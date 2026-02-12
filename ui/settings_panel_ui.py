@@ -231,6 +231,7 @@ class _AIPage(QWidget):
         super().__init__(parent)
         self.config = config
         self._worker = None
+        self._model_memory: dict[str, str] = {}
         self._build()
 
     def _build(self):
@@ -282,6 +283,14 @@ class _AIPage(QWidget):
 
         self._api_row = key_row
         pc_layout.addWidget(key_row)
+
+        pc_layout.addWidget(Divider())
+
+        self._ollama_host_input = _styled_input("http://localhost:11434", width=240)
+        self._ollama_host_input.setText(self.config.get("ollama_host", "http://localhost:11434"))
+        self._ollama_host_input.textChanged.connect(self._on_change)
+        self._ollama_host_row = _Card.row("Ollama Host", self._ollama_host_input, "Yerel model sunucusu adresi")
+        pc_layout.addWidget(self._ollama_host_row)
 
         layout.addWidget(provider_card)
 
@@ -363,6 +372,19 @@ class _AIPage(QWidget):
 
         ac_layout.addWidget(Divider())
 
+        self._sticky_switch = _styled_check(self.config.get("llm_sticky_selection", True))
+        self._sticky_switch.toggled.connect(self._on_change)
+        ac_layout.addWidget(_Card.row("Model Stickiness", self._sticky_switch, "Seçilen provider/model öncelikli ve sabit çalışsın"))
+
+        ac_layout.addWidget(Divider())
+
+        self._fallback_combo = _styled_combo(["conservative", "aggressive"], width=160)
+        self._fallback_combo.setCurrentText(self.config.get("llm_fallback_mode", "conservative"))
+        self._fallback_combo.currentTextChanged.connect(self._on_change)
+        ac_layout.addWidget(_Card.row("Fallback Mode", self._fallback_combo, "Conservative: yalnız seçilen provider, Aggressive: sıradaki provider'lara geç"))
+
+        ac_layout.addWidget(Divider())
+
         # Autonomy / planning depth
         self._autonomy_combo = _styled_combo(["Strict", "Balanced", "Flexible"], width=160)
         self._autonomy_combo.setCurrentText(self.config.get("autonomy_level", "Balanced"))
@@ -415,6 +437,7 @@ class _AIPage(QWidget):
         self._steps_slider.setValue(self.config.get("planner_max_steps", 10))
         self._steps_label.setText(str(self._steps_slider.value()))
         _set_switch_checked(self._cost_guard, self.config.get("cost_guard", True))
+        _set_switch_checked(self._sticky_switch, self.config.get("llm_sticky_selection", True))
 
         # Trigger provider change to set up model list
         self._on_provider_change(self._provider_combo.currentText())
@@ -438,9 +461,14 @@ class _AIPage(QWidget):
     def _on_provider_change(self, text: str):
         pkey = self._get_provider_key()
         info = PROVIDERS.get(pkey, {})
+        previous_model = self._model_combo.currentText().strip()
+        if previous_model:
+            prev_provider = self.config.get("llm_provider", "groq")
+            self._model_memory[str(prev_provider)] = previous_model
 
         # Show/hide API key
         self._api_row.setVisible(info.get("needs_key", True))
+        self._ollama_host_row.setVisible(pkey == "ollama")
 
         # Populate models
         self._model_combo.blockSignals(True)
@@ -451,7 +479,20 @@ class _AIPage(QWidget):
             self._model_combo.addItems(info.get("models", []))
         self._model_combo.blockSignals(False)
 
+        preferred_model = (
+            self._model_memory.get(pkey)
+            or self.config.get("llm_model", "")
+        )
+        if preferred_model:
+            idx = self._model_combo.findText(preferred_model)
+            if idx >= 0:
+                self._model_combo.setCurrentIndex(idx)
+            else:
+                self._model_combo.setCurrentText(preferred_model)
+        self.config["llm_provider"] = pkey
+
         self._key_status.setText("")
+        self._fallback_combo.setEnabled(not _switch_checked(self._sticky_switch))
         self._on_change()
 
     def _load_ollama_models(self):
@@ -502,6 +543,8 @@ class _AIPage(QWidget):
             self._key_status.setStyleSheet(f"color: #FF3B30; font-size: 11px;")
 
     def _on_change(self):
+        if hasattr(self, "_fallback_combo") and hasattr(self, "_sticky_switch"):
+            self._fallback_combo.setEnabled(not _switch_checked(self._sticky_switch))
         self.settings_changed.emit(self.get_settings())
 
     def _on_steps_change(self, value: int):
@@ -510,13 +553,17 @@ class _AIPage(QWidget):
 
     def get_settings(self) -> dict:
         pkey = self._get_provider_key()
+        sticky = _switch_checked(self._sticky_switch)
         return {
             "llm_provider": pkey,
             "llm_model": self._model_combo.currentText(),
             "api_key": self._api_input.text().strip(),
+            "ollama_host": self._ollama_host_input.text().strip() or "http://localhost:11434",
             "llm_temperature": self._temp_slider.value() / 100,
             "llm_max_tokens": self._tokens_spin.value(),
             "cost_guard": _switch_checked(self._cost_guard),
+            "llm_sticky_selection": sticky,
+            "llm_fallback_mode": "conservative" if sticky else self._fallback_combo.currentText(),
             "autonomy_level": self._autonomy_combo.currentText(),
             "task_planning_depth": self._planning_combo.currentText(),
             "planner_max_steps": self._steps_slider.value(),
@@ -728,6 +775,18 @@ class _GeneralPage(QWidget):
         self._replan_attempts.valueChanged.connect(self._on_change)
         cl.addWidget(_Card.row("Re-Plan Attempts", self._replan_attempts, "0 kapatır, 1-3 yeniden plan deneme sayısı"))
 
+        cl.addWidget(Divider())
+
+        self._privacy_strict = _styled_check(self.config.get("privacy_mode_strict", True))
+        self._privacy_strict.toggled.connect(self._on_change)
+        cl.addWidget(_Card.row("Strict Privacy", self._privacy_strict, "Bulut LLM'e giderken hassas verileri maskele"))
+
+        cl.addWidget(Divider())
+
+        self._privacy_storage = _styled_check(self.config.get("privacy_redact_storage", True))
+        self._privacy_storage.toggled.connect(self._on_change)
+        cl.addWidget(_Card.row("Redact Stored Data", self._privacy_storage, "Bellek/öğrenme kayıtlarında hassas veriyi maskele"))
+
         layout.addWidget(card)
 
         # About
@@ -766,6 +825,8 @@ class _GeneralPage(QWidget):
             "enabled_languages": enabled_languages,
             "auto_replan_enabled": _switch_checked(self._auto_replan),
             "auto_replan_max_attempts": self._replan_attempts.value(),
+            "privacy_mode_strict": _switch_checked(self._privacy_strict),
+            "privacy_redact_storage": _switch_checked(self._privacy_storage),
         }
 
 

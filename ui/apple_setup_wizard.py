@@ -26,16 +26,16 @@ logger = get_logger("apple_setup_wizard")
 
 # Apple-style color palette
 COLORS = {
-    "primary": "#0F9AFE",
-    "secondary": "#4C6FFF",
+    "primary": "#0E86F8",
+    "secondary": "#1565D8",
     "success": "#22C55E",
     "warning": "#F59E0B",
     "danger": "#EF4444",
-    "text": "#0F172A",
-    "text_secondary": "#475569",
-    "bg": "#FFFFFF",
-    "bg_secondary": "#F8FAFC",
-    "border": "#E2E8F0",
+    "text": "#0B1B2B",
+    "text_secondary": "#4B6075",
+    "bg": "#F2F6FC",
+    "bg_secondary": "#FFFFFF",
+    "border": "#D7E1EC",
 }
 
 # Provider definitions (emoji-free)
@@ -328,7 +328,7 @@ class ProviderCard(QFrame):
         header.setSpacing(8)
 
         name_label = QLabel(info["name"])
-        name_label.setFont(QFont("SF Pro Display", 16, QFont.Weight.Medium))
+        name_label.setFont(QFont(".AppleSystemUIFont", 16, QFont.Weight.Medium))
         name_label.setStyleSheet(f"color: {COLORS['text']};")
         header.addWidget(name_label)
 
@@ -482,6 +482,7 @@ class AppleSetupWizard(QDialog):
 
         self.setup_completed = False
         self._provider_cards: dict[str, ProviderCard] = {}
+        self._selected_model_by_provider: dict[str, str] = {}
         self._ollama_install_thread = None
         self._connection_test_thread = None
         self._connection_verified = False
@@ -491,7 +492,8 @@ class AppleSetupWizard(QDialog):
     def _setup_ui(self):
         self.setStyleSheet(f"""
             QDialog {{
-                background: {COLORS['bg']};
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                            stop:0 #F7FAFF, stop:0.5 #F1F6FD, stop:1 #EAF1FA);
             }}
             QLabel {{
                 color: {COLORS['text']};
@@ -499,7 +501,18 @@ class AppleSetupWizard(QDialog):
         """)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(24, 24, 24, 24)
+
+        shell = QFrame()
+        shell.setStyleSheet(f"""
+            QFrame {{
+                background: {COLORS['bg_secondary']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 18px;
+            }}
+        """)
+        shell_layout = QVBoxLayout(shell)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self._wrap_step(self._create_welcome_page(), 1, "Hoş geldiniz"))        # 0
@@ -514,8 +527,8 @@ class AppleSetupWizard(QDialog):
 
         # Connect stack changed signal to handle page-specific logic
         self.stack.currentChanged.connect(self._on_page_changed)
-
-        layout.addWidget(self.stack)
+        shell_layout.addWidget(self.stack)
+        layout.addWidget(shell)
 
     def _wrap_step(self, widget: QWidget, step_no: int, title: str) -> QWidget:
         """Wrap each page with a consistent header showing step info."""
@@ -539,7 +552,7 @@ class AppleSetupWizard(QDialog):
         header_row.addWidget(step_badge, alignment=Qt.AlignmentFlag.AlignLeft)
 
         title_label = QLabel(title)
-        title_label.setFont(QFont("SF Pro Display", 18, QFont.Weight.Bold))
+        title_label.setFont(QFont(".AppleSystemUIFont", 18, QFont.Weight.Bold))
         title_label.setStyleSheet(f"color: {COLORS['text']};")
         header_row.addWidget(title_label, alignment=Qt.AlignmentFlag.AlignLeft)
         header_row.addStretch()
@@ -594,23 +607,23 @@ class AppleSetupWizard(QDialog):
             layout.addWidget(mascot)
 
         logo = QLabel("WIQO")
-        logo.setFont(QFont("SF Pro Display", 52, QFont.Weight.Bold))
+        logo.setFont(QFont(".AppleSystemUIFont", 52, QFont.Weight.Bold))
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         logo.setStyleSheet(f"color: {COLORS['primary']}; letter-spacing: -1px;")
         layout.addWidget(logo)
 
         # Subtitle
         subtitle = QLabel("Intelligent Digital Assistant")
-        subtitle.setFont(QFont("SF Pro Text", 20, QFont.Weight.Medium))
+        subtitle.setFont(QFont(".AppleSystemUIFont", 20, QFont.Weight.Medium))
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setStyleSheet(f"color: {COLORS['text_secondary']};")
         layout.addWidget(subtitle)
 
         # Description
         desc = QLabel(
-            "Control your Mac with natural language.\n"
-            "Setup takes just 2 minutes.\n\n"
-            "Wiqo stays by your side from the first step."
+            "Wiqo, ilk günden itibaren yanında olan güvenilir bir dijital asistandır.\n"
+            "Kurulum 2 dakika sürer ve seçtiğin model ayarlarına sadık kalır.\n\n"
+            "Hız, gizlilik ve kontrol tamamen sende."
         )
         desc.setWordWrap(True)
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -635,7 +648,7 @@ class AppleSetupWizard(QDialog):
 
         # Header
         header = QLabel("Choose AI Provider")
-        header.setFont(QFont("SF Pro Display", 24, QFont.Weight.Bold))
+        header.setFont(QFont(".AppleSystemUIFont", 24, QFont.Weight.Bold))
         layout.addWidget(header)
 
         desc = QLabel("Select the AI engine that powers Wiqo")
@@ -672,6 +685,9 @@ class AppleSetupWizard(QDialog):
     def _on_provider_selected(self, provider_id: str):
         self.config["provider"] = provider_id
         self.config["llm_type"] = PROVIDERS[provider_id]["llm_type"]
+        remembered = self._selected_model_by_provider.get(provider_id)
+        if remembered:
+            self.config["model"] = remembered
 
         for pid, card in self._provider_cards.items():
             card.set_selected(pid == provider_id)
@@ -693,7 +709,7 @@ class AppleSetupWizard(QDialog):
 
         # Header
         header = QLabel("Ollama Setup")
-        header.setFont(QFont("SF Pro Display", 24, QFont.Weight.Bold))
+        header.setFont(QFont(".AppleSystemUIFont", 24, QFont.Weight.Bold))
         layout.addWidget(header)
 
         desc = QLabel(
@@ -709,18 +725,18 @@ class AppleSetupWizard(QDialog):
         self._ollama_radio_group = QButtonGroup()
 
         install_radio = QRadioButton("Install Ollama (Recommended)")
-        install_radio.setFont(QFont("SF Pro Text", 14, QFont.Weight.Medium))
+        install_radio.setFont(QFont(".AppleSystemUIFont", 14, QFont.Weight.Medium))
         install_radio.setChecked(True)
         self._ollama_radio_group.addButton(install_radio, 1)
         layout.addWidget(install_radio)
 
         skip_radio = QRadioButton("Already installed, skip")
-        skip_radio.setFont(QFont("SF Pro Text", 14))
+        skip_radio.setFont(QFont(".AppleSystemUIFont", 14))
         self._ollama_radio_group.addButton(skip_radio, 2)
         layout.addWidget(skip_radio)
 
         api_radio = QRadioButton("Use cloud API instead")
-        api_radio.setFont(QFont("SF Pro Text", 14))
+        api_radio.setFont(QFont(".AppleSystemUIFont", 14))
         self._ollama_radio_group.addButton(api_radio, 3)
         layout.addWidget(api_radio)
 
@@ -824,6 +840,7 @@ class AppleSetupWizard(QDialog):
             QMessageBox.information(self, "Success", message)
             self.config["ollama_installed"] = True
             self.config["model"] = "llama3.2:3b"
+            self._selected_model_by_provider["ollama"] = "llama3.2:3b"
             self.stack.setCurrentIndex(4)  # Model page
         else:
             QMessageBox.critical(self, "Error", message)
@@ -838,7 +855,7 @@ class AppleSetupWizard(QDialog):
 
         # Header
         header = QLabel("API Key")
-        header.setFont(QFont("SF Pro Display", 24, QFont.Weight.Bold))
+        header.setFont(QFont(".AppleSystemUIFont", 24, QFont.Weight.Bold))
         layout.addWidget(header)
 
         self._api_desc = QLabel("")
@@ -848,7 +865,7 @@ class AppleSetupWizard(QDialog):
 
         # API Key input
         key_label = QLabel("Enter your API key:")
-        key_label.setFont(QFont("SF Pro Text", 13, QFont.Weight.Medium))
+        key_label.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Medium))
         layout.addWidget(key_label)
 
         self._api_input = QLineEdit()
@@ -949,7 +966,7 @@ class AppleSetupWizard(QDialog):
 
         # Header
         header = QLabel("Select Model")
-        header.setFont(QFont("SF Pro Display", 24, QFont.Weight.Bold))
+        header.setFont(QFont(".AppleSystemUIFont", 24, QFont.Weight.Bold))
         layout.addWidget(header)
 
         desc = QLabel("Choose the AI model to use")
@@ -959,6 +976,7 @@ class AppleSetupWizard(QDialog):
         # Model combo
         self._model_combo = QComboBox()
         self._model_combo.setFixedHeight(44)
+        self._model_combo.currentTextChanged.connect(self._on_model_changed)
         self._model_combo.setStyleSheet(f"""
             QComboBox {{
                 background: {COLORS['bg_secondary']};
@@ -1010,6 +1028,7 @@ class AppleSetupWizard(QDialog):
         model = self._model_combo.currentText()
         if model:
             self.config["model"] = model
+            self._selected_model_by_provider[self.config.get("provider", "groq")] = model
             self.stack.setCurrentIndex(5)  # Connection test
 
     def _populate_model_combo(self):
@@ -1037,15 +1056,33 @@ class AppleSetupWizard(QDialog):
                 logger.info(f"Cloud provider models: {models}")
                 self._model_combo.addItems(models)
 
-            # Select first item
+            preferred_model = (
+                self._selected_model_by_provider.get(provider)
+                or self.config.get("model", "")
+            )
             if self._model_combo.count() > 0:
-                self._model_combo.setCurrentIndex(0)
+                selected_idx = self._model_combo.findText(preferred_model)
+                if selected_idx >= 0:
+                    self._model_combo.setCurrentIndex(selected_idx)
+                else:
+                    self._model_combo.setCurrentIndex(0)
+                self.config["model"] = self._model_combo.currentText()
+                self._selected_model_by_provider[provider] = self._model_combo.currentText()
                 logger.info(f"Selected model: {self._model_combo.currentText()}")
 
         except Exception as e:
             logger.error(f"Failed to populate models: {e}", exc_info=True)
             # Fallback: add at least one model
             self._model_combo.addItem("llama-3.3-70b-versatile")
+            self.config["model"] = "llama-3.3-70b-versatile"
+
+    def _on_model_changed(self, model: str):
+        model = (model or "").strip()
+        if not model:
+            return
+        provider = self.config.get("provider", "groq")
+        self.config["model"] = model
+        self._selected_model_by_provider[provider] = model
 
     # ── Page 5: Connection Test ─────────────────────────────
     def _create_connection_test(self) -> QWidget:
@@ -1056,7 +1093,7 @@ class AppleSetupWizard(QDialog):
 
         # Header
         header = QLabel("Testing Connection")
-        header.setFont(QFont("SF Pro Display", 24, QFont.Weight.Bold))
+        header.setFont(QFont(".AppleSystemUIFont", 24, QFont.Weight.Bold))
         header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(header)
 
@@ -1068,7 +1105,7 @@ class AppleSetupWizard(QDialog):
         # Status
         self._test_status = QLabel("Testing...")
         self._test_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._test_status.setFont(QFont("SF Pro Text", 16, QFont.Weight.Medium))
+        self._test_status.setFont(QFont(".AppleSystemUIFont", 16, QFont.Weight.Medium))
         self._test_status.setStyleSheet(f"color: {COLORS['text_secondary']};")
         layout.addWidget(self._test_status)
 
@@ -1162,7 +1199,7 @@ class AppleSetupWizard(QDialog):
 
         # Header
         header = QLabel("Telegram Bot (Optional)")
-        header.setFont(QFont("SF Pro Display", 24, QFont.Weight.Bold))
+        header.setFont(QFont(".AppleSystemUIFont", 24, QFont.Weight.Bold))
         layout.addWidget(header)
 
         desc = QLabel(
@@ -1175,7 +1212,7 @@ class AppleSetupWizard(QDialog):
 
         # Bot Token
         token_label = QLabel("Bot Token:")
-        token_label.setFont(QFont("SF Pro Text", 13, QFont.Weight.Medium))
+        token_label.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Medium))
         layout.addWidget(token_label)
 
         self._telegram_token = QLineEdit()
@@ -1198,7 +1235,7 @@ class AppleSetupWizard(QDialog):
 
         # User ID
         uid_label = QLabel("User ID:")
-        uid_label.setFont(QFont("SF Pro Text", 13, QFont.Weight.Medium))
+        uid_label.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Medium))
         layout.addWidget(uid_label)
 
         self._telegram_uid = QLineEdit()
@@ -1256,7 +1293,7 @@ class AppleSetupWizard(QDialog):
         layout.setSpacing(18)
 
         header = QLabel("Personalization")
-        header.setFont(QFont("SF Pro Display", 24, QFont.Weight.Bold))
+        header.setFont(QFont(".AppleSystemUIFont", 24, QFont.Weight.Bold))
         layout.addWidget(header)
 
         desc = QLabel(
@@ -1268,7 +1305,7 @@ class AppleSetupWizard(QDialog):
         layout.addWidget(desc)
 
         tone_label = QLabel("Communication Tone")
-        tone_label.setFont(QFont("SF Pro Text", 13, QFont.Weight.Medium))
+        tone_label.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Medium))
         layout.addWidget(tone_label)
         self._tone_combo = QComboBox()
         self._tone_combo.addItem("Professional + Friendly", "professional_friendly")
@@ -1278,7 +1315,7 @@ class AppleSetupWizard(QDialog):
         layout.addWidget(self._tone_combo)
 
         length_label = QLabel("Response Length")
-        length_label.setFont(QFont("SF Pro Text", 13, QFont.Weight.Medium))
+        length_label.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Medium))
         layout.addWidget(length_label)
         self._length_combo = QComboBox()
         self._length_combo.addItem("Short (2-4 sentences)", "short")
@@ -1288,7 +1325,7 @@ class AppleSetupWizard(QDialog):
         layout.addWidget(self._length_combo)
 
         autonomy_label = QLabel("Autonomy Level")
-        autonomy_label.setFont(QFont("SF Pro Text", 13, QFont.Weight.Medium))
+        autonomy_label.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Medium))
         layout.addWidget(autonomy_label)
         self._autonomy_combo = QComboBox()
         self._autonomy_combo.addItem("Strict (safe, fewer actions)", "Strict")
@@ -1298,7 +1335,7 @@ class AppleSetupWizard(QDialog):
         layout.addWidget(self._autonomy_combo)
 
         depth_label = QLabel("Task Planning Depth")
-        depth_label.setFont(QFont("SF Pro Text", 13, QFont.Weight.Medium))
+        depth_label.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Medium))
         layout.addWidget(depth_label)
         self._planning_depth_combo = QComboBox()
         self._planning_depth_combo.addItem("Adaptive", "adaptive")
@@ -1308,7 +1345,7 @@ class AppleSetupWizard(QDialog):
         layout.addWidget(self._planning_depth_combo)
 
         expertise_label = QLabel("Assistant Expertise")
-        expertise_label.setFont(QFont("SF Pro Text", 13, QFont.Weight.Medium))
+        expertise_label.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Medium))
         layout.addWidget(expertise_label)
         self._expertise_combo = QComboBox()
         self._expertise_combo.addItem("Basic", "basic")
@@ -1318,7 +1355,7 @@ class AppleSetupWizard(QDialog):
         layout.addWidget(self._expertise_combo)
 
         access_label = QLabel("Erişim Kapsamı")
-        access_label.setFont(QFont("SF Pro Text", 13, QFont.Weight.Medium))
+        access_label.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Medium))
         layout.addWidget(access_label)
         self._access_combo = QComboBox()
         self._access_combo.addItem("Geniş (ev dizini + tüm kullanıcı dizinleri)", "full")
@@ -1359,22 +1396,29 @@ class AppleSetupWizard(QDialog):
         layout.setSpacing(24)
 
         # Success icon (text-based, no emoji)
+        mascot = QLabel()
+        mascot_pixmap = load_brand_pixmap(size=128)
+        if not mascot_pixmap.isNull():
+            mascot.setPixmap(mascot_pixmap)
+            mascot.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(mascot)
+
         icon = QLabel("✓")
-        icon.setFont(QFont("SF Pro Display", 80, QFont.Weight.Thin))
+        icon.setFont(QFont(".AppleSystemUIFont", 62, QFont.Weight.Thin))
         icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon.setStyleSheet(f"color: {COLORS['success']};")
         layout.addWidget(icon)
 
         # Title
         title = QLabel("Setup Complete")
-        title.setFont(QFont("SF Pro Display", 28, QFont.Weight.Bold))
+        title.setFont(QFont(".AppleSystemUIFont", 28, QFont.Weight.Bold))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
 
         # Description
         desc = QLabel(
-            "Wiqo is ready to use.\n\n"
-            "Start controlling your Mac with natural language."
+            "Wiqo hazır.\n\n"
+            "Asistanın artık seçtiğin sağlayıcı ve modele sadık şekilde çalışacak."
         )
         desc.setWordWrap(True)
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1470,6 +1514,9 @@ class AppleSetupWizard(QDialog):
                     "llm_provider": provider,
                     "llm_model": self.config.get("model", "llama-3.3-70b-versatile"),
                     "api_key": api_key,
+                    "llm_sticky_selection": True,
+                    "llm_fallback_mode": "conservative",
+                    "llm_fallback_order": [provider, "groq", "gemini", "openai", "ollama"],
                     "full_disk_access": bool(self.config.get("full_disk_access", True)),
                     "autonomy_level": self.config.get("autonomy_level", "Balanced"),
                     "communication_tone": self.config.get("communication_tone", "professional_friendly"),

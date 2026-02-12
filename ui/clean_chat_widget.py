@@ -47,7 +47,7 @@ class CleanMessageBubble(QFrame):
         avatar = QLabel("S" if not self.is_user else "K")  # S=Sistem, K=Kullanıcı
         avatar.setFixedSize(32, 32)
         avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        avatar.setFont(QFont("SF Pro Display", 12, QFont.Weight.Medium))
+        avatar.setFont(QFont(".AppleSystemUIFont", 12, QFont.Weight.Medium))
 
         if self.is_user:
             avatar.setStyleSheet("""
@@ -78,7 +78,7 @@ class CleanMessageBubble(QFrame):
 
         # Sender label
         sender = QLabel("YOU" if self.is_user else "WIQO")
-        sender.setFont(QFont("SF Pro Display", 10, QFont.Weight.Bold))
+        sender.setFont(QFont(".AppleSystemUIFont", 10, QFont.Weight.Bold))
         sender.setStyleSheet(f"color: {'#7196A2' if self.is_user else '#8E8E93'}; border: none; letter-spacing: 0.5px;")
         bubble_layout.addWidget(sender)
 
@@ -86,7 +86,7 @@ class CleanMessageBubble(QFrame):
         text_label = QLabel(self.message)
         text_label.setWordWrap(True)
         text_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        text_label.setFont(QFont("SF Pro Text", 13))
+        text_label.setFont(QFont(".AppleSystemUIFont", 13))
         text_label.setTextFormat(Qt.TextFormat.MarkdownText)
         text_label.setStyleSheet(f"""
             color: {'#FFFFFF' if self.is_user else '#252F33'};
@@ -98,7 +98,7 @@ class CleanMessageBubble(QFrame):
 
         # Timestamp
         time_label = QLabel(self.timestamp)
-        time_label.setFont(QFont("SF Pro Text", 9))
+        time_label.setFont(QFont(".AppleSystemUIFont", 9))
         time_label.setStyleSheet(f"color: {'rgba(255,255,255,0.7)' if self.is_user else '#8E8E93'};")
         time_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         bubble_layout.addWidget(time_label)
@@ -151,7 +151,7 @@ class CleanTypingIndicator(QFrame):
         avatar = QLabel("W")
         avatar.setFixedSize(32, 32)
         avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        avatar.setFont(QFont("SF Pro Display", 12, QFont.Weight.Bold))
+        avatar.setFont(QFont(".AppleSystemUIFont", 12, QFont.Weight.Bold))
         avatar.setStyleSheet("""
             QLabel {
                 background-color: #E5E5EA;
@@ -178,7 +178,7 @@ class CleanTypingIndicator(QFrame):
         self._dots = []
         for _ in range(3):
             dot = QLabel("•")
-            dot.setFont(QFont("SF Pro Display", 16))
+            dot.setFont(QFont(".AppleSystemUIFont", 16))
             dot.setStyleSheet("color: #475569;")
             indicator_layout.addWidget(dot)
             self._dots.append(dot)
@@ -349,7 +349,7 @@ class CleanChatWidget(QWidget):
         avatar = QLabel("W")
         avatar.setFixedSize(40, 40)
         avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        avatar.setFont(QFont("SF Pro Display", 16, QFont.Weight.Bold))
+        avatar.setFont(QFont(".AppleSystemUIFont", 16, QFont.Weight.Bold))
         avatar.setStyleSheet("""
             QLabel {
                 background-color: #22c55e;
@@ -364,12 +364,12 @@ class CleanChatWidget(QWidget):
         text_layout.setSpacing(2)
 
         name_label = QLabel("WIQO")
-        name_label.setFont(QFont("SF Pro Display", 18, QFont.Weight.Bold))
+        name_label.setFont(QFont(".AppleSystemUIFont", 18, QFont.Weight.Bold))
         name_label.setStyleSheet("color: #252F33; border: none; letter-spacing: 0.5px;")
         text_layout.addWidget(name_label)
 
         self._status_label = QLabel("AKTİF")
-        self._status_label.setFont(QFont("SF Pro Text", 10, QFont.Weight.Bold))
+        self._status_label.setFont(QFont(".AppleSystemUIFont", 10, QFont.Weight.Bold))
         self._status_label.setStyleSheet("color: #34C759; border: none; text-transform: uppercase;")
         text_layout.addWidget(self._status_label)
 
@@ -380,7 +380,7 @@ class CleanChatWidget(QWidget):
 
         # Action buttons
         clear_btn = QPushButton("Temizle")
-        clear_btn.setFont(QFont("SF Pro Text", 12))
+        clear_btn.setFont(QFont(".AppleSystemUIFont", 12))
         clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         clear_btn.setStyleSheet("""
             QPushButton {
@@ -397,7 +397,7 @@ class CleanChatWidget(QWidget):
         layout.addWidget(clear_btn)
 
         export_btn = QPushButton("Dışa Aktar")
-        export_btn.setFont(QFont("SF Pro Text", 12))
+        export_btn.setFont(QFont(".AppleSystemUIFont", 12))
         export_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         export_btn.setStyleSheet("""
             QPushButton {
@@ -432,7 +432,7 @@ class CleanChatWidget(QWidget):
         # Attachment button
         attach_btn = QPushButton("+")
         attach_btn.setFixedSize(40, 40)
-        attach_btn.setFont(QFont("SF Pro Display", 18))
+        attach_btn.setFont(QFont(".AppleSystemUIFont", 18))
         attach_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         attach_btn.setToolTip("Dosya ekle")
         attach_btn.setStyleSheet("""
@@ -453,7 +453,7 @@ class CleanChatWidget(QWidget):
         self._input_field = QLineEdit()
         self._input_field.setPlaceholderText("Mesajınızı yazın...")
         self._input_field.setMinimumHeight(44)
-        self._input_field.setFont(QFont("SF Pro Text", 14))
+        self._input_field.setFont(QFont(".AppleSystemUIFont", 14))
         self._input_field.setStyleSheet("""
             QLineEdit {
                 background-color: #F2F2F7;
@@ -475,7 +475,7 @@ class CleanChatWidget(QWidget):
         self._send_btn = QPushButton("Gönder")
         self._send_btn.setMinimumHeight(44)
         self._send_btn.setMinimumWidth(80)
-        self._send_btn.setFont(QFont("SF Pro Text", 13, QFont.Weight.Medium))
+        self._send_btn.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Medium))
         self._send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._send_btn.setStyleSheet("""
             QPushButton {

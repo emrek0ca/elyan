@@ -11,11 +11,10 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from PyQt6.QtWidgets import (
         QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-        QFrame, QSizePolicy, QGraphicsDropShadowEffect, QLineEdit,
-        QTextEdit, QScrollArea, QStackedWidget, QProgressBar,
-        QGraphicsOpacityEffect
+        QFrame, QSizePolicy, QLineEdit, QTextEdit, QScrollArea,
+        QStackedWidget, QProgressBar
     )
-    from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QTimer, QSize, pyqtProperty
+    from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QTimer, QSize, pyqtProperty
     from PyQt6.QtGui import QFont, QColor, QIcon, QPixmap, QPainter, QPainterPath
     PYQT_AVAILABLE = True
 except ImportError:
@@ -40,7 +39,7 @@ class WiqoTheme:
     
     # Fonts
     FONT_UI = ".AppleSystemUIFont"
-    FONT_DISPLAY = "SF Pro Display"
+    FONT_DISPLAY = ".AppleSystemUIFont"
 
 
 # New futuristic classes
@@ -62,14 +61,6 @@ if PYQT_AVAILABLE:
                     border-radius: 12px;
                 }
             """)
-            
-            # Very subtle shadow
-            shadow = QGraphicsDropShadowEffect(self)
-            shadow.setBlurRadius(16)
-            shadow.setXOffset(0)
-            shadow.setYOffset(4)
-            shadow.setColor(QColor(0, 0, 0, 10))
-            self.setGraphicsEffect(shadow)
 
     # Alias for compatibility
     GlassFrame = StandardCard
@@ -96,7 +87,7 @@ if PYQT_AVAILABLE:
                         border: none;
                         border-radius: 8px;
                         font-weight: 600;
-                        font-family: "SF Pro Text";
+                        font-family: ".AppleSystemUIFont";
                         font-size: 13px;
                     }
                     QPushButton:hover {
@@ -114,7 +105,7 @@ if PYQT_AVAILABLE:
                         border: 1px solid #D1D1D6;
                         border-radius: 8px;
                         font-weight: 500;
-                        font-family: "SF Pro Text";
+                        font-family: ".AppleSystemUIFont";
                         font-size: 13px;
                     }
                     QPushButton:hover {
@@ -147,7 +138,7 @@ if PYQT_AVAILABLE:
                         border-radius: 8px;
                         text-align: left;
                         padding-left: 20px;
-                        font-family: "SF Pro Text";
+                        font-family: ".AppleSystemUIFont";
                         font-weight: 600;
                         font-size: 13px;
                     }
@@ -161,7 +152,7 @@ if PYQT_AVAILABLE:
                         border-radius: 8px;
                         text-align: left;
                         padding-left: 20px;
-                        font-family: "SF Pro Text";
+                        font-family: ".AppleSystemUIFont";
                         font-weight: 500;
                         font-size: 13px;
                     }
@@ -213,7 +204,7 @@ if PYQT_AVAILABLE:
                 font-size: 24px;
                 font-weight: 700;
                 color: #252F33;
-                font-family: "SF Pro Display";
+                font-family: ".AppleSystemUIFont";
             """)
             layout.addWidget(self._value_label)
 
@@ -276,7 +267,7 @@ if PYQT_AVAILABLE:
             msg_label = QLabel(self._message)
             msg_label.setWordWrap(True)
             msg_label.setTextFormat(Qt.TextFormat.RichText)
-            msg_label.setStyleSheet(f"color: #252F33; font-size: 13px; font-family: 'SF Pro Text';")
+            msg_label.setStyleSheet(f"color: #252F33; font-size: 13px; font-family: '.AppleSystemUIFont';")
             bubble_layout.addWidget(msg_label)
 
             # Timestamp
@@ -632,7 +623,7 @@ if PYQT_AVAILABLE:
                 font-size: 16px;
                 font-weight: 700;
                 color: #252F33;
-                font-family: "SF Pro Display";
+                font-family: ".AppleSystemUIFont";
             """)
             layout.addWidget(title_label)
 
@@ -683,7 +674,7 @@ if PYQT_AVAILABLE:
 
             title_label = QLabel(self._title)
             title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            title_label.setStyleSheet("font-size: 18px; font-weight: 700; color: #252F33; font-family: 'SF Pro Display';")
+            title_label.setStyleSheet("font-size: 18px; font-weight: 700; color: #252F33; font-family: '.AppleSystemUIFont';")
             layout.addWidget(title_label)
 
             if self._description:
@@ -790,7 +781,7 @@ if PYQT_AVAILABLE:
         """Clean header for UI sections"""
         def __init__(self, text: str, parent=None):
             super().__init__(text, parent)
-            self.setFont(QFont("SF Pro Display", 16, QFont.Weight.Bold))
+            self.setFont(QFont(".AppleSystemUIFont", 16, QFont.Weight.Bold))
             self.setStyleSheet("color: #252F33; border: none; margin-bottom: 8px;")
 
 
@@ -798,23 +789,24 @@ if PYQT_AVAILABLE:
         """Label with breathing/pulse opacity animation"""
         def __init__(self, text: str, parent=None):
             super().__init__(text, parent)
+            self._pulse_on = False
+            self._pulse_timer = QTimer(self)
+            self._pulse_timer.setInterval(550)
+            self._pulse_timer.timeout.connect(self._pulse_tick)
             self.setStyleSheet("color: #8E8E93; font-size: 13px; border: none;")
-            self._effect = QGraphicsOpacityEffect(self)
-            self.setGraphicsEffect(self._effect)
-            
-            self._anim = QPropertyAnimation(self._effect, b"opacity")
-            self._anim.setDuration(1500)
-            self._anim.setStartValue(0.3)
-            self._anim.setEndValue(1.0)
-            self._anim.setLoopCount(-1)
-            self._anim.setEasingCurve(QEasingCurve.Type.InOutSine)
+
+        def _pulse_tick(self):
+            self._pulse_on = not self._pulse_on
+            color = "#7196A2" if self._pulse_on else "#8E8E93"
+            self.setStyleSheet(f"color: {color}; font-size: 13px; border: none;")
 
         def start(self):
-            self._anim.start()
+            self._pulse_timer.start()
 
         def stop(self):
-            self._anim.stop()
-            self._effect.setOpacity(1.0)
+            self._pulse_timer.stop()
+            self._pulse_on = False
+            self.setStyleSheet("color: #8E8E93; font-size: 13px; border: none;")
 
 
     class Switch(QWidget):

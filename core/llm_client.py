@@ -62,13 +62,11 @@ class LLMClient:
                 self.openai_api_key = api_key or OPENAI_API_KEY
             
             self.model = settings.get("llm_model", "") or default_models.get(self.llm_type, OLLAMA_MODEL)
-            # If provider is cloud but model looks like local tag, reset to default
-            if self.llm_type in {"groq", "gemini", "openai"} and (":" in self.model):
-                self.model = default_models.get(self.llm_type, self.model)
             self.fallback_mode = str(settings.get("llm_fallback_mode", "aggressive")).lower()
             if self.fallback_mode not in {"aggressive", "conservative"}:
                 self.fallback_mode = "aggressive"
             self.fallback_order = self._normalize_fallback_order(settings.get("llm_fallback_order", []))
+            self.sticky_selection = bool(settings.get("llm_sticky_selection", True))
             self.assistant_style = settings.get("assistant_style", "professional_friendly_short")
             self.communication_tone = settings.get("communication_tone", "professional_friendly")
             self.response_length = settings.get("response_length", "short")
@@ -99,6 +97,7 @@ class LLMClient:
             self.model = OLLAMA_MODEL
             self.fallback_mode = "aggressive"
             self.fallback_order = ["groq", "gemini", "openai", "ollama"]
+            self.sticky_selection = True
             self.assistant_style = "professional_friendly_short"
             self.communication_tone = "professional_friendly"
             self.response_length = "short"
@@ -106,8 +105,6 @@ class LLMClient:
             self.enabled_languages = ["tr", "en"]
             self.assistant_expertise = "advanced"
             self.pricing_rates = DEFAULT_PRICING_PER_1K.copy()
-            if self.llm_type in {"groq", "gemini", "openai"} and (":" in self.model):
-                self.model = default_models.get(self.llm_type, OLLAMA_MODEL)
 
         self.host = OLLAMA_HOST
         self.options = OLLAMA_OPTIONS
@@ -354,8 +351,9 @@ class LLMClient:
             token_cap = 280
             temp_cap = 0.35
 
+        selected_model = str(self.model or "").strip() or "llama-3.3-70b-versatile"
         data = {
-            "model": self.model if "llama" in self.model or "mixtral" in self.model or "gemma" in self.model else "llama-3.3-70b-versatile",
+            "model": selected_model,
             "messages": [
                 {"role": "system", "content": system_part},
                 {"role": "user", "content": user_part}
@@ -394,12 +392,10 @@ class LLMClient:
             "Content-Type": "application/json"
         }
         # Cost-aware caps
-        model = self.model if ("gpt" in self.model or "o1" in self.model) else "gpt-4o-mini"
+        model = str(self.model or "").strip() or "gpt-4o-mini"
         max_tokens_cap = 700
         temp_cap = 0.7
         if getattr(self, "cost_guard", True):
-            if "mini" not in model and "gpt-4o" in model:
-                model = "gpt-4o-mini"
             max_tokens_cap = 280
             temp_cap = 0.35
 
@@ -436,11 +432,7 @@ class LLMClient:
         max_tokens: int | None = None
     ) -> str | None:
         """Call Google Gemini API"""
-        model_name = self.model if "gemini" in self.model else "gemini-2.0-flash"
-        if getattr(self, "cost_guard", True):
-            # Prefer flash mini-equivalent
-            if "pro" in model_name:
-                model_name = "gemini-1.5-flash"
+        model_name = str(self.model or "").strip() or "gemini-2.0-flash"
         max_tokens_cap = 700
         temp_cap = 0.7
         if getattr(self, "cost_guard", True):
@@ -518,6 +510,8 @@ class LLMClient:
         return False
 
     def _provider_attempt_order(self) -> list[str]:
+        if getattr(self, "sticky_selection", True):
+            return [self.llm_type]
         if self.fallback_mode == "conservative":
             return [self.llm_type]
         order: list[str] = []

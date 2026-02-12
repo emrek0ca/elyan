@@ -20,6 +20,7 @@ DEFAULT_SETTINGS = {
     "llm_max_tokens": 2048,
     "llm_fallback_mode": "aggressive",
     "llm_fallback_order": ["groq", "gemini", "openai", "ollama"],
+    "llm_sticky_selection": True,
     "assistant_style": "professional_friendly_short",
     "full_disk_access": True,
     "onboarding_completed": False,
@@ -37,6 +38,9 @@ DEFAULT_SETTINGS = {
     "monthly_budget_usd": 20.0,
     "budget_alert_threshold_pct": 80,
     "pricing_alerts_enabled": True,
+    "privacy_mode_strict": True,
+    "privacy_redact_storage": True,
+    "privacy_redact_logs": True,
     "assistant_expertise": "advanced",
     "ollama_host": "http://localhost:11434",
     "api_key": "",
@@ -144,6 +148,8 @@ class SettingsPanel:
                     if provider not in normalized:
                         normalized.append(provider)
                 self._settings["llm_fallback_order"] = normalized
+                if not isinstance(self._settings.get("llm_sticky_selection"), bool):
+                    self._settings["llm_sticky_selection"] = True
 
                 style = str(self._settings.get("assistant_style", "professional_friendly_short")).strip()
                 if not style:
@@ -191,6 +197,12 @@ class SettingsPanel:
                     self._settings["budget_alert_threshold_pct"] = 80
                 if not isinstance(self._settings.get("pricing_alerts_enabled"), bool):
                     self._settings["pricing_alerts_enabled"] = True
+                if not isinstance(self._settings.get("privacy_mode_strict"), bool):
+                    self._settings["privacy_mode_strict"] = True
+                if not isinstance(self._settings.get("privacy_redact_storage"), bool):
+                    self._settings["privacy_redact_storage"] = True
+                if not isinstance(self._settings.get("privacy_redact_logs"), bool):
+                    self._settings["privacy_redact_logs"] = True
                 if self._settings.get("assistant_expertise") not in {"basic", "advanced", "expert"}:
                     self._settings["assistant_expertise"] = "advanced"
                 if not isinstance(self._settings.get("full_disk_access"), bool):

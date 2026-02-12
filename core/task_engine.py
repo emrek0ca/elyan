@@ -40,6 +40,7 @@ from config.settings_manager import SettingsPanel
 from security.validator import validate_input, sanitize_input
 from security.audit import get_audit_logger
 from security.approval import get_approval_manager, RiskLevel
+from security.privacy_guard import redact_text, sanitize_for_storage, sanitize_object, is_external_provider
 from tools import AVAILABLE_TOOLS
 from utils.logger import get_logger
 
@@ -108,6 +109,47 @@ class TaskEngine:
         self.planner = None
         self.settings = SettingsPanel()
 
+    def _privacy_flags(self) -> Dict[str, bool]:
+        return {
+            "strict": bool(self.settings.get("privacy_mode_strict", True)),
+            "redact_storage": bool(self.settings.get("privacy_redact_storage", True)),
+            "redact_logs": bool(self.settings.get("privacy_redact_logs", True)),
+        }
+
+    def _should_redact_for_cloud_llm(self) -> bool:
+        if not self.llm:
+            return False
+        flags = self._privacy_flags()
+        return flags["strict"] and is_external_provider(getattr(self.llm, "llm_type", ""))
+
+    def _extract_execution_requirements(self, text: str) -> Dict[str, Any]:
+        """
+        Extract detail-level execution hints from user command.
+        This helps planner treat constraints as first-class requirements.
+        """
+        t = (text or "").lower()
+        req: Dict[str, Any] = {}
+
+        # Quality/detail expectations
+        if any(k in t for k in ["detay", "ayrıntı", "ayrinti", "kapsamlı", "kapsamli", "profesyonel"]):
+            req["quality_level"] = "high"
+        if any(k in t for k in ["hızlı", "hizli", "kısa", "kisa", "özet", "ozet"]):
+            req["brevity_preferred"] = True
+
+        # Output format hints
+        if "pdf" in t:
+            req["preferred_output"] = "pdf"
+        elif any(k in t for k in ["docx", "word"]):
+            req["preferred_output"] = "docx"
+        elif any(k in t for k in ["json", "yaml", "csv", "excel"]):
+            req["preferred_output"] = "structured"
+
+        # Deadline urgency
+        if any(k in t for k in ["acil", "hemen", "şimdi", "simdi", "ivedi"]):
+            req["urgency"] = "high"
+
+        return req
+
     async def initialize(self) -> bool:
         """Initialize engine components"""
         try:
@@ -164,18 +206,23 @@ class TaskEngine:
             )
 
         user_input = sanitize_input(user_input)
-        logger.info(f"[TaskEngine] Processing: {user_input[:50]}...")
+        flags = self._privacy_flags()
+        log_input = redact_text(user_input) if flags["redact_logs"] else user_input
+        logger.info(f"[TaskEngine] Processing: {log_input[:80]}...")
 
         # Audit log
         self.audit.log_action(
             user_id=user_id or "unknown",
             action="task_request",
-            details={"input": user_input[:100]}
+            details={"input": (redact_text(user_input) if flags["redact_storage"] else user_input)[:200]}
         )
 
         try:
+            local_context = dict(context or {})
+            local_context["execution_requirements"] = self._extract_execution_requirements(user_input)
+
             # 2. Intent Analysis
-            intent_result = await self._analyze_intent(user_input, context)
+            intent_result = await self._analyze_intent(user_input, local_context)
             decompose_tried = False
             planner_route_used = False
 
@@ -198,7 +245,7 @@ class TaskEngine:
                 tasks = self._build_task_definitions(intent_result.get("tasks", []), max_steps=12)
             elif self._should_force_planning(user_input, intent_result):
                 logger.info("Planner route: IntelligentPlanner activated")
-                tasks = await self._plan_with_intelligent_planner(user_input, intent_result, context)
+                tasks = await self._plan_with_intelligent_planner(user_input, intent_result, local_context)
                 planner_route_used = True
             elif (not is_complex and
                 intent_result.get("confidence", 0) >= 0.8 and 
@@ -215,18 +262,18 @@ class TaskEngine:
             else:
                 if is_complex and intent_result.get("type") != "CHAT":
                     logger.info("Complex query detected - Forcing LLM decomposition")
-                tasks = await self._decompose_tasks(user_input, intent_result, context)
+                tasks = await self._decompose_tasks(user_input, intent_result, local_context)
 
             if not tasks:
                 # İlk deneme başarısızsa bir kez daha LLM decomposition dene (zorla)
                 if intent_result.get("type") != "CHAT" and not self._is_chat_message(user_input):
                     logger.info("No deterministic tasks -> forcing LLM decomposition")
-                    tasks = await self._decompose_tasks(user_input, intent_result, context)
+                    tasks = await self._decompose_tasks(user_input, intent_result, local_context)
                     decompose_tried = True
 
                 if not tasks:
                     # Görev çıkarılamadı → muhtemelen sohbet mesajı
-                    fallback_msg = await self._generate_chat_response(user_input, context)
+                    fallback_msg = await self._generate_chat_response(user_input, local_context)
                     elapsed_ms = int((time.time() - start_time) * 1000)
                     return TaskResult(
                         success=True,
@@ -241,7 +288,7 @@ class TaskEngine:
                 # LLM sadece "chat", "ask_for_confirmation" gibi sahte action'lar döndü
                 # Bu aslında bir sohbet mesajı demek
                 logger.info(f"All tasks are non-tool actions: {[t.action for t in tasks]} → chat fallback")
-                response = await self._generate_chat_response(user_input, context)
+                response = await self._generate_chat_response(user_input, local_context)
                 elapsed_ms = int((time.time() - start_time) * 1000)
                 return TaskResult(
                     success=True,
@@ -285,7 +332,7 @@ class TaskEngine:
                     goal=user_input,
                     original_tasks=ordered_tasks,
                     failed_execution=execution_result,
-                    context=context,
+                    context=local_context,
                     notify_callback=notify_callback,
                     user_id=user_id,
                 )
@@ -301,17 +348,23 @@ class TaskEngine:
 
             # Store in memory
             if user_id:
+                stored_user_input = sanitize_for_storage(user_input) if flags["redact_storage"] else user_input
+                stored_summary = sanitize_for_storage(summary) if flags["redact_storage"] else summary
                 self.memory.store_conversation(
                     user_id,
-                    user_input,
-                    {"action": "task_execution", "result": summary}
+                    stored_user_input,
+                    {
+                        "action": "task_execution",
+                        "result": stored_summary,
+                        "metadata": sanitize_object(execution_result.get("data", {})) if flags["redact_storage"] else execution_result.get("data", {})
+                    }
                 )
 
                 # Store in semantic memory
                 semantic = await get_semantic_memory()
                 await semantic.add_conversation(
-                    user_input=user_input,
-                    bot_response=summary,
+                    user_input=stored_user_input,
+                    bot_response=stored_summary,
                     metadata={"user_id": user_id}
                 )
 
@@ -411,24 +464,28 @@ class TaskEngine:
     ) -> List[TaskDefinition]:
         """Use IntelligentPlanner to create executable tasks."""
         try:
+            planner_goal = redact_text(goal) if self._should_redact_for_cloud_llm() else goal
+            planner_context = context or {}
+            if self._should_redact_for_cloud_llm() and planner_context:
+                planner_context = sanitize_object(planner_context)
             max_steps = int(self.settings.get("planner_max_steps", 10) or 10)
             if self.settings.get("cost_guard", True):
                 max_steps = min(max_steps, 6)
             self.intelligent_planner.max_depth = max(3, min(5, max_steps // 2))
             use_llm = bool(self.llm) and not self.settings.get("cost_guard", True)
             try:
-                plan = await self.intelligent_planner.create_plan(goal, context=context or {}, use_llm=use_llm)
+                plan = await self.intelligent_planner.create_plan(planner_goal, context=planner_context, use_llm=use_llm)
             except TypeError:
                 # Backward compatibility for planner mocks/older signatures.
-                plan = await self.intelligent_planner.create_plan(goal, context=context or {})
+                plan = await self.intelligent_planner.create_plan(planner_goal, context=planner_context)
 
-            quality = self.intelligent_planner.evaluate_plan_quality(getattr(plan, "subtasks", []) or [], goal)
+            quality = self.intelligent_planner.evaluate_plan_quality(getattr(plan, "subtasks", []) or [], planner_goal)
             if not quality.get("safe_to_run", True):
                 feedback = ", ".join(quality.get("issues", [])[:8]) or "quality_below_threshold"
                 revised_subtasks = await self.intelligent_planner.revise_plan(
-                    goal,
+                    planner_goal,
                     current_subtasks=getattr(plan, "subtasks", []) or [],
-                    context=context or {},
+                    context=planner_context,
                     failure_feedback=feedback,
                     use_llm=use_llm,
                 )
@@ -486,6 +543,8 @@ class TaskEngine:
             for row in failed_rows[:6]:
                 feedback_lines.append(f"{row.get('task_id')}: {str(row.get('error', 'unknown'))[:120]}")
             failure_feedback = " | ".join(feedback_lines)
+            if self._should_redact_for_cloud_llm():
+                failure_feedback = redact_text(failure_feedback)
 
             # Build SubTask list from failed plan.
             from core.intelligent_planner import SubTask
@@ -502,9 +561,9 @@ class TaskEngine:
 
             use_llm = bool(self.llm) and not self.settings.get("cost_guard", True)
             revised = await self.intelligent_planner.revise_plan(
-                goal,
+                redact_text(goal) if self._should_redact_for_cloud_llm() else goal,
                 current_subtasks=current_subtasks,
-                context=context or {},
+                context=sanitize_object(context or {}) if self._should_redact_for_cloud_llm() else (context or {}),
                 failure_feedback=failure_feedback,
                 use_llm=use_llm,
             )
@@ -527,7 +586,7 @@ class TaskEngine:
             retry_tasks = self._order_tasks_by_dependency(retry_tasks)
 
             if notify_callback:
-                await notify_callback("Plan revize edildi, ikinci deneme başlatılıyor...")
+                await self._emit_notify(notify_callback, "Plan revize edildi, ikinci deneme başlatılıyor...")
 
             retry_exec = await self._execute_tasks(retry_tasks, notify_callback=notify_callback, user_id=user_id)
             retry_exec["_replanned_tasks"] = retry_tasks
@@ -659,6 +718,17 @@ class TaskEngine:
 
         return False
 
+    async def _emit_notify(self, notify_callback, payload: Any):
+        """Notify helper that supports both async and sync callbacks."""
+        if not notify_callback:
+            return
+        try:
+            maybe = notify_callback(payload)
+            if asyncio.iscoroutine(maybe):
+                await maybe
+        except Exception as exc:
+            logger.debug(f"notify_callback failed: {exc}")
+
     async def _generate_chat_response(
         self,
         user_input: str,
@@ -666,12 +736,16 @@ class TaskEngine:
     ) -> str:
         """Generate chat response for conversational inputs using direct chat API"""
         try:
+            llm_user_input = redact_text(user_input) if self._should_redact_for_cloud_llm() else user_input
             # Build context hint from formatted_context (if available)
             context_hint = ""
             if context:
                 # Prioritize formatted_context (from context_manager)
                 if "formatted_context" in context:
-                    context_hint = f"\n\nBaglamdan notlar:\n{context['formatted_context'][:400]}"
+                    formatted = str(context["formatted_context"])
+                    if self._should_redact_for_cloud_llm():
+                        formatted = redact_text(formatted)
+                    context_hint = f"\n\nBaglamdan notlar:\n{formatted[:400]}"
                 # Fallback to recent_history
                 elif context.get("recent_history"):
                     try:
@@ -717,7 +791,7 @@ class TaskEngine:
                 return "Şu an LLM bağlı değil, basit yanıta geçiyorum."
 
             response = await asyncio.wait_for(
-                self.llm.chat(user_input, system_prompt=system_prompt),
+                self.llm.chat(llm_user_input, system_prompt=system_prompt),
                 timeout=15.0
             )
             return response.strip() if response else "Anlamadım, biraz daha açar mısın?"
@@ -760,10 +834,15 @@ class TaskEngine:
         ]
         catalog = "\n".join(f"  {t}" for t in key_tools)
 
+        llm_user_input = redact_text(user_input) if self._should_redact_for_cloud_llm() else user_input
+
         # Add context if available (conversation history)
         context_str = ""
         if context and "formatted_context" in context:
-            context_str = f"\n\nBaglamdan notlar:\n{context['formatted_context'][:300]}\n"
+            formatted = str(context["formatted_context"])
+            if self._should_redact_for_cloud_llm():
+                formatted = redact_text(formatted)
+            context_str = f"\n\nBaglamdan notlar:\n{formatted[:300]}\n"
         if context and isinstance(context.get("user_profile"), dict):
             profile = context["user_profile"]
             profile_parts = []
@@ -775,6 +854,11 @@ class TaskEngine:
                 profile_parts.append(f"ilgiler={','.join(str(t) for t in topics[:5])}")
             if profile_parts:
                 context_str += f"\nProfil ipucu: {' | '.join(profile_parts)}\n"
+        if context and isinstance(context.get("execution_requirements"), dict):
+            req = context["execution_requirements"]
+            req_parts = [f"{k}={v}" for k, v in req.items()]
+            if req_parts:
+                context_str += f"\nYurutme gereksinimleri: {' | '.join(req_parts[:8])}\n"
 
         autonomy = self.settings.get("autonomy_level", "Balanced")
         planning_depth = self.settings.get("task_planning_depth", "adaptive")
@@ -786,7 +870,7 @@ class TaskEngine:
             max_steps = min(12, max_steps + 2)
 
         # Minimal, token-efficient prompt
-        prompt = f"""Gorev: {user_input}{context_str}
+        prompt = f"""Gorev: {llm_user_input}{context_str}
 
 Araclar:
 {catalog}
@@ -800,6 +884,7 @@ KURALLAR:
 - Her adim icin id ver (task_1, task_2). Bagimli adimlarda depends_on kullan.
 - Maksimum {max_steps} adim yaz.
 - Sohbet icin tool KULLANMA, bos dizi dondur [].
+- Kullanici detay/kalite/format gereksinimlerini atlama; adimlara dahil et.
 
 JSON ciktisi (baska hicbir sey yazma):
 [{{"id":"task_1","action":"arac","params":{{}},"description":"aciklama","depends_on":[]}}]"""
@@ -1115,7 +1200,7 @@ JSON ciktisi (baska hicbir sey yazma):
                             "error": f"Dependency failed: {', '.join([d for d in t.dependencies if d in failed_tasks])}"
                         })
                         if notify_callback:
-                            await notify_callback(f" {t.description} atlandı (bağımlı adım başarısız).")
+                            await self._emit_notify(notify_callback, f" {t.description} atlandı (bağımlı adım başarısız).")
                         continue
 
                     if not t.dependencies or all(dep in successful_tasks for dep in t.dependencies):
@@ -1134,7 +1219,8 @@ JSON ciktisi (baska hicbir sey yazma):
                 try:
                     if self._requires_explicit_approval(task_def.action):
                         if notify_callback:
-                            await notify_callback(
+                            await self._emit_notify(
+                                notify_callback,
                                 f" {task_def.description} için açık kullanıcı onayı bekleniyor..."
                             )
 
@@ -1143,7 +1229,7 @@ JSON ciktisi (baska hicbir sey yazma):
                             failed += 1
                             reason = approval_result.get("reason") or "Kullanıcı onayı verilmedi"
                             if notify_callback:
-                                await notify_callback(f" {task_def.description} iptal edildi: {reason}")
+                                await self._emit_notify(notify_callback, f" {task_def.description} iptal edildi: {reason}")
                             return {
                                 "task_id": task_def.id,
                                 "action": task_def.action,
@@ -1153,7 +1239,7 @@ JSON ciktisi (baska hicbir sey yazma):
                             }
 
                     if notify_callback:
-                        await notify_callback(f" *{task_def.description}* başlatıldı...")
+                        await self._emit_notify(notify_callback, f" *{task_def.description}* başlatıldı...")
                     
                     tool_func = AVAILABLE_TOOLS.get(task_def.action)
                     if not tool_func:
@@ -1165,7 +1251,7 @@ JSON ciktisi (baska hicbir sey yazma):
                     )
                     # If screenshot and notifier exists, send image
                     if notify_callback and task_def.action == "take_screenshot" and result.get("success"):
-                        await notify_callback({
+                        await self._emit_notify(notify_callback, {
                             "type": "screenshot",
                             "path": result.get("path") or result.get("filename"),
                             "message": f"{task_def.description} goruntusu"
@@ -1174,11 +1260,11 @@ JSON ciktisi (baska hicbir sey yazma):
                     if result.get("success"):
                         succeeded += 1
                         if notify_callback:
-                            await notify_callback(f" {task_def.description} tamamlandı.")
+                            await self._emit_notify(notify_callback, f" {task_def.description} tamamlandı.")
                     else:
                         failed += 1
                         if notify_callback:
-                            await notify_callback(f" {task_def.description} hatası: {result.get('error')}")
+                            await self._emit_notify(notify_callback, f" {task_def.description} hatası: {result.get('error')}")
                             
                     return {
                         "task_id": task_def.id,
@@ -1206,7 +1292,7 @@ JSON ciktisi (baska hicbir sey yazma):
 
         # Final progress update
         if notify_callback and succeeded == len(tasks):
-            await notify_callback(f"Tum gorevler basariyla tamamlandi.")
+            await self._emit_notify(notify_callback, "Tum gorevler basariyla tamamlandi.")
 
         return {
             "success": failed == 0,

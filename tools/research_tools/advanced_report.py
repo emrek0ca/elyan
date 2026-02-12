@@ -4,6 +4,7 @@ Enterprise-grade reporting with comprehensive analytics and formatting
 """
 
 import asyncio
+import json
 import re
 from typing import Dict, List, Optional, Any
 from pathlib import Path
@@ -226,6 +227,8 @@ class AdvancedReportGenerator:
             "appendix": self._generate_appendix(research_data),
             "quality_metrics": metrics,
             "key_findings_list": findings, # Pass clean list
+            "sources_raw": sources,
+            "findings_raw": findings,
             "visualizations": {
                 "reliability_chart": reliability_chart,
                 "findings_chart": findings_chart,
@@ -565,9 +568,12 @@ class AdvancedReportGenerator:
             if summary:
                 doc.add_paragraph(summary)
 
+            self._add_docx_section(doc, "Introduction", sections.get("introduction", ""))
+            self._add_docx_section(doc, "Methodology", sections.get("methodology", ""))
+
             # Key Findings
             doc.add_heading("Key Findings", level=2)
-            findings = sections.get("key_findings_list", [])
+            findings = sections.get("findings_raw", []) or sections.get("key_findings_list", [])
             if not findings:
                 raw_findings = sections.get("key_findings", "")
                 findings = self._strip_html_list(raw_findings)
@@ -581,10 +587,24 @@ class AdvancedReportGenerator:
 
             # Sources
             doc.add_heading("Sources", level=2)
-            sources = sections.get("quality_metrics", {})
-            if hasattr(sources, 'source_count'):
-                doc.add_paragraph(f"Total Sources: {sources.source_count}")
-                doc.add_paragraph(f"Average Reliability: {sources.average_reliability*100:.1f}%")
+            sources = sections.get("sources_raw", [])
+            if sources:
+                for source in sources[:20]:
+                    title = self._strip_html(source.get("title", "Unknown source"))
+                    reliability = int(float(source.get("reliability_score", 0.0)) * 100)
+                    url = source.get("url", "")
+                    line = f"- {title} (Reliability: {reliability}%)"
+                    if url:
+                        line += f" | {url}"
+                    doc.add_paragraph(line)
+            else:
+                metrics_obj = sections.get("quality_metrics", {})
+                if hasattr(metrics_obj, 'source_count'):
+                    doc.add_paragraph(f"Total Sources: {metrics_obj.source_count}")
+                    doc.add_paragraph(f"Average Reliability: {metrics_obj.average_reliability*100:.1f}%")
+
+            self._add_docx_section(doc, "Strategic Insights", sections.get("insights", ""))
+            self._add_docx_section(doc, "Recommendations", sections.get("recommendations", ""))
 
             # Save
             doc.save(str(output_path))
@@ -597,6 +617,17 @@ class AdvancedReportGenerator:
         except Exception as e:
             logger.error(f"Word generation error: {e}")
             return await self._generate_advanced_pdf(topic, sections, metrics)
+
+    def _add_docx_section(self, doc, heading: str, html_text: str):
+        """Add cleaned section text to DOCX with consistent paragraph flow."""
+        cleaned = self._strip_html(html_text)
+        if not cleaned:
+            return
+        doc.add_heading(heading, level=2)
+        for paragraph in re.split(r'(?<=[.!?])\s+', cleaned):
+            p = paragraph.strip()
+            if p:
+                doc.add_paragraph(p)
 
     async def _generate_advanced_pdf(
         self,
