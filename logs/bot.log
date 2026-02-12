@@ -8389,3 +8389,391 @@ AttributeError: 'NoneType' object has no attribute 'chat'
 2026-02-12 22:29:30 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
 2026-02-12 22:29:30 | intelligent_planner | INFO | Intelligent Planner initialized
 2026-02-12 22:29:30 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 01:21:24 | security.audit | INFO | Audit database initialized at /Users/emrekoca/.config/cdacs-bot/audit.db
+2026-02-13 01:21:24 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 01:21:24 | learning_engine | INFO | Loaded 14 patterns, 0 preferences
+2026-02-13 01:21:24 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 01:21:24 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 01:21:58 | wizard_entry | WARNING | Apple setup wizard unavailable, falling back: cannot import name 'SetupWizard' from 'ui.apple_setup_wizard' (/Users/emrekoca/Desktop/bot/ui/apple_setup_wizard.py)
+2026-02-13 01:21:58 | wizard_entry | WARNING | Enhanced setup wizard unavailable, falling back: cannot import name 'SetupWizard' from 'ui.enhanced_setup_wizard' (/Users/emrekoca/Desktop/bot/ui/enhanced_setup_wizard.py)
+2026-02-13 01:21:59 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 01:21:59 | learning_engine | INFO | Loaded 14 patterns, 0 preferences
+2026-02-13 01:21:59 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 01:21:59 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 01:21:59 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 01:21:59 | notifications | INFO | Smart Notification System initialized
+2026-02-13 01:21:59 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 01:21:59 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 01:21:59 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 01:21:59 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 01:21:59 | fast_response | INFO | Fast Response System initialized
+2026-02-13 01:21:59 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 01:21:59 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 01:21:59 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 01:21:59 | agent | INFO | UI bağlantısı kuruldu
+2026-02-13 01:21:59 | agent | INFO | Agent başlatılıyor...
+2026-02-13 01:21:59 | agent | INFO | Temel motorlar hazır
+2026-02-13 01:21:59 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 01:21:59 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 01:21:59 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 01:21:59 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 01:22:03 | model_manager | INFO | Shared embedding model starting to load (sentence-transformers/all-MiniLM-L6-v2)
+2026-02-13 01:22:07 | model_manager | INFO | Shared embedding model loaded successfully
+2026-02-13 01:22:07 | semantic_memory | INFO | Semantic memory linked to shared embedder
+2026-02-13 01:22:07 | knowledge_base | INFO | Knowledge base linked to shared embedder
+2026-02-13 01:22:07 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 01:22:07 | connection_pool | INFO | Connection pools initialized
+2026-02-13 01:22:07 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 01:22:07 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 01:22:07 | telegram | INFO | Proactive commands registered (schedule, briefing, alerts)
+2026-02-13 01:22:07 | telegram | INFO | Extended commands registered (code, email, parallel, etc.)
+2026-02-13 01:22:07 | telegram | INFO | Voice handler registered (Phase 13.1 + 13.2)
+2026-02-13 01:22:07 | telegram | INFO | Browser commands registered (Phase 14)
+2026-02-13 01:22:07 | telegram | INFO | Handler'lar kaydedildi ve approval callback ayarlandi
+2026-02-13 01:22:08 | telegram.ext.Application | INFO | Application started
+2026-02-13 01:22:08 | clean_main_app | INFO | Telegram botu başarıyla başlatıldı ve polling yapıyor
+2026-02-13 01:22:37 | agent | INFO | İşleniyor: hop...
+2026-02-13 01:22:37 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 01:22:37 | security.audit | INFO | Audit database initialized at /Users/emrekoca/.config/cdacs-bot/audit.db
+2026-02-13 01:22:37 | task_engine | INFO | Task Engine and Intelligence engines initialized successfully
+2026-02-13 01:22:37 | task_engine | INFO | [TaskEngine] Processing: hop...
+2026-02-13 01:22:37 | llm | INFO | LLM_ROUTER provider=groq status=skipped reason=missing_credentials elapsed_ms=0
+2026-02-13 01:22:37 | llm | INFO | LLM_ROUTER provider=gemini status=skipped reason=missing_credentials elapsed_ms=0
+2026-02-13 01:22:39 | llm | INFO | OpenAI response (40 chars)
+2026-02-13 01:22:39 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=1796
+2026-02-13 01:22:39 | memory | INFO | Stored preference for user 0: preferred_language = en
+2026-02-13 01:22:39 | memory | INFO | Stored preference for user 0: common_actions = {"chat": 1}
+2026-02-13 01:22:48 | clean_main_app | INFO | Semantic analysis enabled for File Panel (indexing placeholder)
+2026-02-13 01:23:42 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 01:23:42 | learning_engine | INFO | Loaded 15 patterns, 0 preferences
+2026-02-13 01:23:42 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 01:23:42 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 01:23:42 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 01:23:42 | notifications | INFO | Smart Notification System initialized
+2026-02-13 01:23:42 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 01:23:42 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 01:23:42 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 01:23:42 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 01:23:42 | fast_response | INFO | Fast Response System initialized
+2026-02-13 01:23:42 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 01:23:42 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 01:23:42 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 01:23:42 | agent | INFO | UI bağlantısı kuruldu
+2026-02-13 01:23:42 | agent | INFO | Agent başlatılıyor...
+2026-02-13 01:23:42 | agent | INFO | Temel motorlar hazır
+2026-02-13 01:23:42 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 01:23:42 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 01:23:42 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 01:23:42 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 01:23:45 | model_manager | INFO | Shared embedding model starting to load (sentence-transformers/all-MiniLM-L6-v2)
+2026-02-13 01:23:49 | model_manager | INFO | Shared embedding model loaded successfully
+2026-02-13 01:23:49 | semantic_memory | INFO | Semantic memory linked to shared embedder
+2026-02-13 01:23:49 | knowledge_base | INFO | Knowledge base linked to shared embedder
+2026-02-13 01:23:49 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 01:23:49 | connection_pool | INFO | Connection pools initialized
+2026-02-13 01:23:49 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 01:23:49 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 01:23:49 | telegram | INFO | Proactive commands registered (schedule, briefing, alerts)
+2026-02-13 01:23:49 | telegram | INFO | Extended commands registered (code, email, parallel, etc.)
+2026-02-13 01:23:49 | telegram | INFO | Voice handler registered (Phase 13.1 + 13.2)
+2026-02-13 01:23:49 | telegram | INFO | Browser commands registered (Phase 14)
+2026-02-13 01:23:49 | telegram | INFO | Handler'lar kaydedildi ve approval callback ayarlandi
+2026-02-13 01:23:50 | telegram.ext.Application | INFO | Application started
+2026-02-13 01:23:50 | clean_main_app | INFO | Telegram botu başarıyla başlatıldı ve polling yapıyor
+2026-02-13 01:26:46 | main | INFO | Wiqo Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 01:26:47 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 01:26:47 | learning_engine | INFO | Loaded 15 patterns, 0 preferences
+2026-02-13 01:26:47 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 01:26:47 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 01:26:47 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 01:26:47 | notifications | INFO | Smart Notification System initialized
+2026-02-13 01:26:47 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 01:26:47 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 01:26:47 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 01:26:47 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 01:26:47 | fast_response | INFO | Fast Response System initialized
+2026-02-13 01:26:47 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 01:26:47 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 01:26:47 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 01:26:47 | agent | INFO | UI bağlantısı kuruldu
+2026-02-13 01:26:47 | agent | INFO | Agent başlatılıyor...
+2026-02-13 01:26:47 | agent | INFO | Temel motorlar hazır
+2026-02-13 01:26:47 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 01:26:47 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 01:26:47 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 01:26:47 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 01:26:49 | model_manager | INFO | Shared embedding model starting to load (sentence-transformers/all-MiniLM-L6-v2)
+2026-02-13 01:26:53 | model_manager | INFO | Shared embedding model loaded successfully
+2026-02-13 01:26:53 | semantic_memory | INFO | Semantic memory linked to shared embedder
+2026-02-13 01:26:53 | knowledge_base | INFO | Knowledge base linked to shared embedder
+2026-02-13 01:26:53 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 01:26:53 | connection_pool | INFO | Connection pools initialized
+2026-02-13 01:26:53 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 01:26:53 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 01:26:54 | telegram | INFO | Proactive commands registered (schedule, briefing, alerts)
+2026-02-13 01:26:54 | telegram | INFO | Extended commands registered (code, email, parallel, etc.)
+2026-02-13 01:26:54 | telegram | INFO | Voice handler registered (Phase 13.1 + 13.2)
+2026-02-13 01:26:54 | telegram | INFO | Browser commands registered (Phase 14)
+2026-02-13 01:26:54 | telegram | INFO | Handler'lar kaydedildi ve approval callback ayarlandi
+2026-02-13 01:26:54 | telegram.ext.Application | INFO | Application started
+2026-02-13 01:26:54 | clean_main_app | INFO | Telegram botu başarıyla başlatıldı ve polling yapıyor
+2026-02-13 01:30:09 | main | INFO | Wiqo Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 01:30:10 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 01:30:10 | learning_engine | INFO | Loaded 15 patterns, 0 preferences
+2026-02-13 01:30:10 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 01:30:10 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 01:30:10 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 01:30:10 | notifications | INFO | Smart Notification System initialized
+2026-02-13 01:30:10 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 01:30:10 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 01:30:10 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 01:30:10 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 01:30:10 | fast_response | INFO | Fast Response System initialized
+2026-02-13 01:30:10 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 01:30:10 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 01:30:10 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 01:30:10 | agent | INFO | UI bağlantısı kuruldu
+2026-02-13 01:30:10 | agent | INFO | Agent başlatılıyor...
+2026-02-13 01:30:10 | agent | INFO | Temel motorlar hazır
+2026-02-13 01:30:10 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 01:30:10 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 01:30:10 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 01:30:10 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 01:30:18 | model_manager | INFO | Shared embedding model starting to load (sentence-transformers/all-MiniLM-L6-v2)
+2026-02-13 01:30:23 | model_manager | INFO | Shared embedding model loaded successfully
+2026-02-13 01:30:23 | semantic_memory | INFO | Semantic memory linked to shared embedder
+2026-02-13 01:30:23 | knowledge_base | INFO | Knowledge base linked to shared embedder
+2026-02-13 01:30:23 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 01:30:23 | connection_pool | INFO | Connection pools initialized
+2026-02-13 01:30:23 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 01:30:23 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 01:30:24 | telegram | INFO | Proactive commands registered (schedule, briefing, alerts)
+2026-02-13 01:30:24 | telegram | INFO | Extended commands registered (code, email, parallel, etc.)
+2026-02-13 01:30:24 | telegram | INFO | Voice handler registered (Phase 13.1 + 13.2)
+2026-02-13 01:30:24 | telegram | INFO | Browser commands registered (Phase 14)
+2026-02-13 01:30:24 | telegram | INFO | Handler'lar kaydedildi ve approval callback ayarlandi
+2026-02-13 01:30:24 | telegram.ext.Application | INFO | Application started
+2026-02-13 01:30:25 | clean_main_app | INFO | Telegram botu başarıyla başlatıldı ve polling yapıyor
+2026-02-13 01:33:10 | main | INFO | Wiqo Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 01:33:11 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 01:33:11 | learning_engine | INFO | Loaded 15 patterns, 0 preferences
+2026-02-13 01:33:11 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 01:33:11 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 01:33:11 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 01:33:11 | notifications | INFO | Smart Notification System initialized
+2026-02-13 01:33:11 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 01:33:11 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 01:33:11 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 01:33:11 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 01:33:11 | fast_response | INFO | Fast Response System initialized
+2026-02-13 01:33:11 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 01:33:11 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 01:33:11 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 01:33:11 | agent | INFO | UI bağlantısı kuruldu
+2026-02-13 01:33:11 | agent | INFO | Agent başlatılıyor...
+2026-02-13 01:33:11 | agent | INFO | Temel motorlar hazır
+2026-02-13 01:33:11 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 01:33:11 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 01:33:11 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 01:33:11 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 01:33:14 | model_manager | INFO | Shared embedding model starting to load (sentence-transformers/all-MiniLM-L6-v2)
+2026-02-13 01:33:18 | model_manager | INFO | Shared embedding model loaded successfully
+2026-02-13 01:33:18 | semantic_memory | INFO | Semantic memory linked to shared embedder
+2026-02-13 01:33:18 | knowledge_base | INFO | Knowledge base linked to shared embedder
+2026-02-13 01:33:18 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 01:33:18 | connection_pool | INFO | Connection pools initialized
+2026-02-13 01:33:18 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 01:33:18 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 01:33:19 | telegram | INFO | Proactive commands registered (schedule, briefing, alerts)
+2026-02-13 01:33:19 | telegram | INFO | Extended commands registered (code, email, parallel, etc.)
+2026-02-13 01:33:19 | telegram | INFO | Voice handler registered (Phase 13.1 + 13.2)
+2026-02-13 01:33:19 | telegram | INFO | Browser commands registered (Phase 14)
+2026-02-13 01:33:19 | telegram | INFO | Handler'lar kaydedildi ve approval callback ayarlandi
+2026-02-13 01:33:19 | telegram.ext.Application | INFO | Application started
+2026-02-13 01:33:19 | clean_main_app | INFO | Telegram botu başarıyla başlatıldı ve polling yapıyor
+2026-02-13 01:36:01 | main | INFO | Wiqo Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 01:41:29 | main | INFO | Wiqo Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 01:41:30 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 01:41:30 | learning_engine | INFO | Loaded 15 patterns, 0 preferences
+2026-02-13 01:41:30 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 01:41:30 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 01:41:30 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 01:41:30 | notifications | INFO | Smart Notification System initialized
+2026-02-13 01:41:30 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 01:41:30 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 01:41:30 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 01:41:30 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 01:41:30 | fast_response | INFO | Fast Response System initialized
+2026-02-13 01:41:30 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 01:41:30 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 01:41:30 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 01:41:30 | agent | INFO | UI bağlantısı kuruldu
+2026-02-13 01:41:30 | agent | INFO | Agent başlatılıyor...
+2026-02-13 01:41:30 | agent | INFO | Temel motorlar hazır
+2026-02-13 01:41:30 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 01:41:30 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 01:41:30 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 01:41:30 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 01:41:32 | model_manager | INFO | Shared embedding model starting to load (sentence-transformers/all-MiniLM-L6-v2)
+2026-02-13 01:41:37 | model_manager | INFO | Shared embedding model loaded successfully
+2026-02-13 01:41:37 | semantic_memory | INFO | Semantic memory linked to shared embedder
+2026-02-13 01:41:37 | knowledge_base | INFO | Knowledge base linked to shared embedder
+2026-02-13 01:41:37 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 01:41:37 | connection_pool | INFO | Connection pools initialized
+2026-02-13 01:41:37 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 01:41:37 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 01:41:37 | telegram | INFO | Proactive commands registered (schedule, briefing, alerts)
+2026-02-13 01:41:37 | telegram | INFO | Extended commands registered (code, email, parallel, etc.)
+2026-02-13 01:41:37 | telegram | INFO | Voice handler registered (Phase 13.1 + 13.2)
+2026-02-13 01:41:37 | telegram | INFO | Browser commands registered (Phase 14)
+2026-02-13 01:41:37 | telegram | INFO | Handler'lar kaydedildi ve approval callback ayarlandi
+2026-02-13 01:41:38 | telegram.ext.Application | INFO | Application started
+2026-02-13 01:41:38 | clean_main_app | INFO | Telegram botu başarıyla başlatıldı ve polling yapıyor
+2026-02-13 01:42:09 | advanced_research | INFO | Araştırma başlatıldı: zürafalar (standard)
+2026-02-13 01:42:10 | web.search | INFO | Search 'zürafalar': found 6 results
+2026-02-13 01:42:12 | web.scraper | INFO | Extracted 4620 chars from https://www.hayvanisimleri.net/zurafalar-hakkinda-bilgiler
+2026-02-13 01:42:13 | web.scraper | INFO | Extracted 19742 chars from https://www.keyiflibilgi.com/zurafalarin-ozellikleri-hakkinda-33-bilgi/
+2026-02-13 01:42:14 | web.scraper | INFO | Extracted 49045 chars from https://tr.postposmo.com/Jirafas/
+2026-02-13 01:42:15 | web.scraper | INFO | Extracted 8072 chars from https://hayvanrehberim.com/10-maddede-zurafalar-hakkinda-her-sey/
+2026-02-13 01:42:16 | web.scraper | INFO | Extracted 3985 chars from https://www.sabah.com.tr/yasam/zurafalar-ne-yer-nerede-yasar-zurafalar-kac-yil-yasar-ve-ozellikleri-nelerdir-k1-5920188
+2026-02-13 01:42:16 | advanced_report | INFO | LLM client initialized for report generation
+2026-02-13 01:42:17 | advanced_report | INFO | Word document created: /Users/emrekoca/Desktop/Research Reports/zürafalar_20260213_014217.docx
+2026-02-13 01:42:17 | advanced_report | INFO | Professional report generated: /Users/emrekoca/Desktop/Research Reports/zürafalar_20260213_014217.docx (docx)
+2026-02-13 01:42:17 | advanced_research | INFO | Profesyonel rapor oluşturuldu: /Users/emrekoca/Desktop/Research Reports/zürafalar_20260213_014217.docx
+2026-02-13 01:42:17 | advanced_research | INFO | Rapor metrikleri - Kapsam: 60%, Güvenilirlik: 67%, Bütünlük: 67%
+2026-02-13 01:42:17 | advanced_research | INFO | Araştırma tamamlandı: zürafalar - 6 kaynak, 1 rapor
+2026-02-13 01:42:17 | clean_main_app | ERROR | Background research error: BotWorker.research_finished[str].emit(): argument 1 has unexpected type 'dict'
+2026-02-13 01:46:35 | main | INFO | Wiqo Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 01:46:35 | clean_main_app | INFO | Setup wizard selected: ui.apple_setup_wizard.AppleSetupWizard
+2026-02-13 01:47:00 | apple_setup_wizard | INFO | Populating models for provider: openai
+2026-02-13 01:47:00 | apple_setup_wizard | INFO | Cloud provider models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo']
+2026-02-13 01:47:00 | apple_setup_wizard | INFO | Selected model: gpt-4o
+2026-02-13 01:47:06 | apple_setup_wizard | INFO | Starting connection test for openai
+2026-02-13 01:47:26 | apple_setup_wizard | INFO | Configuration saved: LLM=openai, Model=gpt-4o
+2026-02-13 01:47:26 | apple_setup_wizard | INFO | Settings.json updated
+2026-02-13 01:47:28 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 01:47:28 | learning_engine | INFO | Loaded 0 patterns, 0 preferences
+2026-02-13 01:47:28 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 01:47:28 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 01:47:28 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 01:47:28 | notifications | INFO | Smart Notification System initialized
+2026-02-13 01:47:28 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 01:47:28 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 01:47:28 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 01:47:28 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 01:47:28 | fast_response | INFO | Fast Response System initialized
+2026-02-13 01:47:28 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 01:47:28 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 01:47:28 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 01:47:28 | agent | INFO | UI bağlantısı kuruldu
+2026-02-13 01:47:28 | agent | INFO | Agent başlatılıyor...
+2026-02-13 01:47:28 | agent | INFO | Temel motorlar hazır
+2026-02-13 01:47:28 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 01:47:28 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 01:47:28 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 01:47:28 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 01:47:31 | model_manager | INFO | Shared embedding model starting to load (sentence-transformers/all-MiniLM-L6-v2)
+2026-02-13 01:47:36 | model_manager | INFO | Shared embedding model loaded successfully
+2026-02-13 01:47:36 | semantic_memory | INFO | Semantic memory linked to shared embedder
+2026-02-13 01:47:36 | knowledge_base | INFO | Knowledge base linked to shared embedder
+2026-02-13 01:47:36 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 01:47:36 | connection_pool | INFO | Connection pools initialized
+2026-02-13 01:47:36 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 01:47:36 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 01:47:36 | clean_main_app | WARNING | Telegram token bulunamadı, bot başlatılamıyor
+2026-02-13 01:48:12 | agent | INFO | İşleniyor: wiqo...
+2026-02-13 01:48:12 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 01:48:12 | security.audit | INFO | Audit database initialized at /Users/emrekoca/.config/cdacs-bot/audit.db
+2026-02-13 01:48:12 | task_engine | INFO | Task Engine and Intelligence engines initialized successfully
+2026-02-13 01:48:12 | task_engine | INFO | [TaskEngine] Processing: wiqo...
+2026-02-13 01:48:13 | llm | INFO | OpenAI response (107 chars)
+2026-02-13 01:48:13 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=1357
+2026-02-13 01:48:13 | memory | INFO | Stored preference for user 0: preferred_language = en
+2026-02-13 01:48:13 | memory | INFO | Stored preference for user 0: common_actions = {"chat": 1}
+2026-02-13 01:48:19 | agent | INFO | İşleniyor: ss al...
+2026-02-13 01:48:19 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 01:48:19 | task_engine | INFO | [TaskEngine] Processing: ss al...
+2026-02-13 01:48:19 | task_engine | INFO | Cognitive Bypass: Direct-Route active for take_screenshot
+2026-02-13 01:48:19 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 01:48:19 | task_engine | ERROR | Task bypass_task_1 failed: 'NoneType' object can't be awaited
+2026-02-13 01:48:19 | memory | INFO | Stored preference for user 0: preferred_language = en
+2026-02-13 01:52:41 | main | INFO | Wiqo Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 01:52:41 | clean_main_app | INFO | Setup wizard selected: ui.apple_setup_wizard.AppleSetupWizard
+2026-02-13 01:53:00 | apple_setup_wizard | INFO | Populating models for provider: openai
+2026-02-13 01:53:00 | apple_setup_wizard | INFO | Cloud provider models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo']
+2026-02-13 01:53:00 | apple_setup_wizard | INFO | Selected model: gpt-4o
+2026-02-13 01:53:03 | apple_setup_wizard | INFO | Starting connection test for openai
+2026-02-13 01:53:17 | apple_setup_wizard | INFO | Configuration saved: LLM=openai, Model=gpt-4o
+2026-02-13 01:53:17 | apple_setup_wizard | INFO | Settings.json updated
+2026-02-13 01:53:18 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 01:53:18 | learning_engine | INFO | Loaded 0 patterns, 0 preferences
+2026-02-13 01:53:18 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 01:53:18 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 01:53:18 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 01:53:18 | notifications | INFO | Smart Notification System initialized
+2026-02-13 01:53:18 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 01:53:18 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 01:53:18 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 01:53:18 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 01:53:18 | fast_response | INFO | Fast Response System initialized
+2026-02-13 01:53:18 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 01:53:18 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 01:53:18 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 01:53:18 | agent | INFO | UI bağlantısı kuruldu
+2026-02-13 01:53:18 | agent | INFO | Agent başlatılıyor...
+2026-02-13 01:53:18 | agent | INFO | Temel motorlar hazır
+2026-02-13 01:53:18 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 01:53:18 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 01:53:18 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 01:53:18 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 01:53:22 | model_manager | INFO | Shared embedding model starting to load (sentence-transformers/all-MiniLM-L6-v2)
+2026-02-13 01:53:26 | model_manager | INFO | Shared embedding model loaded successfully
+2026-02-13 01:53:26 | semantic_memory | INFO | Semantic memory linked to shared embedder
+2026-02-13 01:53:26 | knowledge_base | INFO | Knowledge base linked to shared embedder
+2026-02-13 01:53:26 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 01:53:26 | connection_pool | INFO | Connection pools initialized
+2026-02-13 01:53:26 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 01:53:26 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 01:53:26 | clean_main_app | WARNING | Telegram token bulunamadı, bot başlatılamıyor
+2026-02-13 01:53:45 | agent | INFO | İşleniyor: ss al...
+2026-02-13 01:53:45 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 01:53:45 | security.audit | INFO | Audit database initialized at /Users/emrekoca/.config/cdacs-bot/audit.db
+2026-02-13 01:53:45 | task_engine | INFO | Task Engine and Intelligence engines initialized successfully
+2026-02-13 01:53:45 | task_engine | INFO | [TaskEngine] Processing: ss al...
+2026-02-13 01:53:45 | task_engine | INFO | Cognitive Bypass: Direct-Route active for take_screenshot
+2026-02-13 01:53:45 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 01:53:45 | task_executor | INFO | Executing take_screenshot with params: {'filename': None}
+2026-02-13 01:53:45 | task_executor | INFO | Task take_screenshot completed in 0.21s
+2026-02-13 01:53:45 | memory | INFO | Stored preference for user 0: preferred_language = en
+2026-02-13 01:53:45 | memory | INFO | Stored preference for user 0: common_actions = {"unknown": 1}
+2026-02-13 01:54:16 | agent | INFO | İşleniyor: bir website yap. bu sitede resimlerimi paylaşcam. tema olarak siyah beyaz kullan...
+2026-02-13 01:54:16 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 01:54:16 | task_engine | INFO | [TaskEngine] Processing: bir website yap. bu sitede resimlerimi paylaşcam. tema olarak siyah beyaz kullan...
+2026-02-13 01:54:16 | task_engine | INFO | Cognitive Bypass: Direct-Route active for multi_task
+2026-02-13 01:54:16 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 01:54:16 | task_executor | INFO | Executing create_folder with params: {'path': '~/Desktop/olarak-siyah-beyaz-kullan-renkleri-site'}
+2026-02-13 01:54:16 | task_executor | INFO | Task create_folder completed in 0.00s
+2026-02-13 01:54:16 | task_engine | INFO | Executing 3 tasks in parallel
+2026-02-13 01:54:16 | task_executor | INFO | Executing write_file with params: {'path': '~/Desktop/olarak-siyah-beyaz-kullan-renkleri-site/index.html', 'content': '<!DOCTYPE html>\n<html lang="tr">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>olarak siyah beyaz kullan renkleri | Portfolio</title>\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <header class="hero">\n    <nav class="nav">\n      <div class="brand">olarak siyah beyaz kullan renkleri</div>\n      <button id="themeToggle" class="theme-btn" aria-label="Tema değiştir">Tema</button>\n    </nav>\n    <div class="hero-content">\n      <p class="eyebrow">PORTFOLIO</p>\n      <h1>olarak siyah beyaz kullan renkleri</h1>\n      <p>Modern, hızlı ve mobil uyumlu kişisel portfolyo sayfası.</p>\n      <a class="cta" href="#projeler">Projeleri Gör</a>\n    </div>\n  </header>\n\n  <main>\n    <section id="hakkimda" class="section reveal">\n      <h2>Hakkımda</h2>\n      <p>Ürün odaklı, detaylara dikkat eden ve sürdürülebilir çözümler üreten bir geliştiriciyim.</p>\n    </section>\n\n    <section id="projeler" class="section reveal">\n      <h2>Projeler</h2>\n      <div class="cards">\n        <article class="card">\n          <h3>Proje 1</h3>\n          <p>Gerçek hayatta kullanılan bir otomasyon çözümü.</p>\n        </article>\n        <article class="card">\n          <h3>Proje 2</h3>\n          <p>Performans ve ölçeklenebilirlik odaklı web uygulaması.</p>\n        </article>\n        <article class="card">\n          <h3>Proje 3</h3>\n          <p>Kullanıcı deneyimini iyileştiren arayüz çalışması.</p>\n        </article>\n      </div>\n    </section>\n\n    <section id="iletisim" class="section reveal">\n      <h2>İletişim</h2>\n      <form class="contact-form">\n        <input type="text" placeholder="Ad Soyad" required>\n        <input type="email" placeholder="E-posta" required>\n        <textarea rows="5" placeholder="Mesajınız" required></textarea>\n        <button type="submit">Gönder</button>\n      </form>\n    </section>\n  </main>\n\n  <footer class="footer">\n    <p>© 2026 olarak siyah beyaz kullan renkleri. Tüm hakları saklıdır.</p>\n  </footer>\n\n  <script src="script.js"></script>\n</body>\n</html>\n'}
+2026-02-13 01:54:16 | task_executor | INFO | Task write_file completed in 0.00s
+2026-02-13 01:54:16 | task_executor | INFO | Executing write_file with params: {'path': '~/Desktop/olarak-siyah-beyaz-kullan-renkleri-site/style.css', 'content': '* {\n  box-sizing: border-box;\n}\n\n:root {\n  --bg: #f7f4ef;\n  --bg-strong: #efe8de;\n  --text: #1f2328;\n  --muted: #5f6670;\n  --accent: #0f766e;\n  --card: #ffffff;\n  --border: #dad2c7;\n}\n\nbody {\n  margin: 0;\n  font-family: "Avenir Next", "Segoe UI", sans-serif;\n  color: var(--text);\n  background:\n    radial-gradient(circle at 10% 10%, #fff7e8 0%, transparent 35%),\n    radial-gradient(circle at 90% 20%, #d9f3ec 0%, transparent 30%),\n    var(--bg);\n}\n\n.hero {\n  min-height: 72vh;\n  padding: 24px clamp(20px, 6vw, 80px);\n}\n\n.nav {\n  display: flex;\n  justify-content: space-between;\n  align-items: center;\n}\n\n.brand {\n  font-weight: 700;\n  letter-spacing: 0.4px;\n}\n\n.theme-btn {\n  border: 1px solid var(--border);\n  background: var(--card);\n  border-radius: 999px;\n  padding: 8px 14px;\n  cursor: pointer;\n}\n\n.hero-content {\n  margin-top: 72px;\n  max-width: 720px;\n}\n\n.eyebrow {\n  color: var(--accent);\n  font-size: 12px;\n  letter-spacing: 1.8px;\n}\n\nh1 {\n  margin: 10px 0;\n  font-size: clamp(2rem, 4.5vw, 4rem);\n  line-height: 1.1;\n}\n\n.cta {\n  display: inline-block;\n  margin-top: 16px;\n  text-decoration: none;\n  color: #fff;\n  background: var(--accent);\n  padding: 12px 18px;\n  border-radius: 10px;\n}\n\n.section {\n  padding: 48px clamp(20px, 6vw, 80px);\n}\n\n.cards {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));\n  gap: 16px;\n}\n\n.card {\n  background: var(--card);\n  border: 1px solid var(--border);\n  border-radius: 14px;\n  padding: 18px;\n}\n\n.contact-form {\n  display: grid;\n  gap: 10px;\n  max-width: 520px;\n}\n\n.contact-form input,\n.contact-form textarea {\n  border: 1px solid var(--border);\n  border-radius: 10px;\n  padding: 12px;\n  font: inherit;\n  background: #fff;\n}\n\n.contact-form button {\n  width: fit-content;\n  border: none;\n  border-radius: 10px;\n  padding: 10px 16px;\n  background: var(--accent);\n  color: #fff;\n  cursor: pointer;\n}\n\n.footer {\n  padding: 28px;\n  text-align: center;\n  color: var(--muted);\n}\n\n.reveal {\n  opacity: 0;\n  transform: translateY(16px);\n  transition: opacity 420ms ease, transform 420ms ease;\n}\n\n.reveal.visible {\n  opacity: 1;\n  transform: translateY(0);\n}\n\nbody.dark {\n  --bg: #111826;\n  --bg-strong: #0e1320;\n  --text: #f0f4fa;\n  --muted: #b8c1cf;\n  --accent: #22c55e;\n  --card: #161f31;\n  --border: #27334a;\n}\n'}
+2026-02-13 01:54:16 | task_executor | INFO | Task write_file completed in 0.00s
+2026-02-13 01:54:16 | task_executor | INFO | Executing write_file with params: {'path': '~/Desktop/olarak-siyah-beyaz-kullan-renkleri-site/script.js', 'content': "const revealElements = document.querySelectorAll('.reveal');\n\nconst observer = new IntersectionObserver((entries) => {\n  entries.forEach((entry) => {\n    if (entry.isIntersecting) {\n      entry.target.classList.add('visible');\n      observer.unobserve(entry.target);\n    }\n  });\n}, { threshold: 0.12 });\n\nrevealElements.forEach((el) => observer.observe(el));\n\nconst themeToggle = document.getElementById('themeToggle');\nthemeToggle?.addEventListener('click', () => {\n  document.body.classList.toggle('dark');\n});\n\ndocument.querySelector('.contact-form')?.addEventListener('submit', (event) => {\n  event.preventDefault();\n  alert('Mesajınız alındı. Teşekkürler.');\n});\n"}
+2026-02-13 01:54:16 | task_executor | INFO | Task write_file completed in 0.00s
+2026-02-13 01:54:16 | memory | INFO | Stored preference for user 0: preferred_language = tr
+2026-02-13 01:54:16 | memory | INFO | Stored preference for user 0: common_actions = {"unknown": 2}
+2026-02-13 01:57:27 | agent | INFO | İşleniyor: hayvan...
+2026-02-13 01:57:27 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 01:57:27 | task_engine | INFO | [TaskEngine] Processing: hayvan...
+2026-02-13 01:57:29 | llm | INFO | OpenAI response (361 chars)
+2026-02-13 01:57:29 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=2485
+2026-02-13 01:57:29 | memory | INFO | Stored preference for user 0: preferred_language = en
+2026-02-13 01:57:29 | memory | INFO | Stored preference for user 0: common_actions = {"unknown": 2, "chat": 1}
+2026-02-13 01:57:36 | agent | INFO | İşleniyor: araştır...
+2026-02-13 01:57:36 | agent | INFO | Intent: research (requires_llm=True) -> routed_to=task_engine
+2026-02-13 01:57:36 | task_engine | INFO | [TaskEngine] Processing: araştır...
+2026-02-13 01:57:36 | task_engine | INFO | Cognitive Bypass: Direct-Route active for advanced_research
+2026-02-13 01:57:36 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 01:57:36 | task_executor | INFO | Executing advanced_research with params: {}
+2026-02-13 01:57:36 | task_executor | ERROR | Task advanced_research execution error: advanced_research() missing 1 required positional argument: 'topic'
+2026-02-13 01:57:37 | memory | INFO | Stored preference for user 0: preferred_language = tr

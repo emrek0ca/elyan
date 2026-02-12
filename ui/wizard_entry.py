@@ -10,22 +10,22 @@ logger = get_logger("wizard_entry")
 
 
 def get_setup_wizard_class():
-    """Return canonical setup wizard class with compatibility fallbacks."""
+    """Return canonical setup wizard class (latest-first, no legacy fallback)."""
     try:
-        from .apple_setup_wizard import SetupWizard as AppleSetupWizard
+        from .apple_setup_wizard import AppleSetupWizard
         return AppleSetupWizard
     except Exception as exc:
         logger.warning(f"Apple setup wizard unavailable, falling back: {exc}")
 
     try:
-        from .enhanced_setup_wizard import SetupWizard as EnhancedSetupWizard
+        from .enhanced_setup_wizard import EnhancedSetupWizard
         return EnhancedSetupWizard
     except Exception as exc:
-        logger.warning(f"Enhanced setup wizard unavailable, falling back: {exc}")
-
-    from .setup_wizard import SetupWizard as LegacySetupWizard
-    return LegacySetupWizard
+        logger.error(f"Enhanced setup wizard unavailable: {exc}")
+        raise RuntimeError(
+            "No modern setup wizard available (apple/enhanced). "
+            "Legacy wizard fallback disabled intentionally."
+        ) from exc
 
 
 SetupWizard = get_setup_wizard_class()
-

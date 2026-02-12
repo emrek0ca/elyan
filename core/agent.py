@@ -33,6 +33,7 @@ from .user_profile import get_user_profile_store
 from .i18n import detect_language
 from tools import AVAILABLE_TOOLS
 from security.validator import validate_input, sanitize_input
+from security.privacy_guard import redact_text, sanitize_for_storage, sanitize_object, is_external_provider
 from config.settings import HOME_DIR
 from utils.logger import get_logger
 
@@ -259,6 +260,12 @@ ACTION_TO_TOOL = {
 
 class Agent:
     def __init__(self):
+        try:
+            from config.settings_manager import SettingsPanel
+            self.settings = SettingsPanel()
+        except Exception:
+            self.settings = None
+
         self.llm = LLMClient()
         self.executor = TaskExecutor()
         self.ui_app = None  # UI application reference
@@ -291,6 +298,15 @@ class Agent:
         # Operation modes
         self.autonomous_mode = True  # Can plan and execute multi-step tasks
         self.current_user_id = None  # Set during process()
+
+    def _privacy_flags(self) -> dict:
+        if not self.settings:
+            return {"strict": True, "redact_storage": True, "redact_logs": True}
+        return {
+            "strict": bool(self.settings.get("privacy_mode_strict", True)),
+            "redact_storage": bool(self.settings.get("privacy_redact_storage", True)),
+            "redact_logs": bool(self.settings.get("privacy_redact_logs", True)),
+        }
 
     def connect_ui(self, ui_app):
         """Connect to UI application for real-time updates"""
@@ -362,7 +378,9 @@ class Agent:
             return f"Hata: {msg}"
 
         user_input = sanitize_input(user_input)
-        logger.info(f"İşleniyor: {user_input[:50]}...")
+        flags = self._privacy_flags()
+        log_input = redact_text(user_input) if flags["redact_logs"] else user_input
+        logger.info(f"İşleniyor: {log_input[:80]}...")
 
         # === v18.0 FAST RESPONSE PATH ===
         # Try cache first (instant response)
@@ -412,7 +430,7 @@ class Agent:
             # Build comprehensive context from context_manager
             context_data = await self.context_manager.build_context(
                 user_id=self.current_user_id or 0,
-                current_message=user_input,
+                current_message=redact_text(user_input) if (flags["redact_storage"] or (flags["strict"] and is_external_provider(self.llm.llm_type))) else user_input,
                 include_history=True,
                 include_preferences=True,
                 include_recent_tasks=False  # Skip for performance
@@ -427,6 +445,9 @@ class Agent:
                 "user_preferences": context_data.get("user_preferences", {}),
                 "formatted_context": formatted_context  # For LLM injection
             }
+            if flags["strict"] and is_external_provider(self.llm.llm_type):
+                context["formatted_context"] = redact_text(str(context.get("formatted_context", "")))
+                context["recent_history"] = sanitize_object(context.get("recent_history", []))
             profile_summary = self.user_profiles.profile_summary(str(self.current_user_id or "local"))
             context["user_profile"] = profile_summary
             context["user_preferences"] = {
@@ -459,6 +480,23 @@ class Agent:
                 "tasks_failed": metadata.get("tasks_failed", 0)
             }
 
+            # Continuous improvement: learn from each executed task outcome.
+            try:
+                task_rows = (task_result.data or {}).get("results", [])
+                if isinstance(task_rows, list):
+                    for row in task_rows:
+                        if not isinstance(row, dict):
+                            continue
+                        self.self_improvement.record_interaction_outcome(
+                            tool_name=str(row.get("action", "unknown")),
+                            params=sanitize_object(row.get("data", {})) if flags["redact_storage"] else (row.get("data", {}) or {}),
+                            success=bool(row.get("success", False)),
+                            duration_ms=float(task_result.execution_time_ms or 0),
+                            error=sanitize_for_storage(str(row.get("error", ""))) if row.get("error") and flags["redact_storage"] else row.get("error"),
+                        )
+            except Exception as inner_exc:
+                logger.debug(f"Self-improvement record error: {inner_exc}")
+
             # Cache successful responses
             if result and not result.startswith("Hata:"):
                 complexity = self.llm_optimizer.classify_complexity(user_input)
@@ -486,12 +524,12 @@ class Agent:
         try:
             await self.learning.record_interaction(
                 user_id=str(self.current_user_id or "local"),
-                input_text=user_input,
+                input_text=sanitize_for_storage(user_input) if flags["redact_storage"] else user_input,
                 intent=learning_intent,
                 action=learning_action,
                 success=learning_success,
                 duration_ms=learning_duration_ms,
-                context=learning_context
+                context=sanitize_object(learning_context) if flags["redact_storage"] else learning_context
             )
             # Keep lightweight long-term profile for personalization.
             self.user_profiles.update_after_interaction(
@@ -504,7 +542,7 @@ class Agent:
             try:
                 self.context_manager.learn_from_interaction(
                     user_id=int(self.current_user_id or 0),
-                    user_message=user_input,
+                    user_message=sanitize_for_storage(user_input) if flags["redact_storage"] else user_input,
                     bot_response={
                         "action": learning_action,
                         "success": learning_success,

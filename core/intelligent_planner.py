@@ -217,6 +217,10 @@ Return JSON array:
         formatted = context.get("formatted_context")
         if formatted:
             segments.append(f"recent_context={str(formatted)[:300]}")
+        requirements = context.get("execution_requirements")
+        if isinstance(requirements, dict) and requirements:
+            req = ",".join(f"{k}={v}" for k, v in requirements.items())
+            segments.append(f"execution_requirements={req[:200]}")
         return " | ".join(segments)
 
     def evaluate_plan_quality(self, subtasks: List[SubTask], goal: str = "") -> Dict[str, Any]:

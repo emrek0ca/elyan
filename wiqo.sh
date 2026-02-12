@@ -18,8 +18,10 @@ source venv/bin/activate
 echo "Sistem hazır"
 echo ""
 
-# Eski instance'ları kapat
+# Eski instance'ları kapat (python / python3 varyantları)
 pkill -f "python3 main.py" 2>/dev/null
+pkill -f "python main.py" 2>/dev/null
+pkill -f "/Users/emrekoca/Desktop/bot/main.py" 2>/dev/null
 sleep 0.5
 
 # Başlat

@@ -18,6 +18,7 @@ from config.settings_manager import SettingsPanel
 from utils.logger import get_logger
 
 logger = get_logger("main")
+LAUNCHER_VERSION = "24.0.0"
 
 
 def _resolve_telegram_token() -> str:
@@ -33,6 +34,7 @@ def _resolve_telegram_token() -> str:
 def run_with_ui() -> int:
     """Start desktop UI mode."""
     try:
+        logger.info(f"Wiqo Launcher v{LAUNCHER_VERSION} starting from {__file__}")
         from ui.clean_main_app import main as clean_main
         return int(clean_main() or 0)
     except Exception as exc:
@@ -94,4 +96,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
