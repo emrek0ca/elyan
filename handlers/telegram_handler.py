@@ -1,0 +1,1634 @@
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+from core.agent import Agent
+from config.settings import ALLOWED_USER_IDS, HOME_DIR, LOGS_DIR
+from security.rate_limiter import rate_limiter
+from security.approval import get_approval_manager
+from core.error_handler import ErrorHandler
+from core.tool_health import get_tool_health_manager, ToolStatus
+from core.briefing_manager import get_briefing_manager
+from config.settings_manager import SettingsPanel
+from utils.logger import get_logger
+from pathlib import Path
+from typing import Any, Optional
+import asyncio
+import os
+import json
+import logging
+
+logger = get_logger("telegram")
+
+agent: Agent = None
+telegram_app: Optional[Application] = None
+pending_approvals = {}  # request_id -> {"user_id": int, "future": asyncio.Future}
+pending_requests = {}  # user_id -> request_id for cancellation tracking
+
+
+def _get_save_dir(setting_key: str, default_relative: str) -> Path:
+    """Resolve Telegram save directories from settings with safe fallback."""
+    try:
+        settings = SettingsPanel()
+        raw_path = str(settings.get(setting_key, default_relative) or default_relative).strip()
+    except Exception:
+        raw_path = default_relative
+
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = (HOME_DIR / path).resolve()
+    return path
+
+
+class StatusMessageManager:
+    """Manages a single status message that updates in real-time"""
+    def __init__(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        self.update = update
+        self.context = context
+        self.message = None
+        self.last_text = ""
+
+    async def update_status(self, text: str):
+        if not text or text == self.last_text:
+            return
+            
+        self.last_text = text
+        try:
+            if not self.message:
+                self.message = await self.update.message.reply_text(text, parse_mode=None)
+            else:
+                await self.context.bot.edit_message_text(
+                    chat_id=self.update.effective_chat.id,
+                    message_id=self.message.message_id,
+                    text=text,
+                    parse_mode=None
+                )
+        except Exception as e:
+            logger.debug(f"Status update failed (likely same content or message deleted): {e}")
+            # Fallback if edit fails
+            if "Message is not modified" not in str(e):
+                self.message = await self.update.message.reply_text(text, parse_mode=None)
+
+def init_handlers(agent_instance: Agent):
+    global agent
+    agent = agent_instance
+
+    # Setup notification delivery callback
+    from core.smart_notifications import get_smart_notifications
+    notif_system = get_smart_notifications()
+
+    async def telegram_notification_callback(notification):
+        """Deliver notifications via Telegram"""
+        try:
+            # This would need the bot application instance and user chat_id
+            # For now, just log it. In production, store user chat_ids and send messages
+            logger.info(f"Notification: [{notification.priority.value}] {notification.title}")
+        except Exception as e:
+            logger.error(f"Telegram notification delivery error: {e}")
+
+    notif_system.register_delivery_callback(telegram_notification_callback)
+
+async def check_user(update: Update) -> bool:
+    if not ALLOWED_USER_IDS:
+        return True
+
+    user_id = update.effective_user.id
+    if user_id not in ALLOWED_USER_IDS:
+        logger.warning(f"Yetkisiz erisim: {user_id}")
+        await update.message.reply_text("Bu botu kullanma yetkiniz yok.")
+        return False
+
+    return True
+
+async def approval_callback(approval_request):
+    """Callback for requesting user approval of high-risk operations"""
+    user_id = 0
+    try:
+        if telegram_app is None:
+            return None
+
+        user_id = int(getattr(approval_request, "user_id", 0) or 0)
+        if user_id <= 0:
+            # Non-Telegram request (desktop UI/local) - let fallback callback handle it.
+            return None
+
+        if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
+            logger.warning(f"Unauthorized approval request blocked for user {user_id}")
+            return False
+
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+
+        pending_approvals[approval_request.id] = {
+            "user_id": user_id,
+            "future": future,
+        }
+        pending_requests[user_id] = approval_request.id
+
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("Onayla", callback_data=f"approval:{approval_request.id}:approve"),
+            InlineKeyboardButton("Reddet", callback_data=f"approval:{approval_request.id}:deny"),
+        ]])
+
+        message = (
+            "Onay gerekli\n\n"
+            f"İşlem: {approval_request.operation}\n"
+            f"Açıklama: {approval_request.description}\n"
+            f"Risk: {approval_request.risk_level.value.upper()}\n\n"
+            "Devam etmek istiyor musunuz?"
+        )
+
+        await telegram_app.bot.send_message(
+            chat_id=user_id,
+            text=message,
+            reply_markup=keyboard,
+            parse_mode=None,
+        )
+
+        approved = await future
+        return bool(approved)
+
+    except Exception as e:
+        logger.error(f"Approval callback error: {e}")
+        return False
+    finally:
+        req_id = getattr(approval_request, "id", "")
+        if req_id:
+            pending_approvals.pop(req_id, None)
+        if user_id and pending_requests.get(user_id) == req_id:
+            pending_requests.pop(user_id, None)
+
+
+async def approval_query_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle approval decision button clicks."""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data or ""
+    parts = data.split(":")
+    if len(parts) != 3:
+        await query.edit_message_text("Geçersiz onay isteği.")
+        return
+
+    _, request_id, decision = parts
+    pending = pending_approvals.get(request_id)
+    if not pending:
+        await query.edit_message_text("Bu onay isteği artık geçerli değil.")
+        return
+
+    expected_user = int(pending.get("user_id", 0) or 0)
+    actor_id = int(query.from_user.id) if query.from_user else 0
+    if expected_user and actor_id != expected_user:
+        await query.answer("Bu onay isteği size ait değil.", show_alert=True)
+        return
+
+    approved = decision == "approve"
+    future = pending.get("future")
+    if future and not future.done():
+        future.set_result(approved)
+
+    pending_approvals.pop(request_id, None)
+    if expected_user and pending_requests.get(expected_user) == request_id:
+        pending_requests.pop(expected_user, None)
+
+    if approved:
+        await query.edit_message_text("Onay alındı. İşlem devam ediyor.")
+    else:
+        await query.edit_message_text("İşlem reddedildi.")
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_user(update):
+        return
+
+    welcome = (
+        "Merhaba! Ben senin bilgisayar asistaninim.\n\n"
+        "Yapabileceklerim:\n"
+        "  - Dosya listeleme, okuma, yazma, tasima, silme\n"
+        "  - Belge olusturma ve duzenleme (Word, Excel, PDF)\n"
+        "  - Arastirma yapip rapor olusturma\n"
+        "  - Not alma ve yonetme\n"
+        "  - Gorev planlama\n"
+        "  - Ekran goruntusu alma ve gonderme\n"
+        "  - Gorselleri kaydetme\n"
+        "  - Sistem bilgisi\n"
+        "  - Uygulama kontrolu\n\n"
+        "Dogal dilde konusabilirsin:\n"
+        "  \"Masaustunde ne var?\"\n"
+        "  \"rapor.pdf oku ve ozetle\"\n"
+        "  \"yapay zeka hakkinda arastirma yap\"\n"
+        "  \"ekran goruntusu al\"\n\n"
+        "Komutlar: /help /status /stats /reset /screenshot"
+    )
+    await update.message.reply_text(welcome)
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_user(update):
+        return
+
+    help_text = (
+        "Kullanim Rehberi\n"
+        "-----------------\n\n"
+        "Dosya Islemleri:\n"
+        "  - \"Masaustunde ne var?\"\n"
+        "  - \"test.txt dosyasini oku\"\n"
+        "  - \"dosyayi Documents'a tasi\"\n"
+        "  - \"test.txt sil\"\n\n"
+        "Belge Islemleri:\n"
+        "  - \"rapor.pdf oku\"\n"
+        "  - \"rapor.docx ozetle\"\n"
+        "  - \"word belgesi olustur\"\n"
+        "  - \"1.pdf ve 2.pdf birlestir\"\n\n"
+        "Arastirma:\n"
+        "  - \"yapay zeka hakkinda arastirma yap\"\n"
+        "  - \"blockchain konusunu arastir\"\n\n"
+        "Not Sistemi:\n"
+        "  - \"not olustur: Toplanti notlari\"\n"
+        "  - \"notlarimi goster\"\n\n"
+        "Ekran ve Gorseller:\n"
+        "  - \"ekran goruntusu al\" veya /screenshot\n"
+        "  - Gorsel gonderdiginizde otomatik kaydedilir\n\n"
+        "Sistem:\n"
+        "  - \"sistem durumu\"\n"
+        "  - \"Safari ac\"\n"
+        "  - \"YouTube'a git\"\n\n"
+        "Komutlar:\n"
+        "  /status - Sistem durumu\n"
+        "  /stats - İstatistikler\n"
+        "  /dashboard - İzleme paneli\n"
+        "  /health - Sistem sağlığı\n"
+        "  /cancel - İşlemi iptal et\n"
+        "  /screenshot - Ekran görüntüsü\n"
+        "  /reset - Sistemi sıfırla\n\n"
+        "Akıllı Asistan:\n"
+        "  /smart_insights - Davranış analizi\n"
+        "  /proactive - Proaktif öneriler\n"
+        "  /auto_check - Otomatikleştirme fırsatları\n\n"
+        "Otomasyon & Sistem:\n"
+        "  /automate - Otomasyon görevleri\n"
+        "  /health - Self-healing durumu\n\n"
+        "Analytics & Bildirimler:\n"
+        "  /analytics - Analytics dashboard\n"
+        "  /insights - Sistem öngörüleri\n"
+        "  /notifications - Bildirim yönetimi\n\n"
+        "Gelişmiş Sistem:\n"
+        "  /plan - Akıllı görev planlama\n"
+        "  /predict - Öngörücü bakım\n"
+        "  /security - Güvenlik raporu\n"
+        "  /improve - Self-improvement metrikleri"
+    )
+    await update.message.reply_text(help_text)
+
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_user(update):
+        return
+
+    from tools.system_tools import get_system_info
+    result = await get_system_info()
+
+    if result.get("success"):
+        sys_info = result.get("system", {})
+        cpu = result.get("cpu", {})
+        mem = result.get("memory", {})
+        disk = result.get("disk", {})
+        battery = result.get("battery")
+
+        status = (
+            f"Sistem Durumu\n"
+            f"{'─'*20}\n"
+            f"OS: {sys_info.get('os')} {sys_info.get('os_version', '')}\n"
+            f"CPU: %{cpu.get('percent')}\n"
+            f"RAM: %{mem.get('percent')} ({mem.get('used_gb')}/{mem.get('total_gb')} GB)\n"
+            f"Disk: %{disk.get('percent')} ({disk.get('free_gb')} GB bos)"
+        )
+
+        if battery:
+            charging = "sarj oluyor" if battery.get('charging') else "sarj olmuyor"
+            status += f"\nPil: %{battery.get('percent')} ({charging})"
+
+        cb = agent.executor.circuit_breaker
+        status += f"\n\nBot Durumu: {'Koruma Modu' if cb.is_open else 'Normal'}"
+    else:
+        status = "Sistem bilgisi alinamadi"
+
+    await update.message.reply_text(status)
+
+async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_user(update):
+        return
+
+    agent.executor.reset_circuit_breaker()
+    await update.message.reply_text("Sistem sifirlandi")
+
+
+async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Bot performans istatistiklerini goster"""
+    if not await check_user(update):
+        return
+
+    stats = agent.executor.get_stats()
+
+    cb_status = "ACIK (Koruma)" if stats.get("circuit_breaker_open") else "KAPALI (Normal)"
+
+    stats_text = (
+        f"Bot Istatistikleri\n"
+        f"{'─'*25}\n\n"
+        f"Gorev Ozeti:\n"
+        f"  - Toplam: {stats.get('total', 0)}\n"
+        f"  - Basarili: {stats.get('success', 0)}\n"
+        f"  - Basarisiz: {stats.get('failed', 0)}\n"
+        f"  - Basari Orani: {stats.get('success_rate', '0%')}\n\n"
+        f"Performans:\n"
+        f"  - Ort. Sure: {stats.get('avg_time', '0s')}\n\n"
+        f"Circuit Breaker:\n"
+        f"  - Durum: {cb_status}\n"
+        f"  - Hata Sayisi: {stats.get('failure_count', 0)}/5"
+    )
+
+    await update.message.reply_text(stats_text)
+
+
+async def cmd_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sistem monitoring dashboard'unu goster"""
+    if not await check_user(update):
+        return
+
+    try:
+        from core.monitoring import get_monitoring
+        monitoring = get_monitoring()
+        dashboard = monitoring.get_dashboard()
+
+        ops = dashboard.get("operations", {})
+        dashboard_text = (
+            f" Sistem Dashboard\n"
+            f"{'─'*30}\n\n"
+            f"İşlemler:\n"
+            f"  Toplam: {ops.get('total_operations', 0)}\n"
+            f"  Başarılı: {ops.get('successful', 0)}\n"
+            f"  Başarısız: {ops.get('failed', 0)}\n"
+            f"  Başarı Oranı: {ops.get('success_rate', '0%')}\n"
+            f"  Ort. Süre: {ops.get('avg_duration_ms', '0')}ms\n"
+        )
+
+        # Tool stats
+        tool_stats = dashboard.get("tool_stats", {})
+        if tool_stats:
+            dashboard_text += f"\nEn Çok Kullanılan Araçlar:\n"
+            for tool, stats in list(tool_stats.items())[:5]:
+                if stats.get('total', 0) > 0:
+                    dashboard_text += f"  • {tool}: {stats.get('success_rate', '0%')} başarı\n"
+
+        health = monitoring.get_health_status()
+        dashboard_text += (
+            f"\n{health['status_code']} Sistem Sağlığı: {health['status']}\n"
+            f"  Son 5 dakika hata: {health['recent_errors_5min']}"
+        )
+
+        await update.message.reply_text(dashboard_text)
+    except Exception as e:
+        logger.error(f"Dashboard error: {e}")
+        await update.message.reply_text("Dashboard bilgisi yüklenemedi")
+
+
+async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sistem sağlık durumunu kontrol et"""
+    if not await check_user(update):
+        return
+
+    try:
+        from core.monitoring import get_monitoring
+        from core.tool_health import get_tool_health_manager
+
+        monitoring = get_monitoring()
+        health = monitoring.get_health_status()
+        tool_health = get_tool_health_manager()
+        tool_summary = tool_health.get_health_summary()
+
+        health_text = (
+            f"{health['status_code']} Sistem Sağlığı\n"
+            f"{'─'*25}\n\n"
+            f"Durum: {health['status']}\n"
+            f"Başarı Oranı: {health['success_rate']}\n"
+            f"Son Hata (5min): {health['recent_errors_5min']}\n"
+            f"Toplam İşlem: {health['total_operations']}\n\n"
+            f"Araçlar:\n"
+            f"  Sağlıklı: {tool_summary.get('healthy', 0)}/{tool_summary.get('total_tools', 0)}\n"
+            f"  Sağlık Yüzdesi: {tool_summary.get('health_percentage', 0):.1f}%"
+        )
+
+        await update.message.reply_text(health_text)
+    except Exception as e:
+        logger.error(f"Health check error: {e}")
+        await update.message.reply_text("Sağlık kontrol başarısız")
+
+
+async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sistem ve cache bilgisi göster"""
+    if not await check_user(update):
+        return
+
+    try:
+        from core.smart_cache import get_smart_cache
+        from core.semantic_memory import get_semantic_memory
+        from core.fast_response import get_fast_response_system
+        from core.response_cache import get_response_cache
+        from core.llm_optimizer import get_llm_optimizer
+        from core.quick_intent import get_quick_intent_detector
+
+        cache = get_smart_cache()
+        cache_stats = cache.get_statistics()
+
+        semantic = await get_semantic_memory()
+        conv_summary = semantic.get_context_summary(top_k=3)
+
+        # Fast response stats
+        fast_resp = get_fast_response_system()
+        fast_stats = fast_resp.get_stats()
+
+        # Response cache stats
+        resp_cache = get_response_cache()
+        resp_stats = resp_cache.get_stats()
+
+        # LLM optimizer stats
+        llm_opt = get_llm_optimizer()
+        llm_stats = llm_opt.get_stats()
+
+        # Quick intent stats
+        quick_int = get_quick_intent_detector()
+        intent_stats = quick_int.get_stats()
+
+        info_text = (
+            f"Sistem Bilgisi v18.0\n"
+            f"{'─'*30}\n\n"
+            f"Hızlı Yanıt:\n"
+            f"  Toplam: {fast_stats['total_requests']}\n"
+            f"  Hızlı: {fast_stats['fast_responses']}\n"
+            f"  Oran: {fast_stats['hit_rate']}\n"
+            f"  Süre: {fast_stats['avg_response_time']}\n\n"
+            f"Yanıt Cache:\n"
+            f"  Boyut: {resp_stats['cache_size']}/{resp_stats['max_size']}\n"
+            f"  Hit: {resp_stats['hit_rate']}\n"
+            f"  Fuzzy: {resp_stats['fuzzy_rate']}\n\n"
+            f"LLM Optimizasyon:\n"
+            f"  Toplam: {llm_stats['total_optimizations']}\n"
+            f"  Token tasarruf: {llm_stats['tokens_saved']}\n\n"
+            f"Intent Tespiti:\n"
+            f"  Toplam: {intent_stats['total_detections']}\n"
+            f"  Süre: {intent_stats['avg_detection_time']}\n\n"
+            f"Smart Cache:\n"
+            f"  Boyut: {cache_stats['size']}/{cache_stats['max_size']}\n"
+            f"  Hit: {cache_stats['hit_rate']}\n\n"
+            f"Konuşmalar:\n"
+            f"  Toplam: {len(semantic.conversations)}\n"
+            f"  Bugün: {len(semantic.get_recent(days=1))}"
+        )
+
+        await update.message.reply_text(info_text)
+    except Exception as e:
+        logger.error(f"Info error: {e}")
+        await update.message.reply_text("Bilgi yüklenemedi")
+
+
+async def cmd_research_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Araştırma durumunu kontrol et"""
+    if not await check_user(update):
+        return
+
+    try:
+        if not context.args:
+            await update.message.reply_text("Kullanım: /research_status <research_id>")
+            return
+
+        research_id = context.args[0]
+
+        from tools.research_tools.advanced_research import get_research_status
+
+        result = get_research_status(research_id)
+
+        if not result.get("success"):
+            await update.message.reply_text(f"Araştırma bulunamadı: {research_id}")
+            return
+
+        status_text = (
+            f"Araştırma Durumu\n"
+            f"{'─'*30}\n\n"
+            f"Durum: {result['status']}\n"
+            f"İlerleme: {result['progress']}%\n"
+            f"Konu: {result['topic']}\n"
+            f"Derinlik: {result['depth']}\n"
+            f"Kaynaklar: {result['source_count']}\n"
+            f"Bulgular: {result['finding_count']}"
+        )
+
+        if result.get('summary'):
+            status_text += f"\n\nÖzet: {result['summary'][:200]}..."
+
+        await update.message.reply_text(status_text)
+
+    except Exception as e:
+        logger.error(f"Research status error: {e}")
+        await update.message.reply_text("Durum kontrolü başarısız")
+
+
+async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mevcut işlemi iptal eder"""
+    user_id = update.effective_user.id
+    if not await check_user(update): return
+
+    # Cancel pending approval request for this user if exists
+    pending_id = pending_requests.pop(user_id, None)
+    if pending_id:
+        pending = pending_approvals.pop(pending_id, None)
+        future = pending.get("future") if isinstance(pending, dict) else None
+        if future and not future.done():
+            future.set_result(False)
+        await update.message.reply_text("Bekleyen onay isteği iptal edildi.")
+        return
+
+    if agent:
+        # Check if agent is currently running for this user
+        if hasattr(agent, 'agent_loop') and agent.agent_loop.state:
+             agent.agent_loop.state.should_cancel = True
+             await update.message.reply_text("🛑 İşlem iptal ediliyor...")
+        else:
+             await update.message.reply_text("Çalışan bir işlem bulunamadı.")
+    else:
+        await update.message.reply_text("Agent hazır değil.")
+
+async def cmd_tools(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Araç sağlığı ve listesini gösterir"""
+    if not await check_user(update): return
+
+    manager = get_tool_health_manager()
+    summary = manager.get_health_summary()
+    
+    tools = manager.get_available_tools()
+    
+    text = f" **Araç Durumu ({summary['total_tools']} Toplam)**\n"
+    text += f" Sağlıklı: {summary['healthy']}\n"
+    text += f" Sorunlu: {summary['degraded']}\n"
+    text += f" Kapalı: {summary['unavailable']}\n"
+    text += f" Sağlık Oranı: %{summary['health_percentage']:.1f}\n\n"
+    
+    text += "**Tüm Araçlar:**\n"
+    for t in sorted(tools):
+        status = manager.get_tool_status(t)
+        icon = "" if status == ToolStatus.HEALTHY else "" if status == ToolStatus.DEGRADED else ""
+        text += f"{icon} `{t}`\n"
+        
+    await update.message.reply_text(text, parse_mode=None)
+
+async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sistem ayarlarını gösterir (maskelenmiş)"""
+    if not await check_user(update): return
+    
+    import config.settings as settings
+    
+    text = " **Sistem Ayarları**\n\n"
+    
+    # Masking keys
+    keys_to_show = [
+        "APP_NAME", "VERSION", "ENVIRONMENT", "AGENT_AUTONOMOUS",
+        "TELEGRAM_BOT_TOKEN", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"
+    ]
+    
+    for key in keys_to_show:
+        if hasattr(settings, key):
+            val = getattr(settings, key)
+            if any(secret in key for secret in ["TOKEN", "KEY", "PASSWORD", "SECRET"]):
+                if val:
+                    val = val[:4] + "****" + val[-4:] if len(str(val)) > 8 else "****"
+                else:
+                    val = "Tanımlı Değil"
+            text += f"• `{key}`: {val}\n"
+            
+    await update.message.reply_text(text, parse_mode=None)
+
+async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Son log kayıtlarını gösterir"""
+    if not await check_user(update): return
+    
+    log_file = LOGS_DIR / "bot.log"
+    if not log_file.exists():
+        await update.message.reply_text("Log dosyası bulunamadı.")
+        return
+        
+    try:
+        # Read last 20 lines
+        with open(log_file, "r") as f:
+            lines = f.readlines()
+            last_lines = lines[-20:]
+            
+        content = "".join(last_lines)
+        if len(content) > 4000:
+            content = "..." + content[-3900:]
+            
+        await update.message.reply_text(f" **Son Loglar:**\n```\n{content}\n```", parse_mode=None)
+    except Exception as e:
+        await update.message.reply_text(f"Log okuma hatası: {e}")
+
+async def cmd_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sistem ozeti ve proaktif oneriler sunar"""
+    if not await check_user(update): return
+    
+    await update.message.reply_text(" Brifing hazırlanıyor...")
+    
+    try:
+        manager = get_briefing_manager()
+        result = await manager.get_proactive_briefing()
+        
+        if result.get("success"):
+            briefing = result.get("briefing")
+            metrics = result.get("metrics", {})
+            
+            # Formatted header with metrics
+            header = f" **Wiqo Günlük Brifing**\n"
+            header += f"━━━━━━━━━━━━━━━━━━━━\n"
+            header += f" Sağlık Skoru: %{metrics.get('health_score')}\n"
+            header += f" CPU: %{metrics.get('cpu')} |  MEM: %{metrics.get('mem')}\n\n"
+            
+            full_text = header + briefing
+            await update.message.reply_text(full_text, parse_mode=None)
+        else:
+            await update.message.reply_text(f" Brifing oluşturulamadı: {result.get('error')}")
+            
+    except Exception as e:
+        logger.error(f"Briefing command error: {e}")
+        await update.message.reply_text(" Brifing sırasında bir hata oluştu.")
+
+
+async def cmd_smart_insights(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Akıllı davranış öngörüleri ve pattern analizi"""
+    if not await check_user(update): return
+
+    try:
+        from core.context_intelligence import get_context_intelligence
+        ci = get_context_intelligence()
+
+        # Get insights
+        insights = await ci.get_smart_insights()
+        summary = ci.get_context_summary()
+
+        text = "Akıllı Davranış Analizi\n"
+        text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+
+        text += f"Öğrenilmiş Pattern: {summary['total_patterns']}\n"
+        text += f"Zaman Bazlı: {summary['time_based_patterns']}\n"
+        text += f"Sıralı Pattern: {summary['sequence_patterns']}\n"
+        text += f"Yüksek Güvenli: {summary['high_confidence_patterns']}\n\n"
+
+        if insights:
+            text += "Öngörüler:\n"
+            for insight in insights:
+                text += f"• {insight}\n"
+        else:
+            text += "Henüz yeterli veri yok. Sistemi kullanmaya devam edin.\n"
+
+        await update.message.reply_text(text)
+
+    except Exception as e:
+        logger.error(f"Smart insights error: {e}")
+        await update.message.reply_text(f"Analiz hatası: {e}")
+
+
+async def cmd_proactive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Proaktif öneriler al"""
+    if not await check_user(update): return
+
+    try:
+        from core.context_intelligence import get_context_intelligence
+        ci = get_context_intelligence()
+
+        # Get proactive suggestions
+        suggestions = await ci.get_proactive_suggestions(limit=5)
+
+        if not suggestions:
+            text = "Şu anda öneri yok.\n\n"
+            text += "Sistemi daha fazla kullandıkça, davranış pattern'lerinizi öğreneceğim ve proaktif önerilerde bulunabileceğim."
+            await update.message.reply_text(text)
+            return
+
+        text = "Proaktif Öneriler\n"
+        text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+
+        for i, sug in enumerate(suggestions, 1):
+            confidence_bar = "▓" * int(sug["confidence"] * 10) + "░" * (10 - int(sug["confidence"] * 10))
+            text += f"{i}. {sug['action']}\n"
+            text += f"   Neden: {sug['reason']}\n"
+            text += f"   Güven: [{confidence_bar}] {sug['confidence']:.0%}\n\n"
+
+        await update.message.reply_text(text)
+
+    except Exception as e:
+        logger.error(f"Proactive suggestions error: {e}")
+        await update.message.reply_text(f"Öneri hatası: {e}")
+
+
+async def cmd_auto_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Otomatikleştirme fırsatlarını kontrol et"""
+    if not await check_user(update): return
+
+    try:
+        from core.context_intelligence import get_context_intelligence
+        ci = get_context_intelligence()
+
+        # Check automation opportunities
+        automation_candidates = []
+        for pattern_key, pattern in ci.patterns.items():
+            if pattern.confidence > 0.7 and pattern.frequency > 5:
+                should_auto, reason = await ci.should_automate(pattern.actions[0])
+                if should_auto:
+                    automation_candidates.append({
+                        "action": pattern.actions[0],
+                        "reason": reason,
+                        "confidence": pattern.confidence,
+                        "frequency": pattern.frequency
+                    })
+
+        if not automation_candidates:
+            text = "Otomatikleştirme fırsatı bulunamadı.\n\n"
+            text += "Düzenli olarak tekrarlanan işlemler otomatik algılanacak."
+            await update.message.reply_text(text)
+            return
+
+        text = "Otomatikleştirme Fırsatları\n"
+        text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+
+        for i, auto in enumerate(automation_candidates[:5], 1):
+            text += f"{i}. {auto['action']}\n"
+            text += f"   {auto['reason']}\n"
+            text += f"   Güven: {auto['confidence']:.0%} | Sıklık: {auto['frequency']} kez\n\n"
+
+        text += "\nBu işlemleri otomatikleştirebilirim. Zamanlanmış görev olarak ayarlayalım mı?"
+
+        await update.message.reply_text(text)
+
+    except Exception as e:
+        logger.error(f"Auto check error: {e}")
+        await update.message.reply_text(f"Kontrol hatası: {e}")
+
+
+async def cmd_automate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Otomasyon görevlerini yönet"""
+    if not await check_user(update): return
+
+    try:
+        from core.automation_engine import get_automation_engine
+        engine = get_automation_engine()
+
+        # Parse command arguments
+        args = context.args
+        if not args:
+            # Show summary
+            summary = engine.get_summary()
+            tasks = engine.list_tasks()
+
+            text = "Otomasyon Motoru\n"
+            text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+            text += f"Toplam Görev: {summary['total_tasks']}\n"
+            text += f"Aktif: {summary['enabled_tasks']}\n"
+            text += f"Zamanlanmış: {summary['scheduled_tasks']}\n"
+            text += f"Çalışıyor: {summary['running_tasks']}\n\n"
+
+            if tasks:
+                text += "Görevler:\n"
+                for task in tasks[:10]:
+                    status_icon = "" if task['enabled'] else ""
+                    text += f"{status_icon} {task['name']}\n"
+                    text += f"  Durum: {task['status']}\n"
+                    text += f"  Son: {task['last_run'] or 'Hiç'}\n\n"
+            else:
+                text += "Henüz otomasyon görevi yok.\n"
+                text += "Kullanım: /automate create <isim> <action>\n"
+
+            await update.message.reply_text(text)
+            return
+
+        # Create new task
+        if args[0] == "create" and len(args) >= 3:
+            name = args[1]
+            action = args[2]
+            params = {}
+
+            task_id = engine.create_task(
+                name=name,
+                action=action,
+                params=params,
+                trigger_type="SCHEDULED" if len(args) > 3 else "PENDING"
+            )
+
+            await update.message.reply_text(f"Otomasyon görevi oluşturuldu: {task_id}\n{name}")
+
+    except Exception as e:
+        logger.error(f"Automate command error: {e}")
+        await update.message.reply_text(f"Otomasyon hatası: {e}")
+
+
+async def cmd_analytics(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Advanced analytics dashboard"""
+    if not await check_user(update): return
+
+    try:
+        from core.advanced_analytics import get_analytics
+        analytics = get_analytics()
+
+        dashboard = analytics.get_dashboard_data()
+        summary = analytics.get_summary()
+
+        text = "Advanced Analytics Dashboard\n"
+        text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+
+        text += f"Toplam Metrik: {summary['total_metrics']}\n"
+        text += f"Toplam Sayaç: {summary['total_counters']}\n"
+        text += f"Toplam Zamanlayıcı: {summary['total_timers']}\n"
+        text += f"Aktif Trend: {summary['active_trends']}\n\n"
+
+        # Top timers
+        if dashboard['timings']:
+            text += "En Yavaş İşlemler:\n"
+            sorted_timings = sorted(
+                dashboard['timings'].items(),
+                key=lambda x: x[1]['mean'],
+                reverse=True
+            )[:5]
+            for name, stats in sorted_timings:
+                text += f"  {name}: {stats['mean']:.0f}ms (p95: {stats['p95']:.0f}ms)\n"
+            text += "\n"
+
+        # Recent trends
+        if dashboard['trends']:
+            text += "Trendler:\n"
+            for trend in dashboard['trends'][-5:]:
+                direction = trend['direction']
+                icon = "↗" if direction == "up" else "↘" if direction == "down" else "→"
+                text += f"  {icon} {trend['metric']}: {trend['change']} ({trend['period']})\n"
+            text += "\n"
+
+        # Insights
+        insights = dashboard['insights']
+        if insights:
+            text += "Öngörüler:\n"
+            for insight in insights[:5]:
+                text += f"  • {insight}\n"
+
+        await update.message.reply_text(text)
+
+    except Exception as e:
+        logger.error(f"Analytics command error: {e}")
+        await update.message.reply_text(f"Analytics hatası: {e}")
+
+
+async def cmd_insights(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Auto-generated system insights"""
+    if not await check_user(update): return
+
+    try:
+        from core.advanced_analytics import get_analytics
+        analytics = get_analytics()
+
+        # Analyze trends first
+        analytics.analyze_trends()
+
+        insights = analytics.generate_insights()
+
+        if not insights:
+            await update.message.reply_text("Şu anda öngörü bulunmuyor. Sistemi kullanmaya devam edin.")
+            return
+
+        text = "Sistem Öngörüleri\n"
+        text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+
+        for i, insight in enumerate(insights, 1):
+            text += f"{i}. {insight}\n"
+
+        await update.message.reply_text(text)
+
+    except Exception as e:
+        logger.error(f"Insights command error: {e}")
+        await update.message.reply_text(f"Öngörü hatası: {e}")
+
+
+async def cmd_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Smart notification management"""
+    if not await check_user(update): return
+
+    try:
+        from core.smart_notifications import get_smart_notifications
+        notif_system = get_smart_notifications()
+
+        args = context.args
+
+        # /notifications list
+        if not args or args[0] == "list":
+            summary = notif_system.get_summary()
+            notifications = notif_system.get_notifications(unread_only=False, limit=10)
+
+            text = "Bildirimler\n"
+            text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+
+            text += f"Toplam: {summary['total_notifications']}\n"
+            text += f"Okunmamış: {summary['unread_notifications']}\n"
+            text += f"Sessiz Saat: {'Aktif' if summary['quiet_hours_active'] else 'Kapalı'}\n\n"
+
+            if notifications:
+                text += "Son Bildirimler:\n"
+                for notif in notifications:
+                    read_icon = "✓" if notif['read'] else "•"
+                    priority = notif['priority']
+                    text += f"{read_icon} [{priority.upper()}] {notif['title']}\n"
+                    text += f"   {notif['timestamp']}\n"
+            else:
+                text += "Bildirim yok.\n"
+
+            await update.message.reply_text(text)
+
+        # /notifications unread
+        elif args[0] == "unread":
+            notifications = notif_system.get_notifications(unread_only=True, limit=20)
+
+            if not notifications:
+                await update.message.reply_text("Okunmamış bildirim yok.")
+                return
+
+            text = f"Okunmamış Bildirimler ({len(notifications)})\n"
+            text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+
+            for notif in notifications:
+                text += f"[{notif['priority'].upper()}] {notif['title']}\n"
+                text += f"{notif['message']}\n"
+                text += f"{notif['timestamp']}\n\n"
+
+            await update.message.reply_text(text)
+
+        # /notifications clear
+        elif args[0] == "clear":
+            # Mark all as read
+            for notif in notif_system.notifications:
+                notif.read = True
+            await update.message.reply_text("Tüm bildirimler okundu olarak işaretlendi.")
+
+        else:
+            await update.message.reply_text(
+                "Kullanım:\n"
+                "/notifications list - Bildirimleri listele\n"
+                "/notifications unread - Okunmamışları göster\n"
+                "/notifications clear - Tümünü okundu işaretle"
+            )
+
+    except Exception as e:
+        logger.error(f"Notifications command error: {e}")
+        await update.message.reply_text(f"Bildirim hatası: {e}")
+
+
+async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Intelligent task planning"""
+    if not await check_user(update): return
+
+    try:
+        from core.intelligent_planner import get_intelligent_planner
+        planner = get_intelligent_planner()
+
+        args = context.args
+
+        # /plan status
+        if args and args[0] == "status":
+            if len(args) < 2:
+                await update.message.reply_text("Kullanım: /plan status <plan_id>")
+                return
+
+            plan_id = args[1]
+            status = planner.get_plan_status(plan_id)
+
+            if not status:
+                await update.message.reply_text(f"Plan bulunamadı: {plan_id}")
+                return
+
+            text = f"Plan Durumu: {plan_id}\n"
+            text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+            text += f"Açıklama: {status['description']}\n"
+            text += f"Toplam Task: {status['total_tasks']}\n"
+            text += f"Tamamlanan: {status['completed']}\n"
+            text += f"Başarısız: {status['failed']}\n"
+            text += f"Çalışan: {status['running']}\n"
+            text += f"Süre: {status['duration']:.2f}s\n"
+            text += f"Durum: {'Başarılı' if status['success'] else 'Devam Ediyor'}\n"
+
+            await update.message.reply_text(text)
+
+        # /plan list
+        elif args and args[0] == "list":
+            summary = planner.get_summary()
+
+            text = "Plan Özeti\n"
+            text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+            text += f"Aktif Plan: {summary['active_plans']}\n"
+            text += f"Tamamlanan Plan: {summary['completed_plans']}\n"
+            text += f"Toplam Task: {summary['total_tasks_executed']}\n"
+            text += f"Ortalama Süre: {summary['average_plan_duration']:.2f}s\n"
+
+            await update.message.reply_text(text)
+
+        else:
+            await update.message.reply_text(
+                "Kullanım:\n"
+                "/plan status <plan_id> - Plan durumunu göster\n"
+                "/plan list - Tüm planları listele"
+            )
+
+    except Exception as e:
+        logger.error(f"Plan command error: {e}")
+        await update.message.reply_text(f"Plan hatası: {e}")
+
+
+async def cmd_predict(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Predictive maintenance predictions"""
+    if not await check_user(update): return
+
+    try:
+        from core.predictive_maintenance import get_predictive_maintenance
+        pm = get_predictive_maintenance()
+
+        args = context.args
+
+        # /predict trends
+        if args and args[0] == "trends":
+            trends = pm.get_resource_trends()
+
+            if "error" in trends:
+                await update.message.reply_text(trends["error"])
+                return
+
+            text = "Kaynak Trendleri\n"
+            text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+
+            for resource, data in trends.items():
+                text += f"{resource.upper()}:\n"
+                text += f"  Şu An: {data['current']:.1f}%\n"
+                text += f"  Ortalama: {data['avg']:.1f}%\n"
+                if 'max' in data:
+                    text += f"  Maks: {data['max']:.1f}%\n"
+                trend_icon = "↗" if data['trend'] > 0 else "↘" if data['trend'] < 0 else "→"
+                text += f"  Trend: {trend_icon} {data['trend']:+.2f}\n\n"
+
+            await update.message.reply_text(text)
+
+        # /predict list (default)
+        else:
+            predictions = pm.get_predictions()
+
+            if not predictions:
+                summary = pm.get_summary()
+                text = "Tahmin Özeti\n"
+                text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+                text += f"Monitoring: {'Aktif' if summary['monitoring_active'] else 'Kapalı'}\n"
+                text += f"Toplanan Metrik: {summary['metrics_collected']}\n"
+                text += f"Aktif Tahmin: {summary['active_predictions']}\n\n"
+                text += "Şu anda sorun öngörülmüyor."
+                await update.message.reply_text(text)
+                return
+
+            text = "Sistem Tahminleri\n"
+            text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+
+            for pred in predictions:
+                severity_icon = "" if pred['severity'] == 'critical' else "" if pred['severity'] == 'warning' else ""
+                text += f"{severity_icon} {pred['description']}\n"
+                text += f"   Zaman: {pred['time_until']//60}dk sonra\n"
+                text += f"   Güven: {pred['confidence']}\n"
+                text += f"   Öneri: {pred['recommendation']}\n\n"
+
+            await update.message.reply_text(text)
+
+    except Exception as e:
+        logger.error(f"Predict command error: {e}")
+        await update.message.reply_text(f"Tahmin hatası: {e}")
+
+
+async def cmd_security(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Security report"""
+    if not await check_user(update): return
+
+    try:
+        from core.advanced_security import get_advanced_security
+        security = get_advanced_security()
+
+        user_id = str(update.effective_user.id)
+        report = security.get_security_report(user_id)
+
+        text = "Güvenlik Raporu\n"
+        text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+
+        text += f"Toplam Olay: {report['total_events']}\n"
+        text += f"Engellenen İşlem: {report['blocked_count']}\n\n"
+
+        # Threat levels
+        if report['threat_levels']:
+            text += "Tehdit Seviyeleri:\n"
+            for level, count in report['threat_levels'].items():
+                text += f"  {level}: {count}\n"
+            text += "\n"
+
+        # Event types
+        if report['event_types']:
+            text += "Olay Tipleri:\n"
+            for event_type, count in sorted(report['event_types'].items(), key=lambda x: x[1], reverse=True)[:5]:
+                text += f"  {event_type}: {count}\n"
+            text += "\n"
+
+        # Critical events
+        if report['critical_events']:
+            text += f"Kritik Olaylar (Son {len(report['critical_events'])}):\n"
+            for event in report['critical_events'][-3:]:
+                text += f"  • {event['description']}\n"
+
+        await update.message.reply_text(text)
+
+    except Exception as e:
+        logger.error(f"Security command error: {e}")
+        await update.message.reply_text(f"Güvenlik raporu hatası: {e}")
+
+
+async def cmd_improve(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Self-improvement metrics and recommendations"""
+    if not await check_user(update): return
+
+    try:
+        from core.self_improvement import get_self_improvement
+        improver = get_self_improvement()
+
+        args = context.args
+
+        # /improve recommendations
+        if args and args[0] == "recommendations":
+            recommendations = improver.get_improvement_recommendations()
+
+            if not recommendations:
+                await update.message.reply_text("Şu anda öneri yok. Sistem iyi çalışıyor!")
+                return
+
+            text = "İyileştirme Önerileri\n"
+            text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+
+            for i, rec in enumerate(recommendations, 1):
+                text += f"{i}. {rec}\n\n"
+
+            await update.message.reply_text(text)
+
+        # /improve trends
+        elif args and args[0] == "trends":
+            trends = improver.analyze_performance_trends()
+
+            if not trends:
+                await update.message.reply_text("Henüz yeterli veri yok.")
+                return
+
+            text = "Performans Trendleri\n"
+            text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+
+            for metric, data in list(trends.items())[:10]:
+                trend_icon = "↗" if data['trend'] == 'improving' else "→" if data['trend'] == 'stable' else "↘"
+                text += f"{trend_icon} {metric}\n"
+                text += f"   İyileşme: {data['improvement_percent']:+.1f}%\n"
+                text += f"   Eski: {data['old_avg']:.0f}ms\n"
+                text += f"   Yeni: {data['new_avg']:.0f}ms\n\n"
+
+            await update.message.reply_text(text)
+
+        # /improve summary (default)
+        else:
+            summary = improver.get_summary()
+
+            text = "Self-Improvement Özeti\n"
+            text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+
+            text += f"Toplam İşlem: {summary['total_interactions']}\n"
+            text += f"Başarı Oranı: {summary['overall_success_rate']}\n"
+            text += f"Optimizasyon Kuralı: {summary['optimization_rules']}\n"
+            text += f"İzlenen Tool: {summary['tracked_tools']}\n"
+            text += f"Feedback: {summary['feedback_entries']}\n"
+            text += f"Ortalama Puan: {summary['average_rating']}\n"
+            text += f"Öğrenilen Hata Pattern: {summary['error_patterns_learned']}\n"
+
+            await update.message.reply_text(text)
+
+    except Exception as e:
+        logger.error(f"Improve command error: {e}")
+        await update.message.reply_text(f"İyileştirme hatası: {e}")
+
+
+async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sistem sağlık raporu ve self-healing durumu"""
+    if not await check_user(update): return
+
+    try:
+        from core.self_healing import get_self_healing
+        healer = get_self_healing()
+
+        report = healer.get_health_report()
+
+        text = "Sistem Sağlık Raporu\n"
+        text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+
+        # System health
+        health = report['system_health']
+        status_icon = "" if health['status'] == 'healthy' else ""
+        text += f"Durum: {status_icon} {health['status'].upper()}\n\n"
+
+        text += f"Bellek: {health['memory_percent']:.1f}%\n"
+        text += f"CPU: {health['cpu_percent']:.1f}%\n"
+        text += f"Disk: {health['disk_percent']:.1f}%\n\n"
+
+        # Auto-fix stats
+        fix_stats = report['auto_fix_stats']
+        text += f"Otomatik Düzeltme:\n"
+        text += f"  Toplam: {fix_stats['total_fixes']}\n"
+        text += f"  Başarılı: {fix_stats['successful_fixes']}\n"
+        text += f"  Başarı Oranı: {fix_stats['success_rate']}\n\n"
+
+        # Recent issues
+        issues = report['recent_issues']
+        if issues:
+            text += f"Son Sorunlar ({len(issues)}):\n"
+            for issue in issues[-5:]:
+                severity_icon = "" if issue['severity'] == 'low' else "" if issue['severity'] == 'high' else ""
+                text += f"{severity_icon} {issue['description']}\n"
+        else:
+            text += "Sorun tespit edilmedi.\n"
+
+        await update.message.reply_text(text)
+
+    except Exception as e:
+        logger.error(f"Health command error: {e}")
+        await update.message.reply_text(f"Sağlık kontrolü hatası: {e}")
+
+
+async def cmd_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ekran goruntusu al ve gonder"""
+    if not await check_user(update):
+        return
+
+    await update.message.reply_text("Ekran goruntusu aliniyor...")
+
+    try:
+        from tools.system_tools import take_screenshot
+        result = await take_screenshot()
+
+        if result.get("success"):
+            screenshot_path = result.get("path")
+            if screenshot_path and Path(screenshot_path).exists():
+                await update.message.reply_photo(
+                    photo=open(screenshot_path, 'rb'),
+                    caption=f"Ekran goruntusu: {result.get('filename')}"
+                )
+            else:
+                error_msg = "Ekran goruntusu kaydedilemedi"
+                formatted_error = ErrorHandler.format_error_response(error_msg, "take_screenshot")
+                await update.message.reply_text(formatted_error)
+        else:
+            error_msg = result.get('error', 'Bilinmiyor')
+            formatted_error = ErrorHandler.format_error_response(error_msg, "take_screenshot")
+            await update.message.reply_text(formatted_error)
+
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Screenshot hatasi: {error_msg}")
+        formatted_error = ErrorHandler.format_error_response(error_msg, "take_screenshot")
+        await update.message.reply_text(formatted_error)
+
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gelen gorselleri kaydet"""
+    if not await check_user(update):
+        return
+
+    try:
+        # En buyuk boyutlu versiyonu al
+        photo = update.message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+
+        # Kayit dizini
+        save_dir = _get_save_dir("photo_save_dir", "~/Desktop/TelegramInbox/Photos")
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        # Dosya adi
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"image_{timestamp}.jpg"
+        save_path = save_dir / filename
+
+        # Indir ve kaydet
+        await file.download_to_drive(str(save_path))
+
+        # Caption varsa not olarak kaydet
+        caption = update.message.caption
+        if caption:
+            caption_file = save_path.with_suffix('.txt')
+            caption_file.write_text(caption, encoding='utf-8')
+
+        await update.message.reply_text(
+            f" Görsel kaydedildi.\n"
+            f"Boyut: {photo.width}x{photo.height}\n\n"
+            f"Bu görselle ne yapmak istersiniz?",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(" Analiz Et", callback_data=f"vision:analyze:{save_path}"),
+                    InlineKeyboardButton(" Metni Oku (OCR)", callback_data=f"vision:ocr:{save_path}")
+                ],
+                [
+                    InlineKeyboardButton(" Açıkla", callback_data=f"vision:explain:{save_path}"),
+                    InlineKeyboardButton(" İptal", callback_data="vision:cancel")
+                ]
+            ])
+        )
+
+        logger.info(f"Gorsel kaydedildi: {save_path}")
+
+    except Exception as e:
+        logger.error(f"Gorsel kaydetme hatasi: {e}")
+        await update.message.reply_text(f"Gorsel kaydedilemedi: {str(e)}")
+
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gelen belgeleri kaydet"""
+    if not await check_user(update):
+        return
+
+    try:
+        document = update.message.document
+        file = await context.bot.get_file(document.file_id)
+
+        # Kayit dizini
+        save_dir = _get_save_dir("document_save_dir", "~/Desktop/TelegramInbox/Files")
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        # Dosya adi
+        filename = document.file_name or f"file_{document.file_id}"
+        save_path = save_dir / filename
+
+        # Ayni isimde varsa numara ekle
+        counter = 1
+        original_path = save_path
+        while save_path.exists():
+            stem = original_path.stem
+            suffix = original_path.suffix
+            save_path = save_dir / f"{stem}_{counter}{suffix}"
+            counter += 1
+
+        # Indir ve kaydet
+        await file.download_to_drive(str(save_path))
+
+        await update.message.reply_text(
+            f"Dosya kaydedildi:\n"
+            f"Konum: {save_path}\n"
+            f"Boyut: {document.file_size} bytes"
+        )
+
+        logger.info(f"Dosya kaydedildi: {save_path}")
+
+    except Exception as e:
+        logger.error(f"Dosya kaydetme hatasi: {e}")
+        await update.message.reply_text(f"Dosya kaydedilemedi: {str(e)}")
+
+
+async def vision_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Vision butonlarını işle"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data.split(":")
+    if data[1] == "cancel":
+        await query.edit_message_text("İşlem iptal edildi.")
+        return
+
+    action = data[1]
+    image_path = ":".join(data[2:]) # Handle paths with colons if any
+
+    prompts = {
+        "analyze": "Resmi detaylıca analiz et ve önemli detayları belirt.",
+        "ocr": "Resimdeki tüm metinleri çıkar ve düzenli bir şekilde yaz.",
+        "explain": "Bu resimde ne olduğunu, bağlamını ve anlamını açıkla."
+    }
+
+    await query.edit_message_text(f" Görsel işleniyor ({action})...")
+    
+    try:
+        from tools.vision_tools import analyze_image
+        result = await analyze_image(image_path, prompt=prompts.get(action))
+        
+        if result.get("success"):
+            response = f" **Vision Sonucu ({action})**\n\n{result.get('analysis')}"
+            # Provider bilgisi ekle (küçük font/italic gibi görünebilir robotik dilde)
+            response += f"\n\n_Kaynak: {result.get('provider')}_"
+            
+            if len(response) > 4000:
+                await query.message.reply_text(response[:4000])
+            else:
+                await query.edit_message_text(response, parse_mode=None)
+        else:
+            await query.edit_message_text(f" Hata: {result.get('error')}")
+            
+    except Exception as e:
+        logger.error(f"Vision callback hatası: {e}")
+        await query.edit_message_text(f" Beklenmedik bir hata oluştu: {str(e)}")
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_user(update):
+        return
+
+    user = update.effective_user
+
+    # Rate limiting kontrolu
+    allowed, rate_msg = rate_limiter.is_allowed(user.id)
+    if not allowed:
+        await update.message.reply_text(f"Lutfen bekleyin: {rate_msg}")
+        return
+
+    user_input = update.message.text
+    logger.info(f"[{user.id}] {user.first_name}: {user_input[:50]}...")
+
+    await update.message.chat.send_action("typing")
+
+    # Set user_id for audit logging
+    agent.current_user_id = user.id
+    if agent.agent_loop:
+        agent.agent_loop.current_user_id = user.id
+
+    # Real-time step feedback callback
+    status_manager = StatusMessageManager(update, context)
+
+    async def notify_step(message_data: Any):
+        if isinstance(message_data, dict) and message_data.get("type") == "screenshot":
+            # Proactive screenshot feedback
+            photo_path = message_data.get("path")
+            caption = message_data.get("message", " İşlem görseli")
+            if photo_path and Path(photo_path).exists():
+                try:
+                    await update.message.reply_photo(
+                        photo=open(photo_path, 'rb'),
+                        caption=caption
+                    )
+                except Exception as e:
+                    logger.error(f"Notify screenshot error: {e}")
+                    await status_manager.update_status(f" {caption}")
+        else:
+            # Regular text notification - Use the status manager for live updates
+            text = str(message_data)
+            # Add some "live" flair
+            if "..." in text:
+                text = f" {text}"
+            else:
+                text = f" {text}"
+            await status_manager.update_status(text)
+
+    try:
+        response = await agent.process(user_input, notify=notify_step)
+
+        if len(response) > 4000:
+            chunks = [response[i:i+4000] for i in range(0, len(response), 4000)]
+            for chunk in chunks:
+                await update.message.reply_text(chunk)
+        else:
+            await update.message.reply_text(response)
+
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Mesaj isleme hatasi: {error_msg}")
+        # Use ErrorHandler for professional error message
+        formatted_error = ErrorHandler.format_error_response(error_msg)
+        await update.message.reply_text(formatted_error)
+
+def setup_handlers(app: Application, agent_instance: Agent):
+    global telegram_app
+    telegram_app = app
+
+    init_handlers(agent_instance)
+
+    # Set approval callback
+    approval_manager = get_approval_manager()
+    previous_callback = approval_manager.approval_callback
+
+    async def routed_approval_callback(approval_request):
+        handled = await approval_callback(approval_request)
+        if handled is None and previous_callback:
+            return await previous_callback(approval_request)
+        return bool(handled)
+
+    approval_manager.set_approval_callback(routed_approval_callback)
+
+    # Core commands
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("dashboard", cmd_dashboard))
+    app.add_handler(CommandHandler("health", cmd_health))
+    app.add_handler(CommandHandler("info", cmd_info))
+    app.add_handler(CommandHandler("research_status", cmd_research_status))
+    app.add_handler(CommandHandler("reset", cmd_reset))
+    app.add_handler(CommandHandler("cancel", cmd_cancel))
+    app.add_handler(CommandHandler("screenshot", cmd_screenshot))
+    app.add_handler(CommandHandler("tools", cmd_tools))
+    app.add_handler(CommandHandler("config", cmd_config))
+    app.add_handler(CommandHandler("logs", cmd_logs))
+    app.add_handler(CommandHandler("briefing", cmd_briefing))
+
+    # Context Intelligence & Proactive AI commands
+    app.add_handler(CommandHandler("smart_insights", cmd_smart_insights))
+    app.add_handler(CommandHandler("proactive", cmd_proactive))
+    app.add_handler(CommandHandler("auto_check", cmd_auto_check))
+
+    # Automation & Self-Healing commands
+    app.add_handler(CommandHandler("automate", cmd_automate))
+    app.add_handler(CommandHandler("health", cmd_health))
+
+    # Analytics & Notifications commands
+    app.add_handler(CommandHandler("analytics", cmd_analytics))
+    app.add_handler(CommandHandler("insights", cmd_insights))
+    app.add_handler(CommandHandler("notifications", cmd_notifications))
+
+    # Advanced System commands
+    app.add_handler(CommandHandler("plan", cmd_plan))
+    app.add_handler(CommandHandler("predict", cmd_predict))
+    app.add_handler(CommandHandler("security", cmd_security))
+    app.add_handler(CommandHandler("improve", cmd_improve))
+    
+    # Phase 12: Proactive Intelligence Commands
+    try:
+        from .telegram_proactive_commands import (
+            cmd_schedule, cmd_schedule_briefing, cmd_trigger_briefing,
+            cmd_alerts, cmd_check_disk
+        )
+        
+        app.add_handler(CommandHandler("schedule", cmd_schedule))
+        app.add_handler(CommandHandler("schedule_briefing", cmd_schedule_briefing))
+        app.add_handler(CommandHandler("trigger_briefing", cmd_trigger_briefing))
+        app.add_handler(CommandHandler("alerts", cmd_alerts))
+        app.add_handler(CommandHandler("check_disk", cmd_check_disk))
+        
+        logger.info("Proactive commands registered (schedule, briefing, alerts)")
+    except ImportError as e:
+        logger.warning(f"Proactive commands not available: {e}")
+
+    # Extended commands from telegram_extensions module
+    try:
+        from .telegram_extensions import (
+            cmd_execute_code, cmd_send_email, cmd_check_emails,
+            cmd_parallel_operations, cmd_streaming_operations,
+            cmd_suggestions, cmd_anomalies, cmd_context_info,
+            cmd_performance_analysis
+        )
+
+        app.add_handler(CommandHandler("code", cmd_execute_code))
+        app.add_handler(CommandHandler("email", cmd_send_email))
+        app.add_handler(CommandHandler("emails", cmd_check_emails))
+        app.add_handler(CommandHandler("parallel", cmd_parallel_operations))
+        app.add_handler(CommandHandler("streaming", cmd_streaming_operations))
+        app.add_handler(CommandHandler("suggestions", cmd_suggestions))
+        app.add_handler(CommandHandler("anomalies", cmd_anomalies))
+        app.add_handler(CommandHandler("context", cmd_context_info))
+        app.add_handler(CommandHandler("perf", cmd_performance_analysis))
+
+        logger.info("Extended commands registered (code, email, parallel, etc.)")
+    except ImportError as e:
+        logger.warning(f"Extended commands not available: {e}")
+
+    # Message handlers
+    app.add_handler(CallbackQueryHandler(approval_query_callback, pattern="^approval:"))
+    app.add_handler(CallbackQueryHandler(vision_callback, pattern="^vision:"))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    
+    # Phase 13: Voice message handler
+    try:
+        from .telegram_voice_handler import handle_voice_message, cmd_voice_status
+        from .telegram_voice_commands import cmd_voice_toggle
+        
+        app.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
+        app.add_handler(CommandHandler("voice_status", cmd_voice_status))
+        app.add_handler(CommandHandler("voice", cmd_voice_toggle))
+        
+        logger.info("Voice handler registered (Phase 13.1 + 13.2)")
+    except ImportError as e:
+        logger.warning(f"Voice handler not available: {e}")
+    
+    # Phase 14: Browser automation commands
+    try:
+        from .telegram_browser_commands import (
+            cmd_browser_open, cmd_browser_screenshot, cmd_browser_click,
+            cmd_browser_type, cmd_browser_extract, cmd_browser_status,
+            cmd_browser_close, cmd_scrape
+        )
+        
+        app.add_handler(CommandHandler("browser_open", cmd_browser_open))
+        app.add_handler(CommandHandler("browser_screenshot", cmd_browser_screenshot))
+        app.add_handler(CommandHandler("browser_click", cmd_browser_click))
+        app.add_handler(CommandHandler("browser_type", cmd_browser_type))
+        app.add_handler(CommandHandler("browser_extract", cmd_browser_extract))
+        app.add_handler(CommandHandler("browser_status", cmd_browser_status))
+        app.add_handler(CommandHandler("browser_close", cmd_browser_close))
+        app.add_handler(CommandHandler("scrape", cmd_scrape))
+        
+        logger.info("Browser commands registered (Phase 14)")
+    except ImportError as e:
+        logger.warning(f"Browser commands not available: {e}")
+    
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    logger.info("Handler'lar kaydedildi ve approval callback ayarlandi")

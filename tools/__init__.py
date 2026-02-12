@@ -1,0 +1,383 @@
+"""
+LAZY LOADING TOOL SYSTEM - Fast startup, load tools on demand
+"""
+
+_loaded_tools = {}
+
+def _lazy_load_tool(tool_name: str):
+    """Lazy load a single tool when accessed"""
+    if tool_name in _loaded_tools:
+        return _loaded_tools[tool_name]
+    
+    # File Tools
+    if tool_name in ["list_files", "read_file", "write_file", "search_files", "delete_file",
+                     "move_file", "copy_file", "rename_file", "create_folder"]:
+        from .file_tools import (
+            list_files, read_file, write_file, search_files, delete_file,
+            move_file, copy_file, rename_file, create_folder
+        )
+        tools = {
+            "list_files": list_files, "read_file": read_file, "write_file": write_file,
+            "search_files": search_files, "delete_file": delete_file, "move_file": move_file,
+            "copy_file": copy_file, "rename_file": rename_file, "create_folder": create_folder
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+    
+    # System Tools
+    if tool_name in ["get_system_info", "open_app", "open_url", "get_running_apps",
+                     "take_screenshot", "read_clipboard", "write_clipboard",
+                     "close_app", "shutdown_system", "restart_system", "sleep_system", "lock_screen",
+                     "set_volume", "send_notification", "kill_process",
+                     "get_process_info", "run_safe_command", "get_installed_apps", "get_display_info"]:
+        from .system_tools import (
+            get_system_info, open_app, open_url, get_running_apps,
+            take_screenshot, read_clipboard, write_clipboard,
+            close_app, shutdown_system, restart_system, sleep_system, lock_screen,
+            set_volume, send_notification, kill_process, get_process_info,
+            run_safe_command, get_installed_apps, get_display_info
+        )
+        tools = {
+            "get_system_info": get_system_info, "open_app": open_app, "open_url": open_url,
+            "get_running_apps": get_running_apps, "take_screenshot": take_screenshot,
+            "read_clipboard": read_clipboard, "write_clipboard": write_clipboard,
+            "shutdown_system": shutdown_system, "restart_system": restart_system,
+            "sleep_system": sleep_system, "lock_screen": lock_screen,
+            "close_app": close_app, "set_volume": set_volume, "send_notification": send_notification,
+            "kill_process": kill_process, "get_process_info": get_process_info, 
+            "run_safe_command": run_safe_command,
+            "get_installed_apps": get_installed_apps,
+            "get_display_info": get_display_info
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+    
+    # Script Tools
+    if tool_name == "run_command":
+        from .script_tools import run_command
+        _loaded_tools["run_command"] = run_command
+        return _loaded_tools["run_command"]
+
+    # macOS Tools
+    if tool_name in ["toggle_dark_mode", "get_appearance", "set_brightness", "get_brightness",
+                     "wifi_status", "wifi_toggle", "bluetooth_status",
+                     "get_wifi_details", "get_public_ip", "scan_local_network",
+                     "get_today_events", "create_event", "get_reminders", "create_reminder",
+                     "spotlight_search", "get_system_preferences"]:
+        from .macos_tools import (
+            toggle_dark_mode, get_appearance,
+            wifi_status, wifi_toggle, bluetooth_status,
+            get_wifi_details, get_public_ip, scan_local_network,
+            get_today_events, create_event, get_reminders, create_reminder,
+            spotlight_search, get_system_preferences
+        )
+        from .macos_tools.appearance import set_brightness, get_brightness
+        tools = {
+            "toggle_dark_mode": toggle_dark_mode, "get_appearance": get_appearance,
+            "set_brightness": set_brightness, "get_brightness": get_brightness,
+            "wifi_status": wifi_status, "wifi_toggle": wifi_toggle,
+            "bluetooth_status": bluetooth_status,
+            "get_wifi_details": get_wifi_details, "get_public_ip": get_public_ip,
+            "scan_local_network": scan_local_network,
+            "get_today_events": get_today_events, "create_event": create_event,
+            "get_reminders": get_reminders, "create_reminder": create_reminder,
+            "spotlight_search": spotlight_search, "get_system_preferences": get_system_preferences,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Office Tools
+    if tool_name in ["read_word", "write_word", "read_excel", "write_excel",
+                     "read_pdf", "get_pdf_info", "summarize_document"]:
+        from .office_tools import (
+            read_word, write_word, read_excel, write_excel,
+            read_pdf, get_pdf_info, summarize_document
+        )
+        tools = {
+            "read_word": read_word, "write_word": write_word,
+            "read_excel": read_excel, "write_excel": write_excel,
+            "read_pdf": read_pdf, "get_pdf_info": get_pdf_info,
+            "summarize_document": summarize_document,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Web Tools
+    if tool_name in ["fetch_page", "extract_text", "web_search",
+                     "start_research", "get_research_status"]:
+        from .web_tools import (
+            fetch_page, extract_text, web_search,
+            start_research, get_research_status
+        )
+        tools = {
+            "fetch_page": fetch_page, "extract_text": extract_text,
+            "web_search": web_search, "start_research": start_research,
+            "get_research_status": get_research_status,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Media Tools
+    if tool_name in ["control_music", "get_now_playing", "set_display_brightness"]:
+        from .media_tools import control_music, get_now_playing, set_display_brightness
+        tools = {
+            "control_music": control_music,
+            "get_now_playing": get_now_playing,
+            "set_display_brightness": set_display_brightness
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Advanced Tools
+    if tool_name in ["smart_summarize", "create_smart_file", "analyze_document", "generate_report", "analyze_image"]:
+        if tool_name == "analyze_image":
+            from .vision_tools import analyze_image
+            _loaded_tools["analyze_image"] = analyze_image
+        else:
+            from .advanced_tools import smart_summarize, create_smart_file, analyze_document, generate_report
+            tools = {
+                "smart_summarize": smart_summarize, "create_smart_file": create_smart_file,
+                "analyze_document": analyze_document, "generate_report": generate_report,
+            }
+            _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Note Tools
+    if tool_name in ["create_note", "list_notes", "search_notes", "update_note", "delete_note", "get_note"]:
+        from .note_tools import create_note, list_notes, search_notes, update_note, delete_note, get_note
+        tools = {
+            "create_note": create_note, "list_notes": list_notes, "search_notes": search_notes,
+            "update_note": update_note, "delete_note": delete_note, "get_note": get_note,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Planning Tools
+    if tool_name in ["create_plan", "execute_plan", "get_plan_status", "cancel_plan", "list_plans"]:
+        from .planning_tools import create_plan, execute_plan, get_plan_status, cancel_plan, list_plans
+        tools = {
+            "create_plan": create_plan, "execute_plan": execute_plan,
+            "get_plan_status": get_plan_status, "cancel_plan": cancel_plan, "list_plans": list_plans,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Document Tools
+    if tool_name in ["edit_text_file", "batch_edit_text", "edit_word_document",
+                     "merge_documents", "merge_pdfs", "merge_word_documents"]:
+        from .document_tools import (
+            edit_text_file, batch_edit_text, edit_word_document,
+            merge_documents, merge_pdfs, merge_word_documents
+        )
+        tools = {
+            "edit_text_file": edit_text_file, "batch_edit_text": batch_edit_text,
+            "edit_word_document": edit_word_document,
+            "merge_documents": merge_documents, "merge_pdfs": merge_pdfs,
+            "merge_word_documents": merge_word_documents,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Research Tools
+    if tool_name in ["advanced_research", "evaluate_source", "quick_research",
+                     "synthesize_findings", "create_research_report",
+                     "deep_research", "get_research_engine"]:
+        from .research_tools import (
+            advanced_research, evaluate_source, quick_research,
+            synthesize_findings, create_research_report,
+            deep_research, get_research_engine
+        )
+        tools = {
+            "advanced_research": advanced_research, "evaluate_source": evaluate_source,
+            "quick_research": quick_research, "synthesize_findings": synthesize_findings,
+            "create_research_report": create_research_report,
+            "deep_research": deep_research, "get_research_engine": get_research_engine,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Document Generator Tools
+    if tool_name in ["generate_research_document", "get_document_generator"]:
+        from .document_generator import (
+            generate_research_document, get_document_generator
+        )
+        tools = {
+            "generate_research_document": generate_research_document,
+            "get_document_generator": get_document_generator,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Visualization Tools
+    if tool_name in ["create_chart", "create_research_visualization", "get_chart_generator"]:
+        from .visualization import (
+            create_chart, create_research_visualization
+        )
+        from .visualization.chart_generator import get_chart_generator
+        tools = {
+            "create_chart": create_chart,
+            "create_research_visualization": create_research_visualization,
+            "get_chart_generator": get_chart_generator,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Email Tools
+    if tool_name in ["send_email", "get_emails", "get_unread_emails", "search_emails"]:
+        from .email_tools import (
+            send_email, get_emails, get_unread_emails, search_emails
+        )
+        tools = {
+            "send_email": send_email, "get_emails": get_emails,
+            "get_unread_emails": get_unread_emails, "search_emails": search_emails,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Code Execution Tools
+    if tool_name in ["execute_python_code", "execute_javascript_code",
+                     "execute_shell_command", "debug_code"]:
+        from .code_execution_tools import (
+            execute_python_code, execute_javascript_code,
+            execute_shell_command, debug_code
+        )
+        tools = {
+            "execute_python_code": execute_python_code,
+            "execute_javascript_code": execute_javascript_code,
+            "execute_shell_command": execute_shell_command,
+            "debug_code": debug_code,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # AI Tools
+    if tool_name in ["ollama_list_models", "ollama_remove_model"]:
+        from .ai_tools import ollama_list_models, ollama_remove_model
+        tools = {
+            "ollama_list_models": ollama_list_models,
+            "ollama_remove_model": ollama_remove_model
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+    return None
+
+# Lazy dictionary class
+class LazyToolDict(dict):
+    """Dictionary that lazy-loads tools on demand"""
+
+    def __init__(self):
+        super().__init__()
+        self._tool_names = {
+            # File Tools
+            "list_files", "read_file", "write_file", "search_files", "delete_file",
+            "move_file", "copy_file", "rename_file", "create_folder",
+            # System Tools
+            "get_system_info", "run_command", "run_safe_command", "open_app", "open_url",
+            "get_running_apps", "take_screenshot", "read_clipboard", "write_clipboard",
+            "close_app", "shutdown_system", "restart_system", "sleep_system", "lock_screen",
+            "set_volume", "send_notification", "kill_process", "get_process_info",
+            "get_installed_apps", "get_display_info",
+            # macOS Tools
+            "toggle_dark_mode", "get_appearance", "set_brightness", "get_brightness",
+            "wifi_status", "wifi_toggle", "bluetooth_status",
+            "get_wifi_details", "get_public_ip", "scan_local_network",
+            "get_today_events", "create_event", "get_reminders",
+            "create_reminder", "spotlight_search", "get_system_preferences",
+            # Media Tools
+            "control_music", "get_now_playing", "set_display_brightness",
+            # Office Tools
+            "read_word", "write_word", "read_excel", "write_excel", "read_pdf",
+            "get_pdf_info", "summarize_document",
+            # Web Tools
+            "fetch_page", "extract_text", "web_search", "start_research", "get_research_status",
+            # Advanced Tools
+            "smart_summarize", "create_smart_file", "analyze_document", "generate_report", "analyze_image",
+            # Note Tools
+            "create_note", "list_notes", "search_notes", "update_note", "delete_note", "get_note",
+            # Planning Tools
+            "create_plan", "execute_plan", "get_plan_status", "cancel_plan", "list_plans",
+            # Document Tools
+            "edit_text_file", "batch_edit_text", "edit_word_document", "merge_documents",
+            "merge_pdfs", "merge_word_documents",
+            # Research Tools
+            "advanced_research", "evaluate_source", "quick_research", "synthesize_findings",
+            "create_research_report", "deep_research", "get_research_engine",
+            # Document Generator Tools
+            "generate_research_document", "get_document_generator",
+            # Visualization Tools
+            "create_chart", "create_research_visualization", "get_chart_generator",
+            # Email Tools
+            "send_email", "get_emails", "get_unread_emails", "search_emails",
+            # Code Execution Tools
+            "execute_python_code", "execute_javascript_code", "execute_shell_command", "debug_code",
+            # AI Tools
+            "ollama_list_models", "ollama_remove_model",
+        }
+
+    def __getitem__(self, key):
+        if key not in _loaded_tools and key in self._tool_names:
+            _lazy_load_tool(key)
+        return _loaded_tools.get(key)
+
+    def __contains__(self, key):
+        return key in self._tool_names or key in _loaded_tools
+
+    def __len__(self):
+        return len(self._tool_names)
+
+    def __iter__(self):
+        return iter(self._tool_names)
+
+    def items(self):
+        # Load all tools and return items
+        for tool_name in self._tool_names:
+            if tool_name not in _loaded_tools:
+                _lazy_load_tool(tool_name)
+        return _loaded_tools.items()
+
+    def values(self):
+        # Load all tools and return values
+        for tool_name in self._tool_names:
+            if tool_name not in _loaded_tools:
+                _lazy_load_tool(tool_name)
+        return _loaded_tools.values()
+
+    def get(self, key, default=None):
+        try:
+            return self[key] if key in self else default
+        except:
+            return default
+
+    def keys(self):
+        return self._tool_names
+
+# CORE TOOLS - Fast core imports only
+from .file_tools import (
+    list_files, read_file, write_file, search_files, delete_file,
+    move_file, copy_file, rename_file, create_folder
+)
+from .system_tools import (
+    get_system_info, open_app, open_url, get_running_apps,
+    take_screenshot, read_clipboard, write_clipboard,
+    close_app, shutdown_system, restart_system, sleep_system, lock_screen,
+    set_volume, send_notification, kill_process, get_process_info, run_safe_command
+)
+from .script_tools import run_command
+
+# Pre-populate core tools (no lazy loading for these)
+_loaded_tools.update({
+    "list_files": list_files, "read_file": read_file, "write_file": write_file,
+    "search_files": search_files, "delete_file": delete_file, "move_file": move_file,
+    "copy_file": copy_file, "rename_file": rename_file, "create_folder": create_folder,
+    "get_system_info": get_system_info, "open_app": open_app, "open_url": open_url,
+    "get_running_apps": get_running_apps, "take_screenshot": take_screenshot,
+    "read_clipboard": read_clipboard, "write_clipboard": write_clipboard,
+    "shutdown_system": shutdown_system, "restart_system": restart_system,
+    "sleep_system": sleep_system, "lock_screen": lock_screen,
+    "close_app": close_app, "set_volume": set_volume, "send_notification": send_notification,
+    "kill_process": kill_process, "get_process_info": get_process_info,
+    "run_safe_command": run_safe_command, "run_command": run_command
+})
+
+# Use lazy dict for AVAILABLE_TOOLS
+AVAILABLE_TOOLS = LazyToolDict()
