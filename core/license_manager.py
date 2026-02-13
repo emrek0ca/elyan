@@ -1,12 +1,12 @@
 """
-License Manager for Wiqo v12.0
+License Manager for Elyan v12.0
 
 Handles Lifetime Executive License validation.
 Offline verification using cryptographic signatures.
 
 License Format:
 {
-    "license_key": "WIQO-XXXX-XXXX-XXXX-XXXX",
+    "license_key": "ELYAN-XXXX-XXXX-XXXX-XXXX",
     "license_type": "Lifetime Executive",
     "issued_to": "User Name",
     "issued_date": "2026-02-07",
@@ -43,7 +43,7 @@ class License:
     def is_valid(self) -> bool:
         """Check if license is structurally valid"""
         return (
-            self.license_key.startswith("WIQO-") and
+            self.license_key.startswith("ELYAN-") and
             len(self.license_key) == 24 and
             self.license_type == "Lifetime Executive" and
             bool(self.issued_to) and
@@ -53,7 +53,7 @@ class License:
 
 class LicenseManager:
     """
-    Manages license validation for Wiqo.
+    Manages license validation for Elyan.
 
     Without valid license:
     - Task planning: Allowed
@@ -204,7 +204,7 @@ class LicenseManager:
         system_info = f"{platform.system()} {platform.release()}"
 
         request = (
-            f"Wiqo License Request\n"
+            f"Elyan License Request\n"
             f"====================\n\n"
             f"Machine ID: {machine_id}\n"
             f"System: {system_info}\n"

@@ -1,4 +1,4 @@
-"""Lightweight internationalization helpers for Wiqo."""
+"""Lightweight internationalization helpers for Elyan."""
 
 from __future__ import annotations
 

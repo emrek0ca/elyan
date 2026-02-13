@@ -1,5 +1,5 @@
 """
-Wiqo Setup Wizard v19.1 - Professional onboarding with unified AI configuration
+Elyan Setup Wizard v19.1 - Professional onboarding with unified AI configuration
 """
 
 import os
@@ -151,7 +151,7 @@ class SetupWizard(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Wiqo Kurulum Sihirbazı")
+        self.setWindowTitle("Elyan Kurulum Sihirbazı")
         self.setFixedSize(620, 560)
         self.setModal(True)
         self.config: Dict[str, Any] = {
@@ -192,7 +192,7 @@ class SetupWizard(QDialog):
         layout.setContentsMargins(40, 50, 40, 40)
         layout.setSpacing(16)
 
-        logo = QLabel("WIQO")
+        logo = QLabel("ELYAN")
         logo.setFont(QFont("SF Pro Display", 48, QFont.Weight.Bold))
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         logo.setStyleSheet("color: #252F33; letter-spacing: -2px;")
@@ -205,7 +205,7 @@ class SetupWizard(QDialog):
         layout.addWidget(title)
 
         desc = QLabel(
-            "Wiqo, bilgisayarınızı doğal dille kontrol etmenizi sağlar.\n"
+            "Elyan, bilgisayarınızı doğal dille kontrol etmenizi sağlar.\n"
             "Kurulum sadece 2 dakika sürer."
         )
         desc.setWordWrap(True)
@@ -231,7 +231,7 @@ class SetupWizard(QDialog):
 
         layout.addWidget(SectionHeader("Adım 1: Yapay Zeka Motoru"))
 
-        desc = QLabel("Wiqo'nun zeka kaynağını seçin:")
+        desc = QLabel("Elyan'ın zeka kaynağını seçin:")
         desc.setStyleSheet("color: #8E8E93; font-size: 13px;")
         layout.addWidget(desc)
 

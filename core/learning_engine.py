@@ -1,5 +1,5 @@
 """
-Learning Engine - Wiqo's Adaptive Intelligence System
+Learning Engine - Elyan's Adaptive Intelligence System
 
 Kullanıcı davranışlarını öğrenir, tercihlerini kaydeder ve zamanla adapte olur.
 
@@ -22,6 +22,7 @@ Database Schema:
 import json
 import time
 import sqlite3
+import re
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime, timedelta
@@ -384,6 +385,165 @@ class LearningEngine:
                 last_updated=interaction.timestamp
             )
             self._preference_cache[time_key] = pref
+
+        # Explicit preference signals in user text.
+        explicit_prefs = self._detect_preferences(interaction.input_text)
+        for pref_key, pref_value, confidence, learned_from in explicit_prefs:
+            self._upsert_preference(
+                key=pref_key,
+                value=pref_value,
+                learned_from=learned_from,
+                confidence=confidence,
+                timestamp=interaction.timestamp,
+            )
+
+    @staticmethod
+    def _normalize(text: str) -> str:
+        return " ".join(str(text or "").lower().strip().split())
+
+    def _detect_preferences(self, text: str) -> List[Tuple[str, Any, float, str]]:
+        t = self._normalize(text)
+        if not t:
+            return []
+
+        explicit_markers = [
+            "bundan sonra",
+            "artık",
+            "tercihim",
+            "lütfen",
+            "her zaman",
+        ]
+        is_explicit = any(m in t for m in explicit_markers)
+        base_conf = 0.6 if is_explicit else 0.45
+
+        prefs: List[Tuple[str, Any, float, str]] = []
+
+        # Length preference
+        if any(k in t for k in ["kısa", "kisa", "özet", "ozet", "özetle", "kısa tut"]):
+            prefs.append(("response_length", "short", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
+        if any(k in t for k in ["detaylı", "detayli", "uzun", "tüm detay", "tum detay"]):
+            prefs.append(("response_length", "detailed", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
+
+        # Tone preference
+        if any(k in t for k in ["resmi", "kurumsal"]):
+            prefs.append(("communication_tone", "formal", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
+        if any(k in t for k in ["samimi", "sıcak", "sicak"]):
+            prefs.append(("communication_tone", "friendly", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
+        if "profesyonel" in t:
+            prefs.append(("communication_tone", "professional_friendly", base_conf + 0.05, "explicit" if is_explicit else "implicit"))
+
+        # Language preference
+        if any(k in t for k in ["ingilizce", "english"]):
+            prefs.append(("preferred_language", "en", base_conf + 0.15, "explicit" if is_explicit else "implicit"))
+        if any(k in t for k in ["türkçe", "turkce"]):
+            prefs.append(("preferred_language", "tr", base_conf + 0.15, "explicit" if is_explicit else "implicit"))
+
+        # Format style
+        if "adım adım" in t or "adim adim" in t:
+            prefs.append(("format_style", "steps", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
+        if "madde madde" in t:
+            prefs.append(("format_style", "bullets", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
+        if "tablo" in t:
+            prefs.append(("format_style", "table", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
+
+        # Code inclusion
+        if any(k in t for k in ["kodsuz", "kod istemiyorum", "kod olmasın"]):
+            prefs.append(("include_code", False, base_conf + 0.2, "explicit" if is_explicit else "implicit"))
+        if any(k in t for k in ["kod yaz", "kodu ver", "kodla", "code"]):
+            prefs.append(("include_code", True, base_conf + 0.15, "explicit" if is_explicit else "implicit"))
+
+        # Output format preference
+        if any(k in t for k in ["pdf", "docx", "word", "markdown", "md", "json", "csv", "yaml", "excel"]):
+            if "pdf" in t:
+                prefs.append(("preferred_output", "pdf", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
+            elif "docx" in t or "word" in t:
+                prefs.append(("preferred_output", "docx", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
+            elif "json" in t:
+                prefs.append(("preferred_output", "json", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
+            elif "csv" in t or "excel" in t:
+                prefs.append(("preferred_output", "csv", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
+            elif "yaml" in t:
+                prefs.append(("preferred_output", "yaml", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
+            elif "markdown" in t or "md" in t:
+                prefs.append(("preferred_output", "markdown", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
+
+        # User alias preference
+        alias_match = re.search(
+            r"\bbana\s+([a-z0-9çğıöşü _-]{2,24})\s+(de|diye hitap et|diye seslen|olarak hitap et)\b",
+            t,
+        )
+        if alias_match:
+            alias = alias_match.group(1).strip()
+            if alias:
+                prefs.append(("user_alias", alias, 0.75, "explicit"))
+
+        return prefs
+
+    def _upsert_preference(
+        self,
+        *,
+        key: str,
+        value: Any,
+        learned_from: str,
+        confidence: float,
+        timestamp: float,
+    ) -> None:
+        pref = self._preference_cache.get(key)
+        if pref:
+            pref.value = value
+            pref.learned_from = learned_from
+            pref.confidence = max(pref.confidence, float(confidence))
+            pref.last_updated = timestamp
+        else:
+            pref = UserPreference(
+                key=key,
+                value=value,
+                learned_from=learned_from,
+                confidence=float(confidence),
+                last_updated=timestamp,
+            )
+            self._preference_cache[key] = pref
+        asyncio.create_task(self._persist_preference(pref))
+
+    async def _persist_preference(self, pref: UserPreference):
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO user_preferences (key, value, learned_from, confidence, last_updated)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value=excluded.value,
+                        learned_from=excluded.learned_from,
+                        confidence=excluded.confidence,
+                        last_updated=excluded.last_updated
+                    """,
+                    (
+                        pref.key,
+                        json.dumps(pref.value, ensure_ascii=False),
+                        pref.learned_from,
+                        float(pref.confidence),
+                        float(pref.last_updated),
+                    ),
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to persist preference: {e}")
+
+    def get_preference(self, key: str, min_confidence: float = 0.6) -> Optional[Any]:
+        pref = self._preference_cache.get(key)
+        if not pref:
+            return None
+        if float(pref.confidence or 0.0) < float(min_confidence):
+            return None
+        return pref.value
+
+    def get_preferences(self, min_confidence: float = 0.6) -> Dict[str, Any]:
+        prefs: Dict[str, Any] = {}
+        for key, pref in self._preference_cache.items():
+            if float(pref.confidence or 0.0) >= float(min_confidence):
+                prefs[key] = pref.value
+        return prefs
 
     async def _persist_learned_pattern(self, pattern: LearnedPattern):
         """Persist pattern to database"""

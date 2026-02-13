@@ -1,8 +1,8 @@
 #!/bin/bash
-# Wiqo Clean Start - Tüm ayarları sıfırla ve ilk açılış gibi başlat
+# Elyan Clean Start - Tüm ayarları sıfırla ve ilk açılış gibi başlat
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  WIQO - Clean Start"
+echo "  ELYAN - Clean Start"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "Tüm ayarlar sıfırlanıyor..."

@@ -500,7 +500,7 @@ class EnhancedFileOperations:
             if backup_dir:
                 backup_path = Path(backup_dir).expanduser().resolve()
             else:
-                backup_path = Path.home() / "Backups" / "Wiqo"
+                backup_path = Path.home() / "Backups" / "Elyan"
 
             backup_path.mkdir(parents=True, exist_ok=True)
 

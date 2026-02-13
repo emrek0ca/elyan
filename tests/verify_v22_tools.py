@@ -3,7 +3,7 @@ import json
 from tools import AVAILABLE_TOOLS
 
 async def verify_tools():
-    print("=== Wiqo v22.0 Tool Verification ===\n")
+    print("=== Elyan v22.0 Tool Verification ===\n")
     
     tools_to_test = [
         ("get_wifi_details", {}),

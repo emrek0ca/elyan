@@ -1,4 +1,4 @@
-"""Shared branding helpers for Wiqo image assets."""
+"""Shared branding helpers for Elyan image assets."""
 
 from pathlib import Path
 

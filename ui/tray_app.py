@@ -1,4 +1,4 @@
-"""System tray application for Wiqo."""
+"""System tray application for Elyan."""
 import traceback
 
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
@@ -11,7 +11,7 @@ from ui.branding import load_brand_icon
 logger = get_logger("ui.tray")
 
 class TrayApp(QObject):
-    """System Tray Icon for Wiqo Background Engine"""
+    """System Tray Icon for Elyan Background Engine"""
 
     def __init__(self, agent=None):
         super().__init__()
@@ -28,7 +28,7 @@ class TrayApp(QObject):
         self.menu = self._build_menu()
         self.tray_icon.setContextMenu(self.menu)
         self.tray_icon.show()
-        self.tray_icon.setToolTip("Wiqo: Hazır")
+        self.tray_icon.setToolTip("Elyan: Hazır")
         logger.info("Tray icon initialized")
 
     def _build_tray_icon(self) -> QIcon:
@@ -50,12 +50,12 @@ class TrayApp(QObject):
     def _build_menu(self) -> QMenu:
         menu = QMenu()
 
-        companion_action = QAction(load_brand_icon(size=24), "Wiqo Yanında", self)
+        companion_action = QAction(load_brand_icon(size=24), "Elyan Yanında", self)
         companion_action.setEnabled(False)
         menu.addAction(companion_action)
         menu.addSeparator()
 
-        self.status_action = QAction("Wiqo Durum: Hazır", self)
+        self.status_action = QAction("Elyan Durum: Hazır", self)
         self.status_action.setEnabled(False)
         menu.addAction(self.status_action)
         menu.addSeparator()
@@ -104,9 +104,9 @@ class TrayApp(QObject):
     def update_status(self, status: str):
         """Update the status text in the menu"""
         if self.status_action:
-            self.status_action.setText(f"Wiqo Durum: {status}")
+            self.status_action.setText(f"Elyan Durum: {status}")
 
         if status.lower() == "meşgul":
-            self.tray_icon.setToolTip("Wiqo: İşlem yapılıyor...")
+            self.tray_icon.setToolTip("Elyan: İşlem yapılıyor...")
         else:
-            self.tray_icon.setToolTip("Wiqo: Hazır")
+            self.tray_icon.setToolTip("Elyan: Hazır")

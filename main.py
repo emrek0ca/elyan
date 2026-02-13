@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Wiqo entrypoint.
+Elyan entrypoint.
 
 Usage:
 - python main.py         -> Desktop UI (tray/wizard)
@@ -34,7 +34,7 @@ def _resolve_telegram_token() -> str:
 def run_with_ui() -> int:
     """Start desktop UI mode."""
     try:
-        logger.info(f"Wiqo Launcher v{LAUNCHER_VERSION} starting from {__file__}")
+        logger.info(f"Elyan Launcher v{LAUNCHER_VERSION} starting from {__file__}")
         from ui.clean_main_app import main as clean_main
         return int(clean_main() or 0)
     except Exception as exc:
@@ -78,7 +78,7 @@ def run_with_cli() -> int:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Wiqo launcher")
+    parser = argparse.ArgumentParser(description="Elyan launcher")
     parser.add_argument(
         "--cli",
         action="store_true",

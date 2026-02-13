@@ -1,4 +1,4 @@
-"""Token usage and estimated pricing tracker for Wiqo."""
+"""Token usage and estimated pricing tracker for Elyan."""
 
 from __future__ import annotations
 

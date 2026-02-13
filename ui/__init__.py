@@ -1,5 +1,5 @@
 """
-Wiqo Desktop UI - Modern PyQt6 based user interface
+Elyan Desktop UI - Modern PyQt6 based user interface
 """
 
 # Original components

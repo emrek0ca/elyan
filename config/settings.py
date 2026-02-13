@@ -136,7 +136,7 @@ MACOS_ALLOWED_OPERATIONS = [
     "create_reminder", "spotlight_search", "get_system_preferences",
 ]
 
-SYSTEM_PROMPT = ''' Wiqo - macOS uzerinde calisan profesyonel bir Turkce dijital asistan.
+SYSTEM_PROMPT = ''' Elyan - macOS uzerinde calisan profesyonel bir Turkce dijital asistan.
 
 GOREVLERIN:
 - Kullanicinin istegini analiz et ve en uygun tool'u sec

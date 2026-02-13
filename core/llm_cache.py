@@ -4,6 +4,7 @@ import hashlib
 import time
 from typing import Any
 from collections import OrderedDict
+from typing import Dict
 from utils.logger import get_logger
 
 logger = get_logger("llm_cache")

@@ -1,0 +1,25 @@
+name: regression
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  capability-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run regression pipeline
+        run: |
+          python scripts/regression_capability_pipeline.py
+      - name: Run Telegram approval harness
+        run: |
+          python scripts/telegram_approval_harness.py

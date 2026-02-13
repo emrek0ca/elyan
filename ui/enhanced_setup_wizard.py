@@ -1,5 +1,5 @@
 """
-Wiqo Enhanced Setup Wizard v24.0 - Professional AI Configuration
+Elyan Enhanced Setup Wizard v24.0 - Professional AI Configuration
 With Ollama Installation Support, Provider Comparison, and Connection Testing
 """
 
@@ -356,7 +356,7 @@ class EnhancedSetupWizard(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Wiqo Gelişmiş Kurulum Sihirbazı")
+        self.setWindowTitle("Elyan Gelişmiş Kurulum Sihirbazı")
         self.setFixedSize(680, 640)
         self.setModal(True)
 
@@ -410,7 +410,7 @@ class EnhancedSetupWizard(QDialog):
         layout.setSpacing(20)
 
         # Logo
-        logo = QLabel("🤖 WIQO")
+        logo = QLabel("🤖 ELYAN")
         logo.setFont(QFont("SF Pro Display", 52, QFont.Weight.Bold))
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         logo.setStyleSheet("color: #2196F3; letter-spacing: -2px;")
@@ -425,7 +425,7 @@ class EnhancedSetupWizard(QDialog):
 
         # Description
         desc = QLabel(
-            "Wiqo, bilgisayarınızı doğal dille kontrol etmenizi sağlar.\n\n"
+            "Elyan, bilgisayarınızı doğal dille kontrol etmenizi sağlar.\n\n"
             "✨ 94+ farklı araç\n"
             "⚡ Ultra-hızlı yanıt süresi\n"
             "🔒 Gizlilik odaklı (yerel model desteği)\n\n"
@@ -458,7 +458,7 @@ class EnhancedSetupWizard(QDialog):
         layout.addWidget(header)
 
         desc = QLabel(
-            "Wiqo'nun zeka kaynağını seçin. Her seçeneğin avantajları farklıdır:"
+            "Elyan'ın zeka kaynağını seçin. Her seçeneğin avantajları farklıdır:"
         )
         desc.setStyleSheet("color: #78909C; font-size: 13px; margin-bottom: 8px;")
         desc.setWordWrap(True)
@@ -858,7 +858,7 @@ class EnhancedSetupWizard(QDialog):
         layout.addWidget(header)
 
         desc = QLabel(
-            "Wiqo'yu Telegram üzerinden de kullanabilirsiniz.\n"
+            "Elyan'ı Telegram üzerinden de kullanabilirsiniz.\n"
             "Şimdilik atlamak isterseniz, daha sonra ayarlardan ekleyebilirsiniz."
         )
         desc.setWordWrap(True)
@@ -945,7 +945,7 @@ class EnhancedSetupWizard(QDialog):
 
         # Description
         desc = QLabel(
-            "Wiqo başarıyla kuruldu ve kullanıma hazır.\n\n"
+            "Elyan başarıyla kuruldu ve kullanıma hazır.\n\n"
             "Artık doğal dille komutlar verebilir,\n"
             "dosyalarınızı yönetebilir ve daha fazlasını yapabilirsiniz!"
         )
@@ -957,7 +957,7 @@ class EnhancedSetupWizard(QDialog):
         layout.addStretch()
 
         # Finish button
-        finish_btn = AnimatedButton("🚀 Wiqo'yu Başlat", primary=True)
+        finish_btn = AnimatedButton("🚀 Elyan'ı Başlat", primary=True)
         finish_btn.setFixedHeight(50)
         finish_btn.clicked.connect(self._complete_wizard)
         layout.addWidget(finish_btn)

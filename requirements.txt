@@ -1,5 +1,5 @@
 # =============================================
-# Wiqo v2.0.0 - Desktop Application Requirements
+# Elyan v2.0.0 - Desktop Application Requirements
 # =============================================
 
 # Core Dependencies

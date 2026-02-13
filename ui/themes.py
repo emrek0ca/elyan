@@ -55,7 +55,7 @@ class ThemeColors:
     shadow_lg: str = "0 10px 15px rgba(0,0,0,0.5)"
 
 
-# Wiqo Professional Palette (Apple-Style)
+# Elyan Professional Palette (Apple-Style)
 WIQO_TURQUOISE = "#ADDBE3"
 WIQO_STEEL = "#7196A2"
 WIQO_SLATE = "#517079"
@@ -232,7 +232,7 @@ THEMES: Dict[str, ThemeColors] = {
 }
 
 THEME_NAMES = {
-    "wiqo": "Wiqo Beyaz (Professional)",
+    "wiqo": "Elyan Beyaz (Professional)",
     "dark": "Koyu (Dark)",
     "light": "Açık (Light)",
     "midnight": "Gece Yarısı (Midnight)",

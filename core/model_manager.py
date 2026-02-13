@@ -1,5 +1,5 @@
 """
-Centralized Model Manager for Wiqo (v17.0)
+Centralized Model Manager for Elyan (v17.0)
 Ensures expensive models are loaded once and shared across components.
 """
 import asyncio

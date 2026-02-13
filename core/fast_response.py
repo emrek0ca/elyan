@@ -66,7 +66,7 @@ class FastResponseSystem:
         # Identity patterns
         self.identity_patterns = [
             (r'\b(sen kimsin|adın ne|kimsin sen|nesin sen)\b',
-             "Ben Wiqo, senin akilli asistaninim. Dosya islemleri, uygulama kontrolu, "
+             "Ben Elyan, senin akilli asistaninim. Dosya islemleri, uygulama kontrolu, "
              "web arastirma, ekran goruntusu ve daha bircok konuda yardimci olabilirim."),
             (r'\b(ne yapabilirsin|yeteneklerin|neler yapabilirsin|ozelliklerin)\b',
              "Yapabileceklerim:\n"

@@ -24,7 +24,7 @@ logger = get_logger("proactive_scheduler")
 
 class ProactiveScheduler:
     """
-    Unified scheduler for all proactive Wiqo features.
+    Unified scheduler for all proactive Elyan features.
     
     Uses APScheduler with SQLite persistence to survive restarts.
     """

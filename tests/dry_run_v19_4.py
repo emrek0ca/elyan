@@ -8,7 +8,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from core.parameter_extractor import normalize_path, clean_name_string
 
 def test_fixes():
-    print("--- Wiqo v19.4 Dry Run Test ---")
+    print("--- Elyan v19.4 Dry Run Test ---")
     
     test_cases = [
         # Path Normalization

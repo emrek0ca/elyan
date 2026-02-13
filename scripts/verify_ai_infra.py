@@ -22,7 +22,7 @@ async def verify_infrastructure():
     
     test_cases = [
         ("Naber?", "CHAT"),
-        ("Selam Wiqo", "CHAT"),
+        ("Selam Elyan", "CHAT"),
         ("Masaüstünü listele", "ACTION"),
         ("Yeni bir klasör oluştur", "ACTION"),
         ("SS al", "ACTION")

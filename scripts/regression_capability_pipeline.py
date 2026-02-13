@@ -267,7 +267,7 @@ async def check_multimodal_tools():
     out = str(ROOT / ".wiqo")
     p = await create_visual_asset_pack(
         "Regression Multimodal",
-        brief="Wiqo için premium launch visual set",
+        brief="Elyan için premium launch visual set",
         output_dir=out,
     )
     _assert("multimodal.visual_pack.success", bool(p.get("success")), str(p))

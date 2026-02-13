@@ -1,10 +1,10 @@
 #!/bin/bash
-# Wiqo Başlatıcı - Tek komutla çalışır
+# Elyan Başlatıcı - Tek komutla çalışır
 
 cd "$(dirname "$0")"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  WIQO - Akıllı Asistan"
+echo "  ELYAN - Akıllı Asistan"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 

@@ -1,4 +1,9 @@
+from telegram import Update
+from telegram.ext import ContextTypes
+from utils.logger import get_logger
+from .telegram_voice_handler import VOICE_RESPONSE_ENABLED
 
+logger = get_logger("telegram_voice_commands")
 
 async def _send_voice_response(update: Update, response_text: str, original_text: str):
     """Send voice response using TTS"""
@@ -13,7 +18,7 @@ async def _send_voice_response(update: Update, response_text: str, original_text
             # Fallback to text
             await update.message.reply_text(
                 f" **Sen:** {original_text}\n\n"
-                f" **Wiqo:** {response_text}",
+                f" **Elyan:** {response_text}",
                 parse_mode='Markdown'
             )
             return
@@ -27,7 +32,7 @@ async def _send_voice_response(update: Update, response_text: str, original_text
             # Send voice message
             await update.message.reply_voice(
                 voice=open(temp_file, 'rb'),
-                caption=f" **Sen:** {original_text}\n\n **Wiqo (Sesli)**"
+                caption=f" **Sen:** {original_text}\n\n **Elyan (Sesli)**"
             )
             
             # Cleanup
@@ -39,7 +44,7 @@ async def _send_voice_response(update: Update, response_text: str, original_text
             # Fallback
             await update.message.reply_text(
                 f" **Sen:** {original_text}\n\n"
-                f" **Wiqo:** {response_text}",
+                f" **Elyan:** {response_text}",
                 parse_mode='Markdown'
             )
     
@@ -47,7 +52,7 @@ async def _send_voice_response(update: Update, response_text: str, original_text
         logger.error(f"Voice response error: {e}")
         await update.message.reply_text(
             f" **Sen:** {original_text}\n\n"
-            f" **Wiqo:** {response_text}",
+            f" **Elyan:** {response_text}",
             parse_mode='Markdown'
         )
 

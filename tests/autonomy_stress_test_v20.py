@@ -14,7 +14,7 @@ from utils.logger import get_logger
 logger = get_logger("tests.autonomy_stress")
 
 async def run_stress_test():
-    print("🚀 Starting Wiqo Autonomy Stress Test (v20.0)")
+    print("🚀 Starting Elyan Autonomy Stress Test (v20.0)")
     
     # Initialize components
     llm = LLMClient()
@@ -34,7 +34,7 @@ async def run_stress_test():
         if isinstance(msg, dict) and msg.get("type") == "screenshot":
             print(f"📸 SCREENSHOT: {msg.get('path')}")
         else:
-            print(f"ℹ️  [Wiqo]: {msg}")
+            print(f"ℹ️  [Elyan]: {msg}")
 
     result = await loop.process(user_input, notify=mock_notify)
     

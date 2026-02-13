@@ -15,6 +15,8 @@ import asyncio
 import os
 import json
 import logging
+import re
+import time
 
 logger = get_logger("telegram")
 
@@ -333,7 +335,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /plan - Akıllı görev planlama\n"
         "  /predict - Öngörücü bakım\n"
         "  /security - Güvenlik raporu\n"
-        "  /improve - Self-improvement metrikleri"
+        "  /improve - Self-improvement metrikleri\n"
+        "  /feedback 1-5 <yorum> - Geri bildirim"
     )
     await update.message.reply_text(help_text)
 
@@ -715,7 +718,7 @@ async def cmd_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE):
             metrics = result.get("metrics", {})
             
             # Formatted header with metrics
-            header = f" **Wiqo Günlük Brifing**\n"
+            header = f" **Elyan Günlük Brifing**\n"
             header += f"━━━━━━━━━━━━━━━━━━━━\n"
             header += f" Sağlık Skoru: %{metrics.get('health_score')}\n"
             header += f" CPU: %{metrics.get('cpu')} |  MEM: %{metrics.get('mem')}\n\n"
@@ -1221,6 +1224,42 @@ async def cmd_security(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Güvenlik raporu hatası: {e}")
 
 
+async def cmd_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Collect user feedback for continuous improvement."""
+    if not await check_user(update):
+        return
+
+    try:
+        args = context.args or []
+        if not args:
+            await update.message.reply_text("Kullanım: /feedback 1-5 <yorum>")
+            return
+
+        rating_text = args[0].strip()
+        if not rating_text.isdigit():
+            await update.message.reply_text("Puan 1-5 arası sayı olmalı. Örnek: /feedback 4 hızlıydı")
+            return
+
+        rating = int(rating_text)
+        if rating < 1 or rating > 5:
+            await update.message.reply_text("Puan 1-5 arası olmalı.")
+            return
+
+        feedback_text = " ".join(args[1:]).strip() if len(args) > 1 else None
+        from core.self_improvement import get_self_improvement
+        improver = get_self_improvement()
+        improver.add_feedback(
+            user_id=str(update.effective_user.id),
+            interaction_id=f"tg_{update.effective_user.id}_{int(time.time())}",
+            rating=rating,
+            feedback_text=feedback_text,
+        )
+        await update.message.reply_text("Geri bildirim alındı. Teşekkürler.")
+    except Exception as e:
+        logger.error(f"Feedback command error: {e}")
+        await update.message.reply_text(f"Geri bildirim kaydedilemedi: {e}")
+
+
 async def cmd_improve(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Self-improvement metrics and recommendations"""
     if not await check_user(update): return
@@ -1521,6 +1560,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.chat.send_action("typing")
 
+    # Inline feedback capture (non-command)
+    if isinstance(user_input, str):
+        feedback_match = re.match(r"^\s*(feedback|puan)\s+([1-5])\s*(.*)$", user_input, flags=re.IGNORECASE)
+        if feedback_match:
+            rating = int(feedback_match.group(2))
+            feedback_text = feedback_match.group(3).strip() or None
+            from core.self_improvement import get_self_improvement
+            improver = get_self_improvement()
+            improver.add_feedback(
+                user_id=str(user.id),
+                interaction_id=f"tg_{user.id}_{int(time.time())}",
+                rating=rating,
+                feedback_text=feedback_text,
+            )
+            await update.message.reply_text("Geri bildirim alındı. Teşekkürler.")
+            return
+
     # Set user_id for audit logging
     agent.current_user_id = user.id
     if agent.agent_loop:
@@ -1624,6 +1680,7 @@ def setup_handlers(app: Application, agent_instance: Agent):
     app.add_handler(CommandHandler("plan", cmd_plan))
     app.add_handler(CommandHandler("predict", cmd_predict))
     app.add_handler(CommandHandler("security", cmd_security))
+    app.add_handler(CommandHandler("feedback", cmd_feedback))
     app.add_handler(CommandHandler("improve", cmd_improve))
     
     # Phase 12: Proactive Intelligence Commands

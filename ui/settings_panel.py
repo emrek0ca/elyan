@@ -21,7 +21,7 @@ class SettingsWindow(QMainWindow):
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.timeout.connect(self._flush_pending_settings)
-        self.setWindowTitle("Wiqo Ayarlar")
+        self.setWindowTitle("Elyan Ayarlar")
         self.setFixedSize(780, 560)
         self._setup_ui()
 

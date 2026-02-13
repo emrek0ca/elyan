@@ -1,0 +1,525 @@
+{
+  "active": {},
+  "history": [
+    {
+      "pipeline_id": "pl_10ddf1a56d6f",
+      "user_id": "local",
+      "domain": "website",
+      "user_input": "demo input",
+      "status": "completed",
+      "created_at": 1770941032.320992,
+      "updated_at": 1770941032.3211,
+      "tasks": [
+        {
+          "id": "task_1",
+          "action": "x",
+          "description": "y",
+          "status": "done",
+          "error": ""
+        }
+      ],
+      "progress": {
+        "completed": 1,
+        "failed": 0,
+        "total": 1
+      },
+      "last_error": "",
+      "completed_at": 1770941032.321171,
+      "summary": "done"
+    },
+    {
+      "pipeline_id": "pl_bd365b8c5861",
+      "user_id": "regression",
+      "domain": "website",
+      "user_input": "demo pipeline",
+      "status": "completed",
+      "created_at": 1770941363.533288,
+      "updated_at": 1770941363.53392,
+      "tasks": [
+        {
+          "id": "task_1",
+          "action": "create_web_project_scaffold",
+          "description": "scaffold",
+          "status": "done",
+          "error": ""
+        }
+      ],
+      "progress": {
+        "completed": 1,
+        "failed": 0,
+        "total": 1
+      },
+      "last_error": "",
+      "completed_at": 1770941363.5340102,
+      "summary": "ok"
+    },
+    {
+      "pipeline_id": "pl_cafae5d75d84",
+      "user_id": "regression",
+      "domain": "website",
+      "user_input": "demo pipeline",
+      "status": "completed",
+      "created_at": 1770941764.231421,
+      "updated_at": 1770941764.2318878,
+      "tasks": [
+        {
+          "id": "task_1",
+          "action": "create_web_project_scaffold",
+          "description": "scaffold",
+          "status": "done",
+          "error": ""
+        }
+      ],
+      "progress": {
+        "completed": 1,
+        "failed": 0,
+        "total": 1
+      },
+      "last_error": "",
+      "completed_at": 1770941764.231958,
+      "summary": "ok"
+    },
+    {
+      "pipeline_id": "pl_2d81d81bb374",
+      "user_id": "regression",
+      "domain": "website",
+      "user_input": "demo pipeline",
+      "status": "completed",
+      "created_at": 1770941809.267483,
+      "updated_at": 1770941809.267589,
+      "tasks": [
+        {
+          "id": "task_1",
+          "action": "create_web_project_scaffold",
+          "description": "scaffold",
+          "status": "done",
+          "error": ""
+        }
+      ],
+      "progress": {
+        "completed": 1,
+        "failed": 0,
+        "total": 1
+      },
+      "last_error": "",
+      "completed_at": 1770941809.267675,
+      "summary": "ok"
+    },
+    {
+      "pipeline_id": "pl_428d914ffae7",
+      "user_id": "regression",
+      "domain": "website",
+      "user_input": "demo pipeline",
+      "status": "completed",
+      "created_at": 1770941852.242786,
+      "updated_at": 1770941852.242913,
+      "tasks": [
+        {
+          "id": "task_1",
+          "action": "create_web_project_scaffold",
+          "description": "scaffold",
+          "status": "done",
+          "error": ""
+        }
+      ],
+      "progress": {
+        "completed": 1,
+        "failed": 0,
+        "total": 1
+      },
+      "last_error": "",
+      "completed_at": 1770941852.2430139,
+      "summary": "ok"
+    },
+    {
+      "pipeline_id": "pl_1e1cbe7bfda6",
+      "user_id": "regression",
+      "domain": "website",
+      "user_input": "demo pipeline",
+      "status": "completed",
+      "created_at": 1770942076.49343,
+      "updated_at": 1770942076.4939609,
+      "tasks": [
+        {
+          "id": "task_1",
+          "action": "create_web_project_scaffold",
+          "description": "scaffold",
+          "status": "done",
+          "error": ""
+        }
+      ],
+      "progress": {
+        "completed": 1,
+        "failed": 0,
+        "total": 1
+      },
+      "last_error": "",
+      "completed_at": 1770942076.494049,
+      "summary": "ok"
+    },
+    {
+      "pipeline_id": "pl_81ff6266659b",
+      "user_id": "regression",
+      "domain": "website",
+      "user_input": "demo pipeline",
+      "status": "completed",
+      "created_at": 1770942117.6903198,
+      "updated_at": 1770942117.69052,
+      "tasks": [
+        {
+          "id": "task_1",
+          "action": "create_web_project_scaffold",
+          "description": "scaffold",
+          "status": "done",
+          "error": ""
+        }
+      ],
+      "progress": {
+        "completed": 1,
+        "failed": 0,
+        "total": 1
+      },
+      "last_error": "",
+      "completed_at": 1770942117.690649,
+      "summary": "ok"
+    },
+    {
+      "pipeline_id": "pl_1a18167839db",
+      "user_id": "regression",
+      "domain": "website",
+      "user_input": "demo pipeline",
+      "status": "completed",
+      "created_at": 1770942207.3079722,
+      "updated_at": 1770942207.3081942,
+      "tasks": [
+        {
+          "id": "task_1",
+          "action": "create_web_project_scaffold",
+          "description": "scaffold",
+          "status": "done",
+          "error": ""
+        }
+      ],
+      "progress": {
+        "completed": 1,
+        "failed": 0,
+        "total": 1
+      },
+      "last_error": "",
+      "completed_at": 1770942207.308348,
+      "summary": "ok"
+    },
+    {
+      "pipeline_id": "pl_155c95f47907",
+      "user_id": "regression",
+      "domain": "website",
+      "user_input": "demo pipeline",
+      "status": "completed",
+      "created_at": 1770942556.0052428,
+      "updated_at": 1770942556.005882,
+      "tasks": [
+        {
+          "id": "task_1",
+          "action": "create_web_project_scaffold",
+          "description": "scaffold",
+          "status": "done",
+          "error": ""
+        }
+      ],
+      "progress": {
+        "completed": 1,
+        "failed": 0,
+        "total": 1
+      },
+      "last_error": "",
+      "completed_at": 1770942556.006059,
+      "summary": "ok"
+    },
+    {
+      "pipeline_id": "pl_5d89e1c8f521",
+      "user_id": "regression",
+      "domain": "website",
+      "user_input": "demo pipeline",
+      "status": "completed",
+      "created_at": 1770942673.217739,
+      "updated_at": 1770942673.21793,
+      "tasks": [
+        {
+          "id": "task_1",
+          "action": "create_web_project_scaffold",
+          "description": "scaffold",
+          "status": "done",
+          "error": ""
+        }
+      ],
+      "progress": {
+        "completed": 1,
+        "failed": 0,
+        "total": 1
+      },
+      "last_error": "",
+      "completed_at": 1770942673.218082,
+      "summary": "ok"
+    },
+    {
+      "pipeline_id": "pl_bde403cb78b5",
+      "user_id": "regression",
+      "domain": "website",
+      "user_input": "demo pipeline",
+      "status": "completed",
+      "created_at": 1770942724.374451,
+      "updated_at": 1770942724.374667,
+      "tasks": [
+        {
+          "id": "task_1",
+          "action": "create_web_project_scaffold",
+          "description": "scaffold",
+          "status": "done",
+          "error": ""
+        }
+      ],
+      "progress": {
+        "completed": 1,
+        "failed": 0,
+        "total": 1
+      },
+      "last_error": "",
+      "completed_at": 1770942724.3748028,
+      "summary": "ok"
+    },
+    {
+      "pipeline_id": "pl_14f15367895c",
+      "user_id": "regression",
+      "domain": "website",
+      "user_input": "demo pipeline",
+      "status": "completed",
+      "created_at": 1770942734.969088,
+      "updated_at": 1770942734.969307,
+      "tasks": [
+        {
+          "id": "task_1",
+          "action": "create_web_project_scaffold",
+          "description": "scaffold",
+          "status": "done",
+          "error": ""
+        }
+      ],
+      "progress": {
+        "completed": 1,
+        "failed": 0,
+        "total": 1
+      },
+      "last_error": "",
+      "completed_at": 1770942734.969457,
+      "summary": "ok"
+    },
+    {
+      "pipeline_id": "pl_d65e386f8af7",
+      "user_id": "regression",
+      "domain": "website",
+      "user_input": "demo pipeline",
+      "status": "completed",
+      "created_at": 1770942746.382515,
+      "updated_at": 1770942746.382745,
+      "tasks": [
+        {
+          "id": "task_1",
+          "action": "create_web_project_scaffold",
+          "description": "scaffold",
+          "status": "done",
+          "error": ""
+        }
+      ],
+      "progress": {
+        "completed": 1,
+        "failed": 0,
+        "total": 1
+      },
+      "last_error": "",
+      "completed_at": 1770942746.382915,
+      "summary": "ok"
+    },
+    {
+      "pipeline_id": "pl_99afbad46e0f",
+      "user_id": "regression",
+      "domain": "website",
+      "user_input": "demo pipeline",
+      "status": "completed",
+      "created_at": 1770942833.357008,
+      "updated_at": 1770942833.357676,
+      "tasks": [
+        {
+          "id": "task_1",
+          "action": "create_web_project_scaffold",
+          "description": "scaffold",
+          "status": "done",
+          "error": ""
+        }
+      ],
+      "progress": {
+        "completed": 1,
+        "failed": 0,
+        "total": 1
+      },
+      "last_error": "",
+      "completed_at": 1770942833.357825,
+      "summary": "ok"
+    },
+    {
+      "pipeline_id": "pl_aa723e003025",
+      "user_id": "regression",
+      "domain": "website",
+      "user_input": "demo pipeline",
+      "status": "completed",
+      "created_at": 1770942923.674626,
+      "updated_at": 1770942923.67485,
+      "tasks": [
+        {
+          "id": "task_1",
+          "action": "create_web_project_scaffold",
+          "description": "scaffold",
+          "status": "done",
+          "error": ""
+        }
+      ],
+      "progress": {
+        "completed": 1,
+        "failed": 0,
+        "total": 1
+      },
+      "last_error": "",
+      "completed_at": 1770942923.675026,
+      "summary": "ok"
+    },
+    {
+      "pipeline_id": "pl_4037f7e1e192",
+      "user_id": "regression",
+      "domain": "website",
+      "user_input": "demo pipeline",
+      "status": "completed",
+      "created_at": 1770943017.3998988,
+      "updated_at": 1770943017.4001138,
+      "tasks": [
+        {
+          "id": "task_1",
+          "action": "create_web_project_scaffold",
+          "description": "scaffold",
+          "status": "done",
+          "error": ""
+        }
+      ],
+      "progress": {
+        "completed": 1,
+        "failed": 0,
+        "total": 1
+      },
+      "last_error": "",
+      "completed_at": 1770943017.400286,
+      "summary": "ok"
+    },
+    {
+      "pipeline_id": "pl_8ee230ab9727",
+      "user_id": "regression",
+      "domain": "website",
+      "user_input": "demo pipeline",
+      "status": "completed",
+      "created_at": 1770943308.392648,
+      "updated_at": 1770943308.393109,
+      "tasks": [
+        {
+          "id": "task_1",
+          "action": "create_web_project_scaffold",
+          "description": "scaffold",
+          "status": "done",
+          "error": ""
+        }
+      ],
+      "progress": {
+        "completed": 1,
+        "failed": 0,
+        "total": 1
+      },
+      "last_error": "",
+      "completed_at": 1770943308.393307,
+      "summary": "ok"
+    },
+    {
+      "pipeline_id": "pl_746c3634e364",
+      "user_id": "regression",
+      "domain": "website",
+      "user_input": "demo pipeline",
+      "status": "completed",
+      "created_at": 1770943674.27392,
+      "updated_at": 1770943674.274376,
+      "tasks": [
+        {
+          "id": "task_1",
+          "action": "create_web_project_scaffold",
+          "description": "scaffold",
+          "status": "done",
+          "error": ""
+        }
+      ],
+      "progress": {
+        "completed": 1,
+        "failed": 0,
+        "total": 1
+      },
+      "last_error": "",
+      "completed_at": 1770943674.274533,
+      "summary": "ok"
+    },
+    {
+      "pipeline_id": "pl_7b059d9227bc",
+      "user_id": "regression",
+      "domain": "website",
+      "user_input": "demo pipeline",
+      "status": "completed",
+      "created_at": 1770943793.886291,
+      "updated_at": 1770943793.886612,
+      "tasks": [
+        {
+          "id": "task_1",
+          "action": "create_web_project_scaffold",
+          "description": "scaffold",
+          "status": "done",
+          "error": ""
+        }
+      ],
+      "progress": {
+        "completed": 1,
+        "failed": 0,
+        "total": 1
+      },
+      "last_error": "",
+      "completed_at": 1770943793.8868082,
+      "summary": "ok"
+    },
+    {
+      "pipeline_id": "pl_5bc9a9bc9b80",
+      "user_id": "regression",
+      "domain": "website",
+      "user_input": "demo pipeline",
+      "status": "completed",
+      "created_at": 1770944276.757484,
+      "updated_at": 1770944276.758037,
+      "tasks": [
+        {
+          "id": "task_1",
+          "action": "create_web_project_scaffold",
+          "description": "scaffold",
+          "status": "done",
+          "error": ""
+        }
+      ],
+      "progress": {
+        "completed": 1,
+        "failed": 0,
+        "total": 1
+      },
+      "last_error": "",
+      "completed_at": 1770944276.758202,
+      "summary": "ok"
+    }
+  ]
+}

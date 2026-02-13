@@ -25,7 +25,7 @@ _CLAUDE_MD_PATH = Path(__file__).parent.parent / "CLAUDE.md"
 
 class LLMClient:
     _default_chat_prompt = (
-        "Wiqo - akilli, bilgili ve samimi bir Turkce dijital asistan. "
+        "Elyan - akilli, bilgili ve samimi bir Turkce dijital asistan. "
         "Kullaniciyla dogal ve sicak bir sekilde sohbet et. "
         "Profesyonel ama samimi bir ton kullan - ne robotik ne de asiri rahat. "
         "Kisa ve oze yanit ver (2-4 cumle). "
@@ -145,7 +145,7 @@ class LLMClient:
                 "expert": "Teknik dogrulugu yuksek tut ama anlasilir kal.",
             }
             self._default_chat_prompt = (
-                f"Wiqo, {tone_map.get(self.communication_tone, 'profesyonel ve samimi')} bir Turkce asistan. "
+                f"Elyan, {tone_map.get(self.communication_tone, 'profesyonel ve samimi')} bir Turkce asistan. "
                 f"Yaniti {length_map.get(self.response_length, '2-4 cumle')} ile ver. "
                 f"{expertise_map.get(self.assistant_expertise, 'Gerekirse teknik detayi kisa ve acik ver.')} "
                 "Gereksiz teknik detay ve jargon kullanma. "
@@ -335,7 +335,7 @@ class LLMClient:
         if "\n\nKullanıcı:" in prompt:
             parts = prompt.split("\n\nKullanıcı:", 1)
             system_part = parts[0].strip()
-            user_part = user_message or parts[1].replace("\nWiqo:", "").strip()
+            user_part = user_message or parts[1].replace("\nElyan:", "").strip()
             return system_part, user_part
         # No split marker - use full prompt as system, user_message as user
         if user_message:
@@ -933,7 +933,7 @@ KONUŞMA:
 
     def _extract_core_prompt(self) -> str:
         """Extract only the core essence of CLAUDE.md for ultra-compact prompts"""
-        return """Wiqo - macOS'ta çalışan akıllı Türkçe asistan.
+        return """Elyan - macOS'ta çalışan akıllı Türkçe asistan.
 
 KİMLİK: Samimi, profesyonel, verimli. Emoji kullanma, kısa ve öz ol.
 
@@ -977,7 +977,7 @@ TOOL KATEGORİLERİ:
         if is_simple:
             logger.info("Using lightweight system prompt for simple query")
             system = (
-                "Wiqo, akilli bir Turkce asistan. "
+                "Elyan, akilli bir Turkce asistan. "
                 "JSON formatinda yanit ver: {\"action\": \"...\", \"message\": \"...\", \"params\": {}}. "
                 "Chat ise action: chat yap."
             )
@@ -1253,7 +1253,7 @@ TOOL KATEGORİLERİ:
         if not system_prompt:
             system_prompt = self._default_chat_prompt
 
-        prompt = f"{system_prompt}\n\nKullanıcı: {user_message}\nWiqo:"
+        prompt = f"{system_prompt}\n\nKullanıcı: {user_message}\nElyan:"
 
         try:
             chat_max_tokens = self._resolve_dynamic_max_tokens(user_message, is_chat=True)

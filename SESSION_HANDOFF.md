@@ -1,6 +1,6 @@
-# WIQO - Oturum Notu (12 Şubat 2026)
+# ELYAN - Oturum Notu (12 Şubat 2026)
 
-Bu dosya kısa handoff içindir. Güncel tek kaynak: `WIQO_MASTER.md`.
+Bu dosya kısa handoff içindir. Güncel tek kaynak: `ELYAN_MASTER.md`.
 
 ## Bu Oturumda Eklenenler
 - Güç komutlarına zorunlu açık onay:

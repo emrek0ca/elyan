@@ -51,7 +51,7 @@ class ChartGenerator:
     """Generate charts and visualizations"""
 
     def __init__(self, output_dir: str = None):
-        self.output_dir = Path(output_dir) if output_dir else Path.home() / "Desktop" / "WiqoCharts"
+        self.output_dir = Path(output_dir) if output_dir else Path.home() / "Desktop" / "ElyanCharts"
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Check for matplotlib availability

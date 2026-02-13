@@ -291,7 +291,7 @@ class ChatWidget(QWidget):
 
         # Welcome message
         self._add_bot_message(
-            "Merhaba! Ben Wiqo, kişisel bilgisayar asistanınız. \n\n"
+            "Merhaba! Ben Elyan, kişisel bilgisayar asistanınız. \n\n"
             "Size şu konularda yardımcı olabilirim:\n"
             "• 📁 Dosya ve klasör yönetimi\n"
             "•  Araştırma ve bilgi toplama\n"
@@ -334,7 +334,7 @@ class ChatWidget(QWidget):
         info_layout = QVBoxLayout()
         info_layout.setSpacing(2)
 
-        name_label = QLabel("Wiqo")
+        name_label = QLabel("Elyan")
         name_label.setStyleSheet("""
             QLabel {
                 color: #ffffff;
@@ -609,11 +609,11 @@ class ChatWidget(QWidget):
 
         if file_path:
             with open(file_path, "w", encoding="utf-8") as f:
-                f.write("# Wiqo Sohbet Geçmişi\n")
+                f.write("# Elyan Sohbet Geçmişi\n")
                 f.write(f"# Tarih: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n")
 
                 for msg in self._messages:
-                    role = " Kullanıcı" if msg["role"] == "user" else " Wiqo"
+                    role = " Kullanıcı" if msg["role"] == "user" else " Elyan"
                     f.write(f"{role}:\n{msg['content']}\n\n")
 
             self._add_bot_message(f" Sohbet kaydedildi: {Path(file_path).name}")

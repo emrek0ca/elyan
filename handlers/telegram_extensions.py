@@ -7,6 +7,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from utils.logger import get_logger
 from pathlib import Path
+from typing import Dict
 import os
 
 logger = get_logger("telegram_extensions")

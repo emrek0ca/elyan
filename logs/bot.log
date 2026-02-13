@@ -8777,3 +8777,1668 @@ AttributeError: 'NoneType' object has no attribute 'chat'
 2026-02-13 01:57:36 | task_executor | INFO | Executing advanced_research with params: {}
 2026-02-13 01:57:36 | task_executor | ERROR | Task advanced_research execution error: advanced_research() missing 1 required positional argument: 'topic'
 2026-02-13 01:57:37 | memory | INFO | Stored preference for user 0: preferred_language = tr
+2026-02-13 02:11:17 | main | INFO | Wiqo Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 02:11:40 | main | INFO | Wiqo Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 02:11:40 | clean_main_app | INFO | Setup wizard selected: ui.apple_setup_wizard.AppleSetupWizard
+2026-02-13 02:11:58 | apple_setup_wizard | INFO | Populating models for provider: openai
+2026-02-13 02:11:58 | apple_setup_wizard | INFO | Cloud provider models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo']
+2026-02-13 02:11:58 | apple_setup_wizard | INFO | Selected model: gpt-4o
+2026-02-13 02:12:00 | apple_setup_wizard | INFO | Starting connection test for openai
+2026-02-13 02:12:10 | apple_setup_wizard | INFO | Configuration saved: LLM=openai, Model=gpt-4o
+2026-02-13 02:12:10 | apple_setup_wizard | INFO | Settings.json updated
+2026-02-13 02:12:12 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 02:12:12 | learning_engine | INFO | Loaded 0 patterns, 0 preferences
+2026-02-13 02:12:12 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 02:12:12 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 02:12:12 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 02:12:12 | notifications | INFO | Smart Notification System initialized
+2026-02-13 02:12:12 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 02:12:12 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 02:12:12 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 02:12:12 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 02:12:12 | fast_response | INFO | Fast Response System initialized
+2026-02-13 02:12:12 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 02:12:12 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 02:12:12 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 02:12:12 | agent | INFO | UI bağlantısı kuruldu
+2026-02-13 02:12:12 | agent | INFO | Agent başlatılıyor...
+2026-02-13 02:12:12 | agent | INFO | Temel motorlar hazır
+2026-02-13 02:12:12 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 02:12:12 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 02:12:12 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 02:12:12 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 02:12:16 | model_manager | INFO | Shared embedding model starting to load (sentence-transformers/all-MiniLM-L6-v2)
+2026-02-13 02:12:21 | model_manager | INFO | Shared embedding model loaded successfully
+2026-02-13 02:12:21 | semantic_memory | INFO | Semantic memory linked to shared embedder
+2026-02-13 02:12:21 | knowledge_base | INFO | Knowledge base linked to shared embedder
+2026-02-13 02:12:21 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 02:12:21 | connection_pool | INFO | Connection pools initialized
+2026-02-13 02:12:21 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 02:12:21 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 02:12:21 | clean_main_app | INFO | Telegram token ayarlı değil, Telegram botu başlatılmadı
+2026-02-13 02:17:31 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 02:17:54 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 02:17:54 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 02:17:54 | learning_engine | INFO | Loaded 0 patterns, 0 preferences
+2026-02-13 02:17:54 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 02:17:54 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 02:17:54 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 02:17:54 | notifications | INFO | Smart Notification System initialized
+2026-02-13 02:17:54 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 02:17:54 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 02:17:54 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 02:17:54 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 02:17:54 | fast_response | INFO | Fast Response System initialized
+2026-02-13 02:17:54 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 02:17:54 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 02:17:54 | agent | INFO | Agent başlatılıyor...
+2026-02-13 02:17:54 | agent | INFO | Temel motorlar hazır
+2026-02-13 02:17:54 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 02:17:54 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 02:17:54 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 02:17:54 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 02:17:56 | model_manager | INFO | Shared embedding model starting to load (sentence-transformers/all-MiniLM-L6-v2)
+2026-02-13 02:18:01 | model_manager | INFO | Shared embedding model loaded successfully
+2026-02-13 02:18:01 | semantic_memory | INFO | Semantic memory linked to shared embedder
+2026-02-13 02:18:01 | knowledge_base | INFO | Knowledge base linked to shared embedder
+2026-02-13 02:18:01 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 02:18:01 | connection_pool | INFO | Connection pools initialized
+2026-02-13 02:18:01 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 02:18:01 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 02:18:01 | telegram | INFO | Proactive commands registered (schedule, briefing, alerts)
+2026-02-13 02:18:01 | telegram | INFO | Extended commands registered (code, email, parallel, etc.)
+2026-02-13 02:18:01 | telegram | INFO | Voice handler registered (Phase 13.1 + 13.2)
+2026-02-13 02:18:01 | telegram | INFO | Browser commands registered (Phase 14)
+2026-02-13 02:18:01 | telegram | INFO | Handler'lar kaydedildi ve approval callback ayarlandi
+2026-02-13 02:18:01 | main | INFO | Telegram CLI modu aktif. Durdurmak için Ctrl+C.
+2026-02-13 02:18:01 | telegram.ext.Application | INFO | Application started
+2026-02-13 02:18:08 | telegram.ext.Application | INFO | Application is stopping. This might take a moment.
+2026-02-13 02:18:08 | telegram.ext.Application | INFO | Application.stop() complete
+2026-02-13 02:33:37 | main | INFO | Wiqo Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 02:33:38 | clean_main_app | INFO | Setup wizard selected: ui.apple_setup_wizard.AppleSetupWizard
+2026-02-13 02:33:52 | apple_setup_wizard | INFO | Populating models for provider: openai
+2026-02-13 02:33:52 | apple_setup_wizard | INFO | Cloud provider models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo']
+2026-02-13 02:33:52 | apple_setup_wizard | INFO | Selected model: gpt-4o
+2026-02-13 02:33:54 | apple_setup_wizard | INFO | Starting connection test for openai
+2026-02-13 02:34:09 | apple_setup_wizard | INFO | Configuration saved: LLM=openai, Model=gpt-4o
+2026-02-13 02:34:09 | apple_setup_wizard | INFO | Settings.json updated
+2026-02-13 02:34:11 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 02:34:11 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 02:34:11 | learning_engine | INFO | Loaded 0 patterns, 0 preferences
+2026-02-13 02:34:11 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 02:34:11 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 02:34:11 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 02:34:11 | notifications | INFO | Smart Notification System initialized
+2026-02-13 02:34:11 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 02:34:11 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 02:34:11 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 02:34:11 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 02:34:11 | fast_response | INFO | Fast Response System initialized
+2026-02-13 02:34:11 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 02:34:11 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 02:34:11 | agent | INFO | UI bağlantısı kuruldu
+2026-02-13 02:34:11 | agent | INFO | Agent başlatılıyor...
+2026-02-13 02:34:11 | agent | INFO | Temel motorlar hazır
+2026-02-13 02:34:11 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 02:34:11 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 02:34:11 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 02:34:11 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 02:34:14 | model_manager | INFO | Shared embedding model starting to load (sentence-transformers/all-MiniLM-L6-v2)
+2026-02-13 02:34:19 | model_manager | INFO | Shared embedding model loaded successfully
+2026-02-13 02:34:19 | semantic_memory | INFO | Semantic memory linked to shared embedder
+2026-02-13 02:34:19 | knowledge_base | INFO | Knowledge base linked to shared embedder
+2026-02-13 02:34:19 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 02:34:19 | connection_pool | INFO | Connection pools initialized
+2026-02-13 02:34:19 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 02:34:19 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 02:34:19 | telegram | INFO | Proactive commands registered (schedule, briefing, alerts)
+2026-02-13 02:34:19 | telegram | INFO | Extended commands registered (code, email, parallel, etc.)
+2026-02-13 02:34:19 | telegram | INFO | Voice handler registered (Phase 13.1 + 13.2)
+2026-02-13 02:34:19 | telegram | INFO | Browser commands registered (Phase 14)
+2026-02-13 02:34:19 | telegram | INFO | Handler'lar kaydedildi ve approval callback ayarlandi
+2026-02-13 02:34:20 | telegram.ext.Application | INFO | Application started
+2026-02-13 02:34:20 | clean_main_app | INFO | Telegram botu başarıyla başlatıldı ve polling yapıyor
+2026-02-13 02:34:39 | telegram | INFO | [8433815573] Osman Emre: selam...
+2026-02-13 02:34:39 | agent | INFO | İşleniyor: selam...
+2026-02-13 02:34:39 | fast_response | INFO | Fast response: greeting in 1.3ms
+2026-02-13 02:34:39 | agent | INFO | Fast response: 1.3ms
+2026-02-13 02:34:43 | telegram | INFO | [8433815573] Osman Emre: naber wiqo...
+2026-02-13 02:34:43 | agent | INFO | İşleniyor: naber wiqo...
+2026-02-13 02:34:43 | fast_response | INFO | Fast response: greeting in 0.2ms
+2026-02-13 02:34:43 | agent | INFO | Fast response: 0.2ms
+2026-02-13 02:34:48 | telegram | INFO | [8433815573] Osman Emre: kediler...
+2026-02-13 02:34:48 | agent | INFO | İşleniyor: kediler...
+2026-02-13 02:34:48 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 02:34:48 | security.audit | INFO | Audit database initialized at /Users/emrekoca/.config/cdacs-bot/audit.db
+2026-02-13 02:34:48 | task_engine | INFO | Task Engine and Intelligence engines initialized successfully
+2026-02-13 02:34:48 | task_engine | INFO | [TaskEngine] Processing: kediler...
+2026-02-13 02:34:50 | llm | INFO | OpenAI response (306 chars)
+2026-02-13 02:34:50 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=2410
+2026-02-13 02:34:50 | memory | INFO | Stored preference for user 8433815573: preferred_language = en
+2026-02-13 02:34:50 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 1}
+2026-02-13 02:34:58 | telegram | INFO | [8433815573] Osman Emre: ss al...
+2026-02-13 02:34:58 | agent | INFO | İşleniyor: ss al...
+2026-02-13 02:34:58 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 02:34:58 | task_engine | INFO | [TaskEngine] Processing: ss al...
+2026-02-13 02:34:58 | task_engine | INFO | Cognitive Bypass: Direct-Route active for take_screenshot
+2026-02-13 02:34:58 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 02:34:58 | task_executor | INFO | Executing take_screenshot with params: {'filename': None}
+2026-02-13 02:34:59 | task_executor | INFO | Task take_screenshot completed in 0.30s
+2026-02-13 02:35:02 | memory | INFO | Stored preference for user 8433815573: preferred_language = en
+2026-02-13 02:35:02 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 1, "unknown": 1}
+2026-02-13 02:35:15 | telegram | INFO | [8433815573] Osman Emre: safariyi aç...
+2026-02-13 02:35:16 | agent | INFO | İşleniyor: safariyi aç...
+2026-02-13 02:35:16 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 02:35:16 | task_engine | INFO | [TaskEngine] Processing: safariyi aç...
+2026-02-13 02:35:16 | task_engine | INFO | Cognitive Bypass: Direct-Route active for open_app
+2026-02-13 02:35:16 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 02:35:16 | task_executor | INFO | Executing open_app with params: {'app_name': 'Safari'}
+2026-02-13 02:35:16 | task_executor | INFO | Task open_app completed in 0.10s
+2026-02-13 02:35:16 | memory | INFO | Stored preference for user 8433815573: preferred_language = tr
+2026-02-13 02:35:16 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 1, "unknown": 2}
+2026-02-13 02:35:28 | telegram | INFO | [8433815573] Osman Emre: metin cam kırıkhan arat...
+2026-02-13 02:35:28 | agent | INFO | İşleniyor: metin cam kırıkhan arat...
+2026-02-13 02:35:28 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 02:35:28 | task_engine | INFO | [TaskEngine] Processing: metin cam kırıkhan arat...
+2026-02-13 02:35:28 | task_engine | INFO | Cognitive Bypass: Direct-Route active for open_url
+2026-02-13 02:35:28 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 02:35:28 | task_executor | INFO | Executing open_url with params: {'url': 'https://www.google.com/search?q=metin+cam+k%C4%B1r%C4%B1khan'}
+2026-02-13 02:35:28 | task_executor | INFO | Task open_url completed in 0.10s
+2026-02-13 02:35:28 | memory | INFO | Stored preference for user 8433815573: preferred_language = tr
+2026-02-13 02:35:28 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 1, "unknown": 3}
+2026-02-13 02:36:31 | telegram | INFO | [8433815573] Osman Emre: Metin cam kırıkhan arat...
+2026-02-13 02:36:31 | agent | INFO | İşleniyor: Metin cam kırıkhan arat...
+2026-02-13 02:36:31 | agent | INFO | Cache hit - instant response
+2026-02-13 02:36:42 | telegram | INFO | [8433815573] Osman Emre: Safari aç...
+2026-02-13 02:36:42 | agent | INFO | İşleniyor: Safari aç...
+2026-02-13 02:36:42 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 02:36:42 | task_engine | INFO | [TaskEngine] Processing: Safari aç...
+2026-02-13 02:36:42 | task_engine | INFO | Cognitive Bypass: Direct-Route active for open_app
+2026-02-13 02:36:42 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 02:36:42 | task_executor | INFO | Executing open_app with params: {'app_name': 'Safari'}
+2026-02-13 02:36:42 | task_executor | INFO | Task open_app completed in 0.09s
+2026-02-13 02:36:43 | memory | INFO | Stored preference for user 8433815573: preferred_language = tr
+2026-02-13 02:36:43 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 1, "unknown": 4}
+2026-02-13 02:36:49 | telegram | INFO | [8433815573] Osman Emre: Kedi resmi arat...
+2026-02-13 02:36:49 | agent | INFO | İşleniyor: Kedi resmi arat...
+2026-02-13 02:36:49 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 02:36:49 | task_engine | INFO | [TaskEngine] Processing: Kedi resmi arat...
+2026-02-13 02:36:49 | task_engine | INFO | Cognitive Bypass: Direct-Route active for open_url
+2026-02-13 02:36:49 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 02:36:49 | task_executor | INFO | Executing open_url with params: {'url': 'https://www.google.com/search?q=kedi+resmi'}
+2026-02-13 02:36:50 | task_executor | INFO | Task open_url completed in 0.13s
+2026-02-13 02:36:50 | memory | INFO | Stored preference for user 8433815573: preferred_language = en
+2026-02-13 02:36:50 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 1, "unknown": 5}
+2026-02-13 02:36:57 | telegram | INFO | [8433815573] Osman Emre: Ekran görüntüsü al...
+2026-02-13 02:36:57 | agent | INFO | İşleniyor: Ekran görüntüsü al...
+2026-02-13 02:36:57 | agent | INFO | Intent: command (requires_llm=False) -> routed_to=task_engine
+2026-02-13 02:36:57 | task_engine | INFO | [TaskEngine] Processing: Ekran görüntüsü al...
+2026-02-13 02:36:57 | task_engine | INFO | Cognitive Bypass: Direct-Route active for take_screenshot
+2026-02-13 02:36:57 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 02:36:57 | task_executor | INFO | Executing take_screenshot with params: {'filename': None}
+2026-02-13 02:36:57 | task_executor | INFO | Task take_screenshot completed in 0.24s
+2026-02-13 02:37:02 | memory | INFO | Stored preference for user 8433815573: preferred_language = tr
+2026-02-13 02:37:02 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 1, "unknown": 6}
+2026-02-13 02:38:27 | telegram | INFO | [8433815573] Osman Emre: Metin cam websitesi yap...
+2026-02-13 02:38:27 | agent | INFO | İşleniyor: Metin cam websitesi yap...
+2026-02-13 02:38:27 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 02:38:30 | llm | INFO | OpenAI response (260 chars)
+2026-02-13 02:38:30 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=3156
+2026-02-13 02:38:30 | task_engine | INFO | [TaskEngine] Processing: Metin cam websitesi yap...
+2026-02-13 02:38:32 | llm | INFO | OpenAI response (365 chars)
+2026-02-13 02:38:32 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=1962
+2026-02-13 02:38:32 | memory | INFO | Stored preference for user 8433815573: preferred_language = en
+2026-02-13 02:38:32 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 2, "unknown": 6}
+2026-02-13 02:38:45 | telegram | INFO | [8433815573] Osman Emre: Metin cam websitesi yap HTML css js kullanarak...
+2026-02-13 02:38:46 | agent | INFO | İşleniyor: Metin cam websitesi yap HTML css js kullanarak...
+2026-02-13 02:38:46 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 02:38:48 | llm | INFO | OpenAI response (207 chars)
+2026-02-13 02:38:48 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=1845
+2026-02-13 02:38:48 | task_engine | INFO | [TaskEngine] Processing: Metin cam websitesi yap HTML css js kullanarak...
+2026-02-13 02:38:48 | task_engine | INFO | Cognitive Bypass: Direct-Route active for open_url
+2026-02-13 02:38:48 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 02:38:48 | task_executor | INFO | Executing open_url with params: {'url': 'https://www.google.com/search?q=kedi+resimleri'}
+2026-02-13 02:38:48 | task_executor | INFO | Task open_url completed in 0.14s
+2026-02-13 02:38:48 | memory | INFO | Stored preference for user 8433815573: preferred_language = en
+2026-02-13 02:38:48 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 2, "unknown": 7}
+2026-02-13 02:40:07 | telegram | INFO | [8433815573] Osman Emre: Metin cam websitesi yap HTML css js kullanarak...
+2026-02-13 02:40:07 | agent | INFO | İşleniyor: Metin cam websitesi yap HTML css js kullanarak...
+2026-02-13 02:40:07 | agent | INFO | Cache hit - instant response
+2026-02-13 02:40:15 | telegram | INFO | [8433815573] Osman Emre: kedi resmi arat...
+2026-02-13 02:40:16 | agent | INFO | İşleniyor: kedi resmi arat...
+2026-02-13 02:40:16 | agent | INFO | Cache hit - instant response
+2026-02-13 02:40:20 | telegram | INFO | [8433815573] Osman Emre: metin cam arat...
+2026-02-13 02:40:20 | agent | INFO | İşleniyor: metin cam arat...
+2026-02-13 02:40:20 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 02:40:21 | llm | INFO | OpenAI response (226 chars)
+2026-02-13 02:40:21 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=1763
+2026-02-13 02:40:21 | task_engine | INFO | [TaskEngine] Processing: metin cam arat...
+2026-02-13 02:40:21 | task_engine | INFO | Cognitive Bypass: Direct-Route active for open_url
+2026-02-13 02:40:21 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 02:40:22 | task_executor | INFO | Executing open_url with params: {'url': 'https://www.google.com/search?q=metin+cam'}
+2026-02-13 02:40:22 | task_executor | INFO | Task open_url completed in 0.09s
+2026-02-13 02:40:22 | memory | INFO | Stored preference for user 8433815573: preferred_language = en
+2026-02-13 02:40:22 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 2, "unknown": 8}
+2026-02-13 02:55:33 | advanced_research | INFO | Araştırma başlatıldı: kediler (standard)
+2026-02-13 02:55:34 | web.search | INFO | Search 'kediler': found 6 results
+2026-02-13 02:55:34 | web.scraper | INFO | Extracted 269 chars from https://kediler.gen.tr/
+2026-02-13 02:55:35 | web.scraper | INFO | Extracted 8787 chars from https://onedio.com/haber/kedilerle-ilgili-hic-duymadiginiz-21-ilginc-bilgi-1158032
+2026-02-13 02:55:35 | web.scraper | INFO | Extracted 6267 chars from https://www.kedi.gen.tr/kedilerin-ozellikleri.html
+2026-02-13 02:55:36 | web.scraper | INFO | Extracted 28598 chars from https://sosyal.petlebi.com/kedi-cinsleri
+2026-02-13 02:55:36 | web.scraper | INFO | Extracted 4445 chars from https://www.turkgun.com/faydali-bilgiler/kedi-turleri-cinsleri-ve-ozellikleri-kedi-dunyasina-derinlemesine-bir-bakis/278001
+2026-02-13 02:55:37 | advanced_report | INFO | LLM client initialized for report generation
+2026-02-13 02:55:37 | advanced_report | INFO | Word document created: /Users/emrekoca/Desktop/Research Reports/kediler_20260213_025537.docx
+2026-02-13 02:55:37 | advanced_report | INFO | Professional report generated: /Users/emrekoca/Desktop/Research Reports/kediler_20260213_025537.docx (docx)
+2026-02-13 02:55:37 | advanced_research | INFO | Profesyonel rapor oluşturuldu: /Users/emrekoca/Desktop/Research Reports/kediler_20260213_025537.docx
+2026-02-13 02:55:37 | advanced_research | INFO | Rapor metrikleri - Kapsam: 60%, Güvenilirlik: 66%, Bütünlük: 53%
+2026-02-13 02:55:37 | advanced_research | INFO | Araştırma tamamlandı: kediler - 6 kaynak, 1 rapor
+2026-02-13 02:57:34 | advanced_research | INFO | Araştırma başlatıldı: ali nesin (standard)
+2026-02-13 02:57:35 | web.search | INFO | Search 'ali nesin': found 6 results
+2026-02-13 02:57:36 | web.scraper | INFO | Extracted 3394 chars from https://alinesin.org/about_tr.html
+2026-02-13 02:57:37 | web.scraper | INFO | Extracted 5824 chars from https://www.dr.com.tr/yazar/ali-nesin/s=218446
+2026-02-13 02:57:39 | web.scraper | INFO | Extracted 14542 chars from https://www.24okur.com/ali-nesin-kimdir-kisaca-hayati-matematige-katkilari-ve-kitaplari/
+2026-02-13 02:57:40 | web.scraper | INFO | Extracted 2323 chars from https://nesinkoyleri.org/egitimci/ali-nesin/
+2026-02-13 02:57:41 | web.scraper | INFO | Extracted 1389 chars from https://nesinsanatkoyu.org/node/143
+2026-02-13 02:57:41 | advanced_report | INFO | LLM client initialized for report generation
+2026-02-13 02:57:41 | advanced_report | INFO | Word document created: /Users/emrekoca/Desktop/Research Reports/ali_nesin_20260213_025741.docx
+2026-02-13 02:57:41 | advanced_report | INFO | Professional report generated: /Users/emrekoca/Desktop/Research Reports/ali_nesin_20260213_025741.docx (docx)
+2026-02-13 02:57:41 | advanced_research | INFO | Profesyonel rapor oluşturuldu: /Users/emrekoca/Desktop/Research Reports/ali_nesin_20260213_025741.docx
+2026-02-13 02:57:41 | advanced_research | INFO | Rapor metrikleri - Kapsam: 60%, Güvenilirlik: 74%, Bütünlük: 53%
+2026-02-13 02:57:41 | advanced_research | INFO | Araştırma tamamlandı: ali nesin - 6 kaynak, 1 rapor
+2026-02-13 02:58:32 | tools.pro_workflows | ERROR | create_web_project_scaffold error: [Errno 1] Operation not permitted: '/Users/emrekoca/Desktop/Wiqo_Pro_Demo_Site'
+2026-02-13 02:58:32 | tools.pro_workflows | ERROR | generate_document_pack error: [Errno 1] Operation not permitted: '/Users/emrekoca/Desktop/Wiqo_Professional_Assistant_Strategy_document_pack'
+2026-02-13 02:58:41 | tools.pro_workflows | ERROR | generate_document_pack error: [Errno 1] Operation not permitted: '/Users/emrekoca/Desktop/WiqoDocuments'
+2026-02-13 03:09:47 | telegram | INFO | [8433815573] Osman Emre: kedi resmi...
+2026-02-13 03:09:48 | agent | INFO | İşleniyor: kedi resmi...
+2026-02-13 03:09:48 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 03:09:51 | llm | INFO | OpenAI response (265 chars)
+2026-02-13 03:09:51 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=3012
+2026-02-13 03:09:51 | task_engine | INFO | [TaskEngine] Processing: kedi resmi...
+2026-02-13 03:09:54 | llm | INFO | OpenAI response (197 chars)
+2026-02-13 03:09:54 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=2745
+2026-02-13 03:09:54 | memory | INFO | Stored preference for user 8433815573: preferred_language = en
+2026-02-13 03:09:54 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 3, "unknown": 8}
+2026-02-13 03:10:07 | telegram | INFO | [8433815573] Osman Emre: hesap makinesi aç...
+2026-02-13 03:10:08 | agent | INFO | İşleniyor: hesap makinesi aç...
+2026-02-13 03:10:08 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 03:10:10 | llm | INFO | OpenAI response (226 chars)
+2026-02-13 03:10:10 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=2930
+2026-02-13 03:10:10 | task_engine | INFO | [TaskEngine] Processing: hesap makinesi aç...
+2026-02-13 03:10:10 | task_engine | INFO | Cognitive Bypass: Direct-Route active for open_app
+2026-02-13 03:10:10 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 03:10:11 | task_executor | INFO | Executing open_app with params: {'app_name': 'Calculator'}
+2026-02-13 03:10:11 | task_executor | INFO | Task open_app completed in 0.10s
+2026-02-13 03:10:11 | memory | INFO | Stored preference for user 8433815573: preferred_language = tr
+2026-02-13 03:10:11 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 3, "unknown": 9}
+2026-02-13 03:10:24 | telegram | INFO | [8433815573] Osman Emre: 7^2 ne yapıyor...
+2026-02-13 03:10:24 | agent | INFO | İşleniyor: 7^2 ne yapıyor...
+2026-02-13 03:10:24 | agent | INFO | Intent: question (requires_llm=False) -> routed_to=task_engine
+2026-02-13 03:10:26 | llm | INFO | OpenAI response (249 chars)
+2026-02-13 03:10:26 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=2383
+2026-02-13 03:10:26 | task_engine | INFO | [TaskEngine] Processing: 7^2 ne yapıyor...
+2026-02-13 03:10:28 | llm | INFO | OpenAI response (65 chars)
+2026-02-13 03:10:28 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=1077
+2026-02-13 03:10:28 | memory | INFO | Stored preference for user 8433815573: preferred_language = tr
+2026-02-13 03:10:28 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 4, "unknown": 9}
+2026-02-13 03:11:13 | telegram | INFO | [8433815573] Osman Emre: yanlış...
+2026-02-13 03:11:13 | agent | INFO | İşleniyor: yanlış...
+2026-02-13 03:11:13 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 03:11:16 | llm | INFO | OpenAI response (256 chars)
+2026-02-13 03:11:16 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=3004
+2026-02-13 03:11:16 | task_engine | INFO | [TaskEngine] Processing: yanlış...
+2026-02-13 03:11:19 | llm | INFO | OpenAI response (258 chars)
+2026-02-13 03:11:19 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=2999
+2026-02-13 03:11:19 | memory | INFO | Stored preference for user 8433815573: preferred_language = tr
+2026-02-13 03:11:19 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 5, "unknown": 9}
+2026-02-13 03:14:55 | telegram | INFO | [8433815573] Osman Emre: hatay kırıkhan metin cam arat...
+2026-02-13 03:14:56 | agent | INFO | İşleniyor: hatay kırıkhan metin cam arat...
+2026-02-13 03:14:56 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 03:14:57 | llm | INFO | OpenAI response (287 chars)
+2026-02-13 03:14:57 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=1818
+2026-02-13 03:14:57 | task_engine | INFO | [TaskEngine] Processing: hatay kırıkhan metin cam arat...
+2026-02-13 03:14:57 | task_engine | INFO | Cognitive Bypass: Direct-Route active for open_url
+2026-02-13 03:14:57 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 03:14:58 | task_executor | INFO | Executing open_url with params: {'url': 'https://www.google.com/search?q=hatay+k%C4%B1r%C4%B1khan+metin+cam'}
+2026-02-13 03:14:58 | task_executor | INFO | Task open_url completed in 0.10s
+2026-02-13 03:14:58 | memory | INFO | Stored preference for user 8433815573: preferred_language = tr
+2026-02-13 03:14:58 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 5, "unknown": 10}
+2026-02-13 03:15:10 | telegram | INFO | [8433815573] Osman Emre: metin cam arat...
+2026-02-13 03:15:11 | agent | INFO | İşleniyor: metin cam arat...
+2026-02-13 03:15:11 | agent | INFO | Cache hit - instant response
+2026-02-13 03:16:04 | learning_engine | INFO | Loaded 0 patterns, 0 preferences, 0 skill memories
+2026-02-13 03:16:04 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/Desktop/bot/.wiqo/learning_regression.db
+2026-02-13 03:16:49 | learning_engine | INFO | Loaded 0 patterns, 0 preferences, 0 skill memories
+2026-02-13 03:16:49 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/Desktop/bot/.wiqo/learning_regression.db
+2026-02-13 03:17:32 | learning_engine | INFO | Loaded 0 patterns, 0 preferences, 0 skill memories
+2026-02-13 03:17:32 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/Desktop/bot/.wiqo/learning_regression.db
+2026-02-13 03:21:16 | learning_engine | INFO | Loaded 0 patterns, 0 preferences, 0 skill memories
+2026-02-13 03:21:16 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/Desktop/bot/.wiqo/learning_regression.db
+2026-02-13 03:21:16 | text_to_speech | ERROR | pyttsx3 not installed. Run: pip install pyttsx3
+2026-02-13 03:21:57 | learning_engine | INFO | Loaded 0 patterns, 0 preferences, 0 skill memories
+2026-02-13 03:21:57 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/Desktop/bot/.wiqo/learning_regression.db
+2026-02-13 03:21:57 | text_to_speech | ERROR | pyttsx3 not installed. Run: pip install pyttsx3
+2026-02-13 03:21:57 | speech_to_text | ERROR | Whisper not installed. Run: pip install openai-whisper
+2026-02-13 03:23:27 | learning_engine | INFO | Loaded 0 patterns, 0 preferences, 0 skill memories
+2026-02-13 03:23:27 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/Desktop/bot/.wiqo/learning_regression.db
+2026-02-13 03:23:27 | text_to_speech | ERROR | pyttsx3 not installed. Run: pip install pyttsx3
+2026-02-13 03:23:27 | speech_to_text | ERROR | Whisper not installed. Run: pip install openai-whisper
+2026-02-13 03:29:16 | learning_engine | INFO | Loaded 0 patterns, 0 preferences, 0 skill memories
+2026-02-13 03:29:16 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/Desktop/bot/.wiqo/learning_regression.db
+2026-02-13 03:29:16 | text_to_speech | ERROR | pyttsx3 not installed. Run: pip install pyttsx3
+2026-02-13 03:29:16 | speech_to_text | ERROR | Whisper not installed. Run: pip install openai-whisper
+2026-02-13 03:31:13 | learning_engine | INFO | Loaded 0 patterns, 0 preferences, 0 skill memories
+2026-02-13 03:31:13 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/Desktop/bot/.wiqo/learning_regression.db
+2026-02-13 03:31:13 | text_to_speech | ERROR | pyttsx3 not installed. Run: pip install pyttsx3
+2026-02-13 03:31:13 | speech_to_text | ERROR | Whisper not installed. Run: pip install openai-whisper
+2026-02-13 03:32:04 | security.audit | ERROR | Error initializing audit database: unable to open database file
+2026-02-13 03:32:26 | learning_engine | INFO | Loaded 0 patterns, 0 preferences, 0 skill memories
+2026-02-13 03:32:26 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/Desktop/bot/.wiqo/learning_regression.db
+2026-02-13 03:32:26 | text_to_speech | ERROR | pyttsx3 not installed. Run: pip install pyttsx3
+2026-02-13 03:32:26 | speech_to_text | ERROR | Whisper not installed. Run: pip install openai-whisper
+2026-02-13 03:33:53 | learning_engine | INFO | Loaded 0 patterns, 0 preferences, 0 skill memories
+2026-02-13 03:33:53 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/Desktop/bot/.wiqo/learning_regression.db
+2026-02-13 03:33:53 | text_to_speech | ERROR | pyttsx3 not installed. Run: pip install pyttsx3
+2026-02-13 03:33:53 | speech_to_text | ERROR | Whisper not installed. Run: pip install openai-whisper
+2026-02-13 03:35:23 | learning_engine | INFO | Loaded 0 patterns, 0 preferences, 0 skill memories
+2026-02-13 03:35:23 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/Desktop/bot/.wiqo/learning_regression.db
+2026-02-13 03:35:23 | text_to_speech | ERROR | pyttsx3 not installed. Run: pip install pyttsx3
+2026-02-13 03:35:23 | speech_to_text | ERROR | Whisper not installed. Run: pip install openai-whisper
+2026-02-13 03:36:57 | learning_engine | INFO | Loaded 0 patterns, 0 preferences, 0 skill memories
+2026-02-13 03:36:57 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/Desktop/bot/.wiqo/learning_regression.db
+2026-02-13 03:36:57 | text_to_speech | ERROR | pyttsx3 not installed. Run: pip install pyttsx3
+2026-02-13 03:36:57 | speech_to_text | ERROR | Whisper not installed. Run: pip install openai-whisper
+2026-02-13 03:39:05 | main | INFO | Wiqo Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 03:39:06 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 03:39:06 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 03:39:06 | learning_engine | INFO | Loaded 15 patterns, 0 preferences, 0 skill memories
+2026-02-13 03:39:06 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 03:39:06 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 03:39:06 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 03:39:06 | notifications | INFO | Smart Notification System initialized
+2026-02-13 03:39:06 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 03:39:06 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 03:39:06 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 03:39:06 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 03:39:06 | fast_response | INFO | Fast Response System initialized
+2026-02-13 03:39:06 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 03:39:06 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 03:39:06 | agent | INFO | UI bağlantısı kuruldu
+2026-02-13 03:39:06 | agent | INFO | Agent başlatılıyor...
+2026-02-13 03:39:06 | agent | INFO | Temel motorlar hazır
+2026-02-13 03:39:06 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 03:39:06 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 03:39:06 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 03:39:06 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 03:39:06 | model_manager | ERROR | Failed to load shared embedding model: No module named 'sentence_transformers'
+2026-02-13 03:39:06 | semantic_memory | WARNING | Shared embedder not available, using keyword matching
+2026-02-13 03:39:06 | model_manager | ERROR | Failed to load shared embedding model: No module named 'sentence_transformers'
+2026-02-13 03:39:06 | knowledge_base | WARNING | Shared embedder not available for KB
+2026-02-13 03:39:06 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 03:39:06 | connection_pool | INFO | Connection pools initialized
+2026-02-13 03:39:06 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 03:39:06 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 03:39:07 | clean_main_app | ERROR | Telegram bot başlatma hatası: No module named 'telegram'
+2026-02-13 03:40:33 | main | INFO | Wiqo Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 03:40:34 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 03:40:34 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 03:40:34 | learning_engine | INFO | Loaded 15 patterns, 0 preferences, 0 skill memories
+2026-02-13 03:40:34 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 03:40:34 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 03:40:34 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 03:40:34 | notifications | INFO | Smart Notification System initialized
+2026-02-13 03:40:34 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 03:40:34 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 03:40:34 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 03:40:34 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 03:40:34 | fast_response | INFO | Fast Response System initialized
+2026-02-13 03:40:34 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 03:40:34 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 03:40:34 | agent | INFO | UI bağlantısı kuruldu
+2026-02-13 03:40:34 | agent | INFO | Agent başlatılıyor...
+2026-02-13 03:40:34 | agent | INFO | Temel motorlar hazır
+2026-02-13 03:40:34 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 03:40:34 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 03:40:34 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 03:40:34 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 03:40:34 | model_manager | ERROR | Failed to load shared embedding model: No module named 'sentence_transformers'
+2026-02-13 03:40:34 | semantic_memory | WARNING | Shared embedder not available, using keyword matching
+2026-02-13 03:40:34 | model_manager | ERROR | Failed to load shared embedding model: No module named 'sentence_transformers'
+2026-02-13 03:40:34 | knowledge_base | WARNING | Shared embedder not available for KB
+2026-02-13 03:40:34 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 03:40:34 | connection_pool | INFO | Connection pools initialized
+2026-02-13 03:40:34 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 03:40:34 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 03:40:35 | clean_main_app | ERROR | Telegram bot başlatma hatası: No module named 'telegram'
+2026-02-13 03:40:49 | agent | INFO | İşleniyor: wiqo...
+2026-02-13 03:40:49 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 03:40:49 | security.audit | INFO | Audit database initialized at /Users/emrekoca/.config/cdacs-bot/audit.db
+2026-02-13 03:40:49 | task_engine | INFO | Task Engine and Intelligence engines initialized successfully
+2026-02-13 03:40:49 | task_engine | INFO | [TaskEngine] Processing: wiqo...
+2026-02-13 03:40:49 | llm | INFO | OpenAI response (40 chars)
+2026-02-13 03:40:49 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=863
+2026-02-13 03:40:49 | memory | INFO | Stored preference for user 0: preferred_language = en
+2026-02-13 03:40:49 | memory | INFO | Stored preference for user 0: common_actions = {"chat": 1}
+2026-02-13 03:40:53 | agent | INFO | İşleniyor: allah...
+2026-02-13 03:40:53 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 03:40:53 | task_engine | INFO | [TaskEngine] Processing: allah...
+2026-02-13 03:40:53 | llm | INFO | LLM_ROUTER provider=openai status=failed reason=error:RuntimeError elapsed_ms=3
+2026-02-13 03:40:53 | memory | INFO | Stored preference for user 0: preferred_language = en
+2026-02-13 03:40:53 | memory | INFO | Stored preference for user 0: common_actions = {"chat": 2}
+2026-02-13 03:41:48 | learning_engine | INFO | Loaded 0 patterns, 0 preferences, 0 skill memories
+2026-02-13 03:41:48 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/Desktop/bot/.wiqo/learning_regression.db
+2026-02-13 03:41:48 | text_to_speech | ERROR | pyttsx3 not installed. Run: pip install pyttsx3
+2026-02-13 03:41:48 | speech_to_text | ERROR | Whisper not installed. Run: pip install openai-whisper
+2026-02-13 03:45:27 | main | INFO | Wiqo Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 03:45:28 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 03:45:28 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 03:45:28 | learning_engine | INFO | Loaded 17 patterns, 0 preferences, 0 skill memories
+2026-02-13 03:45:28 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 03:45:28 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 03:45:28 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 03:45:28 | notifications | INFO | Smart Notification System initialized
+2026-02-13 03:45:28 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 03:45:28 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 03:45:28 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 03:45:28 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 03:45:28 | fast_response | INFO | Fast Response System initialized
+2026-02-13 03:45:28 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 03:45:28 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 03:45:28 | agent | INFO | UI bağlantısı kuruldu
+2026-02-13 03:45:28 | agent | INFO | Agent başlatılıyor...
+2026-02-13 03:45:28 | agent | INFO | Temel motorlar hazır
+2026-02-13 03:45:28 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 03:45:28 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 03:45:28 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 03:45:28 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 03:45:32 | model_manager | INFO | Shared embedding model starting to load (sentence-transformers/all-MiniLM-L6-v2)
+2026-02-13 03:45:36 | model_manager | INFO | Shared embedding model loaded successfully
+2026-02-13 03:45:36 | semantic_memory | INFO | Semantic memory linked to shared embedder
+2026-02-13 03:45:36 | knowledge_base | INFO | Knowledge base linked to shared embedder
+2026-02-13 03:45:36 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 03:45:36 | connection_pool | INFO | Connection pools initialized
+2026-02-13 03:45:36 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 03:45:36 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 03:45:37 | telegram | INFO | Proactive commands registered (schedule, briefing, alerts)
+2026-02-13 03:45:37 | telegram | INFO | Extended commands registered (code, email, parallel, etc.)
+2026-02-13 03:45:37 | telegram | INFO | Voice handler registered (Phase 13.1 + 13.2)
+2026-02-13 03:45:37 | telegram | INFO | Browser commands registered (Phase 14)
+2026-02-13 03:45:37 | telegram | INFO | Handler'lar kaydedildi ve approval callback ayarlandi
+2026-02-13 03:45:37 | telegram.ext.Application | INFO | Application started
+2026-02-13 03:45:37 | clean_main_app | INFO | Telegram botu başarıyla başlatıldı ve polling yapıyor
+2026-02-13 03:46:35 | agent | INFO | İşleniyor: selam...
+2026-02-13 03:46:35 | fast_response | INFO | Fast response: greeting in 0.2ms
+2026-02-13 03:46:35 | agent | INFO | Fast response: 0.2ms
+2026-02-13 03:46:56 | agent | INFO | İşleniyor: 1. Önce e-ticaret pazarı araştır, sonra oyun prototipi proje paketi üret, ardınd...
+2026-02-13 03:46:56 | agent | INFO | Intent: research (requires_llm=True) -> routed_to=task_engine
+2026-02-13 03:46:56 | security.audit | INFO | Audit database initialized at /Users/emrekoca/.config/cdacs-bot/audit.db
+2026-02-13 03:46:56 | task_engine | INFO | Task Engine and Intelligence engines initialized successfully
+2026-02-13 03:46:56 | task_engine | INFO | [TaskEngine] Processing: 1. Önce e-ticaret pazarı araştır, sonra oyun prototipi proje paketi üret, ardınd...
+2026-02-13 03:46:56 | task_engine | INFO | Complex query detected - Forcing LLM decomposition
+2026-02-13 03:46:56 | task_engine | INFO | Goal-graph deterministic workflow selected (2 tasks)
+2026-02-13 03:46:56 | task_engine | ERROR | Task execution error: Task <Task pending name='Task-24' coro=<CleanMainWindow._process_message() running at /Users/emrekoca/Desktop/bot/ui/clean_main_app.py:1372> cb=[_run_until_complete_cb() at /opt/homebrew/Cellar/python@3.14/3.14.2_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py:181]> got Future <Future pending> attached to a different loop
+2026-02-13 03:46:56 | error_handler | ERROR | Error [unknown] in None: Task <Task pending name='Task-24' coro=<CleanMainWindow._process_message() running at /Users/emrekoca/Desktop/bot/ui/clean_main_app.py:1372> cb=[_run_until_complete_cb() at /opt/homebrew/Cellar/python@3.14/3.14.2_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py:181]> got Future <Future pending> attached to a different loop
+2026-02-13 03:46:56 | memory | INFO | Stored preference for user 0: preferred_language = tr
+2026-02-13 03:47:28 | agent | INFO | İşleniyor: allah...
+2026-02-13 03:47:28 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 03:47:28 | task_engine | INFO | [TaskEngine] Processing: allah...
+2026-02-13 03:47:31 | llm | INFO | OpenAI response (246 chars)
+2026-02-13 03:47:31 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=2600
+2026-02-13 03:47:31 | memory | INFO | Stored preference for user 0: preferred_language = en
+2026-02-13 03:47:31 | memory | INFO | Stored preference for user 0: common_actions = {"chat": 3}
+2026-02-13 03:47:39 | telegram | INFO | [8433815573] Osman Emre: selam...
+2026-02-13 03:47:39 | agent | INFO | İşleniyor: selam...
+2026-02-13 03:47:39 | agent | INFO | Cache hit - instant response
+2026-02-13 03:47:43 | telegram | INFO | [8433815573] Osman Emre: Allah...
+2026-02-13 03:47:43 | agent | INFO | İşleniyor: Allah...
+2026-02-13 03:47:43 | agent | INFO | Cache hit - instant response
+2026-02-13 03:47:54 | learning_engine | INFO | Loaded 0 patterns, 0 preferences, 0 skill memories
+2026-02-13 03:47:54 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/Desktop/bot/.wiqo/learning_regression.db
+2026-02-13 03:47:54 | text_to_speech | ERROR | pyttsx3 not installed. Run: pip install pyttsx3
+2026-02-13 03:47:54 | speech_to_text | ERROR | Whisper not installed. Run: pip install openai-whisper
+2026-02-13 03:48:43 | main | INFO | Wiqo Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 03:48:44 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 03:48:44 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 03:48:44 | learning_engine | INFO | Loaded 18 patterns, 0 preferences, 0 skill memories
+2026-02-13 03:48:44 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 03:48:44 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 03:48:44 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 03:48:44 | notifications | INFO | Smart Notification System initialized
+2026-02-13 03:48:44 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 03:48:44 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 03:48:44 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 03:48:44 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 03:48:44 | fast_response | INFO | Fast Response System initialized
+2026-02-13 03:48:44 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 03:48:44 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 03:48:44 | agent | INFO | UI bağlantısı kuruldu
+2026-02-13 03:48:44 | agent | INFO | Agent başlatılıyor...
+2026-02-13 03:48:44 | agent | INFO | Temel motorlar hazır
+2026-02-13 03:48:44 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 03:48:44 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 03:48:44 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 03:48:44 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 03:48:47 | model_manager | INFO | Shared embedding model starting to load (sentence-transformers/all-MiniLM-L6-v2)
+2026-02-13 03:48:52 | model_manager | INFO | Shared embedding model loaded successfully
+2026-02-13 03:48:52 | semantic_memory | INFO | Semantic memory linked to shared embedder
+2026-02-13 03:48:52 | knowledge_base | INFO | Knowledge base linked to shared embedder
+2026-02-13 03:48:52 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 03:48:52 | connection_pool | INFO | Connection pools initialized
+2026-02-13 03:48:52 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 03:48:52 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 03:48:52 | telegram | INFO | Proactive commands registered (schedule, briefing, alerts)
+2026-02-13 03:48:52 | telegram | INFO | Extended commands registered (code, email, parallel, etc.)
+2026-02-13 03:48:52 | telegram | INFO | Voice handler registered (Phase 13.1 + 13.2)
+2026-02-13 03:48:52 | telegram | INFO | Browser commands registered (Phase 14)
+2026-02-13 03:48:52 | telegram | INFO | Handler'lar kaydedildi ve approval callback ayarlandi
+2026-02-13 03:48:53 | telegram.ext.Application | INFO | Application started
+2026-02-13 03:48:53 | clean_main_app | INFO | Telegram botu başarıyla başlatıldı ve polling yapıyor
+2026-02-13 03:48:53 | agent | INFO | İşleniyor: Önce e-ticaret pazarı araştır, sonra oyun prototipi proje paketi üret, ardından ...
+2026-02-13 03:48:53 | agent | INFO | Intent: research (requires_llm=True) -> routed_to=task_engine
+2026-02-13 03:48:53 | security.audit | INFO | Audit database initialized at /Users/emrekoca/.config/cdacs-bot/audit.db
+2026-02-13 03:48:53 | task_engine | INFO | Task Engine and Intelligence engines initialized successfully
+2026-02-13 03:48:53 | task_engine | INFO | [TaskEngine] Processing: Önce e-ticaret pazarı araştır, sonra oyun prototipi proje paketi üret, ardından ...
+2026-02-13 03:48:53 | task_engine | INFO | Complex query detected - Forcing LLM decomposition
+2026-02-13 03:48:53 | task_engine | INFO | Goal-graph deterministic workflow selected (2 tasks)
+2026-02-13 03:48:55 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 03:48:55 | task_executor | INFO | Executing advanced_research with params: {'topic': 'Önce e-ticaret pazarı araştır', 'depth': 'medium'}
+2026-02-13 03:48:55 | advanced_research | INFO | Araştırma başlatıldı: Önce e-ticaret pazarı araştır (standard)
+2026-02-13 03:48:56 | web.search | INFO | Search 'Önce e-ticaret pazarı araştır': found 6 results
+2026-02-13 03:48:57 | web.scraper | INFO | Extracted 16068 chars from https://www.temasis.net/blog/e-ticarete-yatirim-yapmadan-once-dikkatlice-pazar-arastirmasi-yapin
+2026-02-13 03:48:57 | web.scraper | INFO | Extracted 10578 chars from https://www.ideasoft.com.tr/e-ticarette-pazar-arastirmasi/
+2026-02-13 03:48:58 | web.scraper | INFO | Extracted 5529 chars from https://demresa.com/blog/e-ticarete-atilmadan-once-yapilmasi-gerekenler
+2026-02-13 03:49:00 | web.scraper | INFO | Extracted 14774 chars from https://www.bilisimcafe.net/e-ticaret-isletmeleri-icin-pazar-arastirmasi-nasil-yapilir/
+2026-02-13 03:49:01 | web.scraper | INFO | Extracted 3691 chars from https://www.creosoft.com.tr/e-ticaret-pazar-arastirmasi-ve-analizi-e-ticaret-isinizi-nasil-sekillendirir/
+2026-02-13 03:49:01 | advanced_report | INFO | LLM client initialized for report generation
+2026-02-13 03:49:01 | advanced_report | INFO | Word document created: /Users/emrekoca/Desktop/Research Reports/Önce_e-ticaret_pazarı_araştır_20260213_034901.docx
+2026-02-13 03:49:01 | advanced_report | INFO | Professional report generated: /Users/emrekoca/Desktop/Research Reports/Önce_e-ticaret_pazarı_araştır_20260213_034901.docx (docx)
+2026-02-13 03:49:01 | advanced_research | INFO | Profesyonel rapor oluşturuldu: /Users/emrekoca/Desktop/Research Reports/Önce_e-ticaret_pazarı_araştır_20260213_034901.docx
+2026-02-13 03:49:01 | advanced_research | INFO | Rapor metrikleri - Kapsam: 60%, Güvenilirlik: 66%, Bütünlük: 67%
+2026-02-13 03:49:01 | advanced_research | INFO | Araştırma tamamlandı: Önce e-ticaret pazarı araştır - 6 kaynak, 1 rapor
+2026-02-13 03:49:01 | task_executor | INFO | Task advanced_research completed in 6.45s
+2026-02-13 03:49:01 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 03:49:01 | task_executor | INFO | Executing generate_document_pack with params: {'topic': 'profesyonel rapor hazırla', 'output_dir': '~/Desktop'}
+2026-02-13 03:49:01 | task_executor | INFO | Task generate_document_pack completed in 0.02s
+2026-02-13 03:49:01 | memory | INFO | Stored preference for user 0: preferred_language = tr
+2026-02-13 03:49:01 | memory | INFO | Stored preference for user 0: common_actions = {"chat": 3, "unknown": 1}
+2026-02-13 03:49:53 | document_generator | ERROR | python-docx not installed
+2026-02-13 03:49:53 | document_generator | ERROR | TXT generation error: [Errno 1] Operation not permitted: '/Users/emrekoca/Desktop/WiqoDocuments/Regression_Docs_-_Professional_Pack.txt'
+2026-02-13 03:49:53 | learning_engine | INFO | Loaded 0 patterns, 0 preferences, 0 skill memories
+2026-02-13 03:49:53 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/Desktop/bot/.wiqo/learning_regression.db
+2026-02-13 03:49:53 | text_to_speech | ERROR | pyttsx3 not installed. Run: pip install pyttsx3
+2026-02-13 03:49:53 | speech_to_text | ERROR | Whisper not installed. Run: pip install openai-whisper
+2026-02-13 03:50:38 | main | INFO | Wiqo Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 03:50:39 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 03:50:39 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 03:50:39 | learning_engine | INFO | Loaded 19 patterns, 0 preferences, 1 skill memories
+2026-02-13 03:50:39 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 03:50:39 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 03:50:39 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 03:50:39 | notifications | INFO | Smart Notification System initialized
+2026-02-13 03:50:39 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 03:50:39 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 03:50:39 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 03:50:39 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 03:50:39 | fast_response | INFO | Fast Response System initialized
+2026-02-13 03:50:39 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 03:50:39 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 03:50:39 | agent | INFO | UI bağlantısı kuruldu
+2026-02-13 03:50:39 | agent | INFO | Agent başlatılıyor...
+2026-02-13 03:50:39 | agent | INFO | Temel motorlar hazır
+2026-02-13 03:50:39 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 03:50:39 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 03:50:39 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 03:50:39 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 03:50:42 | model_manager | INFO | Shared embedding model starting to load (sentence-transformers/all-MiniLM-L6-v2)
+2026-02-13 03:50:47 | model_manager | INFO | Shared embedding model loaded successfully
+2026-02-13 03:50:47 | semantic_memory | INFO | Semantic memory linked to shared embedder
+2026-02-13 03:50:47 | knowledge_base | INFO | Knowledge base linked to shared embedder
+2026-02-13 03:50:47 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 03:50:47 | connection_pool | INFO | Connection pools initialized
+2026-02-13 03:50:47 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 03:50:47 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 03:50:47 | agent | INFO | İşleniyor: Önce e-ticaret pazarı araştır, sonra oyun prototipi proje paketi üret, ardından ...
+2026-02-13 03:50:47 | agent | INFO | Intent: research (requires_llm=True) -> routed_to=task_engine
+2026-02-13 03:50:47 | security.audit | INFO | Audit database initialized at /Users/emrekoca/.config/cdacs-bot/audit.db
+2026-02-13 03:50:47 | task_engine | INFO | Task Engine and Intelligence engines initialized successfully
+2026-02-13 03:50:47 | task_engine | INFO | [TaskEngine] Processing: Önce e-ticaret pazarı araştır, sonra oyun prototipi proje paketi üret, ardından ...
+2026-02-13 03:50:47 | task_engine | INFO | Complex query detected - Forcing LLM decomposition
+2026-02-13 03:50:47 | task_engine | INFO | Goal-graph deterministic workflow selected (3 tasks)
+2026-02-13 03:50:47 | telegram | INFO | Proactive commands registered (schedule, briefing, alerts)
+2026-02-13 03:50:47 | telegram | INFO | Extended commands registered (code, email, parallel, etc.)
+2026-02-13 03:50:47 | telegram | INFO | Voice handler registered (Phase 13.1 + 13.2)
+2026-02-13 03:50:47 | telegram | INFO | Browser commands registered (Phase 14)
+2026-02-13 03:50:47 | telegram | INFO | Handler'lar kaydedildi ve approval callback ayarlandi
+2026-02-13 03:50:48 | telegram.ext.Application | INFO | Application started
+2026-02-13 03:50:48 | clean_main_app | INFO | Telegram botu başarıyla başlatıldı ve polling yapıyor
+2026-02-13 03:50:49 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 03:50:49 | task_executor | INFO | Executing advanced_research with params: {'topic': 'Önce e-ticaret pazarı araştır', 'depth': 'medium'}
+2026-02-13 03:50:49 | advanced_research | INFO | Araştırma başlatıldı: Önce e-ticaret pazarı araştır (standard)
+2026-02-13 03:50:50 | web.search | INFO | Search 'Önce e-ticaret pazarı araştır': found 6 results
+2026-02-13 03:50:50 | web.scraper | INFO | Extracted 16068 chars from https://www.temasis.net/blog/e-ticarete-yatirim-yapmadan-once-dikkatlice-pazar-arastirmasi-yapin
+2026-02-13 03:50:51 | web.scraper | INFO | Extracted 10578 chars from https://www.ideasoft.com.tr/e-ticarette-pazar-arastirmasi/
+2026-02-13 03:50:51 | web.scraper | INFO | Extracted 5529 chars from https://demresa.com/blog/e-ticarete-atilmadan-once-yapilmasi-gerekenler
+2026-02-13 03:50:52 | web.scraper | INFO | Extracted 14774 chars from https://www.bilisimcafe.net/e-ticaret-isletmeleri-icin-pazar-arastirmasi-nasil-yapilir/
+2026-02-13 03:50:53 | web.scraper | INFO | Extracted 3691 chars from https://www.creosoft.com.tr/e-ticaret-pazar-arastirmasi-ve-analizi-e-ticaret-isinizi-nasil-sekillendirir/
+2026-02-13 03:50:53 | advanced_report | INFO | LLM client initialized for report generation
+2026-02-13 03:50:53 | advanced_report | INFO | Word document created: /Users/emrekoca/Desktop/Research Reports/Önce_e-ticaret_pazarı_araştır_20260213_035053.docx
+2026-02-13 03:50:53 | advanced_report | INFO | Professional report generated: /Users/emrekoca/Desktop/Research Reports/Önce_e-ticaret_pazarı_araştır_20260213_035053.docx (docx)
+2026-02-13 03:50:54 | advanced_research | INFO | Profesyonel rapor oluşturuldu: /Users/emrekoca/Desktop/Research Reports/Önce_e-ticaret_pazarı_araştır_20260213_035053.docx
+2026-02-13 03:50:54 | advanced_research | INFO | Rapor metrikleri - Kapsam: 60%, Güvenilirlik: 66%, Bütünlük: 67%
+2026-02-13 03:50:54 | advanced_research | INFO | Araştırma tamamlandı: Önce e-ticaret pazarı araştır - 6 kaynak, 1 rapor
+2026-02-13 03:50:54 | task_executor | INFO | Task advanced_research completed in 4.59s
+2026-02-13 03:50:54 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 03:50:54 | task_executor | INFO | Executing create_software_project_pack with params: {'project_name': 'oyun prototipi proje paketi üret', 'project_type': 'game', 'stack': 'python', 'complexity': 'expert', 'output_dir': '~/Desktop'}
+2026-02-13 03:50:54 | task_executor | INFO | Task create_software_project_pack completed in 0.00s
+2026-02-13 03:50:54 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 03:50:54 | task_executor | INFO | Executing generate_document_pack with params: {'topic': 'profesyonel rapor hazırla', 'output_dir': '~/Desktop'}
+2026-02-13 03:50:54 | task_executor | INFO | Task generate_document_pack completed in 0.02s
+2026-02-13 03:50:54 | memory | INFO | Stored preference for user 0: preferred_language = tr
+2026-02-13 03:50:54 | memory | INFO | Stored preference for user 0: common_actions = {"chat": 3, "unknown": 2}
+2026-02-13 03:52:39 | telegram.ext.Updater | ERROR | Exception happened while polling for updates.
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 305, in _request_wrapper
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_httpxrequest.py", line 279, in do_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1540, in request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1643, in send
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1637, in send
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_models.py", line 979, in aread
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_models.py", line 997, in aiter_bytes
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_models.py", line 1063, in aiter_raw
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_models.py", line 1076, in aclose
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 182, in aclose
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_transports/default.py", line 276, in aclose
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 412, in aclose
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 203, in __init__
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 26, in current_async_library
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1333, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1267, in _find_spec
+  File "<frozen importlib._bootstrap_external>", line 1292, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1266, in _get_spec
+  File "<frozen importlib._bootstrap_external>", line 1369, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1412, in _fill_cache
+OSError: [Errno 24] Too many open files: '/Users/emrekoca/Desktop/bot'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_utils/networkloop.py", line 161, in network_retry_loop
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_utils/networkloop.py", line 154, in do_action
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_updater.py", line 340, in polling_action_cb
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 671, in get_updates
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 4860, in get_updates
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 703, in _post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 732, in _do_post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 198, in post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 317, in _request_wrapper
+telegram.error.NetworkError: Unknown error in HTTP implementation: OSError(24, 'Too many open files')
+2026-02-13 03:52:40 | telegram.ext.Updater | ERROR | Exception happened while polling for updates.
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 229, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 343, in _close_connections
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 203, in __init__
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 26, in current_async_library
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1333, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1267, in _find_spec
+  File "<frozen importlib._bootstrap_external>", line 1292, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1266, in _get_spec
+  File "<frozen importlib._bootstrap_external>", line 1369, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1412, in _fill_cache
+OSError: [Errno 24] Too many open files: '/Users/emrekoca/Desktop/bot'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 305, in _request_wrapper
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_httpxrequest.py", line 279, in do_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1540, in request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1629, in send
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1657, in _send_handling_auth
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1694, in _send_handling_redirects
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1730, in _send_single_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_transports/default.py", line 394, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 255, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 343, in _close_connections
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 203, in __init__
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 26, in current_async_library
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1333, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1267, in _find_spec
+  File "<frozen importlib._bootstrap_external>", line 1292, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1266, in _get_spec
+  File "<frozen importlib._bootstrap_external>", line 1369, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1412, in _fill_cache
+OSError: [Errno 24] Too many open files: '/Users/emrekoca/Desktop/bot'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_utils/networkloop.py", line 161, in network_retry_loop
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_utils/networkloop.py", line 154, in do_action
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_updater.py", line 340, in polling_action_cb
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 671, in get_updates
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 4860, in get_updates
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 703, in _post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 732, in _do_post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 198, in post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 317, in _request_wrapper
+telegram.error.NetworkError: Unknown error in HTTP implementation: OSError(24, 'Too many open files')
+2026-02-13 03:52:42 | telegram.ext.Updater | ERROR | Exception happened while polling for updates.
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 229, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 343, in _close_connections
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 203, in __init__
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 26, in current_async_library
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1333, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1267, in _find_spec
+  File "<frozen importlib._bootstrap_external>", line 1292, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1266, in _get_spec
+  File "<frozen importlib._bootstrap_external>", line 1369, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1412, in _fill_cache
+OSError: [Errno 24] Too many open files: '/Users/emrekoca/Desktop/bot'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 305, in _request_wrapper
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_httpxrequest.py", line 279, in do_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1540, in request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1629, in send
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1657, in _send_handling_auth
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1694, in _send_handling_redirects
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1730, in _send_single_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_transports/default.py", line 394, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 255, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 343, in _close_connections
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 203, in __init__
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 26, in current_async_library
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1333, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1267, in _find_spec
+  File "<frozen importlib._bootstrap_external>", line 1292, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1266, in _get_spec
+  File "<frozen importlib._bootstrap_external>", line 1369, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1412, in _fill_cache
+OSError: [Errno 24] Too many open files: '/Users/emrekoca/Desktop/bot'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_utils/networkloop.py", line 161, in network_retry_loop
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_utils/networkloop.py", line 154, in do_action
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_updater.py", line 340, in polling_action_cb
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 671, in get_updates
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 4860, in get_updates
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 703, in _post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 732, in _do_post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 198, in post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 317, in _request_wrapper
+telegram.error.NetworkError: Unknown error in HTTP implementation: OSError(24, 'Too many open files')
+2026-02-13 03:52:44 | telegram.ext.Updater | ERROR | Exception happened while polling for updates.
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 229, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 343, in _close_connections
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 203, in __init__
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 26, in current_async_library
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1333, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1267, in _find_spec
+  File "<frozen importlib._bootstrap_external>", line 1292, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1266, in _get_spec
+  File "<frozen importlib._bootstrap_external>", line 1369, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1412, in _fill_cache
+OSError: [Errno 24] Too many open files: '/Users/emrekoca/Desktop/bot'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 305, in _request_wrapper
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_httpxrequest.py", line 279, in do_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1540, in request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1629, in send
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1657, in _send_handling_auth
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1694, in _send_handling_redirects
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1730, in _send_single_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_transports/default.py", line 394, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 255, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 343, in _close_connections
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 203, in __init__
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 26, in current_async_library
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1333, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1267, in _find_spec
+  File "<frozen importlib._bootstrap_external>", line 1292, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1266, in _get_spec
+  File "<frozen importlib._bootstrap_external>", line 1369, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1412, in _fill_cache
+OSError: [Errno 24] Too many open files: '/Users/emrekoca/Desktop/bot'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_utils/networkloop.py", line 161, in network_retry_loop
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_utils/networkloop.py", line 154, in do_action
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_updater.py", line 340, in polling_action_cb
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 671, in get_updates
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 4860, in get_updates
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 703, in _post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 732, in _do_post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 198, in post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 317, in _request_wrapper
+telegram.error.NetworkError: Unknown error in HTTP implementation: OSError(24, 'Too many open files')
+2026-02-13 03:52:47 | telegram.ext.Updater | ERROR | Exception happened while polling for updates.
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 229, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 343, in _close_connections
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 203, in __init__
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 26, in current_async_library
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1333, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1267, in _find_spec
+  File "<frozen importlib._bootstrap_external>", line 1292, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1266, in _get_spec
+  File "<frozen importlib._bootstrap_external>", line 1369, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1412, in _fill_cache
+OSError: [Errno 24] Too many open files: '/Users/emrekoca/Desktop/bot'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 305, in _request_wrapper
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_httpxrequest.py", line 279, in do_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1540, in request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1629, in send
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1657, in _send_handling_auth
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1694, in _send_handling_redirects
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1730, in _send_single_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_transports/default.py", line 394, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 255, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 343, in _close_connections
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 203, in __init__
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 26, in current_async_library
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1333, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1267, in _find_spec
+  File "<frozen importlib._bootstrap_external>", line 1292, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1266, in _get_spec
+  File "<frozen importlib._bootstrap_external>", line 1369, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1412, in _fill_cache
+OSError: [Errno 24] Too many open files: '/Users/emrekoca/Desktop/bot'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_utils/networkloop.py", line 161, in network_retry_loop
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_utils/networkloop.py", line 154, in do_action
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_updater.py", line 340, in polling_action_cb
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 671, in get_updates
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 4860, in get_updates
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 703, in _post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 732, in _do_post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 198, in post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 317, in _request_wrapper
+telegram.error.NetworkError: Unknown error in HTTP implementation: OSError(24, 'Too many open files')
+2026-02-13 03:52:52 | telegram.ext.Updater | ERROR | Exception happened while polling for updates.
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 229, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 343, in _close_connections
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 203, in __init__
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 26, in current_async_library
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1333, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1267, in _find_spec
+  File "<frozen importlib._bootstrap_external>", line 1292, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1266, in _get_spec
+  File "<frozen importlib._bootstrap_external>", line 1369, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1412, in _fill_cache
+OSError: [Errno 24] Too many open files: '/Users/emrekoca/Desktop/bot'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 305, in _request_wrapper
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_httpxrequest.py", line 279, in do_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1540, in request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1629, in send
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1657, in _send_handling_auth
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1694, in _send_handling_redirects
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1730, in _send_single_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_transports/default.py", line 394, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 255, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 343, in _close_connections
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 203, in __init__
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 26, in current_async_library
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1333, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1267, in _find_spec
+  File "<frozen importlib._bootstrap_external>", line 1292, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1266, in _get_spec
+  File "<frozen importlib._bootstrap_external>", line 1369, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1412, in _fill_cache
+OSError: [Errno 24] Too many open files: '/Users/emrekoca/Desktop/bot'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_utils/networkloop.py", line 161, in network_retry_loop
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_utils/networkloop.py", line 154, in do_action
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_updater.py", line 340, in polling_action_cb
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 671, in get_updates
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 4860, in get_updates
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 703, in _post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 732, in _do_post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 198, in post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 317, in _request_wrapper
+telegram.error.NetworkError: Unknown error in HTTP implementation: OSError(24, 'Too many open files')
+2026-02-13 03:53:00 | telegram.ext.Updater | ERROR | Exception happened while polling for updates.
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 229, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 343, in _close_connections
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 203, in __init__
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 26, in current_async_library
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1333, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1267, in _find_spec
+  File "<frozen importlib._bootstrap_external>", line 1292, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1266, in _get_spec
+  File "<frozen importlib._bootstrap_external>", line 1369, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1412, in _fill_cache
+OSError: [Errno 24] Too many open files: '/Users/emrekoca/Desktop/bot'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 305, in _request_wrapper
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_httpxrequest.py", line 279, in do_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1540, in request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1629, in send
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1657, in _send_handling_auth
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1694, in _send_handling_redirects
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1730, in _send_single_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_transports/default.py", line 394, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 255, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 343, in _close_connections
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 203, in __init__
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 26, in current_async_library
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1333, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1267, in _find_spec
+  File "<frozen importlib._bootstrap_external>", line 1292, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1266, in _get_spec
+  File "<frozen importlib._bootstrap_external>", line 1369, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1412, in _fill_cache
+OSError: [Errno 24] Too many open files: '/Users/emrekoca/Desktop/bot'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_utils/networkloop.py", line 161, in network_retry_loop
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_utils/networkloop.py", line 154, in do_action
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_updater.py", line 340, in polling_action_cb
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 671, in get_updates
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 4860, in get_updates
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 703, in _post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 732, in _do_post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 198, in post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 317, in _request_wrapper
+telegram.error.NetworkError: Unknown error in HTTP implementation: OSError(24, 'Too many open files')
+2026-02-13 03:53:12 | telegram.ext.Updater | ERROR | Exception happened while polling for updates.
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 229, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 343, in _close_connections
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 203, in __init__
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 26, in current_async_library
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1333, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1267, in _find_spec
+  File "<frozen importlib._bootstrap_external>", line 1292, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1266, in _get_spec
+  File "<frozen importlib._bootstrap_external>", line 1369, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1412, in _fill_cache
+OSError: [Errno 24] Too many open files: '/Users/emrekoca/Desktop/bot'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 305, in _request_wrapper
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_httpxrequest.py", line 279, in do_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1540, in request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1629, in send
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1657, in _send_handling_auth
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1694, in _send_handling_redirects
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_client.py", line 1730, in _send_single_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpx/_transports/default.py", line 394, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 255, in handle_async_request
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_async/connection_pool.py", line 343, in _close_connections
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 203, in __init__
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/httpcore/_synchronization.py", line 26, in current_async_library
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1333, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1267, in _find_spec
+  File "<frozen importlib._bootstrap_external>", line 1292, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1266, in _get_spec
+  File "<frozen importlib._bootstrap_external>", line 1369, in find_spec
+  File "<frozen importlib._bootstrap_external>", line 1412, in _fill_cache
+OSError: [Errno 24] Too many open files: '/Users/emrekoca/Desktop/bot'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_utils/networkloop.py", line 161, in network_retry_loop
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_utils/networkloop.py", line 154, in do_action
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_updater.py", line 340, in polling_action_cb
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 671, in get_updates
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 4860, in get_updates
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 703, in _post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 732, in _do_post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 198, in post
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 317, in _request_wrapper
+telegram.error.NetworkError: Unknown error in HTTP implementation: OSError(24, 'Too many open files')
+2026-02-13 03:53:55 | main | INFO | Wiqo Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 03:53:57 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 03:53:57 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 03:53:57 | learning_engine | INFO | Loaded 19 patterns, 0 preferences, 2 skill memories
+2026-02-13 03:53:57 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 03:53:57 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 03:53:57 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 03:53:57 | notifications | INFO | Smart Notification System initialized
+2026-02-13 03:53:57 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 03:53:57 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 03:53:57 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 03:53:57 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 03:53:57 | fast_response | INFO | Fast Response System initialized
+2026-02-13 03:53:57 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 03:53:57 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 03:53:57 | agent | INFO | UI bağlantısı kuruldu
+2026-02-13 03:53:57 | agent | INFO | Agent başlatılıyor...
+2026-02-13 03:53:57 | agent | INFO | Temel motorlar hazır
+2026-02-13 03:53:57 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 03:53:57 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 03:53:57 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 03:53:57 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 03:54:00 | model_manager | INFO | Shared embedding model starting to load (sentence-transformers/all-MiniLM-L6-v2)
+2026-02-13 03:54:05 | model_manager | INFO | Shared embedding model loaded successfully
+2026-02-13 03:54:05 | semantic_memory | INFO | Semantic memory linked to shared embedder
+2026-02-13 03:54:05 | knowledge_base | INFO | Knowledge base linked to shared embedder
+2026-02-13 03:54:05 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 03:54:05 | connection_pool | INFO | Connection pools initialized
+2026-02-13 03:54:05 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 03:54:05 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 03:54:05 | telegram | INFO | Proactive commands registered (schedule, briefing, alerts)
+2026-02-13 03:54:05 | telegram | INFO | Extended commands registered (code, email, parallel, etc.)
+2026-02-13 03:54:05 | telegram | INFO | Voice handler registered (Phase 13.1 + 13.2)
+2026-02-13 03:54:05 | telegram | INFO | Browser commands registered (Phase 14)
+2026-02-13 03:54:05 | telegram | INFO | Handler'lar kaydedildi ve approval callback ayarlandi
+2026-02-13 03:54:06 | telegram.ext.Application | INFO | Application started
+2026-02-13 03:54:06 | clean_main_app | INFO | Telegram botu başarıyla başlatıldı ve polling yapıyor
+2026-02-13 03:54:50 | speech_to_text | INFO | Loading Whisper model: base
+2026-02-13 03:54:51 | speech_to_text | INFO | Loading Whisper model: base
+2026-02-13 03:54:56 | speech_to_text | INFO | Loading Whisper model: base
+2026-02-13 03:54:59 | agent | INFO | İşleniyor: wiqo...
+2026-02-13 03:54:59 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 03:54:59 | security.audit | INFO | Audit database initialized at /Users/emrekoca/.config/cdacs-bot/audit.db
+2026-02-13 03:54:59 | task_engine | INFO | Task Engine and Intelligence engines initialized successfully
+2026-02-13 03:54:59 | task_engine | INFO | [TaskEngine] Processing: wiqo...
+2026-02-13 03:55:00 | llm | INFO | OpenAI response (40 chars)
+2026-02-13 03:55:00 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=1489
+2026-02-13 03:55:00 | memory | INFO | Stored preference for user 0: preferred_language = en
+2026-02-13 03:55:00 | memory | INFO | Stored preference for user 0: common_actions = {"chat": 4, "unknown": 2}
+2026-02-13 03:55:05 | agent | INFO | İşleniyor: wiqo...
+2026-02-13 03:55:05 | agent | INFO | Cache hit - instant response
+2026-02-13 03:55:25 | speech_to_text | INFO | Whisper model loaded successfully
+2026-02-13 03:55:25 | speech_to_text | INFO | Transcribing: /private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/wiqo_ptt_mbuyryvj.wav (language: tr)
+2026-02-13 03:55:25 | speech_to_text | ERROR | Transcription error: Failed to load audio: ffmpeg version 8.0.1 Copyright (c) 2000-2025 the FFmpeg developers
+  built with Apple clang version 17.0.0 (clang-1700.4.4.1)
+  configuration: --prefix=/opt/homebrew/Cellar/ffmpeg/8.0.1 --enable-shared --enable-pthreads --enable-version3 --cc=clang --host-cflags= --host-ldflags= --enable-ffplay --enable-gnutls --enable-gpl --enable-libaom --enable-libaribb24 --enable-libbluray --enable-libdav1d --enable-libharfbuzz --enable-libjxl --enable-libmp3lame --enable-libopus --enable-librav1e --enable-librist --enable-librubberband --enable-libsnappy --enable-libsrt --enable-libssh --enable-libsvtav1 --enable-libtesseract --enable-libtheora --enable-libvidstab --enable-libvmaf --enable-libvorbis --enable-libvpx --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxml2 --enable-libxvid --enable-lzma --enable-libfontconfig --enable-libfreetype --enable-frei0r --enable-libass --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenjpeg --enable-libspeex --enable-libsoxr --enable-libzmq --enable-libzimg --disable-libjack --disable-indev=jack --enable-videotoolbox --enable-audiotoolbox --enable-neon
+  libavutil      60.  8.100 / 60.  8.100
+  libavcodec     62. 11.100 / 62. 11.100
+  libavformat    62.  3.100 / 62.  3.100
+  libavdevice    62.  1.100 / 62.  1.100
+  libavfilter    11.  4.100 / 11.  4.100
+  libswscale      9.  1.100 /  9.  1.100
+  libswresample   6.  1.100 /  6.  1.100
+[in#0 @ 0xa2ec5c000] Error opening input: Invalid data found when processing input
+Error opening input file /private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/wiqo_ptt_mbuyryvj.wav.
+Error opening input files: Invalid data found when processing input
+
+2026-02-13 03:55:30 | agent | INFO | İşleniyor: siyah beyaz temalı bir portfolyo sitesi oluştur html css js kullanarak...
+2026-02-13 03:55:30 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 03:55:30 | task_engine | INFO | [TaskEngine] Processing: siyah beyaz temalı bir portfolyo sitesi oluştur html css js kullanarak...
+2026-02-13 03:55:30 | task_engine | INFO | Cognitive Bypass: Direct-Route active for open_url
+2026-02-13 03:55:30 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 03:55:30 | task_executor | INFO | Executing open_url with params: {'url': 'https://www.google.com/search?q=kedi+resimleri'}
+2026-02-13 03:55:30 | task_executor | INFO | Task open_url completed in 0.15s
+2026-02-13 03:55:31 | memory | INFO | Stored preference for user 0: preferred_language = tr
+2026-02-13 03:55:31 | memory | INFO | Stored preference for user 0: common_actions = {"chat": 4, "unknown": 3}
+2026-02-13 03:55:35 | speech_to_text | INFO | Whisper model loaded successfully
+2026-02-13 03:55:35 | speech_to_text | INFO | Transcribing: /private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/wiqo_ptt_t6ubng3m.wav (language: tr)
+2026-02-13 03:55:35 | speech_to_text | ERROR | Transcription error: Failed to load audio: ffmpeg version 8.0.1 Copyright (c) 2000-2025 the FFmpeg developers
+  built with Apple clang version 17.0.0 (clang-1700.4.4.1)
+  configuration: --prefix=/opt/homebrew/Cellar/ffmpeg/8.0.1 --enable-shared --enable-pthreads --enable-version3 --cc=clang --host-cflags= --host-ldflags= --enable-ffplay --enable-gnutls --enable-gpl --enable-libaom --enable-libaribb24 --enable-libbluray --enable-libdav1d --enable-libharfbuzz --enable-libjxl --enable-libmp3lame --enable-libopus --enable-librav1e --enable-librist --enable-librubberband --enable-libsnappy --enable-libsrt --enable-libssh --enable-libsvtav1 --enable-libtesseract --enable-libtheora --enable-libvidstab --enable-libvmaf --enable-libvorbis --enable-libvpx --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxml2 --enable-libxvid --enable-lzma --enable-libfontconfig --enable-libfreetype --enable-frei0r --enable-libass --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenjpeg --enable-libspeex --enable-libsoxr --enable-libzmq --enable-libzimg --disable-libjack --disable-indev=jack --enable-videotoolbox --enable-audiotoolbox --enable-neon
+  libavutil      60.  8.100 / 60.  8.100
+  libavcodec     62. 11.100 / 62. 11.100
+  libavformat    62.  3.100 / 62.  3.100
+  libavdevice    62.  1.100 / 62.  1.100
+  libavfilter    11.  4.100 / 11.  4.100
+  libswscale      9.  1.100 /  9.  1.100
+  libswresample   6.  1.100 /  6.  1.100
+[in#0 @ 0x970c38000] Error opening input: Invalid data found when processing input
+Error opening input file /private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/wiqo_ptt_t6ubng3m.wav.
+Error opening input files: Invalid data found when processing input
+
+2026-02-13 03:55:35 | speech_to_text | INFO | Whisper model loaded successfully
+2026-02-13 03:55:35 | speech_to_text | INFO | Transcribing: /private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/wiqo_ptt_mwinpf9m.wav (language: tr)
+2026-02-13 03:55:35 | speech_to_text | ERROR | Transcription error: Failed to load audio: ffmpeg version 8.0.1 Copyright (c) 2000-2025 the FFmpeg developers
+  built with Apple clang version 17.0.0 (clang-1700.4.4.1)
+  configuration: --prefix=/opt/homebrew/Cellar/ffmpeg/8.0.1 --enable-shared --enable-pthreads --enable-version3 --cc=clang --host-cflags= --host-ldflags= --enable-ffplay --enable-gnutls --enable-gpl --enable-libaom --enable-libaribb24 --enable-libbluray --enable-libdav1d --enable-libharfbuzz --enable-libjxl --enable-libmp3lame --enable-libopus --enable-librav1e --enable-librist --enable-librubberband --enable-libsnappy --enable-libsrt --enable-libssh --enable-libsvtav1 --enable-libtesseract --enable-libtheora --enable-libvidstab --enable-libvmaf --enable-libvorbis --enable-libvpx --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxml2 --enable-libxvid --enable-lzma --enable-libfontconfig --enable-libfreetype --enable-frei0r --enable-libass --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenjpeg --enable-libspeex --enable-libsoxr --enable-libzmq --enable-libzimg --disable-libjack --disable-indev=jack --enable-videotoolbox --enable-audiotoolbox --enable-neon
+  libavutil      60.  8.100 / 60.  8.100
+  libavcodec     62. 11.100 / 62. 11.100
+  libavformat    62.  3.100 / 62.  3.100
+  libavdevice    62.  1.100 / 62.  1.100
+  libavfilter    11.  4.100 / 11.  4.100
+  libswscale      9.  1.100 /  9.  1.100
+  libswresample   6.  1.100 /  6.  1.100
+[in#0 @ 0x882c18000] Error opening input: Invalid data found when processing input
+Error opening input file /private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/wiqo_ptt_mwinpf9m.wav.
+Error opening input files: Invalid data found when processing input
+
+2026-02-13 03:55:48 | telegram | INFO | [8433815573] Osman Emre: wiqo...
+2026-02-13 03:55:48 | agent | INFO | İşleniyor: wiqo...
+2026-02-13 03:55:48 | agent | INFO | Cache hit - instant response
+2026-02-13 03:55:50 | telegram | INFO | [8433815573] Osman Emre: siyah beyaz temalı bir portfolyo sitesi oluştur ht...
+2026-02-13 03:55:50 | agent | INFO | İşleniyor: siyah beyaz temalı bir portfolyo sitesi oluştur html css js kullanarak...
+2026-02-13 03:55:50 | agent | INFO | Cache hit - instant response
+2026-02-13 03:57:14 | telegram | INFO | [8433815573] Osman Emre: wiqo...
+2026-02-13 03:57:15 | agent | INFO | İşleniyor: wiqo...
+2026-02-13 03:57:15 | agent | INFO | Cache hit - instant response
+2026-02-13 03:57:18 | telegram | INFO | [8433815573] Osman Emre: ananı sikim...
+2026-02-13 03:57:18 | agent | INFO | İşleniyor: ananı sikim...
+2026-02-13 03:57:18 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 03:57:20 | llm | INFO | OpenAI response (265 chars)
+2026-02-13 03:57:20 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=2293
+2026-02-13 03:57:20 | task_engine | INFO | [TaskEngine] Processing: ananı sikim...
+2026-02-13 03:57:21 | llm | INFO | OpenAI response (78 chars)
+2026-02-13 03:57:21 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=948
+2026-02-13 03:57:21 | memory | INFO | Stored preference for user 8433815573: preferred_language = tr
+2026-02-13 03:57:21 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 6, "unknown": 10}
+2026-02-13 03:57:30 | telegram | INFO | [8433815573] Osman Emre: siyah beyaz temalı bir portfolyo sitesi oluştur ht...
+2026-02-13 03:57:30 | agent | INFO | İşleniyor: siyah beyaz temalı bir portfolyo sitesi oluştur html css js kullanarak...
+2026-02-13 03:57:30 | agent | INFO | Cache hit - instant response
+2026-02-13 03:57:44 | telegram | INFO | [8433815573] Osman Emre: html css js kullanarak website yap...
+2026-02-13 03:57:44 | agent | INFO | İşleniyor: html css js kullanarak website yap...
+2026-02-13 03:57:44 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 03:57:46 | llm | INFO | OpenAI response (199 chars)
+2026-02-13 03:57:46 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=2024
+2026-02-13 03:57:46 | task_engine | INFO | [TaskEngine] Processing: html css js kullanarak website yap...
+2026-02-13 03:57:46 | task_engine | INFO | Cognitive Bypass: Direct-Route active for multi_task
+2026-02-13 03:57:56 | document_generator | ERROR | python-docx not installed
+2026-02-13 03:57:56 | document_generator | ERROR | TXT generation error: [Errno 1] Operation not permitted: '/Users/emrekoca/Desktop/WiqoDocuments/Regression_Docs_-_Professional_Pack.txt'
+2026-02-13 03:57:56 | learning_engine | INFO | Loaded 0 patterns, 0 preferences, 0 skill memories
+2026-02-13 03:57:56 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/Desktop/bot/.wiqo/learning_regression.db
+2026-02-13 03:57:56 | text_to_speech | ERROR | pyttsx3 not installed. Run: pip install pyttsx3
+2026-02-13 03:57:56 | speech_to_text | ERROR | Whisper not installed. Run: pip install openai-whisper
+2026-02-13 03:58:43 | agent | INFO | İşleniyor: html css js kullanarak website yap...
+2026-02-13 03:58:43 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 03:58:45 | llm | INFO | OpenAI response (277 chars)
+2026-02-13 03:58:45 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=2009
+2026-02-13 03:58:45 | task_engine | INFO | [TaskEngine] Processing: html css js kullanarak website yap...
+2026-02-13 03:58:45 | task_engine | INFO | Cognitive Bypass: Direct-Route active for multi_task
+2026-02-13 03:59:17 | main | INFO | Wiqo Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 04:01:10 | main | INFO | Wiqo Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 04:01:12 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 04:01:12 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 04:01:12 | learning_engine | INFO | Loaded 21 patterns, 0 preferences, 3 skill memories
+2026-02-13 04:01:12 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 04:01:12 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 04:01:12 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 04:01:12 | notifications | INFO | Smart Notification System initialized
+2026-02-13 04:01:12 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 04:01:12 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 04:01:12 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 04:01:12 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 04:01:12 | fast_response | INFO | Fast Response System initialized
+2026-02-13 04:01:12 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 04:01:12 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 04:01:12 | agent | INFO | UI bağlantısı kuruldu
+2026-02-13 04:01:12 | agent | INFO | Agent başlatılıyor...
+2026-02-13 04:01:12 | agent | INFO | Temel motorlar hazır
+2026-02-13 04:01:12 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 04:01:12 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 04:01:12 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 04:01:12 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 04:01:15 | model_manager | INFO | Shared embedding model starting to load (sentence-transformers/all-MiniLM-L6-v2)
+2026-02-13 04:01:19 | model_manager | INFO | Shared embedding model loaded successfully
+2026-02-13 04:01:19 | semantic_memory | INFO | Semantic memory linked to shared embedder
+2026-02-13 04:01:19 | knowledge_base | INFO | Knowledge base linked to shared embedder
+2026-02-13 04:01:19 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 04:01:19 | connection_pool | INFO | Connection pools initialized
+2026-02-13 04:01:19 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 04:01:19 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 04:01:20 | telegram | INFO | Proactive commands registered (schedule, briefing, alerts)
+2026-02-13 04:01:20 | telegram | INFO | Extended commands registered (code, email, parallel, etc.)
+2026-02-13 04:01:20 | telegram | INFO | Voice handler registered (Phase 13.1 + 13.2)
+2026-02-13 04:01:20 | telegram | INFO | Browser commands registered (Phase 14)
+2026-02-13 04:01:20 | telegram | INFO | Handler'lar kaydedildi ve approval callback ayarlandi
+2026-02-13 04:01:20 | telegram.ext.Application | INFO | Application started
+2026-02-13 04:01:20 | clean_main_app | INFO | Telegram botu başarıyla başlatıldı ve polling yapıyor
+2026-02-13 04:01:31 | telegram | INFO | [8433815573] Osman Emre: wiqo...
+2026-02-13 04:01:32 | agent | INFO | İşleniyor: wiqo...
+2026-02-13 04:01:32 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 04:01:32 | security.audit | INFO | Audit database initialized at /Users/emrekoca/.config/cdacs-bot/audit.db
+2026-02-13 04:01:32 | task_engine | INFO | Task Engine and Intelligence engines initialized successfully
+2026-02-13 04:01:34 | llm | INFO | OpenAI response (273 chars)
+2026-02-13 04:01:34 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=2463
+2026-02-13 04:01:34 | task_engine | INFO | [TaskEngine] Processing: wiqo...
+2026-02-13 04:01:35 | llm | INFO | OpenAI response (32 chars)
+2026-02-13 04:01:35 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=876
+2026-02-13 04:01:35 | memory | INFO | Stored preference for user 8433815573: preferred_language = en
+2026-02-13 04:01:35 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 7, "unknown": 10}
+2026-02-13 04:01:46 | telegram | INFO | [8433815573] Osman Emre: Siyah beyaz temalı bir portfolyo sitesi oluştur ht...
+2026-02-13 04:01:46 | agent | INFO | İşleniyor: Siyah beyaz temalı bir portfolyo sitesi oluştur html css js kullanarak...
+2026-02-13 04:01:46 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 04:01:48 | llm | INFO | OpenAI response (272 chars)
+2026-02-13 04:01:48 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=2277
+2026-02-13 04:01:48 | task_engine | INFO | [TaskEngine] Processing: Siyah beyaz temalı bir portfolyo sitesi oluştur html css js kullanarak...
+2026-02-13 04:01:48 | task_engine | INFO | Cognitive Bypass: Direct-Route active for multi_task
+2026-02-13 04:02:52 | agent | INFO | İşleniyor: Siyah beyaz temalı bir portfolyo sitesi oluştur html css js kullanarak...
+2026-02-13 04:02:52 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 04:02:55 | llm | INFO | OpenAI response (283 chars)
+2026-02-13 04:02:55 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=2628
+2026-02-13 04:02:55 | task_engine | INFO | [TaskEngine] Processing: Siyah beyaz temalı bir portfolyo sitesi oluştur html css js kullanarak...
+2026-02-13 04:02:55 | task_engine | INFO | Cognitive Bypass: Direct-Route active for multi_task
+2026-02-13 04:03:18 | agent | ERROR | Process timeout: Siyah beyaz temalı bir portfol
+2026-02-13 04:03:18 | error_handler | ERROR | Error [timeout] in None: İşlem zaman aşımına uğradı
+2026-02-13 04:03:18 | memory | INFO | Stored preference for user 8433815573: preferred_language = tr
+2026-02-13 04:03:19 | telegram.ext.Application | ERROR | No error handlers are registered, logging exception.
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_application.py", line 1315, in process_update
+    await coroutine
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_handlers/basehandler.py", line 159, in handle_update
+    return await self.callback(update, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/emrekoca/Desktop/bot/handlers/telegram_handler.py", line 193, in approval_query_callback
+    await query.answer()
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_callbackquery.py", line 190, in answer
+    return await self.get_bot().answer_callback_query(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 969, in answer_callback_query
+    return await super().answer_callback_query(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 4440, in answer_callback_query
+    return await self._post(
+           ^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.BadRequest: Query is too old and response timeout expired or query id is invalid
+2026-02-13 04:03:19 | telegram.ext.Application | ERROR | No error handlers are registered, logging exception.
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_application.py", line 1315, in process_update
+    await coroutine
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_handlers/basehandler.py", line 159, in handle_update
+    return await self.callback(update, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/emrekoca/Desktop/bot/handlers/telegram_handler.py", line 193, in approval_query_callback
+    await query.answer()
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_callbackquery.py", line 190, in answer
+    return await self.get_bot().answer_callback_query(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 969, in answer_callback_query
+    return await super().answer_callback_query(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 4440, in answer_callback_query
+    return await self._post(
+           ^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.BadRequest: Query is too old and response timeout expired or query id is invalid
+2026-02-13 04:03:19 | telegram.ext.Application | ERROR | No error handlers are registered, logging exception.
+Traceback (most recent call last):
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_application.py", line 1315, in process_update
+    await coroutine
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_handlers/basehandler.py", line 159, in handle_update
+    return await self.callback(update, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/emrekoca/Desktop/bot/handlers/telegram_handler.py", line 193, in approval_query_callback
+    await query.answer()
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_callbackquery.py", line 190, in answer
+    return await self.get_bot().answer_callback_query(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 969, in answer_callback_query
+    return await super().answer_callback_query(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 4440, in answer_callback_query
+    return await self._post(
+           ^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/Users/emrekoca/Desktop/bot/.venv/lib/python3.14/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.BadRequest: Query is too old and response timeout expired or query id is invalid
+2026-02-13 04:03:19 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 04:03:19 | task_executor | INFO | Executing create_folder with params: {'path': '~/Desktop/portfolyo-site'}
+2026-02-13 04:03:19 | task_executor | INFO | Task create_folder completed in 0.00s
+2026-02-13 04:03:19 | task_engine | INFO | Executing 3 tasks in parallel
+2026-02-13 04:03:19 | task_executor | INFO | Executing write_file with params: {'path': '~/Desktop/portfolyo-site/index.html', 'content': '<!DOCTYPE html>\n<html lang="tr">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>portfolyo | Portfolio</title>\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <header class="hero">\n    <nav class="nav">\n      <div class="brand">portfolyo</div>\n      <button id="themeToggle" class="theme-btn" aria-label="Tema değiştir">Tema</button>\n    </nav>\n    <div class="hero-content">\n      <p class="eyebrow">PORTFOLIO</p>\n      <h1>portfolyo</h1>\n      <p>Modern, hızlı ve mobil uyumlu kişisel portfolyo sayfası.</p>\n      <a class="cta" href="#projeler">Projeleri Gör</a>\n    </div>\n  </header>\n\n  <main>\n    <section id="hakkimda" class="section reveal">\n      <h2>Hakkımda</h2>\n      <p>Ürün odaklı, detaylara dikkat eden ve sürdürülebilir çözümler üreten bir geliştiriciyim.</p>\n    </section>\n\n    <section id="projeler" class="section reveal">\n      <h2>Projeler</h2>\n      <div class="cards">\n        <article class="card">\n          <h3>Proje 1</h3>\n          <p>Gerçek hayatta kullanılan bir otomasyon çözümü.</p>\n        </article>\n        <article class="card">\n          <h3>Proje 2</h3>\n          <p>Performans ve ölçeklenebilirlik odaklı web uygulaması.</p>\n        </article>\n        <article class="card">\n          <h3>Proje 3</h3>\n          <p>Kullanıcı deneyimini iyileştiren arayüz çalışması.</p>\n        </article>\n      </div>\n    </section>\n\n    <section id="iletisim" class="section reveal">\n      <h2>İletişim</h2>\n      <form class="contact-form">\n        <input type="text" placeholder="Ad Soyad" required>\n        <input type="email" placeholder="E-posta" required>\n        <textarea rows="5" placeholder="Mesajınız" required></textarea>\n        <button type="submit">Gönder</button>\n      </form>\n    </section>\n  </main>\n\n  <footer class="footer">\n    <p>© 2026 portfolyo. Tüm hakları saklıdır.</p>\n  </footer>\n\n  <script src="script.js"></script>\n</body>\n</html>\n'}
+2026-02-13 04:03:19 | task_executor | INFO | Task write_file completed in 0.00s
+2026-02-13 04:03:19 | task_executor | INFO | Executing write_file with params: {'path': '~/Desktop/portfolyo-site/style.css', 'content': '* {\n  box-sizing: border-box;\n}\n\n:root {\n  --bg: #f7f4ef;\n  --bg-strong: #efe8de;\n  --text: #1f2328;\n  --muted: #5f6670;\n  --accent: #0f766e;\n  --card: #ffffff;\n  --border: #dad2c7;\n}\n\nbody {\n  margin: 0;\n  font-family: "Avenir Next", "Segoe UI", sans-serif;\n  color: var(--text);\n  background:\n    radial-gradient(circle at 10% 10%, #fff7e8 0%, transparent 35%),\n    radial-gradient(circle at 90% 20%, #d9f3ec 0%, transparent 30%),\n    var(--bg);\n}\n\n.hero {\n  min-height: 72vh;\n  padding: 24px clamp(20px, 6vw, 80px);\n}\n\n.nav {\n  display: flex;\n  justify-content: space-between;\n  align-items: center;\n}\n\n.brand {\n  font-weight: 700;\n  letter-spacing: 0.4px;\n}\n\n.theme-btn {\n  border: 1px solid var(--border);\n  background: var(--card);\n  border-radius: 999px;\n  padding: 8px 14px;\n  cursor: pointer;\n}\n\n.hero-content {\n  margin-top: 72px;\n  max-width: 720px;\n}\n\n.eyebrow {\n  color: var(--accent);\n  font-size: 12px;\n  letter-spacing: 1.8px;\n}\n\nh1 {\n  margin: 10px 0;\n  font-size: clamp(2rem, 4.5vw, 4rem);\n  line-height: 1.1;\n}\n\n.cta {\n  display: inline-block;\n  margin-top: 16px;\n  text-decoration: none;\n  color: #fff;\n  background: var(--accent);\n  padding: 12px 18px;\n  border-radius: 10px;\n}\n\n.section {\n  padding: 48px clamp(20px, 6vw, 80px);\n}\n\n.cards {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));\n  gap: 16px;\n}\n\n.card {\n  background: var(--card);\n  border: 1px solid var(--border);\n  border-radius: 14px;\n  padding: 18px;\n}\n\n.contact-form {\n  display: grid;\n  gap: 10px;\n  max-width: 520px;\n}\n\n.contact-form input,\n.contact-form textarea {\n  border: 1px solid var(--border);\n  border-radius: 10px;\n  padding: 12px;\n  font: inherit;\n  background: #fff;\n}\n\n.contact-form button {\n  width: fit-content;\n  border: none;\n  border-radius: 10px;\n  padding: 10px 16px;\n  background: var(--accent);\n  color: #fff;\n  cursor: pointer;\n}\n\n.footer {\n  padding: 28px;\n  text-align: center;\n  color: var(--muted);\n}\n\n.reveal {\n  opacity: 0;\n  transform: translateY(16px);\n  transition: opacity 420ms ease, transform 420ms ease;\n}\n\n.reveal.visible {\n  opacity: 1;\n  transform: translateY(0);\n}\n\nbody.dark {\n  --bg: #111826;\n  --bg-strong: #0e1320;\n  --text: #f0f4fa;\n  --muted: #b8c1cf;\n  --accent: #22c55e;\n  --card: #161f31;\n  --border: #27334a;\n}\n'}
+2026-02-13 04:03:19 | task_executor | INFO | Task write_file completed in 0.00s
+2026-02-13 04:03:19 | task_executor | INFO | Executing write_file with params: {'path': '~/Desktop/portfolyo-site/script.js', 'content': "const revealElements = document.querySelectorAll('.reveal');\n\nconst observer = new IntersectionObserver((entries) => {\n  entries.forEach((entry) => {\n    if (entry.isIntersecting) {\n      entry.target.classList.add('visible');\n      observer.unobserve(entry.target);\n    }\n  });\n}, { threshold: 0.12 });\n\nrevealElements.forEach((el) => observer.observe(el));\n\nconst themeToggle = document.getElementById('themeToggle');\nthemeToggle?.addEventListener('click', () => {\n  document.body.classList.toggle('dark');\n});\n\ndocument.querySelector('.contact-form')?.addEventListener('submit', (event) => {\n  event.preventDefault();\n  alert('Mesajınız alındı. Teşekkürler.');\n});\n"}
+2026-02-13 04:03:19 | task_executor | INFO | Task write_file completed in 0.00s
+2026-02-13 04:03:20 | memory | INFO | Stored preference for user 8433815573: preferred_language = tr
+2026-02-13 04:03:20 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 7, "unknown": 11}
+2026-02-13 04:07:03 | agent | INFO | İşleniyor: selam...
+2026-02-13 04:07:03 | fast_response | INFO | Fast response: greeting in 0.1ms
+2026-02-13 04:07:03 | agent | INFO | Fast response: 0.1ms
+2026-02-13 04:07:09 | agent | INFO | İşleniyor: sen kimsin...
+2026-02-13 04:07:09 | fast_response | INFO | Fast response: definition in 0.1ms
+2026-02-13 04:07:09 | agent | INFO | Fast response: 0.1ms
+2026-02-13 04:07:12 | agent | INFO | İşleniyor: aferin...
+2026-02-13 04:07:12 | agent | INFO | Intent: chat (requires_llm=True) -> routed_to=task_engine
+2026-02-13 04:07:14 | llm | INFO | OpenAI response (269 chars)
+2026-02-13 04:07:14 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=1820
+2026-02-13 04:07:14 | task_engine | INFO | [TaskEngine] Processing: aferin...
+2026-02-13 04:07:15 | llm | INFO | OpenAI response (58 chars)
+2026-02-13 04:07:15 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=1019
+2026-02-13 04:07:15 | memory | INFO | Stored preference for user 8433815573: preferred_language = en
+2026-02-13 04:07:15 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 8, "unknown": 11}
+2026-02-13 04:07:20 | agent | INFO | İşleniyor: olma...
+2026-02-13 04:07:20 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 04:07:22 | llm | INFO | OpenAI response (269 chars)
+2026-02-13 04:07:22 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=2066
+2026-02-13 04:07:22 | task_engine | INFO | [TaskEngine] Processing: olma...
+2026-02-13 04:07:24 | llm | INFO | OpenAI response (376 chars)
+2026-02-13 04:07:24 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=2042
+2026-02-13 04:07:24 | memory | INFO | Stored preference for user 8433815573: preferred_language = en
+2026-02-13 04:07:24 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 9, "unknown": 11}
+2026-02-13 04:07:30 | agent | INFO | İşleniyor: lan...
+2026-02-13 04:07:30 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 04:07:32 | llm | INFO | OpenAI response (267 chars)
+2026-02-13 04:07:32 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=1943
+2026-02-13 04:07:32 | task_engine | INFO | [TaskEngine] Processing: lan...
+2026-02-13 04:07:32 | learning_engine | INFO | Fuzzy match: 'lan' -> unknown
+2026-02-13 04:07:33 | llm | INFO | OpenAI response (95 chars)
+2026-02-13 04:07:33 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=790
+2026-02-13 04:07:33 | memory | INFO | Stored preference for user 8433815573: preferred_language = en
+2026-02-13 04:07:33 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 10, "unknown": 11}
+2026-02-13 18:33:18 | main | INFO | Elyan Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 18:39:09 | main | INFO | Elyan Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 18:55:14 | main | INFO | Elyan Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 19:00:06 | main | INFO | Elyan Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 19:00:09 | main | ERROR | UI başlatma hatası: name 'List' is not defined
+2026-02-13 19:06:22 | main | INFO | Elyan Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 19:06:26 | main | ERROR | UI başlatma hatası: name 'List' is not defined
+2026-02-13 19:08:10 | main | INFO | Elyan Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 19:08:12 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 19:08:12 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 19:08:12 | learning_engine | INFO | Loaded 24 patterns, 0 preferences, 3 skill memories
+2026-02-13 19:08:12 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 19:08:12 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 19:08:12 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 19:08:12 | notifications | INFO | Smart Notification System initialized
+2026-02-13 19:08:12 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 19:08:12 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 19:08:12 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 19:08:12 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 19:08:12 | fast_response | INFO | Fast Response System initialized
+2026-02-13 19:08:12 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 19:08:12 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 19:08:12 | agent | INFO | UI bağlantısı kuruldu
+2026-02-13 19:08:12 | agent | INFO | Agent başlatılıyor...
+2026-02-13 19:08:12 | agent | INFO | Temel motorlar hazır
+2026-02-13 19:08:12 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 19:08:12 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 19:08:12 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 19:08:12 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 19:08:12 | model_manager | ERROR | Failed to load shared embedding model: No module named 'sentence_transformers'
+2026-02-13 19:08:12 | semantic_memory | WARNING | Shared embedder not available, using keyword matching
+2026-02-13 19:08:12 | model_manager | ERROR | Failed to load shared embedding model: No module named 'sentence_transformers'
+2026-02-13 19:08:12 | knowledge_base | WARNING | Shared embedder not available for KB
+2026-02-13 19:08:12 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 19:08:12 | connection_pool | INFO | Connection pools initialized
+2026-02-13 19:08:12 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 19:08:12 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 19:08:14 | telegram | INFO | Proactive commands registered (schedule, briefing, alerts)
+2026-02-13 19:08:14 | clean_main_app | ERROR | Telegram bot başlatma hatası: name 'Dict' is not defined
+2026-02-13 19:10:18 | main | INFO | Elyan Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 19:10:20 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 19:10:20 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 19:10:20 | learning_engine | INFO | Loaded 24 patterns, 0 preferences, 3 skill memories
+2026-02-13 19:10:20 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 19:10:20 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 19:10:20 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 19:10:20 | notifications | INFO | Smart Notification System initialized
+2026-02-13 19:10:20 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 19:10:20 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 19:10:20 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 19:10:20 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 19:10:20 | fast_response | INFO | Fast Response System initialized
+2026-02-13 19:10:20 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 19:10:20 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 19:10:20 | agent | INFO | UI bağlantısı kuruldu
+2026-02-13 19:10:20 | agent | INFO | Agent başlatılıyor...
+2026-02-13 19:10:20 | agent | INFO | Temel motorlar hazır
+2026-02-13 19:10:20 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 19:10:20 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 19:10:20 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 19:10:20 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 19:10:20 | model_manager | ERROR | Failed to load shared embedding model: No module named 'sentence_transformers'
+2026-02-13 19:10:20 | semantic_memory | WARNING | Shared embedder not available, using keyword matching
+2026-02-13 19:10:20 | model_manager | ERROR | Failed to load shared embedding model: No module named 'sentence_transformers'
+2026-02-13 19:10:20 | knowledge_base | WARNING | Shared embedder not available for KB
+2026-02-13 19:10:20 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 19:10:20 | connection_pool | INFO | Connection pools initialized
+2026-02-13 19:10:20 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 19:10:20 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 19:10:20 | telegram | INFO | Proactive commands registered (schedule, briefing, alerts)
+2026-02-13 19:10:20 | telegram | INFO | Extended commands registered (code, email, parallel, etc.)
+2026-02-13 19:10:20 | clean_main_app | ERROR | Telegram bot başlatma hatası: name 'Update' is not defined
+2026-02-13 19:11:55 | clean_main_app | ERROR | Telegram bot başlatma hatası: [Errno 8] nodename nor servname provided, or not known
+2026-02-13 19:12:50 | main | INFO | Elyan Launcher v24.0.0 starting from /Users/emrekoca/Desktop/bot/main.py
+2026-02-13 19:12:51 | llm_optimizer | INFO | LLM Optimizer initialized
+2026-02-13 19:12:51 | memory | INFO | Memory database initialized at /Users/emrekoca/.config/cdacs-bot/memory.db
+2026-02-13 19:12:51 | learning_engine | INFO | Loaded 24 patterns, 0 preferences, 3 skill memories
+2026-02-13 19:12:51 | learning_engine | INFO | Learning engine initialized: /Users/emrekoca/.wiqo/learning.db
+2026-02-13 19:12:51 | speed_optimizer | INFO | Speed optimizer initialized
+2026-02-13 19:12:51 | analytics | INFO | Advanced Analytics Engine initialized
+2026-02-13 19:12:51 | notifications | INFO | Smart Notification System initialized
+2026-02-13 19:12:51 | intelligent_planner | INFO | Intelligent Planner initialized
+2026-02-13 19:12:51 | predictive_maintenance | INFO | Predictive Maintenance Engine initialized
+2026-02-13 19:12:51 | advanced_security | INFO | Advanced Security System initialized
+2026-02-13 19:12:51 | self_improvement | INFO | Self-Improvement Engine initialized
+2026-02-13 19:12:51 | fast_response | INFO | Fast Response System initialized
+2026-02-13 19:12:51 | response_cache | INFO | Response Cache initialized (max_size=500, ttl=3600s)
+2026-02-13 19:12:51 | quick_intent | INFO | Quick Intent Detector initialized
+2026-02-13 19:12:51 | agent | INFO | UI bağlantısı kuruldu
+2026-02-13 19:12:51 | agent | INFO | Agent başlatılıyor...
+2026-02-13 19:12:51 | agent | INFO | Temel motorlar hazır
+2026-02-13 19:12:51 | agent | INFO | 🔧 Arka plan servisleri başlatılıyor...
+2026-02-13 19:12:51 | tool_health | INFO | Initializing tool health checks...
+2026-02-13 19:12:51 | tool_health | INFO | Tool health check initialization complete
+2026-02-13 19:12:51 | session_manager | INFO | Session manager initialized: /Users/emrekoca/.wiqo/sessions
+2026-02-13 19:12:51 | model_manager | ERROR | Failed to load shared embedding model: No module named 'sentence_transformers'
+2026-02-13 19:12:51 | semantic_memory | WARNING | Shared embedder not available, using keyword matching
+2026-02-13 19:12:51 | model_manager | ERROR | Failed to load shared embedding model: No module named 'sentence_transformers'
+2026-02-13 19:12:51 | knowledge_base | WARNING | Shared embedder not available for KB
+2026-02-13 19:12:51 | connection_pool | INFO | HTTP connection pool initialized (20 max connections)
+2026-02-13 19:12:51 | connection_pool | INFO | Connection pools initialized
+2026-02-13 19:12:51 | agent | INFO | ✅ Tüm servisler başarıyla aktif edildi.
+2026-02-13 19:12:51 | agent | INFO |  Agent hazır - Autonomous mode active
+2026-02-13 19:12:52 | telegram | INFO | Proactive commands registered (schedule, briefing, alerts)
+2026-02-13 19:12:52 | telegram | INFO | Extended commands registered (code, email, parallel, etc.)
+2026-02-13 19:12:52 | telegram | INFO | Voice handler registered (Phase 13.1 + 13.2)
+2026-02-13 19:12:52 | telegram | INFO | Browser commands registered (Phase 14)
+2026-02-13 19:12:52 | telegram | INFO | Handler'lar kaydedildi ve approval callback ayarlandi
+2026-02-13 19:12:52 | telegram.ext.Application | INFO | Application started
+2026-02-13 19:12:52 | clean_main_app | INFO | Telegram botu başarıyla başlatıldı ve polling yapıyor
+2026-02-13 19:13:00 | telegram | INFO | [8433815573] Osman Emre: selam...
+2026-02-13 19:13:00 | agent | INFO | İşleniyor: selam...
+2026-02-13 19:13:00 | fast_response | INFO | Fast response: greeting in 0.2ms
+2026-02-13 19:13:00 | agent | INFO | Fast response: 0.2ms
+2026-02-13 19:13:04 | telegram | INFO | [8433815573] Osman Emre: ss al...
+2026-02-13 19:13:04 | agent | INFO | İşleniyor: ss al...
+2026-02-13 19:13:04 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 19:13:04 | security.audit | INFO | Audit database initialized at /Users/emrekoca/.config/cdacs-bot/audit.db
+2026-02-13 19:13:04 | task_engine | INFO | Task Engine and Intelligence engines initialized successfully
+2026-02-13 19:13:07 | llm | INFO | OpenAI response (264 chars)
+2026-02-13 19:13:07 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=3402
+2026-02-13 19:13:07 | task_engine | INFO | [TaskEngine] Processing: ss al...
+2026-02-13 19:13:07 | task_engine | INFO | Cognitive Bypass: Direct-Route active for take_screenshot
+2026-02-13 19:13:07 | task_engine | INFO | Executing 1 tasks in parallel
+2026-02-13 19:13:08 | task_executor | INFO | Executing take_screenshot with params: {'filename': None}
+2026-02-13 19:13:08 | task_executor | INFO | Task take_screenshot completed in 0.35s
+2026-02-13 19:13:12 | memory | INFO | Stored preference for user 8433815573: preferred_language = en
+2026-02-13 19:13:12 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 10, "unknown": 12}
+2026-02-13 19:13:26 | telegram | INFO | [8433815573] Osman Emre: adın ne...
+2026-02-13 19:13:26 | agent | INFO | İşleniyor: adın ne...
+2026-02-13 19:13:26 | fast_response | INFO | Fast response: definition in 0.1ms
+2026-02-13 19:13:26 | agent | INFO | Fast response: 0.1ms
+2026-02-13 19:14:30 | telegram | INFO | [8433815573] Osman Emre: wiqo...
+2026-02-13 19:14:30 | agent | INFO | İşleniyor: wiqo...
+2026-02-13 19:14:30 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 19:14:34 | llm | INFO | OpenAI response (263 chars)
+2026-02-13 19:14:34 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=4019
+2026-02-13 19:14:34 | task_engine | INFO | [TaskEngine] Processing: wiqo...
+2026-02-13 19:14:34 | learning_engine | INFO | Fuzzy match: 'wiqo' -> chat
+2026-02-13 19:14:37 | llm | INFO | OpenAI response (117 chars)
+2026-02-13 19:14:37 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=2705
+2026-02-13 19:14:37 | memory | INFO | Stored preference for user 8433815573: preferred_language = en
+2026-02-13 19:14:37 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 11, "unknown": 12}
+2026-02-13 19:16:41 | telegram | INFO | [8433815573] Osman Emre: bi haftalık altın grafiği...
+2026-02-13 19:16:41 | agent | INFO | İşleniyor: bi haftalık altın grafiği...
+2026-02-13 19:16:41 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 19:16:45 | llm | INFO | OpenAI response (308 chars)
+2026-02-13 19:16:45 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=3662
+2026-02-13 19:16:45 | task_engine | INFO | [TaskEngine] Processing: bi haftalık altın grafiği...
+2026-02-13 19:16:49 | llm | INFO | OpenAI response (250 chars)
+2026-02-13 19:16:49 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=3698
+2026-02-13 19:16:49 | memory | INFO | Stored preference for user 8433815573: preferred_language = tr
+2026-02-13 19:16:49 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 12, "unknown": 12}
+2026-02-13 19:17:09 | telegram | INFO | [8433815573] Osman Emre: kedi resmi çiz...
+2026-02-13 19:17:10 | agent | INFO | İşleniyor: kedi resmi çiz...
+2026-02-13 19:17:10 | agent | INFO | Intent: unknown (requires_llm=True) -> routed_to=task_engine
+2026-02-13 19:17:13 | llm | INFO | OpenAI response (263 chars)
+2026-02-13 19:17:13 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=2967
+2026-02-13 19:17:13 | task_engine | INFO | [TaskEngine] Processing: kedi resmi çiz...
+2026-02-13 19:17:16 | llm | INFO | OpenAI response (238 chars)
+2026-02-13 19:17:16 | llm | INFO | LLM_ROUTER provider=openai status=success reason=ok elapsed_ms=3168
+2026-02-13 19:17:16 | memory | INFO | Stored preference for user 8433815573: preferred_language = tr
+2026-02-13 19:17:16 | memory | INFO | Stored preference for user 8433815573: common_actions = {"chat": 13, "unknown": 12}
+2026-02-13 19:17:47 | advanced_research | INFO | Araştırma başlatıldı: köpek (standard)
+2026-02-13 19:17:48 | web.search | INFO | Search 'köpek': found 6 results
+2026-02-13 19:17:49 | web.scraper | INFO | Extracted 32542 chars from https://sosyal.petlebi.com/kopek-cinsleri
+2026-02-13 19:17:50 | web.scraper | INFO | Extracted 204 chars from https://petokulu.com/kopek-cinsleri/
+2026-02-13 19:17:50 | web.scraper | INFO | Extracted 4221 chars from https://nettepet.com/
+2026-02-13 19:17:51 | web.scraper | INFO | Extracted 5830 chars from https://www.patibul.com/kopek-ilanlari/Kocaeli
+2026-02-13 19:17:55 | advanced_report | INFO | LLM client initialized for report generation
+2026-02-13 19:17:57 | advanced_report | INFO | Word document created: /Users/emrekoca/Desktop/Research Reports/köpek_20260213_191757.docx
+2026-02-13 19:17:57 | advanced_report | INFO | Professional report generated: /Users/emrekoca/Desktop/Research Reports/köpek_20260213_191757.docx (docx)
+2026-02-13 19:17:57 | advanced_research | INFO | Profesyonel rapor oluşturuldu: /Users/emrekoca/Desktop/Research Reports/köpek_20260213_191757.docx
+2026-02-13 19:17:57 | advanced_research | INFO | Rapor metrikleri - Kapsam: 60%, Güvenilirlik: 65%, Bütünlük: 47%
+2026-02-13 19:17:57 | advanced_research | INFO | Araştırma tamamlandı: köpek - 6 kaynak, 1 rapor

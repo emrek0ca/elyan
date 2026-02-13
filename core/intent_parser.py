@@ -1039,7 +1039,7 @@ document.querySelector('.contact-form')?.addEventListener('submit', (event) => {
             return {
                 "action": "chat",
                 "params": {},
-                "reply": "Merhaba, ben Wiqo. Stratejik kararlarınızda ve günlük görevlerinizde size yardımcı olmaya hazırım. Dosya yönetimi, sistem kontrolleri veya derin araştırmalar için bana komut verebilirsiniz. Size nasıl yardımcı olabilirim?"
+                "reply": "Merhaba, ben Elyan. Stratejik kararlarınızda ve günlük görevlerinizde size yardımcı olmaya hazırım. Dosya yönetimi, sistem kontrolleri veya derin araştırmalar için bana komut verebilirsiniz. Size nasıl yardımcı olabilirim?"
             }
 
         return None

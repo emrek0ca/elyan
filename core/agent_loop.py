@@ -627,11 +627,11 @@ class AgentLoop:
             if similar:
                 input_ex = similar[0].get('input', '')
                 resp_ex = similar[0].get('response', '')
-                context_hint = f"\n\nBenzer geçmiş konuşma:\nKullanıcı: {input_ex}\nWiqo: {resp_ex}"
+                context_hint = f"\n\nBenzer geçmiş konuşma:\nKullanıcı: {input_ex}\nElyan: {resp_ex}"
 
-        # System prompt for Wiqo persona
+        # System prompt for Elyan persona
         system_prompt = (
-            "Wiqo, akıllı, samimi ve profesyonel bir Türkçe asistan. "
+            "Elyan, akıllı, samimi ve profesyonel bir Türkçe asistan. "
             "Kullanıcının sorusuna doğrudan, doğal ve kısa bir cevap ver. "
             "Gereksiz teknik detaylardan kaçın, arkadaşça bir ton kullan. "
             "Sadece Türkçe konuş. Emojiler KULLANMA. "

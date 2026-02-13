@@ -1,0 +1,12 @@
+{
+  "visual_style": "cinematic editorial",
+  "lighting": "soft key + directional accent",
+  "color_palette": ["#0F172A", "#334155", "#E2E8F0", "#F8FAFC"],
+  "texture_policy": "high detail, realistic material response",
+  "brand_alignment": ["clean", "premium", "professional"],
+  "consistency_rules": [
+    "Konu merkezli kompozisyon",
+    "Aynı renk ailesi korunmalı",
+    "Tipografik boşluk bırakılmalı"
+  ]
+}

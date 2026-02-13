@@ -1,5 +1,5 @@
 """
-Wiqo Settings Panel - Apple-inspired, clean, professional
+Elyan Settings Panel - Apple-inspired, clean, professional
 3 categories: AI, Telegram, General
 """
 
@@ -249,7 +249,7 @@ class _AIPage(QWidget):
             [PROVIDERS[k]["label"] for k in PROVIDERS], width=220
         )
         self._provider_combo.currentTextChanged.connect(self._on_provider_change)
-        pc_layout.addWidget(_Card.row("Provider", self._provider_combo, "Wiqo'nun kullanacağı AI servisi"))
+        pc_layout.addWidget(_Card.row("Provider", self._provider_combo, "Elyan'ın kullanacağı AI servisi"))
 
         pc_layout.addWidget(Divider())
 
@@ -841,7 +841,7 @@ class _GeneralPage(QWidget):
         al.setContentsMargins(20, 16, 20, 16)
         al.setSpacing(4)
 
-        name_lbl = QLabel("Wiqo v24.0 Pro")
+        name_lbl = QLabel("Elyan v24.0 Pro")
         name_lbl.setFont(QFont(T.FONT_DISPLAY, 15, QFont.Weight.Bold))
         name_lbl.setStyleSheet(f"color: {T.TEXT_PRIMARY}; background: transparent;")
         al.addWidget(name_lbl)

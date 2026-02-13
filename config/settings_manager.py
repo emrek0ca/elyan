@@ -8,7 +8,7 @@ logger = logging.getLogger("config.settings_manager")
 
 # Default settings
 DEFAULT_SETTINGS = {
-    "bot_name": "Wiqo Bot",
+    "bot_name": "Elyan Bot",
     "auto_start": False,
     "ui_theme": "Sistem",
     "ui_language": "Türkçe",

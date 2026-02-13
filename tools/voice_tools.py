@@ -1,6 +1,6 @@
 """
 Voice Tools - Architectural foundation for audio interaction
-Prepares Wiqo for future expansion into voice-based commands and feedback.
+Prepares Elyan for future expansion into voice-based commands and feedback.
 """
 
 from typing import Optional

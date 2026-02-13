@@ -65,7 +65,7 @@ class BrowserManager:
             # Create context
             self.context = await self.browser.new_context(
                 viewport={'width': 1280, 'height': 720},
-                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Wiqo/1.0'
+                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Elyan/1.0'
             )
             
             # Set default timeout

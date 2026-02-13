@@ -1,5 +1,5 @@
 """
-AI settings panel for Wiqo.
+AI settings panel for Elyan.
 Extracted from clean_main_app to keep UI code modular.
 """
 

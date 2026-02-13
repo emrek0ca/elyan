@@ -372,7 +372,7 @@ class CleanSidebar(QFrame):
             brand_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             logo_layout.addWidget(brand_label)
 
-        logo_text = QLabel("Wiqo")
+        logo_text = QLabel("Elyan")
         logo_text.setFont(QFont(".AppleSystemUIFont", 32, QFont.Weight.Bold))
         logo_text.setStyleSheet("color: #252F33; border: none; letter-spacing: -1px;")
         logo_layout.addWidget(logo_text)
@@ -1162,7 +1162,7 @@ class CleanMainWindow(QMainWindow):
         super().__init__()
         self._bot_worker = BotWorker()
         
-        self.setWindowTitle("Wiqo v24.0 Pro")
+        self.setWindowTitle("Elyan v24.0 Pro")
         self.setWindowIcon(load_brand_icon(size=128))
         self.setMinimumSize(1180, 760)
         self.resize(1320, 840)
@@ -1189,13 +1189,13 @@ class CleanMainWindow(QMainWindow):
         """Thread-safe history update"""
         if hasattr(self, "_chat_widget"):
             self._chat_widget.add_message("User", user_input)
-            self._chat_widget.add_message("Wiqo", result)
+            self._chat_widget.add_message("Elyan", result)
 
     def _on_thought_notified(self, thought: str):
         """Display live reasoning thoughts"""
         if hasattr(self, "_chat_widget"):
             # Use a special reasoning style/prefix
-            self._chat_widget.add_message("Wiqo Reasoning", thought)
+            self._chat_widget.add_message("Elyan Reasoning", thought)
         self._dashboard._add_activity(f"Düşünce: {thought[:40]}...", "şimdi")
 
     def _on_screenshot_shown(self, path: str, message: str):
@@ -1406,7 +1406,7 @@ def main():
     """Main entry point"""
     app = QApplication(sys.argv)
     _configure_font_fallbacks(app)
-    app.setApplicationName("Wiqo")
+    app.setApplicationName("Elyan")
     app.setApplicationVersion("24.0.0")
 
     # Setup detection (provider-aware, not just .env presence)

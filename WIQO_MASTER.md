@@ -1,9 +1,9 @@
-# WIQO MASTER STATUS
+# ELYAN MASTER STATUS
 
 Son güncelleme: 13 Şubat 2026 (03:12)
 
 ## Ürün Özeti
-- Wiqo: macOS odaklı, çok araçlı, TR öncelikli dijital asistan.
+- Elyan: macOS odaklı, çok araçlı, TR öncelikli dijital asistan.
 - Ana hedef: kullanıcının verdiği görevi doğru anlayıp güvenli biçimde planlayıp uygulamak.
 - Çalışma modeli: Anla -> Planla -> Uygula -> Geri Bildirim -> Öğren.
 

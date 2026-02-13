@@ -1,7 +1,7 @@
 """
 Proactive Intelligence Module
 
-This module provides autonomous capabilities for Wiqo:
+This module provides autonomous capabilities for Elyan:
 - Scheduled task automation
 - Morning intelligence briefings
 - Smart monitoring and alerts

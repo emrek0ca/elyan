@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single-file launcher for Wiqo.
+"""Single-file launcher for Elyan.
 
 Usage:
     python wiqo.py

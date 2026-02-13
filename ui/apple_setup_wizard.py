@@ -1,5 +1,5 @@
 """
-Wiqo Setup Wizard - Apple-inspired Design
+Elyan Setup Wizard - Apple-inspired Design
 Clean, minimal, emoji-free, never freezes
 """
 
@@ -454,7 +454,7 @@ class AppleSetupWizard(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Wiqo Setup")
+        self.setWindowTitle("Elyan Setup")
         self.setMinimumSize(760, 680)
         self.resize(820, 700)
         self.setSizeGripEnabled(True)
@@ -606,7 +606,7 @@ class AppleSetupWizard(QDialog):
             mascot.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(mascot)
 
-        logo = QLabel("WIQO")
+        logo = QLabel("ELYAN")
         logo.setFont(QFont(".AppleSystemUIFont", 52, QFont.Weight.Bold))
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         logo.setStyleSheet(f"color: {COLORS['primary']}; letter-spacing: -1px;")
@@ -621,7 +621,7 @@ class AppleSetupWizard(QDialog):
 
         # Description
         desc = QLabel(
-            "Wiqo, ilk günden itibaren yanında olan güvenilir bir dijital asistandır.\n"
+            "Elyan, ilk günden itibaren yanında olan güvenilir bir dijital asistandır.\n"
             "Kurulum 2 dakika sürer ve seçtiğin model ayarlarına sadık kalır.\n\n"
             "Hız, gizlilik ve kontrol tamamen sende."
         )
@@ -651,7 +651,7 @@ class AppleSetupWizard(QDialog):
         header.setFont(QFont(".AppleSystemUIFont", 24, QFont.Weight.Bold))
         layout.addWidget(header)
 
-        desc = QLabel("Select the AI engine that powers Wiqo")
+        desc = QLabel("Select the AI engine that powers Elyan")
         desc.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 14px;")
         layout.addWidget(desc)
 
@@ -1203,7 +1203,7 @@ class AppleSetupWizard(QDialog):
         layout.addWidget(header)
 
         desc = QLabel(
-            "Connect Wiqo to Telegram for mobile access.\n"
+            "Connect Elyan to Telegram for mobile access.\n"
             "You can skip this and add it later in settings."
         )
         desc.setWordWrap(True)
@@ -1297,7 +1297,7 @@ class AppleSetupWizard(QDialog):
         layout.addWidget(header)
 
         desc = QLabel(
-            "Customize how Wiqo communicates and plans complex tasks.\n"
+            "Customize how Elyan communicates and plans complex tasks.\n"
             "You can change these later in settings."
         )
         desc.setWordWrap(True)
@@ -1417,7 +1417,7 @@ class AppleSetupWizard(QDialog):
 
         # Description
         desc = QLabel(
-            "Wiqo hazır.\n\n"
+            "Elyan hazır.\n\n"
             "Asistanın artık seçtiğin sağlayıcı ve modele sadık şekilde çalışacak."
         )
         desc.setWordWrap(True)
@@ -1428,7 +1428,7 @@ class AppleSetupWizard(QDialog):
         layout.addStretch()
 
         # Finish button
-        finish = CleanButton("Launch Wiqo", primary=True)
+        finish = CleanButton("Launch Elyan", primary=True)
         finish.clicked.connect(self._complete_wizard)
         layout.addWidget(finish)
 

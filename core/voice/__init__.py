@@ -1,5 +1,5 @@
 """
-Voice module for Wiqo
+Voice module for Elyan
 
 Provides speech-to-text and text-to-speech capabilities
 """

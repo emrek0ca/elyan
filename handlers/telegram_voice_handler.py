@@ -107,7 +107,7 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
                     # Send text response
                     await update.message.reply_text(
                         f" **Sen:** {transcribed_text}\n\n"
-                        f" **Wiqo:** {response}",
+                        f" **Elyan:** {response}",
                         parse_mode='Markdown'
                     )
             else:

@@ -50,7 +50,7 @@ class DocumentSection:
 class DocumentMetadata:
     """Document metadata"""
     title: str
-    author: str = "Wiqo AI Assistant"
+    author: str = "Elyan AI Assistant"
     date: str = None
     version: str = "1.0"
     language: str = "tr"
@@ -68,7 +68,7 @@ class ProfessionalDocumentGenerator:
     """Generate professional documents from research and data"""
 
     def __init__(self, output_dir: str = None):
-        self.output_dir = Path(output_dir) if output_dir else Path.home() / "Desktop" / "WiqoDocuments"
+        self.output_dir = Path(output_dir) if output_dir else Path.home() / "Desktop" / "ElyanDocuments"
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def generate_research_report(

@@ -81,7 +81,7 @@ class CleanMessageBubble(QFrame):
         bubble_layout.setSpacing(6)
 
         # Sender label
-        sender = QLabel("YOU" if self.is_user else "WIQO")
+        sender = QLabel("YOU" if self.is_user else "ELYAN")
         sender.setFont(QFont(".AppleSystemUIFont", 10, QFont.Weight.Bold))
         sender.setStyleSheet(f"color: {'#7196A2' if self.is_user else '#8E8E93'}; border: none; letter-spacing: 0.5px;")
         bubble_layout.addWidget(sender)
@@ -362,7 +362,7 @@ class CleanChatWidget(QWidget):
 
         # Welcome message
         self._add_bot_message(
-            "Merhaba, ben Wiqo - kişisel bilgisayar asistanınız.\n\n"
+            "Merhaba, ben Elyan - kişisel bilgisayar asistanınız.\n\n"
             "Size dosya yönetimi, araştırma, belge oluşturma ve "
             "sistem kontrolü konularında yardımcı olabilirim.\n\n"
             "Nasıl yardımcı olabilirim?"
@@ -404,7 +404,7 @@ class CleanChatWidget(QWidget):
         text_layout = QVBoxLayout()
         text_layout.setSpacing(2)
 
-        name_label = QLabel("WIQO")
+        name_label = QLabel("ELYAN")
         name_label.setFont(QFont(".AppleSystemUIFont", 18, QFont.Weight.Bold))
         name_label.setStyleSheet("color: #252F33; border: none; letter-spacing: 0.5px;")
         text_layout.addWidget(name_label)
@@ -565,7 +565,7 @@ class CleanChatWidget(QWidget):
         self._speak_btn.setFixedSize(40, 40)
         self._speak_btn.setFont(QFont(".AppleSystemUIFont", 14))
         self._speak_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._speak_btn.setToolTip("Son WIQO yanıtını seslendir")
+        self._speak_btn.setToolTip("Son ELYAN yanıtını seslendir")
         self._speak_btn.setStyleSheet("""
             QPushButton {
                 background-color: #F2F2F7;
@@ -698,12 +698,12 @@ class CleanChatWidget(QWidget):
 
         if file_path:
             with open(file_path, "w", encoding="utf-8") as f:
-                f.write("Wiqo Sohbet Gecmisi\n")
+                f.write("Elyan Sohbet Gecmisi\n")
                 f.write(f"Tarih: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n")
                 f.write("-" * 50 + "\n\n")
 
                 for msg in self._messages:
-                    role = "Kullanici" if msg["role"] == "user" else "Wiqo"
+                    role = "Kullanici" if msg["role"] == "user" else "Elyan"
                     f.write(f"{role}:\n{msg['content']}\n\n")
 
             self._add_bot_message(f"Sohbet kaydedildi: {Path(file_path).name}")
@@ -852,7 +852,7 @@ class CleanChatWidget(QWidget):
     def _speak_latest_response(self):
         """Speak latest assistant response via local TTS."""
         if not self._last_assistant_message.strip():
-            self._add_bot_message("Seslendirme için önce bir WIQO yanıtı olmalı.")
+            self._add_bot_message("Seslendirme için önce bir ELYAN yanıtı olmalı.")
             return
 
         class _SpeakWorker(QThread):

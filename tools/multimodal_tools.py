@@ -1,5 +1,5 @@
 """
-Multimodal tools for Wiqo:
+Multimodal tools for Elyan:
 - speech-to-text
 - text-to-speech
 - visual asset generation packs
@@ -22,8 +22,16 @@ logger = get_logger("tools.multimodal")
 
 
 def _slug(value: str) -> str:
-    cleaned = "".join(ch if ch.isalnum() or ch in ("-", "_", " ") else " " for ch in str(value or "wiqo"))
-    return "_".join(cleaned.strip().split())[:80] or "wiqo"
+    cleaned = "".join(ch if ch.isalnum() or ch in ("-", "_", " ") else " " for ch in str(value or "elyan"))
+    return "_".join(cleaned.strip().split())[:80] or "elyan"
+
+
+def _quality_report(*, passed: bool, issues: list[str], checks: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "passed": bool(passed),
+        "issues": issues,
+        "checks": checks,
+    }
 
 
 async def transcribe_audio_file(audio_file: str, language: str = "tr", model_name: str = "base") -> dict[str, Any]:
@@ -47,12 +55,40 @@ async def transcribe_audio_file(audio_file: str, language: str = "tr", model_nam
             return result
 
         text = str(result.get("text", "")).strip()
+        duration = float(result.get("duration", 0) or 0)
+        word_count = len(text.split())
+        min_chars = 8 if duration > 3 else 0
+        min_words = 3 if duration > 8 else 0
+        issues: list[str] = []
+        if min_chars and len(text) < min_chars:
+            issues.append("transcript_too_short")
+        if min_words and word_count < min_words:
+            issues.append("transcript_too_few_words")
+        passed = not issues
+        report = _quality_report(
+            passed=passed,
+            issues=issues,
+            checks={
+                "duration_sec": duration,
+                "char_count": len(text),
+                "word_count": word_count,
+                "min_chars": min_chars,
+                "min_words": min_words,
+            },
+        )
+        if not passed:
+            return {
+                "success": False,
+                "error": "Kalite kapısı: transkript yetersiz",
+                "quality_report": report,
+            }
         return {
             "success": True,
             "text": text,
             "language": result.get("language", language),
             "segments": result.get("segments", []),
-            "duration": result.get("duration", 0),
+            "duration": duration,
+            "quality_report": report,
             "message": "Ses metne dönüştürüldü.",
         }
     except Exception as e:
@@ -90,11 +126,41 @@ async def speak_text_local(
         if not ok:
             return {"success": False, "error": "Konuşma üretimi başarısız."}
 
+        output_ok = True
+        size_bytes = 0
+        if out_path:
+            try:
+                size_bytes = Path(out_path).stat().st_size
+                output_ok = size_bytes > 256
+            except Exception:
+                output_ok = False
+
+        issues: list[str] = []
+        if out_path and not output_ok:
+            issues.append("audio_output_missing_or_too_small")
+
+        report = _quality_report(
+            passed=not issues,
+            issues=issues,
+            checks={
+                "spoken_chars": len(t),
+                "output_file": out_path or None,
+                "output_size_bytes": size_bytes,
+            },
+        )
+        if issues:
+            return {
+                "success": False,
+                "error": "Kalite kapısı: ses çıktısı doğrulanamadı",
+                "quality_report": report,
+            }
+
         return {
             "success": True,
             "voice_mode": voice_mode,
             "output_file": out_path,
             "spoken_chars": len(t),
+            "quality_report": report,
             "message": "Metin konuşma çıktısına dönüştürüldü.",
         }
     except Exception as e:
@@ -225,11 +291,31 @@ async def analyze_and_narrate_image(
             return analysis
 
         text = str(analysis.get("analysis", "")).strip()
+        min_chars = 40
+        issues: list[str] = []
+        if len(text) < min_chars:
+            issues.append("analysis_too_short")
+        report = _quality_report(
+            passed=not issues,
+            issues=issues,
+            checks={
+                "char_count": len(text),
+                "min_chars": min_chars,
+            },
+        )
+        if issues:
+            return {
+                "success": False,
+                "error": "Kalite kapısı: görsel analiz yetersiz",
+                "quality_report": report,
+            }
+
         response: dict[str, Any] = {
             "success": True,
             "analysis": text,
             "provider": analysis.get("provider", "unknown"),
             "spoken": False,
+            "quality_report": report,
             "message": "Görsel analiz tamamlandı.",
         }
 

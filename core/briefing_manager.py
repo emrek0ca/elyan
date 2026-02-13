@@ -73,7 +73,7 @@ class BriefingManager:
 
     async def _generate_briefing_text(self, context: Dict[str, Any]) -> str:
         """Use LLM to create a comprehensive briefing with all data sources"""
-        prompt = f"""Bir yapay zeka asistanı (Wiqo) olarak kullanıcıya kapsamlı bir sabah brifingi ver.
+        prompt = f"""Bir yapay zeka asistanı (Elyan) olarak kullanıcıya kapsamlı bir sabah brifingi ver.
 
 VERİLER:
 {context}

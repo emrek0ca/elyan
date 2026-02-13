@@ -1,6 +1,6 @@
 """
 Startup Health Check System
-Comprehensive validation before launching Wiqo
+Comprehensive validation before launching Elyan
 """
 
 import os
@@ -27,7 +27,7 @@ class HealthCheckResult:
 
 class StartupChecker:
     """
-    Validates system readiness before launching Wiqo
+    Validates system readiness before launching Elyan
     - Checks configuration files
     - Validates LLM provider setup
     - Verifies dependencies
@@ -424,7 +424,7 @@ class StartupChecker:
 
         summary = f"""
 ╔══════════════════════════════════════════════════════╗
-║          WIQO STARTUP HEALTH CHECK                   ║
+║          ELYAN STARTUP HEALTH CHECK                   ║
 ╚══════════════════════════════════════════════════════╝
 
 ✓ Passed: {len(passed)}

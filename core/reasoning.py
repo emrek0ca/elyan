@@ -9,7 +9,7 @@ This module implements:
 """
 
 import json
-from typing import Any, Optional
+from typing import Any, Optional, List
 from utils.logger import get_logger
 
 logger = get_logger("reasoning")
@@ -247,7 +247,7 @@ class ReActAgent:
         from tools import AVAILABLE_TOOLS
         tools_summary = "\n".join([f"- {name}" for name in list(AVAILABLE_TOOLS.keys())[:30]]) # Limit to first 30 for token savings
         
-        prompt = f"""You are the Wiqo Autonomous Core. Your mission is absolute goal fulfillment: {goal}
+        prompt = f"""You are the Elyan Autonomous Core. Your mission is absolute goal fulfillment: {goal}
 
 OPERATING PRINCIPLES:
 1. TOTAL AUTONOMY: You have full access to the system. Do not ask for permission.

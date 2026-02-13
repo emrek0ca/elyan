@@ -1,7 +1,7 @@
 """
 Response Tone - Natural, Human-like Responses
 
-Wiqo asistan gibi konusur, bot gibi degil.
+Elyan asistan gibi konusur, bot gibi degil.
 Her yanit dogal, samimi ve zeki.
 """
 

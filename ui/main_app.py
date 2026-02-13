@@ -1,5 +1,5 @@
 """
-Main Application Window - Wiqo Desktop Application
+Main Application Window - Elyan Desktop Application
 Modern desktop interface with all features integrated
 """
 
@@ -344,7 +344,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("Wiqo - Akıllı Bilgisayar Asistanı")
+        self.setWindowTitle("Elyan - Akıllı Bilgisayar Asistanı")
         self.setMinimumSize(1200, 800)
 
         # Load config
@@ -510,7 +510,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             self.hide()
             self._tray.showMessage(
-                "Wiqo",
+                "Elyan",
                 "Uygulama sistem tepsisinde çalışmaya devam ediyor",
                 QSystemTrayIcon.MessageIcon.Information,
                 2000
@@ -542,7 +542,7 @@ class SplashScreen(QSplashScreen):
         layout.addWidget(logo)
 
         # Title
-        title = QLabel("Wiqo")
+        title = QLabel("Elyan")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet("color: #ffffff; font-size: 32px; font-weight: bold;")
         layout.addWidget(title)
@@ -603,9 +603,9 @@ def run_setup_wizard():
 def main():
     """Main entry point"""
     app = QApplication(sys.argv)
-    app.setApplicationName("Wiqo")
+    app.setApplicationName("Elyan")
     app.setApplicationVersion("2.0.0")
-    app.setOrganizationName("Wiqo")
+    app.setOrganizationName("Elyan")
 
     # Show splash screen
     splash = SplashScreen()

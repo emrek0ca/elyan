@@ -25,7 +25,7 @@ def check_pyqt6():
     return PYQT_AVAILABLE
 
 class WiqoTheme:
-    """Standardized glassmorphic styling tokens for Wiqo v4.0"""
+    """Standardized glassmorphic styling tokens for Elyan v4.0"""
     GLASS_BASE = "rgba(255, 255, 255, 0.05)"
     GLASS_BASE_SELECTED = "rgba(255, 255, 255, 0.1)"
     BORDER_OVERLAY = "1px solid rgba(255, 255, 255, 0.1)"

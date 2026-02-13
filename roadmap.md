@@ -1,9 +1,9 @@
-# WIQO Professional Assistant Roadmap
+# ELYAN Professional Assistant Roadmap
 
 Last update: 2026-02-13
 
 ## Vision
-Wiqo is not a simple command bot. It must operate as a professional AI assistant that can:
+Elyan is not a simple command bot. It must operate as a professional AI assistant that can:
 - build websites and software projects
 - write and debug code
 - generate and refine visual content workflows
@@ -125,7 +125,7 @@ Wiqo is not a simple command bot. It must operate as a professional AI assistant
 - Fully autonomous destructive system operations.
 
 
-WIQO — Professional Digital Operator Roadmap
+ELYAN — Professional Digital Operator Roadmap
 
 Last update: 2026-02-13
 Product Class: Actionable AI / Computer Operator
@@ -134,12 +134,12 @@ Product Class: Actionable AI / Computer Operator
 
 1. Product Definition
 
-Wiqo bir sohbet botu değildir.
-Wiqo’nun amacı cevap üretmek değil iş teslim etmektir.
+Elyan bir sohbet botu değildir.
+Elyan’nun amacı cevap üretmek değil iş teslim etmektir.
 
 Tanım:
 
-Wiqo, kullanıcının bilgisayarında çalışan, hedef odaklı görevleri planlayan, yürüten, doğrulayan ve teslim eden profesyonel dijital operatördür.
+Elyan, kullanıcının bilgisayarında çalışan, hedef odaklı görevleri planlayan, yürüten, doğrulayan ve teslim eden profesyonel dijital operatördür.
 
 Çalışma modeli:
 
@@ -179,7 +179,7 @@ Her uzun görev:
 
 2.3 Assistant → Operator Continuum
 
-Wiqo farklı otonomi seviyelerinde çalışır:
+Elyan farklı otonomi seviyelerinde çalışır:
 
 Level	Davranış
 Advisory	sadece önerir
@@ -321,7 +321,7 @@ Publish-Ready threshold altında çıktı teslim edilmez.
 
 4.4 Learning System
 
-Wiqo öğrenir:
+Elyan öğrenir:
 	•	tercih edilen format
 	•	tekrar eden görev dizileri
 	•	hata sonrası doğru strateji
@@ -403,7 +403,7 @@ User Value Metrics
 Business Metrics
 	•	haftalık aktif workflow sayısı
 	•	görev başına tasarruf edilen süre
-	•	Wiqo ile yapılan iş yüzdesi
+	•	Elyan ile yapılan iş yüzdesi
 
 ⸻
 
@@ -416,9 +416,9 @@ Business Metrics
 
 Son Tanım
 
-Wiqo bir AI asistanı değil.
+Elyan bir AI asistanı değil.
 
-Wiqo = bilgisayarda çalışan teslimat odaklı dijital çalışan
+Elyan = bilgisayarda çalışan teslimat odaklı dijital çalışan
 
 Başarı ölçütü: cevap kalitesi değil
 insanın yapmadığı iş miktarıdır
@@ -429,12 +429,12 @@ insanın yapmadığı iş miktarıdır
 
 
 
-Aşağıdaki özet, diğer oturumda kaldığımız yerden devam etmek için hazırlanmıştır. Bu oturumda Wiqo’yu “chat bot”tan “delivery odaklı dijital operatör”e yaklaştıracak çekirdek geliştirmeleri
+Aşağıdaki özet, diğer oturumda kaldığımız yerden devam etmek için hazırlanmıştır. Bu oturumda Elyan’yu “chat bot”tan “delivery odaklı dijital operatör”e yaklaştıracak çekirdek geliştirmeleri
   yaptık.
 
   1) Ürün Yönü ve Hedef
 
-  - Wiqo’nun davranışı “cevap üretme” yerine “iş teslim etme” modeline çekildi:
+  - Elyan’nun davranışı “cevap üretme” yerine “iş teslim etme” modeline çekildi:
       - Goal -> Contract -> Plan -> Execute -> Verify -> Deliver -> Learn
   - Roadmap’e uygun şekilde capability bazlı ve profesyonel pipeline bazlı çalışma mantığı güçlendirildi.
 

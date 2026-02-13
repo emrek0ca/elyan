@@ -1,5 +1,5 @@
 """
-Task Engine - Central task processing motor for Wiqo v12.0
+Task Engine - Central task processing motor for Elyan v12.0
 
 This is the single source of truth for task execution.
 Both UI and Telegram bot use this engine.
@@ -100,7 +100,7 @@ class TaskDefinition:
 class TaskEngine:
     """
     Central task processing engine.
-    Handles all task execution for Wiqo.
+    Handles all task execution for Elyan.
     """
 
     def __init__(self):
@@ -225,6 +225,26 @@ class TaskEngine:
                     if not isinstance(base_q, list):
                         base_q = []
                     req["quality_checklist"] = list(dict.fromkeys([*base_q, *learned["quality_focus"]]))[:8]
+        except Exception:
+            pass
+
+        # User preference learning (tone/length/format/output).
+        try:
+            prefs = self.learning.get_preferences(min_confidence=0.6)
+            if prefs.get("response_length") and not req.get("response_length"):
+                req["response_length"] = str(prefs["response_length"])
+            if prefs.get("communication_tone") and not req.get("communication_tone"):
+                req["communication_tone"] = str(prefs["communication_tone"])
+            if prefs.get("preferred_language") and not req.get("preferred_language"):
+                req["preferred_language"] = str(prefs["preferred_language"])
+            if prefs.get("preferred_output") and not req.get("preferred_output"):
+                req["preferred_output"] = str(prefs["preferred_output"])
+            if prefs.get("format_style") and not req.get("format_style"):
+                req["format_style"] = str(prefs["format_style"])
+            if "include_code" in prefs and "include_code" not in req:
+                req["include_code"] = bool(prefs["include_code"])
+            if prefs.get("user_alias") and not req.get("user_alias"):
+                req["user_alias"] = str(prefs["user_alias"])
         except Exception:
             pass
 
@@ -1110,6 +1130,23 @@ class TaskEngine:
             tone = self.settings.get("communication_tone", "professional_friendly")
             length = self.settings.get("response_length", "short")
             expertise = self.settings.get("assistant_expertise", "advanced")
+            preferred_language = self.settings.get("preferred_language", "auto")
+            format_style = ""
+            include_code_pref = None
+
+            user_alias = ""
+            try:
+                prefs = self.learning.get_preferences(min_confidence=0.6)
+                tone = str(prefs.get("communication_tone", tone))
+                length = str(prefs.get("response_length", length))
+                preferred_language = str(prefs.get("preferred_language", preferred_language))
+                format_style = str(prefs.get("format_style", "")) if prefs.get("format_style") else ""
+                if "include_code" in prefs:
+                    include_code_pref = bool(prefs.get("include_code"))
+                if prefs.get("user_alias"):
+                    user_alias = str(prefs.get("user_alias"))
+            except Exception:
+                user_alias = ""
 
             tone_hint = {
                 "professional_friendly": "profesyonel ama samimi",
@@ -1129,11 +1166,27 @@ class TaskEngine:
                 "expert": "Teknik doğruluk yüksek olsun, ama anlaşılır kal.",
             }.get(expertise, "Gerekirse teknik ayrıntıyı kısa ve anlaşılır ver.")
 
+            lang_hint = "Sadece Turkce konus." if preferred_language in ("auto", "tr") else "Sadece Ingilizce konus."
+            format_hint = ""
+            if format_style == "steps":
+                format_hint = "Cevabi adim adim ve numarali ver. "
+            elif format_style == "bullets":
+                format_hint = "Cevabi madde madde ver. "
+            elif format_style == "table":
+                format_hint = "Uygunsa tablo kullan. "
+
+            code_hint = ""
+            if include_code_pref is True:
+                code_hint = "Gerekiyorsa kisa ve calisir kod ornegi ver. "
+            elif include_code_pref is False:
+                code_hint = "Kod vermeden acikla. "
+
+            alias_hint = f"Kullaniciya '{user_alias}' diye hitap et. " if user_alias else ""
             system_prompt = (
-                f"Wiqo, {tone_hint} bir Turkce dijital asistansin. "
+                f"Elyan, {tone_hint} bir dijital asistansin. "
                 f"Kullanicinin sorusuna dogrudan, net ve {length_hint} ile cevap ver. "
-                "Sadece Turkce konus. Emoji kullanma. "
-                f"{expertise_hint}"
+                f"{lang_hint} Emoji kullanma. "
+                f"{format_hint}{code_hint}{alias_hint}{expertise_hint}"
                 f"{context_hint}"
             )
 
