@@ -40,6 +40,9 @@ from .capability_router import get_capability_router
 from .capability_metrics import get_capability_metrics
 from .pipeline_state import get_pipeline_state
 from .task_contract import build_task_contract
+from .artifact_quality_engine import get_artifact_quality_engine
+from .goal_graph import get_goal_graph_planner
+from .operator_policy import get_operator_policy_engine
 from config.settings_manager import SettingsPanel
 from security.validator import validate_input, sanitize_input
 from security.audit import get_audit_logger
@@ -115,6 +118,9 @@ class TaskEngine:
         self.capability_router = get_capability_router()
         self.capability_metrics = get_capability_metrics()
         self.pipeline_state = get_pipeline_state()
+        self.quality_engine = get_artifact_quality_engine()
+        self.goal_graph_planner = get_goal_graph_planner()
+        self.operator_policy_engine = get_operator_policy_engine()
 
     def _privacy_flags(self) -> Dict[str, bool]:
         return {
@@ -166,6 +172,59 @@ class TaskEngine:
             req["quality_checklist"] = capability.quality_checklist
             req["learning_tags"] = capability.learning_tags
             req["assistant_profile"] = "professional_real_assistant"
+        except Exception:
+            pass
+
+        # Multi-goal understanding (goal graph) for complex instructions.
+        try:
+            goal_graph = self.goal_graph_planner.build(text)
+            req["goal_graph"] = goal_graph
+            req["goal_stage_count"] = int(goal_graph.get("stage_count", 1))
+            req["goal_complexity_score"] = float(goal_graph.get("complexity_score", 0.0))
+            chain = goal_graph.get("workflow_chain", [])
+            if isinstance(chain, list) and chain:
+                req["workflow_chain"] = chain
+                req["primary_delivery_domain"] = str(
+                    goal_graph.get("primary_delivery_domain", req.get("capability_domain", "general"))
+                )
+            if req.get("goal_stage_count", 1) >= 2:
+                req["assistant_profile"] = "professional_operator_multistep"
+                req["quality_level"] = "high"
+            constraints = goal_graph.get("constraints", {})
+            if isinstance(constraints, dict):
+                if not req.get("preferred_output") and constraints.get("preferred_output"):
+                    req["preferred_output"] = str(constraints.get("preferred_output"))
+                if not req.get("urgency") and constraints.get("urgency"):
+                    req["urgency"] = str(constraints.get("urgency"))
+                q_mode = str(constraints.get("quality_mode", ""))
+                if q_mode == "high":
+                    req["quality_level"] = "high"
+                elif q_mode == "compact":
+                    req["brevity_preferred"] = True
+                deliverables = constraints.get("deliverables", [])
+                if isinstance(deliverables, list) and deliverables:
+                    req["deliverables"] = [str(x) for x in deliverables[:8]]
+        except Exception:
+            pass
+
+        # Continuous learning hints (local, low-cost).
+        try:
+            domain = str(req.get("capability_domain", "general"))
+            learned = self.learning.get_execution_hints(text, domain)
+            if learned:
+                req["learning_hint_confidence"] = float(learned.get("confidence", 0.0))
+                if not req.get("preferred_output") and learned.get("preferred_output"):
+                    req["preferred_output"] = str(learned.get("preferred_output"))
+                if isinstance(learned.get("preferred_tools_boost"), list):
+                    base = req.get("preferred_tools", [])
+                    if not isinstance(base, list):
+                        base = []
+                    req["preferred_tools"] = list(dict.fromkeys([*learned["preferred_tools_boost"], *base]))[:8]
+                if isinstance(learned.get("quality_focus"), list):
+                    base_q = req.get("quality_checklist", [])
+                    if not isinstance(base_q, list):
+                        base_q = []
+                    req["quality_checklist"] = list(dict.fromkeys([*base_q, *learned["quality_focus"]]))[:8]
         except Exception:
             pass
 
@@ -251,6 +310,17 @@ class TaskEngine:
             decompose_tried = False
             planner_route_used = False
 
+            clarify_msg = self._clarification_prompt(user_input, intent_result, execution_req)
+            if clarify_msg:
+                elapsed_ms = int((time.time() - start_time) * 1000)
+                self.capability_metrics.record(capability_domain, True, elapsed_ms, capability_objective)
+                return TaskResult(
+                    success=True,
+                    message=clarify_msg,
+                    metadata={"type": "clarification", "intent": intent_result},
+                    execution_time_ms=elapsed_ms
+                )
+
             if intent_result["type"] == "CHAT":
                 # Simple chat response - no execution needed
                 response = await self._generate_chat_response(user_input, context)
@@ -288,7 +358,11 @@ class TaskEngine:
             else:
                 if is_complex and intent_result.get("type") != "CHAT":
                     logger.info("Complex query detected - Forcing LLM decomposition")
-                tasks = await self._decompose_tasks(user_input, intent_result, local_context)
+                tasks = self._build_goal_graph_workflow_tasks(user_input, execution_req)
+                if tasks:
+                    logger.info(f"Goal-graph deterministic workflow selected ({len(tasks)} tasks)")
+                else:
+                    tasks = await self._decompose_tasks(user_input, intent_result, local_context)
 
             if not tasks:
                 # İlk deneme başarısızsa bir kez daha LLM decomposition dene (zorla)
@@ -332,6 +406,31 @@ class TaskEngine:
             # 4. Dependency Analysis & Ordering
             ordered_tasks = self._order_tasks_by_dependency(tasks)
             task_contract = build_task_contract(execution_req, task_count=len(ordered_tasks))
+            plan_preview = self._build_explainability_preview(execution_req, ordered_tasks)
+            if notify_callback and (len(ordered_tasks) >= 3 or int(execution_req.get("goal_stage_count", 1) or 1) >= 2):
+                await self._emit_notify(notify_callback, plan_preview)
+
+            if self._should_require_plan_confirmation(execution_req, ordered_tasks):
+                approval_result = await self._request_plan_confirmation(
+                    user_id=user_id,
+                    plan_preview=plan_preview,
+                    ordered_tasks=ordered_tasks,
+                )
+                if not approval_result.get("approved", False):
+                    elapsed_ms = int((time.time() - start_time) * 1000)
+                    self.capability_metrics.record(capability_domain, False, elapsed_ms, capability_objective)
+                    reason = str(approval_result.get("reason", "Plan onayı verilmedi"))
+                    return TaskResult(
+                        success=False,
+                        message=f"Görev planı kullanıcı onayıyla iptal edildi: {reason}",
+                        error=reason,
+                        metadata={
+                            "type": "plan_confirmation_denied",
+                            "plan_preview": plan_preview,
+                            "task_contract": task_contract.to_dict(),
+                        },
+                        execution_time_ms=elapsed_ms,
+                    )
 
             # 5. Security Validation
             security_check = self._security_check(ordered_tasks, user_id)
@@ -345,6 +444,7 @@ class TaskEngine:
                     metadata={
                         "blocked_tasks": security_check.get("blocked_tasks", []),
                         "task_contract": task_contract.to_dict(),
+                        "plan_preview": plan_preview,
                     }
                 )
 
@@ -386,8 +486,30 @@ class TaskEngine:
                     if isinstance(retry_result.get("_replanned_tasks"), list):
                         ordered_tasks = retry_result["_replanned_tasks"]
 
+            quality_report = self.quality_engine.evaluate(
+                domain=capability_domain,
+                pipeline_id=pipeline_id,
+                task_contract=task_contract.to_dict(),
+                execution_result=execution_result,
+                tasks=ordered_tasks,
+                publish_threshold=float(self.settings.get("publish_ready_threshold", 78.0) or 78.0),
+            )
+
+            # Enforce publish-ready gating for delivery-oriented mode.
+            if execution_result.get("success", False) and not quality_report.get("publish_ready", False):
+                execution_result["success"] = False
+                execution_result["quality_blocked"] = True
+
             # 8. Result Summarization
             summary = self._summarize_results(execution_result, ordered_tasks)
+            if execution_result.get("quality_blocked"):
+                q_score = quality_report.get("overall_score", 0)
+                q_th = quality_report.get("threshold", 78)
+                summary = (
+                    f"Teslimat kalite eşiğini geçemedi (score={q_score}, hedef={q_th}).\n"
+                    f"{summary}\n"
+                    "Lütfen kalite checklistini artırarak tekrar deneyin."
+                )
 
             elapsed_ms = int((time.time() - start_time) * 1000)
 
@@ -431,7 +553,21 @@ class TaskEngine:
                 pipeline_id=pipeline_id,
                 success=bool(execution_result["success"]),
                 summary=summary,
+                quality_report=quality_report,
             )
+
+            try:
+                await self.learning.record_outcome(
+                    domain=capability_domain,
+                    input_text=user_input,
+                    execution_requirements=execution_req,
+                    tool_actions=[t.action for t in ordered_tasks],
+                    success=bool(execution_result["success"]),
+                    quality_score=float(quality_report.get("overall_score", 0.0)),
+                    publish_ready=bool(quality_report.get("publish_ready", False)),
+                )
+            except Exception as learning_exc:
+                logger.debug(f"learning record_outcome failed: {learning_exc}")
 
             return TaskResult(
                 success=execution_result["success"],
@@ -444,6 +580,8 @@ class TaskEngine:
                     "capability_domain": capability_domain,
                     "pipeline_id": pipeline_id,
                     "task_contract": task_contract.to_dict(),
+                    "plan_preview": plan_preview,
+                    "quality_report": quality_report,
                 },
                 execution_time_ms=elapsed_ms
             )
@@ -456,6 +594,7 @@ class TaskEngine:
                         pipeline_id=pipeline_id,
                         success=False,
                         summary=str(e),
+                        quality_report=None,
                     )
                 except Exception:
                     pass
@@ -520,6 +659,15 @@ class TaskEngine:
         # If explicit multi-step connectors exist
         if self._is_complex_query(user_input):
             return True
+        # Goal graph indicates multi-stage request
+        try:
+            graph = self.goal_graph_planner.build(user_input)
+            if int(graph.get("stage_count", 1)) >= 2:
+                return True
+            if float(graph.get("complexity_score", 0.0)) >= 0.6:
+                return True
+        except Exception:
+            pass
         # If intent is UNKNOWN but text is > 6 words, try planning
         words = user_input.strip().split()
         if intent.get("type") == "UNKNOWN" and len(words) >= 6:
@@ -533,6 +681,30 @@ class TaskEngine:
         if cost_guard and planning_depth == "compact":
             return False
         return planning_depth in {"deep", "adaptive"}
+
+    def _clarification_prompt(
+        self,
+        user_input: str,
+        intent: Dict[str, Any],
+        execution_req: Dict[str, Any],
+    ) -> str:
+        confidence = float(intent.get("confidence", 0.0) or 0.0)
+        domain = str(execution_req.get("capability_domain", "general"))
+        stage_count = int(execution_req.get("goal_stage_count", 1) or 1)
+        if self._is_chat_message(user_input):
+            return ""
+        if intent.get("type") == "UNKNOWN" and stage_count <= 1 and domain == "general":
+            return (
+                "İsteğini netleştireyim: bu görevde tam olarak ne yapmamı istiyorsun?\n"
+                "1) Araştırma\n2) Kod/Proje üretimi\n3) Doküman/rapor\n4) Sistem işlemi"
+            )
+        if confidence < 0.4 and stage_count <= 1 and domain == "general":
+            return (
+                "Komutu güvenli ve doğru çalıştırmak için netleştirmem gerekiyor.\n"
+                "Hedef çıktıyı tek cümlede belirt: örn. 'X konusunda araştırma raporu üret' veya "
+                "'Y için çalışan proje scaffold oluştur'."
+            )
+        return ""
 
     async def _plan_with_intelligent_planner(
         self,
@@ -678,10 +850,20 @@ class TaskEngine:
         t = f"{text} {goal}".lower()
         if any(k in t for k in ["website", "web site", "site", "landing page", "frontend", "web sayfası", "web sayfasi"]):
             return "create_web_project_scaffold"
+        if any(k in t for k in ["oyun", "game", "unity", "pygame", "app", "uygulama"]):
+            return "create_software_project_pack"
         if any(k in t for k in ["kod", "code", "debug", "hata", "refactor", "script", "test"]):
             return "execute_python_code"
         if any(k in t for k in ["gorsel", "görsel", "image", "logo", "poster", "tasarla", "design"]):
             return "create_image_workflow_profile"
+        if any(k in t for k in ["ses", "audio", "voice", "konuş", "konus", "speak", "tts"]):
+            return "speak_text_local"
+        if any(k in t for k in ["transcribe", "whisper", "speech to text", "sesi yazıya", "sesi yaziya"]):
+            return "transcribe_audio_file"
+        if any(k in t for k in ["görseli analiz et ve anlat", "gorseli analiz et ve anlat", "narrate image", "analyze and narrate"]):
+            return "analyze_and_narrate_image"
+        if any(k in t for k in ["visual pack", "asset pack", "gorsel paket", "görsel paket"]):
+            return "create_visual_asset_pack"
         if any(k in t for k in ["özet", "ozet", "summar", "kısalt", "kisalt", "sentez"]):
             return "smart_summarize"
         if any(k in t for k in ["belge", "dokuman", "doküman", "rapor", "proposal", "sunum", "pdf", "docx"]):
@@ -705,6 +887,77 @@ class TaskEngine:
         if any(k in t for k in ["screenshot", "ekran görüntüsü", "ss"]):
             return "take_screenshot"
         return "chat"
+
+    def _build_goal_graph_workflow_tasks(
+        self,
+        user_input: str,
+        execution_req: Dict[str, Any],
+    ) -> List[TaskDefinition]:
+        """Deterministic workflow fallback for complex multi-domain requests."""
+        graph = execution_req.get("goal_graph", {})
+        if not isinstance(graph, dict):
+            return []
+        nodes = graph.get("nodes", [])
+        if not isinstance(nodes, list) or len(nodes) < 2:
+            return []
+
+        tasks: List[TaskDefinition] = []
+        previous_id = ""
+        for idx, n in enumerate(nodes[:6], start=1):
+            if not isinstance(n, dict):
+                continue
+            domain = str(n.get("domain", "general"))
+            stage_text = str(n.get("text", "")).strip() or user_input
+            task_id = f"workflow_task_{idx}"
+            action = ""
+            params: Dict[str, Any] = {}
+            description = f"Stage {idx}: {stage_text}"
+
+            if domain == "research":
+                action = "advanced_research"
+                params = {"topic": stage_text, "depth": "medium"}
+            elif domain == "website":
+                action = "create_web_project_scaffold"
+                params = {"project_name": stage_text[:80], "stack": "react", "output_dir": "~/Desktop"}
+            elif domain == "code":
+                action = "create_software_project_pack"
+                project_type = "game" if any(k in stage_text.lower() for k in ["oyun", "game", "pygame", "unity"]) else "app"
+                params = {
+                    "project_name": stage_text[:80],
+                    "project_type": project_type,
+                    "stack": "python",
+                    "complexity": "expert",
+                    "output_dir": "~/Desktop",
+                }
+            elif domain == "document":
+                action = "generate_document_pack"
+                params = {"topic": stage_text[:120], "output_dir": "~/Desktop"}
+            elif domain == "image":
+                action = "create_visual_asset_pack"
+                params = {"project_name": stage_text[:80], "brief": stage_text, "output_dir": "~/Desktop"}
+            elif domain == "summarization":
+                action = "smart_summarize"
+                params = {"text": user_input}
+            elif domain == "multimodal":
+                action = "get_multimodal_capability_report"
+                params = {}
+            else:
+                continue
+
+            deps = [previous_id] if previous_id else []
+            tasks.append(
+                TaskDefinition(
+                    id=task_id,
+                    action=action,
+                    params=params,
+                    description=description,
+                    dependencies=deps,
+                    is_risky=self._is_risky_action(action),
+                    requires_approval=self._requires_explicit_approval(action),
+                )
+            )
+            previous_id = task_id
+        return tasks
 
     async def _analyze_intent(
         self,
@@ -763,8 +1016,9 @@ class TaskEngine:
             'open', 'close', 'delete', 'search', 'find', 'send',
             'volume', 'ses', 'parlaklik', 'wifi', 'bluetooth', 'ekran',
             'kaydet', 'yedekle', 'azalt', 'artir', 'dusur', 'mail', 'email',
-            'website', 'site', 'web', 'kod', 'code', 'debug', 'gorsel', 'image',
+            'website', 'site', 'web', 'kod', 'code', 'debug', 'gorsel', 'image', 'oyun', 'game', 'uygulama', 'app',
             'logo', 'tasarla', 'belge', 'dokuman', 'doküman', 'rapor', 'ozet', 'özet',
+            'audio', 'voice', 'konus', 'konuş', 'transcribe', 'whisper', 'mikrofon',
         }
         has_tool = any(
             word.startswith(prefix) and (len(word) - len(prefix)) <= 5
@@ -928,8 +1182,14 @@ class TaskEngine:
             "execute_python_code(code)", "debug_code(code,language)",
             "analyze_image(image_path,prompt)", "generate_research_document(research_data,format,template)",
             "create_web_project_scaffold(project_name,stack,theme,output_dir)",
+            "create_software_project_pack(project_name,project_type,stack,complexity,output_dir)",
             "generate_document_pack(topic,brief,audience,language,output_dir)",
             "create_image_workflow_profile(project_name,visual_style,aspect_ratios,output_dir)",
+            "create_visual_asset_pack(project_name,brief,style,output_dir)",
+            "transcribe_audio_file(audio_file,language,model_name)",
+            "speak_text_local(text,output_file,voice_mode)",
+            "analyze_and_narrate_image(image_path,prompt,language,speak,output_audio_file)",
+            "get_multimodal_capability_report()",
             "run_safe_command(command)", "spotlight_search(query)",
             "kill_process(name)", "get_process_info()",
             "ollama_list_models()", "ollama_remove_model(model_name)",
@@ -1168,8 +1428,30 @@ JSON ciktisi (baska hicbir sey yazma):
             "dd if=", "curl", "wget"
         ]
         high_risk_actions = {"run_safe_command", "run_command", "execute_command", "terminal", "kill_process"}
+        policy = self._operator_policy()
+        system_actions = {
+            "run_safe_command", "run_command", "execute_command", "terminal", "kill_process",
+            "shutdown_system", "restart_system", "sleep_system", "lock_screen",
+        }
+        destructive_actions = {
+            "delete_file", "format_disk", "shutdown_system", "restart_system",
+            "run_command", "execute_command", "kill_process",
+        }
 
         for task in tasks:
+            if task.action in system_actions and not policy.allow_system_actions:
+                return {
+                    "allowed": False,
+                    "reason": f"Operator policy '{policy.level}' system aksiyonunu engelliyor: {task.action}",
+                    "blocked_tasks": [task.id],
+                }
+            if task.action in destructive_actions and not policy.allow_destructive_actions:
+                return {
+                    "allowed": False,
+                    "reason": f"Operator policy '{policy.level}' destructive aksiyonu engelliyor: {task.action}",
+                    "blocked_tasks": [task.id],
+                }
+
             # Only run dangerous pattern scan for high-risk actions
             if task.action in high_risk_actions:
                 task_str = str(task.params).lower()
@@ -1211,15 +1493,69 @@ JSON ciktisi (baska hicbir sey yazma):
         }
         return action in risky_actions
 
+    def _operator_policy(self):
+        level = str(self.settings.get("operator_mode_level", "Confirmed"))
+        return self.operator_policy_engine.resolve(level)
+
     def _requires_explicit_approval(self, action: str) -> bool:
         """Whether action must be explicitly approved by the user."""
-        return action in _EXPLICIT_APPROVAL_ACTIONS
+        if action in _EXPLICIT_APPROVAL_ACTIONS:
+            return True
+        if self._is_risky_action(action):
+            return bool(self._operator_policy().require_confirmation_for_risky)
+        return False
 
     def _approval_risk_level(self, action: str) -> RiskLevel:
         """Risk level mapping for explicit-approval actions."""
         if action in {"shutdown_system", "restart_system"}:
             return RiskLevel.CRITICAL
         return RiskLevel.HIGH
+
+    def _should_require_plan_confirmation(
+        self,
+        execution_req: Dict[str, Any],
+        ordered_tasks: List[TaskDefinition],
+    ) -> bool:
+        if not bool(self.settings.get("require_plan_confirmation", True)):
+            return False
+        stage_count = int(execution_req.get("goal_stage_count", 1) or 1)
+        complexity = float(execution_req.get("goal_complexity_score", 0.0) or 0.0)
+        risky_count = sum(1 for t in ordered_tasks if self._is_risky_action(t.action))
+        if stage_count >= 3:
+            return True
+        if len(ordered_tasks) >= 4:
+            return True
+        if complexity >= 0.75:
+            return True
+        if risky_count >= 1:
+            return True
+        return False
+
+    async def _request_plan_confirmation(
+        self,
+        *,
+        user_id: Optional[str],
+        plan_preview: str,
+        ordered_tasks: List[TaskDefinition],
+    ) -> Dict[str, Any]:
+        if not getattr(self.approval, "approval_callback", None):
+            # No callback configured (tests/CLI): don't block execution.
+            return {"approved": True, "auto_approved": True, "reason": "approval_callback_missing"}
+        try:
+            uid = int(user_id) if user_id is not None else 0
+        except Exception:
+            uid = 0
+        return await self.approval.request_approval(
+            operation="execution_plan",
+            risk_level=RiskLevel.MEDIUM,
+            description=f"Kompleks görev planı onayı gerekiyor ({len(ordered_tasks)} adım)",
+            params={
+                "task_count": len(ordered_tasks),
+                "plan_preview": plan_preview[:1500],
+            },
+            user_id=uid,
+            timeout=180,
+        )
 
     async def _request_explicit_approval(
         self,
@@ -1266,6 +1602,38 @@ JSON ciktisi (baska hicbir sey yazma):
             summary += "\n"
 
         return summary
+
+    def _build_explainability_preview(
+        self,
+        execution_req: Dict[str, Any],
+        tasks: List[TaskDefinition],
+    ) -> str:
+        """Create a compact, human-readable execution preview."""
+        stage_count = int(execution_req.get("goal_stage_count", 1) or 1)
+        complexity = float(execution_req.get("goal_complexity_score", 0.0) or 0.0)
+        chain = execution_req.get("workflow_chain", [])
+        if not isinstance(chain, list):
+            chain = []
+        domain = str(execution_req.get("capability_domain", "general"))
+        objective = str(execution_req.get("primary_objective", "solve_user_task_reliably"))
+
+        lines = [
+            "Plan Preview",
+            f"- Domain: {domain}",
+            f"- Objective: {objective}",
+            f"- Stage Count: {stage_count}",
+            f"- Complexity: {complexity:.2f}",
+        ]
+        if chain:
+            lines.append(f"- Workflow Chain: {' -> '.join(str(x) for x in chain)}")
+
+        lines.append("- Planned Tasks:")
+        for idx, task in enumerate(tasks[:8], start=1):
+            dep = f" (depends: {','.join(task.dependencies)})" if task.dependencies else ""
+            lines.append(f"  {idx}. {task.action}{dep}")
+        if len(tasks) > 8:
+            lines.append(f"  ... +{len(tasks) - 8} adım")
+        return "\n".join(lines)
 
     async def _execute_tasks(
         self,

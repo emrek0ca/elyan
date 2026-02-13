@@ -33,6 +33,8 @@ DEFAULT_SETTINGS = {
     "planner_max_steps": 10,
     "auto_replan_enabled": True,
     "auto_replan_max_attempts": 1,
+    "require_plan_confirmation": True,
+    "publish_ready_threshold": 78.0,
     "cost_guard": True,
     "pricing_rates_per_1k": {},
     "monthly_budget_usd": 20.0,
@@ -51,6 +53,7 @@ DEFAULT_SETTINGS = {
     "context_memory": 10,
     # v23.0 New Keys
     "autonomy_level": "Balanced",
+    "operator_mode_level": "Confirmed",
     "allowed_tools": ["all"],
     "vision_frequency": 30,
     "vision_quality": "balanced",
@@ -182,6 +185,13 @@ class SettingsPanel:
                     self._settings["auto_replan_max_attempts"] = max(0, min(3, attempts))
                 except Exception:
                     self._settings["auto_replan_max_attempts"] = 1
+                if not isinstance(self._settings.get("require_plan_confirmation"), bool):
+                    self._settings["require_plan_confirmation"] = True
+                try:
+                    threshold = float(self._settings.get("publish_ready_threshold", 78.0))
+                    self._settings["publish_ready_threshold"] = max(50.0, min(95.0, threshold))
+                except Exception:
+                    self._settings["publish_ready_threshold"] = 78.0
                 if not isinstance(self._settings.get("cost_guard"), bool):
                     self._settings["cost_guard"] = True
                 if not isinstance(self._settings.get("pricing_rates_per_1k"), dict):
@@ -205,6 +215,8 @@ class SettingsPanel:
                     self._settings["privacy_redact_logs"] = True
                 if self._settings.get("assistant_expertise") not in {"basic", "advanced", "expert"}:
                     self._settings["assistant_expertise"] = "advanced"
+                if self._settings.get("operator_mode_level") not in {"Advisory", "Assisted", "Confirmed", "Trusted", "Operator"}:
+                    self._settings["operator_mode_level"] = "Confirmed"
                 if not isinstance(self._settings.get("full_disk_access"), bool):
                     self._settings["full_disk_access"] = True
                 if not str(self._settings.get("photo_save_dir", "")).strip():

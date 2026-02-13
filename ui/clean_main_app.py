@@ -7,12 +7,15 @@ import sys
 import os
 import asyncio
 import json
+import concurrent.futures
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
 import psutil
 from core.monitoring import get_monitoring
 from core.capability_metrics import get_capability_metrics
 from core.pricing_tracker import get_pricing_tracker
+from core.artifact_quality_engine import get_artifact_quality_engine
+from core.pipeline_state import get_pipeline_state
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -220,23 +223,35 @@ class BotWorker(QThread):
             logger.error(f"Telegram bot başlatma hatası: {e}")
 
     async def process_message(self, message: str) -> str:
-        """Process a message through the agent"""
+        """Process a message through the worker's event loop safely."""
         if self._agent is None:
             return "Bot henüz başlatılmadı. Lütfen bekleyin."
 
+        if not self._loop or not self._loop.is_running():
+            return "Arka plan döngüsü hazır değil. Lütfen tekrar deneyin."
+
+        self.activity_logged.emit(f"Kullanıcı mesajı işleniyor: {message[:30]}...", "şimdi")
+
+        async def _runner() -> str:
+            return await self._agent.process(message)
+
         try:
-            self.activity_logged.emit(f"Kullanıcı mesajı işleniyor: {message[:30]}...", "şimdi")
-            response = await self._agent.process(message)
+            # Always execute agent processing on BotWorker loop.
+            cfut = asyncio.run_coroutine_threadsafe(_runner(), self._loop)
+            wrapped = asyncio.wrap_future(cfut)
+            response = await wrapped
             self.activity_logged.emit("İşlem başarıyla tamamlandı", "şimdi")
             return response
+        except concurrent.futures.CancelledError:
+            return "İşlem iptal edildi."
         except Exception as e:
             logger.error(f"Message processing error: {e}")
             return f"Hata oluştu: {str(e)}"
 
     def trigger_research(self, topic: str, depth: str, fmt: str):
         """Trigger background research"""
-        if self._loop:
-            self._loop.create_task(self._run_research(topic, depth, fmt))
+        if self._loop and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(self._run_research(topic, depth, fmt), self._loop)
 
     async def _run_research(self, topic: str, depth: str, fmt: str):
         """Run deep research in background"""
@@ -449,6 +464,7 @@ class CleanSidebar(QFrame):
 
 class CleanDashboard(QWidget):
     """Modern Dashboard with Activity Feed and Stats"""
+    quick_mode_requested = pyqtSignal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -487,12 +503,16 @@ class CleanDashboard(QWidget):
         self._ops_card = StatCard("", "0", "Toplam İşlem", "#7196A2")
         self._domain_card = StatCard("", "general", "Odak Domain", "#7196A2")
         self._cost_card = StatCard("", "$0.00", "Tahmini Maliyet", "#7196A2")
+        self._quality_card = StatCard("", "0", "Kalite Skoru", "#7196A2")
+        self._pipeline_card = StatCard("", "A:0 H:0", "Pipeline", "#7196A2")
         
         ai_stats_layout.addWidget(self._latency_card)
         ai_stats_layout.addWidget(self._success_card)
         ai_stats_layout.addWidget(self._ops_card)
         ai_stats_layout.addWidget(self._domain_card)
         ai_stats_layout.addWidget(self._cost_card)
+        ai_stats_layout.addWidget(self._quality_card)
+        ai_stats_layout.addWidget(self._pipeline_card)
         layout.addLayout(ai_stats_layout)
 
         # Performance Graph (v8.0)
@@ -509,15 +529,42 @@ class CleanDashboard(QWidget):
         suggestions_layout.setContentsMargins(15, 15, 15, 15)
         suggestions_layout.setSpacing(10)
         
-        self._suggestion_btn1 = AnimatedButton("Doküman Özetle", primary=False)
-        self._suggestion_btn2 = AnimatedButton("Güvenlik Taraması", primary=False)
-        self._suggestion_btn3 = AnimatedButton("Verimlilik Analizi", primary=False)
-        
+        self._suggestion_btn1 = AnimatedButton("Build", primary=False)
+        self._suggestion_btn2 = AnimatedButton("Research", primary=False)
+        self._suggestion_btn3 = AnimatedButton("Document", primary=False)
+        self._suggestion_btn4 = AnimatedButton("Ship", primary=False)
+
         suggestions_layout.addWidget(self._suggestion_btn1)
         suggestions_layout.addWidget(self._suggestion_btn2)
         suggestions_layout.addWidget(self._suggestion_btn3)
+        suggestions_layout.addWidget(self._suggestion_btn4)
         suggestions_layout.addStretch()
         layout.addWidget(self._suggestions_frame)
+
+        self._suggestion_btn1.clicked.connect(
+            lambda: self.quick_mode_requested.emit(
+                "build",
+                "Build modu: profesyonel bir proje planla, kodu üret, test et ve teslim paketini hazırla.",
+            )
+        )
+        self._suggestion_btn2.clicked.connect(
+            lambda: self.quick_mode_requested.emit(
+                "research",
+                "Research modu: çok kaynaklı derin araştırma yap, riskleri çıkar ve karar özeti oluştur.",
+            )
+        )
+        self._suggestion_btn3.clicked.connect(
+            lambda: self.quick_mode_requested.emit(
+                "document",
+                "Document modu: yönetici özeti, ana rapor ve aksiyon maddeleri içeren profesyonel doküman paketi üret.",
+            )
+        )
+        self._suggestion_btn4.clicked.connect(
+            lambda: self.quick_mode_requested.emit(
+                "ship",
+                "Ship modu: mevcut çalışmayı doğrula, kalite raporu çıkar ve publish-ready teslim çıktısı üret.",
+            )
+        )
 
         # Activity Feed Section
         layout.addWidget(SectionHeader("Son Aktiviteler"))
@@ -584,6 +631,16 @@ class CleanDashboard(QWidget):
             pricing = get_pricing_tracker().summary()
             lifetime_cost = float(pricing.get("lifetime", {}).get("estimated_cost_usd", 0.0))
             self._cost_card.set_value(f"${lifetime_cost:.2f}")
+
+            quality = get_artifact_quality_engine().summary(window_hours=24)
+            avg_quality = float(quality.get("avg_quality_score", 0.0))
+            publish_rate = float(quality.get("publish_ready_rate", 0.0))
+            self._quality_card.set_value(f"{avg_quality:.0f}/{publish_rate:.0f}%")
+
+            pipeline = get_pipeline_state().history_summary(window_hours=24)
+            active_count = int(pipeline.get("active_count", 0))
+            recent_total = int(pipeline.get("recent_total", 0))
+            self._pipeline_card.set_value(f"A:{active_count} R:{recent_total}")
             
             # Update Latency Graph (v8.0)
             self._latency_graph.add_value(avg_latency)
@@ -1012,123 +1069,28 @@ class CleanResearchPanel(QWidget):
 
 
 class CleanSettingsPanel(QWidget):
-    """Clean settings panel with real logic integration"""
+    """Settings panel wrapper that uses full professional Settings UI."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        from ui.settings_panel import SettingsPanel
-        self._settings = SettingsPanel()
+        from config.settings_manager import SettingsPanel as SettingsManager
+        from ui.settings_panel_ui import SettingsPanelUI
+        self._settings_manager = SettingsManager()
+        self._full_settings_ui = SettingsPanelUI(config=self._settings_manager._settings)
+        self._full_settings_ui.settings_changed.connect(self._on_settings_changed)
         self._setup_ui()
 
     def _setup_ui(self):
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; background-color: transparent; }")
-
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(32, 32, 32, 32)
-        layout.setSpacing(24)
-
-        # Header
-        header = QLabel("Tercihler")
-        header.setFont(QFont(".AppleSystemUIFont", 32, QFont.Weight.Bold))
-        header.setStyleSheet("color: #252F33; border: none; letter-spacing: -0.5px;")
-        layout.addWidget(header)
-
-        # General Section
-        general_section = GlassFrame()
-        general_layout = QVBoxLayout(general_section)
-        general_layout.setContentsMargins(24, 24, 24, 24)
-        general_layout.setSpacing(16)
-
-        general_layout.addWidget(SectionHeader("Genel Yapılandırma"))
-
-        # Theme
-        theme_combo = self._create_combo(["Sistem", "Koyu", "Açık"])
-        theme_combo.setCurrentText(self._settings.get("ui_theme", "Sistem"))
-        theme_combo.currentTextChanged.connect(lambda v: self._settings.set("ui_theme", v))
-        general_layout.addWidget(self._create_setting_row("Tema", "Uygulama görünümü", theme_combo))
-
-        general_layout.addWidget(Divider())
-
-        # Notifications
-        notif_switch = Switch(self._settings.get("notifications_enabled", True))
-        notif_switch.toggled.connect(lambda v: self._settings.set("notifications_enabled", v))
-        general_layout.addWidget(self._create_setting_row("Bildirimler", "Masaüstü bildirimlerini etkinleştir", notif_switch))
-
-        layout.addWidget(general_section)
-
-        # Privacy Section
-        privacy_section = GlassFrame()
-        privacy_layout = QVBoxLayout(privacy_section)
-        privacy_layout.setContentsMargins(24, 24, 24, 24)
-        privacy_layout.setSpacing(16)
-
-        privacy_layout.addWidget(SectionHeader("Güvenlik ve Gizlilik"))
-
-        # Public Access
-        public_switch = Switch(self._settings.get("public_access", False))
-        public_switch.toggled.connect(lambda v: self._settings.set("public_access", v))
-        privacy_layout.addWidget(self._create_setting_row("Genel Erişim", "Herkesin botu kullanmasına izin ver", public_switch))
-
-        layout.addWidget(privacy_section)
-
-        # Advanced Section
-        adv_section = GlassFrame()
-        adv_layout = QVBoxLayout(adv_section)
-        adv_layout.setContentsMargins(24, 24, 24, 24)
-        adv_layout.setSpacing(16)
-        
-        adv_layout.addWidget(SectionHeader("Gelişmiş"))
-        
-        # Cache
-        cache_switch = Switch(self._settings.get("cache_enabled", True))
-        cache_switch.toggled.connect(lambda v: self._settings.set("cache_enabled", v))
-        adv_layout.addWidget(self._create_setting_row("Önbellek", "Daha hızlı yanıt için önbelleği aktif et", cache_switch))
-
-        layout.addWidget(adv_section)
-        layout.addStretch()
-
-        scroll.setWidget(content)
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.addWidget(scroll)
+        main_layout.addWidget(self._full_settings_ui)
 
-    def _create_setting_row(self, title: str, desc: str, control: QWidget) -> QWidget:
-        row = QWidget()
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 4, 0, 4)
-
-        text_layout = QVBoxLayout()
-        t_label = QLabel(title)
-        t_label.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Medium))
-        t_label.setStyleSheet("color: #0F172A; border: none;")
-        text_layout.addWidget(t_label)
-
-        d_label = QLabel(desc)
-        d_label.setFont(QFont(".AppleSystemUIFont", 11))
-        d_label.setStyleSheet("color: #64748b; border: none;")
-        text_layout.addWidget(d_label)
-
-        layout.addLayout(text_layout, 1)
-        layout.addWidget(control)
-        return row
-
-    def _create_combo(self, items: list) -> QComboBox:
-        combo = QComboBox()
-        combo.addItems(items)
-        combo.setStyleSheet("""
-            QComboBox {
-                background-color: #F8FAFC;
-                border: 1px solid #E2E8F0;
-                border-radius: 8px;
-                padding: 6px 12px;
-                color: #0F172A;
-                min-width: 120px;
-            }
-        """)
-        return combo
+    def _on_settings_changed(self, settings: dict):
+        try:
+            if isinstance(settings, dict) and settings:
+                self._settings_manager.update(settings)
+        except Exception as exc:
+            logger.error(f"Settings update failed: {exc}")
 
 
 class CleanAdvancedPanel(QWidget):
@@ -1295,6 +1257,7 @@ class CleanMainWindow(QMainWindow):
         from ui.clean_chat_widget import CleanChatWidget
 
         self._dashboard = CleanDashboard()
+        self._dashboard.quick_mode_requested.connect(self._on_quick_mode_requested)
         self._content_stack.addWidget(self._dashboard)
 
         self._chat_widget = CleanChatWidget(process_callback=self._process_message)
@@ -1396,6 +1359,15 @@ class CleanMainWindow(QMainWindow):
         self._content_stack.setCurrentIndex(index)
         self._content_stack.currentWidget().update()
         self.setFocus()
+
+    def _on_quick_mode_requested(self, mode: str, prompt: str):
+        """Route one-click operator modes to chat workflow."""
+        self._dashboard._add_activity(f"One-click mode: {mode.upper()}", "şimdi")
+        # Chat page index is 1
+        self._sidebar._on_nav_click(1)
+        self._content_stack.setCurrentIndex(1)
+        if hasattr(self, "_chat_widget"):
+            self._chat_widget.set_draft(prompt, auto_send=True)
 
     def _on_status_changed(self, message: str, online: bool):
         self._sidebar.set_status(online, message)

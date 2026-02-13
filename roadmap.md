@@ -85,6 +85,33 @@ Wiqo is not a simple command bot. It must operate as a professional AI assistant
 - [x] Add dashboard panels for quality/cost/performance (initial cards).
 - [x] Add regression tests for capability routing and pipeline behavior.
 
+## Sprint D
+- [x] Add artifact quality engine with publish-ready threshold enforcement.
+- [x] Attach quality report to pipeline completion and UI dashboard cards.
+- [x] Add Continuous Learning v2 skill memory (preferred tools/output/quality focus).
+- [x] Add local self-review recommendations for optimization opportunities.
+- [x] Add one-click Operator UX modes (Build / Research / Document / Ship).
+
+## Sprint E
+- [x] Add multimodal tools foundation (speech-to-text, text-to-speech, visual asset pack).
+- [x] Add vision+voice fused workflow (`analyze_and_narrate_image`).
+- [x] Add multimodal capability health report for operator diagnostics.
+- [x] Extend TaskEngine decomposition catalog and heuristic mapping for multimodal intents.
+- [x] Add regression checks for multimodal workflow behavior.
+- [x] Add live microphone capture and push-to-talk UI integration.
+
+## Sprint F
+- [x] Add goal-graph understanding for complex multi-stage instructions.
+- [x] Add deterministic multi-domain workflow fallback (research -> code -> document chains).
+- [x] Add operator policy engine (Advisory/Assisted/Confirmed/Trusted/Operator).
+- [x] Expose operator mode level in settings UI with live policy explanation.
+- [x] Add advanced software project pack generator (web/app/game scaffolds + test/run/deploy docs).
+- [x] Add clarification gate for ambiguous commands to improve intent accuracy.
+- [x] Add execution plan explainability preview in TaskEngine notifications/results.
+- [x] Add complex-plan confirmation gate before execution (toggleable in settings).
+- [x] Add goal-graph constraint extraction (format/urgency/deliverable intent) to improve intent fidelity.
+- [x] Add regression coverage for goal graph + operator policy + software packs.
+
 ## Success Metrics
 - Task completion rate by capability domain.
 - First-pass success ratio (no rework needed).
@@ -395,3 +422,112 @@ Wiqo = bilgisayarda çalışan teslimat odaklı dijital çalışan
 
 Başarı ölçütü: cevap kalitesi değil
 insanın yapmadığı iş miktarıdır
+
+
+
+
+
+
+
+Aşağıdaki özet, diğer oturumda kaldığımız yerden devam etmek için hazırlanmıştır. Bu oturumda Wiqo’yu “chat bot”tan “delivery odaklı dijital operatör”e yaklaştıracak çekirdek geliştirmeleri
+  yaptık.
+
+  1) Ürün Yönü ve Hedef
+
+  - Wiqo’nun davranışı “cevap üretme” yerine “iş teslim etme” modeline çekildi:
+      - Goal -> Contract -> Plan -> Execute -> Verify -> Deliver -> Learn
+  - Roadmap’e uygun şekilde capability bazlı ve profesyonel pipeline bazlı çalışma mantığı güçlendirildi.
+
+  2) Core Mimari Geliştirmeleri
+
+  - core/goal_graph.py
+      - Çok adımlı/çok domain görevleri (research -> code -> document -> package) graf mantığıyla planlama temeli.
+  - core/operator_policy.py
+      - Otonomi seviyeleri eklendi: Advisory, Assisted, Confirmed, Trusted, Operator.
+  - core/task_engine.py
+      - Routing sinyalleri + domain quality checklist entegrasyonu.
+      - Kompleks görevlerde deterministic workflow fallback.
+      - Plan önizleme (explainability) ve plan onay kapısı.
+      - Riskli aksiyonlar için explicit approval akışı.
+      - Multimodal ve software-pack aksiyon haritaları genişletildi.
+      - Resume/uzun görev state yaklaşımı güçlendirildi.
+  - core/capability_router.py
+      - Website/app/game/prototype gibi domain anahtar kelimeleri genişletildi.
+
+  3) Yeni Araçlar / Workflows
+
+  - tools/multimodal_tools.py
+      - Görsel/ses/çoklu modalite altyapı kancaları.
+  - tools/pro_workflows.py
+      - create_software_project_pack benzeri profesyonel çıktı üreten workflow’lar.
+  - tools/__init__.py
+      - Yeni tool kayıtları eklendi.
+
+  4) UI / Operatör Deneyimi
+
+  - ui/settings_panel_ui.py
+      - Operator Mode ayarları ve politika metinleri.
+      - Plan onayı toggle’ı.
+  - ui/clean_main_app.py
+      - Settings sayfası gerçek paneli yükleyecek şekilde düzeltildi.
+      - Kritik async loop bug fix (different loop hatası için):
+          - run_coroutine_threadsafe + wrap_future ile worker loop’ta güvenli çalışma.
+  - ui/clean_chat_widget.py
+      - Push-to-talk, STT, son cevabı seslendirme kontrolleri.
+
+  5) Intent/Komut Anlama Düzeltmeleri (senin verdiğin örnek için kritik)
+
+  - core/intent_parser.py
+      - “portfolyo sitesi oluştur html css js ...” gibi website builder niyetleri daha sağlam algılanıyor.
+      - Arama tetikleyicisi daha sıkılaştırıldı (\bara\b) böylece yanlışlıkla “kedi resmi açma” gibi geçmiş davranışlara sapmıyor.
+      - Website-build niyeti varsa browser-search dalını bypass ediyor.
+
+  6) Telegram + Onay Sistemi Düzeltmeleri (son kritik fix)
+  Sorun: Telegram’da “Onayla” denince işlem bazen devam etmiyordu.
+
+  Yapılanlar:
+
+  - handlers/telegram_handler.py
+      - Pending onaylar loop-safe çözümleniyor (call_soon_threadsafe).
+      - Aynı kullanıcı için eski bekleyen onay varsa temizleniyor (stale request engeli).
+      - Onay gönderildi/tıklandı/çözüldü logları eklendi.
+      - /cancel de loop-safe şekilde pending onayı kapatıyor.
+  - security/approval.py
+      - Approval request_id üretimi güçlendirildi:
+          - saniye bazlı çakışma riski yerine ms + uuid kullanılıyor.
+  - Sonuç:
+      - “Onayladım ama yapmıyor” akışındaki ana race/çakışma kaynakları kapatıldı.
+
+  7) Test / Regresyon
+
+  - scripts/regression_capability_pipeline.py kapsamı genişletildi:
+      - Routing, pipeline, plan confirm, policy, multimodal, workflow davranışlarını kapsayacak şekilde.
+  - Son regresyon koşuları başarılı raporlandı.
+  - Son yaptığım Telegram/onay patch’lerinde sözdizimi doğrulaması geçti:
+      - python3 -m py_compile handlers/telegram_handler.py security/approval.py
+
+  8) Çalıştırma ve Hızlı Kontrol Komutları
+  Temiz başlatma:
+
+  cd /Users/emrekoca/Desktop/bot
+  source .venv/bin/activate
+  pkill -f "python.*main.py|python.*wiqo.py" 2>/dev/null || true
+  python main.py
+
+  Onay akışını canlı izleme:
+
+  tail -f logs/*.log | rg "Approval request sent|Approval button clicked|Approval resolved|approval"
+
+  9) Daha Önce Yaşanan Ortam Sorunları ve Durum
+
+  - python-dotenv, telegram, sentence-transformers eksikliği görüldü.
+  - Homebrew Python’da PEP668 nedeniyle global pip bloklandı; .venv kullanımı doğru yol.
+  - PyQt cocoa plugin sorunu bir noktada görüldü (venv/PyQt kurulum uyumsuzluğu kaynaklı). Bu, proje kodundan çok runtime ortamı tarafı.
+
+  10) Kalan Açık Noktalar (Next)
+
+  - Telegram onay akışını gerçek senaryo ile bir kez daha uçtan uca test etmek.
+  - Ayarlar ekranı görsel güncellemelerinin tamamını kullanıcı beklentisine göre polish etmek.
+  - Capability regression testlerini CI’ya bağlamak.
+  - Multimodal (vision/audio/speech) üretim kalite kapılarını daha sıkılaştırmak.
+

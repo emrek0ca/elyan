@@ -261,16 +261,37 @@ def _lazy_load_tool(tool_name: str):
         return _loaded_tools.get(tool_name)
 
     # Professional Workflows
-    if tool_name in ["create_web_project_scaffold", "generate_document_pack", "create_image_workflow_profile"]:
+    if tool_name in ["create_web_project_scaffold", "generate_document_pack", "create_image_workflow_profile", "create_software_project_pack"]:
         from .pro_workflows import (
             create_web_project_scaffold,
             generate_document_pack,
             create_image_workflow_profile,
+            create_software_project_pack,
         )
         tools = {
             "create_web_project_scaffold": create_web_project_scaffold,
             "generate_document_pack": generate_document_pack,
             "create_image_workflow_profile": create_image_workflow_profile,
+            "create_software_project_pack": create_software_project_pack,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Multimodal Tools
+    if tool_name in ["transcribe_audio_file", "speak_text_local", "create_visual_asset_pack", "analyze_and_narrate_image", "get_multimodal_capability_report"]:
+        from .multimodal_tools import (
+            transcribe_audio_file,
+            speak_text_local,
+            create_visual_asset_pack,
+            analyze_and_narrate_image,
+            get_multimodal_capability_report,
+        )
+        tools = {
+            "transcribe_audio_file": transcribe_audio_file,
+            "speak_text_local": speak_text_local,
+            "create_visual_asset_pack": create_visual_asset_pack,
+            "analyze_and_narrate_image": analyze_and_narrate_image,
+            "get_multimodal_capability_report": get_multimodal_capability_report,
         }
         _loaded_tools.update(tools)
         return _loaded_tools.get(tool_name)
@@ -328,7 +349,10 @@ class LazyToolDict(dict):
             # AI Tools
             "ollama_list_models", "ollama_remove_model",
             # Professional Workflows
-            "create_web_project_scaffold", "generate_document_pack", "create_image_workflow_profile",
+            "create_web_project_scaffold", "generate_document_pack", "create_image_workflow_profile", "create_software_project_pack",
+            # Multimodal Tools
+            "transcribe_audio_file", "speak_text_local", "create_visual_asset_pack", "analyze_and_narrate_image",
+            "get_multimodal_capability_report",
         }
 
     def __getitem__(self, key):

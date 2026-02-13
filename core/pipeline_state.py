@@ -88,7 +88,13 @@ class PipelineStateManager:
         p["updated_at"] = time.time()
         self._save()
 
-    def complete(self, pipeline_id: str, success: bool, summary: str = ""):
+    def complete(
+        self,
+        pipeline_id: str,
+        success: bool,
+        summary: str = "",
+        quality_report: dict[str, Any] | None = None,
+    ):
         active = self._state.get("active", {})
         p = active.pop(pipeline_id, None)
         if not p:
@@ -96,6 +102,8 @@ class PipelineStateManager:
         p["status"] = "completed" if success else "failed"
         p["completed_at"] = time.time()
         p["summary"] = str(summary or "")
+        if isinstance(quality_report, dict):
+            p["quality_report"] = quality_report
         history = self._state.setdefault("history", [])
         history.append(p)
         self._state["history"] = history[-100:]
@@ -116,6 +124,39 @@ class PipelineStateManager:
                 }
             )
         return candidates
+
+    def history_summary(self, window_hours: int = 24) -> dict[str, Any]:
+        now = time.time()
+        cutoff = now - (max(1, int(window_hours)) * 3600)
+        active_count = len(self._state.get("active", {}))
+        history = self._state.get("history", [])
+
+        recent = [h for h in history if float(h.get("completed_at") or 0.0) >= cutoff]
+        total = len(recent)
+        succeeded = sum(1 for h in recent if h.get("status") == "completed")
+        failed = sum(1 for h in recent if h.get("status") == "failed")
+
+        avg_quality = 0.0
+        quality_rows = []
+        for h in recent:
+            q = h.get("quality_report")
+            if isinstance(q, dict):
+                try:
+                    quality_rows.append(float(q.get("overall_score", 0.0)))
+                except Exception:
+                    continue
+        if quality_rows:
+            avg_quality = round(sum(quality_rows) / len(quality_rows), 1)
+
+        return {
+            "window_hours": window_hours,
+            "active_count": active_count,
+            "history_count": len(history),
+            "recent_total": total,
+            "recent_success_rate": round((succeeded / total) * 100.0, 1) if total else 0.0,
+            "recent_failed": failed,
+            "recent_avg_quality": avg_quality,
+        }
 
 
 _pipeline_state: PipelineStateManager | None = None

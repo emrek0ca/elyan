@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional, Callable, List
 from datetime import datetime
 from enum import Enum
 from dataclasses import dataclass
+from uuid import uuid4
 from utils.logger import get_logger
 
 logger = get_logger("safety.approval")
@@ -97,7 +98,7 @@ class ApprovalManager:
             }
         
         # Create approval request
-        request_id = f"req_{user_id}_{int(datetime.now().timestamp())}"
+        request_id = f"req_{user_id}_{int(datetime.now().timestamp() * 1000)}_{uuid4().hex[:8]}"
         request = ApprovalRequest(
             id=request_id,
             operation=operation,

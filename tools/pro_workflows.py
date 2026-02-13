@@ -583,3 +583,199 @@ async def create_image_workflow_profile(
     except Exception as exc:
         logger.error(f"create_image_workflow_profile error: {exc}")
         return {"success": False, "error": str(exc)}
+
+
+async def create_software_project_pack(
+    project_name: str,
+    project_type: str = "webapp",
+    stack: str = "python",
+    complexity: str = "advanced",
+    output_dir: str = "~/Desktop",
+) -> dict[str, Any]:
+    """
+    Create a complex project pack for web/app/game style requests.
+    Produces code scaffold + test skeleton + run/deploy docs + quality checklist.
+    """
+    try:
+        valid, msg, base_dir = validate_path(output_dir)
+        if not valid or base_dir is None:
+            return {"success": False, "error": msg}
+
+        safe_name = _safe_project_slug(project_name)
+        ptype = str(project_type or "webapp").strip().lower()
+        if ptype not in {"webapp", "app", "game"}:
+            ptype = "webapp"
+        chosen_stack = str(stack or "python").strip().lower()
+        level = str(complexity or "advanced").strip().lower()
+        if level not in {"standard", "advanced", "expert"}:
+            level = "advanced"
+
+        pack_dir = (base_dir / f"{safe_name}_project_pack").resolve()
+        src_dir = pack_dir / "src"
+        tests_dir = pack_dir / "tests"
+        docs_dir = pack_dir / "docs"
+        for d in (pack_dir, src_dir, tests_dir, docs_dir):
+            d.mkdir(parents=True, exist_ok=True)
+
+        if ptype == "game":
+            entry = src_dir / "main.py"
+            entry_content = """import pygame
+
+def main():
+    pygame.init()
+    screen = pygame.display.set_mode((900, 520))
+    pygame.display.set_caption("Wiqo Game Prototype")
+    clock = pygame.time.Clock()
+    running = True
+    x = 100
+
+    while running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_RIGHT]:
+            x += 4
+        if keys[pygame.K_LEFT]:
+            x -= 4
+
+        screen.fill((16, 24, 40))
+        pygame.draw.rect(screen, (120, 180, 255), (x, 280, 70, 70))
+        pygame.display.flip()
+        clock.tick(60)
+
+    pygame.quit()
+
+if __name__ == "__main__":
+    main()
+"""
+            deps = ["pygame>=2.6.0"]
+        elif ptype == "app":
+            entry = src_dir / "main.py"
+            entry_content = """def run():
+    print("Wiqo App Pack: application core started.")
+
+if __name__ == "__main__":
+    run()
+"""
+            deps = ["fastapi>=0.111.0", "uvicorn>=0.30.0"]
+        else:
+            entry = src_dir / "main.py"
+            entry_content = """def run():
+    print("Wiqo WebApp Pack: project scaffold ready.")
+
+if __name__ == "__main__":
+    run()
+"""
+            deps = ["fastapi>=0.111.0", "uvicorn>=0.30.0"]
+
+        entry.write_text(entry_content, encoding="utf-8")
+
+        test_file = tests_dir / "test_smoke.py"
+        test_file.write_text(
+            "\n".join(
+                [
+                    "def test_smoke_import():",
+                    "    import importlib.util",
+                    "    spec = importlib.util.spec_from_file_location('main', 'src/main.py')",
+                    "    assert spec is not None",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        (pack_dir / "requirements.txt").write_text("\n".join(deps) + "\n", encoding="utf-8")
+
+        (docs_dir / "RUN_GUIDE.md").write_text(
+            "\n".join(
+                [
+                    f"# Run Guide - {project_name}",
+                    "",
+                    f"Project Type: {ptype}",
+                    f"Stack: {chosen_stack}",
+                    f"Complexity: {level}",
+                    "",
+                    "## Setup",
+                    "1. python3 -m venv .venv",
+                    "2. source .venv/bin/activate",
+                    "3. pip install -r requirements.txt",
+                    "",
+                    "## Run",
+                    "python src/main.py",
+                    "",
+                    "## Test",
+                    "pytest -q",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        (docs_dir / "DEPLOY_GUIDE.md").write_text(
+            "\n".join(
+                [
+                    f"# Deploy Guide - {project_name}",
+                    "",
+                    "## Steps",
+                    "1. Build artifact / container image",
+                    "2. Set runtime env vars",
+                    "3. Configure health checks",
+                    "4. Roll out gradually and monitor logs",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        (docs_dir / "QUALITY_REPORT.md").write_text(
+            "\n".join(
+                [
+                    f"# Quality Report Seed - {project_name}",
+                    "",
+                    "Checklist:",
+                    "- [ ] Correctness",
+                    "- [ ] Test coverage",
+                    "- [ ] Reproducible run",
+                    "- [ ] Clear deployment path",
+                    "- [ ] Security review for risky operations",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        (pack_dir / "README.md").write_text(
+            "\n".join(
+                [
+                    f"# {project_name} - Project Pack",
+                    "",
+                    f"Type: {ptype}",
+                    f"Stack: {chosen_stack}",
+                    f"Complexity: {level}",
+                    "",
+                    "This pack is generated for complex multi-step delivery by Wiqo.",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        files = [
+            str(entry),
+            str(test_file),
+            str(pack_dir / "requirements.txt"),
+            str(docs_dir / "RUN_GUIDE.md"),
+            str(docs_dir / "DEPLOY_GUIDE.md"),
+            str(docs_dir / "QUALITY_REPORT.md"),
+            str(pack_dir / "README.md"),
+        ]
+        return {
+            "success": True,
+            "project_name": project_name,
+            "project_type": ptype,
+            "stack": chosen_stack,
+            "complexity": level,
+            "pack_dir": str(pack_dir),
+            "files_created": files,
+            "message": f"Software project pack oluşturuldu: {pack_dir}",
+        }
+    except Exception as exc:
+        logger.error(f"create_software_project_pack error: {exc}")
+        return {"success": False, "error": str(exc)}

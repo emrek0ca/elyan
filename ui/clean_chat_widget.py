@@ -6,6 +6,10 @@ Minimal, clean and modern design
 import asyncio
 import inspect
 import json
+import os
+import signal
+import subprocess
+import tempfile
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Callable
 from pathlib import Path
@@ -249,6 +253,37 @@ class CleanProcessingWorker(QThread):
                 loop.close()
 
 
+class VoiceTranscriptionWorker(QThread):
+    """Background worker for local speech-to-text transcription."""
+    finished = pyqtSignal(dict)
+    error = pyqtSignal(str)
+
+    def __init__(self, audio_file: str, language: str = "tr"):
+        super().__init__()
+        self.audio_file = audio_file
+        self.language = language
+
+    def run(self):
+        loop = None
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            from tools.multimodal_tools import transcribe_audio_file
+            result = loop.run_until_complete(
+                transcribe_audio_file(self.audio_file, language=self.language)
+            )
+            if isinstance(result, dict):
+                self.finished.emit(result)
+            else:
+                self.error.emit("Geçersiz ses dönüştürme sonucu.")
+        except Exception as e:
+            logger.error(f"Voice transcription worker error: {e}")
+            self.error.emit(str(e))
+        finally:
+            if loop is not None:
+                loop.close()
+
+
 class CleanChatWidget(QWidget):
     """Clean, professional chat interface"""
 
@@ -260,6 +295,12 @@ class CleanChatWidget(QWidget):
         self.process_callback = process_callback
         self._messages: List[Dict[str, Any]] = []
         self._worker = None
+        self._voice_worker = None
+        self._speak_worker = None
+        self._recording_process: Optional[subprocess.Popen] = None
+        self._recording_file: Optional[str] = None
+        self._is_recording = False
+        self._last_assistant_message = ""
 
         self._setup_ui()
 
@@ -449,6 +490,27 @@ class CleanChatWidget(QWidget):
         attach_btn.clicked.connect(self._attach_file)
         layout.addWidget(attach_btn)
 
+        # Push-to-talk button (press & hold)
+        self._voice_btn = QPushButton("🎙")
+        self._voice_btn.setFixedSize(40, 40)
+        self._voice_btn.setFont(QFont(".AppleSystemUIFont", 16))
+        self._voice_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._voice_btn.setToolTip("Basılı tut: kaydet, bırak: otomatik yazıya çevir")
+        self._voice_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #F2F2F7;
+                color: #0f172a;
+                border: none;
+                border-radius: 20px;
+            }
+            QPushButton:hover {
+                background-color: #E5E5EA;
+            }
+        """)
+        self._voice_btn.pressed.connect(self._start_voice_recording)
+        self._voice_btn.released.connect(self._stop_voice_recording)
+        layout.addWidget(self._voice_btn)
+
         # Text input
         self._input_field = QLineEdit()
         self._input_field.setPlaceholderText("Mesajınızı yazın...")
@@ -497,6 +559,26 @@ class CleanChatWidget(QWidget):
         """)
         self._send_btn.clicked.connect(self._send_message)
         layout.addWidget(self._send_btn)
+
+        # Speak latest response
+        self._speak_btn = QPushButton("🔊")
+        self._speak_btn.setFixedSize(40, 40)
+        self._speak_btn.setFont(QFont(".AppleSystemUIFont", 14))
+        self._speak_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._speak_btn.setToolTip("Son WIQO yanıtını seslendir")
+        self._speak_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #F2F2F7;
+                color: #0f172a;
+                border: none;
+                border-radius: 20px;
+            }
+            QPushButton:hover {
+                background-color: #E5E5EA;
+            }
+        """)
+        self._speak_btn.clicked.connect(self._speak_latest_response)
+        layout.addWidget(self._speak_btn)
 
         return input_frame
 
@@ -570,6 +652,7 @@ class CleanChatWidget(QWidget):
             "content": text,
             "timestamp": datetime.now().isoformat()
         })
+        self._last_assistant_message = text
 
         self._scroll_to_bottom()
 
@@ -640,3 +723,170 @@ class CleanChatWidget(QWidget):
             self._add_user_message(text)
         else:
             self._add_bot_message(text)
+
+    def set_draft(self, text: str, auto_send: bool = False):
+        """Programmatically set chat input draft and optionally send."""
+        self._input_field.setText(str(text or ""))
+        self._input_field.setFocus()
+        if auto_send and self._input_field.text().strip():
+            self._send_message()
+
+    def _build_ffmpeg_record_cmd(self, out_file: str) -> list[str]:
+        # macOS avfoundation input, first audio device.
+        return [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "avfoundation",
+            "-i",
+            ":0",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "pcm_s16le",
+            out_file,
+        ]
+
+    def _start_voice_recording(self):
+        """Start press-to-talk recording using ffmpeg."""
+        if self._is_recording:
+            return
+        try:
+            fd, path = tempfile.mkstemp(prefix="wiqo_ptt_", suffix=".wav")
+            os.close(fd)
+            cmd = self._build_ffmpeg_record_cmd(path)
+            self._recording_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                preexec_fn=os.setsid if hasattr(os, "setsid") else None,
+            )
+            self._recording_file = path
+            self._is_recording = True
+            self.set_status(True, "Dinleniyor...")
+            self._voice_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #ef4444;
+                    color: #ffffff;
+                    border: none;
+                    border-radius: 20px;
+                }
+            """)
+        except FileNotFoundError:
+            self._add_bot_message("Ses kaydı için `ffmpeg` bulunamadı. Kurulum: `brew install ffmpeg`")
+        except Exception as e:
+            logger.error(f"start voice recording failed: {e}")
+            self._add_bot_message(f"Ses kaydı başlatılamadı: {e}")
+
+    def _stop_voice_recording(self):
+        """Stop recording and transcribe."""
+        if not self._is_recording:
+            return
+        self._is_recording = False
+        self.set_status(True, "Ses işleniyor...")
+        self._voice_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #F2F2F7;
+                color: #0f172a;
+                border: none;
+                border-radius: 20px;
+            }
+        """)
+
+        proc = self._recording_process
+        audio_file = self._recording_file
+        self._recording_process = None
+        self._recording_file = None
+
+        try:
+            if proc and proc.poll() is None:
+                if hasattr(os, "killpg") and hasattr(os, "getpgid"):
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                else:
+                    proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except Exception:
+                    proc.kill()
+        except Exception as e:
+            logger.debug(f"stop recording process warning: {e}")
+
+        if not audio_file or not Path(audio_file).exists():
+            self._add_bot_message("Ses kaydı alınamadı.")
+            return
+
+        self._voice_worker = VoiceTranscriptionWorker(audio_file=audio_file, language="tr")
+        self._voice_worker.finished.connect(lambda res, p=audio_file: self._on_voice_transcription_done(res, p))
+        self._voice_worker.error.connect(lambda err, p=audio_file: self._on_voice_transcription_error(err, p))
+        self._voice_worker.start()
+
+    def _on_voice_transcription_done(self, result: dict, audio_file: str):
+        try:
+            if result.get("success"):
+                text = str(result.get("text", "")).strip()
+                if text:
+                    self._input_field.setText(text)
+                    self._send_message()
+                else:
+                    self._add_bot_message("Ses çözümlendi fakat metin boş döndü.")
+            else:
+                self._add_bot_message(f"Ses çözümlenemedi: {result.get('error', 'bilinmeyen hata')}")
+        finally:
+            self._cleanup_audio_file(audio_file)
+            self.set_status(True, "AKTİF")
+
+    def _on_voice_transcription_error(self, error: str, audio_file: str):
+        self._cleanup_audio_file(audio_file)
+        self._add_bot_message(f"Ses dönüştürme hatası: {error}")
+        self.set_status(True, "AKTİF")
+
+    def _cleanup_audio_file(self, path: str):
+        try:
+            if path and Path(path).exists():
+                Path(path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def _speak_latest_response(self):
+        """Speak latest assistant response via local TTS."""
+        if not self._last_assistant_message.strip():
+            self._add_bot_message("Seslendirme için önce bir WIQO yanıtı olmalı.")
+            return
+
+        class _SpeakWorker(QThread):
+            finished = pyqtSignal(dict)
+            error = pyqtSignal(str)
+
+            def __init__(self, text: str):
+                super().__init__()
+                self.text = text
+
+            def run(self):
+                loop = None
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    from tools.multimodal_tools import speak_text_local
+                    result = loop.run_until_complete(
+                        speak_text_local(self.text[:800])
+                    )
+                    self.finished.emit(result if isinstance(result, dict) else {"success": False, "error": "invalid_result"})
+                except Exception as exc:
+                    self.error.emit(str(exc))
+                finally:
+                    if loop is not None:
+                        loop.close()
+
+        worker = _SpeakWorker(self._last_assistant_message)
+        worker.finished.connect(self._on_speak_done)
+        worker.error.connect(lambda e: self._add_bot_message(f"Seslendirme hatası: {e}"))
+        worker.start()
+        self._speak_btn.setEnabled(False)
+        self._speak_worker = worker
+
+    def _on_speak_done(self, result: dict):
+        self._speak_btn.setEnabled(True)
+        if not result.get("success"):
+            self._add_bot_message(f"Seslendirme başarısız: {result.get('error', 'bilinmeyen hata')}")

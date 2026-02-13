@@ -20,8 +20,30 @@ logger = get_logger("telegram")
 
 agent: Agent = None
 telegram_app: Optional[Application] = None
-pending_approvals = {}  # request_id -> {"user_id": int, "future": asyncio.Future}
+pending_approvals = {}  # request_id -> {"user_id": int, "future": asyncio.Future, "loop": asyncio.AbstractEventLoop}
 pending_requests = {}  # user_id -> request_id for cancellation tracking
+
+
+def _resolve_pending_request(request_id: str, approved: bool) -> bool:
+    """Resolve pending approval future in a loop-safe way."""
+    pending = pending_approvals.get(request_id)
+    if not pending:
+        return False
+
+    future = pending.get("future")
+    loop = pending.get("loop")
+    if not future or future.done():
+        return False
+
+    try:
+        if loop and loop.is_running():
+            loop.call_soon_threadsafe(future.set_result, bool(approved))
+        else:
+            future.set_result(bool(approved))
+        return True
+    except Exception as exc:
+        logger.error(f"Failed to resolve approval request {request_id}: {exc}")
+        return False
 
 
 def _parse_allowed_ids(raw_ids: Any) -> list[int]:
@@ -147,9 +169,16 @@ async def approval_callback(approval_request):
         loop = asyncio.get_running_loop()
         future = loop.create_future()
 
+        # Ensure only one active approval per user to avoid stale, dangling waits.
+        previous_req_id = pending_requests.get(user_id)
+        if previous_req_id and previous_req_id != approval_request.id:
+            _resolve_pending_request(previous_req_id, False)
+            pending_approvals.pop(previous_req_id, None)
+
         pending_approvals[approval_request.id] = {
             "user_id": user_id,
             "future": future,
+            "loop": loop,
         }
         pending_requests[user_id] = approval_request.id
 
@@ -172,8 +201,10 @@ async def approval_callback(approval_request):
             reply_markup=keyboard,
             parse_mode=None,
         )
+        logger.info(f"Approval request sent via Telegram: request_id={approval_request.id} user_id={user_id} op={approval_request.operation}")
 
         approved = await future
+        logger.info(f"Approval resolved via Telegram: request_id={approval_request.id} approved={bool(approved)}")
         return bool(approved)
 
     except Exception as e:
@@ -211,9 +242,8 @@ async def approval_query_callback(update: Update, context: ContextTypes.DEFAULT_
         return
 
     approved = decision == "approve"
-    future = pending.get("future")
-    if future and not future.done():
-        future.set_result(approved)
+    _resolve_pending_request(request_id, approved)
+    logger.info(f"Approval button clicked: request_id={request_id} actor_id={actor_id} approved={approved}")
 
     pending_approvals.pop(request_id, None)
     if expected_user and pending_requests.get(expected_user) == request_id:
@@ -583,10 +613,8 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Cancel pending approval request for this user if exists
     pending_id = pending_requests.pop(user_id, None)
     if pending_id:
-        pending = pending_approvals.pop(pending_id, None)
-        future = pending.get("future") if isinstance(pending, dict) else None
-        if future and not future.done():
-            future.set_result(False)
+        _resolve_pending_request(pending_id, False)
+        pending_approvals.pop(pending_id, None)
         await update.message.reply_text("Bekleyen onay isteği iptal edildi.")
         return
 

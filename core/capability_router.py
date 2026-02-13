@@ -30,11 +30,18 @@ class CapabilityRouter:
         ],
         "code": [
             "kod", "code", "bug", "debug", "refactor", "fonksiyon", "script",
-            "api", "backend", "algorithm", "test yaz", "unit test"
+            "api", "backend", "algorithm", "test yaz", "unit test",
+            "oyun", "game", "prototip", "prototype", "uygulama", "app",
+            "project pack", "proje paketi", "engine"
         ],
         "image": [
             "gorsel", "görsel", "image", "logo", "poster", "illustration",
             "tasarla", "design", "thumbnail", "afis", "kapak"
+        ],
+        "multimodal": [
+            "ses", "audio", "voice", "konuş", "konus", "transcribe", "speech", "whisper",
+            "mikrofon", "dinle", "duy", "görseli anlat", "gorseli anlat", "narrate", "tts",
+            "stt", "video", "kamera", "görüntü analizi", "goruntu analizi"
         ],
         "research": [
             "araştır", "arastir", "research", "kaynak", "source", "literature",
@@ -53,14 +60,14 @@ class CapabilityRouter:
     _DOMAIN_HINTS: dict[str, dict[str, Any]] = {
         "website": {
             "objective": "build_production_ready_web_artifact",
-            "preferred_tools": ["create_web_project_scaffold", "create_smart_file", "write_file"],
+            "preferred_tools": ["create_software_project_pack", "create_web_project_scaffold", "create_smart_file", "write_file"],
             "output_artifacts": ["project_folder", "readme", "deployment_notes"],
             "quality_checklist": ["responsive", "accessible", "performant", "maintainable"],
             "learning_tags": ["web", "ui", "frontend"],
         },
         "code": {
             "objective": "deliver_working_testable_code",
-            "preferred_tools": ["execute_python_code", "debug_code", "write_file"],
+            "preferred_tools": ["create_software_project_pack", "execute_python_code", "debug_code", "write_file"],
             "output_artifacts": ["source_code", "tests", "implementation_notes"],
             "quality_checklist": ["correctness", "testability", "readability", "safety"],
             "learning_tags": ["code", "debug", "engineering"],
@@ -71,6 +78,19 @@ class CapabilityRouter:
             "output_artifacts": ["prompt_pack", "style_profile", "asset_plan"],
             "quality_checklist": ["style_consistency", "clarity", "brand_alignment"],
             "learning_tags": ["visual", "design", "creative"],
+        },
+        "multimodal": {
+            "objective": "deliver_multimodal_input_output_pipeline",
+            "preferred_tools": [
+                "transcribe_audio_file",
+                "speak_text_local",
+                "analyze_and_narrate_image",
+                "create_visual_asset_pack",
+                "get_multimodal_capability_report",
+            ],
+            "output_artifacts": ["transcript", "voice_output", "visual_pack", "analysis_notes"],
+            "quality_checklist": ["clarity", "reproducibility", "correctness", "usability"],
+            "learning_tags": ["voice", "vision", "multimodal"],
         },
         "research": {
             "objective": "produce_reliable_multi_source_research",

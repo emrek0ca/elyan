@@ -88,6 +88,7 @@ class LearningEngine:
         self._preference_cache: Dict[str, UserPreference] = {}
         self._context_window: List[Interaction] = []
         self._quick_patterns: Dict[str, str] = {}  # Fast lookup
+        self._skill_memory_cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
         self._initialize_database()
         self._load_caches()
@@ -153,6 +154,21 @@ class LearningEngine:
                 )
             """)
 
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS skill_memory (
+                    domain TEXT NOT NULL,
+                    pattern TEXT NOT NULL,
+                    preferred_tools TEXT,
+                    preferred_output TEXT,
+                    quality_focus TEXT,
+                    success_count INTEGER DEFAULT 0,
+                    failure_count INTEGER DEFAULT 0,
+                    avg_quality REAL DEFAULT 0.0,
+                    last_used REAL NOT NULL,
+                    PRIMARY KEY (domain, pattern)
+                )
+            """)
+
             conn.commit()
 
     def _load_caches(self):
@@ -191,7 +207,31 @@ class LearningEngine:
                 )
                 self._preference_cache[row[0]] = pref
 
-        logger.info(f"Loaded {len(self._pattern_cache)} patterns, {len(self._preference_cache)} preferences")
+            # Load skill memory rows
+            cursor = conn.execute("""
+                SELECT domain, pattern, preferred_tools, preferred_output, quality_focus,
+                       success_count, failure_count, avg_quality, last_used
+                FROM skill_memory
+                ORDER BY (success_count - failure_count) DESC, avg_quality DESC, last_used DESC
+                LIMIT 200
+            """)
+            for row in cursor:
+                key = (str(row[0] or "general"), str(row[1] or ""))
+                self._skill_memory_cache[key] = {
+                    "domain": key[0],
+                    "pattern": key[1],
+                    "preferred_tools": json.loads(row[2]) if row[2] else [],
+                    "preferred_output": str(row[3] or ""),
+                    "quality_focus": json.loads(row[4]) if row[4] else [],
+                    "success_count": int(row[5] or 0),
+                    "failure_count": int(row[6] or 0),
+                    "avg_quality": float(row[7] or 0.0),
+                    "last_used": float(row[8] or 0.0),
+                }
+        logger.info(
+            f"Loaded {len(self._pattern_cache)} patterns, {len(self._preference_cache)} preferences, "
+            f"{len(self._skill_memory_cache)} skill memories"
+        )
 
     async def record_interaction(
         self,
@@ -426,7 +466,191 @@ class LearningEngine:
             "high_confidence_patterns": high_confidence,
             "total_interactions": total_interactions,
             "success_rate": success_rate,
-            "preferences": len(self._preference_cache)
+            "preferences": len(self._preference_cache),
+            "skill_memories": len(self._skill_memory_cache),
+        }
+
+    @staticmethod
+    def _signature(input_text: str) -> str:
+        words = [w.strip(".,:;!?()[]{}\"'").lower() for w in str(input_text or "").split()]
+        words = [w for w in words if len(w) >= 3]
+        return " ".join(words[:8])
+
+    async def record_outcome(
+        self,
+        *,
+        domain: str,
+        input_text: str,
+        execution_requirements: Optional[Dict[str, Any]] = None,
+        tool_actions: Optional[List[str]] = None,
+        success: bool,
+        quality_score: float,
+        publish_ready: bool,
+    ):
+        req = execution_requirements or {}
+        signature = self._signature(input_text)
+        if not signature:
+            return
+        domain_key = str(domain or "general")
+        key = (domain_key, signature)
+        current = self._skill_memory_cache.get(key, {
+            "domain": domain_key,
+            "pattern": signature,
+            "preferred_tools": [],
+            "preferred_output": "",
+            "quality_focus": [],
+            "success_count": 0,
+            "failure_count": 0,
+            "avg_quality": 0.0,
+            "last_used": 0.0,
+        })
+        if success and publish_ready:
+            current["success_count"] = int(current.get("success_count", 0)) + 1
+        else:
+            current["failure_count"] = int(current.get("failure_count", 0)) + 1
+
+        prev_quality = float(current.get("avg_quality", 0.0))
+        if prev_quality <= 0:
+            current["avg_quality"] = float(quality_score)
+        else:
+            current["avg_quality"] = round((prev_quality * 0.8) + (float(quality_score) * 0.2), 2)
+
+        if req.get("preferred_output"):
+            current["preferred_output"] = str(req.get("preferred_output"))
+        tools = tool_actions or req.get("preferred_tools", [])
+        if isinstance(tools, list) and tools:
+            uniq = []
+            for tool in tools:
+                tool_s = str(tool or "").strip()
+                if tool_s and tool_s not in uniq:
+                    uniq.append(tool_s)
+            current["preferred_tools"] = uniq[:6]
+        focus = req.get("quality_checklist", [])
+        if isinstance(focus, list) and focus:
+            current["quality_focus"] = [str(x) for x in focus[:6]]
+        current["last_used"] = time.time()
+        self._skill_memory_cache[key] = current
+
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO skill_memory (
+                        domain, pattern, preferred_tools, preferred_output, quality_focus,
+                        success_count, failure_count, avg_quality, last_used
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(domain, pattern) DO UPDATE SET
+                        preferred_tools=excluded.preferred_tools,
+                        preferred_output=excluded.preferred_output,
+                        quality_focus=excluded.quality_focus,
+                        success_count=excluded.success_count,
+                        failure_count=excluded.failure_count,
+                        avg_quality=excluded.avg_quality,
+                        last_used=excluded.last_used
+                    """,
+                    (
+                        domain_key,
+                        signature,
+                        json.dumps(current.get("preferred_tools", [])),
+                        str(current.get("preferred_output", "")),
+                        json.dumps(current.get("quality_focus", [])),
+                        int(current.get("success_count", 0)),
+                        int(current.get("failure_count", 0)),
+                        float(current.get("avg_quality", 0.0)),
+                        float(current.get("last_used", 0.0)),
+                    ),
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to persist skill memory: {e}")
+
+    def get_execution_hints(self, input_text: str, domain: str) -> Dict[str, Any]:
+        signature = self._signature(input_text)
+        domain_key = str(domain or "general")
+        if not signature:
+            return {}
+
+        candidates: List[Dict[str, Any]] = []
+        for (row_domain, row_pattern), row in self._skill_memory_cache.items():
+            if row_domain != domain_key:
+                continue
+            if signature == row_pattern or signature in row_pattern or row_pattern in signature:
+                candidates.append(row)
+        if not candidates:
+            return {}
+
+        def row_score(row: Dict[str, Any]) -> float:
+            success = float(row.get("success_count", 0))
+            failure = float(row.get("failure_count", 0))
+            ratio = success / max(1.0, success + failure)
+            return (ratio * 0.55) + (float(row.get("avg_quality", 0.0)) / 100.0 * 0.35) + (min(1.0, success / 5.0) * 0.10)
+
+        best = sorted(candidates, key=row_score, reverse=True)[0]
+        confidence = round(min(0.95, row_score(best)), 2)
+        if confidence < 0.45:
+            return {}
+
+        return {
+            "preferred_output": best.get("preferred_output", ""),
+            "preferred_tools_boost": best.get("preferred_tools", [])[:4],
+            "quality_focus": best.get("quality_focus", [])[:4],
+            "confidence": confidence,
+        }
+
+    def self_review(self, window_days: int = 14) -> Dict[str, Any]:
+        cutoff = time.time() - (max(1, int(window_days)) * 86400)
+        recommendations: List[str] = []
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT action, total_executions, successful_executions, avg_duration_ms
+                    FROM success_metrics
+                    ORDER BY total_executions DESC
+                    LIMIT 15
+                    """
+                ).fetchall()
+                for action, total_exec, successful_exec, avg_duration in rows:
+                    total = int(total_exec or 0)
+                    if total < 5:
+                        continue
+                    success_rate = (int(successful_exec or 0) / max(1, total)) * 100.0
+                    if success_rate < 65.0:
+                        recommendations.append(
+                            f"{action}: başarı oranı düşük ({success_rate:.0f}%), plan doğrulamasını güçlendir."
+                        )
+                    if int(avg_duration or 0) > 30000:
+                        recommendations.append(
+                            f"{action}: ortalama süre yüksek ({int(avg_duration)}ms), kompakt plan veya cache öner."
+                        )
+
+                skill_rows = conn.execute(
+                    """
+                    SELECT domain, pattern, success_count, failure_count, avg_quality
+                    FROM skill_memory
+                    WHERE last_used >= ?
+                    ORDER BY (success_count - failure_count) ASC, avg_quality ASC
+                    LIMIT 10
+                    """,
+                    (cutoff,),
+                ).fetchall()
+                for domain, pattern, success_count, failure_count, avg_quality in skill_rows:
+                    if int(failure_count or 0) > int(success_count or 0):
+                        recommendations.append(
+                            f"{domain}: '{pattern}' için başarısızlık yüksek, fallback stratejisi güncelle."
+                        )
+                    if float(avg_quality or 0.0) < 70.0:
+                        recommendations.append(
+                            f"{domain}: kalite ortalaması düşük ({float(avg_quality):.1f}), checklist kapsamını artır."
+                        )
+        except Exception as e:
+            logger.error(f"Self-review failed: {e}")
+
+        return {
+            "window_days": window_days,
+            "recommendations": recommendations[:10],
+            "count": min(10, len(recommendations)),
         }
 
 

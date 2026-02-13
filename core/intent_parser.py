@@ -186,13 +186,15 @@ class IntentParser:
     # ==================== WEBSITE BUILDER ====================
     def _parse_website_builder(self, text: str, text_norm: str, original: str) -> dict | None:
         """Website generation commands -> multi-step website scaffold"""
-        triggers = [
-            "website yap", "web sitesi yap", "site yap", "landing page yap",
-            "html site yap", "web sayfası oluştur", "web sayfasi olustur",
-            "bana website yap", "portfolio sitesi yap", "kişisel site yap", "kisisel site yap",
-            "html css js ile yap"
+        web_keywords = [
+            "website", "web sitesi", "web sayfasi", "web sayfası",
+            "site", "sitesi", "landing page", "portfolio", "portfolyo",
         ]
-        if not any(t in text for t in triggers):
+        build_verbs = ["yap", "oluştur", "olustur", "hazırla", "hazirla", "geliştir", "gelistir"]
+        has_web_keyword = any(k in text for k in web_keywords)
+        has_build_verb = any(v in text for v in build_verbs)
+        has_stack_hint = any(k in text for k in ["html", "css", "js", "javascript"])
+        if not ((has_web_keyword and has_build_verb) or (has_web_keyword and has_stack_hint)):
             return None
 
         topic = "Modern Web Sitesi"
@@ -628,7 +630,13 @@ document.querySelector('.contact-form')?.addEventListener('submit', (event) => {
     # ==================== BROWSER SEARCH ====================
     def _parse_browser_search(self, text: str, text_norm: str, original: str) -> dict | None:
         """Open Safari (if mentioned) and search query in browser"""
-        if not any(k in text for k in ["arat", "ara", "search"]):
+        # Exact token match only; avoid false positives like "kullanarak" containing "ara".
+        if not re.search(r"\b(arat|ara|search)\b", text, re.IGNORECASE):
+            return None
+
+        # If user is clearly asking to build a site/project, do not treat it as browser search.
+        if any(k in text.lower() for k in ["website", "web sitesi", "web sayfas", "portfolyo", "portfolio"]) and \
+           any(v in text.lower() for v in ["yap", "oluştur", "olustur", "hazırla", "hazirla", "geliştir", "gelistir"]):
             return None
 
         lower = text.lower()

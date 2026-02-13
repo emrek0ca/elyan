@@ -391,6 +391,26 @@ class _AIPage(QWidget):
         self._autonomy_combo.currentTextChanged.connect(self._on_change)
         ac_layout.addWidget(_Card.row("Autonomy", self._autonomy_combo, "Görevleri ne kadar agresif planlasın?"))
 
+        ac_layout.addWidget(Divider())
+
+        # Operator mode level (execution power policy)
+        self._operator_mode_combo = _styled_combo(
+            ["Advisory", "Assisted", "Confirmed", "Trusted", "Operator"],
+            width=170
+        )
+        self._operator_mode_combo.setCurrentText(self.config.get("operator_mode_level", "Confirmed"))
+        self._operator_mode_combo.currentTextChanged.connect(self._on_operator_mode_change)
+        ac_layout.addWidget(_Card.row("Operator Mode", self._operator_mode_combo, "Sistem erişim gücü ve onay davranışı"))
+
+        self._operator_policy_note = QLabel("")
+        self._operator_policy_note.setWordWrap(True)
+        self._operator_policy_note.setStyleSheet(f"color: {T.TEXT_SECONDARY}; font-size: 11px; padding: 2px 4px;")
+        op_wrap = QWidget()
+        op_wrap_layout = QVBoxLayout(op_wrap)
+        op_wrap_layout.setContentsMargins(20, 2, 20, 6)
+        op_wrap_layout.addWidget(self._operator_policy_note)
+        ac_layout.addWidget(op_wrap)
+
         self._planning_combo = _styled_combo(["adaptive", "compact", "deep"], width=160)
         self._planning_combo.setCurrentText(self.config.get("task_planning_depth", "adaptive"))
         self._planning_combo.currentTextChanged.connect(self._on_change)
@@ -441,6 +461,7 @@ class _AIPage(QWidget):
 
         # Trigger provider change to set up model list
         self._on_provider_change(self._provider_combo.currentText())
+        self._on_operator_mode_change(self._operator_mode_combo.currentText())
 
         # Set model after populate
         saved_model = self.config.get("llm_model", "")
@@ -547,6 +568,22 @@ class _AIPage(QWidget):
             self._fallback_combo.setEnabled(not _switch_checked(self._sticky_switch))
         self.settings_changed.emit(self.get_settings())
 
+    def _operator_policy_text(self, level: str) -> str:
+        lv = str(level or "Confirmed")
+        mapping = {
+            "Advisory": "Sadece öneri üretir. Sistem/destructive aksiyonlar engelli.",
+            "Assisted": "Sistem aksiyonları açılır, destructive aksiyonlar kapalı.",
+            "Confirmed": "Sistem/destructive aksiyonlar açık; riskli işlemlerde onay ister.",
+            "Trusted": "Sistem/destructive açık; riskli işlemlerde minimum onay.",
+            "Operator": "Maksimum operasyon gücü. Güvenlik blokları yine aktif kalır.",
+        }
+        return mapping.get(lv, mapping["Confirmed"])
+
+    def _on_operator_mode_change(self, value: str):
+        if hasattr(self, "_operator_policy_note"):
+            self._operator_policy_note.setText(self._operator_policy_text(value))
+        self._on_change()
+
     def _on_steps_change(self, value: int):
         self._steps_label.setText(str(value))
         self._on_change()
@@ -565,6 +602,7 @@ class _AIPage(QWidget):
             "llm_sticky_selection": sticky,
             "llm_fallback_mode": "conservative" if sticky else self._fallback_combo.currentText(),
             "autonomy_level": self._autonomy_combo.currentText(),
+            "operator_mode_level": self._operator_mode_combo.currentText(),
             "task_planning_depth": self._planning_combo.currentText(),
             "planner_max_steps": self._steps_slider.value(),
         }
@@ -757,6 +795,12 @@ class _GeneralPage(QWidget):
 
         cl.addWidget(Divider())
 
+        self._require_plan_confirm = _styled_check(self.config.get("require_plan_confirmation", True))
+        self._require_plan_confirm.toggled.connect(self._on_change)
+        cl.addWidget(_Card.row("Require Plan Confirmation", self._require_plan_confirm, "Karmaşık planlar çalışmadan önce kullanıcı onayı iste"))
+
+        cl.addWidget(Divider())
+
         self._replan_attempts = QSpinBox()
         self._replan_attempts.setRange(0, 3)
         self._replan_attempts.setValue(int(self.config.get("auto_replan_max_attempts", 1) or 1))
@@ -824,6 +868,7 @@ class _GeneralPage(QWidget):
             "preferred_language": self._preferred_lang.currentText(),
             "enabled_languages": enabled_languages,
             "auto_replan_enabled": _switch_checked(self._auto_replan),
+            "require_plan_confirmation": _switch_checked(self._require_plan_confirm),
             "auto_replan_max_attempts": self._replan_attempts.value(),
             "privacy_mode_strict": _switch_checked(self._privacy_strict),
             "privacy_redact_storage": _switch_checked(self._privacy_storage),
