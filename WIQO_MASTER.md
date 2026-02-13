@@ -1,6 +1,6 @@
 # WIQO MASTER STATUS
 
-Son güncelleme: 13 Şubat 2026 (02:10)
+Son güncelleme: 13 Şubat 2026 (03:12)
 
 ## Ürün Özeti
 - Wiqo: macOS odaklı, çok araçlı, TR öncelikli dijital asistan.
@@ -15,6 +15,88 @@ Son güncelleme: 13 Şubat 2026 (02:10)
 - Eski giriş noktası hâlâ geçerli: `python main.py`
 
 ## Bu Oturumda Yapılan Kritik Düzeltmeler
+
+### 0) AI Panel modüler refactor (yeni)
+- `CleanAIPanel` ayrı modüle taşındı:
+  - `ui/ai_settings_panel.py`
+- `ui/clean_main_app.py` artık yeni paneli import ederek kullanıyor.
+- Eski panel kodu tamamen temizlendi.
+
+### 0.1) LLM bağlantı testi (yeni)
+- AI paneline **“Bağlantıyı Test Et”** butonu eklendi.
+- Provider bazlı doğrulama:
+  - Groq: chat completions ping
+  - Gemini: generateContent ping
+  - OpenAI: models endpoint kontrolü
+  - Ollama: `ollama list` host doğrulaması
+- Sonuçlar panelde anlık durum metni olarak gösteriliyor.
+
+### 0.2) AI panel profesyonel UX iyileştirmesi (yeni)
+- Bağlantı testi artık UI thread'i bloklamıyor (`ConnectionTestWorker`).
+- Test sonucu artık daha detaylı:
+  - başarı/hata özeti
+  - teknik detay (HTTP kodu / stderr)
+  - gecikme süresi (ms)
+- Kaydetme doğrulaması güçlendirildi:
+  - Cloud provider seçiliyken boş API key ile kayıt engelleniyor.
+  - Ollama host formatı (`http://` / `https://`) kontrol ediliyor.
+
+### 0.3) AI panel güvenilirlik artırımı (yeni)
+- Bağlantı testine otomatik retry/backoff eklendi (geçici ağ hataları için).
+- Son 10 bağlantı test sonucu panelde geçmiş olarak tutuluyor.
+- `clean_main_app.py` içindeki `LegacyCleanAIPanel` tamamen kaldırıldı.
+- Kullanılmayan AI panel importları (`QSlider`, `QSpinBox`) temizlendi.
+
+### 0.4) Capability Router temeli (yeni)
+- Yeni modül eklendi: `core/capability_router.py`
+- Kullanıcı talepleri domain bazlı sınıflandırılıyor:
+  - website, code, image, research, document, summarization
+- Router çıktısı `TaskEngine` içine execution requirement olarak enjekte ediliyor:
+  - `capability_domain`, `primary_objective`, `preferred_tools`
+  - `output_artifacts`, `quality_checklist`, `learning_tags`
+- Amaç: görev ayrıştırmayı “profesyonel asistan” davranışına hizalamak ve
+  website/kod/görsel/araştırma/belgeleme/özetleme isteklerini daha doğru route etmek.
+
+### 0.5) Profesyonel workflow araçları (yeni)
+- Yeni tool modülü eklendi: `tools/pro_workflows.py`
+  - `create_web_project_scaffold(...)`
+  - `generate_document_pack(...)`
+- Tool registry güncellendi: `tools/__init__.py`
+- Capability router bu araçları öncelikli önerilerde kullanacak şekilde güncellendi.
+- TaskEngine:
+  - heuristic action inference yeni araçlara yönlendirildi.
+  - decomposition tool kataloğu yeni araçları içeriyor.
+  - kısa mesajlarda capability domain yüksekse chat fallback yerine task akışı korunuyor.
+- `generate_document_pack` dayanıklılığı artırıldı:
+  - markdown/txt paket her durumda lokal olarak üretiliyor
+  - docx üretimi best-effort (başarısız olursa `docx_warning` ile devam)
+
+### 0.6) Kalıcı capability metrikleri + pipeline state (yeni)
+- Yeni modüller:
+  - `core/capability_metrics.py`
+  - `core/pipeline_state.py`
+- TaskEngine entegrasyonu:
+  - capability domain bazlı başarı/süre metrikleri kaydediliyor.
+  - task yürütmeleri pipeline state olarak tutuluyor (start/step/complete).
+  - metadata'da `capability_domain` ve `pipeline_id` dönüyor.
+- Dashboard entegrasyonu (`ui/clean_main_app.py`):
+  - Yeni kartlar: `Odak Domain`, `Tahmini Maliyet`.
+
+### 0.7) Görsel workflow profili (yeni)
+- Yeni tool: `create_image_workflow_profile(...)`
+  - Prompt pack + style profile üretir.
+- Registry ve routing güncellendi:
+  - `tools/__init__.py`
+  - `core/capability_router.py`
+  - `core/task_engine.py`
+
+### 0.8) Task Contract + Regression Suite (yeni)
+- Yeni modül: `core/task_contract.py`
+  - Task contract üretimi: objective, quality checklist, verification, retry, security level.
+- TaskEngine artık metadata içinde `task_contract` döndürüyor.
+- Regression suite eklendi:
+  - `scripts/regression_capability_pipeline.py`
+  - pytest bağımsız çalışır; capability routing + workflows + pipeline state + metrics doğrular.
 
 ### 1) QPainter/UI stabilite
 - `QGraphicsOpacityEffect` tabanlı sayfa geçiş animasyonu kaldırıldı.
@@ -104,15 +186,14 @@ Son güncelleme: 13 Şubat 2026 (02:10)
   - Temizlik planı gerekli (dikkatli, kullanıcı dosyası silmeden).
 
 ## Sonraki Oturum İçin Net Plan
-1. `CleanAIPanel` refactor:
-   - `ui/ai_settings_panel.py` oluştur, `clean_main_app.py` içinden import et.
-2. Legacy temizlik:
+1. Legacy temizlik:
    - Aktif olmayan eski UI dosyalarını envanterle, kademeli sadeleştirme yap.
-3. Test altyapısı:
+2. Test altyapısı:
    - `venv` içine `pytest` kur, kritik senaryolar için smoke test ekle.
-4. LLM UX iyileştirme:
-   - Zeka paneline “Bağlantı Test Et” butonu ve provider bazlı doğrulama sonucu.
-5. Rapor kalitesi:
+3. LLM UX iyileştirme:
+   - AI paneli test butonunu async/non-blocking hale getir.
+   - Test sonuçlarını detay paneline (latency + hata kodu) yaz.
+4. Rapor kalitesi:
    - DOCX/PDF için tek şablon standardı ve kaynak alıntı format birliği.
 
 ## Hızlı Operasyon Notları

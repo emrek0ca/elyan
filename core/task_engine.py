@@ -36,6 +36,10 @@ from .memory import get_memory
 from .learning_engine import get_learning_engine
 from .intelligent_planner import get_intelligent_planner
 from .semantic_memory import get_semantic_memory
+from .capability_router import get_capability_router
+from .capability_metrics import get_capability_metrics
+from .pipeline_state import get_pipeline_state
+from .task_contract import build_task_contract
 from config.settings_manager import SettingsPanel
 from security.validator import validate_input, sanitize_input
 from security.audit import get_audit_logger
@@ -108,6 +112,9 @@ class TaskEngine:
         self.reasoning = None
         self.planner = None
         self.settings = SettingsPanel()
+        self.capability_router = get_capability_router()
+        self.capability_metrics = get_capability_metrics()
+        self.pipeline_state = get_pipeline_state()
 
     def _privacy_flags(self) -> Dict[str, bool]:
         return {
@@ -147,6 +154,20 @@ class TaskEngine:
         # Deadline urgency
         if any(k in t for k in ["acil", "hemen", "şimdi", "simdi", "ivedi"]):
             req["urgency"] = "high"
+
+        # Professional capability routing hints
+        try:
+            capability = self.capability_router.route(text)
+            req["capability_domain"] = capability.domain
+            req["capability_confidence"] = round(float(capability.confidence), 2)
+            req["primary_objective"] = capability.objective
+            req["preferred_tools"] = capability.preferred_tools
+            req["output_artifacts"] = capability.output_artifacts
+            req["quality_checklist"] = capability.quality_checklist
+            req["learning_tags"] = capability.learning_tags
+            req["assistant_profile"] = "professional_real_assistant"
+        except Exception:
+            pass
 
         return req
 
@@ -217,9 +238,13 @@ class TaskEngine:
             details={"input": (redact_text(user_input) if flags["redact_storage"] else user_input)[:200]}
         )
 
+        pipeline_id: Optional[str] = None
         try:
             local_context = dict(context or {})
             local_context["execution_requirements"] = self._extract_execution_requirements(user_input)
+            execution_req = local_context.get("execution_requirements", {}) if isinstance(local_context.get("execution_requirements"), dict) else {}
+            capability_domain = str(execution_req.get("capability_domain", "general"))
+            capability_objective = str(execution_req.get("primary_objective", "solve_user_task_reliably"))
 
             # 2. Intent Analysis
             intent_result = await self._analyze_intent(user_input, local_context)
@@ -230,6 +255,7 @@ class TaskEngine:
                 # Simple chat response - no execution needed
                 response = await self._generate_chat_response(user_input, context)
                 elapsed_ms = int((time.time() - start_time) * 1000)
+                self.capability_metrics.record(capability_domain, True, elapsed_ms, capability_objective)
                 return TaskResult(
                     success=True,
                     message=response,
@@ -275,6 +301,7 @@ class TaskEngine:
                     # Görev çıkarılamadı → muhtemelen sohbet mesajı
                     fallback_msg = await self._generate_chat_response(user_input, local_context)
                     elapsed_ms = int((time.time() - start_time) * 1000)
+                    self.capability_metrics.record(capability_domain, True, elapsed_ms, capability_objective)
                     return TaskResult(
                         success=True,
                         message=fallback_msg,
@@ -290,6 +317,7 @@ class TaskEngine:
                 logger.info(f"All tasks are non-tool actions: {[t.action for t in tasks]} → chat fallback")
                 response = await self._generate_chat_response(user_input, local_context)
                 elapsed_ms = int((time.time() - start_time) * 1000)
+                self.capability_metrics.record(capability_domain, True, elapsed_ms, capability_objective)
                 return TaskResult(
                     success=True,
                     message=response,
@@ -303,22 +331,39 @@ class TaskEngine:
 
             # 4. Dependency Analysis & Ordering
             ordered_tasks = self._order_tasks_by_dependency(tasks)
+            task_contract = build_task_contract(execution_req, task_count=len(ordered_tasks))
 
             # 5. Security Validation
             security_check = self._security_check(ordered_tasks, user_id)
             if not security_check["allowed"]:
+                elapsed_ms = int((time.time() - start_time) * 1000)
+                self.capability_metrics.record(capability_domain, False, elapsed_ms, capability_objective)
                 return TaskResult(
                     success=False,
                     message=f"Guvenlik kontrolu basarisiz: {security_check['reason']}",
                     error=security_check['reason'],
-                    metadata={"blocked_tasks": security_check.get("blocked_tasks", [])}
+                    metadata={
+                        "blocked_tasks": security_check.get("blocked_tasks", []),
+                        "task_contract": task_contract.to_dict(),
+                    }
                 )
+
+            pipeline_id = self.pipeline_state.start(
+                user_id=str(user_id or "unknown"),
+                user_input=user_input,
+                domain=capability_domain,
+                tasks=[
+                    {"id": t.id, "action": t.action, "description": t.description, "status": "pending"}
+                    for t in ordered_tasks
+                ],
+            )
 
             # 6. Execution (license check removed)
             execution_result = await self._execute_tasks(
                 ordered_tasks,
                 notify_callback=notify_callback,
-                user_id=user_id
+                user_id=user_id,
+                pipeline_id=pipeline_id,
             )
 
             # Auto re-plan once if planner route failed.
@@ -376,6 +421,17 @@ class TaskEngine:
                 duration_ms=elapsed_ms,
                 metadata={"task_count": len(ordered_tasks)}
             )
+            self.capability_metrics.record(
+                capability_domain,
+                bool(execution_result["success"]),
+                elapsed_ms,
+                capability_objective,
+            )
+            self.pipeline_state.complete(
+                pipeline_id=pipeline_id,
+                success=bool(execution_result["success"]),
+                summary=summary,
+            )
 
             return TaskResult(
                 success=execution_result["success"],
@@ -384,13 +440,25 @@ class TaskEngine:
                 metadata={
                     "tasks_executed": len(ordered_tasks),
                     "tasks_succeeded": execution_result.get("succeeded", 0),
-                    "tasks_failed": execution_result.get("failed", 0)
+                    "tasks_failed": execution_result.get("failed", 0),
+                    "capability_domain": capability_domain,
+                    "pipeline_id": pipeline_id,
+                    "task_contract": task_contract.to_dict(),
                 },
                 execution_time_ms=elapsed_ms
             )
 
         except Exception as e:
             logger.error(f"Task execution error: {e}")
+            if pipeline_id:
+                try:
+                    self.pipeline_state.complete(
+                        pipeline_id=pipeline_id,
+                        success=False,
+                        summary=str(e),
+                    )
+                except Exception:
+                    pass
             record_error(
                 component="task_engine",
                 error_msg=str(e),
@@ -398,6 +466,16 @@ class TaskEngine:
             )
 
             elapsed_ms = int((time.time() - start_time) * 1000)
+            try:
+                req = self._extract_execution_requirements(user_input)
+                self.capability_metrics.record(
+                    str(req.get("capability_domain", "general")),
+                    False,
+                    elapsed_ms,
+                    str(req.get("primary_objective", "solve_user_task_reliably")),
+                )
+            except Exception:
+                pass
             return TaskResult(
                 success=False,
                 message=ErrorHandler.format_error_response(str(e)),
@@ -598,6 +676,16 @@ class TaskEngine:
     def _infer_action_from_text(self, text: str, goal: str = "") -> str:
         """Heuristic mapping of free-text step to known actions (LLM's unknown)."""
         t = f"{text} {goal}".lower()
+        if any(k in t for k in ["website", "web site", "site", "landing page", "frontend", "web sayfası", "web sayfasi"]):
+            return "create_web_project_scaffold"
+        if any(k in t for k in ["kod", "code", "debug", "hata", "refactor", "script", "test"]):
+            return "execute_python_code"
+        if any(k in t for k in ["gorsel", "görsel", "image", "logo", "poster", "tasarla", "design"]):
+            return "create_image_workflow_profile"
+        if any(k in t for k in ["özet", "ozet", "summar", "kısalt", "kisalt", "sentez"]):
+            return "smart_summarize"
+        if any(k in t for k in ["belge", "dokuman", "doküman", "rapor", "proposal", "sunum", "pdf", "docx"]):
+            return "generate_document_pack"
         if any(k in t for k in ["safari", "browser", "chrome", "url"]):
             return "open_url"
         if any(k in t for k in ["plan", "parcala", "parçala", "görev", "alt görev", "decompose"]):
@@ -675,6 +763,8 @@ class TaskEngine:
             'open', 'close', 'delete', 'search', 'find', 'send',
             'volume', 'ses', 'parlaklik', 'wifi', 'bluetooth', 'ekran',
             'kaydet', 'yedekle', 'azalt', 'artir', 'dusur', 'mail', 'email',
+            'website', 'site', 'web', 'kod', 'code', 'debug', 'gorsel', 'image',
+            'logo', 'tasarla', 'belge', 'dokuman', 'doküman', 'rapor', 'ozet', 'özet',
         }
         has_tool = any(
             word.startswith(prefix) and (len(word) - len(prefix)) <= 5
@@ -689,6 +779,13 @@ class TaskEngine:
 
         # Short messages without tool keywords -> likely chat
         if len(words) <= 8 and not has_tool:
+            # If capability router sees a meaningful non-chat domain, keep task flow active.
+            try:
+                plan = self.capability_router.route(text)
+                if plan.domain != "general" and plan.confidence >= 0.5:
+                    return False
+            except Exception:
+                pass
             return True
 
         # Common chat patterns (Turkish + ASCII normalized)
@@ -828,6 +925,11 @@ class TaskEngine:
             "read_word(path)", "read_pdf(path)", "read_excel(path)",
             "create_smart_file(type,title,content,path)",
             "smart_summarize(text|path)", "analyze_document(path)",
+            "execute_python_code(code)", "debug_code(code,language)",
+            "analyze_image(image_path,prompt)", "generate_research_document(research_data,format,template)",
+            "create_web_project_scaffold(project_name,stack,theme,output_dir)",
+            "generate_document_pack(topic,brief,audience,language,output_dir)",
+            "create_image_workflow_profile(project_name,visual_style,aspect_ratios,output_dir)",
             "run_safe_command(command)", "spotlight_search(query)",
             "kill_process(name)", "get_process_info()",
             "ollama_list_models()", "ollama_remove_model(model_name)",
@@ -1169,7 +1271,8 @@ JSON ciktisi (baska hicbir sey yazma):
         self,
         tasks: List[TaskDefinition],
         notify_callback = None,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        pipeline_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Execute tasks with optimized parallelism (v14.0)"""
         results = []
@@ -1259,10 +1362,16 @@ JSON ciktisi (baska hicbir sey yazma):
                     
                     if result.get("success"):
                         succeeded += 1
+                        if pipeline_id:
+                            self.pipeline_state.mark_task(pipeline_id, task_def.id, True, "")
                         if notify_callback:
                             await self._emit_notify(notify_callback, f" {task_def.description} tamamlandı.")
                     else:
                         failed += 1
+                        if pipeline_id:
+                            self.pipeline_state.mark_task(
+                                pipeline_id, task_def.id, False, str(result.get("error", "error"))
+                            )
                         if notify_callback:
                             await self._emit_notify(notify_callback, f" {task_def.description} hatası: {result.get('error')}")
                             
@@ -1276,6 +1385,8 @@ JSON ciktisi (baska hicbir sey yazma):
                     }
                 except Exception as e:
                     failed += 1
+                    if pipeline_id:
+                        self.pipeline_state.mark_task(pipeline_id, task_def.id, False, str(e))
                     logger.error(f"Task {task_def.id} failed: {e}")
                     return {"task_id": task_def.id, "action": task_def.action, "success": False, "error": str(e)}
 

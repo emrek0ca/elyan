@@ -371,7 +371,7 @@ class StartupChecker:
         user_ids = ""
         if self.settings:
             token = str(self.settings.get("telegram_token", "")).strip()
-            allowed = self.settings.get("allowed_users", [])
+            allowed = self.settings.get("allowed_user_ids", [])
             if isinstance(allowed, list) and allowed:
                 user_ids = ",".join(str(x) for x in allowed if str(x).strip())
         if not token:

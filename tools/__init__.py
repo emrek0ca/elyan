@@ -259,6 +259,21 @@ def _lazy_load_tool(tool_name: str):
         }
         _loaded_tools.update(tools)
         return _loaded_tools.get(tool_name)
+
+    # Professional Workflows
+    if tool_name in ["create_web_project_scaffold", "generate_document_pack", "create_image_workflow_profile"]:
+        from .pro_workflows import (
+            create_web_project_scaffold,
+            generate_document_pack,
+            create_image_workflow_profile,
+        )
+        tools = {
+            "create_web_project_scaffold": create_web_project_scaffold,
+            "generate_document_pack": generate_document_pack,
+            "create_image_workflow_profile": create_image_workflow_profile,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
     return None
 
 # Lazy dictionary class
@@ -312,6 +327,8 @@ class LazyToolDict(dict):
             "execute_python_code", "execute_javascript_code", "execute_shell_command", "debug_code",
             # AI Tools
             "ollama_list_models", "ollama_remove_model",
+            # Professional Workflows
+            "create_web_project_scaffold", "generate_document_pack", "create_image_workflow_profile",
         }
 
     def __getitem__(self, key):

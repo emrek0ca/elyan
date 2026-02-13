@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
 import psutil
 from core.monitoring import get_monitoring
+from core.capability_metrics import get_capability_metrics
+from core.pricing_tracker import get_pricing_tracker
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -20,7 +22,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QLabel, QPushButton, QFrame, QStackedWidget, QScrollArea, 
     QSystemTrayIcon, QMenu, QMessageBox, QLineEdit, QComboBox, 
-    QSlider, QSpinBox, QFileDialog, QListView,
+    QFileDialog, QListView,
     QProgressBar, QListWidget, QListWidgetItem, QTextEdit
 )
 from ui.components import (
@@ -28,6 +30,7 @@ from ui.components import (
     SectionHeader, Divider, LatencyGraph, AnimatedButton, PulseLabel
 )
 from ui.branding import load_brand_icon, load_brand_pixmap
+from ui.ai_settings_panel import CleanAIPanel
 
 from utils.logger import get_logger
 
@@ -179,8 +182,17 @@ class BotWorker(QThread):
 
     async def _start_telegram(self):
         """Telegram botunu arka planda başlatır"""
-        TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-        if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == "YOUR_TOKEN_HERE":
+        token = ""
+        try:
+            from config.settings_manager import SettingsPanel
+            token = str(SettingsPanel().get("telegram_token", "") or "").strip()
+        except Exception:
+            token = ""
+
+        if not token:
+            token = str(os.getenv("TELEGRAM_BOT_TOKEN", "") or "").strip()
+
+        if not token or token == "YOUR_TOKEN_HERE":
             logger.info("Telegram token ayarlı değil, Telegram botu başlatılmadı")
             return
 
@@ -188,7 +200,7 @@ class BotWorker(QThread):
             # Silent token validation
             import httpx
             async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getMe")
+                resp = await client.get(f"https://api.telegram.org/bot{token}/getMe")
                 if resp.status_code != 200:
                     logger.error(f"Geçersiz Telegram Token: {resp.status_code}")
                     return
@@ -196,7 +208,7 @@ class BotWorker(QThread):
             from telegram.ext import ApplicationBuilder
             from handlers.telegram_handler import setup_handlers
 
-            self._telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+            self._telegram_app = ApplicationBuilder().token(token).build()
             setup_handlers(self._telegram_app, self._agent)
 
             await self._telegram_app.initialize()
@@ -473,10 +485,14 @@ class CleanDashboard(QWidget):
         self._latency_card = StatCard("", "0ms", "Yapay Zeka Hızı", "#7196A2")
         self._success_card = StatCard("", "100%", "Başarı Oranı", "#7196A2")
         self._ops_card = StatCard("", "0", "Toplam İşlem", "#7196A2")
+        self._domain_card = StatCard("", "general", "Odak Domain", "#7196A2")
+        self._cost_card = StatCard("", "$0.00", "Tahmini Maliyet", "#7196A2")
         
         ai_stats_layout.addWidget(self._latency_card)
         ai_stats_layout.addWidget(self._success_card)
         ai_stats_layout.addWidget(self._ops_card)
+        ai_stats_layout.addWidget(self._domain_card)
+        ai_stats_layout.addWidget(self._cost_card)
         layout.addLayout(ai_stats_layout)
 
         # Performance Graph (v8.0)
@@ -559,6 +575,15 @@ class CleanDashboard(QWidget):
             
             self._success_card.set_value(health.get("success_rate", "100%"))
             self._ops_card.set_value(str(health.get("total_operations", 0)))
+
+            cap_summary = get_capability_metrics().summary(window_hours=24)
+            top_domain = str(cap_summary.get("top_domain", "general"))
+            top_rate = cap_summary.get("domains", {}).get(top_domain, {}).get("success_rate", 0.0)
+            self._domain_card.set_value(f"{top_domain[:8]} {top_rate:.0f}%")
+
+            pricing = get_pricing_tracker().summary()
+            lifetime_cost = float(pricing.get("lifetime", {}).get("estimated_cost_usd", 0.0))
+            self._cost_card.set_value(f"${lifetime_cost:.2f}")
             
             # Update Latency Graph (v8.0)
             self._latency_graph.add_value(avg_latency)
@@ -984,521 +1009,6 @@ class CleanResearchPanel(QWidget):
 
         layout.addWidget(actions_frame)
         layout.addStretch()
-
-
-class CleanAIPanel(QWidget):
-    """AI control center with provider/model switching"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        from config.settings_manager import SettingsPanel
-        self._settings = SettingsPanel()
-        self._providers = {
-            "groq": ["llama-3.3-70b-versatile", "mixtral-8x7b-32768", "llama-3.1-8b-instant"],
-            "gemini": ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
-            "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
-            "ollama": [],
-        }
-        self._setup_ui()
-        self._load_settings()
-
-    def _setup_ui(self):
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("""
-            QScrollArea {
-                border: none;
-                background-color: transparent;
-            }
-        """)
-
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(32, 32, 32, 32)
-        layout.setSpacing(24)
-
-        # Header
-        header = QLabel("Yapay Zeka")
-        header.setFont(QFont(".AppleSystemUIFont", 32, QFont.Weight.Bold))
-        header.setStyleSheet("color: #252F33; border: none; letter-spacing: -0.5px;")
-        layout.addWidget(header)
-
-        desc = QLabel("Ollama ve model ayarlarını yapılandırın")
-        desc.setFont(QFont(".AppleSystemUIFont", 14))
-        desc.setStyleSheet("color: #64748b;")
-        layout.addWidget(desc)
-
-        # Provider card
-        provider_card = GlassFrame()
-        provider_layout = QVBoxLayout(provider_card)
-        provider_layout.setContentsMargins(24, 20, 24, 20)
-        provider_layout.setSpacing(14)
-
-        row_provider = QHBoxLayout()
-        provider_label = QLabel("Sağlayıcı:")
-        provider_label.setFont(QFont(".AppleSystemUIFont", 13))
-        provider_label.setFixedWidth(120)
-        provider_label.setStyleSheet("color: #94a3b8;")
-        row_provider.addWidget(provider_label)
-
-        self._provider_combo = QComboBox()
-        self._provider_combo.addItems(["groq", "gemini", "openai", "ollama"])
-        self._provider_combo.currentTextChanged.connect(self._on_provider_changed)
-        self._provider_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #F8FAFC;
-                border: 1px solid #E2E8F0;
-                border-radius: 8px;
-                padding: 10px 16px;
-                color: #0F172A;
-            }
-            QComboBox::drop-down { border: none; }
-        """)
-        row_provider.addWidget(self._provider_combo, 1)
-        provider_layout.addLayout(row_provider)
-
-        row_api = QHBoxLayout()
-        api_label = QLabel("API Key:")
-        api_label.setFont(QFont(".AppleSystemUIFont", 13))
-        api_label.setFixedWidth(120)
-        api_label.setStyleSheet("color: #94a3b8;")
-        row_api.addWidget(api_label)
-
-        self._api_key_input = QLineEdit()
-        self._api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self._api_key_input.setPlaceholderText("Provider API anahtarını girin")
-        self._api_key_input.setStyleSheet("""
-            QLineEdit {
-                background-color: #F8FAFC;
-                border: 1px solid #E2E8F0;
-                border-radius: 8px;
-                padding: 10px 16px;
-                color: #0F172A;
-            }
-            QLineEdit:focus { border-color: #3b82f6; }
-        """)
-        row_api.addWidget(self._api_key_input, 1)
-        provider_layout.addLayout(row_api)
-
-        self._host_row_widget = QWidget()
-        row_host = QHBoxLayout(self._host_row_widget)
-        row_host.setContentsMargins(0, 0, 0, 0)
-        host_label = QLabel("Ollama Host:")
-        host_label.setFont(QFont(".AppleSystemUIFont", 13))
-        host_label.setFixedWidth(120)
-        host_label.setStyleSheet("color: #94a3b8;")
-        row_host.addWidget(host_label)
-        self._host_input = QLineEdit()
-        self._host_input.setPlaceholderText("http://localhost:11434")
-        self._host_input.setStyleSheet("""
-            QLineEdit {
-                background-color: #F8FAFC;
-                border: 1px solid #E2E8F0;
-                border-radius: 8px;
-                padding: 10px 16px;
-                color: #0F172A;
-            }
-            QLineEdit:focus { border-color: #3b82f6; }
-        """)
-        row_host.addWidget(self._host_input, 1)
-        provider_layout.addWidget(self._host_row_widget)
-
-        layout.addWidget(provider_card)
-
-        # Status card
-        status_card = GlassFrame()
-        status_layout = QHBoxLayout(status_card)
-        status_layout.setContentsMargins(24, 20, 24, 20)
-
-        self._ollama_status = QLabel("Ollama durumu kontrol ediliyor...")
-        self._ollama_status.setFont(QFont(".AppleSystemUIFont", 14))
-        self._ollama_status.setStyleSheet("color: #94a3b8; border: none;")
-        status_layout.addWidget(self._ollama_status)
-
-        status_layout.addStretch()
-
-        start_btn = QPushButton("Başlat")
-        start_btn.clicked.connect(self._start_ollama)
-        start_btn.setFont(QFont(".AppleSystemUIFont", 13))
-        start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        start_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #22c55e;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 8px 20px;
-            }
-            QPushButton:hover { background-color: #16a34a; }
-        """)
-        status_layout.addWidget(start_btn)
-
-        layout.addWidget(status_card)
-
-        # Model settings
-        model_frame = GlassFrame()
-        model_layout = QVBoxLayout(model_frame)
-        model_layout.setContentsMargins(24, 24, 24, 24)
-        model_layout.setSpacing(16)
-
-        model_title = QLabel("Model Ayarları")
-        model_title.setFont(QFont(".AppleSystemUIFont", 15, QFont.Weight.Medium))
-        model_title.setStyleSheet("color: #0F172A; border: none;")
-        model_layout.addWidget(model_title)
-
-        # Model selection
-        model_row = QHBoxLayout()
-        model_label = QLabel("Model:")
-        model_label.setFont(QFont(".AppleSystemUIFont", 13))
-        model_label.setStyleSheet("color: #94a3b8;")
-        model_label.setFixedWidth(120)
-        model_row.addWidget(model_label)
-
-        self._model_combo = QComboBox()
-        self._model_combo.setEditable(True)
-        self._model_combo.setFont(QFont(".AppleSystemUIFont", 13))
-        self._model_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #F8FAFC;
-                border: 1px solid #E2E8F0;
-                border-radius: 8px;
-                padding: 10px 16px;
-                color: #0F172A;
-            }
-            QComboBox::drop-down { border: none; }
-        """)
-        model_row.addWidget(self._model_combo, 1)
-        model_layout.addLayout(model_row)
-
-        # Temperature
-        temp_row = QHBoxLayout()
-        temp_label = QLabel("Sıcaklık:")
-        temp_label.setFont(QFont(".AppleSystemUIFont", 13))
-        temp_label.setStyleSheet("color: #94a3b8;")
-        temp_label.setFixedWidth(120)
-        temp_row.addWidget(temp_label)
-
-        self._temp_slider = QSlider(Qt.Orientation.Horizontal)
-        self._temp_slider.setRange(0, 100)
-        self._temp_slider.setValue(70)
-        self._temp_slider.setStyleSheet("""
-            QSlider::groove:horizontal {
-                background: #27272a;
-                height: 4px;
-                border-radius: 2px;
-            }
-            QSlider::handle:horizontal {
-                background: #fafafa;
-                width: 16px;
-                height: 16px;
-                margin: -6px 0;
-                border-radius: 8px;
-            }
-            QSlider::sub-page:horizontal {
-                background: #fafafa;
-                border-radius: 2px;
-            }
-        """)
-        temp_row.addWidget(self._temp_slider, 1)
-
-        self._temp_value = QLabel("0.7")
-        self._temp_value.setFont(QFont(".AppleSystemUIFont", 13))
-        self._temp_value.setStyleSheet("color: #94a3b8;")
-        self._temp_value.setFixedWidth(40)
-        temp_row.addWidget(self._temp_value)
-
-        self._temp_slider.valueChanged.connect(
-            lambda v: self._temp_value.setText(f"{v/100:.1f}")
-        )
-        model_layout.addLayout(temp_row)
-
-        # Max tokens
-        tokens_row = QHBoxLayout()
-        tokens_label = QLabel("Max Token:")
-        tokens_label.setFont(QFont(".AppleSystemUIFont", 13))
-        tokens_label.setStyleSheet("color: #94a3b8;")
-        tokens_label.setFixedWidth(120)
-        tokens_row.addWidget(tokens_label)
-
-        self._tokens_spin = QSpinBox()
-        self._tokens_spin.setRange(256, 8192)
-        self._tokens_spin.setValue(2048)
-        self._tokens_spin.setFont(QFont(".AppleSystemUIFont", 13))
-        self._tokens_spin.setStyleSheet("""
-            QSpinBox {
-                background-color: #F8FAFC;
-                border: 1px solid #E2E8F0;
-                border-radius: 8px;
-                padding: 10px 16px;
-                color: #0F172A;
-            }
-        """)
-        tokens_row.addWidget(self._tokens_spin, 1)
-        model_layout.addLayout(tokens_row)
-
-        row_policy = QHBoxLayout()
-        policy_label = QLabel("Politika:")
-        policy_label.setFont(QFont(".AppleSystemUIFont", 13))
-        policy_label.setFixedWidth(120)
-        policy_label.setStyleSheet("color: #94a3b8;")
-        row_policy.addWidget(policy_label)
-
-        self._sticky_switch = Switch(True)
-        self._sticky_switch.toggled.connect(lambda checked: self._fallback_mode.setEnabled(not checked))
-        row_policy.addWidget(self._sticky_switch)
-        sticky_text = QLabel("Model seçimine sadık kal")
-        sticky_text.setStyleSheet("color: #64748b;")
-        row_policy.addWidget(sticky_text)
-        row_policy.addStretch()
-
-        self._fallback_mode = QComboBox()
-        self._fallback_mode.addItems(["conservative", "aggressive"])
-        self._fallback_mode.setStyleSheet("""
-            QComboBox {
-                background-color: #F8FAFC;
-                border: 1px solid #E2E8F0;
-                border-radius: 8px;
-                padding: 8px 12px;
-                color: #0F172A;
-            }
-        """)
-        row_policy.addWidget(self._fallback_mode)
-        model_layout.addLayout(row_policy)
-
-        layout.addWidget(model_frame)
-
-        # Install new model
-        install_frame = GlassFrame()
-        install_layout = QVBoxLayout(install_frame)
-        install_layout.setContentsMargins(24, 24, 24, 24)
-        install_layout.setSpacing(16)
-
-        install_title = QLabel("Yeni Model Yükle")
-        install_title.setFont(QFont(".AppleSystemUIFont", 15, QFont.Weight.Medium))
-        install_title.setStyleSheet("color: #0F172A; border: none;")
-        install_layout.addWidget(install_title)
-
-        install_row = QHBoxLayout()
-
-        self._install_input = QLineEdit()
-        self._install_input.setPlaceholderText("Model adı (örn: phi3)")
-        self._install_input.setFont(QFont(".AppleSystemUIFont", 13))
-        self._install_input.setMinimumHeight(44)
-        self._install_input.setStyleSheet("""
-            QLineEdit {
-                background-color: #F8FAFC;
-                border: 1px solid #E2E8F0;
-                border-radius: 8px;
-                padding: 10px 16px;
-                color: #0F172A;
-            }
-            QLineEdit:focus { border-color: #3b82f6; }
-            QLineEdit::placeholder { color: #94a3b8; }
-        """)
-        install_row.addWidget(self._install_input, 1)
-
-        install_btn = QPushButton("Yükle")
-        install_btn.clicked.connect(self._install_model)
-        install_btn.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Medium))
-        install_btn.setMinimumHeight(44)
-        install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        install_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #0F172A;
-                color: #ffffff;
-                border: none;
-                border-radius: 8px;
-                padding: 0 24px;
-                font-weight: bold;
-            }
-            QPushButton:hover { background-color: #1E293B; }
-        """)
-        install_row.addWidget(install_btn)
-
-        install_layout.addLayout(install_row)
-        layout.addWidget(install_frame)
-
-        # About Wiqo Section
-        about_frame = GlassFrame()
-        about_layout = QVBoxLayout(about_frame)
-        about_layout.setContentsMargins(24, 24, 24, 24)
-        about_layout.setSpacing(12)
-
-        about_title = QLabel("Wiqo Hakkında")
-        about_title.setFont(QFont(".AppleSystemUIFont", 18, QFont.Weight.Bold))
-        about_title.setStyleSheet("color: #0F172A; border: none;")
-        about_layout.addWidget(about_title)
-
-        about_text = QLabel(
-            "Wiqo v24.0 Pro - Otonom Stratejik Eşlikçi\n\n"
-            "Wiqo, yapay zeka ve sistem entegrasyonunu birleştiren, "
-            "kullanıcısının ihtiyaçlarını anlayan ve otonom çözümler üreten "
-            "yeni nesil bir dijital asistan ekosistemidir.\n\n"
-            "• Adaptif Persona Zekası\n"
-            "• Multimodal Analiz & Raporlama\n"
-            "• Derin Araştırma Motoru\n"
-            "• Gerçek Zamanlı Sistem Monitoring"
-        )
-        about_text.setFont(QFont(".AppleSystemUIFont", 12))
-        about_text.setStyleSheet("color: #94a3b8; line-height: 1.5;")
-        about_text.setWordWrap(True)
-        about_layout.addWidget(about_text)
-
-        layout.addWidget(about_frame)
-
-        actions = QHBoxLayout()
-        actions.addStretch()
-        self._save_btn = AnimatedButton("Ayarları Kaydet", primary=True)
-        self._save_btn.clicked.connect(self._save_settings)
-        actions.addWidget(self._save_btn)
-        layout.addLayout(actions)
-
-        layout.addStretch()
-
-        scroll.setWidget(content)
-
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.addWidget(scroll)
-
-    def _load_settings(self):
-        provider = str(self._settings.get("llm_provider", "groq")).strip().lower()
-        if provider not in self._providers:
-            provider = "groq"
-        self._provider_combo.setCurrentText(provider)
-        self._api_key_input.setText(str(self._settings.get("api_key", "")))
-        self._host_input.setText(str(self._settings.get("ollama_host", "http://localhost:11434")))
-        self._temp_slider.setValue(int(float(self._settings.get("llm_temperature", 0.7)) * 100))
-        self._tokens_spin.setValue(int(self._settings.get("llm_max_tokens", 2048)))
-        self._sticky_switch.set_checked(bool(self._settings.get("llm_sticky_selection", True)))
-        self._fallback_mode.setCurrentText(str(self._settings.get("llm_fallback_mode", "conservative")))
-        self._fallback_mode.setEnabled(not self._sticky_switch.is_checked())
-        self._on_provider_changed(provider)
-        model = str(self._settings.get("llm_model", "")).strip()
-        if model:
-            idx = self._model_combo.findText(model)
-            if idx >= 0:
-                self._model_combo.setCurrentIndex(idx)
-            else:
-                self._model_combo.setCurrentText(model)
-        self._refresh_ollama_status()
-
-    def _refresh_models(self, provider: str):
-        self._model_combo.clear()
-        if provider == "ollama":
-            try:
-                import subprocess
-                host = self._host_input.text().strip() or "http://localhost:11434"
-                env = os.environ.copy()
-                env["OLLAMA_HOST"] = host
-                result = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=4, env=env)
-                models = []
-                for line in result.stdout.strip().splitlines()[1:]:
-                    parts = line.split()
-                    if parts:
-                        models.append(parts[0])
-                if not models:
-                    models = ["llama3.2:3b", "llama3.1:8b", "mistral"]
-            except Exception:
-                models = ["llama3.2:3b", "llama3.1:8b", "mistral"]
-            self._model_combo.addItems(models)
-        else:
-            self._model_combo.addItems(self._providers.get(provider, []))
-
-    def _on_provider_changed(self, provider: str):
-        self._host_row_widget.setVisible(provider == "ollama")
-        self._api_key_input.setVisible(provider != "ollama")
-        self._refresh_models(provider)
-        self._refresh_ollama_status()
-
-    def _refresh_ollama_status(self):
-        if self._provider_combo.currentText() != "ollama":
-            self._ollama_status.setText("Cloud provider seçildi")
-            self._ollama_status.setStyleSheet("color: #2563eb; border: none;")
-            return
-        try:
-            import subprocess
-            host = self._host_input.text().strip() or "http://localhost:11434"
-            env = os.environ.copy()
-            env["OLLAMA_HOST"] = host
-            result = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=4, env=env)
-            if result.returncode == 0:
-                self._ollama_status.setText(f"Ollama bağlı ({host})")
-                self._ollama_status.setStyleSheet("color: #16a34a; border: none;")
-            else:
-                self._ollama_status.setText("Ollama erişilemiyor")
-                self._ollama_status.setStyleSheet("color: #dc2626; border: none;")
-        except Exception:
-            self._ollama_status.setText("Ollama erişilemiyor")
-            self._ollama_status.setStyleSheet("color: #dc2626; border: none;")
-
-    def _start_ollama(self):
-        try:
-            import subprocess
-            subprocess.Popen(["ollama", "serve"])
-            QTimer.singleShot(1500, self._refresh_ollama_status)
-        except Exception as e:
-            self._ollama_status.setText(f"Ollama başlatılamadı: {e}")
-            self._ollama_status.setStyleSheet("color: #dc2626; border: none;")
-
-    def _install_model(self):
-        model = self._install_input.text().strip()
-        if not model:
-            return
-        try:
-            import subprocess
-            host = self._host_input.text().strip() or "http://localhost:11434"
-            env = os.environ.copy()
-            env["OLLAMA_HOST"] = host
-            subprocess.Popen(["ollama", "pull", model], env=env)
-            self._ollama_status.setText(f"Model indiriliyor: {model}")
-            self._ollama_status.setStyleSheet("color: #2563eb; border: none;")
-            QTimer.singleShot(3500, lambda: self._refresh_models("ollama"))
-        except Exception as e:
-            self._ollama_status.setText(f"Model indirilemedi: {e}")
-            self._ollama_status.setStyleSheet("color: #dc2626; border: none;")
-
-    def _save_settings(self):
-        provider = self._provider_combo.currentText().strip().lower()
-        model = self._model_combo.currentText().strip()
-        updates = {
-            "llm_provider": provider,
-            "llm_model": model,
-            "api_key": self._api_key_input.text().strip() if provider != "ollama" else "",
-            "ollama_host": self._host_input.text().strip() or "http://localhost:11434",
-            "llm_temperature": self._temp_slider.value() / 100.0,
-            "llm_max_tokens": int(self._tokens_spin.value()),
-            "llm_sticky_selection": bool(self._sticky_switch.is_checked()),
-            "llm_fallback_mode": self._fallback_mode.currentText().strip(),
-        }
-        updates["llm_fallback_order"] = [provider, "groq", "gemini", "openai", "ollama"]
-        self._settings.update(updates)
-
-        # Apply live to running agent so provider/model change takes effect immediately.
-        try:
-            main_win = self.window()
-            worker = getattr(main_win, "_bot_worker", None)
-            agent = getattr(worker, "_agent", None) if worker else None
-            llm = getattr(agent, "llm", None) if agent else None
-            if llm:
-                llm.llm_type = provider
-                llm.model = model
-                llm.host = updates["ollama_host"]
-                llm.sticky_selection = bool(updates["llm_sticky_selection"])
-                llm.fallback_mode = str(updates["llm_fallback_mode"])
-                llm.fallback_order = list(updates["llm_fallback_order"])
-                api_key = updates["api_key"]
-                if provider == "groq":
-                    llm.groq_api_key = api_key
-                elif provider == "gemini":
-                    llm.api_key = api_key
-                elif provider == "openai":
-                    llm.openai_api_key = api_key
-        except Exception as exc:
-            logger.debug(f"Live LLM update skipped: {exc}")
-
-        self._ollama_status.setText(f"Ayarlar kaydedildi: {provider}/{model}")
-        self._ollama_status.setStyleSheet("color: #16a34a; border: none;")
 
 
 class CleanSettingsPanel(QWidget):

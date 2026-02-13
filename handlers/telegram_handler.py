@@ -1,7 +1,7 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from core.agent import Agent
-from config.settings import ALLOWED_USER_IDS, HOME_DIR, LOGS_DIR
+from config.settings import HOME_DIR, LOGS_DIR
 from security.rate_limiter import rate_limiter
 from security.approval import get_approval_manager
 from core.error_handler import ErrorHandler
@@ -22,6 +22,34 @@ agent: Agent = None
 telegram_app: Optional[Application] = None
 pending_approvals = {}  # request_id -> {"user_id": int, "future": asyncio.Future}
 pending_requests = {}  # user_id -> request_id for cancellation tracking
+
+
+def _parse_allowed_ids(raw_ids: Any) -> list[int]:
+    """Normalize allow-list values from settings/env to integer user IDs."""
+    normalized: list[int] = []
+    if isinstance(raw_ids, str):
+        raw_ids = [x.strip() for x in raw_ids.split(",") if x.strip()]
+    if not isinstance(raw_ids, list):
+        return normalized
+    for item in raw_ids:
+        try:
+            user_id = int(str(item).strip())
+            if user_id > 0 and user_id not in normalized:
+                normalized.append(user_id)
+        except Exception:
+            continue
+    return normalized
+
+
+def _get_allowed_user_ids() -> list[int]:
+    """Read allow-list dynamically so runtime config changes take effect immediately."""
+    try:
+        settings_ids = _parse_allowed_ids(SettingsPanel().get("allowed_user_ids", []))
+        if settings_ids:
+            return settings_ids
+    except Exception:
+        pass
+    return _parse_allowed_ids(os.getenv("ALLOWED_USER_IDS", ""))
 
 
 def _get_save_dir(setting_key: str, default_relative: str) -> Path:
@@ -87,11 +115,12 @@ def init_handlers(agent_instance: Agent):
     notif_system.register_delivery_callback(telegram_notification_callback)
 
 async def check_user(update: Update) -> bool:
-    if not ALLOWED_USER_IDS:
+    allowed_user_ids = _get_allowed_user_ids()
+    if not allowed_user_ids:
         return True
 
     user_id = update.effective_user.id
-    if user_id not in ALLOWED_USER_IDS:
+    if user_id not in allowed_user_ids:
         logger.warning(f"Yetkisiz erisim: {user_id}")
         await update.message.reply_text("Bu botu kullanma yetkiniz yok.")
         return False
@@ -110,7 +139,8 @@ async def approval_callback(approval_request):
             # Non-Telegram request (desktop UI/local) - let fallback callback handle it.
             return None
 
-        if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
+        allowed_user_ids = _get_allowed_user_ids()
+        if allowed_user_ids and user_id not in allowed_user_ids:
             logger.warning(f"Unauthorized approval request blocked for user {user_id}")
             return False
 
@@ -215,7 +245,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  \"rapor.pdf oku ve ozetle\"\n"
         "  \"yapay zeka hakkinda arastirma yap\"\n"
         "  \"ekran goruntusu al\"\n\n"
-        "Komutlar: /help /status /stats /reset /screenshot"
+        "Komutlar: /help /status /stats /reset /screenshot /myid"
     )
     await update.message.reply_text(welcome)
 
@@ -256,6 +286,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /health - Sistem sağlığı\n"
         "  /cancel - İşlemi iptal et\n"
         "  /screenshot - Ekran görüntüsü\n"
+        "  /myid - Telegram kullanıcı/chat ID göster\n"
         "  /reset - Sistemi sıfırla\n\n"
         "Akıllı Asistan:\n"
         "  /smart_insights - Davranış analizi\n"
@@ -275,6 +306,23 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /improve - Self-improvement metrikleri"
     )
     await update.message.reply_text(help_text)
+
+async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show Telegram identifiers needed for allow-list setup."""
+    user_id = update.effective_user.id if update.effective_user else 0
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    allowed = _get_allowed_user_ids()
+    is_allowed = user_id in allowed if allowed else True
+    status = "izinli" if is_allowed else "izinli degil"
+
+    text = (
+        "Telegram Kimlik Bilgisi\n"
+        f"Kullanici ID: `{user_id}`\n"
+        f"Chat ID: `{chat_id}`\n"
+        f"Erisim durumu: {status}\n\n"
+        "Ayarlar > Telegram bolumune bu kullanici ID'yi ekleyebilirsiniz."
+    )
+    await update.message.reply_text(text, parse_mode=None)
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_user(update):
@@ -1515,6 +1563,7 @@ def setup_handlers(app: Application, agent_instance: Agent):
     # Core commands
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("myid", cmd_myid))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("dashboard", cmd_dashboard))

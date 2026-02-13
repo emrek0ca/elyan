@@ -11,6 +11,7 @@ from config.settings import OLLAMA_HOST, OLLAMA_MODEL, OLLAMA_OPTIONS, SYSTEM_PR
 from .intent_parser import IntentParser
 from .llm_cache import get_cache
 from .intent_classifier import get_classifier
+from .llm_optimizer import QueryComplexity, get_llm_optimizer
 from .pricing_tracker import get_pricing_tracker, DEFAULT_PRICING_PER_1K
 from .i18n import detect_language, normalize_language_code
 from utils.logger import get_logger
@@ -70,6 +71,8 @@ class LLMClient:
             self.assistant_style = settings.get("assistant_style", "professional_friendly_short")
             self.communication_tone = settings.get("communication_tone", "professional_friendly")
             self.response_length = settings.get("response_length", "short")
+            self.llm_temperature = float(settings.get("llm_temperature", 0.7))
+            self.llm_max_tokens = int(settings.get("llm_max_tokens", 2048))
             self.preferred_language = normalize_language_code(settings.get("preferred_language", "auto"))
             self.enabled_languages = settings.get("enabled_languages", ["tr", "en"])
             self.assistant_expertise = settings.get("assistant_expertise", "advanced")
@@ -101,6 +104,8 @@ class LLMClient:
             self.assistant_style = "professional_friendly_short"
             self.communication_tone = "professional_friendly"
             self.response_length = "short"
+            self.llm_temperature = 0.7
+            self.llm_max_tokens = 2048
             self.preferred_language = "auto"
             self.enabled_languages = ["tr", "en"]
             self.assistant_expertise = "advanced"
@@ -112,6 +117,7 @@ class LLMClient:
         self.intent_parser = IntentParser()
         self.cache = get_cache()
         self.classifier = get_classifier()
+        self.llm_optimizer = get_llm_optimizer()
         self.pricing_tracker = get_pricing_tracker()
         self.cost_guard = settings.get("cost_guard", True) if 'settings' in locals() else True
         self.monthly_budget_usd = float(settings.get("monthly_budget_usd", 20.0)) if 'settings' in locals() else 20.0
@@ -296,7 +302,13 @@ class LLMClient:
 
         try:
             temp = self._get_optimal_temperature(user_message)
-            text = await self._call_any_provider(prompt, user_message=user_message, temp=temp)
+            max_tokens = self._resolve_dynamic_max_tokens(user_message, is_chat=False)
+            text = await self._call_any_provider(
+                prompt,
+                user_message=user_message,
+                temp=temp,
+                max_tokens=max_tokens
+            )
             if text:
                 logger.info(f"LLM response ({self.llm_type}): {text[:200]}")
                 return self._parse(text, user_message)
@@ -1019,6 +1031,49 @@ TOOL KATEGORİLERİ:
 
         return base_prompt
 
+    def _resolve_dynamic_max_tokens(self, user_message: str, is_chat: bool = False) -> int:
+        """
+        Compute a tighter max_tokens budget to reduce token waste.
+        Uses complexity + response length + cost guard + user setting cap.
+        """
+        complexity = self.llm_optimizer.classify_complexity(user_message)
+
+        if is_chat:
+            base_limits = {
+                QueryComplexity.TRIVIAL: 90,
+                QueryComplexity.SIMPLE: 130,
+                QueryComplexity.MODERATE: 180,
+                QueryComplexity.COMPLEX: 240,
+                QueryComplexity.ADVANCED: 320,
+            }
+        else:
+            # JSON/action generation typically needs fewer output tokens than full chat.
+            base_limits = {
+                QueryComplexity.TRIVIAL: 80,
+                QueryComplexity.SIMPLE: 110,
+                QueryComplexity.MODERATE: 160,
+                QueryComplexity.COMPLEX: 220,
+                QueryComplexity.ADVANCED: 320,
+            }
+
+        length_multiplier = {"short": 1.0, "medium": 1.25, "detailed": 1.5}
+        scale = float(length_multiplier.get(str(self.response_length).lower(), 1.0))
+        planned_tokens = int(base_limits.get(complexity, 160) * scale)
+
+        if getattr(self, "cost_guard", True):
+            hard_cap = 280
+        else:
+            hard_cap = 700
+
+        try:
+            setting_cap = int(self.llm_max_tokens)
+            if setting_cap > 0:
+                hard_cap = min(hard_cap, setting_cap)
+        except Exception:
+            pass
+
+        return max(64, min(planned_tokens, hard_cap))
+
     def _get_optimal_temperature(self, user_message: str) -> float:
         """Get optimal temperature based on message type"""
         user_lower = user_message.lower()
@@ -1039,6 +1094,13 @@ TOOL KATEGORİLERİ:
         # Code generation needs extreme precision
         elif any(word in user_lower for word in ["kod", "code", "program", "script", "hata", "debug"]):
             base_temp = 0.0
+
+        try:
+            configured = float(self.llm_temperature)
+            if configured >= 0:
+                base_temp = min(base_temp, max(0.0, min(configured, 1.0)))
+        except Exception:
+            pass
 
         if getattr(self, "cost_guard", True):
             return min(base_temp, 0.35)
@@ -1163,7 +1225,7 @@ TOOL KATEGORİLERİ:
         """Ask LLM with a custom prompt (used by reasoning module) - provider-aware"""
         try:
             temp = temperature or 0.3
-            return await self._call_any_provider(prompt, temp=temp)
+            return await self._call_any_provider(prompt, temp=temp, max_tokens=self._resolve_dynamic_max_tokens(prompt, is_chat=False))
         except Exception as e:
             logger.error(f"Custom prompt LLM error: {e}")
             return ""
@@ -1174,10 +1236,8 @@ TOOL KATEGORİLERİ:
             temp = temperature or 0.1
             if getattr(self, "cost_guard", True):
                 temp = min(temp, 0.35)
-                default_tokens = 320
-            else:
-                default_tokens = 700
-            resolved_max_tokens = max_tokens or default_tokens
+            default_tokens = self._resolve_dynamic_max_tokens(prompt, is_chat=False)
+            resolved_max_tokens = min(max_tokens, default_tokens) if isinstance(max_tokens, int) and max_tokens > 0 else default_tokens
             return await self._call_any_provider(prompt, temp=temp, max_tokens=resolved_max_tokens)
         except Exception as e:
             logger.error(f"Generate error: {e}", exc_info=True)
@@ -1196,9 +1256,7 @@ TOOL KATEGORİLERİ:
         prompt = f"{system_prompt}\n\nKullanıcı: {user_message}\nWiqo:"
 
         try:
-            chat_max_tokens = 500
-            if getattr(self, "cost_guard", True):
-                chat_max_tokens = 260
+            chat_max_tokens = self._resolve_dynamic_max_tokens(user_message, is_chat=True)
             text = await self._call_any_provider(
                 prompt=prompt,
                 user_message=user_message,
