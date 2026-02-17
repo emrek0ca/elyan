@@ -51,7 +51,8 @@
       "Bash(do if grep -iq \"wiqo\" \"$f\")",
       "Bash(then echo \"$f\" fi done)",
       "Bash(do sed -i '' 's/\\\\.wiqo/\\\\.elyan/g; s/\"\"wiqo\"\"/\"\"elyan\"\"/g; s/wiqo_/elyan_/g' \"$f\" echo \"✓ $f\" done done)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }
