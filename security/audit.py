@@ -30,7 +30,7 @@ class AuditLogger:
                 config_dir.mkdir(parents=True, exist_ok=True)
                 db_path = str(config_dir / "audit.db")
             except Exception:
-                fallback_dir = Path.cwd() / ".wiqo_audit"
+                fallback_dir = Path.cwd() / ".elyan_audit"
                 fallback_dir.mkdir(parents=True, exist_ok=True)
                 db_path = str(fallback_dir / "audit.db")
         

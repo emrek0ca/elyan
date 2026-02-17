@@ -38,7 +38,7 @@ class VisualizationEngine:
 
     def __init__(self):
         self.charts: Dict[str, ChartConfig] = {}
-        self.output_dir = HOME_DIR / ".wiqo" / "visualizations"
+        self.output_dir = HOME_DIR / ".elyan" / "visualizations"
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Check if matplotlib is available

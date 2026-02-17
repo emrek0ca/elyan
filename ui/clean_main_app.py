@@ -1218,7 +1218,7 @@ class CleanMainWindow(QMainWindow):
         self._bot_worker.submit_approval_decision(request_id, approved)
 
     def _load_config(self) -> dict:
-        config_file = Path.home() / ".wiqo" / "config.json"
+        config_file = Path.home() / ".elyan" / "config.json"
         if config_file.exists():
             try:
                 with open(config_file, 'r') as f:

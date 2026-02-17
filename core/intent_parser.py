@@ -583,7 +583,7 @@ document.querySelector('.contact-form')?.addEventListener('submit', (event) => {
 
         return {
             "action": "take_screenshot",
-            "params": {"filename": "wiqo_durum"},
+            "params": {"filename": "elyan_durum"},
             "reply": "Anlik durumu gostermek icin ekran goruntusu aliyorum..."
         }
 

@@ -359,7 +359,7 @@ class AdvancedCache:
     def _get_disk_path(self, key: str) -> str:
         """Get disk path for key"""
         from config.settings import HOME_DIR
-        cache_dir = HOME_DIR / ".wiqo" / "cache"
+        cache_dir = HOME_DIR / ".elyan" / "cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Hash key for filename

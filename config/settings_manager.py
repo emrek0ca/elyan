@@ -74,7 +74,7 @@ class SettingsPanel:
 
     def _default_config_path(self) -> Path:
         """Get unified config file path (v23.0)"""
-        preferred = Path.home() / ".wiqo"
+        preferred = Path.home() / ".elyan"
         try:
             preferred.mkdir(parents=True, exist_ok=True)
             probe = preferred / ".write_test"
@@ -82,7 +82,7 @@ class SettingsPanel:
             probe.unlink(missing_ok=True)
             return preferred / "settings.json"
         except Exception:
-            fallback = Path(__file__).parent.parent / ".wiqo"
+            fallback = Path(__file__).parent.parent / ".elyan"
             fallback.mkdir(parents=True, exist_ok=True)
             logger.warning(f"Home config dir not writable, using fallback: {fallback}")
             return fallback / "settings.json"

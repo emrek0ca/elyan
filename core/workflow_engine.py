@@ -466,7 +466,7 @@ class WorkflowEngine:
         self.templates[name] = workflow_definition
 
         # Persist to disk
-        template_file = HOME_DIR / ".wiqo" / "workflow_templates.json"
+        template_file = HOME_DIR / ".elyan" / "workflow_templates.json"
         template_file.parent.mkdir(parents=True, exist_ok=True)
 
         with open(template_file, "w") as f:
@@ -477,7 +477,7 @@ class WorkflowEngine:
     def _load_templates(self):
         """Load workflow templates from disk"""
         try:
-            template_file = HOME_DIR / ".wiqo" / "workflow_templates.json"
+            template_file = HOME_DIR / ".elyan" / "workflow_templates.json"
             if template_file.exists():
                 with open(template_file, "r") as f:
                     self.templates = json.load(f)

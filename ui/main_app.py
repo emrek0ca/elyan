@@ -364,7 +364,7 @@ class MainWindow(QMainWindow):
 
     def _load_config(self) -> dict:
         """Load configuration"""
-        config_file = Path.home() / ".wiqo" / "config.json"
+        config_file = Path.home() / ".elyan" / "config.json"
         if config_file.exists():
             try:
                 with open(config_file, 'r') as f:
@@ -586,7 +586,7 @@ class SplashScreen(QSplashScreen):
 
 def check_first_run() -> bool:
     """Check if this is the first run"""
-    config_dir = Path.home() / ".wiqo"
+    config_dir = Path.home() / ".elyan"
     return not config_dir.exists()
 
 

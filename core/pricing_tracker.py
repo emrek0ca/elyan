@@ -27,7 +27,7 @@ class PricingTracker:
         self._load()
 
     def _default_path(self) -> Path:
-        base = Path.home() / ".wiqo"
+        base = Path.home() / ".elyan"
         try:
             base.mkdir(parents=True, exist_ok=True)
             probe = base / ".write_test"
@@ -35,7 +35,7 @@ class PricingTracker:
             probe.unlink(missing_ok=True)
             return base / "pricing_stats.json"
         except Exception:
-            local = Path(__file__).parent.parent / ".wiqo"
+            local = Path(__file__).parent.parent / ".elyan"
             local.mkdir(parents=True, exist_ok=True)
             return local / "pricing_stats.json"
 
@@ -69,7 +69,7 @@ class PricingTracker:
         except Exception as exc:
             logger.warning(f"Pricing stats save failed: {exc}")
             # Fallback to local writable path.
-            local = Path(__file__).parent.parent / ".wiqo" / "pricing_stats.json"
+            local = Path(__file__).parent.parent / ".elyan" / "pricing_stats.json"
             local.parent.mkdir(parents=True, exist_ok=True)
             try:
                 self.db_path = local

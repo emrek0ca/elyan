@@ -692,7 +692,7 @@ class CleanChatWidget(QWidget):
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "Sohbeti Kaydet",
-            str(Path.home() / "Desktop" / "wiqo_chat.txt"),
+            str(Path.home() / "Desktop" / "elyan_chat.txt"),
             "Text Files (*.txt);;Markdown (*.md)"
         )
 
@@ -754,7 +754,7 @@ class CleanChatWidget(QWidget):
         if self._is_recording:
             return
         try:
-            fd, path = tempfile.mkstemp(prefix="wiqo_ptt_", suffix=".wav")
+            fd, path = tempfile.mkstemp(prefix="elyan_ptt_", suffix=".wav")
             os.close(fd)
             cmd = self._build_ffmpeg_record_cmd(path)
             self._recording_process = subprocess.Popen(

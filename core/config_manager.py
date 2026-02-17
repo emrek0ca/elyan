@@ -59,8 +59,8 @@ class ConfigManager:
     def __init__(self):
         self.config: Dict[str, Any] = {}
         self.feature_flags: Dict[str, FeatureFlag] = {}
-        self.config_file = HOME_DIR / ".wiqo" / "dynamic_config.json"
-        self.flags_file = HOME_DIR / ".wiqo" / "feature_flags.json"
+        self.config_file = HOME_DIR / ".elyan" / "dynamic_config.json"
+        self.flags_file = HOME_DIR / ".elyan" / "feature_flags.json"
         self.env_prefix = "WIQO_"
 
         # Change listeners

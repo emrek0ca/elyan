@@ -79,7 +79,7 @@ class LearningEngine:
 
     def __init__(self, db_path: Optional[Path] = None):
         if db_path is None:
-            db_path = Path.home() / ".wiqo" / "learning.db"
+            db_path = Path.home() / ".elyan" / "learning.db"
 
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)

@@ -352,7 +352,7 @@ class SelfImprovement:
     def _save_rules(self):
         """Persist optimization rules"""
         try:
-            rules_file = HOME_DIR / ".wiqo" / "optimization_rules.json"
+            rules_file = HOME_DIR / ".elyan" / "optimization_rules.json"
             rules_file.parent.mkdir(parents=True, exist_ok=True)
 
             rules_data = {
@@ -379,7 +379,7 @@ class SelfImprovement:
     def _load_rules(self):
         """Load persisted optimization rules"""
         try:
-            rules_file = HOME_DIR / ".wiqo" / "optimization_rules.json"
+            rules_file = HOME_DIR / ".elyan" / "optimization_rules.json"
             if not rules_file.exists():
                 return
 

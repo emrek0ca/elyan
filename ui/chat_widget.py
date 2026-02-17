@@ -603,7 +603,7 @@ class ChatWidget(QWidget):
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "Sohbeti Kaydet",
-            str(Path.home() / "Desktop" / "wiqo_chat.txt"),
+            str(Path.home() / "Desktop" / "elyan_chat.txt"),
             "Text Files (*.txt);;Markdown (*.md)"
         )
 

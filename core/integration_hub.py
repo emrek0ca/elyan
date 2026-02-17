@@ -63,7 +63,7 @@ class IntegrationHub:
 
     def __init__(self):
         self.integrations: Dict[str, Integration] = {}
-        self.credentials_file = HOME_DIR / ".wiqo" / "integrations.json"
+        self.credentials_file = HOME_DIR / ".elyan" / "integrations.json"
 
         # Load saved integrations
         self._load_integrations()

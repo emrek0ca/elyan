@@ -68,7 +68,7 @@ class SessionManager:
     """Manages user sessions, persistence, and recovery"""
 
     def __init__(self, session_dir: Optional[Path] = None):
-        self.session_dir = session_dir or Path.home() / ".wiqo" / "sessions"
+        self.session_dir = session_dir or Path.home() / ".elyan" / "sessions"
         self.session_dir.mkdir(parents=True, exist_ok=True)
 
         # In-memory sessions

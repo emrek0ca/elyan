@@ -164,7 +164,7 @@ class ProactiveSuggestionEngine:
     """Suggests tasks based on user patterns and context"""
 
     def __init__(self, history_file: Optional[Path] = None):
-        self.history_file = history_file or Path.home() / ".wiqo" / "suggestions_history.json"
+        self.history_file = history_file or Path.home() / ".elyan" / "suggestions_history.json"
         self.suggestions: List[ProactiveSuggestion] = []
         self.user_patterns: Dict[str, Any] = {}
         self._load_history()

@@ -17,13 +17,13 @@ echo "Config dosyaları siliniyor..."
 rm -f .env
 rm -f ~/.config/cdacs-bot/settings.json
 rm -rf ~/.config/cdacs-bot/
-rm -rf ~/.wiqo/
+rm -rf ~/.elyan/
 
 echo "Learning database siliniyor..."
-rm -f ~/.wiqo/learning.db
+rm -f ~/.elyan/learning.db
 
 echo "Session dosyaları siliniyor..."
-rm -rf ~/.wiqo/sessions/
+rm -rf ~/.elyan/sessions/
 
 echo ""
 echo "Tüm ayarlar sıfırlandı!"

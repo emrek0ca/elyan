@@ -18,8 +18,8 @@ logger = get_logger("pipeline_state")
 class PipelineStateManager:
     def __init__(self, state_path: Path | None = None):
         if state_path is None:
-            preferred = Path.home() / ".wiqo"
-            fallback = Path(__file__).parent.parent / ".wiqo"
+            preferred = Path.home() / ".elyan"
+            fallback = Path(__file__).parent.parent / ".elyan"
             target_dir = preferred
             try:
                 preferred.mkdir(parents=True, exist_ok=True)

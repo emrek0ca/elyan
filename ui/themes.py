@@ -221,7 +221,7 @@ FUTURE_LIGHT = ThemeColors(
 
 
 THEMES: Dict[str, ThemeColors] = {
-    "wiqo": WIQO_WHITE,
+    "elyan": WIQO_WHITE,
     "dark": DARK_THEME,
     "light": LIGHT_THEME,
     "midnight": MIDNIGHT_THEME,
@@ -232,7 +232,7 @@ THEMES: Dict[str, ThemeColors] = {
 }
 
 THEME_NAMES = {
-    "wiqo": "Elyan Beyaz (Professional)",
+    "elyan": "Elyan Beyaz (Professional)",
     "dark": "Koyu (Dark)",
     "light": "Açık (Light)",
     "midnight": "Gece Yarısı (Midnight)",

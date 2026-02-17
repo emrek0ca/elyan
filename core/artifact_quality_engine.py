@@ -18,8 +18,8 @@ logger = get_logger("artifact_quality")
 class ArtifactQualityEngine:
     def __init__(self, db_path: Path | None = None):
         if db_path is None:
-            preferred = Path.home() / ".wiqo"
-            fallback = Path(__file__).parent.parent / ".wiqo"
+            preferred = Path.home() / ".elyan"
+            fallback = Path(__file__).parent.parent / ".elyan"
             target_dir = preferred
             try:
                 preferred.mkdir(parents=True, exist_ok=True)

@@ -328,13 +328,13 @@ class StartupChecker:
                 fix_suggestion=f"Fix permissions: chmod 755 {logs_dir}"
             ))
 
-        home_config_dir = Path.home() / ".wiqo"
-        local_fallback_dir = self.root_dir / ".wiqo"
+        home_config_dir = Path.home() / ".elyan"
+        local_fallback_dir = self.root_dir / ".elyan"
 
         if self._is_dir_writable(home_config_dir):
             self.checks.append(HealthCheckResult(
                 passed=True,
-                message="Directory writable: .wiqo",
+                message="Directory writable: .elyan",
                 severity="info"
             ))
             return
@@ -358,7 +358,7 @@ class StartupChecker:
     def _is_dir_writable(self, directory: Path) -> bool:
         try:
             directory.mkdir(parents=True, exist_ok=True)
-            probe = directory / ".wiqo_write_test"
+            probe = directory / ".elyan_write_test"
             probe.write_text("ok", encoding="utf-8")
             probe.unlink(missing_ok=True)
             return True
