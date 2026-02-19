@@ -837,3 +837,26 @@ mkdocs serve
   - `elyan gateway restart --daemon --port 18789`
   - `elyan gateway health --json --port 18789`
   - başarısız başlangıç senaryosunda retry mesajı doğrulandı.
+
+## OTURUM GÜNCELLEMESİ — 2026-02-20 (LAUNCHD/DAEMON ÇAKIŞMA DÜZELTMESİ + STARTUP STABILIZATION) ✅
+- `cli/commands/gateway.py` — servis ve manuel daemon çakışması giderildi:
+  - launchd servis algısı için sabit `LAUNCHD_LABEL` + servis ref helper eklendi.
+  - yeni `_kickstart_launchd_service()` ile launchd aktifse başlat/restart artık doğrudan launchd üzerinden yapılıyor.
+  - yeni `_wait_until_gateway_ready()` ile health readiness bekleme tek noktaya alındı.
+  - `start_gateway --daemon` davranışı:
+    - launchd aktifse manuel process spawn yerine launchd kickstart + health wait.
+    - başarısız durumda net yönlendirme: `elyan service uninstall` sonrası manuel mod.
+  - `restart_gateway --daemon` davranışı:
+    - launchd aktifse stop/start yerine launchd kickstart ile çakışmasız restart.
+  - `stop_gateway` launchd aktifken KeepAlive auto-restart hakkında anlaşılır uyarı veriyor.
+- `tests/unit/test_gateway_cli.py` — yeni davranış için regresyon testleri eklendi:
+  - launchd aktif değilken mevcut stop→start akışı korunuyor.
+  - launchd aktifken restart’ın kickstart yoluna gittiği doğrulanıyor.
+
+**Doğrulama:**
+- `source .venv/bin/activate && python -m py_compile cli/commands/gateway.py tests/unit/test_gateway_cli.py main.py` → **OK**
+- `source .venv/bin/activate && PYTHONPATH=. pytest -q tests/unit/test_gateway_cli.py tests/unit/test_cli_main.py` → **9 passed**
+- canlı smoke:
+  - `elyan gateway restart --daemon --port 18789` → **healthy**
+  - `elyan gateway health --json --port 18789` → **healthy: true**
+  - `GET /api/tools/diagnostics` → `broken_tools=0`

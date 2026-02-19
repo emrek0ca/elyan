@@ -11,6 +11,7 @@ from pathlib import Path
 PID_FILE = Path.home() / ".elyan" / "gateway.pid"
 LOG_FILE = Path.home() / ".elyan" / "logs" / "gateway.log"
 DEFAULT_PORT = int(os.environ.get("ELYAN_PORT", 18789))
+LAUNCHD_LABEL = "ai.elyan.gateway"
 
 
 def _resolve_project_root() -> Path:
@@ -141,11 +142,14 @@ def _running_gateway_pid(port: int) -> int | None:
     return None
 
 
-def _is_launchd_service_loaded(label: str = "ai.elyan.gateway") -> bool:
+def _launchd_service_ref(label: str = LAUNCHD_LABEL) -> str:
+    return f"gui/{os.getuid()}/{label}"
+
+
+def _is_launchd_service_loaded(label: str = LAUNCHD_LABEL) -> bool:
     try:
-        import subprocess
         proc = subprocess.run(
-            ["launchctl", "print", f"gui/{os.getuid()}/{label}"],
+            ["launchctl", "print", _launchd_service_ref(label)],
             check=False,
             capture_output=True,
             text=True,
@@ -153,6 +157,32 @@ def _is_launchd_service_loaded(label: str = "ai.elyan.gateway") -> bool:
         return proc.returncode == 0
     except Exception:
         return False
+
+
+def _kickstart_launchd_service(label: str = LAUNCHD_LABEL) -> tuple[bool, str | None]:
+    try:
+        proc = subprocess.run(
+            ["launchctl", "kickstart", "-k", _launchd_service_ref(label)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode == 0:
+            return True, None
+        err = (proc.stderr or proc.stdout or "").strip() or "launchctl kickstart failed"
+        return False, err
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _wait_until_gateway_ready(port: int, timeout_s: float = 15.0) -> bool:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        status = _fetch_gateway_status(port)
+        if status.get("ok"):
+            return True
+        time.sleep(0.5)
+    return False
 
 def _safe_process_info(pid: int) -> dict:
     info = {
@@ -213,14 +243,37 @@ def start_gateway(daemon=False, port: int | None = None):
     
     if daemon:
         # Launch independent process
-        import subprocess
         log_file = LOG_FILE
         log_file.parent.mkdir(parents=True, exist_ok=True)
 
         if _is_launchd_service_loaded():
             print("ℹ️  launchd servisi aktif görünüyor (ai.elyan.gateway).")
-            print("    Manuel --daemon ile birlikte çalıştırmak port çakışmasına yol açabilir.")
-            print("    Tek mod önerisi: ya `elyan service install` ya da `elyan gateway start --daemon`.")
+            print("    Port çakışmasını önlemek için başlatma launchd üzerinden yapılacak.")
+
+            if _wait_until_gateway_ready(gateway_port, timeout_s=2.0):
+                takeover_pid = _running_gateway_pid(gateway_port)
+                if takeover_pid:
+                    _write_pidfile(takeover_pid)
+                print(f"✅  Gateway is healthy at http://127.0.0.1:{gateway_port}")
+                return
+
+            kicked, kick_err = _kickstart_launchd_service()
+            if not kicked:
+                print(f"❌  launchd restart başarısız: {kick_err}")
+                print("    Çözüm: `elyan service uninstall` sonrası `elyan gateway start --daemon` kullanın.")
+                return
+
+            if _wait_until_gateway_ready(gateway_port, timeout_s=20.0):
+                takeover_pid = _running_gateway_pid(gateway_port)
+                if takeover_pid:
+                    _write_pidfile(takeover_pid)
+                print(f"✅  Gateway is healthy at http://127.0.0.1:{gateway_port}")
+                return
+
+            print("❌  launchd servisi tetiklendi fakat gateway hazır olmadı.")
+            print(f"    Log: tail -n 120 {log_file}")
+            print("    Çözüm: `elyan service uninstall` ile servis modunu kapatıp manuel daemon kullanın.")
+            return
         
         with open(log_file, "a") as log:
             env = dict(os.environ)
@@ -342,6 +395,10 @@ def start_gateway(daemon=False, port: int | None = None):
 
 def stop_gateway(port: int | None = None):
     gateway_port = int(port or DEFAULT_PORT)
+    if _is_launchd_service_loaded():
+        print("ℹ️  launchd servisi aktif. KeepAlive nedeniyle süreç otomatik yeniden başlayabilir.")
+        print("    Tam durdurma için: `elyan service uninstall`")
+
     targets = set()
     pid = _read_pidfile()
     if pid:
@@ -376,6 +433,24 @@ def stop_gateway(port: int | None = None):
 
 def restart_gateway(daemon=False, port: int | None = None):
     gateway_port = int(port or DEFAULT_PORT)
+    if daemon and _is_launchd_service_loaded():
+        print("🔄  launchd servisi üzerinden yeniden başlatılıyor...")
+        kicked, kick_err = _kickstart_launchd_service()
+        if not kicked:
+            print(f"❌  launchd restart başarısız: {kick_err}")
+            print("    Çözüm: `elyan service uninstall` sonrası manuel daemon restart deneyin.")
+            return
+
+        if _wait_until_gateway_ready(gateway_port, timeout_s=20.0):
+            takeover_pid = _running_gateway_pid(gateway_port)
+            if takeover_pid:
+                _write_pidfile(takeover_pid)
+            print(f"✅  Gateway is healthy at http://127.0.0.1:{gateway_port}")
+        else:
+            print("❌  launchd restart sonrası gateway hazır olmadı.")
+            print(f"    Log: tail -n 120 {LOG_FILE}")
+        return
+
     stop_gateway(port=gateway_port)
     deadline = time.time() + 12
     while time.time() < deadline:

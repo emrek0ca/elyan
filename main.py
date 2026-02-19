@@ -17,6 +17,7 @@ import asyncio
 import sys
 import os
 import socket
+import time
 from pathlib import Path
 
 # Fix path for imports
@@ -32,8 +33,23 @@ GATEWAY_PORT = int(os.environ.get("ELYAN_PORT", 18789))
 
 
 def check_port_available(port: int, host: str = "127.0.0.1") -> bool:
-    """BUG-FUNC-009: Check if port is available before starting gateway."""
+    """
+    BUG-FUNC-009 hardened:
+    Avoid false negatives right after restart (TIME_WAIT) by checking
+    active listeners first, then probing bind with SO_REUSEADDR.
+    """
+    # If something is actively accepting, port is in use.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.3)
+        try:
+            if probe.connect_ex((host, port)) == 0:
+                return False
+        except OSError:
+            pass
+
+    # Fallback bind probe that tolerates restart race windows.
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.settimeout(1)
         try:
             s.bind((host, port))
@@ -66,19 +82,27 @@ def start_ui():
 
 def start_cli():
     """Start the Unified Gateway (API + Telegram + All Channels)."""
-    # BUG-FUNC-009: Check port availability before starting
+    # BUG-FUNC-009: Check port availability before starting.
+    # Add short retries to survive rapid stop/start races.
     if not check_port_available(GATEWAY_PORT):
         if find_existing_gateway(GATEWAY_PORT):
             logger.error(
                 f"Port {GATEWAY_PORT} is already in use by another Elyan instance. "
                 f"Run 'elyan gateway status' to check, or set ELYAN_PORT env var."
             )
-        else:
+            return 1
+        became_free = False
+        for _ in range(8):  # ~2s total
+            if check_port_available(GATEWAY_PORT):
+                became_free = True
+                break
+            time.sleep(0.25)
+        if not became_free:
             logger.error(
                 f"Port {GATEWAY_PORT} is already in use by another process. "
                 f"Free the port or set ELYAN_PORT=<other_port> and retry."
             )
-        return 1
+            return 1
 
     try:
         logger.info(f"Starting Elyan Gateway v{VERSION}...")

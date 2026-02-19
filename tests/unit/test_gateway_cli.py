@@ -115,8 +115,28 @@ def test_restart_gateway_calls_stop_then_start(monkeypatch):
     calls = []
     monkeypatch.setattr(gateway, "stop_gateway", lambda port=None: calls.append(("stop", port)))
     monkeypatch.setattr(gateway, "_is_port_listening", lambda port: False)
+    monkeypatch.setattr(gateway, "_is_launchd_service_loaded", lambda: False)
     monkeypatch.setattr(gateway, "start_gateway", lambda daemon=False, port=None: calls.append(("start", port, daemon)))
 
     gateway.restart_gateway(daemon=True, port=18789)
     assert calls[0] == ("stop", 18789)
     assert calls[1] == ("start", 18789, True)
+
+
+def test_restart_gateway_uses_launchd_when_loaded(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(gateway, "_is_launchd_service_loaded", lambda: True)
+    monkeypatch.setattr(gateway, "_kickstart_launchd_service", lambda: (True, None))
+    monkeypatch.setattr(gateway, "_wait_until_gateway_ready", lambda port, timeout_s=20.0: True)
+    monkeypatch.setattr(gateway, "_running_gateway_pid", lambda port: 98765)
+    monkeypatch.setattr(gateway, "_write_pidfile", lambda pid: calls.append(("write_pid", pid)))
+    monkeypatch.setattr(gateway, "stop_gateway", lambda port=None: calls.append(("stop", port)))
+    monkeypatch.setattr(gateway, "start_gateway", lambda daemon=False, port=None: calls.append(("start", port, daemon)))
+
+    gateway.restart_gateway(daemon=True, port=18789)
+    out = capsys.readouterr().out
+
+    assert ("write_pid", 98765) in calls
+    assert ("stop", 18789) not in calls
+    assert ("start", 18789, True) not in calls
+    assert "launchd servisi üzerinden yeniden başlatılıyor" in out
