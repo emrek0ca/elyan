@@ -12,7 +12,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QThread
 from PyQt6.QtGui import QFont
 
 from ui.components import (
-    WiqoTheme as T, GlassFrame, AnimatedButton, SidebarButton, 
+    ElyanTheme as T, GlassFrame, AnimatedButton, SidebarButton, 
     Switch, SectionHeader, Divider
 )
 from core.pricing_tracker import DEFAULT_PRICING_PER_1K, get_pricing_tracker
@@ -1016,6 +1016,583 @@ class _PricingPage(QWidget):
 
 
 # ═══════════════════════════════════════════════════════════════
+# Channels Settings Page
+# ═══════════════════════════════════════════════════════════════
+class _ChannelsPage(QWidget):
+    settings_changed = pyqtSignal(dict)
+
+    def __init__(self, config: dict, parent=None):
+        super().__init__(parent)
+        self.config = config
+        self._build()
+
+    def _build(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        layout.addWidget(SectionHeader("Kanal Yönetimi"))
+
+        desc = QLabel("Elyan'ın bağlanacağı iletişim kanallarını yapılandırın")
+        desc.setFont(QFont(T.FONT_UI, 12))
+        desc.setStyleSheet(f"color: {T.TEXT_SECONDARY}; padding: 0 4px;")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        channels_data = self.config.get("channels", {})
+
+        # Discord
+        layout.addWidget(SectionHeader("Discord"))
+        discord_card = _Card()
+        dc = discord_card._row_layout
+
+        self._discord_enabled = _styled_check(channels_data.get("discord", {}).get("enabled", False))
+        self._discord_enabled.toggled.connect(self._on_change)
+        dc.addWidget(_Card.row("Etkin", self._discord_enabled, "Discord bot bağlantısını aktif et"))
+
+        dc.addWidget(Divider())
+
+        self._discord_token = _styled_input("Discord bot token", password=True, width=280)
+        self._discord_token.setText(channels_data.get("discord", {}).get("token", ""))
+        self._discord_token.textChanged.connect(self._on_change)
+        dc.addWidget(_Card.row("Bot Token", self._discord_token, "Discord Developer Portal'dan aldığınız token"))
+
+        layout.addWidget(discord_card)
+
+        # Slack
+        layout.addWidget(SectionHeader("Slack"))
+        slack_card = _Card()
+        sc = slack_card._row_layout
+
+        self._slack_enabled = _styled_check(channels_data.get("slack", {}).get("enabled", False))
+        self._slack_enabled.toggled.connect(self._on_change)
+        sc.addWidget(_Card.row("Etkin", self._slack_enabled, "Slack workspace bağlantısını aktif et"))
+
+        sc.addWidget(Divider())
+
+        self._slack_token = _styled_input("Slack bot token (xoxb-...)", password=True, width=280)
+        self._slack_token.setText(channels_data.get("slack", {}).get("bot_token", ""))
+        self._slack_token.textChanged.connect(self._on_change)
+        sc.addWidget(_Card.row("Bot Token", self._slack_token, "Slack App'ten aldığınız bot token"))
+
+        sc.addWidget(Divider())
+
+        self._slack_signing = _styled_input("Signing secret", password=True, width=280)
+        self._slack_signing.setText(channels_data.get("slack", {}).get("signing_secret", ""))
+        self._slack_signing.textChanged.connect(self._on_change)
+        sc.addWidget(_Card.row("Signing Secret", self._slack_signing, "Request doğrulama için"))
+
+        layout.addWidget(slack_card)
+
+        # WhatsApp
+        layout.addWidget(SectionHeader("WhatsApp"))
+        wa_card = _Card()
+        wc = wa_card._row_layout
+
+        self._wa_enabled = _styled_check(channels_data.get("whatsapp", {}).get("enabled", False))
+        self._wa_enabled.toggled.connect(self._on_change)
+        wc.addWidget(_Card.row("Etkin", self._wa_enabled, "WhatsApp bağlantısını aktif et"))
+
+        wc.addWidget(Divider())
+
+        self._wa_phone = _styled_input("+90...", width=200)
+        self._wa_phone.setText(channels_data.get("whatsapp", {}).get("phone_number", ""))
+        self._wa_phone.textChanged.connect(self._on_change)
+        wc.addWidget(_Card.row("Telefon Numarası", self._wa_phone, "WhatsApp'a bağlı telefon numarası"))
+
+        layout.addWidget(wa_card)
+
+        # WebChat
+        layout.addWidget(SectionHeader("WebChat"))
+        web_card = _Card()
+        xc = web_card._row_layout
+
+        self._webchat_enabled = _styled_check(channels_data.get("webchat", {}).get("enabled", True))
+        self._webchat_enabled.toggled.connect(self._on_change)
+        xc.addWidget(_Card.row("Etkin", self._webchat_enabled, "Tarayıcı tabanlı sohbet arayüzü"))
+
+        layout.addWidget(web_card)
+
+        # Gateway
+        layout.addWidget(SectionHeader("Gateway"))
+        gw_card = _Card()
+        gc = gw_card._row_layout
+
+        self._gw_port = QSpinBox()
+        self._gw_port.setRange(1024, 65535)
+        self._gw_port.setValue(int(self.config.get("gateway_port", 18789)))
+        self._gw_port.setFixedWidth(100)
+        self._gw_port.setFixedHeight(34)
+        self._gw_port.setStyleSheet(f"""
+            QSpinBox {{
+                background: {T.BG_SECONDARY};
+                border: 1px solid {T.BORDER_LIGHT};
+                border-radius: 8px;
+                padding: 0 10px;
+                font-size: 13px;
+                color: {T.TEXT_PRIMARY};
+            }}
+        """)
+        self._gw_port.valueChanged.connect(self._on_change)
+        gc.addWidget(_Card.row("Gateway Port", self._gw_port, "HTTP/WebSocket sunucu portu"))
+
+        gc.addWidget(Divider())
+
+        self._webhook_auth = _styled_input("Bearer token", password=True, width=200)
+        self._webhook_auth.setText(self.config.get("webhook_auth_token", ""))
+        self._webhook_auth.textChanged.connect(self._on_change)
+        gc.addWidget(_Card.row("Webhook Token", self._webhook_auth, "Harici webhook isteklerinin doğrulanması"))
+
+        layout.addWidget(gw_card)
+        layout.addStretch()
+
+    def _on_change(self):
+        self.settings_changed.emit(self.get_settings())
+
+    def get_settings(self) -> dict:
+        return {
+            "channels": {
+                "discord": {
+                    "enabled": _switch_checked(self._discord_enabled),
+                    "token": self._discord_token.text().strip(),
+                },
+                "slack": {
+                    "enabled": _switch_checked(self._slack_enabled),
+                    "bot_token": self._slack_token.text().strip(),
+                    "signing_secret": self._slack_signing.text().strip(),
+                },
+                "whatsapp": {
+                    "enabled": _switch_checked(self._wa_enabled),
+                    "phone_number": self._wa_phone.text().strip(),
+                },
+                "webchat": {
+                    "enabled": _switch_checked(self._webchat_enabled),
+                },
+            },
+            "gateway_port": self._gw_port.value(),
+            "webhook_auth_token": self._webhook_auth.text().strip(),
+        }
+
+
+# ═══════════════════════════════════════════════════════════════
+# Cron & Scheduler Settings Page
+# ═══════════════════════════════════════════════════════════════
+class _CronPage(QWidget):
+    settings_changed = pyqtSignal(dict)
+
+    def __init__(self, config: dict, parent=None):
+        super().__init__(parent)
+        self.config = config
+        self._build()
+
+    def _build(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        layout.addWidget(SectionHeader("Zamanlanmış Görevler"))
+
+        desc = QLabel("Cron ifadeleri ile otomatik görevler tanımlayın")
+        desc.setFont(QFont(T.FONT_UI, 12))
+        desc.setStyleSheet(f"color: {T.TEXT_SECONDARY}; padding: 0 4px;")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        # Add new job
+        layout.addWidget(SectionHeader("Yeni Görev Ekle"))
+        add_card = _Card()
+        ac = add_card._row_layout
+
+        self._cron_expr = _styled_input("0 6 * * *  (her gün 06:00)", width=200)
+        ac.addWidget(_Card.row("Cron İfadesi", self._cron_expr, "Standart cron formatı: dakika saat gün ay haftagünü"))
+
+        ac.addWidget(Divider())
+
+        self._cron_prompt = _styled_input("Sabah brifingini hazırla", width=320)
+        ac.addWidget(_Card.row("Görev Prompt", self._cron_prompt, "Agent'a gönderilecek komut"))
+
+        ac.addWidget(Divider())
+
+        self._cron_channel = _styled_combo(["telegram", "discord", "slack", "webchat"], width=160)
+        ac.addWidget(_Card.row("Hedef Kanal", self._cron_channel, "Sonucun gönderileceği kanal"))
+
+        ac.addWidget(Divider())
+
+        add_btn = _styled_btn("Görev Ekle", primary=True)
+        add_btn.clicked.connect(self._add_job)
+        add_wrap = QWidget()
+        add_wrap.setStyleSheet("background: transparent;")
+        awl = QHBoxLayout(add_wrap)
+        awl.setContentsMargins(20, 8, 20, 8)
+        awl.addStretch()
+        awl.addWidget(add_btn)
+        ac.addWidget(add_wrap)
+
+        layout.addWidget(add_card)
+
+        # Existing jobs
+        layout.addWidget(SectionHeader("Mevcut Görevler"))
+
+        self._jobs_card = _Card()
+        self._jobs_layout = self._jobs_card._row_layout
+        self._refresh_jobs_list()
+
+        layout.addWidget(self._jobs_card)
+
+        # Heartbeat
+        layout.addWidget(SectionHeader("Heartbeat"))
+        hb_card = _Card()
+        hc = hb_card._row_layout
+
+        self._hb_enabled = _styled_check(self.config.get("heartbeat_enabled", False))
+        self._hb_enabled.toggled.connect(self._on_change)
+        hc.addWidget(_Card.row("Heartbeat Etkin", self._hb_enabled, "Periyodik sistem uyanma mekanizması"))
+
+        hc.addWidget(Divider())
+
+        self._hb_interval = QSpinBox()
+        self._hb_interval.setRange(5, 1440)
+        self._hb_interval.setValue(int(self.config.get("heartbeat_interval_minutes", 360)))
+        self._hb_interval.setFixedWidth(100)
+        self._hb_interval.setFixedHeight(34)
+        self._hb_interval.setStyleSheet(f"""
+            QSpinBox {{
+                background: {T.BG_SECONDARY};
+                border: 1px solid {T.BORDER_LIGHT};
+                border-radius: 8px;
+                padding: 0 10px;
+                font-size: 13px;
+                color: {T.TEXT_PRIMARY};
+            }}
+        """)
+        self._hb_interval.valueChanged.connect(self._on_change)
+        hc.addWidget(_Card.row("Aralık (dakika)", self._hb_interval, "Uyanma sıklığı"))
+
+        layout.addWidget(hb_card)
+        layout.addStretch()
+
+    def _add_job(self):
+        expr = self._cron_expr.text().strip()
+        prompt = self._cron_prompt.text().strip()
+        channel = self._cron_channel.currentText()
+        if not expr or not prompt:
+            return
+
+        cron_jobs = self.config.get("cron_jobs", [])
+        cron_jobs.append({
+            "expression": expr,
+            "prompt": prompt,
+            "channel": channel,
+            "enabled": True,
+        })
+        self.config["cron_jobs"] = cron_jobs
+        self._cron_expr.clear()
+        self._cron_prompt.clear()
+        self._refresh_jobs_list()
+        self._on_change()
+
+    def _remove_job(self, index: int):
+        cron_jobs = self.config.get("cron_jobs", [])
+        if 0 <= index < len(cron_jobs):
+            cron_jobs.pop(index)
+            self.config["cron_jobs"] = cron_jobs
+            self._refresh_jobs_list()
+            self._on_change()
+
+    def _refresh_jobs_list(self):
+        while self._jobs_layout.count():
+            item = self._jobs_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        cron_jobs = self.config.get("cron_jobs", [])
+        if not cron_jobs:
+            empty = QLabel("Henüz zamanlanmış görev yok")
+            empty.setStyleSheet(f"color: {T.TEXT_SECONDARY}; font-size: 12px; padding: 16px;")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._jobs_layout.addWidget(empty)
+            return
+
+        for i, job in enumerate(cron_jobs):
+            row = QWidget()
+            row.setStyleSheet("background: transparent;")
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(20, 8, 20, 8)
+            rl.setSpacing(12)
+
+            expr_lbl = QLabel(job.get("expression", ""))
+            expr_lbl.setFont(QFont("SF Mono", 12))
+            expr_lbl.setStyleSheet(f"color: {T.ACCENT_BLUE}; background: transparent;")
+            expr_lbl.setFixedWidth(120)
+            rl.addWidget(expr_lbl)
+
+            prompt_lbl = QLabel(job.get("prompt", "")[:50])
+            prompt_lbl.setStyleSheet(f"color: {T.TEXT_PRIMARY}; font-size: 12px; background: transparent;")
+            rl.addWidget(prompt_lbl, 1)
+
+            ch_lbl = QLabel(job.get("channel", "telegram"))
+            ch_lbl.setStyleSheet(f"color: {T.TEXT_SECONDARY}; font-size: 11px; background: transparent;")
+            rl.addWidget(ch_lbl)
+
+            del_btn = QPushButton("Sil")
+            del_btn.setFixedSize(50, 28)
+            del_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent;
+                    color: #FF3B30;
+                    border: 1px solid #FF3B30;
+                    border-radius: 6px;
+                    font-size: 11px;
+                }}
+                QPushButton:hover {{ background: #FF3B3010; }}
+            """)
+            del_btn.clicked.connect(lambda _, idx=i: self._remove_job(idx))
+            rl.addWidget(del_btn)
+
+            self._jobs_layout.addWidget(row)
+            if i < len(cron_jobs) - 1:
+                self._jobs_layout.addWidget(Divider())
+
+    def _on_change(self):
+        self.settings_changed.emit(self.get_settings())
+
+    def get_settings(self) -> dict:
+        return {
+            "cron_jobs": self.config.get("cron_jobs", []),
+            "heartbeat_enabled": _switch_checked(self._hb_enabled),
+            "heartbeat_interval_minutes": self._hb_interval.value(),
+        }
+
+
+# ═══════════════════════════════════════════════════════════════
+# Security Settings Page
+# ═══════════════════════════════════════════════════════════════
+class _SecurityPage(QWidget):
+    settings_changed = pyqtSignal(dict)
+
+    def __init__(self, config: dict, parent=None):
+        super().__init__(parent)
+        self.config = config
+        self._build()
+
+    def _build(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        layout.addWidget(SectionHeader("Güvenlik & İzolasyon"))
+
+        # Tool Policy
+        layout.addWidget(SectionHeader("Tool Politikası"))
+        policy_card = _Card()
+        pc = policy_card._row_layout
+
+        self._sandbox_enabled = _styled_check(self.config.get("sandbox_enabled", False))
+        self._sandbox_enabled.toggled.connect(self._on_change)
+        pc.addWidget(_Card.row("Docker Sandbox", self._sandbox_enabled, "Komut çalıştırmayı Docker container'da izole et"))
+
+        pc.addWidget(Divider())
+
+        self._tool_approval = _styled_check(self.config.get("tool_approval_required", True))
+        self._tool_approval.toggled.connect(self._on_change)
+        pc.addWidget(_Card.row("Tool Onayı", self._tool_approval, "Riskli araç kullanımında kullanıcı onayı iste"))
+
+        pc.addWidget(Divider())
+
+        self._destructive_block = _styled_check(self.config.get("block_destructive", True))
+        self._destructive_block.toggled.connect(self._on_change)
+        pc.addWidget(_Card.row("Yıkıcı İşlem Engeli", self._destructive_block, "rm -rf, format gibi tehlikeli komutları engelle"))
+
+        layout.addWidget(policy_card)
+
+        # Rate Limiting
+        layout.addWidget(SectionHeader("Hız Limitleri"))
+        rate_card = _Card()
+        rc = rate_card._row_layout
+
+        self._rate_limit = QSpinBox()
+        self._rate_limit.setRange(1, 100)
+        self._rate_limit.setValue(int(self.config.get("rate_limit_per_minute", 30)))
+        self._rate_limit.setFixedWidth(100)
+        self._rate_limit.setFixedHeight(34)
+        self._rate_limit.setStyleSheet(f"""
+            QSpinBox {{
+                background: {T.BG_SECONDARY};
+                border: 1px solid {T.BORDER_LIGHT};
+                border-radius: 8px;
+                padding: 0 10px;
+                font-size: 13px;
+                color: {T.TEXT_PRIMARY};
+            }}
+        """)
+        self._rate_limit.valueChanged.connect(self._on_change)
+        rc.addWidget(_Card.row("İstek/Dakika", self._rate_limit, "Dakikadaki maksimum istek sayısı"))
+
+        rc.addWidget(Divider())
+
+        self._daily_token_limit = QSpinBox()
+        self._daily_token_limit.setRange(0, 1000000)
+        self._daily_token_limit.setSingleStep(10000)
+        self._daily_token_limit.setValue(int(self.config.get("daily_token_limit", 100000)))
+        self._daily_token_limit.setFixedWidth(140)
+        self._daily_token_limit.setFixedHeight(34)
+        self._daily_token_limit.setStyleSheet(f"""
+            QSpinBox {{
+                background: {T.BG_SECONDARY};
+                border: 1px solid {T.BORDER_LIGHT};
+                border-radius: 8px;
+                padding: 0 10px;
+                font-size: 13px;
+                color: {T.TEXT_PRIMARY};
+            }}
+        """)
+        self._daily_token_limit.valueChanged.connect(self._on_change)
+        rc.addWidget(_Card.row("Günlük Token Limiti", self._daily_token_limit, "0 = sınırsız"))
+
+        layout.addWidget(rate_card)
+
+        # Audit
+        layout.addWidget(SectionHeader("Denetim"))
+        audit_card = _Card()
+        auc = audit_card._row_layout
+
+        self._audit_enabled = _styled_check(self.config.get("audit_logging", True))
+        self._audit_enabled.toggled.connect(self._on_change)
+        auc.addWidget(_Card.row("Audit Logging", self._audit_enabled, "Tüm agent işlemlerini kaydet"))
+
+        auc.addWidget(Divider())
+
+        self._audit_retention = QSpinBox()
+        self._audit_retention.setRange(1, 365)
+        self._audit_retention.setValue(int(self.config.get("audit_retention_days", 30)))
+        self._audit_retention.setFixedWidth(100)
+        self._audit_retention.setFixedHeight(34)
+        self._audit_retention.setStyleSheet(f"""
+            QSpinBox {{
+                background: {T.BG_SECONDARY};
+                border: 1px solid {T.BORDER_LIGHT};
+                border-radius: 8px;
+                padding: 0 10px;
+                font-size: 13px;
+                color: {T.TEXT_PRIMARY};
+            }}
+        """)
+        self._audit_retention.valueChanged.connect(self._on_change)
+        auc.addWidget(_Card.row("Log Saklama (gün)", self._audit_retention, "Eski loglar otomatik temizlenir"))
+
+        layout.addWidget(audit_card)
+
+        # Keychain
+        layout.addWidget(SectionHeader("Keychain"))
+        kc_card = _Card()
+        kcc = kc_card._row_layout
+
+        self._keychain_enabled = _styled_check(self.config.get("keychain_enabled", False))
+        self._keychain_enabled.toggled.connect(self._on_change)
+        kcc.addWidget(_Card.row("macOS Keychain", self._keychain_enabled, "API anahtarlarını Keychain'de sakla (.env yerine)"))
+
+        layout.addWidget(kc_card)
+        layout.addStretch()
+
+    def _on_change(self):
+        self.settings_changed.emit(self.get_settings())
+
+    def get_settings(self) -> dict:
+        return {
+            "sandbox_enabled": _switch_checked(self._sandbox_enabled),
+            "tool_approval_required": _switch_checked(self._tool_approval),
+            "block_destructive": _switch_checked(self._destructive_block),
+            "rate_limit_per_minute": self._rate_limit.value(),
+            "daily_token_limit": self._daily_token_limit.value(),
+            "audit_logging": _switch_checked(self._audit_enabled),
+            "audit_retention_days": self._audit_retention.value(),
+            "keychain_enabled": _switch_checked(self._keychain_enabled),
+        }
+
+
+# ═══════════════════════════════════════════════════════════════
+# Skills Settings Page
+# ═══════════════════════════════════════════════════════════════
+class _SkillsPage(QWidget):
+    settings_changed = pyqtSignal(dict)
+
+    def __init__(self, config: dict, parent=None):
+        super().__init__(parent)
+        self.config = config
+        self._build()
+
+    def _build(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        layout.addWidget(SectionHeader("Skill Yönetimi"))
+
+        desc = QLabel("Yüklü skill/plugin'leri yönetin. Skill'ler ~/.elyan/skills/ dizininde bulunur.")
+        desc.setFont(QFont(T.FONT_UI, 12))
+        desc.setStyleSheet(f"color: {T.TEXT_SECONDARY}; padding: 0 4px;")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        # Built-in skills
+        layout.addWidget(SectionHeader("Dahili Skill'ler"))
+        builtin_card = _Card()
+        bc = builtin_card._row_layout
+
+        skills_config = self.config.get("skills", {})
+        self._skill_switches = {}
+
+        builtin_skills = [
+            ("system", "Sistem", "Sistem bilgisi, ekran görüntüsü, ses kontrolü"),
+            ("files", "Dosya", "Dosya okuma, yazma, arama işlemleri"),
+            ("research", "Araştırma", "Web araştırma, rapor oluşturma"),
+            ("browser", "Tarayıcı", "Web otomasyon, sayfa gezinme"),
+            ("office", "Ofis", "Excel, PDF, belge işleme"),
+            ("email", "E-posta", "E-posta gönderme ve okuma"),
+        ]
+
+        for i, (key, label, desc_text) in enumerate(builtin_skills):
+            sw = _styled_check(skills_config.get(key, {}).get("enabled", True))
+            sw.toggled.connect(self._on_change)
+            bc.addWidget(_Card.row(label, sw, desc_text))
+            self._skill_switches[key] = sw
+            if i < len(builtin_skills) - 1:
+                bc.addWidget(Divider())
+
+        layout.addWidget(builtin_card)
+
+        # External skills
+        layout.addWidget(SectionHeader("Harici Skill'ler"))
+        ext_card = _Card()
+        ec = ext_card._row_layout
+
+        ext_skills = [
+            ("github", "GitHub", "Repo, PR, issue yönetimi"),
+            ("spotify", "Spotify", "Müzik kontrolü ve playlist"),
+        ]
+
+        for i, (key, label, desc_text) in enumerate(ext_skills):
+            sw = _styled_check(skills_config.get(key, {}).get("enabled", False))
+            sw.toggled.connect(self._on_change)
+            ec.addWidget(_Card.row(label, sw, desc_text))
+            self._skill_switches[key] = sw
+            if i < len(ext_skills) - 1:
+                ec.addWidget(Divider())
+
+        layout.addWidget(ext_card)
+        layout.addStretch()
+
+    def _on_change(self):
+        self.settings_changed.emit(self.get_settings())
+
+    def get_settings(self) -> dict:
+        skills = {}
+        for key, sw in self._skill_switches.items():
+            skills[key] = {"enabled": _switch_checked(sw)}
+        return {"skills": skills}
+
+
+# ═══════════════════════════════════════════════════════════════
 # Main Settings Panel (with sidebar)
 # ═══════════════════════════════════════════════════════════════
 class SettingsPanelUI(QWidget):
@@ -1052,10 +1629,10 @@ class SettingsPanelUI(QWidget):
 
         # Nav items
         self._nav_btns = []
-        categories = ["AI", "Telegram", "General", "Pricing"]
+        categories = ["AI", "Telegram", "Kanallar", "Cron", "Skill'ler", "Güvenlik", "Genel", "Fiyatlama"]
 
         for i, name in enumerate(categories):
-            btn = SidebarButton("", name) # Icons removed per standard
+            btn = SidebarButton("", name)
             btn.clicked.connect(lambda checked, idx=i: self._nav_to(idx))
             sb_layout.addWidget(btn)
             self._nav_btns.append(btn)
@@ -1080,13 +1657,25 @@ class SettingsPanelUI(QWidget):
         self._telegram = _TelegramPage(self.config)
         self._telegram.settings_changed.connect(self._on_change)
 
+        self._channels = _ChannelsPage(self.config)
+        self._channels.settings_changed.connect(self._on_change)
+
+        self._cron = _CronPage(self.config)
+        self._cron.settings_changed.connect(self._on_change)
+
+        self._skills = _SkillsPage(self.config)
+        self._skills.settings_changed.connect(self._on_change)
+
+        self._security = _SecurityPage(self.config)
+        self._security.settings_changed.connect(self._on_change)
+
         self._general = _GeneralPage(self.config)
         self._general.settings_changed.connect(self._on_change)
 
         self._pricing = _PricingPage(self.config)
         self._pricing.settings_changed.connect(self._on_change)
 
-        for page in [self._ai, self._telegram, self._general, self._pricing]:
+        for page in [self._ai, self._telegram, self._channels, self._cron, self._skills, self._security, self._general, self._pricing]:
             scroll = QScrollArea()
             scroll.setWidget(page)
             scroll.setWidgetResizable(True)
@@ -1131,6 +1720,10 @@ class SettingsPanelUI(QWidget):
         s = {}
         s.update(self._ai.get_settings())
         s.update(self._telegram.get_settings())
+        s.update(self._channels.get_settings())
+        s.update(self._cron.get_settings())
+        s.update(self._skills.get_settings())
+        s.update(self._security.get_settings())
         s.update(self._general.get_settings())
         s.update(self._pricing.get_settings())
         return s

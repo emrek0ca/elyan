@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Elyan Canvas</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .glass { background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(10px); }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen p-8">
+    <div id="app" class="max-w-6xl mx-auto">
+        <header class="mb-8 flex justify-between items-center">
+            <h1 id="title" class="text-3xl font-bold text-gray-800">Elyan Canvas</h1>
+            <span id="type" class="px-3 py-1 bg-blue-100 text-blue-600 rounded-full text-sm font-medium uppercase"></span>
+        </header>
+
+        <div id="content" class="glass border border-gray-200 rounded-2xl shadow-sm p-6 min-h-[400px]">
+            <!-- Dynamic content here -->
+            <div class="flex items-center justify-center h-full text-gray-400">Veri yükleniyor...</div>
+        </div>
+    </div>
+
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        const canvasId = params.get('id');
+
+        async function loadCanvas() {
+            if (!canvasId) {
+                document.getElementById('content').innerHTML = "Canvas ID bulunamadı.";
+                return;
+            }
+
+            try {
+                const resp = await fetch(`/api/canvas/${canvasId}`);
+                const canvas = await resp.json();
+                
+                document.getElementById('title').innerText = canvas.title;
+                document.getElementById('type').innerText = canvas.type;
+
+                renderCanvas(canvas);
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function renderCanvas(canvas) {
+            const container = document.getElementById('content');
+            const data = canvas.data;
+
+            if (canvas.type === 'kanban') {
+                container.innerHTML = `<div class="grid grid-cols-3 gap-4">
+                    ${['todo', 'doing', 'done'].map(status => `
+                        <div class="bg-gray-100 p-4 rounded-xl">
+                            <h3 class="font-bold mb-4 uppercase text-xs text-gray-500">${status}</h3>
+                            <div class="space-y-3">
+                                ${data.items.filter(i => i.status === status).map(i => `
+                                    <div class="bg-white p-3 rounded-lg shadow-sm border border-gray-200">${i.task}</div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>`;
+            } else if (canvas.type === 'chart') {
+                container.innerHTML = `<div class="text-center py-20 text-gray-500 italic">Grafik motoru (D3.js) yükleniyor...</div>`;
+            }
+        }
+
+        loadCanvas();
+    </script>
+</body>
+</html>

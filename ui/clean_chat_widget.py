@@ -56,7 +56,7 @@ class CleanMessageBubble(QFrame):
         if self.is_user:
             avatar.setStyleSheet("""
                 QLabel {
-                    background-color: #7196A2; /* WIQO_STEEL */
+                    background-color: #0F9AFE;
                     color: white;
                     border-radius: 16px;
                 }
@@ -83,7 +83,7 @@ class CleanMessageBubble(QFrame):
         # Sender label
         sender = QLabel("YOU" if self.is_user else "ELYAN")
         sender.setFont(QFont(".AppleSystemUIFont", 10, QFont.Weight.Bold))
-        sender.setStyleSheet(f"color: {'#7196A2' if self.is_user else '#8E8E93'}; border: none; letter-spacing: 0.5px;")
+        sender.setStyleSheet(f"color: {'#0F9AFE' if self.is_user else '#8E8E93'}; border: none; letter-spacing: 0.5px;")
         bubble_layout.addWidget(sender)
 
         # Message text
@@ -111,7 +111,7 @@ class CleanMessageBubble(QFrame):
         if self.is_user:
             bubble.setStyleSheet("""
                 QFrame {
-                    background-color: #7196A2;
+                    background-color: #0F9AFE;
                     border-radius: 18px;
                     border-bottom-right-radius: 4px;
                     border: none;
@@ -152,14 +152,14 @@ class CleanTypingIndicator(QFrame):
         layout.setSpacing(12)
 
         # Avatar
-        avatar = QLabel("W")
+        avatar = QLabel("E")
         avatar.setFixedSize(32, 32)
         avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
         avatar.setFont(QFont(".AppleSystemUIFont", 12, QFont.Weight.Bold))
         avatar.setStyleSheet("""
             QLabel {
                 background-color: #E5E5EA;
-                color: #7196A2;
+                color: #0F9AFE;
                 border-radius: 16px;
             }
         """)
@@ -195,7 +195,7 @@ class CleanTypingIndicator(QFrame):
     def _animate(self):
         for i, dot in enumerate(self._dots):
             if i == self._animation_index:
-                dot.setStyleSheet("color: #94a3b8;")
+                dot.setStyleSheet("color: #8E8E93;")
             else:
                 dot.setStyleSheet("color: #475569;")
 
@@ -387,13 +387,13 @@ class CleanChatWidget(QWidget):
         info_layout.setSpacing(12)
 
         # Avatar
-        avatar = QLabel("W")
+        avatar = QLabel("E")
         avatar.setFixedSize(40, 40)
         avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
         avatar.setFont(QFont(".AppleSystemUIFont", 16, QFont.Weight.Bold))
         avatar.setStyleSheet("""
             QLabel {
-                background-color: #22c55e;
+                background-color: #0F9AFE;
                 color: #ffffff;
                 border-radius: 20px;
             }
@@ -426,7 +426,7 @@ class CleanChatWidget(QWidget):
         clear_btn.setStyleSheet("""
             QPushButton {
                 background-color: transparent;
-                color: #94a3b8;
+                color: #8E8E93;
                 border: none;
                 padding: 8px 12px;
             }
@@ -443,7 +443,7 @@ class CleanChatWidget(QWidget):
         export_btn.setStyleSheet("""
             QPushButton {
                 background-color: transparent;
-                color: #94a3b8;
+                color: #8E8E93;
                 border: none;
                 padding: 8px 12px;
             }
@@ -471,17 +471,17 @@ class CleanChatWidget(QWidget):
         layout.setSpacing(12)
 
         # Attachment button
-        attach_btn = QPushButton("+")
-        attach_btn.setFixedSize(40, 40)
-        attach_btn.setFont(QFont(".AppleSystemUIFont", 18))
+        attach_btn = QPushButton("ADD")
+        attach_btn.setFixedSize(50, 40)
+        attach_btn.setFont(QFont(".AppleSystemUIFont", 11, QFont.Weight.Bold))
         attach_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         attach_btn.setToolTip("Dosya ekle")
         attach_btn.setStyleSheet("""
             QPushButton {
                 background-color: #F2F2F7;
-                color: #7196A2;
+                color: #0F9AFE;
                 border: none;
-                border-radius: 20px;
+                border-radius: 8px;
             }
             QPushButton:hover {
                 background-color: #E5E5EA;
@@ -490,18 +490,18 @@ class CleanChatWidget(QWidget):
         attach_btn.clicked.connect(self._attach_file)
         layout.addWidget(attach_btn)
 
-        # Push-to-talk button (press & hold)
-        self._voice_btn = QPushButton("🎙")
-        self._voice_btn.setFixedSize(40, 40)
-        self._voice_btn.setFont(QFont(".AppleSystemUIFont", 16))
+        # Push-to-talk button
+        self._voice_btn = QPushButton("VOICE")
+        self._voice_btn.setFixedSize(60, 40)
+        self._voice_btn.setFont(QFont(".AppleSystemUIFont", 11, QFont.Weight.Bold))
         self._voice_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._voice_btn.setToolTip("Basılı tut: kaydet, bırak: otomatik yazıya çevir")
         self._voice_btn.setStyleSheet("""
             QPushButton {
                 background-color: #F2F2F7;
-                color: #0f172a;
+                color: #1C1C1E;
                 border: none;
-                border-radius: 20px;
+                border-radius: 8px;
             }
             QPushButton:hover {
                 background-color: #E5E5EA;
@@ -513,20 +513,19 @@ class CleanChatWidget(QWidget):
 
         # Text input
         self._input_field = QLineEdit()
-        self._input_field.setPlaceholderText("Mesajınızı yazın...")
+        self._input_field.setPlaceholderText("Mesajınızı buraya yazın...")
         self._input_field.setMinimumHeight(44)
-        self._input_field.setFont(QFont(".AppleSystemUIFont", 14))
+        self._input_field.setFont(QFont(".AppleSystemUIFont", 13))
         self._input_field.setStyleSheet("""
             QLineEdit {
-                background-color: #F2F2F7;
-                border: 1px solid transparent;
-                border-radius: 20px;
-                padding: 10px 18px;
-                color: #252F33;
+                background-color: #FFFFFF;
+                border: 1px solid #E5E5EA;
+                border-radius: 8px;
+                padding: 10px 16px;
+                color: #1C1C1E;
             }
             QLineEdit:focus {
-                background-color: #FFFFFF;
-                border: 1px solid #D1D1D6;
+                border: 1.5px solid #0F9AFE;
             }
             QLineEdit::placeholder { color: #8E8E93; }
         """)
@@ -534,27 +533,26 @@ class CleanChatWidget(QWidget):
         layout.addWidget(self._input_field, 1)
 
         # Send button
-        self._send_btn = QPushButton("Gönder")
+        self._send_btn = QPushButton("SEND")
         self._send_btn.setMinimumHeight(44)
         self._send_btn.setMinimumWidth(80)
-        self._send_btn.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Medium))
+        self._send_btn.setFont(QFont(".AppleSystemUIFont", 11, QFont.Weight.Bold))
         self._send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._send_btn.setStyleSheet("""
             QPushButton {
-                background-color: #252F33;
+                background-color: #0F9AFE;
                 color: #FFFFFF;
                 border: none;
-                border-radius: 22px;
-                padding: 0 24px;
-                font-weight: 700;
+                border-radius: 8px;
+                padding: 0 20px;
                 letter-spacing: 0.5px;
             }
             QPushButton:hover {
-                background-color: #090E0F;
+                background-color: #0B84D9;
             }
             QPushButton:disabled {
-                background-color: #E5E5EA;
-                color: #8E8E93;
+                background-color: #F2F2F7;
+                color: #C7C7CC;
             }
         """)
         self._send_btn.clicked.connect(self._send_message)

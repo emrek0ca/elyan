@@ -1,0 +1,1722 @@
+<!DOCTYPE html>
+<html lang="tr" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Elyan | Enterprise Control Center</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .sidebar-item { transition: all .15s; }
+        .sidebar-item:hover { background: rgba(255,255,255,0.08); }
+        .sidebar-item.active { background: #0F9AFE; color: white; }
+        .glass-card { background: rgba(255,255,255,0.85); backdrop-filter: blur(14px); border: 1px solid rgba(229,231,235,0.6); }
+        .card-shadow { box-shadow: 0 1px 4px rgba(0,0,0,.08), 0 0 0 1px rgba(0,0,0,.03); }
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; }
+        .pulse-dot { animation: pulse 2s infinite; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+        .activity-row { animation: slideIn .3s ease; }
+        @keyframes slideIn { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:none} }
+        .bar-fill { transition: width .6s ease; }
+    </style>
+</head>
+<body class="h-full bg-[#F0F2F5] text-gray-900 overflow-hidden flex">
+
+<!-- ═══════════════════════ SIDEBAR ═══════════════════════ -->
+<aside class="w-60 bg-[#1A2332] text-gray-300 flex flex-col shrink-0 select-none">
+    <div class="p-5 flex items-center gap-3 border-b border-white/5">
+        <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-700 rounded-lg flex items-center justify-center text-white font-bold text-sm shadow">E</div>
+        <div>
+            <span class="text-base font-bold text-white tracking-tight">ELYAN</span>
+            <p class="text-[10px] text-gray-500 -mt-0.5" id="sb-version">v18.0.0</p>
+        </div>
+    </div>
+
+    <nav class="flex-1 px-3 py-4 space-y-0.5">
+        <button onclick="switchTab('overview')" data-tab="overview" class="sidebar-item active w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left">
+            <i data-lucide="layout-dashboard" class="w-4 h-4 shrink-0"></i>
+            <span class="text-sm font-medium">Genel Bakış</span>
+        </button>
+        <button onclick="switchTab('channels')" data-tab="channels" class="sidebar-item w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left">
+            <i data-lucide="message-square" class="w-4 h-4 shrink-0"></i>
+            <span class="text-sm font-medium">Kanallar</span>
+            <span id="sb-channels-badge" class="ml-auto text-[10px] bg-blue-500 text-white rounded-full px-1.5 py-0.5 hidden">0</span>
+        </button>
+        <button onclick="switchTab('skills')" data-tab="skills" class="sidebar-item w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left">
+            <i data-lucide="puzzle" class="w-4 h-4 shrink-0"></i>
+            <span class="text-sm font-medium">Skills</span>
+            <span id="sb-skills-badge" class="ml-auto text-[10px] bg-cyan-500 text-white rounded-full px-1.5 py-0.5 hidden">0</span>
+        </button>
+        <button onclick="switchTab('tasks')" data-tab="tasks" class="sidebar-item w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left">
+            <i data-lucide="list-checks" class="w-4 h-4 shrink-0"></i>
+            <span class="text-sm font-medium">Görevler</span>
+            <span id="sb-tasks-badge" class="ml-auto text-[10px] bg-orange-500 text-white rounded-full px-1.5 py-0.5 hidden">0</span>
+        </button>
+        <button onclick="switchTab('automation')" data-tab="automation" class="sidebar-item w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left">
+            <i data-lucide="repeat" class="w-4 h-4 shrink-0"></i>
+            <span class="text-sm font-medium">Otomasyon</span>
+            <span id="sb-routines-badge" class="ml-auto text-[10px] bg-emerald-500 text-white rounded-full px-1.5 py-0.5 hidden">0</span>
+        </button>
+        <button onclick="switchTab('analytics')" data-tab="analytics" class="sidebar-item w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left">
+            <i data-lucide="bar-chart-2" class="w-4 h-4 shrink-0"></i>
+            <span class="text-sm font-medium">Analitik</span>
+        </button>
+        <button onclick="switchTab('security')" data-tab="security" class="sidebar-item w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left">
+            <i data-lucide="shield-check" class="w-4 h-4 shrink-0"></i>
+            <span class="text-sm font-medium">Güvenlik</span>
+        </button>
+        <button onclick="switchTab('tools')" data-tab="tools" class="sidebar-item w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left">
+            <i data-lucide="wrench" class="w-4 h-4 shrink-0"></i>
+            <span class="text-sm font-medium">Araçlar</span>
+        </button>
+
+        <div class="pt-4 pb-1 text-[10px] uppercase font-bold text-gray-600 px-3 tracking-widest">Sistem</div>
+        <button onclick="switchTab('settings')" data-tab="settings" class="sidebar-item w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left">
+            <i data-lucide="settings" class="w-4 h-4 shrink-0"></i>
+            <span class="text-sm font-medium">Ayarlar</span>
+        </button>
+    </nav>
+
+    <div class="p-4 border-t border-white/5">
+        <div class="flex items-center gap-2.5 px-1">
+            <div class="relative">
+                <div class="w-7 h-7 bg-gradient-to-br from-green-400 to-emerald-600 rounded-full"></div>
+                <div class="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-green-400 rounded-full border-2 border-[#1A2332] pulse-dot"></div>
+            </div>
+            <div class="overflow-hidden">
+                <p class="text-xs font-semibold text-white truncate">Sistem Aktif</p>
+                <p class="text-[10px] text-gray-500 truncate" id="sb-uptime">—</p>
+            </div>
+        </div>
+    </div>
+</aside>
+
+<!-- ═══════════════════════ MAIN ═══════════════════════ -->
+<main class="flex-1 flex flex-col min-w-0 overflow-hidden">
+
+    <!-- TOP BAR -->
+    <header class="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-6 shrink-0">
+        <div class="flex items-center gap-3">
+            <h2 class="text-sm font-bold" id="page-title">Genel Bakış</h2>
+            <div class="h-3.5 w-px bg-gray-200"></div>
+            <span id="hdr-model" class="px-2 py-0.5 bg-blue-50 text-blue-600 rounded text-[11px] font-medium">—</span>
+            <span class="px-2 py-0.5 bg-green-50 text-green-600 rounded text-[11px] font-medium">Gateway :18789</span>
+        </div>
+        <div class="flex items-center gap-5">
+            <!-- CPU -->
+            <div class="flex items-center gap-2">
+                <span class="text-[10px] font-bold text-gray-400 uppercase">CPU</span>
+                <div class="w-20 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div id="cpu-bar" class="bar-fill bg-blue-500 h-full" style="width:0%"></div>
+                </div>
+                <span id="cpu-val" class="text-xs font-semibold w-8 text-right">—</span>
+            </div>
+            <!-- RAM -->
+            <div class="flex items-center gap-2">
+                <span class="text-[10px] font-bold text-gray-400 uppercase">RAM</span>
+                <div class="w-20 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div id="ram-bar" class="bar-fill bg-purple-500 h-full" style="width:0%"></div>
+                </div>
+                <span id="ram-val" class="text-xs font-semibold w-14 text-right">—</span>
+            </div>
+            <!-- WS indicator -->
+            <div class="flex items-center gap-1.5">
+                <div id="ws-dot" class="w-2 h-2 rounded-full bg-gray-300"></div>
+                <span id="ws-label" class="text-[10px] text-gray-400">WS</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- SCROLLABLE BODY -->
+    <div class="flex-1 overflow-y-auto p-6">
+
+        <!-- ══════════ TAB: OVERVIEW ══════════ -->
+        <div id="tab-overview" class="tab-panel active space-y-6">
+
+            <!-- Status Cards -->
+            <div class="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+                <!-- Gateway -->
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <div class="flex items-center justify-between mb-3">
+                        <div class="p-1.5 bg-green-100 text-green-600 rounded-lg"><i data-lucide="radio" class="w-4 h-4"></i></div>
+                        <span class="text-[10px] font-bold text-green-500 uppercase">Çalışıyor</span>
+                    </div>
+                    <p class="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Gateway</p>
+                    <h3 class="text-xl font-bold mt-0.5" id="card-uptime">—</h3>
+                </div>
+                <!-- Active Tasks -->
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <div class="flex items-center justify-between mb-3">
+                        <div class="p-1.5 bg-orange-100 text-orange-600 rounded-lg"><i data-lucide="list-checks" class="w-4 h-4"></i></div>
+                        <span id="card-tasks-badge" class="text-[10px] font-bold text-orange-500">0 aktif</span>
+                    </div>
+                    <p class="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Görevler</p>
+                    <h3 class="text-xl font-bold mt-0.5" id="card-tasks">—</h3>
+                </div>
+                <!-- Memory -->
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <div class="flex items-center justify-between mb-3">
+                        <div class="p-1.5 bg-purple-100 text-purple-600 rounded-lg"><i data-lucide="database" class="w-4 h-4"></i></div>
+                    </div>
+                    <p class="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Bellek</p>
+                    <h3 class="text-xl font-bold mt-0.5" id="card-memory">—</h3>
+                    <p class="text-[10px] text-gray-400 mt-1" id="card-memory-sub">Kullanıcı kotası: —</p>
+                </div>
+                <!-- Model -->
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <div class="flex items-center justify-between mb-3">
+                        <div class="p-1.5 bg-blue-100 text-blue-600 rounded-lg"><i data-lucide="cpu" class="w-4 h-4"></i></div>
+                    </div>
+                    <p class="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Model</p>
+                    <h3 class="text-base font-bold mt-0.5 truncate" id="card-model">—</h3>
+                </div>
+                <!-- Cost -->
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <div class="flex items-center justify-between mb-3">
+                        <div class="p-1.5 bg-yellow-100 text-yellow-600 rounded-lg"><i data-lucide="dollar-sign" class="w-4 h-4"></i></div>
+                    </div>
+                    <p class="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Bu Ay</p>
+                    <h3 class="text-xl font-bold mt-0.5" id="card-cost">$—</h3>
+                </div>
+                <!-- Success Rate -->
+                <div class="glass-card card-shadow rounded-xl p-4 bg-gradient-to-br from-blue-600 to-blue-800 border-none text-white">
+                    <div class="flex items-center justify-between mb-3">
+                        <div class="p-1.5 bg-white/20 rounded-lg"><i data-lucide="trending-up" class="w-4 h-4"></i></div>
+                    </div>
+                    <p class="text-[10px] text-blue-200 uppercase tracking-wider font-semibold">Başarı</p>
+                    <h3 class="text-xl font-bold mt-0.5" id="card-success">—%</h3>
+                </div>
+            </div>
+
+            <!-- Activity Feed + Quick Task -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+                <!-- Live Activity Feed -->
+                <div class="lg:col-span-2 glass-card card-shadow rounded-xl overflow-hidden flex flex-col">
+                    <div class="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between bg-white/60">
+                        <div class="flex items-center gap-2">
+                            <div id="feed-dot" class="w-2 h-2 rounded-full bg-gray-300"></div>
+                            <h4 class="font-bold text-sm">Canlı Aktivite</h4>
+                        </div>
+                        <button onclick="clearFeed()" class="text-[11px] text-gray-400 hover:text-gray-600">Temizle</button>
+                    </div>
+                    <div id="activity-feed" class="flex-1 overflow-y-auto divide-y divide-gray-50 max-h-72">
+                        <div class="p-4 text-center text-xs text-gray-400">Aktivite bekleniyor...</div>
+                    </div>
+                </div>
+
+                <!-- Quick Task -->
+                <div class="glass-card card-shadow rounded-xl overflow-hidden flex flex-col">
+                    <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60">
+                        <h4 class="font-bold text-sm">Hızlı Görev</h4>
+                    </div>
+                    <div class="p-5 flex flex-col gap-3 flex-1">
+                        <textarea id="quick-task-input" rows="4" placeholder="Bir görev tanımla... örn. 'Masaüstünde ne var?'" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm resize-none outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400"></textarea>
+                        <select id="quick-task-priority" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm outline-none">
+                            <option value="normal">Normal Öncelik</option>
+                            <option value="high">Yüksek Öncelik</option>
+                            <option value="low">Düşük Öncelik</option>
+                        </select>
+                        <button onclick="createTask()" class="w-full py-2.5 bg-gray-900 text-white rounded-lg text-sm font-bold hover:bg-black transition-all flex items-center justify-center gap-2">
+                            <i data-lucide="play" class="w-4 h-4"></i> Görevi Başlat
+                        </button>
+                        <div id="quick-task-status" class="text-xs text-center text-gray-400 hidden"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ══════════ TAB: CHANNELS ══════════ -->
+        <div id="tab-channels" class="tab-panel space-y-4">
+            <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60 flex items-center justify-between">
+                    <h4 class="font-bold text-sm">Kanal Bağlantıları</h4>
+                    <span id="channels-count" class="text-xs text-gray-400">Yükleniyor...</span>
+                </div>
+                <div id="channels-list" class="divide-y divide-gray-50">
+                    <div class="p-8 text-center text-sm text-gray-400">Kanallar yükleniyor...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ══════════ TAB: SKILLS ══════════ -->
+        <div id="tab-skills" class="tab-panel space-y-5">
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Toplam</p>
+                    <p class="text-2xl font-black" id="skills-total">—</p>
+                </div>
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Yüklü</p>
+                    <p class="text-2xl font-black text-blue-600" id="skills-installed">—</p>
+                </div>
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Aktif</p>
+                    <p class="text-2xl font-black text-green-500" id="skills-enabled">—</p>
+                </div>
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Issue</p>
+                    <p class="text-2xl font-black text-red-500" id="skills-issues">—</p>
+                </div>
+            </div>
+
+            <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60 flex flex-wrap gap-2 items-center">
+                    <input id="skills-search" placeholder="Skill ara..." class="bg-gray-50 border border-gray-200 rounded px-2.5 py-1.5 text-xs outline-none w-44" />
+                    <select id="skills-mode" class="bg-gray-50 border border-gray-200 rounded px-2 py-1.5 text-xs outline-none">
+                        <option value="all">Tümü (Catalog)</option>
+                        <option value="installed">Yalnızca Yüklü</option>
+                        <option value="enabled">Yalnızca Aktif</option>
+                    </select>
+                    <button onclick="loadSkills()" class="px-3 py-1.5 bg-gray-900 text-white rounded text-xs font-bold hover:bg-black">Yenile</button>
+                    <button onclick="updateAllSkills()" class="px-3 py-1.5 bg-blue-600 text-white rounded text-xs font-bold hover:bg-blue-700">Update All</button>
+                    <button onclick="checkSkillsHealth()" class="px-3 py-1.5 bg-emerald-600 text-white rounded text-xs font-bold hover:bg-emerald-700">Health Check</button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="border-b border-gray-100 bg-gray-50/50">
+                                <th class="text-left px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Skill</th>
+                                <th class="text-left px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Category</th>
+                                <th class="text-left px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Source</th>
+                                <th class="text-left px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Status</th>
+                                <th class="text-right px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="skills-table" class="divide-y divide-gray-50">
+                            <tr><td colspan="5" class="px-4 py-4 text-center text-xs text-gray-400">Yükleniyor...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <pre id="skills-check-output" class="bg-gray-900 text-gray-100 rounded p-3 text-xs overflow-auto max-h-56">Skill health çıktısı burada.</pre>
+        </div>
+
+        <!-- ══════════ TAB: TASKS ══════════ -->
+        <div id="tab-tasks" class="tab-panel space-y-5">
+            <!-- Active -->
+            <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60 flex items-center justify-between">
+                    <h4 class="font-bold text-sm">Aktif Görevler</h4>
+                    <span id="active-tasks-count" class="text-xs text-gray-400">—</span>
+                </div>
+                <div id="active-tasks-list" class="divide-y divide-gray-50">
+                    <div class="p-6 text-center text-sm text-gray-400">Aktif görev yok</div>
+                </div>
+            </div>
+            <!-- History -->
+            <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60">
+                    <h4 class="font-bold text-sm">Görev Geçmişi</h4>
+                </div>
+                <div id="task-history-list" class="divide-y divide-gray-50">
+                    <div class="p-6 text-center text-sm text-gray-400">Geçmiş yükleniyor...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ══════════ TAB: AUTOMATION ══════════ -->
+        <div id="tab-automation" class="tab-panel space-y-5">
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Toplam Rutin</p>
+                    <p class="text-2xl font-black" id="rt-total">—</p>
+                </div>
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Aktif</p>
+                    <p class="text-2xl font-black text-green-500" id="rt-enabled">—</p>
+                </div>
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Pasif</p>
+                    <p class="text-2xl font-black text-gray-500" id="rt-disabled">—</p>
+                </div>
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Son Geçmiş</p>
+                    <p class="text-sm font-semibold text-gray-700" id="rt-last">—</p>
+                </div>
+            </div>
+
+            <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60">
+                    <h4 class="font-bold text-sm">Yeni Rutin</h4>
+                </div>
+                <div class="p-5 space-y-3">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <select id="rt-template" onchange="applyRoutineTemplate()" class="bg-gray-50 border border-gray-200 rounded px-3 py-2 text-sm outline-none">
+                            <option value="">Template (opsiyonel) — custom rutin</option>
+                        </select>
+                        <input id="rt-name" class="bg-gray-50 border border-gray-200 rounded px-3 py-2 text-sm outline-none" placeholder="Rutin adı (örn: Sabah Panel Kontrol)" />
+                        <input id="rt-expression" class="bg-gray-50 border border-gray-200 rounded px-3 py-2 text-sm outline-none" value="0 9 * * *" placeholder="Cron (örn: 0 9 * * *)" />
+                        <input id="rt-panels" class="bg-gray-50 border border-gray-200 rounded px-3 py-2 text-sm outline-none" placeholder="Panel URL'leri (virgül ile): panel1.com,panel2.com" />
+                        <select id="rt-channel" class="bg-gray-50 border border-gray-200 rounded px-3 py-2 text-sm outline-none">
+                            <option value="telegram">telegram</option>
+                            <option value="whatsapp">whatsapp</option>
+                            <option value="discord">discord</option>
+                            <option value="slack">slack</option>
+                            <option value="webchat">webchat</option>
+                        </select>
+                        <input id="rt-chat-id" class="bg-gray-50 border border-gray-200 rounded px-3 py-2 text-sm outline-none" placeholder="Rapor hedef chat/channel ID" />
+                    </div>
+                    <textarea id="rt-steps" rows="5" class="w-full bg-gray-50 border border-gray-200 rounded p-3 text-xs font-mono outline-none" placeholder="Her satır bir adım olacak şekilde yazın...">Tarayıcıyı aç
+Belirlenen panellere giriş yap
+Yeni veri var mı kontrol et
+Excel / tablo oluştur
+Özet rapor hazırla
+Telegram / WhatsApp gönder</textarea>
+                    <div class="flex items-center gap-2">
+                        <button onclick="createRoutine()" class="px-4 py-2 bg-emerald-600 text-white rounded text-sm font-bold hover:bg-emerald-700">Rutin Ekle</button>
+                        <button onclick="loadRoutines()" class="px-3 py-2 bg-gray-100 text-gray-700 rounded text-sm font-bold hover:bg-gray-200">Yenile</button>
+                        <span id="rt-create-status" class="text-xs text-gray-500"></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60">
+                    <h4 class="font-bold text-sm">Rutin Listesi</h4>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="border-b border-gray-100 bg-gray-50/50">
+                                <th class="text-left px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">ID / Ad</th>
+                                <th class="text-left px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Zamanlama</th>
+                                <th class="text-left px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Hedef</th>
+                                <th class="text-left px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Son Çalışma</th>
+                                <th class="text-right px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">İşlemler</th>
+                            </tr>
+                        </thead>
+                        <tbody id="rt-table" class="divide-y divide-gray-50">
+                            <tr><td colspan="5" class="px-4 py-4 text-center text-xs text-gray-400">Yükleniyor...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ══════════ TAB: ANALYTICS ══════════ -->
+        <div id="tab-analytics" class="tab-panel space-y-5">
+            <!-- Özet kartlar -->
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Toplam Görev</p>
+                    <p class="text-2xl font-black" id="an-total-tasks">—</p>
+                    <p class="text-[10px] text-gray-400 mt-1" id="an-tasks-period">Son 30 gün</p>
+                </div>
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Başarı Oranı</p>
+                    <p class="text-2xl font-black text-green-500" id="an-success">—%</p>
+                    <div class="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                        <div id="an-success-bar" class="bar-fill h-full bg-green-500 rounded-full" style="width:0%"></div>
+                    </div>
+                </div>
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Ort. Süre</p>
+                    <p class="text-2xl font-black" id="an-avg-time">—</p>
+                    <p class="text-[10px] text-gray-400 mt-1">saniye/görev</p>
+                </div>
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Token Tüketimi</p>
+                    <p class="text-2xl font-black" id="an-tokens">—</p>
+                    <p class="text-[10px] text-gray-400 mt-1">toplam token</p>
+                </div>
+            </div>
+
+            <!-- Kanal dağılımı + Maliyet -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- Kanal dağılımı -->
+                <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                    <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60">
+                        <h4 class="font-bold text-sm">Kanal Kullanımı</h4>
+                    </div>
+                    <div id="an-channel-bars" class="p-5 space-y-3">
+                        <div class="text-xs text-gray-400 text-center py-4">Yükleniyor...</div>
+                    </div>
+                </div>
+
+                <!-- Maliyet analizi -->
+                <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                    <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60">
+                        <h4 class="font-bold text-sm">Maliyet Analizi</h4>
+                    </div>
+                    <div class="p-5 space-y-3">
+                        <div class="flex justify-between items-center">
+                            <span class="text-sm text-gray-600">Bu Ay Harcama</span>
+                            <span class="text-sm font-bold text-gray-900" id="an-cost-month">$—</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-sm text-gray-600">Aylık Bütçe</span>
+                            <span class="text-sm font-bold text-blue-600" id="an-budget">$—</span>
+                        </div>
+                        <div class="h-2 bg-gray-100 rounded-full overflow-hidden">
+                            <div id="an-budget-bar" class="bar-fill h-full bg-blue-500 rounded-full" style="width:0%"></div>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-sm text-gray-600">Kalan</span>
+                            <span class="text-sm font-bold text-green-600" id="an-cost-remaining">$—</span>
+                        </div>
+                        <div class="border-t border-gray-100 pt-3 mt-1">
+                            <div class="flex justify-between items-center">
+                                <span class="text-xs text-gray-400">Tahmin (ay sonu)</span>
+                                <span class="text-xs font-bold text-orange-500" id="an-cost-forecast">$—</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Performans metrikleri tablosu -->
+            <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60">
+                    <h4 class="font-bold text-sm">Performans Metrikleri</h4>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="border-b border-gray-100 bg-gray-50/50">
+                                <th class="text-left px-5 py-2.5 text-[10px] font-bold text-gray-400 uppercase tracking-wider">Metrik</th>
+                                <th class="text-right px-5 py-2.5 text-[10px] font-bold text-gray-400 uppercase tracking-wider">Hedef</th>
+                                <th class="text-right px-5 py-2.5 text-[10px] font-bold text-gray-400 uppercase tracking-wider">Mevcut</th>
+                                <th class="text-right px-5 py-2.5 text-[10px] font-bold text-gray-400 uppercase tracking-wider">Durum</th>
+                            </tr>
+                        </thead>
+                        <tbody id="an-metrics-table" class="divide-y divide-gray-50">
+                            <tr><td colspan="4" class="px-5 py-4 text-center text-xs text-gray-400">Yükleniyor...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Model dağılımı -->
+            <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60 flex justify-between items-center">
+                    <h4 class="font-bold text-sm">Model Kullanım Dağılımı</h4>
+                    <span class="text-[10px] text-gray-400" id="an-model-period">Son 30 gün</span>
+                </div>
+                <div id="an-model-bars" class="p-5 space-y-3">
+                    <div class="text-xs text-gray-400 text-center py-4">Yükleniyor...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ══════════ TAB: SECURITY ══════════ -->
+        <div id="tab-security" class="tab-panel space-y-5">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="glass-card card-shadow rounded-xl p-5">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-2">Güvenlik Skoru</p>
+                    <div class="flex items-end gap-2">
+                        <span class="text-4xl font-black text-green-500" id="sec-score">—</span>
+                        <span class="text-sm text-gray-400 mb-1">/100</span>
+                    </div>
+                    <div class="mt-3 h-2 bg-gray-100 rounded-full overflow-hidden">
+                        <div id="sec-score-bar" class="bar-fill h-full bg-green-500 rounded-full" style="width:0%"></div>
+                    </div>
+                </div>
+                <div class="glass-card card-shadow rounded-xl p-5">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-2">Rate Limiter</p>
+                    <p class="text-2xl font-bold" id="sec-rate">Aktif</p>
+                    <p class="text-xs text-gray-400 mt-1">Kötüye kullanım koruması</p>
+                </div>
+                <div class="glass-card card-shadow rounded-xl p-5">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-2">Audit Log</p>
+                    <p class="text-2xl font-bold" id="sec-audit-count">—</p>
+                    <p class="text-xs text-gray-400 mt-1">Toplam kayıt</p>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- Güvenlik Kontrolleri -->
+                <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                    <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60">
+                        <h4 class="font-bold text-sm">Güvenlik Kontrolleri</h4>
+                    </div>
+                    <div class="divide-y divide-gray-50">
+                        <div class="px-5 py-3 flex items-center justify-between">
+                            <span class="text-sm">Input Validation</span>
+                            <span class="text-xs font-bold text-green-500">✓ Aktif</span>
+                        </div>
+                        <div class="px-5 py-3 flex items-center justify-between">
+                            <span class="text-sm">Deny-Before-Allow Policy</span>
+                            <span class="text-xs font-bold text-green-500">✓ Aktif</span>
+                        </div>
+                        <div class="px-5 py-3 flex items-center justify-between">
+                            <span class="text-sm">Keychain Secret Storage</span>
+                            <span class="text-xs font-bold text-green-500">✓ Aktif</span>
+                        </div>
+                        <div class="px-5 py-3 flex items-center justify-between">
+                            <span class="text-sm">Async Rate Limiter</span>
+                            <span class="text-xs font-bold text-green-500">✓ Aktif</span>
+                        </div>
+                        <div class="px-5 py-3 flex items-center justify-between">
+                            <span class="text-sm">Explicit Approval (Risky)</span>
+                            <span class="text-xs font-bold text-green-500">✓ Aktif</span>
+                        </div>
+                        <div class="px-5 py-3 flex items-center justify-between">
+                            <span class="text-sm">Privacy Redaction</span>
+                            <span class="text-xs font-bold text-green-500">✓ Aktif</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bekleyen Onaylar -->
+                <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                    <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60 flex justify-between items-center">
+                        <h4 class="font-bold text-sm">Bekleyen Onaylar</h4>
+                        <span id="pending-approvals-count" class="text-[10px] bg-orange-100 text-orange-600 rounded-full px-2 py-0.5 font-bold hidden">0</span>
+                    </div>
+                    <div id="pending-approvals-list" class="divide-y divide-gray-50">
+                        <div class="p-6 text-center text-xs text-gray-400">Bekleyen onay yok</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Denetim Logu -->
+            <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60 flex items-center justify-between">
+                    <h4 class="font-bold text-sm">Denetim Logu</h4>
+                    <div class="flex items-center gap-2">
+                        <select id="audit-filter" onchange="loadAuditLog()" class="text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1 outline-none">
+                            <option value="">Tümü</option>
+                            <option value="high">Yüksek Risk</option>
+                            <option value="medium">Orta Risk</option>
+                            <option value="low">Düşük Risk</option>
+                        </select>
+                        <button onclick="loadAuditLog()" class="text-xs text-blue-500 hover:text-blue-700 font-medium">Yenile</button>
+                    </div>
+                </div>
+                <div id="audit-log-list" class="divide-y divide-gray-50 max-h-64 overflow-y-auto">
+                    <div class="p-6 text-center text-xs text-gray-400">Yükleniyor...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ══════════ TAB: TOOLS ══════════ -->
+        <div id="tab-tools" class="tab-panel space-y-5">
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Toplam Tool</p>
+                    <p class="text-2xl font-black" id="tools-total">—</p>
+                </div>
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Allowed</p>
+                    <p class="text-2xl font-black text-green-500" id="tools-allowed">—</p>
+                </div>
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Denied</p>
+                    <p class="text-2xl font-black text-red-500" id="tools-denied">—</p>
+                </div>
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Approval</p>
+                    <p class="text-2xl font-black text-orange-500" id="tools-approval">—</p>
+                </div>
+            </div>
+
+            <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60 flex flex-wrap items-center gap-2">
+                    <input id="tools-search" placeholder="Tool ara..." class="bg-gray-50 border border-gray-200 rounded px-2.5 py-1.5 text-xs outline-none w-44" />
+                    <select id="tools-group-filter" class="bg-gray-50 border border-gray-200 rounded px-2 py-1.5 text-xs outline-none">
+                        <option value="">Tüm Gruplar</option>
+                        <option value="fs">fs</option>
+                        <option value="runtime">runtime</option>
+                        <option value="web">web</option>
+                        <option value="ui">ui</option>
+                        <option value="messaging">messaging</option>
+                        <option value="automation">automation</option>
+                        <option value="memory">memory</option>
+                        <option value="other">other</option>
+                    </select>
+                    <select id="tools-policy-filter" class="bg-gray-50 border border-gray-200 rounded px-2 py-1.5 text-xs outline-none">
+                        <option value="">Tüm Policy</option>
+                        <option value="allowed">Allowed</option>
+                        <option value="denied">Denied</option>
+                        <option value="approval">Approval</option>
+                    </select>
+                    <button onclick="loadTools()" class="px-3 py-1.5 bg-gray-900 text-white rounded text-xs font-bold hover:bg-black">Yenile</button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="border-b border-gray-100 bg-gray-50/50">
+                                <th class="text-left px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Tool</th>
+                                <th class="text-left px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Group</th>
+                                <th class="text-right px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Calls</th>
+                                <th class="text-right px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Success</th>
+                                <th class="text-center px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Allow</th>
+                                <th class="text-center px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Deny</th>
+                                <th class="text-center px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Approval</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tools-table" class="divide-y divide-gray-50">
+                            <tr><td colspan="7" class="px-4 py-4 text-center text-xs text-gray-400">Yükleniyor...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60">
+                    <h4 class="font-bold text-sm">Tool Test (Dashboard)</h4>
+                </div>
+                <div class="p-5 space-y-3">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <select id="tool-test-name" class="bg-gray-50 border border-gray-200 rounded px-2.5 py-2 text-sm outline-none"></select>
+                        <button onclick="runToolTest()" class="px-3 py-2 bg-blue-600 text-white rounded text-sm font-bold hover:bg-blue-700">Tool Test Çalıştır</button>
+                    </div>
+                    <textarea id="tool-test-params" rows="4" class="w-full bg-gray-50 border border-gray-200 rounded p-3 text-xs font-mono outline-none" placeholder='{"path":"~/Desktop"}'>{}</textarea>
+                    <pre id="tool-test-output" class="bg-gray-900 text-gray-100 rounded p-3 text-xs overflow-auto max-h-72">Çıktı burada görünecek...</pre>
+                </div>
+            </div>
+        </div>
+
+        <!-- ══════════ TAB: SETTINGS ══════════ -->
+        <div id="tab-settings" class="tab-panel">
+            <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60">
+                    <h4 class="font-bold text-sm">Model Yönlendirme</h4>
+                </div>
+                <div class="p-6 space-y-5 max-w-2xl">
+                    <div class="text-xs text-gray-500 space-y-1">
+                        <div><span class="font-bold text-gray-700">Aktif:</span> <span id="settings-runtime-model">—</span></div>
+                        <div><span class="font-bold text-gray-700">Config:</span> <span id="settings-config-model">—</span></div>
+                        <div id="settings-runtime-note" class="text-[11px] text-amber-600 hidden">Aktif model config ile farklı. Kaydet sonrası rolleri senkronlayın.</div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="space-y-1.5">
+                            <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Varsayılan Sağlayıcı</label>
+                            <select id="settings-default-provider" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500/20">
+                                <option value="openai">OpenAI</option>
+                                <option value="anthropic">Anthropic</option>
+                                <option value="google">Google</option>
+                                <option value="groq">Groq</option>
+                                <option value="ollama">Ollama</option>
+                            </select>
+                        </div>
+                        <div class="space-y-1.5">
+                            <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Varsayılan Model</label>
+                            <input id="settings-default-model" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="gpt-4o" />
+                        </div>
+                        <div class="space-y-1.5">
+                            <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Fallback Sağlayıcı</label>
+                            <select id="settings-fallback-provider" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500/20">
+                                <option value="openai">OpenAI</option>
+                                <option value="anthropic">Anthropic</option>
+                                <option value="google">Google</option>
+                                <option value="groq">Groq</option>
+                                <option value="ollama">Ollama</option>
+                            </select>
+                        </div>
+                        <div class="space-y-1.5">
+                            <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Fallback Model</label>
+                            <input id="settings-fallback-model" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="gpt-4o-mini" />
+                        </div>
+                    </div>
+
+                    <div class="flex flex-wrap gap-4 text-xs text-gray-600">
+                        <label class="inline-flex items-center gap-2">
+                            <input id="settings-router-enabled" type="checkbox" class="rounded border-gray-300" />
+                            Neural Router aktif
+                        </label>
+                        <label class="inline-flex items-center gap-2">
+                            <input id="settings-sync-roles" type="checkbox" class="rounded border-gray-300" checked />
+                            Tüm rolleri varsayılan modelle senkronla
+                        </label>
+                    </div>
+
+                    <div class="flex items-center gap-2">
+                        <button onclick="saveModelSettings()" class="px-5 py-2.5 bg-gray-900 text-white rounded-lg text-sm font-bold hover:bg-black transition-all">Kaydet</button>
+                        <button onclick="loadModelSettings()" class="px-3 py-2.5 bg-gray-100 text-gray-700 rounded-lg text-sm font-bold hover:bg-gray-200 transition-all">Yenile</button>
+                        <span id="settings-save-status" class="text-xs text-gray-500"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div><!-- /scrollable -->
+</main>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let ws = null;
+let wsConnected = false;
+const API = '';  // same origin
+
+// ── Tab navigation ─────────────────────────────────────────────────────────
+function switchTab(name) {
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('[data-tab]').forEach(b => b.classList.remove('active'));
+    document.getElementById('tab-' + name).classList.add('active');
+    document.querySelector(`[data-tab="${name}"]`).classList.add('active');
+    const titles = { overview:'Genel Bakış', channels:'Kanallar', skills:'Skills', tasks:'Görevler', automation:'Otomasyon', analytics:'Analitik', security:'Güvenlik', tools:'Araçlar', settings:'Ayarlar' };
+    document.getElementById('page-title').textContent = titles[name] || name;
+    if (name === 'channels') loadChannels();
+    if (name === 'skills') loadSkills();
+    if (name === 'tasks') loadTasks();
+    if (name === 'automation') loadRoutines();
+    if (name === 'analytics') loadAnalytics();
+    if (name === 'security') loadSecurity();
+    if (name === 'tools') loadTools();
+    if (name === 'settings') loadModelSettings();
+}
+
+// ── WebSocket ──────────────────────────────────────────────────────────────
+function connectWS() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}/ws/dashboard`);
+    ws.onopen = () => {
+        wsConnected = true;
+        document.getElementById('ws-dot').className = 'w-2 h-2 rounded-full bg-green-400';
+        document.getElementById('ws-label').textContent = 'Live';
+        document.getElementById('feed-dot').className = 'w-2 h-2 rounded-full bg-green-400 pulse-dot';
+    };
+    ws.onclose = () => {
+        wsConnected = false;
+        document.getElementById('ws-dot').className = 'w-2 h-2 rounded-full bg-gray-300';
+        document.getElementById('ws-label').textContent = 'WS';
+        document.getElementById('feed-dot').className = 'w-2 h-2 rounded-full bg-gray-300';
+        setTimeout(connectWS, 3000);
+    };
+    ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        if (msg.event === 'activity') appendActivity(msg.data);
+        if (msg.event === 'history') msg.data.forEach(appendActivity);
+    };
+}
+
+// ── Activity feed ──────────────────────────────────────────────────────────
+function appendActivity(ev) {
+    const feed = document.getElementById('activity-feed');
+    // Remove placeholder
+    const placeholder = feed.querySelector('.text-center');
+    if (placeholder) placeholder.remove();
+
+    const colors = { task_created:'blue', message:'green', webhook:'purple', error:'red' };
+    const color = colors[ev.type] || 'gray';
+    const row = document.createElement('div');
+    row.className = 'activity-row px-5 py-2.5 flex items-center gap-3 hover:bg-gray-50/50';
+    row.innerHTML = `
+        <span class="text-[10px] text-gray-400 w-12 shrink-0">${ev.ts}</span>
+        <span class="px-1.5 py-0.5 bg-${color}-100 text-${color}-700 rounded text-[10px] font-bold uppercase shrink-0">${ev.type}</span>
+        <span class="text-xs text-gray-500 truncate">${ev.channel}</span>
+        <span class="text-xs text-gray-700 truncate flex-1">${ev.detail}</span>
+        <span class="text-[10px] shrink-0 ${ev.ok ? 'text-green-500' : 'text-red-500'}">${ev.ok ? '✓' : '✗'}</span>
+    `;
+    feed.prepend(row);
+    // Keep max 20 rows
+    while (feed.children.length > 20) feed.lastChild.remove();
+}
+
+function clearFeed() {
+    document.getElementById('activity-feed').innerHTML = '<div class="p-4 text-center text-xs text-gray-400">Aktivite bekleniyor...</div>';
+}
+
+// ── Status polling ─────────────────────────────────────────────────────────
+async function pollStatus() {
+    try {
+        const r = await fetch(API + '/api/status');
+        const s = await r.json();
+        document.getElementById('cpu-val').textContent = s.cpu || '—';
+        document.getElementById('cpu-bar').style.width = (s.cpu_pct || 0) + '%';
+        document.getElementById('ram-val').textContent = s.ram || '—';
+        document.getElementById('ram-bar').style.width = (s.ram_pct || 0) + '%';
+        document.getElementById('card-uptime').textContent = s.uptime || '—';
+        document.getElementById('sb-uptime').textContent = s.uptime || '—';
+        document.getElementById('sb-version').textContent = 'v' + (s.version || '18.0.0');
+    } catch(e) {}
+}
+
+async function pollAnalytics() {
+    try {
+        const r = await fetch(API + '/api/analytics');
+        const a = await r.json();
+        document.getElementById('card-model').textContent = a.model || '—';
+        document.getElementById('card-success').textContent = (a.success_rate ?? '—') + '%';
+        document.getElementById('card-cost').textContent = '$' + (a.cost_usd ?? '—');
+        const modelTag = (a.provider || '') + ': ' + (a.model || '—');
+        const mismatch = (a.model_consistent === false) &&
+            ((a.configured_provider || '') || (a.configured_model || ''));
+        document.getElementById('hdr-model').textContent = mismatch
+            ? `${modelTag} (cfg: ${a.configured_provider || '—'}:${a.configured_model || '—'})`
+            : modelTag;
+
+        const ch = a.active_channels || 0;
+        const badge = document.getElementById('sb-channels-badge');
+        badge.textContent = ch;
+        badge.classList.toggle('hidden', ch === 0);
+    } catch(e) {}
+}
+
+function _defaultModelForProvider(provider) {
+    const p = (provider || '').toLowerCase();
+    const map = {
+        openai: 'gpt-4o',
+        anthropic: 'claude-3-5-sonnet-latest',
+        google: 'gemini-2.0-flash',
+        groq: 'llama-3.3-70b-versatile',
+        ollama: 'llama3.1:8b',
+    };
+    return map[p] || 'gpt-4o';
+}
+
+async function loadModelSettings() {
+    const statusEl = document.getElementById('settings-save-status');
+    if (statusEl) statusEl.textContent = 'Yükleniyor...';
+    try {
+        const r = await fetch(API + '/api/models');
+        const d = await r.json();
+        const def = d.default || {};
+        const fb = d.fallback || {};
+        const activeProvider = d.active_provider || def.provider || '—';
+        const activeModel = d.active_model || def.model || '—';
+        const cfgProvider = d.configured_provider || def.provider || '—';
+        const cfgModel = d.configured_model || def.model || '—';
+
+        document.getElementById('settings-default-provider').value = def.provider || 'openai';
+        document.getElementById('settings-default-model').value = def.model || _defaultModelForProvider(def.provider || 'openai');
+        document.getElementById('settings-fallback-provider').value = fb.provider || 'openai';
+        document.getElementById('settings-fallback-model').value = fb.model || _defaultModelForProvider(fb.provider || 'openai');
+        document.getElementById('settings-router-enabled').checked = !!d.router_enabled;
+
+        document.getElementById('settings-runtime-model').textContent = `${activeProvider}:${activeModel}`;
+        document.getElementById('settings-config-model').textContent = `${cfgProvider}:${cfgModel}`;
+        const mismatch = d.model_consistent === false;
+        document.getElementById('settings-runtime-note').classList.toggle('hidden', !mismatch);
+
+        if (statusEl) statusEl.textContent = '';
+    } catch (e) {
+        if (statusEl) statusEl.textContent = 'Yükleme hatası';
+    }
+}
+
+async function saveModelSettings() {
+    const statusEl = document.getElementById('settings-save-status');
+    if (statusEl) statusEl.textContent = 'Kaydediliyor...';
+    try {
+        const provider = (document.getElementById('settings-default-provider')?.value || 'openai').trim();
+        const model = (document.getElementById('settings-default-model')?.value || _defaultModelForProvider(provider)).trim();
+        const fallbackProvider = (document.getElementById('settings-fallback-provider')?.value || 'openai').trim();
+        const fallbackModel = (document.getElementById('settings-fallback-model')?.value || _defaultModelForProvider(fallbackProvider)).trim();
+        const routerEnabled = !!document.getElementById('settings-router-enabled')?.checked;
+        const syncRoles = !!document.getElementById('settings-sync-roles')?.checked;
+
+        const resp = await fetch(API + '/api/models', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                provider,
+                model,
+                fallback_provider: fallbackProvider,
+                fallback_model: fallbackModel,
+                router_enabled: routerEnabled,
+                sync_roles: syncRoles,
+            }),
+        });
+        if (!resp.ok) {
+            throw new Error('Model API update failed');
+        }
+        await loadModelSettings();
+        await pollAnalytics();
+        if (statusEl) statusEl.textContent = 'Kaydedildi';
+    } catch (e) {
+        if (statusEl) statusEl.textContent = 'Kaydetme hatası';
+    }
+}
+
+async function pollTasks() {
+    try {
+        const r = await fetch(API + '/api/tasks');
+        const t = await r.json();
+        const active = t.active || [];
+        const badge = document.getElementById('sb-tasks-badge');
+        badge.textContent = active.length;
+        badge.classList.toggle('hidden', active.length === 0);
+        document.getElementById('card-tasks').textContent = active.length + ' aktif';
+        document.getElementById('card-tasks-badge').textContent = active.length + ' aktif';
+    } catch(e) {}
+}
+
+async function pollMemory() {
+    try {
+        const r = await fetch(API + '/api/memory/stats');
+        const m = await r.json();
+        const sizeMb = typeof m.size_mb === 'number' ? m.size_mb.toFixed(2) : '—';
+        document.getElementById('card-memory').textContent = sizeMb + ' MB';
+
+        const sub = document.getElementById('card-memory-sub');
+        const top = (m.top_users || [])[0];
+        if (top) {
+            sub.textContent = `Top user ${top.user_id}: ${top.used_mb} MB (${top.usage_percent}%)`;
+        } else {
+            const limitGb = ((m.default_user_limit_bytes || 0) / (1024 ** 3)).toFixed(2);
+            sub.textContent = `Kullanıcı kotası: ${limitGb === '0.00' ? '—' : limitGb + ' GB'}`;
+        }
+    } catch(e) {}
+}
+
+// ── Channels tab ───────────────────────────────────────────────────────────
+async function loadChannels() {
+    const list = document.getElementById('channels-list');
+    try {
+        const r = await fetch(API + '/api/channels');
+        const d = await r.json();
+        const channels = d.channels || [];
+        document.getElementById('channels-count').textContent = channels.length + ' kanal';
+        if (!channels.length) {
+            list.innerHTML = '<div class="p-8 text-center text-sm text-gray-400">Yapılandırılmış kanal yok</div>';
+            return;
+        }
+        list.innerHTML = channels.map(ch => `
+            <div class="px-5 py-4 flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-9 h-9 bg-gray-200 rounded-full flex items-center justify-center text-gray-500">
+                        <i data-lucide="message-square" class="w-4 h-4"></i>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold">${ch.type || ch.name || 'Kanal'}</p>
+                        <p class="text-[10px] text-gray-400">
+                            ${ch.enabled ? 'Etkin' : 'Devre dışı'} · status: ${ch.status || 'unknown'}
+                            ${(ch.health && typeof ch.health.retries === 'number') ? ` · retry: ${ch.health.retries}` : ''}
+                            ${(ch.health && typeof ch.health.failures === 'number') ? ` · fail: ${ch.health.failures}` : ''}
+                            ${(ch.message_metrics) ? ` · in/out: ${ch.message_metrics.received || 0}/${ch.message_metrics.sent || 0}` : ''}
+                            ${(typeof ch.failure_rate_pct === 'number') ? ` · err: ${ch.failure_rate_pct}%` : ''}
+                        </p>
+                        ${(ch.last_activity) ? `<p class="text-[10px] text-gray-400">Son aktivite: ${new Date(ch.last_activity).toLocaleString('tr-TR')}</p>` : ''}
+                    </div>
+                </div>
+                <span class="text-[10px] font-bold ${ch.connected ? 'text-green-500' : 'text-orange-500'} uppercase">${ch.connected ? 'Connected' : (ch.enabled ? 'Degraded' : 'Offline')}</span>
+            </div>
+        `).join('');
+        lucide.createIcons();
+    } catch(e) {
+        list.innerHTML = '<div class="p-8 text-center text-sm text-red-400">API bağlantı hatası</div>';
+    }
+}
+
+// ── Skills tab ─────────────────────────────────────────────────────────────
+async function loadSkills() {
+    const mode = document.getElementById('skills-mode')?.value || 'all';
+    const q = encodeURIComponent(document.getElementById('skills-search')?.value || '');
+    const available = mode === 'all' ? 1 : 0;
+    const enabled = mode === 'enabled' ? 1 : 0;
+    const table = document.getElementById('skills-table');
+    if (!table) return;
+    try {
+        const r = await fetch(API + `/api/skills?available=${available}&enabled=${enabled}&q=${q}`);
+        const d = await r.json();
+        const skills = d.skills || [];
+        const sum = d.summary || {};
+
+        document.getElementById('skills-total').textContent = sum.total ?? 0;
+        document.getElementById('skills-installed').textContent = sum.installed ?? 0;
+        document.getElementById('skills-enabled').textContent = sum.enabled ?? 0;
+        document.getElementById('skills-issues').textContent = sum.issues ?? 0;
+
+        const badge = document.getElementById('sb-skills-badge');
+        if (badge) {
+            badge.textContent = sum.enabled ?? 0;
+            badge.classList.toggle('hidden', !(sum.enabled > 0));
+        }
+
+        const filtered = mode === 'installed'
+            ? skills.filter(s => s.installed)
+            : skills;
+
+        if (!filtered.length) {
+            table.innerHTML = '<tr><td colspan="5" class="px-4 py-4 text-center text-xs text-gray-400">Skill bulunamadı</td></tr>';
+            return;
+        }
+
+        table.innerHTML = filtered.map(s => {
+            const health = s.health_ok ? '🟢' : '🔴';
+            const status = s.installed
+                ? (s.enabled ? '✅ aktif' : '⚪ pasif')
+                : '⬇️ mevcut';
+            return `
+                <tr>
+                    <td class="px-4 py-2.5">
+                        <div class="font-semibold text-xs">${s.name} <span class="text-gray-400">v${s.version || '?'}</span> ${health}</div>
+                        <div class="text-[10px] text-gray-400 truncate">${s.description || ''}</div>
+                    </td>
+                    <td class="px-4 py-2.5 text-xs text-gray-500">${s.category || 'general'}</td>
+                    <td class="px-4 py-2.5 text-xs text-gray-500">${s.source || 'local'}</td>
+                    <td class="px-4 py-2.5 text-xs">${status}</td>
+                    <td class="px-4 py-2.5 text-right">
+                        ${s.installed
+                            ? `
+                                <button onclick="toggleSkill('${s.name}', ${!s.enabled})" class="text-[10px] px-2 py-1 rounded ${s.enabled ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'} font-bold hover:opacity-80">${s.enabled ? 'Disable' : 'Enable'}</button>
+                                <button onclick="removeSkill('${s.name}')" class="text-[10px] px-2 py-1 rounded bg-red-100 text-red-700 font-bold hover:bg-red-200 ml-1">Remove</button>
+                              `
+                            : `<button onclick="installSkill('${s.name}')" class="text-[10px] px-2 py-1 rounded bg-blue-100 text-blue-700 font-bold hover:bg-blue-200">Install</button>`
+                        }
+                    </td>
+                </tr>
+            `;
+        }).join('');
+    } catch(e) {
+        table.innerHTML = '<tr><td colspan="5" class="px-4 py-4 text-center text-xs text-red-400">Skills API hatası</td></tr>';
+    }
+}
+
+async function installSkill(name) {
+    try {
+        await fetch(API + '/api/skills/install', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name})
+        });
+        await loadSkills();
+    } catch(e) { console.error(e); }
+}
+
+async function toggleSkill(name, enabled) {
+    try {
+        await fetch(API + '/api/skills/toggle', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name, enabled})
+        });
+        await loadSkills();
+    } catch(e) { console.error(e); }
+}
+
+async function removeSkill(name) {
+    try {
+        await fetch(API + '/api/skills/remove', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name})
+        });
+        await loadSkills();
+    } catch(e) { console.error(e); }
+}
+
+async function updateAllSkills() {
+    try {
+        await fetch(API + '/api/skills/update', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({all: true})
+        });
+        await loadSkills();
+    } catch(e) { console.error(e); }
+}
+
+async function checkSkillsHealth() {
+    const out = document.getElementById('skills-check-output');
+    if (!out) return;
+    out.textContent = 'Kontrol ediliyor...';
+    try {
+        const r = await fetch(API + '/api/skills/check');
+        const d = await r.json();
+        out.textContent = JSON.stringify(d, null, 2);
+        await loadSkills();
+    } catch(e) {
+        out.textContent = 'Skill check hatası: ' + e.message;
+    }
+}
+
+// ── Automation tab ─────────────────────────────────────────────────────────
+let routineTemplates = [];
+
+function _parsePanelInput(raw) {
+    return (raw || '')
+        .split(/\n|,|;/g)
+        .map(x => x.trim())
+        .filter(Boolean)
+        .map(x => (x.startsWith('http://') || x.startsWith('https://')) ? x : (x.includes('.') ? ('https://' + x) : x));
+}
+
+function applyRoutineTemplate() {
+    const sel = document.getElementById('rt-template');
+    if (!sel) return;
+    const tid = (sel.value || '').trim();
+    if (!tid) return;
+    const template = routineTemplates.find(x => x.id === tid);
+    if (!template) return;
+    const nameEl = document.getElementById('rt-name');
+    const stepsEl = document.getElementById('rt-steps');
+    if (nameEl && !nameEl.value.trim()) {
+        nameEl.value = template.name || '';
+    }
+    if (stepsEl) {
+        stepsEl.value = (template.steps || []).join('\n');
+    }
+}
+
+async function loadRoutines() {
+    const table = document.getElementById('rt-table');
+    if (!table) return;
+    try {
+        const r = await fetch(API + '/api/routines');
+        const d = await r.json();
+        const routines = d.routines || [];
+        routineTemplates = d.templates || [];
+        const sum = d.summary || {};
+
+        const tplSel = document.getElementById('rt-template');
+        if (tplSel) {
+            const oldVal = tplSel.value;
+            tplSel.innerHTML = '<option value=\"\">Template (opsiyonel) — custom rutin</option>' +
+                routineTemplates.map(t => `<option value=\"${t.id}\">${t.name} (${t.id})</option>`).join('');
+            if (oldVal) tplSel.value = oldVal;
+        }
+
+        document.getElementById('rt-total').textContent = sum.total ?? routines.length;
+        document.getElementById('rt-enabled').textContent = sum.enabled ?? 0;
+        document.getElementById('rt-disabled').textContent = sum.disabled ?? 0;
+        const badge = document.getElementById('sb-routines-badge');
+        if (badge) {
+            badge.textContent = sum.enabled ?? 0;
+            badge.classList.toggle('hidden', !(sum.enabled > 0));
+        }
+
+        let last = '—';
+        routines.forEach(x => {
+            if (x.last_run && (!last || x.last_run > last)) last = x.last_run;
+        });
+        document.getElementById('rt-last').textContent = last || '—';
+
+        if (!routines.length) {
+            table.innerHTML = '<tr><td colspan="5" class="px-4 py-4 text-center text-xs text-gray-400">Rutin bulunamadı</td></tr>';
+            return;
+        }
+
+        table.innerHTML = routines.map(x => `
+            <tr>
+                <td class="px-4 py-2.5">
+                    <div class="font-semibold text-xs">${x.id} <span class="text-gray-400">| ${x.name || ''}</span></div>
+                    <div class="text-[10px] text-gray-400">
+                        ${(x.steps || []).length} adım
+                        ${x.template_id ? ' · tpl:' + x.template_id : ''}
+                        ${(x.panels || []).length ? ' · panel:' + (x.panels || []).length : ''}
+                    </div>
+                </td>
+                <td class="px-4 py-2.5 text-xs text-gray-600">${x.expression || '-'}</td>
+                <td class="px-4 py-2.5 text-xs text-gray-600">${x.report_channel || '-'} ${x.report_chat_id ? '· ' + x.report_chat_id : ''}</td>
+                <td class="px-4 py-2.5 text-xs text-gray-600">${x.last_run || '-'}</td>
+                <td class="px-4 py-2.5 text-right">
+                    <button onclick="runRoutine('${x.id}')" class="text-[10px] px-2 py-1 rounded bg-blue-100 text-blue-700 font-bold hover:bg-blue-200">Run</button>
+                    <button onclick="toggleRoutine('${x.id}', ${!x.enabled})" class="text-[10px] px-2 py-1 rounded ${x.enabled ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'} font-bold hover:opacity-80 ml-1">${x.enabled ? 'Disable' : 'Enable'}</button>
+                    <button onclick="removeRoutine('${x.id}')" class="text-[10px] px-2 py-1 rounded bg-red-100 text-red-700 font-bold hover:bg-red-200 ml-1">Remove</button>
+                </td>
+            </tr>
+        `).join('');
+    } catch (e) {
+        table.innerHTML = '<tr><td colspan="5" class="px-4 py-4 text-center text-xs text-red-400">Routines API hatası</td></tr>';
+    }
+}
+
+async function createRoutine() {
+    const status = document.getElementById('rt-create-status');
+    if (status) status.textContent = 'Kaydediliyor...';
+    try {
+        const name = (document.getElementById('rt-name')?.value || '').trim();
+        const expression = (document.getElementById('rt-expression')?.value || '').trim();
+        const stepsRaw = (document.getElementById('rt-steps')?.value || '').trim();
+        const templateId = (document.getElementById('rt-template')?.value || '').trim();
+        const panelsRaw = (document.getElementById('rt-panels')?.value || '').trim();
+        const panels = _parsePanelInput(panelsRaw);
+        const reportChannel = (document.getElementById('rt-channel')?.value || 'telegram').trim();
+        const reportChatId = (document.getElementById('rt-chat-id')?.value || '').trim();
+        if (!expression) {
+            if (status) status.textContent = 'Cron ifadesi gerekli.';
+            return;
+        }
+        let endpoint = '/api/routines';
+        let payload;
+        if (templateId) {
+            endpoint = '/api/routines/from-template';
+            payload = {
+                template_id: templateId,
+                name,
+                expression,
+                report_channel: reportChannel,
+                report_chat_id: reportChatId,
+                enabled: true,
+                created_by: 'dashboard',
+                panels,
+            };
+        } else {
+            if (!name || !stepsRaw) {
+                if (status) status.textContent = 'Custom rutin için ad ve adımlar gerekli.';
+                return;
+            }
+            const steps = stepsRaw.split(/\n|;/g).map(s => s.trim()).filter(Boolean);
+            payload = {
+                name,
+                expression,
+                steps,
+                report_channel: reportChannel,
+                report_chat_id: reportChatId,
+                enabled: true,
+                created_by: 'dashboard',
+                panels,
+            };
+        }
+
+        const resp = await fetch(API + endpoint, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.ok) {
+            if (status) status.textContent = 'Hata: ' + (data.error || 'routine create failed');
+            return;
+        }
+        if (status) status.textContent = 'Rutin eklendi';
+        await loadRoutines();
+    } catch (e) {
+        if (status) status.textContent = 'Hata: ' + e.message;
+    }
+}
+
+async function toggleRoutine(id, enabled) {
+    try {
+        await fetch(API + '/api/routines/toggle', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({id, enabled}),
+        });
+        await loadRoutines();
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+async function runRoutine(id) {
+    try {
+        await fetch(API + '/api/routines/run', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({id}),
+        });
+        await loadRoutines();
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+async function removeRoutine(id) {
+    try {
+        await fetch(API + `/api/routines/${encodeURIComponent(id)}`, {method: 'DELETE'});
+        await loadRoutines();
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+// ── Tasks tab ──────────────────────────────────────────────────────────────
+async function loadTasks() {
+    try {
+        const r = await fetch(API + '/api/tasks');
+        const d = await r.json();
+        const active = d.active || [];
+        const history = d.history || [];
+
+        const al = document.getElementById('active-tasks-list');
+        document.getElementById('active-tasks-count').textContent = active.length + ' aktif';
+        al.innerHTML = active.length ? active.map(t => `
+            <div class="px-5 py-3 flex items-center gap-3">
+                <div class="w-2 h-2 rounded-full bg-orange-400 pulse-dot shrink-0"></div>
+                <span class="text-sm flex-1 truncate">${t.user_input || t.id || 'Görev'}</span>
+                <span class="text-[10px] text-gray-400">${t.domain || ''}</span>
+            </div>
+        `).join('') : '<div class="p-6 text-center text-sm text-gray-400">Aktif görev yok</div>';
+
+        const hl = document.getElementById('task-history-list');
+        hl.innerHTML = history.length ? history.map(t => `
+            <div class="px-5 py-3 flex items-center gap-3">
+                <span class="text-[10px] shrink-0 ${t.success ? 'text-green-500' : 'text-red-400'}">${t.success ? '✓' : '✗'}</span>
+                <span class="text-sm flex-1 truncate">${t.user_input || t.id || '—'}</span>
+                <span class="text-[10px] text-gray-400">${t.domain || ''}</span>
+            </div>
+        `).join('') : '<div class="p-6 text-center text-sm text-gray-400">Geçmiş yok</div>';
+    } catch(e) {}
+}
+
+// ── Analytics tab ──────────────────────────────────────────────────────────
+async function loadAnalytics() {
+    try {
+        const r = await fetch(API + '/api/analytics');
+        const a = await r.json();
+
+        // Özet kartlar
+        document.getElementById('an-total-tasks').textContent = a.total_tasks ?? '—';
+        const sr = a.success_rate ?? 0;
+        document.getElementById('an-success').textContent = sr + '%';
+        document.getElementById('an-success-bar').style.width = sr + '%';
+        document.getElementById('an-avg-time').textContent = a.avg_task_time_s ?? '—';
+        document.getElementById('an-tokens').textContent = _fmt(a.total_tokens);
+
+        // Maliyet
+        const cost = a.cost_usd ?? 0;
+        const budget = a.budget_usd ?? 20;
+        const pct = Math.min(100, Math.round((cost / budget) * 100));
+        document.getElementById('an-cost-month').textContent = '$' + cost.toFixed(4);
+        document.getElementById('an-budget').textContent = '$' + budget.toFixed(2);
+        document.getElementById('an-cost-remaining').textContent = '$' + Math.max(0, budget - cost).toFixed(4);
+        document.getElementById('an-budget-bar').style.width = pct + '%';
+        document.getElementById('an-budget-bar').className = `bar-fill h-full rounded-full ${pct > 80 ? 'bg-red-500' : pct > 50 ? 'bg-orange-400' : 'bg-blue-500'}`;
+        const forecast = cost * (30 / Math.max(1, a.days_elapsed ?? 15));
+        document.getElementById('an-cost-forecast').textContent = '$' + forecast.toFixed(2);
+
+        // Kanal dağılımı
+        const channels = a.channel_breakdown || {};
+        const chEl = document.getElementById('an-channel-bars');
+        if (Object.keys(channels).length) {
+            const total = Object.values(channels).reduce((s, v) => s + v, 0) || 1;
+            chEl.innerHTML = Object.entries(channels).map(([ch, cnt]) => {
+                const pct = Math.round((cnt / total) * 100);
+                return `<div class="space-y-1">
+                    <div class="flex justify-between text-xs">
+                        <span class="font-medium capitalize">${ch}</span>
+                        <span class="text-gray-400">${cnt} (${pct}%)</span>
+                    </div>
+                    <div class="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                        <div class="bar-fill h-full bg-blue-500 rounded-full" style="width:${pct}%"></div>
+                    </div>
+                </div>`;
+            }).join('');
+        } else {
+            chEl.innerHTML = '<div class="text-xs text-gray-400 text-center py-2">Veri yok</div>';
+        }
+
+        // Model dağılımı
+        const models = a.model_breakdown || {};
+        const mdEl = document.getElementById('an-model-bars');
+        if (Object.keys(models).length) {
+            const total2 = Object.values(models).reduce((s, v) => s + v, 0) || 1;
+            mdEl.innerHTML = Object.entries(models).map(([m, cnt]) => {
+                const p = Math.round((cnt / total2) * 100);
+                return `<div class="space-y-1">
+                    <div class="flex justify-between text-xs">
+                        <span class="font-medium">${m}</span>
+                        <span class="text-gray-400">${cnt} istek (${p}%)</span>
+                    </div>
+                    <div class="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                        <div class="bar-fill h-full bg-purple-500 rounded-full" style="width:${p}%"></div>
+                    </div>
+                </div>`;
+            }).join('');
+        } else {
+            mdEl.innerHTML = '<div class="text-xs text-gray-400 text-center py-2">Veri yok</div>';
+        }
+
+        // Performans metrikleri tablosu
+        const perfTargets = [
+            { metric: 'Oturum yükleme', target: '<50ms', current: a.session_load_ms ? a.session_load_ms + 'ms' : '—' },
+            { metric: 'İlk token', target: '<500ms', current: a.first_token_ms ? a.first_token_ms + 'ms' : '—' },
+            { metric: 'Bash komutu', target: '<100ms', current: a.bash_ms ? a.bash_ms + 'ms' : '—' },
+            { metric: 'Görev başarı oranı', target: '>%95', current: sr + '%', ok: sr >= 95 },
+            { metric: 'Ort. retry', target: '<1.5', current: (a.avg_retries ?? '—').toString() },
+        ];
+        document.getElementById('an-metrics-table').innerHTML = perfTargets.map(r => `
+            <tr>
+                <td class="px-5 py-2.5 text-sm">${r.metric}</td>
+                <td class="px-5 py-2.5 text-xs text-right text-gray-400">${r.target}</td>
+                <td class="px-5 py-2.5 text-xs text-right font-bold">${r.current}</td>
+                <td class="px-5 py-2.5 text-right">
+                    <span class="text-[10px] font-bold ${r.ok === false ? 'text-red-500' : r.current === '—' ? 'text-gray-300' : 'text-green-500'}">
+                        ${r.ok === false ? '✗' : r.current === '—' ? '—' : '✓'}
+                    </span>
+                </td>
+            </tr>
+        `).join('');
+
+    } catch(e) {
+        console.error('Analytics yüklenemedi:', e);
+    }
+}
+
+function _fmt(n) {
+    if (!n || n === 0) return '—';
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+    return n.toString();
+}
+
+// ── Security tab ───────────────────────────────────────────────────────────
+async function loadSecurity() {
+    const score = 92;
+    document.getElementById('sec-score').textContent = score;
+    document.getElementById('sec-score-bar').style.width = score + '%';
+
+    // Audit log sayısı
+    try {
+        const r = await fetch(API + '/api/security/events?limit=1');
+        const d = await r.json();
+        document.getElementById('sec-audit-count').textContent = d.total ?? '—';
+    } catch(e) {
+        document.getElementById('sec-audit-count').textContent = '—';
+    }
+
+    // Bekleyen onaylar
+    try {
+        const r = await fetch(API + '/api/security/pending');
+        const d = await r.json();
+        const pending = d.pending || [];
+        const countEl = document.getElementById('pending-approvals-count');
+        countEl.textContent = pending.length;
+        countEl.classList.toggle('hidden', pending.length === 0);
+        const listEl = document.getElementById('pending-approvals-list');
+        if (pending.length) {
+            listEl.innerHTML = pending.map(p => `
+                <div class="px-5 py-3 flex items-center justify-between">
+                    <div>
+                        <p class="text-sm font-medium">${p.action || 'İşlem'}</p>
+                        <p class="text-[10px] text-gray-400">${p.user_id || '?'} · ${p.ts || ''}</p>
+                    </div>
+                    <div class="flex gap-2">
+                        <button onclick="approveAction('${p.id}', true)" class="text-[10px] px-2 py-1 bg-green-100 text-green-700 rounded font-bold hover:bg-green-200">Onayla</button>
+                        <button onclick="approveAction('${p.id}', false)" class="text-[10px] px-2 py-1 bg-red-100 text-red-700 rounded font-bold hover:bg-red-200">Reddet</button>
+                    </div>
+                </div>
+            `).join('');
+        } else {
+            listEl.innerHTML = '<div class="p-6 text-center text-xs text-gray-400">Bekleyen onay yok</div>';
+        }
+    } catch(e) {}
+
+    await loadAuditLog();
+}
+
+async function loadAuditLog() {
+    const severity = document.getElementById('audit-filter')?.value || '';
+    const el = document.getElementById('audit-log-list');
+    try {
+        const url = API + '/api/security/events?limit=20' + (severity ? '&severity=' + severity : '');
+        const r = await fetch(url);
+        const d = await r.json();
+        const events = d.events || [];
+        if (!events.length) {
+            el.innerHTML = '<div class="p-6 text-center text-xs text-gray-400">Kayıt yok</div>';
+            return;
+        }
+        const icons = { high: '🔴', medium: '🟡', low: '🟢', critical: '🚨' };
+        el.innerHTML = events.map(ev => `
+            <div class="px-5 py-2.5 flex items-center gap-3 hover:bg-gray-50/50">
+                <span class="shrink-0">${icons[ev.risk_level] || '⚪'}</span>
+                <span class="text-[10px] text-gray-400 shrink-0 w-28">${(ev.timestamp || '').slice(0, 16)}</span>
+                <span class="text-xs font-medium flex-1 truncate">${ev.operation || '—'}</span>
+                <span class="text-[10px] px-1.5 py-0.5 rounded ${ev.status === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">${ev.status || '?'}</span>
+            </div>
+        `).join('');
+    } catch(e) {
+        el.innerHTML = '<div class="p-6 text-center text-xs text-red-400">API bağlantı hatası</div>';
+    }
+}
+
+async function approveAction(id, approved) {
+    try {
+        await fetch(API + '/api/security/approve', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ id, approved })
+        });
+        await loadSecurity();
+    } catch(e) {
+        console.error('Onay hatası:', e);
+    }
+}
+
+// ── Tools tab ──────────────────────────────────────────────────────────────
+async function loadTools() {
+    const q = encodeURIComponent(document.getElementById('tools-search')?.value || '');
+    const group = encodeURIComponent(document.getElementById('tools-group-filter')?.value || '');
+    const policy = encodeURIComponent(document.getElementById('tools-policy-filter')?.value || '');
+    const table = document.getElementById('tools-table');
+    if (!table) return;
+    try {
+        const r = await fetch(API + `/api/tools?q=${q}&group=${group}&policy=${policy}`);
+        const d = await r.json();
+        const tools = d.tools || [];
+        const sum = d.summary || {};
+        document.getElementById('tools-total').textContent = sum.total ?? 0;
+        document.getElementById('tools-allowed').textContent = sum.allowed ?? 0;
+        document.getElementById('tools-denied').textContent = sum.denied ?? 0;
+        document.getElementById('tools-approval').textContent = sum.approval_required ?? 0;
+
+        if (!tools.length) {
+            table.innerHTML = '<tr><td colspan="7" class="px-4 py-4 text-center text-xs text-gray-400">Tool bulunamadı</td></tr>';
+        } else {
+            table.innerHTML = tools.map(t => `
+                <tr>
+                    <td class="px-4 py-2.5">
+                        <div class="font-semibold text-xs">${t.name}</div>
+                        <div class="text-[10px] text-gray-400 truncate">${t.description || ''}</div>
+                    </td>
+                    <td class="px-4 py-2.5 text-xs text-gray-500">${t.group || 'other'}</td>
+                    <td class="px-4 py-2.5 text-xs text-right">${t.usage?.calls ?? 0}</td>
+                    <td class="px-4 py-2.5 text-xs text-right">${Math.round(t.usage?.success_rate ?? 0)}%</td>
+                    <td class="px-4 py-2.5 text-center">
+                        <input type="checkbox" ${t.allowed ? 'checked' : ''} onchange="toggleToolPolicy('${t.name}', 'allow', this.checked)" />
+                    </td>
+                    <td class="px-4 py-2.5 text-center">
+                        <input type="checkbox" ${t.denied ? 'checked' : ''} onchange="toggleToolPolicy('${t.name}', 'deny', this.checked)" />
+                    </td>
+                    <td class="px-4 py-2.5 text-center">
+                        <input type="checkbox" ${t.requires_approval ? 'checked' : ''} onchange="toggleToolPolicy('${t.name}', 'approval', this.checked)" />
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        const select = document.getElementById('tool-test-name');
+        if (select) {
+            select.innerHTML = tools.map(t => `<option value="${t.name}">${t.name} (${t.group})</option>`).join('');
+        }
+    } catch(e) {
+        table.innerHTML = '<tr><td colspan="7" class="px-4 py-4 text-center text-xs text-red-400">Tools API hatası</td></tr>';
+    }
+}
+
+async function toggleToolPolicy(toolName, field, enabled) {
+    const payload = { tool: toolName };
+    if (field === 'allow') payload.allow = enabled;
+    if (field === 'deny') payload.deny = enabled;
+    if (field === 'approval') payload.requireApproval = enabled;
+    try {
+        await fetch(API + '/api/tools/policy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        await loadTools();
+    } catch(e) {
+        console.error('Tool policy update hatası', e);
+    }
+}
+
+async function runToolTest() {
+    const name = document.getElementById('tool-test-name')?.value;
+    const raw = document.getElementById('tool-test-params')?.value || '{}';
+    const out = document.getElementById('tool-test-output');
+    if (!name || !out) return;
+    let params = {};
+    try {
+        params = JSON.parse(raw || '{}');
+    } catch(e) {
+        out.textContent = 'Params JSON parse hatası: ' + e.message;
+        return;
+    }
+    out.textContent = 'Çalıştırılıyor...';
+    try {
+        const r = await fetch(API + '/api/tools/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tool: name, params, execute: true }),
+        });
+        const d = await r.json();
+        out.textContent = JSON.stringify(d, null, 2);
+    } catch(e) {
+        out.textContent = 'Tool test hatası: ' + e.message;
+    }
+}
+
+// ── Quick task ─────────────────────────────────────────────────────────────
+async function createTask() {
+    const input = document.getElementById('quick-task-input');
+    const status = document.getElementById('quick-task-status');
+    const text = input.value.trim();
+    if (!text) return;
+    status.textContent = 'Gönderiliyor...';
+    status.classList.remove('hidden');
+    try {
+        const r = await fetch(API + '/api/tasks', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({text})
+        });
+        const d = await r.json();
+        if (d.status === 'queued') {
+            status.textContent = '✓ Görev kuyruğa alındı';
+            status.className = 'text-xs text-center text-green-500';
+            input.value = '';
+            setTimeout(() => { status.classList.add('hidden'); status.className = 'text-xs text-center text-gray-400 hidden'; }, 3000);
+        } else {
+            status.textContent = d.error || 'Hata';
+            status.className = 'text-xs text-center text-red-500';
+        }
+    } catch(e) {
+        status.textContent = 'Bağlantı hatası';
+        status.className = 'text-xs text-center text-red-500';
+    }
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+lucide.createIcons();
+connectWS();
+
+// Initial data load
+pollStatus();
+pollAnalytics();
+pollTasks();
+pollMemory();
+loadTools();
+loadSkills();
+loadRoutines();
+loadModelSettings();
+
+['tools-search', 'tools-group-filter', 'tools-policy-filter'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const evt = id === 'tools-search' ? 'input' : 'change';
+    el.addEventListener(evt, () => {
+        if (document.getElementById('tab-tools')?.classList.contains('active')) {
+            loadTools();
+        }
+    });
+});
+
+['skills-search', 'skills-mode'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const evt = id === 'skills-search' ? 'input' : 'change';
+    el.addEventListener(evt, () => {
+        if (document.getElementById('tab-skills')?.classList.contains('active')) {
+            loadSkills();
+        }
+    });
+});
+
+[
+    ['settings-default-provider', 'settings-default-model'],
+    ['settings-fallback-provider', 'settings-fallback-model'],
+].forEach(([providerId, modelId]) => {
+    const p = document.getElementById(providerId);
+    const m = document.getElementById(modelId);
+    if (!p || !m) return;
+    p.addEventListener('change', () => {
+        const current = (m.value || '').trim();
+        if (!current) {
+            m.value = _defaultModelForProvider(p.value);
+        }
+    });
+});
+
+// Periodic refresh
+setInterval(pollStatus, 5000);
+setInterval(pollAnalytics, 15000);
+setInterval(pollTasks, 10000);
+setInterval(pollMemory, 30000);
+setInterval(() => {
+    if (document.getElementById('tab-skills')?.classList.contains('active')) {
+        loadSkills();
+    }
+}, 30000);
+setInterval(() => {
+    if (document.getElementById('tab-automation')?.classList.contains('active')) {
+        loadRoutines();
+    }
+}, 30000);
+setInterval(() => {
+    if (document.getElementById('tab-settings')?.classList.contains('active')) {
+        loadModelSettings();
+    }
+}, 30000);
+</script>
+</body>
+</html>

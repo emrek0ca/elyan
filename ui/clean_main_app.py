@@ -11,6 +11,20 @@ import concurrent.futures
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
 import psutil
+
+from utils.logger import get_logger
+logger = get_logger("clean_main_app")
+
+# Professional macOS Environment Fix (v18.0 Industrial)
+if sys.platform == "darwin":
+    try:
+        import PyQt6
+        qt_path = Path(PyQt6.__file__).parent / "Qt6" / "plugins"
+        if qt_path.exists():
+            os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = str(qt_path)
+    except Exception:
+        pass
+
 from core.monitoring import get_monitoring
 from core.capability_metrics import get_capability_metrics
 from core.pricing_tracker import get_pricing_tracker
@@ -34,10 +48,6 @@ from ui.components import (
 )
 from ui.branding import load_brand_icon, load_brand_pixmap
 from ui.ai_settings_panel import CleanAIPanel
-
-from utils.logger import get_logger
-
-logger = get_logger("clean_main_app")
 
 
 def _configure_font_fallbacks(app: QApplication) -> None:
@@ -420,7 +430,7 @@ class CleanSidebar(QFrame):
 
         self._status_text = QLabel("Bağlantı bekleniyor")
         self._status_text.setFont(QFont(".AppleSystemUIFont", 11))
-        self._status_text.setStyleSheet("color: #64748b; border: none;")
+        self._status_text.setStyleSheet("color: #8E8E93; border: none;")
         status_layout.addWidget(self._status_text)
 
         self._status_bar = QProgressBar()
@@ -433,7 +443,7 @@ class CleanSidebar(QFrame):
                 border-radius: 2px;
             }
             QProgressBar::chunk {
-                background-color: #7196A2;
+                background-color: #0F9AFE;
                 border-radius: 2px;
             }
         """)
@@ -454,7 +464,7 @@ class CleanSidebar(QFrame):
             self._status_text.setText(text or "SİSTEM AKTİF")
             self._status_text.setStyleSheet("color: #34C759; border: none; font-weight: 700; font-size: 10px;")
             self._status_bar.setValue(100)
-            self._status_bar.setStyleSheet(self._status_bar.styleSheet().replace("#7196A2", "#34C759"))
+            self._status_bar.setStyleSheet(self._status_bar.styleSheet().replace("#0F9AFE", "#34C759"))
         else:
             self._status_text.setText(text or "Çevrimdışı")
             self._status_text.setStyleSheet("color: #64748b; border: none;")
@@ -485,35 +495,38 @@ class CleanDashboard(QWidget):
         stats_layout = QHBoxLayout()
         stats_layout.setSpacing(20)
         
-        self._cpu_card = StatCard("", "0%", "CPU Kullanımı", "#7196A2")
-        self._mem_card = StatCard("", "0 MB", "Bellek", "#7196A2")
-        self._disk_card = StatCard("", "0%", "Disk Durumu", "#7196A2")
+        self._cpu_card = StatCard("", "0%", "CPU Kullanımı", "#0F9AFE")
+        self._mem_card = StatCard("", "0 MB", "Bellek", "#5856D6")
+        self._disk_card = StatCard("", "0%", "Disk Durumu", "#34C759")
         
         stats_layout.addWidget(self._cpu_card)
         stats_layout.addWidget(self._mem_card)
         stats_layout.addWidget(self._disk_card)
         layout.addLayout(stats_layout)
 
-        # AI Metrics Row (v7.0)
-        ai_stats_layout = QHBoxLayout()
-        ai_stats_layout.setSpacing(20)
-        
-        self._latency_card = StatCard("", "0ms", "Yapay Zeka Hızı", "#7196A2")
-        self._success_card = StatCard("", "100%", "Başarı Oranı", "#7196A2")
-        self._ops_card = StatCard("", "0", "Toplam İşlem", "#7196A2")
-        self._domain_card = StatCard("", "general", "Odak Domain", "#7196A2")
-        self._cost_card = StatCard("", "$0.00", "Tahmini Maliyet", "#7196A2")
-        self._quality_card = StatCard("", "0", "Kalite Skoru", "#7196A2")
-        self._pipeline_card = StatCard("", "A:0 H:0", "Pipeline", "#7196A2")
-        
-        ai_stats_layout.addWidget(self._latency_card)
-        ai_stats_layout.addWidget(self._success_card)
-        ai_stats_layout.addWidget(self._ops_card)
-        ai_stats_layout.addWidget(self._domain_card)
-        ai_stats_layout.addWidget(self._cost_card)
-        ai_stats_layout.addWidget(self._quality_card)
-        ai_stats_layout.addWidget(self._pipeline_card)
-        layout.addLayout(ai_stats_layout)
+        # AI Metrics Row 1
+        ai_row1 = QHBoxLayout()
+        ai_row1.setSpacing(16)
+        self._latency_card = StatCard("", "0ms", "AI Hızı", "#0F9AFE")
+        self._success_card = StatCard("", "100%", "Başarı Oranı", "#34C759")
+        self._ops_card = StatCard("", "0", "Toplam İşlem", "#5856D6")
+        self._domain_card = StatCard("", "general", "Odak Domain", "#FF9500")
+        ai_row1.addWidget(self._latency_card)
+        ai_row1.addWidget(self._success_card)
+        ai_row1.addWidget(self._ops_card)
+        ai_row1.addWidget(self._domain_card)
+        layout.addLayout(ai_row1)
+
+        # AI Metrics Row 2
+        ai_row2 = QHBoxLayout()
+        ai_row2.setSpacing(16)
+        self._cost_card = StatCard("", "$0.00", "Tahmini Maliyet", "#FF3B30")
+        self._quality_card = StatCard("", "0", "Kalite Skoru", "#AF52DE")
+        self._pipeline_card = StatCard("", "A:0 R:0", "Pipeline", "#007AFF")
+        ai_row2.addWidget(self._cost_card)
+        ai_row2.addWidget(self._quality_card)
+        ai_row2.addWidget(self._pipeline_card)
+        layout.addLayout(ai_row2)
 
         # Performance Graph (v8.0)
         layout.addWidget(SectionHeader("Performans Trendi"))
@@ -804,7 +817,7 @@ class CleanResearchPanel(QWidget):
 
         topic_label = QLabel("Araştırma Konusu")
         topic_label.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Medium))
-        topic_label.setStyleSheet("color: #94a3b8; border: none;")
+        topic_label.setStyleSheet("color: #8E8E93; border: none;")
         input_layout.addWidget(topic_label)
 
         self._topic_input = QLineEdit()
@@ -829,7 +842,7 @@ class CleanResearchPanel(QWidget):
 
         depth_label = QLabel("Derinlik:")
         depth_label.setFont(QFont(".AppleSystemUIFont", 13))
-        depth_label.setStyleSheet("color: #94a3b8;")
+        depth_label.setStyleSheet("color: #8E8E93;")
         options_layout.addWidget(depth_label)
 
         self._depth_combo = QComboBox()
@@ -852,7 +865,7 @@ class CleanResearchPanel(QWidget):
 
         format_label = QLabel("Format:")
         format_label.setFont(QFont(".AppleSystemUIFont", 13))
-        format_label.setStyleSheet("color: #94a3b8;")
+        format_label.setStyleSheet("color: #8E8E93;")
         options_layout.addWidget(format_label)
 
         self._format_combo = QComboBox()
@@ -913,7 +926,7 @@ class CleanResearchPanel(QWidget):
         self._chart_label = QLabel()
         self._chart_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._chart_label.setText("Grafikler burada görünecek")
-        self._chart_label.setStyleSheet("color: #71717a; background: rgba(0,0,0,0.2); border-radius: 12px;")
+        self._chart_label.setStyleSheet("color: #8E8E93; background: #F2F2F7; border-radius: 12px; padding: 40px;")
         self._chart_scroll.setWidget(self._chart_label)
         
         chart_layout.addWidget(self._chart_scroll)
@@ -981,93 +994,6 @@ class CleanResearchPanel(QWidget):
             self._chart_label.setText("Grafik işlenirken hata oluştu")
 
 
-        locations_layout.setContentsMargins(16, 16, 16, 16)
-        locations_layout.setSpacing(12)
-
-        locations = [
-            ("Masaüstü", "~/Desktop"),
-            ("Belgeler", "~/Documents"),
-            ("İndirilenler", "~/Downloads"),
-            ("Resimler", "~/Pictures"),
-        ]
-
-        for name, path in locations:
-            btn = QPushButton(name)
-            btn.setFont(QFont(".AppleSystemUIFont", 13))
-            btn.setMinimumHeight(40)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #0f172a;
-                    color: #e2e8f0;
-                    border: 1px solid #334155;
-                    border-radius: 8px;
-                    padding: 0 20px;
-                }
-                QPushButton:hover {
-                    background-color: rgba(0, 0, 0, 0.05);
-                    border-color: #3b82f6;
-                }
-            """)
-            locations_layout.addWidget(btn)
-
-        layout.addWidget(locations_frame)
-
-        # Actions
-        actions_frame = GlassFrame()
-        actions_layout = QVBoxLayout(actions_frame)
-        actions_layout.setContentsMargins(20, 20, 20, 20)
-        actions_layout.setSpacing(12)
-
-        actions_title = QLabel("Hızlı İşlemler")
-        actions_title.setFont(QFont(".AppleSystemUIFont", 14, QFont.Weight.Medium))
-        actions_title.setStyleSheet("color: #0f172a;")
-        actions_layout.addWidget(actions_title)
-
-        actions = [
-            ("Dosya Ara", "Bilgisayarınızda dosya arayın"),
-            ("Dosyaları Düzenle", "Klasördeki dosyaları türe göre düzenleyin"),
-            ("Yedekle", "Seçili dosyaları yedekleyin"),
-            ("Sıkıştır", "Dosyaları ZIP olarak sıkıştırın"),
-        ]
-
-        for name, desc_text in actions:
-            action_btn = QPushButton()
-            action_btn.setMinimumHeight(60)
-            action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            action_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #0f172a;
-                    border: 1px solid #334155;
-                    border-radius: 8px;
-                    text-align: left;
-                    padding: 12px 16px;
-                }
-                QPushButton:hover {
-                    border-color: #3b82f6;
-                }
-            """)
-
-            btn_layout = QVBoxLayout(action_btn)
-            btn_layout.setContentsMargins(0, 0, 0, 0)
-            btn_layout.setSpacing(4)
-
-            btn_name = QLabel(name)
-            btn_name.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Medium))
-            btn_name.setStyleSheet("color: #0f172a;")
-            btn_layout.addWidget(btn_name)
-
-            btn_desc = QLabel(desc_text)
-            btn_desc.setFont(QFont(".AppleSystemUIFont", 11))
-            btn_desc.setStyleSheet("color: #64748b;")
-            btn_layout.addWidget(btn_desc)
-
-            actions_layout.addWidget(action_btn)
-
-        layout.addWidget(actions_frame)
-        layout.addStretch()
-
-
 class CleanSettingsPanel(QWidget):
     """Settings panel wrapper that uses full professional Settings UI."""
 
@@ -1119,11 +1045,12 @@ class CleanAdvancedPanel(QWidget):
         self._log_area.setFont(QFont("SF Mono", 11))
         self._log_area.setStyleSheet("""
             QTextEdit {
-                background-color: #F8FAFC;
-                border: 1px solid #E2E8F0;
+                background-color: #1E1E2E;
+                border: 1px solid #313244;
                 border-radius: 12px;
                 padding: 12px;
-                color: #334155;
+                color: #CDD6F4;
+                selection-background-color: #45475A;
             }
         """)
         
@@ -1149,7 +1076,7 @@ class CleanAdvancedPanel(QWidget):
         sys_info += f"İşlemci: {platform.processor()}"
         
         info_label = QLabel(sys_info)
-        info_label.setStyleSheet("color: #94a3b8; font-family: 'SF Mono';")
+        info_label.setStyleSheet("color: #8E8E93; font-family: 'SF Mono';")
         info_layout.addWidget(info_label)
         
         layout.addWidget(info_frame)
@@ -1188,22 +1115,20 @@ class CleanMainWindow(QMainWindow):
     def _on_history_added(self, user_input: str, result: str):
         """Thread-safe history update"""
         if hasattr(self, "_chat_widget"):
-            self._chat_widget.add_message("User", user_input)
-            self._chat_widget.add_message("Elyan", result)
+            self._chat_widget.add_message(user_input, is_user=True)
+            self._chat_widget.add_message(result, is_user=False)
 
     def _on_thought_notified(self, thought: str):
         """Display live reasoning thoughts"""
         if hasattr(self, "_chat_widget"):
-            # Use a special reasoning style/prefix
-            self._chat_widget.add_message("Elyan Reasoning", thought)
+            self._chat_widget.add_message(f"[Reasoning] {thought}", is_user=False)
         self._dashboard._add_activity(f"Düşünce: {thought[:40]}...", "şimdi")
 
     def _on_screenshot_shown(self, path: str, message: str):
         """Handle visual verification display"""
         self._dashboard._add_activity(f"Görsel Doğrulama: {message}", "şimdi")
-        # In the future, we could pop up the screenshot or show it in chat
         if hasattr(self, "_chat_widget"):
-             self._chat_widget.add_message("System", f"📷 {message}\nDosya: {path}")
+            self._chat_widget.add_message(f"[Screenshot] {message}\nDosya: {path}", is_user=False)
 
     def _on_approval_requested(self, request_id: str, message: str):
         """Display explicit approval dialog and return user's decision to worker."""
@@ -1283,7 +1208,6 @@ class CleanMainWindow(QMainWindow):
         self._apply_theme()
 
     def _apply_theme(self):
-        # Stronger, cleaner visual identity for desktop UI.
         self.setStyleSheet("""
             QWidget#central_widget {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
@@ -1299,10 +1223,10 @@ class CleanMainWindow(QMainWindow):
                 border: none;
                 background: transparent;
             }
-            QLineEdit, QComboBox, QSpinBox, QTextEdit, QListView, QListWidget {
+            QLineEdit, QComboBox, QSpinBox, QTextEdit {
                 background: #FFFFFF;
                 border: 1px solid #D9E2EC;
-                border-radius: 12px;
+                border-radius: 10px;
                 padding: 8px 10px;
                 color: #1E293B;
                 font-family: ".AppleSystemUIFont";
@@ -1310,25 +1234,6 @@ class CleanMainWindow(QMainWindow):
             }
             QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QTextEdit:focus {
                 border: 1px solid #0F9AFE;
-            }
-            QPushButton {
-                background: #0F9AFE;
-                color: #FFFFFF;
-                border: none;
-                border-radius: 11px;
-                padding: 9px 14px;
-                font-family: ".AppleSystemUIFont";
-                font-size: 13px;
-                font-weight: 600;
-            }
-            QPushButton:hover {
-                background: #0B84D9;
-            }
-            QPushButton:pressed {
-                background: #096DB4;
-            }
-            QLabel {
-                color: #0F172A;
             }
         """)
 
@@ -1340,11 +1245,52 @@ class CleanMainWindow(QMainWindow):
 
         tray_menu = QMenu()
 
-        show_action = QAction("Göster", self)
-        show_action.triggered.connect(self.show)
-        tray_menu.addAction(show_action)
+        # Header
+        header_action = QAction("Elyan v24.0", self)
+        header_action.setEnabled(False)
+        tray_menu.addAction(header_action)
+
+        self._tray_status = QAction("Durum: Başlatılıyor...", self)
+        self._tray_status.setEnabled(False)
+        tray_menu.addAction(self._tray_status)
 
         tray_menu.addSeparator()
+
+        # Main actions
+        show_action = QAction("Paneli Göster", self)
+        show_action.triggered.connect(self._show_and_activate)
+        tray_menu.addAction(show_action)
+
+        chat_action = QAction("Sohbet", self)
+        chat_action.triggered.connect(lambda: self._show_page(1))
+        tray_menu.addAction(chat_action)
+
+        tray_menu.addSeparator()
+
+        # Quick modes
+        quick_menu = tray_menu.addMenu("Hızlı Modlar")
+        for mode, label in [("build", "Build"), ("research", "Research"), ("document", "Document"), ("ship", "Ship")]:
+            act = QAction(label, self)
+            act.triggered.connect(lambda _, m=mode: self._tray_quick_mode(m))
+            quick_menu.addAction(act)
+
+        tray_menu.addSeparator()
+
+        # Settings
+        settings_action = QAction("Ayarlar", self)
+        settings_action.triggered.connect(lambda: self._show_page(5))
+        tray_menu.addAction(settings_action)
+
+        ai_action = QAction("AI Ayarları", self)
+        ai_action.triggered.connect(lambda: self._show_page(4))
+        tray_menu.addAction(ai_action)
+
+        tray_menu.addSeparator()
+
+        # System
+        restart_action = QAction("Botu Yeniden Başlat", self)
+        restart_action.triggered.connect(self._restart_bot)
+        tray_menu.addAction(restart_action)
 
         quit_action = QAction("Çıkış", self)
         quit_action.triggered.connect(self._quit_app)
@@ -1353,6 +1299,31 @@ class CleanMainWindow(QMainWindow):
         self._tray.setContextMenu(tray_menu)
         self._tray.activated.connect(self._on_tray_activated)
         self._tray.show()
+
+    def _show_and_activate(self):
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _show_page(self, index: int):
+        self._show_and_activate()
+        self._sidebar._on_nav_click(index)
+        self._content_stack.setCurrentIndex(index)
+
+    def _tray_quick_mode(self, mode: str):
+        prompts = {
+            "build": "Build modu: profesyonel bir proje planla, kodu üret, test et ve teslim paketini hazırla.",
+            "research": "Research modu: çok kaynaklı derin araştırma yap, riskleri çıkar ve karar özeti oluştur.",
+            "document": "Document modu: yönetici özeti, ana rapor ve aksiyon maddeleri içeren profesyonel doküman paketi üret.",
+            "ship": "Ship modu: mevcut çalışmayı doğrula, kalite raporu çıkar ve publish-ready teslim çıktısı üret.",
+        }
+        self._show_page(1)
+        if hasattr(self, "_chat_widget"):
+            self._chat_widget.set_draft(prompts.get(mode, ""), auto_send=True)
+
+    def _restart_bot(self):
+        self._bot_worker.stop()
+        QTimer.singleShot(1000, self._start_bot)
 
     def _on_page_changed(self, index: int):
         # Graphics effects can trigger QPainter re-entry warnings on some Qt builds.
@@ -1372,6 +1343,9 @@ class CleanMainWindow(QMainWindow):
     def _on_status_changed(self, message: str, online: bool):
         self._sidebar.set_status(online, message)
         self._chat_widget.set_status(online, message)
+        if hasattr(self, '_tray_status'):
+            self._tray_status.setText(f"Durum: {message}")
+        self._tray.setToolTip(f"Elyan - {message}")
 
     def _on_error(self, error: str):
         QMessageBox.warning(self, "Hata", f"Bot hatası: {error}")

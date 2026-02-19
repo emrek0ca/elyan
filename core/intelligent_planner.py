@@ -355,6 +355,11 @@ Return JSON array:
             "goster": "list_files",
             "screenshot": "take_screenshot",
             "ekran": "take_screenshot",
+            "görsel": "create_visual_asset_pack",
+            "gorsel": "create_visual_asset_pack",
+            "image": "create_visual_asset_pack",
+            "logo": "create_visual_asset_pack",
+            "tasarla": "create_visual_asset_pack",
         }
 
         for keyword, action in action_map.items():

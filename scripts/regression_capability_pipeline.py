@@ -80,7 +80,7 @@ async def check_workflow_tools():
         create_software_project_pack,
     )
 
-    out = str(ROOT / ".wiqo")
+    out = str(ROOT / ".elyan")
     w = await create_web_project_scaffold("Regression Web", stack="react", output_dir=out)
     _assert("workflow.web.success", bool(w.get("success")), str(w))
     _assert("workflow.web.files", len(w.get("files_created", [])) >= 5, str(len(w.get("files_created", []))))
@@ -232,7 +232,7 @@ def check_plan_confirmation_policy():
 async def check_learning_v2():
     from core.learning_engine import LearningEngine
 
-    db_path = ROOT / ".wiqo" / "learning_regression.db"
+    db_path = ROOT / ".elyan" / "learning_regression.db"
     if db_path.exists():
         db_path.unlink()
     engine = LearningEngine(db_path=db_path)
@@ -264,7 +264,7 @@ async def check_multimodal_tools():
         get_multimodal_capability_report,
     )
 
-    out = str(ROOT / ".wiqo")
+    out = str(ROOT / ".elyan")
     p = await create_visual_asset_pack(
         "Regression Multimodal",
         brief="Elyan için premium launch visual set",

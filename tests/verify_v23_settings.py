@@ -7,11 +7,11 @@ from config.settings_manager import SettingsPanel, DEFAULT_SETTINGS
 
 def test_migration():
     print("--- Testing Settings Migration ---")
-    old_dir = Path.home() / ".config" / "wiqo-bot"
+    old_dir = Path.home() / ".config" / "elyan-bot"
     old_dir.mkdir(parents=True, exist_ok=True)
     old_file = old_dir / "settings.json"
     
-    new_dir = Path.home() / ".wiqo"
+    new_dir = Path.home() / ".elyan"
     new_file = new_dir / "settings.json"
     
     # Backup existing new settings if any

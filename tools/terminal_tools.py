@@ -10,7 +10,6 @@ Provides secure execution of whitelisted terminal commands with:
 """
 
 import asyncio
-import subprocess
 import shlex
 import re
 from typing import Dict, Any, Optional, List
@@ -76,6 +75,24 @@ DANGEROUS_PATTERNS = [
     r"eval",  # Code evaluation
     r"exec",  # Code execution
 ]
+
+# Shell control operators are blocked even though we use create_subprocess_exec.
+# This prevents ambiguous intent and future regressions if execution mode changes.
+SHELL_CONTROL_PATTERN = re.compile(r"(;|&&|\|\||`|\$\(|\n|\r)")
+
+# Interpreter-style inline execution flags are high-risk injection vectors.
+BLOCKED_INLINE_EXEC_FLAGS = {
+    "python": {"-c", "-m"},
+    "python3": {"-c", "-m"},
+    "node": {"-e", "-p"},
+    "ruby": {"-e"},
+    "perl": {"-e"},
+    "php": {"-r"},
+    "osascript": {"-e"},
+    "bash": {"-c"},
+    "sh": {"-c"},
+    "zsh": {"-c"},
+}
 
 
 class SafeTerminal:
@@ -215,6 +232,15 @@ class SafeTerminal:
                     "risk_level": "critical",
                     "issues": [f"Matches dangerous pattern: {pattern}"]
                 }
+
+        # Block shell operators that can chain/inject commands.
+        if SHELL_CONTROL_PATTERN.search(command):
+            return {
+                "safe": False,
+                "reason": "Shell control operator detected",
+                "risk_level": "critical",
+                "issues": ["Command contains blocked shell control characters/operators"]
+            }
         
         # Parse command
         try:
@@ -260,6 +286,17 @@ class SafeTerminal:
             if not has_allowed and args:  # If has args but none are allowed
                 risk_level = "medium"
                 issues.append(f"'{base_command}' used with non-whitelisted arguments")
+
+        # Explicitly block inline code execution flags for interpreters.
+        blocked_flags = BLOCKED_INLINE_EXEC_FLAGS.get(base_command, set())
+        for arg in args:
+            if arg in blocked_flags:
+                return {
+                    "safe": False,
+                    "reason": f"Inline execution flag blocked for {base_command}: {arg}",
+                    "risk_level": "critical",
+                    "issues": [f"Blocked inline execution flag: {arg}"]
+                }
         
         # Check for file operations on sensitive paths
         sensitive_paths = ["/etc", "/usr", "/bin", "/sbin", "/var", "/System"]

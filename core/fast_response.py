@@ -61,6 +61,14 @@ class FastResponseSystem:
         self.thanks_patterns = [
             (r'^(teşekkür|sağol|eyvallah|tşk|saol|eyv|tesekkurler|tesekkur).*$', None),  # dynamic
             (r'^(tamam|ok|peki|anladım|tamamdır|oldu)$', None),  # dynamic
+            (r'^(gerek yok|gerek yok|lazım değil|lazım degil)$', "Tamam, bir şey lazım olursa buradayım."),
+        ]
+
+        # Conversational catch-all patterns (LLM yerine hızlı yanıt)
+        self.conversational_patterns = [
+            (r'^(napiyorsun|napıyorsun|napiyon|napıyon|naptın|naptin|ne yapıyorsun|ne yapiyorsun)\b',
+             None),  # dynamic - get_varied_greeting gibi bir şey döner
+            (r'^(elyan)\s*$', None),  # Sadece isim yazıldıysa
         ]
 
         # Identity patterns
@@ -127,6 +135,11 @@ class FastResponseSystem:
             if re.search(pattern, question_lower):
                 return True, QuestionType.GREETING
 
+        # Check conversational patterns
+        for pattern, _ in self.conversational_patterns:
+            if re.search(pattern, question_lower):
+                return True, QuestionType.GREETING
+
         # Check identity questions
         for pattern, _ in self.identity_patterns:
             if re.search(pattern, question_lower):
@@ -178,6 +191,20 @@ class FastResponseSystem:
             for pattern, response in self.thanks_patterns:
                 if re.search(pattern, question_lower):
                     answer = response if response else natural_response("thanks_reply")
+                    break
+
+        # Try conversational catch-all
+        if not answer:
+            _conv_replies = [
+                "Seninle konuşuyorum, yardıma hazırım.",
+                "Buradayım. Bir şeye ihtiyacın var mı?",
+                "Evet? Nasıl yardımcı olabilirim?",
+                "Dinliyorum.",
+            ]
+            for pattern, response in self.conversational_patterns:
+                if re.search(pattern, question_lower):
+                    import random as _r
+                    answer = response if response else _r.choice(_conv_replies)
                     break
 
         # Try identity

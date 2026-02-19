@@ -15,9 +15,9 @@ logger = get_logger("tools.pro_workflows")
 
 
 def _safe_project_slug(name: str) -> str:
-    cleaned = "".join(ch if ch.isalnum() or ch in ("-", "_", " ") else " " for ch in str(name or "wiqo-project"))
+    cleaned = "".join(ch if ch.isalnum() or ch in ("-", "_", " ") else " " for ch in str(name or "elyan-project"))
     cleaned = "_".join(cleaned.strip().split())
-    return cleaned[:80] or "wiqo-project"
+    return cleaned[:80] or "elyan-project"
 
 
 async def create_web_project_scaffold(

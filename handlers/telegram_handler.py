@@ -4,6 +4,7 @@ from core.agent import Agent
 from config.settings import HOME_DIR, LOGS_DIR
 from security.rate_limiter import rate_limiter
 from security.approval import get_approval_manager
+from security.validator import sanitize_input, validate_input
 from core.error_handler import ErrorHandler
 from core.tool_health import get_tool_health_manager, ToolStatus
 from core.briefing_manager import get_briefing_manager
@@ -23,25 +24,76 @@ logger = get_logger("telegram")
 agent: Agent = None
 telegram_app: Optional[Application] = None
 pending_approvals = {}  # request_id -> {"user_id": int, "future": asyncio.Future, "loop": asyncio.AbstractEventLoop}
-pending_requests = {}  # user_id -> request_id for cancellation tracking
+pending_requests = {}  # user_id -> set[request_id] for cancellation tracking
+
+
+def _track_pending_request(user_id: int, request_id: str):
+    """Track pending approval request per user (supports multiple pending IDs)."""
+    if not user_id or not request_id:
+        return
+    reqs = pending_requests.setdefault(user_id, set())
+    reqs.add(request_id)
+
+
+def _untrack_pending_request(user_id: int, request_id: str):
+    """Remove a tracked request id; cleanup empty user bucket."""
+    reqs = pending_requests.get(user_id)
+    if not reqs:
+        return
+    reqs.discard(request_id)
+    if not reqs:
+        pending_requests.pop(user_id, None)
+
+
+def _get_user_pending_request_ids(user_id: int) -> set[str]:
+    """
+    Return all pending request IDs for a user.
+    Includes tracked IDs and orphaned entries still present in pending_approvals.
+    """
+    tracked = set(pending_requests.get(user_id, set()))
+    orphaned = {
+        rid for rid, req in pending_approvals.items()
+        if int(req.get("user_id", 0) or 0) == user_id
+    }
+    return tracked.union(orphaned)
 
 
 def _resolve_pending_request(request_id: str, approved: bool) -> bool:
-    """Resolve pending approval future in a loop-safe way."""
+    """Resolve pending approval future in a loop-safe way.
+
+    BUG-FUNC-002: call_soon_threadsafe must only be used from OUTSIDE the
+    running loop. If we are already inside the loop (async handler), call
+    future.set_result() directly so the awaiting coroutine is resumed in the
+    same scheduler tick rather than being re-queued via the thread-safe pipe.
+    """
     pending = pending_approvals.get(request_id)
     if not pending:
+        logger.debug(f"_resolve_pending_request: no pending entry for {request_id}")
         return False
 
     future = pending.get("future")
     loop = pending.get("loop")
     if not future or future.done():
+        logger.debug(f"_resolve_pending_request: future already done for {request_id}")
         return False
 
     try:
-        if loop and loop.is_running():
+        # Detect whether the caller is running inside the same event loop.
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        if running_loop is not None and running_loop is loop:
+            # Already inside the loop — set directly (no threadsafe bridge needed).
+            future.set_result(bool(approved))
+        elif loop and loop.is_running():
+            # Called from a different thread while the loop is running.
             loop.call_soon_threadsafe(future.set_result, bool(approved))
         else:
             future.set_result(bool(approved))
+
+        logger.info(f"Approval resolved: request_id={request_id} approved={approved}")
         return True
     except Exception as exc:
         logger.error(f"Failed to resolve approval request {request_id}: {exc}")
@@ -171,18 +223,23 @@ async def approval_callback(approval_request):
         loop = asyncio.get_running_loop()
         future = loop.create_future()
 
-        # Ensure only one active approval per user to avoid stale, dangling waits.
-        previous_req_id = pending_requests.get(user_id)
-        if previous_req_id and previous_req_id != approval_request.id:
-            _resolve_pending_request(previous_req_id, False)
+        # BUG-FUNC-002: Ensure no stale pending approvals remain for this user.
+        for previous_req_id in _get_user_pending_request_ids(user_id):
+            if previous_req_id == approval_request.id:
+                continue
+            resolved = _resolve_pending_request(previous_req_id, False)
             pending_approvals.pop(previous_req_id, None)
+            _untrack_pending_request(user_id, previous_req_id)
+            logger.warning(
+                f"Cleared stale pending approval: user={user_id} request_id={previous_req_id} resolved={resolved}"
+            )
 
         pending_approvals[approval_request.id] = {
             "user_id": user_id,
             "future": future,
             "loop": loop,
         }
-        pending_requests[user_id] = approval_request.id
+        _track_pending_request(user_id, approval_request.id)
 
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("Onayla", callback_data=f"approval:{approval_request.id}:approve"),
@@ -216,8 +273,8 @@ async def approval_callback(approval_request):
         req_id = getattr(approval_request, "id", "")
         if req_id:
             pending_approvals.pop(req_id, None)
-        if user_id and pending_requests.get(user_id) == req_id:
-            pending_requests.pop(user_id, None)
+        if user_id and req_id:
+            _untrack_pending_request(user_id, req_id)
 
 
 async def approval_query_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -248,8 +305,8 @@ async def approval_query_callback(update: Update, context: ContextTypes.DEFAULT_
     logger.info(f"Approval button clicked: request_id={request_id} actor_id={actor_id} approved={approved}")
 
     pending_approvals.pop(request_id, None)
-    if expected_user and pending_requests.get(expected_user) == request_id:
-        pending_requests.pop(expected_user, None)
+    if expected_user:
+        _untrack_pending_request(expected_user, request_id)
 
     if approved:
         await query.edit_message_text("Onay alındı. İşlem devam ediyor.")
@@ -326,6 +383,13 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /auto_check - Otomatikleştirme fırsatları\n\n"
         "Otomasyon & Sistem:\n"
         "  /automate - Otomasyon görevleri\n"
+        "  /routine - Rutinleri listele\n"
+        "  /routine_add - Saat + adımla rutin ekle\n"
+        "  /routine_run - Rutin manuel çalıştır\n"
+        "  /routine_on /routine_off - Rutin aktif/pasif\n"
+        "  /routine_rm - Rutin sil\n"
+        "  /routine_templates - Hazır template listesi\n"
+        "  /routine_from - Template ile rutin oluştur\n"
         "  /health - Self-healing durumu\n\n"
         "Analytics & Bildirimler:\n"
         "  /analytics - Analytics dashboard\n"
@@ -361,7 +425,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_user(update):
         return
 
-    from tools.system_tools import get_system_info
+    from tools.system_tools import get_system_info, get_battery_status
     result = await get_system_info()
 
     if result.get("success"):
@@ -613,12 +677,19 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not await check_user(update): return
 
-    # Cancel pending approval request for this user if exists
-    pending_id = pending_requests.pop(user_id, None)
-    if pending_id:
-        _resolve_pending_request(pending_id, False)
-        pending_approvals.pop(pending_id, None)
-        await update.message.reply_text("Bekleyen onay isteği iptal edildi.")
+    # BUG-FUNC-002: Cancel ALL pending approval requests for this user.
+    pending_ids = sorted(_get_user_pending_request_ids(user_id))
+    if pending_ids:
+        resolved_count = 0
+        for pending_id in pending_ids:
+            if _resolve_pending_request(pending_id, False):
+                resolved_count += 1
+            pending_approvals.pop(pending_id, None)
+            _untrack_pending_request(user_id, pending_id)
+            logger.info(f"cmd_cancel: user={user_id} request_id={pending_id} cancelled")
+
+        msg = f"{len(pending_ids)} bekleyen onay iptal edildi ({resolved_count} çözümlendi)."
+        await update.message.reply_text(msg)
         return
 
     if agent:
@@ -1382,7 +1453,6 @@ async def cmd_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Ekran goruntusu aliniyor...")
 
     try:
-        from tools.system_tools import take_screenshot
         result = await take_screenshot()
 
         if result.get("success"):
@@ -1550,12 +1620,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
     # Rate limiting kontrolu
-    allowed, rate_msg = rate_limiter.is_allowed(user.id)
+    allowed, rate_msg = await rate_limiter.is_allowed(user.id)
     if not allowed:
         await update.message.reply_text(f"Lutfen bekleyin: {rate_msg}")
         return
 
-    user_input = update.message.text
+    raw_input = update.message.text or ""
+    user_input = sanitize_input(raw_input)
+    valid, validation_msg = validate_input(user_input)
+    if not valid:
+        await update.message.reply_text(validation_msg)
+        return
+
     logger.info(f"[{user.id}] {user.first_name}: {user_input[:50]}...")
 
     await update.message.chat.send_action("typing")
@@ -1611,6 +1687,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         response = await agent.process(user_input, notify=notify_step)
+
+        # Check for screen recording output and send video
+        video_match = re.search(r"Screen recording saved to (.+\.(?:mp4|mov|avi))", response)
+        if video_match:
+            video_path = video_match.group(1).strip()
+            if Path(video_path).exists():
+                try:
+                    await update.message.reply_video(
+                        video=open(video_path, 'rb'),
+                        caption=" Ekran kaydı"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send video: {e}")
 
         if len(response) > 4000:
             chunks = [response[i:i+4000] for i in range(0, len(response), 4000)]
@@ -1699,6 +1788,30 @@ def setup_handlers(app: Application, agent_instance: Agent):
         logger.info("Proactive commands registered (schedule, briefing, alerts)")
     except ImportError as e:
         logger.warning(f"Proactive commands not available: {e}")
+
+    # Routine automation commands
+    try:
+        from .telegram_routines_commands import (
+            cmd_routine,
+            cmd_routine_add,
+            cmd_routine_run,
+            cmd_routine_rm,
+            cmd_routine_on,
+            cmd_routine_off,
+            cmd_routine_templates,
+            cmd_routine_from,
+        )
+        app.add_handler(CommandHandler("routine", cmd_routine))
+        app.add_handler(CommandHandler("routine_add", cmd_routine_add))
+        app.add_handler(CommandHandler("routine_run", cmd_routine_run))
+        app.add_handler(CommandHandler("routine_rm", cmd_routine_rm))
+        app.add_handler(CommandHandler("routine_on", cmd_routine_on))
+        app.add_handler(CommandHandler("routine_off", cmd_routine_off))
+        app.add_handler(CommandHandler("routine_templates", cmd_routine_templates))
+        app.add_handler(CommandHandler("routine_from", cmd_routine_from))
+        logger.info("Routine commands registered (routine, routine_add, routine_run...)")
+    except ImportError as e:
+        logger.warning(f"Routine commands not available: {e}")
 
     # Extended commands from telegram_extensions module
     try:

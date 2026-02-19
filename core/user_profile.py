@@ -19,7 +19,7 @@ class UserProfileStore:
         self._load()
 
     def _default_path(self) -> Path:
-        base = Path.home() / ".wiqo"
+        base = Path.home() / ".elyan"
         try:
             base.mkdir(parents=True, exist_ok=True)
             probe = base / ".write_test"
@@ -27,7 +27,7 @@ class UserProfileStore:
             probe.unlink(missing_ok=True)
             return base / "user_profiles.json"
         except Exception:
-            local = Path(__file__).parent.parent / ".wiqo"
+            local = Path(__file__).parent.parent / ".elyan"
             local.mkdir(parents=True, exist_ok=True)
             return local / "user_profiles.json"
 
@@ -49,7 +49,7 @@ class UserProfileStore:
             )
         except Exception as exc:
             logger.warning(f"Failed to save user profiles: {exc}")
-            local = Path(__file__).parent.parent / ".wiqo" / "user_profiles.json"
+            local = Path(__file__).parent.parent / ".elyan" / "user_profiles.json"
             local.parent.mkdir(parents=True, exist_ok=True)
             try:
                 self.db_path = local

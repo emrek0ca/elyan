@@ -62,6 +62,12 @@ class QuickIntentDetector:
                 r'^(ben de|bende|aynen|kesinlikle|tabii|tabi)',
                 r'^(hmm|himm|hımm|sey|şey|valla|vallahi|yani)',
                 r'^(olsun|bosver|boşver|neyse|gecelim|geçelim)',
+                # Türkçe argо kısaltmaları
+                r'^(napiyorsun|napıyorsun|napiyon|napıyon|naptın|naptin|naptin|naptın)\b',
+                r'^(napıyosun|napiyosun|napısın|napısun|ne yapıyon|ne yapiyon)\b',
+                r'^(gerek yok|gerek yok|lazım değil|lazım degil|hayır gerek yok)\b',
+                r'^(elyan|abi|bro|kanka|dostum|arkadaş)\s*$',
+                r'^(dur|bekle|tamam tamam|okeyy|okey|heh|hı|hii|ha|ahh|ohh|eee|eeee)\b',
             ],
             IntentCategory.COMMAND: [
                 r'^/(status|help|stats|cancel|reset|screenshot)',

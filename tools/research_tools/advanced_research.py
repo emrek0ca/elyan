@@ -13,6 +13,9 @@ from utils.logger import get_logger
 
 logger = get_logger("advanced_research")
 
+# Global cache for last research topic (used by report generation)
+_last_research_topic = None
+
 
 class ResearchDepth(Enum):
     QUICK = "quick"           # 2-3 kaynak, hızlı sonuç
@@ -137,7 +140,7 @@ async def advanced_research(
     sources: list[str] | None = None,
     language: str = "tr",
     include_evaluation: bool = True,
-    generate_report: bool = True
+    generate_report: bool = False  # CHANGED: Report generation disabled for speed (task takes 5 mins otherwise)
 ) -> dict[str, Any]:
     """
     Gelişmiş araştırma yap ve rapor oluştur
@@ -222,21 +225,34 @@ async def advanced_research(
 
             result.progress = 30
 
-            # Step 2: Fetch and evaluate sources
+            # Step 2: Fetch and evaluate sources (CONCURRENT for speed)
             if include_evaluation:
-                for i, source in enumerate(result.sources):
+                async def _evaluate_with_timeout(source):
                     try:
-                        eval_result = await evaluate_source(source.url)
+                        # 15 second timeout per source
+                        eval_result = await asyncio.wait_for(
+                            evaluate_source(source.url),
+                            timeout=15
+                        )
                         if eval_result.get("success"):
                             source.reliability_score = eval_result.get("reliability_score", 0.5)
                             source.content = eval_result.get("content_preview", "")
                             source.fetched = True
                         else:
                             source.error = eval_result.get("error")
+                    except asyncio.TimeoutError:
+                        source.error = "Timeout"
                     except Exception as e:
                         source.error = str(e)
 
-                    result.progress = 30 + int((i + 1) / len(result.sources) * 40)
+                # Run all evaluations concurrently (max 3 at a time)
+                semaphore = asyncio.Semaphore(3)
+                async def _with_semaphore(source):
+                    async with semaphore:
+                        await _evaluate_with_timeout(source)
+
+                await asyncio.gather(*[_with_semaphore(s) for s in result.sources], return_exceptions=True)
+                result.progress = 70
 
             # Step 3: Extract findings
             result.progress = 75
@@ -290,10 +306,35 @@ async def advanced_research(
 
             logger.info(f"Araştırma tamamlandı: {topic} - {len(result.sources)} kaynak, {len(report_paths)} rapor")
 
-            message = f"Araştırma tamamlandı: {len(result.sources)} kaynak, {len(result.findings)} bulgu"
+            # Format professional report message for Telegram
+            message = f"📊 **{topic.upper()} - ARAŞTIRMA RAPORU**\n"
+            message += f"{'='*50}\n\n"
+            message += f"**📈 Özet:**\n{result.summary}\n\n"
+            message += f"**🔍 Ana Bulgular ({len(result.findings)}):**\n"
+            for i, finding in enumerate(result.findings, 1):
+                message += f"{i}. {finding}\n"
+            message += f"\n**📚 Kaynaklar ({len(result.sources)}):**\n"
+            for i, src in enumerate(result.sources[:8], 1):  # Limit to 8 sources for Telegram
+                reliability = f"({src.reliability_score*100:.0f}% güvenilir)" if src.reliability_score > 0 else ""
+                message += f"{i}. [{src.title}]({src.url}) {reliability}\n"
+
             if report_paths:
+                message += f"\n**📄 Detaylı Rapor:**\n"
                 for path in report_paths:
-                    message += f"\nRapor: {path}"
+                    message += f"- {path}\n"
+
+            # Offer detailed report generation
+            message += f"\n{'='*50}\n"
+            message += f"💾 **Detaylı profesyonel rapor (DOCX) oluşturmak ister misin?**\n"
+            message += f"Komut: `Raporla` veya `araştırma raporu oluştur`\n"
+
+            # Store last research topic in global cache for report generation
+            try:
+                global _last_research_topic
+                _last_research_topic = topic
+                logger.info(f"Stored last research topic in cache: {topic}")
+            except Exception as e:
+                logger.debug(f"Could not store topic in cache: {e}")
 
             return {
                 "success": True,
@@ -508,7 +549,13 @@ async def _extract_findings(
         "characters", "karakter", "limit",
         "ai detector", "ai-generated", "human-written",
         "yandeks", "yandex", "arama sonuçları", "tıklayın",
-        "tüm hakları", "copyright", "sayfa", "menü"
+        "tüm hakları", "copyright", "sayfa", "menü",
+        # Web scraping junk
+        "share", "facebook", "twitter", "pinterest", "linkedin",
+        "okuma süresi", "okunma sayısı", "tarihinde düzenlendi",
+        "tarafından yazıldı", "tarafından", "yorum yap",
+        "beğen", "paylaş", "oku", "dk, ", "dk.", "sn",
+        "yazıya gitmek için", "devamını oku"
     ]
     
     # Gereksiz kategori ve SEO terimleri
@@ -618,30 +665,41 @@ async def _generate_summary(
     findings: list[str],
     sources: list[ResearchSource]
 ) -> str:
-    """Araştırma sonuçlarından profesyonel ve bağlamsal bir özet oluşturur."""
-    reliable_count = sum(1 for s in sources if s.reliability_score >= 0.6)
+    """Araştırma sonuçlarını sade ve profesyonel bir özet metnine dönüştürür."""
     source_count = len(sources)
-    
-    # Giriş cümlesi
-    summary = f"**'{topic}'** üzerine yürütülen kapsamlı araştırma kapsamında toplam **{source_count}** stratejik kaynak analiz edilmiştir.\n\n"
-    
-    # Güvenilirlik analizi
-    if reliable_count > 0:
-        summary += f"İnceleme sonucunda, kaynakların **%{int((reliable_count/source_count)*100)}**'sinin yüksek güvenilirlik standartlarını karşıladığı doğrulanmıştır.\n\n"
-    
-    # Tematik Bulgular
-    if findings:
-        summary += "### Yönetici Özeti (Öne Çıkan Bulgular):\n"
-        # Bulguları daha temiz bir şekilde işle
-        for finding in findings[:6]:
-            content = finding.lstrip("• ").strip()
-            summary += f"- {content}\n"
-        
-        summary += "\nBu bulgular, konunun güncel durumunu ve kritik gelişim noktalarını yansıtacak şekilde sentezlenmiştir."
-    else:
-        summary += "Yapılan tarama sonucunda konuyla doğrudan örtüşen yeterli nitelikte bulguya rastlanmamıştır. Aramanın daha spesifik anahtar kelimelerle tekrarlanması önerilir."
+    reliable_count = sum(1 for s in sources if s.reliability_score >= 0.6)
+    reliability_pct = int((reliable_count / source_count) * 100) if source_count else 0
 
-    return summary
+    cleaned_findings: list[str] = []
+    seen = set()
+    for finding in findings:
+        item = str(finding or "").lstrip("•- ").strip()
+        item = " ".join(item.split())
+        if len(item) < 20:
+            continue
+        key = item[:80].lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned_findings.append(item)
+
+    lines = [
+        f"'{topic}' konusunda {source_count} kaynak incelendi.",
+        f"Güvenilirlik eşiğini (>=0.60) geçen kaynaklar: {reliable_count}/{source_count} (%{reliability_pct}).",
+    ]
+
+    if cleaned_findings:
+        lines.append("")
+        lines.append("Öne çıkan bulgular:")
+        for finding in cleaned_findings[:5]:
+            lines.append(f"- {finding}")
+    else:
+        lines.append("")
+        lines.append(
+            "Bu taramada doğrudan kullanılabilir bulgu az. Daha net anahtar kelimelerle tekrar arama önerilir."
+        )
+
+    return "\n".join(lines)
 
 
 def get_research_result(research_id: str) -> dict[str, Any]:

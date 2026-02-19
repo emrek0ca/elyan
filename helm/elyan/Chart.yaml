@@ -1,0 +1,16 @@
+apiVersion: v2
+name: elyan
+description: Elyan — Özerk AI Operatör / Kubernetes Helm Chart
+type: application
+version: 1.0.0
+appVersion: "18.0.0"
+keywords:
+  - ai
+  - assistant
+  - bot
+  - automation
+home: https://github.com/your-org/elyan
+maintainers:
+  - name: Elyan Team
+    email: ops@elyan.ai
+dependencies: []

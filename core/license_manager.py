@@ -61,10 +61,10 @@ class LicenseManager:
     """
 
     # Secret key for HMAC (in production, this should be obfuscated/encrypted)
-    _SECRET_KEY = b"wiqo_lifetime_executive_2026_secret_key_v1"
+    _SECRET_KEY = b"elyan_lifetime_executive_2026_secret_key_v1"
 
     def __init__(self):
-        self.license_file = Path.home() / ".wiqo" / "license.json"
+        self.license_file = Path.home() / ".elyan" / "license.json"
         self._license: Optional[License] = None
         self._is_licensed = False
         self._load_license()
@@ -194,7 +194,7 @@ class LicenseManager:
             ],
             "upgrade_message": (
                 "Upgrade to Lifetime Executive License for full access.\n"
-                "Contact: license@wiqo.ai"
+                "Contact: license@elyan.dev"
             )
         }
 
@@ -209,7 +209,7 @@ class LicenseManager:
             f"Machine ID: {machine_id}\n"
             f"System: {system_info}\n"
             f"Request Date: {datetime.now().strftime('%Y-%m-%d')}\n\n"
-            f"Please send this information to: license@wiqo.ai\n"
+            f"Please send this information to: license@elyan.dev\n"
             f"You will receive your Lifetime Executive License key."
         )
 

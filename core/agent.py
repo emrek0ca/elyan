@@ -1,1281 +1,651 @@
 from typing import Any, Optional
-from datetime import datetime
-from pathlib import Path
-import asyncio
-from .llm_client import LLMClient
-from .task_executor import TaskExecutor
-from .reasoning import ReasoningEngine
-from .memory import get_memory
-from .context_manager import get_context_manager
-from .smart_paths import resolve_path, suggest_path_alternatives
-from .tool_health import get_tool_health_manager
-from .session_manager import get_session_manager
-from .semantic_memory import get_semantic_memory
-from .batch_processor import get_batch_processor
-from .knowledge_base import get_knowledge_base
-from .smart_cache import get_smart_cache
-from .request_router import get_request_router
-from .connection_pool import get_http_pool
-from .learning_engine import get_learning_engine
-from .speed_optimizer import get_speed_optimizer
-from .advanced_analytics import get_analytics
-from .smart_notifications import get_smart_notifications
-from .intelligent_planner import get_intelligent_planner
-from .predictive_maintenance import get_predictive_maintenance
-from .advanced_security import get_advanced_security
-from .self_improvement import get_self_improvement
-from .fast_response import get_fast_response_system
-from .llm_optimizer import get_llm_optimizer
-from .response_cache import get_response_cache
-from .quick_intent import get_quick_intent_detector
-from .response_tone import format_tool_result, format_error_natural
-from .user_profile import get_user_profile_store
-from .i18n import detect_language
+import inspect
+import json
+import re as _re
+import time
+from difflib import get_close_matches
+from urllib.parse import quote_plus
+from core.kernel import kernel
+from core.neural_router import neural_router
+from core.action_lock import action_lock
+from core.quick_intent import get_quick_intent_detector, IntentCategory as _IC
+from core.intelligent_planner import get_intelligent_planner
+from core.intent_parser import get_intent_parser
+from core.context7_client import context7_client
+from core.canvas.engine import canvas_engine
+from tools.generators.slidev_generator import slidev_gen
 from tools import AVAILABLE_TOOLS
+from core.tool_usage import record_tool_usage
 from security.validator import validate_input, sanitize_input
-from security.privacy_guard import redact_text, sanitize_for_storage, sanitize_object, is_external_provider
-from config.settings import HOME_DIR
+from security.privacy_guard import redact_text, sanitize_for_storage, sanitize_object
+from core.i18n import detect_language
 from utils.logger import get_logger
 
 logger = get_logger("agent")
 
-# Action -> Tool mapping
 ACTION_TO_TOOL = {
-    # File operations
-    "list_files": "list_files",
-    "write_file": "write_file",
-    "read_file": "read_file",
-    "delete_file": "delete_file",
-    "remove_file": "delete_file",
-    "search_files": "search_files",
-    "find_files": "search_files",
-    "move_file": "move_file",
-    "tasi": "move_file",
-    "dosya_tasi": "move_file",
-    "copy_file": "copy_file",
-    "kopyala": "copy_file",
-    "dosya_kopyala": "copy_file",
-    "rename_file": "rename_file",
-    "yeniden_adlandir": "rename_file",
-    "dosya_adini_degistir": "rename_file",
-    "create_folder": "create_folder",
-    "klasor_olustur": "create_folder",
-    "yeni_klasor": "create_folder",
-    "mkdir": "create_folder",
-    "create_directory": "create_folder",
-
-    # App control
-    "open_app": "open_app",
-    "app_control": "open_app",  # Generic app control
-    "control_app": "open_app",
-    "manage_app": "open_app",
-    "open_url": "open_url",
-    "close_app": "close_app",
-    "quit_app": "close_app",
-    "kill_process": "kill_process",
-    "get_process_info": "get_process_info",
-    "list_processes": "get_process_info",
-    "processes": "get_process_info",
-
-    # System tools
-    "get_system_info": "get_system_info",
-    "system_info": "get_system_info",
-    "shutdown_system": "shutdown_system",
-    "restart_system": "restart_system",
-    "sleep_system": "sleep_system",
-    "lock_screen": "lock_screen",
-    "run_safe_command": "run_safe_command",
-    "run_command": "run_safe_command",
-    "terminal": "run_safe_command",
-    "execute": "run_safe_command",
-    "take_screenshot": "take_screenshot",
-    "screenshot": "take_screenshot",
-    "read_clipboard": "read_clipboard",
-    "clipboard_read": "read_clipboard",
-    "write_clipboard": "write_clipboard",
-    "clipboard_write": "write_clipboard",
-    "set_volume": "set_volume",
-    "volume": "set_volume",
-    "send_notification": "send_notification",
-    "notification": "send_notification",
-    "notify": "send_notification",
-
-    # macOS Appearance
-    "toggle_dark_mode": "toggle_dark_mode",
-    "dark_mode": "toggle_dark_mode",
-    "get_appearance": "get_appearance",
-    "set_brightness": "set_brightness",
-    "brightness": "set_brightness",
-    "parlaklık": "set_brightness",
-    "parlaklık_aç": "set_brightness",
-    "parlaklık_kapat": "set_brightness",
-    "get_brightness": "get_brightness",
-
-    # macOS Network
-    "wifi_status": "wifi_status",
-    "wifi_toggle": "wifi_toggle",
-    "wifi_on": "wifi_toggle",
-    "wifi_off": "wifi_toggle",
-    "bluetooth_status": "bluetooth_status",
-
-    # macOS Calendar & Reminders
-    "get_today_events": "get_today_events",
-    "today_events": "get_today_events",
-    "calendar_events": "get_today_events",
-    "create_event": "create_event",
-    "add_event": "create_event",
-    "get_reminders": "get_reminders",
-    "list_reminders": "get_reminders",
-    "create_reminder": "create_reminder",
-    "add_reminder": "create_reminder",
-    "remind": "create_reminder",
-
-    # macOS Spotlight
-    "spotlight_search": "spotlight_search",
-    "mdfind": "spotlight_search",
-    "system_search": "spotlight_search",
-
-    # macOS Preferences
-    "get_system_preferences": "get_system_preferences",
-    "system_preferences": "get_system_preferences",
-
-    # Office Document Tools
-    "read_word": "read_word",
-    "write_word": "write_word",
-    "read_excel": "read_excel",
-    "write_excel": "write_excel",
-    "read_pdf": "read_pdf",
-    "get_pdf_info": "get_pdf_info",
-    "pdf_info": "get_pdf_info",
-    "summarize_document": "summarize_document",
-    "summarize": "summarize_document",
-
-    # Web Research Tools
-    "fetch_page": "fetch_page",
-    "web_search": "web_search",
+    # Intent parser aliases
+    "research": "advanced_research",
+    "browser_search": "web_search",
     "search_web": "web_search",
-    "internet_search": "web_search",
-    "start_research": "start_research",
-    "research": "start_research",
-    "get_research_status": "get_research_status",
-    "research_status": "get_research_status",
-
-    # Advanced AI Tools
-    "advanced_research": "advanced_research",
-    "deep_research": "advanced_research",
-    "comprehensive_research": "advanced_research",
-    "smart_summarize": "smart_summarize",
-    "intelligent_summary": "smart_summarize",
-    "create_smart_file": "create_smart_file",
-    "smart_file": "create_smart_file",
-    "create_file": "create_smart_file",
-    "analyze_document": "analyze_document",
-    "document_analysis": "analyze_document",
-    "analyze_file": "analyze_document",
-    "generate_report": "generate_report",
-    "create_report": "generate_report",
-    "ai_report": "generate_report",
-
-    # ========================================
-    # v3.0 New Actions
-    # ========================================
-
-    # Note Taking System
-    "create_note": "create_note",
-    "yeni_not": "create_note",
-    "not_olustur": "create_note",
-    "list_notes": "list_notes",
-    "notlarim": "list_notes",
-    "notlar": "list_notes",
-    "my_notes": "list_notes",
-    "search_notes": "search_notes",
-    "notlarda_ara": "search_notes",
-    "not_ara": "search_notes",
-    "update_note": "update_note",
-    "not_guncelle": "update_note",
-    "delete_note": "delete_note",
-    "not_sil": "delete_note",
-    "get_note": "get_note",
-    "not_getir": "get_note",
-    "not_oku": "get_note",
-
-    # Task Planning System
-    "create_plan": "create_plan",
-    "plan_olustur": "create_plan",
-    "yeni_plan": "create_plan",
-    "execute_plan": "execute_plan",
-    "plan_calistir": "execute_plan",
-    "plani_yurut": "execute_plan",
-    "get_plan_status": "get_plan_status",
-    "plan_durumu": "get_plan_status",
-    "cancel_plan": "cancel_plan",
-    "plan_iptal": "cancel_plan",
-    "list_plans": "list_plans",
-    "planlar": "list_plans",
-
-    # Document Editing Tools
-    "edit_text_file": "edit_text_file",
-    "metin_duzenle": "edit_text_file",
-    "dosya_duzenle": "edit_text_file",
-    "text_edit": "edit_text_file",
-    "batch_edit_text": "batch_edit_text",
-    "toplu_duzenle": "batch_edit_text",
-    "edit_word_document": "edit_word_document",
-    "word_duzenle": "edit_word_document",
-    "word_edit": "edit_word_document",
-
-    # Document Merging Tools
-    "merge_documents": "merge_documents",
-    "belge_birlestir": "merge_documents",
-    "dosya_birlestir": "merge_documents",
+    "create_word_document": "write_word",
+    "create_excel": "write_excel",
+    "create_website": "create_web_project_scaffold",
+    "run_python": "execute_python_code",
+    "show_help": "chat",
+    "status_snapshot": "take_screenshot",
+    "random_image": "create_visual_asset_pack",
+    "create_calendar_event": "create_event",
+    "get_calendar": "get_today_events",
+    "pause_music": "control_music",
+    "resume_music": "control_music",
+    "next_track": "control_music",
+    "prev_track": "control_music",
+    "play_music": "control_music",
+    # PDF fallback
+    "create_pdf": "generate_document_pack",
     "merge_pdfs": "merge_pdfs",
-    "pdf_birlestir": "merge_pdfs",
-    "merge_word_documents": "merge_word_documents",
-    "word_birlestir": "merge_word_documents",
-
-    # Advanced Research Tools (v3.0)
-    "evaluate_source": "evaluate_source",
-    "kaynak_degerlendir": "evaluate_source",
-    "quick_research": "quick_research",
-    "hizli_arastirma": "quick_research",
-    "synthesize_findings": "synthesize_findings",
-    "bulgulari_sentezle": "synthesize_findings",
-    "sentez": "synthesize_findings",
-    "create_research_report": "create_research_report",
-    "arastirma_raporu": "create_research_report",
-    "rapor_olustur": "create_research_report",
-
-    # Deep Research Engine
-    "deep_research": "deep_research",
-    "derin_arastirma": "deep_research",
-    "cok_kaynakli_arastirma": "deep_research",
-    "akademik_arastirma": "deep_research",
-
-    # Document Generator
-    "generate_research_document": "generate_research_document",
-    "belge_olustur": "generate_research_document",
-    "dokuman_olustur": "generate_research_document",
-    "rapor_belgesi": "generate_research_document",
+    # Summary handlers are implemented directly in Agent
+    "summarize_text": "summarize_text",
+    "summarize_file": "summarize_file",
+    "summarize_url": "summarize_url",
+    "translate": "translate",
 }
+
+# Lazy import to avoid circular dependency
+def _push(event_type: str, channel: str, detail: str, success: bool = True):
+    try:
+        from core.gateway.server import push_activity
+        push_activity(event_type, channel, detail, success)
+    except Exception:
+        pass
 
 class Agent:
     def __init__(self):
-        try:
-            from config.settings_manager import SettingsPanel
-            self.settings = SettingsPanel()
-        except Exception:
-            self.settings = None
-
-        self.llm = LLMClient()
-        self.executor = TaskExecutor()
-        self.ui_app = None  # UI application reference
-
-        # Enhanced capabilities
-        self.memory = get_memory()
-        self.context_manager = get_context_manager()
-        self.user_profiles = get_user_profile_store()
-        self.learning = get_learning_engine()
-        self.speed = get_speed_optimizer()
-        self.analytics = get_analytics()
-        self.notifications = get_smart_notifications()
-        self.intelligent_planner = get_intelligent_planner()
-        self.predictive_maintenance = get_predictive_maintenance()
-        self.advanced_security = get_advanced_security()
-        self.self_improvement = get_self_improvement()
-
-        # Fast Response Systems (v18.0 - Speed Focus)
-        self.fast_response = get_fast_response_system()
-        self.llm_optimizer = get_llm_optimizer()
-        self.response_cache = get_response_cache()
+        self.kernel = kernel
+        self.llm = None
+        # Quick access
         self.quick_intent = get_quick_intent_detector()
-        self.intelligent_planner = get_intelligent_planner()
-
-        self.reasoning = None  # Will be initialized in initialize()
-        self.planner = None  # Will be initialized in initialize()
-        self.plan_executor = None  # Will be initialized in initialize()
-        self.agent_loop = None  # Legacy path (runtime'da kullanilmiyor)
-        
-        # Operation modes
-        self.autonomous_mode = True  # Can plan and execute multi-step tasks
-        self.current_user_id = None  # Set during process()
-
-    def _privacy_flags(self) -> dict:
-        if not self.settings:
-            return {"strict": True, "redact_storage": True, "redact_logs": True}
-        return {
-            "strict": bool(self.settings.get("privacy_mode_strict", True)),
-            "redact_storage": bool(self.settings.get("privacy_redact_storage", True)),
-            "redact_logs": bool(self.settings.get("privacy_redact_logs", True)),
-        }
-
-    def connect_ui(self, ui_app):
-        """Connect to UI application for real-time updates"""
-        self.ui_app = ui_app
-        logger.info("UI bağlantısı kuruldu")
-
-    def disconnect_ui(self):
-        """Disconnect from UI application"""
-        self.ui_app = None
-        logger.info("UI bağlantısı kesildi")
+        self.intent_parser = get_intent_parser()
+        self.planner = get_intelligent_planner()
+        self.current_user_id = None
 
     async def initialize(self) -> bool:
-        logger.info("Agent başlatılıyor...")
-        
-        # 1. Critical Base Systems (Sequential as they are foundational)
-        if not await self.llm.check_model():
-            logger.error("LLM başlatılamadı")
-            return False
-        
-        from .reasoning import ReasoningEngine
-        from .planner import AutonomousPlanner
-        from .executor import PlanExecutor
-        
-        self.reasoning = ReasoningEngine(self.llm, self.executor)
-        self.planner = AutonomousPlanner(self.llm, self.reasoning)
-        self.plan_executor = PlanExecutor(self.executor)
-        logger.info("Temel motorlar hazır")
-
-        # 2. Parallel Background Systems (v17.0 Turbo Startup)
-        # v18.0 - Background engine initialization (Serialized to prevent macOS segfaults)
-        logger.info("🔧 Arka plan servisleri başlatılıyor...")
-        
-        try:
-            # 1. Tool Health
-            await get_tool_health_manager().initialize()
-            
-            # 2. Session Manager
-            await get_session_manager().cleanup_stale_sessions(timeout_minutes=120)
-            
-            # 3. Semantic Memory (Embedding model loading)
-            await get_semantic_memory()
-            
-            # 4. Knowledge Base
-            await get_knowledge_base()
-            
-            # 5. Connection Pools
-            from .connection_pool import initialize_pools
-            await initialize_pools()
-            
-            logger.info("✅ Tüm servisler başarıyla aktif edildi.")
-        except Exception as e:
-            logger.error(f"❌ Arka plan servisleri başlatılırken hata oluştu: {e}")
-            # Non-critical failure, continue
-
-        # Request router and cache are fast/synchronous
-        get_smart_cache()
-        get_request_router()
-
-        logger.info(" Agent hazır - Autonomous mode active")
+        await self.kernel.initialize()
+        self.llm = self.kernel.llm
+        logger.info("Agent Initialized.")
         return True
 
     async def process(self, user_input: str, notify=None) -> str:
-        """
-        Process user input through the central task engine.
-        This is the main entry point for both UI and Telegram bot.
-        """
+        # 1. Validation
         valid, msg = validate_input(user_input)
         if not valid:
             return f"Hata: {msg}"
 
+        user_id = int(self.current_user_id or 0)
+        history = self.kernel.memory.get_recent_conversations(user_id, limit=5)
+
+        # 2. Action-Lock Check
+        if action_lock.is_locked:
+            if any(kw in user_input.lower() for kw in ["dur", "iptal", "cancel", "stop"]):
+                action_lock.unlock()
+                return "Üretim modu durduruldu ve kilit açıldı."
+            return f"{action_lock.get_status_prefix()}Şu an bir göreve odaklanmış durumdayım. İptal etmek için 'iptal' yazabilirsin."
+
+        status_prefix = action_lock.get_status_prefix()
+        
+        # 3. Context7 Injection Check
+        context_docs = ""
+        if "use context7" in user_input.lower():
+            tech = "React" if "react" in user_input.lower() else "Python"
+            context_docs = await context7_client.fetch_docs(tech)
+            user_input = user_input.replace("use context7", "").strip()
+            logger.info(f"Context7 docs injected for {tech}")
+
         user_input = sanitize_input(user_input)
-        flags = self._privacy_flags()
-        log_input = redact_text(user_input) if flags["redact_logs"] else user_input
-        logger.info(f"İşleniyor: {log_input[:80]}...")
+        
+        # 4. Neural Routing (Role & Complexity Detection)
+        route = neural_router.route(user_input)
+        role = route["role"]
+        logger.info(f"Routed: {role} (complexity: {route['complexity']}) using {route['model']}")
 
-        # === v18.0 FAST RESPONSE PATH ===
-        # Try cache first (instant response)
-        cached_response = self.response_cache.get(user_input)
-        if cached_response:
-            logger.info("Cache hit - instant response")
-            return cached_response
+        # Intent parser (deterministic) before chat/planner.
+        parsed_intent = self.intent_parser.parse(user_input)
 
-        # Try fast response system (no LLM needed)
-        fast_result = self.fast_response.get_fast_response(user_input)
-        if fast_result:
-            logger.info(f"Fast response: {fast_result.response_time*1000:.1f}ms")
-            # Cache for future use
-            self.response_cache.set(user_input, fast_result.answer, ttl=3600)
-            return fast_result.answer
+        # 5. Production Mode Trigger
+        lock_patterns = _re.compile(r'\b(website|proje|uygulama|program|script|geliştir|oluştur)\b', _re.IGNORECASE)
+        if lock_patterns.search(user_input) and not action_lock.is_locked:
+            action_lock.lock("delivery_task", "Planlama yapılıyor...")
 
-        # Quick intent detection for routing
+        # 6. Special UI Tools (Canvas/Slidev)
+        if any(kw in user_input.lower() for kw in ["görselleştir", "tablo yap", "kanban", "grafik"]):
+            view_id = canvas_engine.create_view("kanban" if "kanban" in user_input.lower() else "chart", "Dashboard View", {})
+            return f"Görselleştirme hazır: http://localhost:18789/canvas?id={view_id}"
+
+        # 7. Direct deterministic intent execution.
+        if self._should_run_direct_intent(parsed_intent, user_input):
+            direct_text = await self._run_direct_intent(parsed_intent, user_input, role, history)
+            self.kernel.memory.store_conversation(
+                user_id,
+                user_input,
+                {"message": direct_text, "action": parsed_intent.get("action", "direct"), "success": not direct_text.startswith("Hata:")},
+            )
+            _push("task_done", "agent", user_input[:60], success=not direct_text.startswith("Hata:"))
+            if action_lock.is_locked:
+                action_lock.unlock()
+            return status_prefix + direct_text
+
+        # 7. Intent Path (Fast vs Slow)
         quick_intent = self.quick_intent.detect(user_input)
-        logger.info(
-            f"Intent: {quick_intent.category.value} "
-            f"(requires_llm={quick_intent.requires_llm}) -> routed_to=task_engine"
-        )
-
-        # UI'ye durum güncellemesi gönder
-        if self.ui_app and hasattr(self.ui_app, 'update_status'):
-            self.ui_app.update_status(f"İşleniyor: {user_input[:30]}...")
-
-        # Configure notify callback
-        notify_callback = notify
-        if not notify_callback and self.ui_app and hasattr(self.ui_app, 'notify_thought'):
-            notify_callback = self.ui_app.notify_thought
-
-        learning_success = False
-        learning_duration_ms = 0
-        learning_intent = "UNKNOWN"
-        learning_action = "unknown"
-        learning_context = {"route": "task_engine"}
-
-        try:
-            # Get or initialize task engine
-            from .task_engine import get_task_engine
-            task_engine = get_task_engine()
-
-            if task_engine.llm is None:
-                await task_engine.initialize()
-
-            # Build comprehensive context from context_manager
-            context_data = await self.context_manager.build_context(
-                user_id=self.current_user_id or 0,
-                current_message=redact_text(user_input) if (flags["redact_storage"] or (flags["strict"] and is_external_provider(self.llm.llm_type))) else user_input,
-                include_history=True,
-                include_preferences=True,
-                include_recent_tasks=False  # Skip for performance
+        if (
+            quick_intent.category in (_IC.CHAT, _IC.GREETING)
+            or (
+                quick_intent.category == _IC.QUESTION
+                and (not parsed_intent or parsed_intent.get("action") in {"chat", "show_help"})
             )
+        ):
+            full_prompt = f"Docs: {context_docs}\n\nUser: {user_input}" if context_docs else user_input
+            chat_resp = await self.llm.generate(full_prompt, role=role, history=history)
+            self.kernel.memory.store_conversation(user_id, user_input, {"message": chat_resp, "action": "chat", "success": True})
+            _push("chat", "agent", user_input[:60])
+            return status_prefix + chat_resp
 
-            # Format context for LLM prompt
-            formatted_context = self.context_manager.format_context_for_prompt(context_data)
+        # 8. Strategic Planning & Execution (Registry-based)
+        plan = await self.planner.create_plan(user_input, {})
+        
+        quality = self.planner.evaluate_plan_quality(getattr(plan, "subtasks", []) or [], user_input)
+        if not quality.get("safe_to_run", True):
+            if action_lock.is_locked: action_lock.unlock()
+            return "Üzgünüm, bu isteği güvenli bir şekilde planlayamadım."
 
-            # Build context dict for task engine
-            context = {
-                "recent_history": context_data.get("conversation_history", []),
-                "user_preferences": context_data.get("user_preferences", {}),
-                "formatted_context": formatted_context  # For LLM injection
-            }
-            if flags["strict"] and is_external_provider(self.llm.llm_type):
-                context["formatted_context"] = redact_text(str(context.get("formatted_context", "")))
-                context["recent_history"] = sanitize_object(context.get("recent_history", []))
-            profile_summary = self.user_profiles.profile_summary(str(self.current_user_id or "local"))
-            context["user_profile"] = profile_summary
-            context["user_preferences"] = {
-                **context.get("user_preferences", {}),
-                "adaptive_profile": profile_summary,
-            }
+        final_results = []
+        executed_steps = set()
+        subtasks = plan.subtasks or []
+        pending_steps = list(subtasks)
 
-            # Execute task through engine
-            task_result = await asyncio.wait_for(
-                task_engine.execute_task(
-                    user_input=user_input,
-                    user_id=self.current_user_id,
-                    notify_callback=notify_callback,
-                    context=context
-                ),
-                timeout=90.0
-            )
+        # Execution Loop
+        while pending_steps and len(executed_steps) < (len(subtasks) + 5):
+            # Dependency Resolution
+            runnable = [s for s in pending_steps if all(d in executed_steps for d in s.dependencies)]
+            if not runnable: break
 
-            result = task_result.message
-            learning_success = bool(task_result.success)
-            learning_duration_ms = int(task_result.execution_time_ms or 0)
-            metadata = task_result.metadata or {}
-            intent_meta = metadata.get("intent", {}) if isinstance(metadata.get("intent", {}), dict) else {}
-            learning_intent = str(intent_meta.get("type", metadata.get("type", "UNKNOWN")))
-            learning_action = str(intent_meta.get("action", metadata.get("type", "unknown"))).lower()
-            learning_context = {
-                "route": "task_engine",
-                "meta_type": metadata.get("type"),
-                "tasks_executed": metadata.get("tasks_executed", 0),
-                "tasks_failed": metadata.get("tasks_failed", 0)
-            }
+            for step in runnable:
+                # Update Lock
+                progress = (len(executed_steps) + 1) / max(len(subtasks), 1)
+                action_lock.update_status(progress, step.name)
+                
+                if notify and step.name != "_chat_":
+                    await notify(f"🛠️ {step.name}")
 
-            # Continuous improvement: learn from each executed task outcome.
+                try:
+                    # Execute via Kernel/Registry
+                    # Step action name must match registry tool name OR be mapped
+                    result = await self._execute_tool(
+                        step.action,
+                        step.params,
+                        user_input=user_input,
+                        step_name=step.name,
+                    )
+                    
+                    # Convert result to string for display
+                    res_text = self._format_result_text(result)
+
+                    if "Hata:" in res_text:
+                        # Simple recovery logic
+                        logger.warning(f"Step failed: {res_text}")
+                        # Could trigger planner recovery here
+                    
+                    final_results.append(res_text)
+                    executed_steps.add(step.task_id)
+                    pending_steps.remove(step)
+                except Exception as e:
+                    logger.error(f"Execution error ({step.action}): {e}")
+                    pending_steps.remove(step)
+
+        if action_lock.is_locked: action_lock.unlock()
+
+        result_str = "\n".join(x for x in final_results if x).strip() or "Görev tamamlandı, ancak görüntülenecek çıktı üretilmedi."
+        self.kernel.memory.store_conversation(user_id, user_input, {"message": result_str, "action": "multi_step", "success": True})
+        _push("task_done", "agent", user_input[:60], success=bool(final_results))
+        return status_prefix + result_str
+
+    async def _execute_tool(self, tool_name: str, params: dict, *, user_input: str = "", step_name: str = ""):
+        """Execute a tool via the Kernel Registry."""
+        # Normalize params
+        safe_params = params if isinstance(params, dict) else {}
+        clean_params = {k: v for k, v in safe_params.items() if k not in ("action", "message", "type")}
+        mapped_tool = ACTION_TO_TOOL.get(tool_name, tool_name)
+        resolved_tool = self._resolve_tool_name(mapped_tool)
+        if resolved_tool:
+            mapped_tool = resolved_tool
+        clean_params = self._normalize_param_aliases(mapped_tool, clean_params)
+        start = time.perf_counter()
+        success = False
+        err_text = ""
+        used_tool = mapped_tool
+
+        # Special case: Chat action fallback
+        if mapped_tool in ("chat", "respond", "answer"):
+            prompt = safe_params.get("message") or user_input
             try:
-                task_rows = (task_result.data or {}).get("results", [])
-                if isinstance(task_rows, list):
-                    for row in task_rows:
-                        if not isinstance(row, dict):
-                            continue
-                        self.self_improvement.record_interaction_outcome(
-                            tool_name=str(row.get("action", "unknown")),
-                            params=sanitize_object(row.get("data", {})) if flags["redact_storage"] else (row.get("data", {}) or {}),
-                            success=bool(row.get("success", False)),
-                            duration_ms=float(task_result.execution_time_ms or 0),
-                            error=sanitize_for_storage(str(row.get("error", ""))) if row.get("error") and flags["redact_storage"] else row.get("error"),
-                        )
-            except Exception as inner_exc:
-                logger.debug(f"Self-improvement record error: {inner_exc}")
+                result = await self.llm.generate(prompt)
+                success = True
+                return result
+            except Exception as exc:
+                err_text = str(exc)
+                raise
+            finally:
+                latency = int((time.perf_counter() - start) * 1000)
+                record_tool_usage(used_tool, success=success, latency_ms=latency, source="agent", error=err_text)
 
-            # Cache successful responses
-            if result and not result.startswith("Hata:"):
-                complexity = self.llm_optimizer.classify_complexity(user_input)
-                ttl_map = {"trivial": 7200, "simple": 3600, "moderate": 1800}
-                ttl = ttl_map.get(complexity.value, 3600)
-                self.response_cache.set(user_input, result, ttl=ttl, confidence=0.9)
+        clean_params = self._prepare_tool_params(mapped_tool, clean_params, user_input=user_input, step_name=step_name)
 
-        except asyncio.TimeoutError:
-            logger.error(f"Process timeout: {user_input[:30]}")
-            from core.error_handler import ErrorHandler
-            result = ErrorHandler.format_error_response("İşlem zaman aşımına uğradı")
-            learning_success = False
-            learning_duration_ms = 90000
-            learning_intent = "TIMEOUT"
-            learning_action = "timeout"
-        except Exception as e:
-            logger.error(f"Process error: {e}")
-            from core.error_handler import ErrorHandler
-            result = ErrorHandler.format_error_response(str(e))
-            learning_success = False
-            learning_duration_ms = 0
-            learning_intent = "ERROR"
-            learning_action = "error"
-
+        # Registry Execution
         try:
-            await self.learning.record_interaction(
-                user_id=str(self.current_user_id or "local"),
-                input_text=sanitize_for_storage(user_input) if flags["redact_storage"] else user_input,
-                intent=learning_intent,
-                action=learning_action,
-                success=learning_success,
-                duration_ms=learning_duration_ms,
-                context=sanitize_object(learning_context) if flags["redact_storage"] else learning_context
-            )
-            # Keep lightweight long-term profile for personalization.
-            self.user_profiles.update_after_interaction(
-                user_id=str(self.current_user_id or "local"),
-                language=detect_language(user_input),
-                action=learning_action,
-                success=learning_success,
-                topic_keywords=self._extract_keywords(user_input),
-            )
+            result = await self.kernel.tools.execute(mapped_tool, clean_params)
+            success = not (isinstance(result, dict) and result.get("success") is False)
+            return result
+        except ValueError:
+            tool_func = AVAILABLE_TOOLS.get(mapped_tool)
+            if not tool_func:
+                resolved = self._resolve_tool_name(mapped_tool)
+                if resolved:
+                    used_tool = resolved
+                    tool_func = AVAILABLE_TOOLS.get(resolved)
+                    clean_params = self._prepare_tool_params(resolved, clean_params, user_input=user_input, step_name=step_name)
+                else:
+                    err_text = f"Tool '{mapped_tool}' not found."
+                    return {"success": False, "error": err_text}
             try:
-                self.context_manager.learn_from_interaction(
-                    user_id=int(self.current_user_id or 0),
-                    user_message=sanitize_for_storage(user_input) if flags["redact_storage"] else user_input,
-                    bot_response={
-                        "action": learning_action,
-                        "success": learning_success,
-                    },
-                )
-            except Exception as inner_exc:
-                logger.debug(f"Context learning error: {inner_exc}")
-        except Exception as e:
-            logger.debug(f"Learning record error: {e}")
-
-        if self.ui_app and hasattr(self.ui_app, 'add_to_history'):
-            self.ui_app.add_to_history(user_input, result)
-            self.ui_app.update_status("Hazır")
-
-        return result
-
-    @staticmethod
-    def _extract_keywords(text: str) -> list[str]:
-        import re
-        words = re.findall(r"[a-zA-ZçğıöşüÇĞİÖŞÜ0-9]{3,}", text.lower())
-        stop = {
-            "ve", "ile", "icin", "için", "ama", "fakat", "gibi", "kadar", "şimdi", "simdi",
-            "this", "that", "with", "from", "your", "about", "please",
-        }
-        output: list[str] = []
-        for w in words:
-            if w in stop:
-                continue
-            if w not in output:
-                output.append(w)
-        return output[:12]
-
-    async def _execute_single_task(self, response: dict) -> str:
-        action = response.get("action")
-        message = response.get("message", "")
-
-        tool_name = ACTION_TO_TOOL.get(action)
-        if not tool_name or tool_name not in AVAILABLE_TOOLS:
-            logger.warning(f"Bilinmeyen action: {action}")
-            return message or "Bu işlemi yapamıyorum."
-
-        # Parametreleri hazırla
-        params = self._prepare_params(action, response)
-        
-        # Smart path resolution for file operations
-        if "path" in params:
-            resolved_path, suggestions = resolve_path(params["path"])
-            if resolved_path:
-                params["path"] = str(resolved_path)
-                logger.info(f"Path resolved: {params['path']}")
-            elif suggestions:
-                # Path bulunamadı ama öneriler var
-                suggestion_text = suggest_path_alternatives(params["path"])
-                return f" {suggestion_text}"
-        
-        # Handle fallback paths if provided
-        fallback_paths = response.get("fallback_paths", [])
-
-        logger.info(f"Çalıştırılıyor: {tool_name} -> {params}")
-
-        # Tool'u çalıştır
-        tool_func = AVAILABLE_TOOLS[tool_name]
-        result = await self.executor.execute(tool_func, params)
-        
-        # If failed and we have fallback paths, try them
-        if not result.get("success") and fallback_paths:
-            original_error = result.get("error", "")
-            for fallback in fallback_paths:
-                resolved_fallback, _ = resolve_path(fallback)
-                if resolved_fallback:
-                    params["path"] = str(resolved_fallback)
-                    logger.info(f"Trying fallback path: {params['path']}")
-                    result = await self.executor.execute(tool_func, params)
-                    if result.get("success"):
-                        logger.info(f"Fallback succeeded: {params['path']}")
-                        break
-            
-            # Still failed? Give helpful message
-            if not result.get("success"):
-                return f" Bu klasör bulunamadı. Şunları denedim: {', '.join(fallback_paths)}\nÖneri: Spotlight ile arayabilirsin: 'projeler klasörünü ara'"
-
-        # Sonucu formatla
-        return self._format_result(action, result, message)
-
-    async def _execute_multi_task(self, response: dict) -> str:
-        tasks = response.get("tasks", [])
-        message = response.get("message", "Görevler yürütülüyor...")
-
-        if not tasks:
-            return "Yapılacak görev bulunamadı."
-
-        results = []
-        for i, task in enumerate(tasks, 1):
-            action = task.get("action")
-            if action == "chat":
-                continue
-
-            tool_name = ACTION_TO_TOOL.get(action)
-            if not tool_name or tool_name not in AVAILABLE_TOOLS:
-                results.append(f" Görev {i}: Bilinmeyen işlem")
-                continue
-
-            params = self._prepare_params(action, task)
-
-            logger.info(f"Multi-task {i}/{len(tasks)}: {tool_name}")
-
-            tool_func = AVAILABLE_TOOLS[tool_name]
-            result = await self.executor.execute(tool_func, params)
-
-            if result.get("success"):
-                results.append(f" Görev {i}: {self._short_result(action, result)}")
-            else:
-                results.append(f" Görev {i}: {result.get('error', 'Hata')}")
-
-        output = f"{message}\n\n"
-        output += "\n".join(results)
-        return output
-
-    def _prepare_params(self, action: str, response: dict) -> dict:
-        params = {}
-        pref_lang = "tr"
-        try:
-            from config.settings_manager import SettingsPanel
-            configured_lang = str(SettingsPanel().get("preferred_language", "auto")).lower()
-            if configured_lang in {"tr", "en", "es", "de", "fr", "it", "pt", "ar", "ru"}:
-                pref_lang = configured_lang
-        except Exception:
-            pass
-
-        if action == "list_files":
-            params["path"] = response.get("path", str(HOME_DIR / "Desktop"))
-
-        elif action == "write_file":
-            params["path"] = response.get("path", str(HOME_DIR / "Desktop" / "not.txt"))
-            params["content"] = response.get("content", "")
-
-        elif action == "read_file":
-            params["path"] = response.get("path", "")
-
-        elif action in ["delete_file", "remove_file"]:
-            params["path"] = response.get("path", "")
-            params["force"] = response.get("force", False)
-
-        elif action in ["move_file", "tasi", "dosya_tasi"]:
-            params["source"] = response.get("source", response.get("path", response.get("kaynak", "")))
-            params["destination"] = response.get("destination", response.get("hedef", ""))
-
-        elif action in ["copy_file", "kopyala", "dosya_kopyala"]:
-            params["source"] = response.get("source", response.get("path", response.get("kaynak", "")))
-            params["destination"] = response.get("destination", response.get("hedef", ""))
-
-        elif action in ["rename_file", "yeniden_adlandir", "dosya_adini_degistir"]:
-            params["path"] = response.get("path", response.get("dosya", ""))
-            params["new_name"] = response.get("new_name", response.get("yeni_ad", ""))
-
-        elif action in ["create_folder", "klasor_olustur", "yeni_klasor"]:
-            params["path"] = response.get("path", response.get("konum", ""))
-
-        elif action == "open_app":
-            params["app_name"] = response.get("app_name", "")
-
-        elif action == "open_url":
-            params["url"] = response.get("url", "")
-
-        elif action in ["search_files", "find_files"]:
-            params["pattern"] = response.get("pattern", "*")
-            params["directory"] = response.get("directory", str(HOME_DIR))
-
-        elif action in ["take_screenshot", "screenshot"]:
-            params["filename"] = response.get("filename", None)
-
-        elif action in ["write_clipboard", "clipboard_write"]:
-            params["text"] = response.get("text", response.get("content", ""))
-
-        elif action in ["close_app", "quit_app"]:
-            params["app_name"] = response.get("app", "")
-
-        elif action in ["shutdown_system", "restart_system", "sleep_system", "lock_screen"]:
-            pass
-
-        elif action in ["set_volume", "volume"]:
-            if "level" in response:
-                params["level"] = response.get("level")
-            if "mute" in response:
-                params["mute"] = response.get("mute")
-
-        elif action in ["send_notification", "notification", "notify"]:
-            params["title"] = response.get("title", "Bot Bildirimi")
-            params["message"] = response.get("message", response.get("content", ""))
-
-        elif action in ["kill_process"]:
-            params["process_name"] = response.get("process", "")
-
-        elif action in ["get_process_info", "list_processes", "processes"]:
-            params["process_name"] = response.get("process", None)
-
-        # macOS Brightness
-        elif action in ["set_brightness", "brightness", "parlaklık", "parlaklık_aç", "parlaklık_kapat"]:
-            params["level"] = response.get("level", 50)
-
-        elif action == "get_brightness":
-            pass  # no params needed
-
-        # macOS WiFi
-        elif action in ["wifi_toggle", "wifi_on", "wifi_off"]:
-            if action == "wifi_on":
-                params["enable"] = True
-            elif action == "wifi_off":
-                params["enable"] = False
-            else:
-                params["enable"] = response.get("enable", None)
-
-        # macOS Calendar
-        elif action in ["create_event", "add_event"]:
-            params["title"] = response.get("title", response.get("event", "Etkinlik"))
-            params["start_time"] = response.get("start_time", response.get("time"))
-            params["end_time"] = response.get("end_time")
-            params["date"] = response.get("date")
-            params["notes"] = response.get("notes", "")
-
-        # macOS Reminders
-        elif action in ["create_reminder", "add_reminder", "remind"]:
-            params["title"] = response.get("title", response.get("reminder", response.get("text", "")))
-            params["due_date"] = response.get("due_date", response.get("date"))
-            params["due_time"] = response.get("due_time", response.get("time"))
-            params["list_name"] = response.get("list", response.get("list_name"))
-            params["notes"] = response.get("notes", "")
-
-        elif action in ["get_reminders", "list_reminders"]:
-            params["list_name"] = response.get("list", response.get("list_name"))
-
-        # macOS Spotlight
-        elif action in ["spotlight_search", "mdfind", "system_search"]:
-            params["query"] = response.get("query", response.get("search", ""))
-            params["file_type"] = response.get("file_type", response.get("type"))
-            params["directory"] = response.get("directory")
-            params["limit"] = response.get("limit", 50)
-
-        # Office: Word
-        elif action == "read_word":
-            params["path"] = response.get("path", "")
-            params["max_chars"] = response.get("max_chars", 10000)
-
-        elif action == "write_word":
-            params["path"] = response.get("path")
-            params["content"] = response.get("content", "")
-            params["title"] = response.get("title")
-            params["paragraphs"] = response.get("paragraphs")
-
-        # Office: Excel
-        elif action == "read_excel":
-            params["path"] = response.get("path", "")
-            params["sheet_name"] = response.get("sheet", response.get("sheet_name"))
-            params["max_rows"] = response.get("max_rows", 100)
-
-        elif action == "write_excel":
-            params["path"] = response.get("path")
-            params["data"] = response.get("data", [])
-            params["headers"] = response.get("headers")
-            params["sheet_name"] = response.get("sheet", response.get("sheet_name", "Sheet1"))
-
-        # Office: PDF
-        elif action == "read_pdf":
-            params["path"] = response.get("path", "")
-            params["pages"] = response.get("pages")
-            params["max_chars"] = response.get("max_chars", 15000)
-
-        elif action in ["get_pdf_info", "pdf_info"]:
-            params["path"] = response.get("path", "")
-
-        # Office: Summarize
-        elif action in ["summarize_document", "summarize"]:
-            params["path"] = response.get("path")
-            params["content"] = response.get("content")
-            params["style"] = response.get("style", "brief")
-
-        # Web: Fetch Page
-        elif action == "fetch_page":
-            params["url"] = response.get("url", "")
-            params["extract_content"] = response.get("extract_content", True)
-
-        # Web: Search
-        elif action in ["web_search", "search_web", "internet_search"]:
-            params["query"] = response.get("query", response.get("search", ""))
-            params["num_results"] = response.get("num_results", 5)
-            params["language"] = response.get("language", pref_lang)
-
-        # Web: Research
-        elif action in ["start_research", "research"]:
-            params["topic"] = response.get("topic", response.get("query", ""))
-            params["depth"] = response.get("depth", "basic")
-
-        elif action in ["get_research_status", "research_status"]:
-            params["task_id"] = response.get("task_id", "")
-
-        # ========================================
-        # v3.0 New Actions - Parameter Preparation
-        # ========================================
-
-        # Note Taking System
-        elif action in ["create_note", "yeni_not", "not_olustur"]:
-            params["title"] = response.get("title", response.get("baslik", ""))
-            params["content"] = response.get("content", response.get("icerik", ""))
-            params["tags"] = response.get("tags", response.get("etiketler", []))
-            params["category"] = response.get("category", response.get("kategori", "general"))
-
-        elif action in ["list_notes", "notlarim", "notlar", "my_notes"]:
-            params["category"] = response.get("category", response.get("kategori"))
-            params["tags"] = response.get("tags", response.get("etiketler"))
-            params["limit"] = response.get("limit", 50)
-
-        elif action in ["search_notes", "notlarda_ara", "not_ara"]:
-            params["query"] = response.get("query", response.get("sorgu", response.get("arama", "")))
-            params["search_in"] = response.get("search_in", "all")
-            params["category"] = response.get("category")
-            params["limit"] = response.get("limit", 20)
-
-        elif action in ["update_note", "not_guncelle"]:
-            params["note_id"] = response.get("note_id", response.get("not_id", response.get("id", "")))
-            params["title"] = response.get("title", response.get("baslik"))
-            params["content"] = response.get("content", response.get("icerik"))
-            params["tags"] = response.get("tags", response.get("etiketler"))
-            params["category"] = response.get("category", response.get("kategori"))
-            params["append"] = response.get("append", response.get("ekle", False))
-
-        elif action in ["delete_note", "not_sil"]:
-            params["note_id"] = response.get("note_id", response.get("not_id", response.get("id", "")))
-            params["permanent"] = response.get("permanent", response.get("kalici", False))
-
-        elif action in ["get_note", "not_getir", "not_oku"]:
-            params["note_id"] = response.get("note_id", response.get("not_id", response.get("id", "")))
-
-        # Task Planning System
-        elif action in ["create_plan", "plan_olustur", "yeni_plan"]:
-            params["name"] = response.get("name", response.get("ad", "Plan"))
-            params["description"] = response.get("description", response.get("aciklama", ""))
-            params["tasks"] = response.get("tasks", response.get("gorevler", []))
-            params["execution_mode"] = response.get("execution_mode", response.get("mod", "sequential"))
-
-        elif action in ["execute_plan", "plan_calistir", "plani_yurut"]:
-            params["plan_id"] = response.get("plan_id", response.get("plan_id", ""))
-
-        elif action in ["get_plan_status", "plan_durumu"]:
-            params["plan_id"] = response.get("plan_id", "")
-
-        elif action in ["cancel_plan", "plan_iptal"]:
-            params["plan_id"] = response.get("plan_id", "")
-
-        elif action in ["list_plans", "planlar"]:
-            params["include_completed"] = response.get("include_completed", False)
-
-        # Document Editing Tools
-        elif action in ["edit_text_file", "metin_duzenle", "dosya_duzenle", "text_edit"]:
-            params["path"] = response.get("path", response.get("dosya", ""))
-            params["operations"] = response.get("operations", response.get("islemler", []))
-            params["create_backup"] = response.get("create_backup", response.get("yedek", True))
-
-        elif action in ["batch_edit_text", "toplu_duzenle"]:
-            params["directory"] = response.get("directory", response.get("dizin", ""))
-            params["pattern"] = response.get("pattern", response.get("desen", "*.txt"))
-            params["operations"] = response.get("operations", response.get("islemler", []))
-            params["create_backup"] = response.get("create_backup", True)
-            params["recursive"] = response.get("recursive", False)
-
-        elif action in ["edit_word_document", "word_duzenle", "word_edit"]:
-            params["path"] = response.get("path", response.get("dosya", ""))
-            params["operations"] = response.get("operations", response.get("islemler", []))
-            params["create_backup"] = response.get("create_backup", True)
-
-        # Document Merging Tools
-        elif action in ["merge_documents", "belge_birlestir", "dosya_birlestir"]:
-            params["input_paths"] = response.get("input_paths", response.get("dosyalar", response.get("files", [])))
-            params["output_path"] = response.get("output_path", response.get("cikti", response.get("output", "")))
-            params["output_format"] = response.get("output_format", response.get("format", "auto"))
-
-        elif action in ["merge_pdfs", "pdf_birlestir"]:
-            params["input_paths"] = response.get("input_paths", response.get("dosyalar", response.get("files", [])))
-            params["output_path"] = response.get("output_path", response.get("cikti", response.get("output", "")))
-            params["page_ranges"] = response.get("page_ranges", response.get("sayfa_araliklari"))
-
-        elif action in ["merge_word_documents", "word_birlestir"]:
-            params["input_paths"] = response.get("input_paths", response.get("dosyalar", response.get("files", [])))
-            params["output_path"] = response.get("output_path", response.get("cikti", response.get("output", "")))
-
-        # Advanced Research Tools (v3.0)
-        elif action in ["advanced_research", "deep_research", "comprehensive_research"]:
-            params["topic"] = response.get("topic", response.get("konu", ""))
-            params["depth"] = response.get("depth", response.get("derinlik", "standard"))
-            params["sources"] = response.get("sources", response.get("kaynaklar"))
-            params["language"] = response.get("language", response.get("dil", pref_lang))
-            params["include_evaluation"] = response.get("include_evaluation", True)
-
-        elif action in ["evaluate_source", "kaynak_degerlendir"]:
-            params["url"] = response.get("url", "")
-            params["criteria"] = response.get("criteria", response.get("kriterler"))
-
-        elif action in ["quick_research", "hizli_arastirma"]:
-            params["topic"] = response.get("topic", response.get("konu", ""))
-            params["max_sources"] = response.get("max_sources", 3)
-
-        elif action in ["synthesize_findings", "bulgulari_sentezle", "sentez"]:
-            params["research_id"] = response.get("research_id", response.get("arastirma_id"))
-            params["findings"] = response.get("findings", response.get("bulgular"))
-            params["sources"] = response.get("sources", response.get("kaynaklar"))
-            params["synthesis_type"] = response.get("synthesis_type", response.get("sentez_tipi", "summary"))
-
-        elif action in ["create_research_report", "arastirma_raporu", "rapor_olustur"]:
-            params["topic"] = response.get("topic", response.get("konu", ""))
-            params["research_id"] = response.get("research_id", response.get("arastirma_id"))
-            params["findings"] = response.get("findings", response.get("bulgular"))
-            params["sources"] = response.get("sources", response.get("kaynaklar"))
-            params["output_format"] = response.get("output_format", response.get("format", "markdown"))
-            params["output_path"] = response.get("output_path", response.get("cikti"))
-            params["include_sources"] = response.get("include_sources", True)
-
-        # Deep Research Engine
-        elif action in ["deep_research", "derin_arastirma", "cok_kaynakli_arastirma", "akademik_arastirma"]:
-            params["topic"] = response.get("topic", response.get("konu", ""))
-            params["depth"] = response.get("depth", response.get("derinlik", "standard"))
-            params["language"] = response.get("language", response.get("dil", pref_lang))
-            params["focus_areas"] = response.get("focus_areas", response.get("odak_alanlari"))
-            params["include_academic"] = response.get("include_academic", response.get("akademik_dahil", True))
-
-        # Document Generator
-        elif action in ["generate_research_document", "belge_olustur", "dokuman_olustur", "rapor_belgesi"]:
-            params["research_data"] = response.get("research_data", response.get("arastirma_verisi", {}))
-            params["format"] = response.get("format", response.get("format", "docx"))
-            params["template"] = response.get("template", response.get("sablon", "research_report"))
-            params["custom_title"] = response.get("custom_title", response.get("baslik"))
-            params["language"] = response.get("language", response.get("dil", pref_lang))
-
-        return params
-
-    def _short_result(self, action: str, result: dict) -> str:
-        if action == "list_files":
-            count = len(result.get("items", []))
-            return f"{count} öğe listelendi"
-        elif action == "write_file":
-            return f"Dosya oluşturuldu"
-        elif action in ["delete_file", "remove_file"]:
-            return f"Dosya/klasör silindi"
-        elif action == "open_app":
-            return f"{result.get('app', 'Uygulama')} açıldı"
-        elif action == "open_url":
-            return "URL açıldı"
-        elif action == "get_system_info":
-            return "Sistem bilgisi alındı"
-        elif action in ["take_screenshot", "screenshot"]:
-            return "Screenshot alındı"
-        elif action in ["read_clipboard", "clipboard_read"]:
-            return "Pano okundu"
-        elif action in ["write_clipboard", "clipboard_write"]:
-            return "Panoya kopyalandı"
-        elif action in ["close_app", "quit_app"]:
-            return f"{result.get('app', 'Uygulama')} kapatıldı"
-        elif action == "shutdown_system":
-            return "Sistem kapatma komutu gönderildi"
-        elif action == "restart_system":
-            return "Sistem yeniden başlatma komutu gönderildi"
-        elif action == "sleep_system":
-            return "Sistem uyku moduna alındı"
-        elif action == "lock_screen":
-            return "Ekran kilitlendi"
-        elif action in ["set_volume", "volume"]:
-            return "Ses ayarlandı"
-        elif action in ["send_notification", "notification", "notify"]:
-            return "Bildirim gönderildi"
-        elif action in ["search_files", "find_files"]:
-            count = len(result.get("matches", []))
-            return f"{count} dosya bulundu"
-        elif action == "kill_process":
-            return f"Process sonlandırıldı"
-        elif action in ["get_process_info", "list_processes", "processes"]:
-            count = result.get("count", 0)
-            return f"{count} process listelendi"
-        elif action in ["run_safe_command", "run_command", "terminal", "execute"]:
-            return f"Komut çalıştırıldı"
-        # macOS tools
-        elif action in ["set_brightness", "brightness", "parlaklık", "parlaklık_aç", "parlaklık_kapat"]:
-            return f"Parlaklık %{result.get('level', 0)}"
-        elif action == "get_brightness":
-            return f"Parlaklık %{result.get('level', 0)}"
-        elif action in ["toggle_dark_mode", "dark_mode"]:
-            mode = result.get("mode", "")
-            return f"{mode} mod aktif"
-        elif action in ["wifi_toggle", "wifi_on", "wifi_off"]:
-            return result.get("action", "WiFi değiştirildi")
-        elif action == "wifi_status":
-            return f"WiFi: {'açık' if result.get('wifi_on') else 'kapalı'}"
-        elif action in ["get_today_events", "today_events", "calendar_events"]:
-            count = result.get("count", 0)
-            return f"{count} etkinlik listelendi"
-        elif action in ["create_event", "add_event"]:
-            return f"Etkinlik oluşturuldu"
-        elif action in ["get_reminders", "list_reminders"]:
-            count = result.get("count", 0)
-            return f"{count} anımsatıcı listelendi"
-        elif action in ["create_reminder", "add_reminder", "remind"]:
-            return f"Anımsatıcı oluşturuldu"
-        elif action in ["spotlight_search", "mdfind", "system_search"]:
-            count = result.get("count", 0)
-            return f"{count} sonuç bulundu"
-        # Office tools
-        elif action == "read_word":
-            return f"Word dosyası okundu"
-        elif action == "write_word":
-            return f"Word dosyası oluşturuldu"
-        elif action == "read_excel":
-            count = result.get("row_count", 0)
-            return f"{count} satır okundu"
-        elif action == "write_excel":
-            count = result.get("row_count", 0)
-            return f"{count} satır yazıldı"
-        elif action == "read_pdf":
-            pages = result.get("pages_read", 0)
-            return f"{pages} sayfa okundu"
-        elif action in ["get_pdf_info", "pdf_info"]:
-            return "PDF bilgisi alındı"
-        elif action in ["summarize_document", "summarize"]:
-            return "Belge özetlendi"
-        # Web tools
-        elif action == "fetch_page":
-            return "Sayfa içeriği alındı"
-        elif action in ["web_search", "search_web", "internet_search"]:
-            count = result.get("count", 0)
-            return f"{count} sonuç bulundu"
-        elif action in ["start_research", "research"]:
-            return "Araştırma başlatıldı"
-        elif action in ["get_research_status", "research_status"]:
-            status = result.get("status", "bilinmiyor")
-            return f"Durum: {status}"
-
-        # v3.0 New Actions - Short Results
-        # Note Taking
-        elif action in ["create_note", "yeni_not", "not_olustur"]:
-            return f"Not oluşturuldu: {result.get('title', '')}"
-        elif action in ["list_notes", "notlarim", "notlar", "my_notes"]:
-            count = result.get("count", 0)
-            return f"{count} not listelendi"
-        elif action in ["search_notes", "notlarda_ara", "not_ara"]:
-            count = result.get("count", 0)
-            return f"{count} not bulundu"
-        elif action in ["update_note", "not_guncelle"]:
-            return f"Not güncellendi"
-        elif action in ["delete_note", "not_sil"]:
-            return f"Not silindi"
-        elif action in ["get_note", "not_getir", "not_oku"]:
-            return f"Not getirildi"
-
-        # Task Planning
-        elif action in ["create_plan", "plan_olustur", "yeni_plan"]:
-            return f"Plan oluşturuldu: {result.get('name', '')}"
-        elif action in ["execute_plan", "plan_calistir", "plani_yurut"]:
-            return f"Plan tamamlandı"
-        elif action in ["get_plan_status", "plan_durumu"]:
-            return f"Durum: {result.get('status', '')}"
-        elif action in ["cancel_plan", "plan_iptal"]:
-            return f"Plan iptal edildi"
-        elif action in ["list_plans", "planlar"]:
-            count = result.get("count", 0)
-            return f"{count} plan listelendi"
-
-        # Document Editing
-        elif action in ["edit_text_file", "metin_duzenle", "dosya_duzenle"]:
-            return f"Dosya düzenlendi"
-        elif action in ["batch_edit_text", "toplu_duzenle"]:
-            count = result.get("modified_count", 0)
-            return f"{count} dosya düzenlendi"
-        elif action in ["edit_word_document", "word_duzenle"]:
-            return f"Word düzenlendi"
-
-        # Document Merging
-        elif action in ["merge_documents", "belge_birlestir", "dosya_birlestir"]:
-            return f"Belgeler birleştirildi"
-        elif action in ["merge_pdfs", "pdf_birlestir"]:
-            pages = result.get("total_pages", 0)
-            return f"PDF birleştirildi: {pages} sayfa"
-        elif action in ["merge_word_documents", "word_birlestir"]:
-            return f"Word dosyaları birleştirildi"
-
-        # Advanced Research v3.0
-        elif action in ["evaluate_source", "kaynak_degerlendir"]:
-            return f"Kaynak değerlendirildi"
-        elif action in ["quick_research", "hizli_arastirma"]:
-            return f"Hızlı araştırma tamamlandı"
-        elif action in ["synthesize_findings", "bulgulari_sentezle"]:
-            return f"Bulgular sentezlendi"
-        elif action in ["create_research_report", "arastirma_raporu"]:
-            return f"Araştırma raporu oluşturuldu"
-
-        # Deep Research Engine
-        elif action in ["deep_research", "derin_arastirma", "cok_kaynakli_arastirma", "akademik_arastirma"]:
-            source_count = result.get("statistics", {}).get("total_sources", 0)
-            return f"Derin araştırma tamamlandı: {source_count} kaynak"
-
-        # Document Generator
-        elif action in ["generate_research_document", "belge_olustur", "dokuman_olustur", "rapor_belgesi"]:
-            filename = result.get("filename", "")
-            return f"Belge oluşturuldu: {filename}"
-
-        return "Tamamlandı"
-
-    def _format_result(self, action: str, result: dict, message: str) -> str:
-        """Delegates to centralized response_tone.format_tool_result"""
-        return format_tool_result(action, result)
-
-    @staticmethod
-    def _normalize_tr(text: str) -> str:
-        """Turkce karakterleri ASCII'ye donustur (esleme icin)"""
-        tr_map = str.maketrans('çğıöşüÇĞİÖŞÜ', 'cgiosuCGIOSU')
-        return text.translate(tr_map)
-
-    def _is_likely_chat(self, text: str) -> bool:
-        """UNKNOWN intent'ler icin ek sohbet tespiti.
-        quick_intent yakalayamadigi ama tool da olmayan mesajlari tespit eder."""
-        import re
-        t = text.lower().strip()
-        tn = self._normalize_tr(t)  # ASCII-normalized version
-        words = tn.split()
-
-        # Tool keyword kontrolu - word-prefix matching ile
-        # (substring yerine, 'al' gibi kisa keyword'lerin 'valla' icinde eslesmemesi icin)
-        tool_prefixes = {
-            'ac', 'kapat', 'kis', 'yukselt', 'sil', 'oku', 'yaz',
-            'bul', 'tara', 'indir', 'yukle', 'calistir', 'gonder',
-            'olustur', 'listele', 'goster', 'screenshot', 'dosya',
-            'klasor', 'hatirlat', 'arastir', 'research', 'kopyala', 'tasi',
-            'open', 'close', 'delete', 'search', 'find', 'send',
-            'volume', 'ses', 'parlaklik', 'wifi', 'bluetooth', 'ekran',
-            'kaydet', 'yedekle', 'azalt', 'artir', 'dusur',
-        }
-        has_tool = any(
-            word.startswith(prefix) and (len(word) - len(prefix)) <= 5
-            for word in words
-            for prefix in tool_prefixes
-            if len(prefix) >= 3  # 3+ char prefix = safe word-prefix match
+                if inspect.iscoroutinefunction(tool_func):
+                    result = await tool_func(**clean_params)
+                else:
+                    result = tool_func(**clean_params)
+                success = not (isinstance(result, dict) and result.get("success") is False)
+                if isinstance(result, dict) and result.get("success") is False:
+                    err_text = str(result.get("error", ""))
+                return result
+            except Exception as e:
+                logger.error(f"Fallback tool execution error ({mapped_tool}): {e}")
+                err_text = str(e)
+                return {"success": False, "error": str(e)}
+        except Exception as exc:
+            err_text = str(exc)
+            raise
+        finally:
+            latency = int((time.perf_counter() - start) * 1000)
+            record_tool_usage(used_tool, success=success, latency_ms=latency, source="agent", error=err_text)
+
+    def _normalize_param_aliases(self, tool_name: str, params: dict) -> dict:
+        """Normalize common planner/LLM parameter aliases into canonical tool params."""
+        clean = dict(params or {})
+        if tool_name in {"open_app", "close_app"}:
+            for key in ("app_name", "appname", "application", "app", "name", "appName"):
+                value = clean.get(key)
+                if isinstance(value, str) and value.strip():
+                    clean["app_name"] = value.strip()
+                    break
+            for key in ("appname", "application", "app", "name", "appName"):
+                clean.pop(key, None)
+        return clean
+
+    def _infer_app_name(self, *texts: str) -> str:
+        haystack = " ".join(t for t in texts if isinstance(t, str) and t).lower()
+        if not haystack:
+            return ""
+
+        aliases = (
+            ("google chrome", "Google Chrome"),
+            ("chrome", "Google Chrome"),
+            ("safari", "Safari"),
+            ("firefox", "Firefox"),
+            ("finder", "Finder"),
+            ("terminal", "Terminal"),
+            ("iterm", "iTerm"),
+            ("visual studio code", "Visual Studio Code"),
+            ("vs code", "Visual Studio Code"),
+            ("vscode", "Visual Studio Code"),
+            ("spotify", "Spotify"),
+            ("telegram", "Telegram"),
+            ("discord", "Discord"),
+            ("slack", "Slack"),
+            ("whatsapp", "WhatsApp"),
+            ("mail", "Mail"),
+            ("takvim", "Calendar"),
+            ("calendar", "Calendar"),
+            ("notlar", "Notes"),
+            ("notes", "Notes"),
+            ("preview", "Preview"),
+            ("photos", "Photos"),
+            ("mesajlar", "Messages"),
+            ("messages", "Messages"),
+            ("tarayıcı", "Safari"),
+            ("tarayici", "Safari"),
+            ("browser", "Safari"),
         )
-        # Short exact-match keywords (2 chars) - only match full words
-        short_tool_words = {'ac', 'ss', 'al'}
-        if not has_tool:
-            has_tool = any(word in short_tool_words for word in words)
-        if has_tool:
+        for token, app_name in aliases:
+            if token in haystack:
+                return app_name
+
+        for txt in texts:
+            if not isinstance(txt, str):
+                continue
+            m = _re.search(r"[\"']([^\"']{2,40})[\"']", txt)
+            if m:
+                return m.group(1).strip()
+        return ""
+
+    def _resolve_tool_name(self, raw_name: str) -> Optional[str]:
+        """Resolve hallucinated/variant action names to a known tool name."""
+        name = str(raw_name or "").strip().lower()
+        name = name.strip("`'\"")
+        for prefix in ("tool.", "tool:", "action.", "action:", "function.", "function:"):
+            if name.startswith(prefix):
+                name = name[len(prefix):]
+                break
+        name = name.replace("-", "_").replace(" ", "_").replace("/", "_")
+        name = _re.sub(r"[^a-z0-9_]", "", name)
+        name = _re.sub(r"_+", "_", name).strip("_")
+        if not name:
+            return None
+        if name in AVAILABLE_TOOLS:
+            return name
+
+        aliases = {
+            "screenshot": "take_screenshot",
+            "screen_capture": "take_screenshot",
+            "openapp": "open_app",
+            "open_application": "open_app",
+            "openapplication": "open_app",
+            "launch_app": "open_app",
+            "launchapp": "open_app",
+            "closeapp": "close_app",
+            "close_application": "close_app",
+            "closeapplication": "close_app",
+            "web_research": "advanced_research",
+            "internet_research": "advanced_research",
+            "research_web": "advanced_research",
+            "deep_web_research": "deep_research",
+            "search_web": "web_search",
+            "browser_search": "web_search",
+            "search_internet": "web_search",
+            "open_browser": "open_url",
+            "openbrowser": "open_url",
+            "python_run": "execute_python_code",
+            "run_python": "execute_python_code",
+            "command_run": "run_safe_command",
+            "visual_generate": "create_visual_asset_pack",
+            "generate_image": "create_visual_asset_pack",
+            "image_generate": "create_visual_asset_pack",
+        }
+        alias = aliases.get(name)
+        if alias:
+            if alias in AVAILABLE_TOOLS and AVAILABLE_TOOLS.get(alias):
+                return alias
+            # Degrade gracefully when primary alias isn't loadable.
+            alias_fallbacks = {
+                "advanced_research": ["deep_research", "web_search", "fetch_page"],
+                "deep_research": ["advanced_research", "web_search"],
+                "create_visual_asset_pack": ["take_screenshot"],
+            }
+            for candidate in alias_fallbacks.get(alias, []):
+                if candidate in AVAILABLE_TOOLS and AVAILABLE_TOOLS.get(candidate):
+                    return candidate
+
+        # Fuzzy fallback across known tools
+        names = list(AVAILABLE_TOOLS.keys())
+        close = get_close_matches(name, names, n=1, cutoff=0.78)
+        if close:
+            candidate = close[0]
+            return candidate if AVAILABLE_TOOLS.get(candidate) else None
+        return None
+
+    def _should_run_direct_intent(self, intent: Optional[dict], user_input: str) -> bool:
+        if not intent or not isinstance(intent, dict):
             return False
+        action = str(intent.get("action", "") or "").strip().lower()
+        if not action or action in {"chat", "unknown"}:
+            return False
+        if action == "multi_task":
+            return isinstance(intent.get("tasks"), list) and len(intent.get("tasks") or []) > 0
+        if self._is_multi_step_request(user_input):
+            return False
+        return True
 
-        # Kisa mesajlar (1-6 kelime) tool keyword icermiyorsa → chat
-        if len(words) <= 6:
-            return True
+    @staticmethod
+    def _is_multi_step_request(user_input: str) -> bool:
+        text = (user_input or "").lower()
+        return any(k in text for k in (" ve ", " sonra ", " ardından ", " once ", "önce "))
 
-        # Soru kaliplari (tool icermeyen)
-        if t.endswith('?'):
-            return True
-        if re.search(r'^(ne|nasil|neden|kim|nerede|hangi|kac)', tn):
-            return True
+    async def _run_direct_intent(self, intent: dict, user_input: str, role: str, history: list) -> str:
+        action = str(intent.get("action", "") or "")
+        params = intent.get("params", {}) if isinstance(intent.get("params"), dict) else {}
+        low_action = action.lower()
 
-        # Genel konusma kaliplari
-        chat_signals = [
-            'bilmiyorum', 'bilmem', 'fikrim yok', 'emin degil',
-            'merak ettim', 'sormak', 'soyler misin', 'anlatir misin',
-            'dusunuyorum', 'sanirim', 'galiba', 'herhalde', 'bence',
-            'senin fikrin', 'ne dersin', 'ne diyorsun', 'sence',
-            'ilginc', 'enteresan', 'vay', 'aaa', 'hmm', 'valla',
-        ]
-        if any(s in tn for s in chat_signals):
-            return True
+        if low_action == "multi_task":
+            tasks = intent.get("tasks") if isinstance(intent.get("tasks"), list) else []
+            outputs = []
+            for i, task in enumerate(tasks, start=1):
+                if not isinstance(task, dict):
+                    continue
+                t_action = str(task.get("action", "") or "")
+                t_params = task.get("params", {}) if isinstance(task.get("params"), dict) else {}
+                t_desc = str(task.get("description", "") or f"Adım {i}")
+                result = await self._execute_tool(
+                    t_action,
+                    t_params,
+                    user_input=user_input,
+                    step_name=t_desc,
+                )
+                text = self._format_result_text(result)
+                outputs.append(f"[{i}] {t_desc}\n{text}")
+            return "\n\n".join(outputs) if outputs else "Çok adımlı görev için yürütülebilir adım bulunamadı."
 
-        return False
+        if low_action == "show_help":
+            return (
+                "Kullanabileceğin örnek komutlar:\n"
+                "- 'masaüstünde ne var'\n"
+                "- 'iphone araştır'\n"
+                "- 'ekran görüntüsü al'\n"
+                "- 'Downloads klasörünü listele'\n"
+                "- 'görsel oluştur: minimalist logo'"
+            )
+
+        if low_action == "translate":
+            text = params.get("text") or user_input
+            target = params.get("target_lang", "en")
+            prompt = f"Aşağıdaki metni {target} diline çevir:\n\n{text}"
+            return (await self.llm.generate(prompt, role=role, history=history)).strip()
+
+        if low_action == "summarize_url":
+            url = params.get("url", "")
+            page = await self._execute_tool("fetch_page", {"url": url}, user_input=user_input, step_name="URL fetch")
+            if not isinstance(page, dict) or not page.get("success"):
+                return self._format_result_text(page)
+            content = (page.get("content") or "")[:12000]
+            prompt = f"Şu metni kısa ve net şekilde özetle:\n\n{content}"
+            return (await self.llm.generate(prompt, role=role, history=history)).strip()
+
+        if low_action == "summarize_file":
+            path = params.get("path", "")
+            doc = await self._execute_tool("read_file", {"path": path}, user_input=user_input, step_name="Dosya oku")
+            if not isinstance(doc, dict) or not doc.get("success"):
+                return self._format_result_text(doc)
+            content = (doc.get("content") or "")[:12000]
+            prompt = f"Aşağıdaki dosya içeriğini özetle:\n\n{content}"
+            return (await self.llm.generate(prompt, role=role, history=history)).strip()
+
+        if low_action == "summarize_text":
+            text = params.get("text") or user_input
+            prompt = f"Bu metni kısa özetle:\n\n{text}"
+            return (await self.llm.generate(prompt, role=role, history=history)).strip()
+
+        # "tüm dosyalar" gibi isteklerde recursive tarama.
+        low_text = user_input.lower()
+        if low_action == "list_files" and any(k in low_text for k in ("tüm dosya", "tum dosya", "hepsini tara", "tamamını tara", "tamamini tara")):
+            result = await self._execute_tool("search_files", {"pattern": "*", "directory": "~"}, user_input=user_input, step_name="Tüm dosya taraması")
+            return self._format_result_text(result)
+
+        result = await self._execute_tool(action, params, user_input=user_input, step_name=intent.get("reply", ""))
+        return self._format_result_text(result)
+
+    def _extract_topic(self, user_input: str, step_name: str = "") -> str:
+        text = " ".join((step_name or "", user_input or "")).strip()
+        if not text:
+            return "genel konu"
+        lowered = text.lower()
+        lowered = _re.sub(
+            r"^.*?\b(?:aç|ac|başlat|baslat|çalıştır|calistir|open|launch)\b\s+(?:ve\s+sonra|ve\s+ardından|ve\s+|ardından\s+|sonra\s+)",
+            "",
+            lowered,
+        )
+        phrase_tokens = ("yapar mısın", "yapar misin")
+        for token in phrase_tokens:
+            lowered = lowered.replace(token, " ")
+
+        word_tokens = (
+            "araştırma", "arastirma", "araştır", "arastir",
+            "hakkında", "hakkinda", "internette", "webde", "web'de",
+            "lütfen", "lutfen", "elyan", "yap",
+            "safariyi", "safari", "chrome",
+            "tarayıcıyı", "tarayiciyi", "tarayıcı", "tarayici", "browser",
+            "aç", "ac", "başlat", "baslat", "çalıştır", "calistir", "ve",
+        )
+        for token in sorted(word_tokens, key=len, reverse=True):
+            lowered = _re.sub(rf"\b{_re.escape(token)}\b", " ", lowered)
+        lowered = _re.sub(r"\s+", " ", lowered).strip(" .,:;-")
+        return lowered or "genel konu"
+
+    def _prepare_tool_params(self, tool_name: str, params: dict, *, user_input: str, step_name: str) -> dict:
+        clean = dict(params or {})
+
+        if tool_name == "list_files":
+            clean["path"] = clean.get("path") or "~/Desktop"
+        elif tool_name == "search_files":
+            clean["pattern"] = clean.get("pattern") or "*"
+            clean["directory"] = clean.get("directory") or "~"
+        elif tool_name == "create_folder":
+            clean["path"] = clean.get("path") or "~/Desktop/yeni_klasor"
+        elif tool_name in {"open_app", "close_app"}:
+            app_name = clean.get("app_name")
+            if isinstance(app_name, str):
+                app_name = app_name.strip()
+            if not app_name:
+                app_name = self._infer_app_name(step_name, user_input)
+            if not app_name and tool_name == "open_app":
+                combined = f"{step_name} {user_input}".lower()
+                if any(k in combined for k in ("tarayıcı", "tarayici", "browser", "web")):
+                    app_name = "Safari"
+            if app_name:
+                clean["app_name"] = app_name
+        elif tool_name == "web_search":
+            query = clean.get("query") or clean.get("topic") or self._extract_topic(user_input, step_name)
+            clean = {"query": query, "num_results": int(clean.get("num_results", 5))}
+        elif tool_name == "advanced_research":
+            topic = clean.get("topic") or clean.get("query") or self._extract_topic(user_input, step_name)
+            depth = str(clean.get("depth", "standard")).lower()
+            depth_map = {
+                "deep": "comprehensive",
+                "medium": "standard",
+                "quick": "quick",
+                "short": "quick",
+                "standard": "standard",
+                "comprehensive": "comprehensive",
+                "expert": "expert",
+            }
+            clean["topic"] = topic
+            clean["depth"] = depth_map.get(depth, "standard")
+        elif tool_name == "open_url":
+            url = clean.get("url", "")
+            if not url:
+                q = clean.get("query") or self._extract_topic(user_input, step_name)
+                if q:
+                    url = f"https://www.google.com/search?q={quote_plus(q)}"
+            clean["url"] = url
+        elif tool_name == "run_safe_command":
+            command = clean.get("command") or clean.get("cmd") or clean.get("query") or ""
+            clean = {"command": command}
+        elif tool_name == "execute_python_code":
+            code = clean.get("code") or ""
+            clean = {"code": code}
+        elif tool_name == "create_visual_asset_pack":
+            project_name = clean.get("project_name") or self._extract_topic(user_input, step_name)[:64]
+            clean["project_name"] = project_name or "elyan-visual"
+            clean["brief"] = clean.get("brief") or user_input
+            clean["output_dir"] = clean.get("output_dir") or "~/Desktop"
+        elif tool_name == "control_music":
+            command = clean.get("command")
+            low = user_input.lower()
+            if not command:
+                if any(k in low for k in ("durdur", "dur", "pause", "stop")):
+                    command = "pause"
+                elif any(k in low for k in ("devam", "resume", "continue")):
+                    command = "play"
+                elif any(k in low for k in ("sonraki", "next", "ileri")):
+                    command = "next"
+                elif any(k in low for k in ("önceki", "onceki", "previous", "geri")):
+                    command = "previous"
+                else:
+                    command = "play"
+            clean["command"] = command
+            if command == "play" and not clean.get("query"):
+                clean["query"] = self._extract_topic(user_input, step_name)
+        elif tool_name == "create_event":
+            clean.setdefault("title", step_name or "Etkinlik")
+            clean.setdefault("date", "today")
+
+        return clean
+
+    def _format_result_text(self, result: Any) -> str:
+        if isinstance(result, dict):
+            if result.get("success") is False:
+                return f"Hata: {result.get('error', 'İşlem başarısız.')}"
+
+            if isinstance(result.get("summary"), str) and result.get("summary"):
+                return result["summary"]
+
+            if isinstance(result.get("message"), str) and result.get("message"):
+                return result["message"]
+
+            if isinstance(result.get("items"), list):
+                items = result.get("items", [])
+                names = []
+                for item in items[:40]:
+                    if isinstance(item, dict):
+                        nm = item.get("name")
+                        if nm:
+                            names.append(str(nm))
+                    else:
+                        names.append(str(item))
+                suffix = f"\n... (+{len(items) - 40} öğe)" if len(items) > 40 else ""
+                return "Klasör içeriği:\n" + ("\n".join(f"- {x}" for x in names) if names else "(boş)") + suffix
+
+            if isinstance(result.get("matches"), list):
+                matches = result.get("matches", [])
+                lines = [str(x) for x in matches[:40]]
+                suffix = f"\n... (+{len(matches) - 40} eşleşme)" if len(matches) > 40 else ""
+                return "Eşleşen dosyalar:\n" + ("\n".join(f"- {x}" for x in lines) if lines else "(eşleşme yok)") + suffix
+
+            if isinstance(result.get("content"), str) and result.get("content"):
+                content = result["content"]
+                if len(content) > 3500:
+                    content = content[:3500] + "\n...\n[çıktı kısaltıldı]"
+                return content
+
+            if result.get("success") is True and isinstance(result.get("path"), str):
+                return f"İşlem tamamlandı: {result['path']}"
+
+            if result.get("success") is True and isinstance(result.get("url"), str):
+                return f"İşlem tamamlandı: {result['url']}"
+
+            if result.get("success") is True:
+                return "İşlem başarıyla tamamlandı."
+
+            return json.dumps(result, ensure_ascii=False, indent=2)
+
+        return str(result)
 
     async def shutdown(self):
-        """Comprehensive shutdown - cleanup all resources"""
-        logger.info("🔴 Agent shutdown başlatılıyor...")
-
-        try:
-            # 1. Stop background schedulers first
-            try:
-                from core.proactive import get_scheduler
-                scheduler = get_scheduler()
-                if hasattr(scheduler, 'shutdown'):
-                    await scheduler.shutdown()
-                    logger.info("✓ Scheduler durduruldu")
-            except Exception as e:
-                logger.debug(f"Scheduler shutdown error: {e}")
-
-            # 2. Close LLM client
-            try:
-                if hasattr(self.llm, 'close'):
-                    await self.llm.close()
-                    logger.info("✓ LLM client kapatıldı")
-            except Exception as e:
-                logger.debug(f"LLM close error: {e}")
-
-            # 3. Shutdown connection pools
-            try:
-                from core.connection_pool import get_http_pool
-                pool = get_http_pool()
-                if hasattr(pool, 'close'):
-                    await pool.close()
-                    logger.info("✓ Connection pool kapatıldı")
-            except Exception as e:
-                logger.debug(f"Pool close error: {e}")
-
-            # 4. Cleanup model manager (sentence transformers)
-            try:
-                from core.model_manager import _manager
-                _manager._model = None
-                logger.info("✓ Model manager temizlendi")
-            except Exception as e:
-                logger.debug(f"Model cleanup error: {e}")
-
-            # 5. Flush caches
-            try:
-                if hasattr(self.response_cache, 'clear'):
-                    self.response_cache.clear()
-                logger.info("✓ Cache temizlendi")
-            except Exception as e:
-                logger.debug(f"Cache clear error: {e}")
-
-            # 6. Save learning data
-            try:
-                if hasattr(self.learning, 'save'):
-                    self.learning.save()
-                logger.info("✓ Learning data kaydedildi")
-            except Exception as e:
-                logger.debug(f"Learning save error: {e}")
-
-            # 7. Close databases
-            try:
-                if hasattr(self.memory, 'close'):
-                    self.memory.close()
-                logger.info("✓ Memory database kapatıldı")
-            except Exception as e:
-                logger.debug(f"Memory close error: {e}")
-
-            logger.info("✅ Agent tamamen kapatıldı")
-
-        except Exception as e:
-            logger.error(f"Shutdown error: {e}", exc_info=True)
+        logger.info("Agent shutting down.")
+        # Kernel handles resource cleanup usually, but we can trigger it
+        pass

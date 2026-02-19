@@ -47,7 +47,7 @@ logs/
 htmlcov/
 
 # Project specific
-.wiqo_audit/
+.elyan_audit/
 .elyan_audit/
 *.db
 *.sqlite

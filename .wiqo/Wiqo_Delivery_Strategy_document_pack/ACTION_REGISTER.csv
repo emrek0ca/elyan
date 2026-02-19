@@ -1,6 +1,0 @@
-action_id,action,owner,priority,status,due_date
-A1,Scope and quality gates netlestir,PM,High,Open,
-A2,Faz bazli uygulama plani cikart,Tech Lead,High,Open,
-A3,Risk sahipliklerini ata,PM,Medium,Open,
-A4,Haftalik KPI takip paneli ac,Ops,Medium,Open,
-A5,Yonetici sunum paketini finalize et,Product,High,Open,

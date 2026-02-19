@@ -29,7 +29,12 @@ def _lazy_load_tool(tool_name: str):
                      "take_screenshot", "read_clipboard", "write_clipboard",
                      "close_app", "shutdown_system", "restart_system", "sleep_system", "lock_screen",
                      "set_volume", "send_notification", "kill_process",
-                     "get_process_info", "run_safe_command", "get_installed_apps", "get_display_info"]:
+                     "get_process_info", "run_safe_command", "get_installed_apps", "get_display_info", "record_screen"]:
+        if tool_name == "record_screen":
+            from .screen_recorder import record_screen
+            _loaded_tools["record_screen"] = record_screen
+            return _loaded_tools["record_screen"]
+
         from .system_tools import (
             get_system_info, open_app, open_url, get_running_apps,
             take_screenshot, read_clipboard, write_clipboard,
@@ -88,16 +93,18 @@ def _lazy_load_tool(tool_name: str):
 
     # Office Tools
     if tool_name in ["read_word", "write_word", "read_excel", "write_excel",
-                     "read_pdf", "get_pdf_info", "summarize_document"]:
+                     "read_pdf", "get_pdf_info", "summarize_document", "analyze_excel_data", "search_in_pdf"]:
         from .office_tools import (
             read_word, write_word, read_excel, write_excel,
-            read_pdf, get_pdf_info, summarize_document
+            read_pdf, get_pdf_info, summarize_document, analyze_excel_data, search_in_pdf
         )
         tools = {
             "read_word": read_word, "write_word": write_word,
             "read_excel": read_excel, "write_excel": write_excel,
             "read_pdf": read_pdf, "get_pdf_info": get_pdf_info,
             "summarize_document": summarize_document,
+            "analyze_excel_data": analyze_excel_data,
+            "search_in_pdf": search_in_pdf
         }
         _loaded_tools.update(tools)
         return _loaded_tools.get(tool_name)
@@ -113,6 +120,44 @@ def _lazy_load_tool(tool_name: str):
             "fetch_page": fetch_page, "extract_text": extract_text,
             "web_search": web_search, "start_research": start_research,
             "get_research_status": get_research_status,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Email Tools
+    if tool_name in ["send_email", "get_emails", "get_unread_emails", "search_emails"]:
+        from .email_tools import (
+            send_email, get_emails, get_unread_emails, search_emails
+        )
+        tools = {
+            "send_email": send_email,
+            "get_emails": get_emails,
+            "get_unread_emails": get_unread_emails,
+            "search_emails": search_emails,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Code Execution Tools
+    if tool_name in ["execute_python_code", "execute_javascript_code", "execute_shell_command", "debug_code"]:
+        from .code_execution_tools import (
+            execute_python_code, execute_javascript_code, execute_shell_command, debug_code
+        )
+        tools = {
+            "execute_python_code": execute_python_code,
+            "execute_javascript_code": execute_javascript_code,
+            "execute_shell_command": execute_shell_command,
+            "debug_code": debug_code,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # AI Provider Tools
+    if tool_name in ["ollama_list_models", "ollama_remove_model"]:
+        from .ai_tools import ollama_list_models, ollama_remove_model
+        tools = {
+            "ollama_list_models": ollama_list_models,
+            "ollama_remove_model": ollama_remove_model,
         }
         _loaded_tools.update(tools)
         return _loaded_tools.get(tool_name)
@@ -197,7 +242,11 @@ def _lazy_load_tool(tool_name: str):
         return _loaded_tools.get(tool_name)
 
     # Document Generator Tools
-    if tool_name in ["generate_research_document", "get_document_generator"]:
+    if tool_name in ["generate_research_document", "get_document_generator", "create_presentation"]:
+        if tool_name == "create_presentation":
+            from .generators.slidev_generator import slidev_gen
+            _loaded_tools["create_presentation"] = slidev_gen.create_presentation
+            return _loaded_tools["create_presentation"]
         from .document_generator import (
             generate_research_document, get_document_generator
         )
@@ -210,10 +259,9 @@ def _lazy_load_tool(tool_name: str):
 
     # Visualization Tools
     if tool_name in ["create_chart", "create_research_visualization", "get_chart_generator"]:
-        from .visualization import (
-            create_chart, create_research_visualization
+        from .visualization.chart_generator import (
+            create_chart, create_research_visualization, get_chart_generator
         )
-        from .visualization.chart_generator import get_chart_generator
         tools = {
             "create_chart": create_chart,
             "create_research_visualization": create_research_visualization,
@@ -222,46 +270,12 @@ def _lazy_load_tool(tool_name: str):
         _loaded_tools.update(tools)
         return _loaded_tools.get(tool_name)
 
-    # Email Tools
-    if tool_name in ["send_email", "get_emails", "get_unread_emails", "search_emails"]:
-        from .email_tools import (
-            send_email, get_emails, get_unread_emails, search_emails
-        )
-        tools = {
-            "send_email": send_email, "get_emails": get_emails,
-            "get_unread_emails": get_unread_emails, "search_emails": search_emails,
-        }
-        _loaded_tools.update(tools)
-        return _loaded_tools.get(tool_name)
-
-    # Code Execution Tools
-    if tool_name in ["execute_python_code", "execute_javascript_code",
-                     "execute_shell_command", "debug_code"]:
-        from .code_execution_tools import (
-            execute_python_code, execute_javascript_code,
-            execute_shell_command, debug_code
-        )
-        tools = {
-            "execute_python_code": execute_python_code,
-            "execute_javascript_code": execute_javascript_code,
-            "execute_shell_command": execute_shell_command,
-            "debug_code": debug_code,
-        }
-        _loaded_tools.update(tools)
-        return _loaded_tools.get(tool_name)
-
-    # AI Tools
-    if tool_name in ["ollama_list_models", "ollama_remove_model"]:
-        from .ai_tools import ollama_list_models, ollama_remove_model
-        tools = {
-            "ollama_list_models": ollama_list_models,
-            "ollama_remove_model": ollama_remove_model
-        }
-        _loaded_tools.update(tools)
-        return _loaded_tools.get(tool_name)
-
     # Professional Workflows
-    if tool_name in ["create_web_project_scaffold", "generate_document_pack", "create_image_workflow_profile", "create_software_project_pack"]:
+    if tool_name in ["create_web_project_scaffold", "generate_document_pack", "create_image_workflow_profile", "create_software_project_pack", "create_delivery_project"]:
+        if tool_name == "create_delivery_project":
+            from core.delivery.engine import delivery_engine
+            _loaded_tools["create_delivery_project"] = delivery_engine.create_project
+            return _loaded_tools["create_delivery_project"]
         from .pro_workflows import (
             create_web_project_scaffold,
             generate_document_pack,
@@ -312,7 +326,7 @@ class LazyToolDict(dict):
             "get_running_apps", "take_screenshot", "read_clipboard", "write_clipboard",
             "close_app", "shutdown_system", "restart_system", "sleep_system", "lock_screen",
             "set_volume", "send_notification", "kill_process", "get_process_info",
-            "get_installed_apps", "get_display_info",
+            "get_installed_apps", "get_display_info", "record_screen",
             # macOS Tools
             "toggle_dark_mode", "get_appearance", "set_brightness", "get_brightness",
             "wifi_status", "wifi_toggle", "bluetooth_status",
@@ -323,7 +337,7 @@ class LazyToolDict(dict):
             "control_music", "get_now_playing", "set_display_brightness",
             # Office Tools
             "read_word", "write_word", "read_excel", "write_excel", "read_pdf",
-            "get_pdf_info", "summarize_document",
+            "get_pdf_info", "summarize_document", "analyze_excel_data", "search_in_pdf",
             # Web Tools
             "fetch_page", "extract_text", "web_search", "start_research", "get_research_status",
             # Advanced Tools
@@ -339,7 +353,7 @@ class LazyToolDict(dict):
             "advanced_research", "evaluate_source", "quick_research", "synthesize_findings",
             "create_research_report", "deep_research", "get_research_engine",
             # Document Generator Tools
-            "generate_research_document", "get_document_generator",
+            "generate_research_document", "get_document_generator", "create_presentation",
             # Visualization Tools
             "create_chart", "create_research_visualization", "get_chart_generator",
             # Email Tools
@@ -350,6 +364,7 @@ class LazyToolDict(dict):
             "ollama_list_models", "ollama_remove_model",
             # Professional Workflows
             "create_web_project_scaffold", "generate_document_pack", "create_image_workflow_profile", "create_software_project_pack",
+            "create_delivery_project",
             # Multimodal Tools
             "transcribe_audio_file", "speak_text_local", "create_visual_asset_pack", "analyze_and_narrate_image",
             "get_multimodal_capability_report",

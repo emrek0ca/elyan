@@ -226,6 +226,9 @@ def format_tool_result(tool_name: str, result: dict) -> str:
     if tool_name == "take_screenshot":
         return f"Ekran goruntusu alindi: {result.get('filename', '')}"
 
+    if tool_name in ["record_screen", "screen_record", "ekran_kaydi"]:
+        return result
+
     if tool_name == "read_clipboard":
         content = result.get("content", "")
         if not content:

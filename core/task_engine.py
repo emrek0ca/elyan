@@ -47,6 +47,7 @@ from config.settings_manager import SettingsPanel
 from security.validator import validate_input, sanitize_input
 from security.audit import get_audit_logger
 from security.approval import get_approval_manager, RiskLevel
+from security.tool_policy import tool_policy
 from security.privacy_guard import redact_text, sanitize_for_storage, sanitize_object, is_external_provider
 from tools import AVAILABLE_TOOLS
 from utils.logger import get_logger
@@ -1535,6 +1536,17 @@ JSON ciktisi (baska hicbir sey yazma):
             # Update task.action to use normalized name for downstream execution
             task.action = normalized_action
 
+            # Enforce tool policy centrally (BUG-SEC-002: requires_approval must be consumed).
+            access = tool_policy.check_access(task.action)
+            if not access.get("allowed", False):
+                return {
+                    "allowed": False,
+                    "reason": f"Tool policy blocked: {task.action}",
+                    "blocked_tasks": [task.id],
+                }
+            if access.get("requires_approval", False):
+                task.requires_approval = True
+
         return {"allowed": True}
 
     def _is_risky_action(self, action: str) -> bool:
@@ -1741,7 +1753,8 @@ JSON ciktisi (baska hicbir sey yazma):
             async def run_task(task_def):
                 nonlocal succeeded, failed
                 try:
-                    if self._requires_explicit_approval(task_def.action):
+                    # Approval can be required either by explicit risk rules or policy.
+                    if task_def.requires_approval or self._requires_explicit_approval(task_def.action):
                         if notify_callback:
                             await self._emit_notify(
                                 notify_callback,

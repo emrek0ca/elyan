@@ -30,13 +30,13 @@ class ProactiveScheduler:
     """
     
     def __init__(self):
-        # Ensure wiqo data directory exists
-        wiqo_dir = Path.home() / ".wiqo"
-        wiqo_dir.mkdir(exist_ok=True)
+        # Ensure elyan data directory exists
+        elyan_dir = Path.home() / ".elyan"
+        elyan_dir.mkdir(exist_ok=True)
         
         # Configure job store (SQLite for persistence)
         jobstores = {
-            'default': SQLAlchemyJobStore(url=f'sqlite:///{wiqo_dir}/scheduler.db')
+            'default': SQLAlchemyJobStore(url=f'sqlite:///{elyan_dir}/scheduler.db')
         }
         
         # Configure executor

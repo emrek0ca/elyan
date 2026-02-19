@@ -1,8 +1,10 @@
 import json
 import os
 import logging
+import platform
 from pathlib import Path
 from typing import Any
+from security.keychain import keychain
 
 logger = logging.getLogger("config.settings_manager")
 
@@ -88,8 +90,8 @@ class SettingsPanel:
             return fallback / "settings.json"
 
     def _migrate_old_settings(self):
-        """Migrate from old ~/.config/wiqo-bot path if exists"""
-        old_path = Path.home() / ".config" / "wiqo-bot" / "settings.json"
+        """Migrate from old ~/.config/elyan-bot path if exists"""
+        old_path = Path.home() / ".config" / "elyan-bot" / "settings.json"
         new_path = self._default_config_path()
         
         if old_path.exists() and not new_path.exists():
@@ -268,7 +270,6 @@ class SettingsPanel:
                 "LLM_TYPE": _llm_type,
                 "OLLAMA_HOST": self._settings.get("ollama_host", "http://localhost:11434"),
                 "MODEL_NAME": self._settings.get("llm_model", "llama-3.3-70b-versatile"),
-                "TELEGRAM_BOT_TOKEN": self._settings.get("telegram_token", ""),
                 "ALLOWED_USER_IDS": ",".join(self._settings.get("allowed_user_ids", []) if isinstance(self._settings.get("allowed_user_ids"), list) else [str(self._settings.get("allowed_user_ids"))]),
                 "FULL_DISK_ACCESS": "true" if bool(self._settings.get("full_disk_access", True)) else "false",
             }
@@ -276,14 +277,40 @@ class SettingsPanel:
             # Match API key to specific provider
             provider = env_updates["LLM_TYPE"]
             api_key = self._settings.get("api_key", "")
-            if provider == "api" or provider == "gemini": # Handle both 'api' and 'gemini' aliases
-                env_updates["GOOGLE_API_KEY"] = api_key
-            elif provider == "groq":
-                env_updates["GROQ_API_KEY"] = api_key
-            elif provider == "openai":
-                env_updates["OPENAI_API_KEY"] = api_key
-            elif provider == "anthropic":
-                env_updates["ANTHROPIC_API_KEY"] = api_key
+            keychain_mode = platform.system() == "Darwin" and keychain.is_available()
+
+            # BUG-SEC-005: Keep secrets in Keychain on macOS, avoid plaintext .env.
+            if keychain_mode:
+                telegram_token = str(self._settings.get("telegram_token", "") or "")
+                if telegram_token:
+                    keychain.set_key("telegram_bot_token", telegram_token)
+
+                if api_key:
+                    if provider == "api" or provider == "gemini":  # Handle both aliases
+                        keychain.set_key("google_api_key", api_key)
+                    elif provider == "groq":
+                        keychain.set_key("groq_api_key", api_key)
+                    elif provider == "openai":
+                        keychain.set_key("openai_api_key", api_key)
+                    elif provider == "anthropic":
+                        keychain.set_key("anthropic_api_key", api_key)
+
+                # Keep sensitive values empty in .env when keychain is active.
+                env_updates["TELEGRAM_BOT_TOKEN"] = ""
+                env_updates["GOOGLE_API_KEY"] = ""
+                env_updates["GROQ_API_KEY"] = ""
+                env_updates["OPENAI_API_KEY"] = ""
+                env_updates["ANTHROPIC_API_KEY"] = ""
+            else:
+                env_updates["TELEGRAM_BOT_TOKEN"] = self._settings.get("telegram_token", "")
+                if provider == "api" or provider == "gemini":  # Handle both aliases
+                    env_updates["GOOGLE_API_KEY"] = api_key
+                elif provider == "groq":
+                    env_updates["GROQ_API_KEY"] = api_key
+                elif provider == "openai":
+                    env_updates["OPENAI_API_KEY"] = api_key
+                elif provider == "anthropic":
+                    env_updates["ANTHROPIC_API_KEY"] = api_key
 
             new_lines = []
             seen_keys = set()

@@ -93,6 +93,14 @@ _VERB_SUFFIXES_ASCII = {_normalize_tr(k): v for k, v in _VERB_SUFFIXES.items()}
 # ASCII-normalized filler words
 _FILLER_WORDS_ASCII = {_normalize_tr(w) for w in _FILLER_WORDS}
 
+# BUG-PERF-002/003: Pre-compile module-level regexes (never recompile per call)
+_RE_APOSTROPHE = re.compile(r"[''`]([a-zçğıöşü]{1,4})\b")
+_RE_TR_SUFFIX = re.compile(
+    r'\b(\w{2,})\s+([uüiı]|[yns][uüiıeaıo]|[td][aeiıoöuü]n?|l[aeiıoöuü]r[iıuü]?)\b'
+)
+_RE_WHITESPACE = re.compile(r"\s+")
+_TR_SUFFIX_STOP = frozenset({'ne', 'bu', 'şu', 'su', 'de', 'da'})
+
 
 def normalize_turkish(text: str) -> str:
     """Gunluk Turkce konusma dilini standart forma cevirir."""
@@ -100,12 +108,13 @@ def normalize_turkish(text: str) -> str:
     text = text.lower().strip()
 
     # 1. Turkce tirnak/apostrof ekleri cikar: chrome'u, safari'yi, dosyanın
-    text = re.sub(r"[''`]([a-zçğıöşü]{1,4})\b", "", text)
+    text = _RE_APOSTROPHE.sub("", text)
 
     # 1b. Boslukluyapisan Turkce ekleri cikar: "chrome u", "safari yi"
-    text = re.sub(r'\b(\w{2,})\s+([uüiı]|[yns][uüiıeaıo]|[td][aeiıoöuü]n?|l[aeiıoöuü]r[iıuü]?)\b',
-                  lambda m: m.group(1) if m.group(1) not in {'ne', 'bu', 'şu', 'su', 'de', 'da'} else m.group(0),
-                  text)
+    text = _RE_TR_SUFFIX.sub(
+        lambda m: m.group(1) if m.group(1) not in _TR_SUFFIX_STOP else m.group(0),
+        text,
+    )
 
     # 2. Informal kısaltmaları değiştir
     words = text.split()
@@ -128,7 +137,7 @@ def normalize_turkish(text: str) -> str:
     text = " ".join(words)
 
     # 5. Çoklu boşluk temizle
-    text = re.sub(r"\s+", " ", text).strip()
+    text = _RE_WHITESPACE.sub(" ", text).strip()
 
     if text != original.lower().strip():
         logger.debug(f"Normalized: '{original}' -> '{text}'")

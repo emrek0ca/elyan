@@ -1,0 +1,1 @@
+import{j as e}from"./index-DUbXk_-z.js";function c({imageSrc:r,imageAlt:a}){return e.jsx("div",{className:"hero-media-shell",children:e.jsx("img",{src:r,alt:a,className:"hero-character-image",loading:"eager",decoding:"async"})})}export{c as HeroScene};
