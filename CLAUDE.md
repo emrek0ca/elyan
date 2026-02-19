@@ -502,3 +502,221 @@ mkdocs serve
 **Ek Doğrulama:**
 - `python -m py_compile core/intent_parser/__init__.py tests/unit/test_intent_parser_and_dashboard.py` → **OK**
 - `pytest -q tests/unit/test_agent_routing.py tests/unit/test_intent_parser_and_dashboard.py` → **14 passed**
+
+## OTURUM GÜNCELLEMESİ — 2026-02-19 (GATEWAY RESTART STABILITY) ✅
+- `cli/commands/gateway.py` — port/PID tespiti güçlendirildi:
+  - `_find_listener_pids()` eklendi (psutil + `lsof` fallback).
+  - `_find_listener_pid()` bu yeni listeleyiciyi kullanacak şekilde güncellendi.
+  - `_is_port_listening()`, `_is_elyan_like_process()`, `_describe_process()` yardımcıları eklendi.
+- `cli/commands/gateway.py` — daemon startup failure yolu iyileştirildi:
+  - ilk process erken çıkarsa takeover PID Elyan değilse net hata + süreç bilgisi gösteriliyor (sessiz false-negative yerine açıklayıcı çıktı).
+  - portu tutan process için `lsof` ile kontrol komutu öneriliyor.
+- `cli/commands/gateway.py` — `stop_gateway()` portu dinleyen **tüm** PID’leri sonlandıracak şekilde güncellendi (tek PID varsayımı kaldırıldı).
+- `cli/commands/gateway.py` — yeni `restart_gateway()` eklendi:
+  - `stop` sonrası port serbest kalana kadar kısa bekleme + sonra `start`.
+- `cli/main.py` — `gateway restart` akışı doğrudan `gateway.restart_gateway(...)` kullanacak şekilde güncellendi.
+- `tests/unit/test_gateway_cli.py` — 2 yeni test eklendi:
+  - `lsof` fallback ile listener PID tespiti.
+  - `restart_gateway()` çağrı sırası (`stop` → `start`) doğrulaması.
+
+**Doğrulama:**
+- `python -m py_compile cli/commands/gateway.py cli/main.py tests/unit/test_gateway_cli.py` → **OK**
+- `pytest -q tests/unit/test_gateway_cli.py` → **6 passed**
+- Canlı doğrulama: `elyan gateway restart --daemon --port 18789` + `elyan gateway health --json --port 18789` → **healthy=true**
+
+## OTURUM GÜNCELLEMESİ — 2026-02-19 (NLU + TOOL RELIABILITY HARDENING) ✅
+- `core/agent.py` — kritik parametre kaybı düzeltildi:
+  - `_execute_tool` artık `message` alanını global olarak silmiyor (`send_notification` / `create_reminder` / benzeri tool parametreleri korunuyor).
+- `core/agent.py` — param hazırlama katmanı güçlendirildi:
+  - `read_file`: kullanıcı metninden `*.ext` dosya adı çıkarımı (örn. `not.txt içinde ne var`).
+  - `write_file`: içerik boşsa “bunu kaydet” senaryosunda son assistant çıktısından otomatik doldurma; boş içerik fallback metni eklendi.
+  - `write_word`: içerik/path/title otomatik doldurma (son assistant çıktısı fallback).
+  - `write_excel`: veri boşsa son assistant çıktısından satır bazlı tablo üretimi (`[{\"Veri\": ...}]`).
+  - `send_notification`: `title/message` zorunlu normalize ve akıllı fallback.
+  - `create_reminder`: `title/due_time/due_date` normalize + doğal dilden saat çıkarımı.
+  - `create_event`: `time`/metinden `start_time` eşleme.
+- `core/agent.py` — yeni yardımcılar:
+  - `_extract_time_from_text()` (TR doğal dil saat parse),
+  - `_get_recent_assistant_text()` (konuşma geçmişinden son yanıt çekme).
+- `core/intent_parser/_files.py` — dosya NLU iyileştirildi:
+  - `write_file`: `bunu kaydet`, `dosya olarak kaydet`, `masaüstüne kaydet` tetikleyicileri eklendi.
+  - dosya adı çıkarımı artık uzantılı adları da yakalıyor (`not.txt`, `rapor.md`).
+  - path çıkarımı `self._extract_path` ile daha tutarlı.
+  - `read_file`: `içinde ne var` kalıbı desteklendi.
+- `core/intent_parser/_system.py` — notification/reminder çakışması azaltıldı:
+  - zaman içeren `hatırlat` cümleleri reminder parser’a bırakılıyor.
+  - `... hatırlat` cümle sonu kalıbı için bildirim içeriği çıkarımı eklendi.
+- `core/intent_parser/_media.py` — reminder parser profesyonelleştirildi:
+  - `"Saat 22 de bana ilaç içmem gerekiyor hatırlat"` gibi cümlelerde `create_reminder` + `due_time=22:00` üretimi.
+  - içerik temizleme (`bana/beni/lütfen` vb.) ve başlık fallback.
+- `core/intent_parser/__init__.py` — `"Planlanmış görevler"` gibi doğal sorgular için yeni parser adımı (`_parse_scheduled_tasks`) pipeline’a eklendi.
+- `tools/__init__.py` — office lazy loader dayanıklılığı artırıldı:
+  - Word/Excel/PDF/Summarizer importları modül bazında `try/except` ile ayrıldı; optional dependency eksik olsa da `write_excel`/`write_word` callable kalıyor.
+- `tools/office_tools/__init__.py` — package exportları optional dependency-safe hale getirildi (PDF/OCR bağımlılığı yoksa word/excel tarafı kırılmıyor).
+- `tools/office_tools/excel_tools.py` — boş veri ile dosya yaratma davranışı düzeltildi:
+  - `data` boşsa artık `success=False` ile anlaşılır hata dönüyor (sessiz boş dosya yerine).
+- `tools/system_tools.py` — `send_notification` fail-safe:
+  - `title/message` opsiyonel default + boş message fallback.
+- `core/gateway/adapters/telegram.py` — markdown parse hataları azaltıldı:
+  - Telegram mesaj gönderimi plain text (`parse_mode=None`) ile standartlaştırıldı.
+
+**Yeni/ güncellenen testler:**
+- `tests/unit/test_agent_routing.py`
+  - `send_notification` için `message` parametresi korunumu.
+  - `write_file` için geçmiş assistant çıktısından içerik fallback.
+- `tests/unit/test_intent_parser_and_dashboard.py`
+  - `not.txt içinde ne var` → `read_file`.
+  - zamanlı hatırlatma cümlesi → `create_reminder` + `due_time`.
+  - `Planlanmış görevler` → `list_plans`.
+- `tests/unit/test_tools_lazy_loader.py`
+  - office lazy loader callable kapsamı genişletildi (`read/write_word`, `read/write_excel` vb.).
+
+**Doğrulama:**
+- `python -m py_compile core/agent.py core/intent_parser/_files.py core/intent_parser/_system.py core/intent_parser/_media.py core/intent_parser/__init__.py tools/__init__.py tools/system_tools.py tools/office_tools/excel_tools.py core/gateway/adapters/telegram.py tests/unit/test_agent_routing.py tests/unit/test_intent_parser_and_dashboard.py tests/unit/test_tools_lazy_loader.py` → **OK**
+- `pytest -q tests/unit/test_tools_lazy_loader.py tests/unit/test_agent_routing.py tests/unit/test_intent_parser_and_dashboard.py` → **20 passed**
+
+## OTURUM GÜNCELLEMESİ — 2026-02-19 (CLI UX + RESEARCH TOPIC HARDENING) ✅
+- `cli/main.py` — ilk kullanım UX iyileştirildi:
+  - top-level komut yazım hatalarında yakın komut önerisi eklendi.
+  - örn. `elyan gatewat logs` → `"Şunu mu demek istediniz: 'gateway'?"`.
+  - `main(argv=None)` imzasına taşındı; test edilebilirlik arttı.
+- `core/agent.py` — araştırma konusu normalize edildi:
+  - `_sanitize_research_topic()` eklendi.
+  - `advanced_research` param hazırlığında parser’dan gelen kirli topic temizleniyor.
+  - `"safariyi aç ve köpekler hakkında araştırma yap"` benzeri girdilerde topic artık `"köpekler"`.
+- `tools/office_tools/word_tools.py` — boş Word dosyası üretimi engellendi:
+  - title/content/paragraphs tamamen boşsa artık `success=False` + anlaşılır hata dönüyor.
+- `tests/unit/test_cli_main.py` — yeni CLI UX testleri:
+  - typo komut önerisi testi.
+  - `version` komutu smoke testi.
+- `tests/unit/test_office_tools.py` — yeni Word güvenlik davranışı testi:
+  - boş payload ile `write_word` hata dönüşü doğrulandı.
+- `tests/unit/test_agent_routing.py` — `advanced_research` topic sanitize regresyon testi eklendi.
+
+**Doğrulama:**
+- `pytest -q tests/unit/test_cli_main.py tests/unit/test_office_tools.py tests/unit/test_agent_routing.py tests/unit/test_intent_parser_and_dashboard.py tests/unit/test_tools_lazy_loader.py tests/unit/test_gateway_cli.py` → **30 passed**
+
+## OTURUM GÜNCELLEMESİ — 2026-02-19 (SPEED + PROFESSIONAL EXECUTION UPGRADE) ✅
+- `tools/research_tools/advanced_research.py` — araştırma motoru hız/güvenilirlik yükseltildi:
+  - depth bazlı adaptif evaluation eklendi (`eval_cap`, `concurrency`, `timeout` haritaları).
+  - web arama sonuçlarında URL+title dedupe eklendi (aynı kaynak tekrarlarını azaltır).
+  - her araştırma çalışmasında otomatik **hızlı Markdown rapor** persist edilir:
+    - `~/.elyan/reports/research/YYYYMMDD/...md`
+    - `report_paths` artık `generate_report=False` olsa bile anlamlı çıktı içerir.
+  - son araştırma sonucu cache’i eklendi (`_last_research_result`, `get_last_research_result`).
+  - `get_research_result` davranışı tutarlılaştırıldı: yalnızca tamamlanan araştırmayı döner; pending ise progress ile hata döner.
+  - modüldeki çift `get_research_result` tanımı kaynaklı tutarsızlık temizlendi (snapshot fonksiyonu ayrıştırıldı).
+- `tools/office_tools/excel_tools.py` — Excel yazımı profesyonel veri normalize katmanı ile güçlendirildi:
+  - `dict` veri artık tek satır olarak doğru yazılır.
+  - `list[dict]`, `list[list/tuple]`, `list[scalar]`, scalar veri tipleri otomatik normalize edilir.
+  - `row_count` doğru hesaplanır; boş veride başarısızlık açık hata ile döner.
+- `core/intent_parser/_apps.py` — doğal dilde birleşik komutlar iyileştirildi:
+  - `"safariyi aç köpekler hakkında araştırma yap"` gibi **bağlaçsız** cümleler de `multi_task` (open_app + research) üretir.
+  - research topic çıkarımında Türkçe ek/artık token temizliği eklendi (`safariyi` kalıntısı gibi parçalar temizlenir).
+- `core/intent_parser/_documents.py` — Word/Excel kaydetme cümleleri daha toleranslı:
+  - `"word olarak kaydet"` / `"word kaydet"` tetikleyicileri eklendi.
+  - `"word aç"` / `"excel aç"` ile belge üretim parser çakışması engellendi.
+- `core/scheduler/routine_engine.py` — rutin ID çözümleme geliştirildi:
+  - prefix ile tekil eşleşmede rutin ID resolve edilir (`match_routine_ids`, `resolve_routine_id`).
+  - `get_routine`, `set_enabled`, `remove_routine`, `get_history`, `run_routine` prefix destekler.
+- `core/gateway/server.py` — routines API prefix ID desteği:
+  - `run/toggle/history/remove` endpointleri ID prefix kabul eder.
+  - ambiguous prefix durumunda net `409` hata döner.
+
+**Yeni testler / güncellenen testler:**
+- `tests/unit/test_advanced_research.py`
+  - hızlı rapor persist testi
+  - pending araştırma sonucu için strict getter testi
+- `tests/unit/test_office_tools.py`
+  - `write_excel` dict/sparse veri tipi testleri
+- `tests/unit/test_intent_parser_and_dashboard.py`
+  - bağlaçsız open+research multi-task testi
+- `tests/unit/test_routine_engine.py`
+  - rutin ID prefix resolution testi
+
+**Doğrulama:**
+- `pytest -q tests/unit/test_advanced_research.py tests/unit/test_office_tools.py tests/unit/test_intent_parser_and_dashboard.py tests/unit/test_routine_engine.py tests/unit/test_agent_routing.py tests/unit/test_gateway_cli.py tests/unit/test_cli_main.py tests/unit/test_tools_lazy_loader.py` → **41 passed**
+- `python -m py_compile tools/research_tools/advanced_research.py tools/office_tools/excel_tools.py core/intent_parser/_apps.py core/intent_parser/_documents.py core/scheduler/routine_engine.py core/gateway/server.py tests/unit/test_advanced_research.py tests/unit/test_office_tools.py tests/unit/test_intent_parser_and_dashboard.py tests/unit/test_routine_engine.py` → **OK**
+- Ek regresyon: `pytest -q tests/unit/test_intent_parser_and_dashboard.py tests/unit/test_advanced_research.py tests/unit/test_office_tools.py tests/unit/test_routine_engine.py` → **20 passed**
+
+## OTURUM GÜNCELLEMESİ — 2026-02-19 (ADAPTIVE AGENT + SKILL-AWARE LEARNING) ✅
+- `core/agent.py` — sürekli öğrenen ve skill-aware ajan akışı eklendi:
+  - yeni entegrasyonlar:
+    - `get_learning_engine()` (yerel davranış öğrenme)
+    - `get_capability_router()` (domain fallback)
+    - `skill_registry` + `skill_manager` (aktif skill’lere göre fallback intent üretimi)
+    - `get_user_profile_store()` (kullanıcı profili yerel güncelleme)
+  - doğal dil ön-normalizasyonu eklendi:
+    - `ss al` gibi kısa/argo komutlar normalize edilerek intent başarımı artırıldı.
+  - parser chat/unknown döndüğünde yeni fallback sırası:
+    1. `learning.quick_match()` ile güvenli parametresiz hızlı aksiyonlar,
+    2. aktif skill’lerden command-level intent çıkarımı (`research/files/office/browser/system/calendar`),
+    3. capability-router tabanlı domain fallback.
+  - turn-finalization merkezi hale getirildi:
+    - `_finalize_turn()` ile her yanıtta:
+      - konuşma belleğine kayıt,
+      - user profile güncelleme,
+      - learning engine’e interaction kaydı.
+  - yerel tercihlerin araç parametrelerine etkisi eklendi:
+    - `preferred_output` ile `write_file` default uzantısı,
+    - `response_length` ile `advanced_research` depth (short→quick, detailed→comprehensive).
+- `tests/unit/test_agent_routing.py` — yeni regresyon testleri:
+  - learning quick-match fallback (`chat` parse olsa bile güvenli aksiyona düşüş),
+  - skill fallback ile araştırma intent’i üretimi,
+  - learning preference’in research depth’e uygulanması.
+
+**Doğrulama:**
+- `PYTHONPATH=. pytest -q tests/unit/test_agent_routing.py tests/unit/test_intent_parser_and_dashboard.py tests/unit/test_office_tools.py tests/unit/test_advanced_research.py tests/unit/test_routine_engine.py tests/unit/test_gateway_cli.py tests/unit/test_cli_main.py` → **43 passed**
+- `python -m py_compile core/agent.py core/skills/registry.py core/learning_engine.py tests/unit/test_agent_routing.py` → **OK**
+
+## OTURUM GÜNCELLEMESİ — 2026-02-19 (OFFICE-STYLE DASHBOARD UI REFRESH) ✅
+- `ui/web/dashboard.html` — dashboard arayüzü roadmap hedeflerine uygun şekilde ofis uygulaması hissiyle yenilendi:
+  - Tipografi güncellendi: `Inter` yerine `IBM Plex Sans + IBM Plex Mono`.
+  - Arka plan/surface sistemi yenilendi: çok katmanlı gradient + modern kart yüzeyleri.
+  - Üst alan yeniden tasarlandı:
+    - daha güçlü top bar (workspace başlığı, model chip, sistem metrikleri),
+    - yeni **Ribbon** satırı (hızlı sekme geçişleri + tek tık yenile + saat + bağlantı durumu).
+  - Alt **status bar** eklendi:
+    - aktif sekme,
+    - son senkron zamanı,
+    - model sağlayıcı/model,
+    - gateway runtime bilgisi.
+  - Sol menü ergonomisi iyileştirildi (aktif durum vurgusu, hover derinliği).
+  - Responsive davranış güçlendirildi:
+    - dar ekranlarda sidebar compact moda düşer,
+    - toolbar yatay kaydırılabilir,
+    - düşük öncelikli status alanları gizlenir.
+- `ui/web/dashboard.html` script güncellemeleri:
+  - `switchTab()` artık ribbon/status bar aktif sekmesini senkronlar.
+  - WebSocket open/close olayları yeni status chip’lerine bağlandı (`WS Connected/Disconnected`).
+  - `pollStatus()` son senkron zamanı + runtime durumunu günceller.
+  - `pollAnalytics()` model bilgisi status bar’a yansıtılır.
+  - `updateRibbonClock()` eklendi (periyodik saat güncellemesi).
+
+**Doğrulama:**
+- `PYTHONPATH=. ./.venv/bin/pytest -q tests/unit/test_intent_parser_and_dashboard.py` → **9 passed**
+- `./.venv/bin/python -m py_compile main.py core/gateway/server.py` → **OK**
+
+## OTURUM GÜNCELLEMESİ — 2026-02-19 (CLI ENTRYPOINT FIX + INSTALL HARDENING) ✅
+- `install.sh` — ilk kurulumda `elyan` komutunun bazı Python 3.12 ortamlarda kırılmasına neden olan editable kurulum sorunu giderildi:
+  - `pip install -e .` yerine **compat editable** kullanımı eklendi:
+    - `pip install -e . --config-settings editable_mode=compat`
+  - kurulum sonrası zorunlu CLI smoke-check eklendi:
+    - `.venv/bin/elyan version` başarısızsa otomatik fallback:
+      - `pip uninstall -y elyan`
+      - `pip install .` (non-editable)
+  - son doğrulama başarısızsa kurulum `err` ile kesiliyor (sessiz bozuk kurulum engellendi).
+- `install.sh` — global launcher dayanıklılığı artırıldı:
+  - `~/.local/bin/elyan` artık `.venv/bin/elyan` yerine doğrudan:
+    - `cd <project>`
+    - `.venv/bin/python3 -m cli.main`
+  - böylece script entrypoint bozulsa bile launcher çalışmaya devam eder.
+
+**Kök neden (tespit):**
+- bazı ortamlarda `__editable__.elyan-*.pth` yüklenmediği için `from cli.main import main` importu başarısız oluyordu.
+- sonuç: `.venv/bin/elyan` çalışırken `ModuleNotFoundError: No module named 'cli'`.
+
+**Doğrulama:**
+- `bash -n install.sh` → **OK**
+- `/Users/emrekoca/Desktop/bot/.venv/bin/elyan version` (repo dışından da) → **Elyan CLI v18.0.0**
+- `source .venv/bin/activate && elyan version` → **Elyan CLI v18.0.0**

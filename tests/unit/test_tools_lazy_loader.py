@@ -4,6 +4,11 @@ from tools import AVAILABLE_TOOLS
 def test_lazy_loader_exposes_extended_tools():
     # Regression: these names existed in catalog but were not loadable from lazy loader.
     expected = [
+        "read_word",
+        "write_word",
+        "read_excel",
+        "write_excel",
+        "analyze_excel_data",
         "send_email",
         "get_emails",
         "get_unread_emails",

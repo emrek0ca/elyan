@@ -6,14 +6,100 @@
     <title>Elyan | Enterprise Control Center</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Inter', sans-serif; }
-        .sidebar-item { transition: all .15s; }
-        .sidebar-item:hover { background: rgba(255,255,255,0.08); }
-        .sidebar-item.active { background: #0F9AFE; color: white; }
-        .glass-card { background: rgba(255,255,255,0.85); backdrop-filter: blur(14px); border: 1px solid rgba(229,231,235,0.6); }
-        .card-shadow { box-shadow: 0 1px 4px rgba(0,0,0,.08), 0 0 0 1px rgba(0,0,0,.03); }
+        :root {
+            --office-navy: #17263b;
+            --office-navy-soft: #213957;
+            --office-blue: #1f72ff;
+            --office-surface: rgba(255, 255, 255, 0.9);
+            --office-line: rgba(148, 163, 184, 0.26);
+            --office-text-soft: #64748b;
+        }
+        * {
+            scrollbar-width: thin;
+            scrollbar-color: rgba(100, 116, 139, 0.5) transparent;
+        }
+        body {
+            font-family: 'IBM Plex Sans', sans-serif;
+            letter-spacing: 0.01em;
+        }
+        pre, code, textarea.font-mono {
+            font-family: 'IBM Plex Mono', monospace;
+        }
+        .app-bg {
+            background:
+                radial-gradient(140% 90% at 0% 0%, #d9e5f8 0%, rgba(217, 229, 248, 0.25) 48%, rgba(240, 244, 251, 0.06) 100%),
+                linear-gradient(180deg, #f4f7fb 0%, #eef3fa 100%);
+        }
+        .office-shell {
+            backdrop-filter: blur(10px);
+        }
+        .sidebar-item {
+            transition: all .15s;
+        }
+        .sidebar-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+            transform: translateX(2px);
+        }
+        .sidebar-item.active {
+            background: linear-gradient(90deg, #1f72ff 0%, #2f5cff 100%);
+            color: white;
+            box-shadow: 0 8px 18px rgba(19, 72, 170, 0.35);
+        }
+        .glass-card {
+            background: var(--office-surface);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--office-line);
+        }
+        .card-shadow {
+            box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08), 0 0 0 1px rgba(15, 23, 42, 0.02);
+        }
+        .office-ribbon {
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, rgba(246, 249, 255, 0.86) 100%);
+        }
+        .office-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.35rem 0.72rem;
+            border-radius: 0.55rem;
+            border: 1px solid rgba(203, 213, 225, 0.95);
+            font-size: 11px;
+            font-weight: 600;
+            color: #334155;
+            background: rgba(255, 255, 255, 0.95);
+            transition: all 0.16s ease;
+        }
+        .office-pill:hover {
+            border-color: rgba(96, 165, 250, 0.45);
+            color: #1d4ed8;
+            box-shadow: 0 6px 14px rgba(29, 78, 216, 0.12);
+        }
+        .office-pill-primary {
+            color: white;
+            background: linear-gradient(90deg, #1f72ff 0%, #3458ff 100%);
+            border-color: transparent;
+        }
+        .office-pill-primary:hover {
+            color: white;
+            border-color: transparent;
+        }
+        .status-chip {
+            display: inline-flex;
+            align-items: center;
+            border: 1px solid rgba(203, 213, 225, 0.85);
+            background: rgba(255, 255, 255, 0.85);
+            border-radius: 999px;
+            padding: 0.25rem 0.6rem;
+            font-size: 11px;
+            font-weight: 600;
+            color: #475569;
+        }
+        .office-status-bar {
+            background: rgba(255, 255, 255, 0.86);
+            border-top: 1px solid rgba(203, 213, 225, 0.8);
+        }
         .tab-panel { display: none; }
         .tab-panel.active { display: block; }
         .pulse-dot { animation: pulse 2s infinite; }
@@ -21,15 +107,43 @@
         .activity-row { animation: slideIn .3s ease; }
         @keyframes slideIn { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:none} }
         .bar-fill { transition: width .6s ease; }
+        @media (max-width: 1024px) {
+            .office-sidebar {
+                width: 74px;
+            }
+            .office-brand-text,
+            .sidebar-label,
+            .sidebar-section-label {
+                display: none;
+            }
+            .sidebar-item {
+                justify-content: center;
+                padding-left: 0.5rem;
+                padding-right: 0.5rem;
+            }
+            .sidebar-item .ml-auto {
+                display: none;
+            }
+        }
+        @media (max-width: 768px) {
+            .office-toolbar-group {
+                overflow-x: auto;
+                white-space: nowrap;
+                padding-bottom: 2px;
+            }
+            .status-compact-hide {
+                display: none;
+            }
+        }
     </style>
 </head>
-<body class="h-full bg-[#F0F2F5] text-gray-900 overflow-hidden flex">
+<body class="h-full app-bg text-gray-900 overflow-hidden flex">
 
 <!-- ═══════════════════════ SIDEBAR ═══════════════════════ -->
-<aside class="w-60 bg-[#1A2332] text-gray-300 flex flex-col shrink-0 select-none">
+<aside class="office-sidebar w-60 bg-[var(--office-navy)] text-gray-300 flex flex-col shrink-0 select-none">
     <div class="p-5 flex items-center gap-3 border-b border-white/5">
         <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-700 rounded-lg flex items-center justify-center text-white font-bold text-sm shadow">E</div>
-        <div>
+        <div class="office-brand-text">
             <span class="text-base font-bold text-white tracking-tight">ELYAN</span>
             <p class="text-[10px] text-gray-500 -mt-0.5" id="sb-version">v18.0.0</p>
         </div>
@@ -38,49 +152,49 @@
     <nav class="flex-1 px-3 py-4 space-y-0.5">
         <button onclick="switchTab('overview')" data-tab="overview" class="sidebar-item active w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left">
             <i data-lucide="layout-dashboard" class="w-4 h-4 shrink-0"></i>
-            <span class="text-sm font-medium">Genel Bakış</span>
+            <span class="sidebar-label text-sm font-medium">Genel Bakış</span>
         </button>
         <button onclick="switchTab('channels')" data-tab="channels" class="sidebar-item w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left">
             <i data-lucide="message-square" class="w-4 h-4 shrink-0"></i>
-            <span class="text-sm font-medium">Kanallar</span>
+            <span class="sidebar-label text-sm font-medium">Kanallar</span>
             <span id="sb-channels-badge" class="ml-auto text-[10px] bg-blue-500 text-white rounded-full px-1.5 py-0.5 hidden">0</span>
         </button>
         <button onclick="switchTab('skills')" data-tab="skills" class="sidebar-item w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left">
             <i data-lucide="puzzle" class="w-4 h-4 shrink-0"></i>
-            <span class="text-sm font-medium">Skills</span>
+            <span class="sidebar-label text-sm font-medium">Skills</span>
             <span id="sb-skills-badge" class="ml-auto text-[10px] bg-cyan-500 text-white rounded-full px-1.5 py-0.5 hidden">0</span>
         </button>
         <button onclick="switchTab('tasks')" data-tab="tasks" class="sidebar-item w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left">
             <i data-lucide="list-checks" class="w-4 h-4 shrink-0"></i>
-            <span class="text-sm font-medium">Görevler</span>
+            <span class="sidebar-label text-sm font-medium">Görevler</span>
             <span id="sb-tasks-badge" class="ml-auto text-[10px] bg-orange-500 text-white rounded-full px-1.5 py-0.5 hidden">0</span>
         </button>
         <button onclick="switchTab('automation')" data-tab="automation" class="sidebar-item w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left">
             <i data-lucide="repeat" class="w-4 h-4 shrink-0"></i>
-            <span class="text-sm font-medium">Otomasyon</span>
+            <span class="sidebar-label text-sm font-medium">Otomasyon</span>
             <span id="sb-routines-badge" class="ml-auto text-[10px] bg-emerald-500 text-white rounded-full px-1.5 py-0.5 hidden">0</span>
         </button>
         <button onclick="switchTab('analytics')" data-tab="analytics" class="sidebar-item w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left">
             <i data-lucide="bar-chart-2" class="w-4 h-4 shrink-0"></i>
-            <span class="text-sm font-medium">Analitik</span>
+            <span class="sidebar-label text-sm font-medium">Analitik</span>
         </button>
         <button onclick="switchTab('security')" data-tab="security" class="sidebar-item w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left">
             <i data-lucide="shield-check" class="w-4 h-4 shrink-0"></i>
-            <span class="text-sm font-medium">Güvenlik</span>
+            <span class="sidebar-label text-sm font-medium">Güvenlik</span>
         </button>
         <button onclick="switchTab('tools')" data-tab="tools" class="sidebar-item w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left">
             <i data-lucide="wrench" class="w-4 h-4 shrink-0"></i>
-            <span class="text-sm font-medium">Araçlar</span>
+            <span class="sidebar-label text-sm font-medium">Araçlar</span>
         </button>
 
-        <div class="pt-4 pb-1 text-[10px] uppercase font-bold text-gray-600 px-3 tracking-widest">Sistem</div>
+        <div class="sidebar-section-label pt-4 pb-1 text-[10px] uppercase font-bold text-gray-600 px-3 tracking-widest">Sistem</div>
         <button onclick="switchTab('settings')" data-tab="settings" class="sidebar-item w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left">
             <i data-lucide="settings" class="w-4 h-4 shrink-0"></i>
-            <span class="text-sm font-medium">Ayarlar</span>
+            <span class="sidebar-label text-sm font-medium">Ayarlar</span>
         </button>
     </nav>
 
-    <div class="p-4 border-t border-white/5">
+    <div class="p-4 border-t border-white/5 office-brand-text">
         <div class="flex items-center gap-2.5 px-1">
             <div class="relative">
                 <div class="w-7 h-7 bg-gradient-to-br from-green-400 to-emerald-600 rounded-full"></div>
@@ -95,32 +209,37 @@
 </aside>
 
 <!-- ═══════════════════════ MAIN ═══════════════════════ -->
-<main class="flex-1 flex flex-col min-w-0 overflow-hidden">
+<main class="office-main flex-1 flex flex-col min-w-0 overflow-hidden">
 
     <!-- TOP BAR -->
-    <header class="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-6 shrink-0">
-        <div class="flex items-center gap-3">
-            <h2 class="text-sm font-bold" id="page-title">Genel Bakış</h2>
-            <div class="h-3.5 w-px bg-gray-200"></div>
-            <span id="hdr-model" class="px-2 py-0.5 bg-blue-50 text-blue-600 rounded text-[11px] font-medium">—</span>
-            <span class="px-2 py-0.5 bg-green-50 text-green-600 rounded text-[11px] font-medium">Gateway :18789</span>
+    <header class="h-16 bg-white/80 border-b border-slate-200 flex items-center justify-between px-6 shrink-0 office-shell">
+        <div class="flex items-center gap-3 min-w-0">
+            <div class="w-9 h-9 rounded-lg bg-slate-100 text-slate-600 flex items-center justify-center border border-slate-200">
+                <i data-lucide="panel-top" class="w-4 h-4"></i>
+            </div>
+            <div class="min-w-0">
+                <p class="text-[10px] uppercase tracking-[0.15em] text-slate-500 font-semibold">Office Workspace</p>
+                <h2 class="text-sm font-bold truncate" id="page-title">Genel Bakış</h2>
+            </div>
+            <span id="hdr-model" class="status-chip status-compact-hide">—</span>
+            <span class="status-chip status-compact-hide">Gateway :18789</span>
         </div>
         <div class="flex items-center gap-5">
             <!-- CPU -->
             <div class="flex items-center gap-2">
-                <span class="text-[10px] font-bold text-gray-400 uppercase">CPU</span>
+                <span class="text-[10px] font-bold text-slate-400 uppercase">CPU</span>
                 <div class="w-20 h-1.5 bg-gray-100 rounded-full overflow-hidden">
                     <div id="cpu-bar" class="bar-fill bg-blue-500 h-full" style="width:0%"></div>
                 </div>
-                <span id="cpu-val" class="text-xs font-semibold w-8 text-right">—</span>
+                <span id="cpu-val" class="text-xs font-semibold w-8 text-right text-slate-700">—</span>
             </div>
             <!-- RAM -->
             <div class="flex items-center gap-2">
-                <span class="text-[10px] font-bold text-gray-400 uppercase">RAM</span>
+                <span class="text-[10px] font-bold text-slate-400 uppercase">RAM</span>
                 <div class="w-20 h-1.5 bg-gray-100 rounded-full overflow-hidden">
                     <div id="ram-bar" class="bar-fill bg-purple-500 h-full" style="width:0%"></div>
                 </div>
-                <span id="ram-val" class="text-xs font-semibold w-14 text-right">—</span>
+                <span id="ram-val" class="text-xs font-semibold w-14 text-right text-slate-700">—</span>
             </div>
             <!-- WS indicator -->
             <div class="flex items-center gap-1.5">
@@ -130,8 +249,24 @@
         </div>
     </header>
 
+    <!-- RIBBON -->
+    <div class="office-ribbon h-12 border-b border-slate-200 px-6 flex items-center justify-between shrink-0">
+        <div class="office-toolbar-group flex items-center gap-2">
+            <button class="office-pill" onclick="switchTab('overview')"><i data-lucide="layout-dashboard" class="w-3.5 h-3.5"></i>Genel</button>
+            <button class="office-pill" onclick="switchTab('tasks')"><i data-lucide="list-checks" class="w-3.5 h-3.5"></i>Görevler</button>
+            <button class="office-pill" onclick="switchTab('automation')"><i data-lucide="repeat" class="w-3.5 h-3.5"></i>Rutinler</button>
+            <button class="office-pill" onclick="switchTab('tools')"><i data-lucide="wrench" class="w-3.5 h-3.5"></i>Araçlar</button>
+            <button class="office-pill office-pill-primary" onclick="pollStatus(); pollAnalytics(); pollTasks(); pollMemory();"><i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>Yenile</button>
+        </div>
+        <div class="flex items-center gap-2.5 text-xs text-slate-600">
+            <span id="ribbon-clock" class="status-chip">--:--</span>
+            <span id="ribbon-active-tab" class="status-chip status-compact-hide">Genel Bakış</span>
+            <span id="status-ws" class="status-chip">Disconnected</span>
+        </div>
+    </div>
+
     <!-- SCROLLABLE BODY -->
-    <div class="flex-1 overflow-y-auto p-6">
+    <div class="flex-1 overflow-y-auto px-6 py-5 md:px-6 sm:px-4 pb-8">
 
         <!-- ══════════ TAB: OVERVIEW ══════════ -->
         <div id="tab-overview" class="tab-panel active space-y-6">
@@ -735,6 +870,20 @@ Telegram / WhatsApp gönder</textarea>
         </div>
 
     </div><!-- /scrollable -->
+    <footer class="office-status-bar h-9 px-5 flex items-center justify-between text-[11px] shrink-0">
+        <div class="flex items-center gap-2 text-slate-600">
+            <span class="font-semibold text-slate-700">LOCAL</span>
+            <span class="status-compact-hide text-slate-400">•</span>
+            <span id="status-runtime">Gateway :18789</span>
+        </div>
+        <div class="flex items-center gap-2 text-slate-500">
+            <span id="status-active-tab" class="text-slate-700">Genel Bakış</span>
+            <span class="status-compact-hide text-slate-400">•</span>
+            <span id="status-last-sync" class="status-compact-hide">Senkron: —</span>
+            <span class="text-slate-400">•</span>
+            <span id="status-provider" class="text-slate-700">Model: —</span>
+        </div>
+    </footer>
 </main>
 
 <script>
@@ -750,7 +899,12 @@ function switchTab(name) {
     document.getElementById('tab-' + name).classList.add('active');
     document.querySelector(`[data-tab="${name}"]`).classList.add('active');
     const titles = { overview:'Genel Bakış', channels:'Kanallar', skills:'Skills', tasks:'Görevler', automation:'Otomasyon', analytics:'Analitik', security:'Güvenlik', tools:'Araçlar', settings:'Ayarlar' };
-    document.getElementById('page-title').textContent = titles[name] || name;
+    const title = titles[name] || name;
+    document.getElementById('page-title').textContent = title;
+    const activeTabEl = document.getElementById('status-active-tab');
+    if (activeTabEl) activeTabEl.textContent = title;
+    const ribbonTabEl = document.getElementById('ribbon-active-tab');
+    if (ribbonTabEl) ribbonTabEl.textContent = title;
     if (name === 'channels') loadChannels();
     if (name === 'skills') loadSkills();
     if (name === 'tasks') loadTasks();
@@ -770,12 +924,16 @@ function connectWS() {
         document.getElementById('ws-dot').className = 'w-2 h-2 rounded-full bg-green-400';
         document.getElementById('ws-label').textContent = 'Live';
         document.getElementById('feed-dot').className = 'w-2 h-2 rounded-full bg-green-400 pulse-dot';
+        const wsState = document.getElementById('status-ws');
+        if (wsState) wsState.textContent = 'WS Connected';
     };
     ws.onclose = () => {
         wsConnected = false;
         document.getElementById('ws-dot').className = 'w-2 h-2 rounded-full bg-gray-300';
         document.getElementById('ws-label').textContent = 'WS';
         document.getElementById('feed-dot').className = 'w-2 h-2 rounded-full bg-gray-300';
+        const wsState = document.getElementById('status-ws');
+        if (wsState) wsState.textContent = 'WS Disconnected';
         setTimeout(connectWS, 3000);
     };
     ws.onmessage = (e) => {
@@ -824,6 +982,13 @@ async function pollStatus() {
         document.getElementById('card-uptime').textContent = s.uptime || '—';
         document.getElementById('sb-uptime').textContent = s.uptime || '—';
         document.getElementById('sb-version').textContent = 'v' + (s.version || '18.0.0');
+        const runtime = document.getElementById('status-runtime');
+        if (runtime) runtime.textContent = `Gateway v${s.version || '18.0.0'}`;
+        const sync = document.getElementById('status-last-sync');
+        if (sync) {
+            const now = new Date();
+            sync.textContent = `Senkron: ${now.toLocaleTimeString('tr-TR', {hour: '2-digit', minute: '2-digit', second: '2-digit'})}`;
+        }
     } catch(e) {}
 }
 
@@ -840,6 +1005,9 @@ async function pollAnalytics() {
         document.getElementById('hdr-model').textContent = mismatch
             ? `${modelTag} (cfg: ${a.configured_provider || '—'}:${a.configured_model || '—'})`
             : modelTag;
+        const providerText = `${a.provider || '—'}:${a.model || '—'}`;
+        const providerEl = document.getElementById('status-provider');
+        if (providerEl) providerEl.textContent = `Model: ${providerText}`;
 
         const ch = a.active_channels || 0;
         const badge = document.getElementById('sb-channels-badge');
@@ -1438,6 +1606,12 @@ function _fmt(n) {
     return n.toString();
 }
 
+function updateRibbonClock() {
+    const clock = document.getElementById('ribbon-clock');
+    if (!clock) return;
+    clock.textContent = new Date().toLocaleTimeString('tr-TR', {hour: '2-digit', minute: '2-digit'});
+}
+
 // ── Security tab ───────────────────────────────────────────────────────────
 async function loadSecurity() {
     const score = 92;
@@ -1649,6 +1823,7 @@ async function createTask() {
 // ── Init ───────────────────────────────────────────────────────────────────
 lucide.createIcons();
 connectWS();
+updateRibbonClock();
 
 // Initial data load
 pollStatus();
@@ -1717,6 +1892,7 @@ setInterval(() => {
         loadModelSettings();
     }
 }, 30000);
+setInterval(updateRibbonClock, 15000);
 </script>
 </body>
 </html>

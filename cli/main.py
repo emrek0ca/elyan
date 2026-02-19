@@ -2,9 +2,45 @@
 """Elyan CLI — v18.0 Ana giriş noktası"""
 import argparse
 import sys
+from difflib import get_close_matches
 
 
-def main():
+TOP_LEVEL_COMMANDS = [
+    "doctor",
+    "health",
+    "logs",
+    "status",
+    "routines",
+    "config",
+    "gateway",
+    "channels",
+    "skills",
+    "security",
+    "models",
+    "cron",
+    "memory",
+    "webhooks",
+    "agents",
+    "browser",
+    "voice",
+    "message",
+    "service",
+    "dashboard",
+    "onboard",
+    "update",
+    "version",
+    "completion",
+]
+
+
+def _suggest_command(raw: str) -> str:
+    matches = get_close_matches(raw, TOP_LEVEL_COMMANDS, n=1, cutoff=0.68)
+    return matches[0] if matches else ""
+
+
+def main(argv: list[str] | None = None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+
     parser = argparse.ArgumentParser(prog="elyan", description="Elyan CLI v18.0")
     sub = parser.add_subparsers(dest="command", help="Komut")
 
@@ -193,11 +229,25 @@ def main():
     p.add_argument("--shell", choices=["zsh", "bash", "fish"])
 
     # ════════════════════════════════════════════════════════════════════
-    args = parser.parse_args()
+    if argv:
+        first = str(argv[0]).strip()
+        if first and not first.startswith("-") and first not in TOP_LEVEL_COMMANDS:
+            suggestion = _suggest_command(first)
+            parser.print_usage(sys.stderr)
+            if suggestion:
+                print(
+                    f"elyan: error: bilinmeyen komut: '{first}'. Şunu mu demek istediniz: '{suggestion}'?",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"elyan: error: bilinmeyen komut: '{first}'", file=sys.stderr)
+            return 2
+
+    args = parser.parse_args(argv)
 
     if not args.command:
         parser.print_help()
-        return
+        return 0
 
     # ── Routing ─────────────────────────────────────────────────────────
     if args.command == "doctor":
@@ -229,9 +279,7 @@ def main():
         elif args.action == "status":
             gateway.gateway_status(as_json=getattr(args, "json", False), port=getattr(args, "port", None))
         elif args.action == "restart":
-            gateway.stop_gateway(port=getattr(args, "port", None))
-            import time; time.sleep(1)
-            gateway.start_gateway(daemon=args.daemon, port=getattr(args, "port", None))
+            gateway.restart_gateway(daemon=args.daemon, port=getattr(args, "port", None))
         elif args.action == "health":
             gateway.gateway_health(as_json=getattr(args, "json", False), port=getattr(args, "port", None))
         elif args.action == "logs":
@@ -340,6 +388,8 @@ def main():
     else:
         parser.print_help()
 
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -516,6 +516,18 @@ class ElyanGatewayServer:
     def _routine_job_id(routine_id: str) -> str:
         return f"routine:{routine_id}"
 
+    @staticmethod
+    def _resolve_routine_id_api(raw_id: str) -> tuple[str | None, str | None]:
+        rid = str(raw_id or "").strip()
+        if not rid:
+            return None, "id required"
+        matches = routine_engine.match_routine_ids(rid)
+        if not matches:
+            return None, "routine not found"
+        if len(matches) > 1:
+            return None, f"ambiguous id prefix ({len(matches)} matches)"
+        return matches[0], None
+
     def _routine_to_job(self, routine: dict) -> dict:
         rid = str(routine.get("id", "")).strip()
         return {
@@ -702,10 +714,12 @@ class ElyanGatewayServer:
             data = await request.json()
         except Exception:
             return web.json_response({"ok": False, "error": "invalid json"}, status=400)
-        rid = str(data.get("id", "")).strip()
+        rid_raw = str(data.get("id", "")).strip()
         enabled = bool(data.get("enabled", True))
-        if not rid:
-            return web.json_response({"ok": False, "error": "id required"}, status=400)
+        rid, err = self._resolve_routine_id_api(rid_raw)
+        if err:
+            status = 400 if "id required" in err else 404 if "not found" in err else 409
+            return web.json_response({"ok": False, "error": err}, status=status)
 
         routine = routine_engine.set_enabled(rid, enabled)
         if not routine:
@@ -722,9 +736,11 @@ class ElyanGatewayServer:
             data = await request.json()
         except Exception:
             return web.json_response({"ok": False, "error": "invalid json"}, status=400)
-        rid = str(data.get("id", "")).strip()
-        if not rid:
-            return web.json_response({"ok": False, "error": "id required"}, status=400)
+        rid_raw = str(data.get("id", "")).strip()
+        rid, err = self._resolve_routine_id_api(rid_raw)
+        if err:
+            status = 400 if "id required" in err else 404 if "not found" in err else 409
+            return web.json_response({"ok": False, "error": err}, status=status)
 
         job_id = self._routine_job_id(rid)
         if not self.cron.get_job(job_id):
@@ -751,13 +767,19 @@ class ElyanGatewayServer:
                     items.append({"id": r_id, "name": routine.get("name"), "history": hist})
             return web.json_response({"items": items})
 
-        history = routine_engine.get_history(rid, limit=int(request.rel_url.query.get("limit", 20)))
-        return web.json_response({"id": rid, "history": history})
+        resolved_id, err = self._resolve_routine_id_api(rid)
+        if err:
+            status = 404 if "not found" in err else 409
+            return web.json_response({"ok": False, "error": err}, status=status)
+        history = routine_engine.get_history(resolved_id, limit=int(request.rel_url.query.get("limit", 20)))
+        return web.json_response({"id": resolved_id, "history": history})
 
     async def handle_routine_remove(self, request):
-        rid = str(request.match_info.get("id", "")).strip()
-        if not rid:
-            return web.json_response({"ok": False, "error": "id required"}, status=400)
+        rid_raw = str(request.match_info.get("id", "")).strip()
+        rid, err = self._resolve_routine_id_api(rid_raw)
+        if err:
+            status = 400 if "id required" in err else 404 if "not found" in err else 409
+            return web.json_response({"ok": False, "error": err}, status=status)
         ok = routine_engine.remove_routine(rid)
         if not ok:
             return web.json_response({"ok": False, "error": "routine not found"}, status=404)

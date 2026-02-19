@@ -79,24 +79,79 @@ async def write_excel(
         is_valid, error, _ = validate_path(str(file_path))
         if not is_valid: return {"success": False, "error": error}
 
+        def _normalize_rows(raw_data: Any, raw_headers: Any) -> tuple[list[str], list[dict[str, Any]]]:
+            cols: list[str] = []
+            rows: list[dict[str, Any]] = []
+
+            if isinstance(raw_headers, list):
+                cols = [str(h).strip() for h in raw_headers if str(h).strip()]
+            elif isinstance(raw_headers, tuple):
+                cols = [str(h).strip() for h in list(raw_headers) if str(h).strip()]
+
+            if raw_data is None:
+                return cols, rows
+
+            if isinstance(raw_data, dict):
+                if not cols:
+                    cols = [str(k) for k in raw_data.keys()]
+                rows.append({k: raw_data.get(k, "") for k in cols})
+                return cols, rows
+
+            if isinstance(raw_data, (list, tuple)):
+                data_list = list(raw_data)
+                if not data_list:
+                    return cols, rows
+
+                first = data_list[0]
+                if isinstance(first, dict):
+                    if not cols:
+                        ordered_keys = []
+                        for item in data_list:
+                            if isinstance(item, dict):
+                                for key in item.keys():
+                                    s_key = str(key)
+                                    if s_key not in ordered_keys:
+                                        ordered_keys.append(s_key)
+                        cols = ordered_keys
+                    for item in data_list:
+                        if isinstance(item, dict):
+                            rows.append({k: item.get(k, "") for k in cols})
+                        else:
+                            rows.append({cols[0]: str(item) if cols else str(item)})
+                    return cols, rows
+
+                if isinstance(first, (list, tuple)):
+                    matrix = [list(r) for r in data_list]
+                    width = max(len(r) for r in matrix) if matrix else 0
+                    if not cols:
+                        cols = [f"Sütun{i+1}" for i in range(width)]
+                    for row_values in matrix:
+                        padded = list(row_values) + [""] * max(0, len(cols) - len(row_values))
+                        rows.append({col: padded[idx] if idx < len(padded) else "" for idx, col in enumerate(cols)})
+                    return cols, rows
+
+                # list/tuple of scalar values -> single column
+                if not cols:
+                    cols = ["Veri"]
+                for item in data_list:
+                    rows.append({cols[0]: item})
+                return cols, rows
+
+            # scalar fallback
+            if not cols:
+                cols = ["Veri"]
+            rows.append({cols[0]: raw_data})
+            return cols, rows
+
         def _write():
             wb = Workbook()
             ws = wb.active
             ws.title = sheet_name
 
-            if not data: return False
+            cols, rows = _normalize_rows(data, headers)
+            if not cols or not rows:
+                return False, 0
 
-            # Convert simple data to standardized format
-            rows = []
-            if isinstance(data, list):
-                if data and isinstance(data[0], dict):
-                    rows = data
-                    cols = headers or list(data[0].keys())
-                else:
-                    cols = headers or [f"Sütun{i+1}" for i in range(len(data[0]))]
-                    for r in data:
-                        rows.append(dict(zip(cols, r)))
-            
             # Write headers
             for c_idx, header in enumerate(cols, 1):
                 cell = ws.cell(row=1, column=c_idx, value=header)
@@ -125,11 +180,13 @@ async def write_excel(
 
             file_path.parent.mkdir(parents=True, exist_ok=True)
             wb.save(str(file_path))
-            return True
+            return True, len(rows)
 
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, _write)
-        return {"success": True, "path": str(file_path), "row_count": len(data) if isinstance(data, list) else 0}
+        wrote, row_count = await loop.run_in_executor(None, _write)
+        if not wrote:
+            return {"success": False, "error": "Yazılacak veri bulunamadı (data boş)."}
+        return {"success": True, "path": str(file_path), "row_count": row_count}
     except Exception as e:
         logger.error(f"Write Excel error: {e}")
         return {"success": False, "error": str(e)}

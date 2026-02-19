@@ -15,9 +15,46 @@ class AppParser(BaseParser):
         open_t = ["aç", "başlat", "çalıştır", "open", "run", "start", "launch"]
         if any(w in text for w in ["dosya", "klasör", "http", ".com", ".org"]):
             return None
+        wants_research = any(k in text for k in ["araştır", "arastir", "araştırma", "arastirma", "research", "incele", "inceleme"])
         if any(t in text for t in open_t):
             for alias, app in self.app_aliases.items():
                 if alias in text or self._normalize(alias) in text_norm:
+                    if wants_research:
+                        topic = ""
+                        m_topic = re.search(r"(.+?)\s+hakkında\s+(?:araştır|arastir|araştırma|arastirma|research|incele)", text, re.IGNORECASE)
+                        if m_topic:
+                            topic = m_topic.group(1).strip()
+                        if not topic:
+                            m_topic2 = re.search(r"(?:araştır|arastir|research|incele)\s+(.+)", text, re.IGNORECASE)
+                            if m_topic2:
+                                topic = m_topic2.group(1).strip()
+                        topic = re.sub(
+                            rf"\b{re.escape(alias)}(?:yi|yı|yu|yü|i|ı|u|ü)?\b",
+                            " ",
+                            topic,
+                            flags=re.IGNORECASE,
+                        )
+                        topic = re.sub(r"\b(aç|ac|ve)\b", " ", topic, flags=re.IGNORECASE)
+                        topic = " ".join(topic.split()).strip() or "genel konu"
+                        return {
+                            "action": "multi_task",
+                            "tasks": [
+                                {
+                                    "id": "task_1",
+                                    "action": "open_app",
+                                    "params": {"app_name": app},
+                                    "description": f"{app} açılıyor...",
+                                },
+                                {
+                                    "id": "task_2",
+                                    "action": "research",
+                                    "params": {"topic": topic, "depth": "standard"},
+                                    "description": f"'{topic}' hakkında araştırma yapılıyor...",
+                                    "depends_on": ["task_1"],
+                                },
+                            ],
+                            "reply": f"{app} açılıyor ve '{topic}' araştırılıyor...",
+                        }
                     return {"action": "open_app", "params": {"app_name": app},
                             "reply": f"{app} açılıyor..."}
             for alias, url in self.url_aliases.items():

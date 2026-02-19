@@ -110,6 +110,21 @@ def test_create_from_template(tmp_path, monkeypatch):
     assert len(item["steps"]) >= 5
 
 
+def test_routine_id_prefix_resolution(tmp_path, monkeypatch):
+    path = tmp_path / "routines.json"
+    monkeypatch.setattr(re_mod, "ROUTINE_PERSIST_PATH", path)
+    engine = re_mod.RoutineEngine()
+    item = engine.add_routine(
+        name="Prefix Test",
+        expression="0 9 * * *",
+        steps=["Adım 1"],
+    )
+    prefix = item["id"][:6]
+    resolved = engine.get_routine(prefix)
+    assert resolved is not None
+    assert resolved["id"] == item["id"]
+
+
 @pytest.mark.asyncio
 async def test_run_routine_deterministic_tools(tmp_path, monkeypatch):
     path = tmp_path / "routines.json"

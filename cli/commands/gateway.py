@@ -3,6 +3,7 @@ import sys
 import time
 import json
 import urllib.request
+import subprocess
 from collections import deque
 import psutil
 from pathlib import Path
@@ -35,6 +36,12 @@ def _clear_pidfile() -> None:
 
 
 def _find_listener_pid(port: int) -> int | None:
+    pids = _find_listener_pids(port)
+    return pids[0] if pids else None
+
+
+def _find_listener_pids(port: int) -> list[int]:
+    pids: set[int] = set()
     try:
         for conn in psutil.net_connections(kind="tcp"):
             laddr = getattr(conn, "laddr", None)
@@ -45,10 +52,54 @@ def _find_listener_pid(port: int) -> int | None:
             if conn.status != psutil.CONN_LISTEN:
                 continue
             if conn.pid:
-                return int(conn.pid)
+                pids.add(int(conn.pid))
     except Exception:
-        return None
-    return None
+        pass
+
+    # Fallback: psutil may miss listener PID on macOS in some environments.
+    if not pids:
+        try:
+            proc = subprocess.run(
+                ["lsof", f"-iTCP:{int(port)}", "-sTCP:LISTEN", "-t"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            for row in (proc.stdout or "").splitlines():
+                row = row.strip()
+                if row.isdigit():
+                    pids.add(int(row))
+        except Exception:
+            pass
+    return sorted(pids)
+
+
+def _is_port_listening(port: int) -> bool:
+    return bool(_find_listener_pids(port))
+
+
+def _is_elyan_like_process(pid: int) -> bool:
+    try:
+        if not psutil.pid_exists(pid):
+            return False
+        proc = psutil.Process(pid)
+        cmd = " ".join(proc.cmdline()).lower()
+        if not cmd:
+            cmd = (proc.name() or "").lower()
+        return any(token in cmd for token in ("elyan", "main.py", "cli.main", "gateway"))
+    except Exception:
+        return False
+
+
+def _describe_process(pid: int) -> str:
+    try:
+        if not psutil.pid_exists(pid):
+            return f"pid={pid} (not found)"
+        proc = psutil.Process(pid)
+        cmd = " ".join(proc.cmdline()).strip() or proc.name()
+        return f"pid={pid} cmd={cmd}"
+    except Exception:
+        return f"pid={pid}"
 
 
 def _running_gateway_pid(port: int) -> int | None:
@@ -184,9 +235,15 @@ def start_gateway(daemon=False, port: int | None = None):
             if proc.poll() is not None:
                 takeover_pid = _running_gateway_pid(gateway_port)
                 if takeover_pid:
-                    _write_pidfile(takeover_pid)
-                    print(f"ℹ️  İlk süreç çıktı fakat gateway çalışıyor (PID: {takeover_pid}).")
-                    print(f"✅  Gateway is healthy at http://127.0.0.1:{gateway_port}")
+                    if _is_elyan_like_process(takeover_pid):
+                        _write_pidfile(takeover_pid)
+                        print(f"ℹ️  İlk süreç çıktı fakat gateway çalışıyor (PID: {takeover_pid}).")
+                        print(f"✅  Gateway is healthy at http://127.0.0.1:{gateway_port}")
+                        return
+                    print("❌  Port başka bir süreç tarafından kullanılıyor:")
+                    print(f"    {_describe_process(takeover_pid)}")
+                    print(f"    Kontrol: lsof -nP -iTCP:{gateway_port} -sTCP:LISTEN")
+                    _clear_pidfile()
                     return
                 print("❌  Gateway process exited during startup. Logları kontrol edin:")
                 print(f"    tail -n 120 {log_file}")
@@ -221,8 +278,7 @@ def stop_gateway(port: int | None = None):
     pid = _read_pidfile()
     if pid:
         targets.add(pid)
-    listener_pid = _find_listener_pid(gateway_port)
-    if listener_pid:
+    for listener_pid in _find_listener_pids(gateway_port):
         targets.add(listener_pid)
 
     if not targets:
@@ -248,6 +304,17 @@ def stop_gateway(port: int | None = None):
     _clear_pidfile()
     if stopped == 0:
         print("⚠️  Durdurulacak aktif gateway süreci bulunamadı.")
+
+
+def restart_gateway(daemon=False, port: int | None = None):
+    gateway_port = int(port or DEFAULT_PORT)
+    stop_gateway(port=gateway_port)
+    deadline = time.time() + 12
+    while time.time() < deadline:
+        if not _is_port_listening(gateway_port):
+            break
+        time.sleep(0.25)
+    start_gateway(daemon=daemon, port=gateway_port)
 
 
 def gateway_status(as_json: bool = False, port: int | None = None):

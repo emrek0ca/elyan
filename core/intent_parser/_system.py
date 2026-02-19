@@ -141,10 +141,19 @@ class SystemParser(BaseParser):
     def _parse_notification(self, text: str, text_norm: str, original: str) -> dict | None:
         if not any(t in text for t in ["bildirim", "bildir", "notification", "hatırlat", "uyar", "notify"]):
             return None
+        # Zamanlı hatırlatma cümlelerini media/reminder parser'a bırak.
+        if "hatırlat" in text and any(k in text for k in ["saat", "dakika", "yarın", "bugün", "aksam", "akşam"]):
+            return None
         m = re.search(r'bildirim[:\s]+(.+)|bildir[:\s]+(.+)|gönder[:\s]+(.+)|hatırlat[:\s]+(.+)',
                       text, re.IGNORECASE)
         if m:
             content = next((g for g in m.groups() if g), "").strip()
+            return {"action": "send_notification",
+                    "params": {"title": "Bot Bildirimi", "message": content},
+                    "reply": "Bildirim gönderiliyor..."}
+        tail = re.search(r'(.+?)\s+hatırlat$', text, re.IGNORECASE)
+        if tail and tail.group(1).strip():
+            content = tail.group(1).strip()
             return {"action": "send_notification",
                     "params": {"title": "Bot Bildirimi", "message": content},
                     "reply": "Bildirim gönderiliyor..."}
@@ -163,11 +172,11 @@ class SystemParser(BaseParser):
     # ── Process Control ───────────────────────────────────────────────────────
     def _parse_process_control(self, text: str, text_norm: str, original: str) -> dict | None:
         if "hangi" in text and "uygulamalar" in text and "çalışıyor" in text:
-            return {"action": "get_process_info", "params": {}, "reply": "Çalışan uygulamalar listeleniyor..."}
+            return {"action": "get_running_apps", "params": {}, "reply": "Çalışan uygulamalar listeleniyor..."}
         list_t = ["process", "çalışan", "uygulamalar", "memory", "cpu"]
         query_w = ["kaç", "neler", "hangileri", "listele", "göster", "hangi", "what", "which"]
         if any(t in text for t in list_t) and any(w in text for w in query_w):
-            return {"action": "get_process_info", "params": {}, "reply": "Çalışan uygulamalar listeleniyor..."}
+            return {"action": "get_running_apps", "params": {}, "reply": "Çalışan uygulamalar listeleniyor..."}
         kill_t = ["sonlandır", "terminate", "kill", "exit", "quit"]
         if any(t in text for t in kill_t):
             for alias, app in [("chrome", "Chrome"), ("safari", "Safari"), ("python", "Python")]:

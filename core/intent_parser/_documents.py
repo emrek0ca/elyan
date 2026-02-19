@@ -15,8 +15,11 @@ class DocumentParser(BaseParser):
     # ── Word Document ─────────────────────────────────────────────────────────
     def _parse_create_word(self, text: str, text_norm: str, original: str) -> dict | None:
         triggers = ["word belgesi", "word dosyası", "docx", "word oluştur",
-                    "word yaz", "belge oluştur", "belge yaz", "rapor yaz"]
+                    "word yaz", "belge oluştur", "belge yaz", "rapor yaz", "word olarak kaydet", "word kaydet"]
         if not any(t in text for t in triggers):
+            if not ("word" in text and "kaydet" in text):
+                return None
+        if any(t in text for t in ["word aç", "word ac", "wordu aç", "word'u aç", "microsoft word aç"]):
             return None
         m = re.search(r'adı\s*[:\s]*(\w+)|(\w+)\s*(?:adında|adlı)\s*(?:word|belge)', text)
         filename = "belge.docx"
@@ -38,6 +41,8 @@ class DocumentParser(BaseParser):
         triggers = ["excel", "xlsx", "tablo oluştur", "tablo yap", "spreadsheet",
                     "veri tablosu", "excel dosyası", "excel belgesi"]
         if not any(t in text for t in triggers):
+            return None
+        if any(t in text for t in ["excel aç", "excel ac", "exceli aç", "excel'i aç", "microsoft excel aç"]):
             return None
         m = re.search(r'adı\s*[:\s]*(\w+)|(\w+)\s*(?:adında|adlı)\s*(?:excel|tablo)', text)
         filename = "tablo.xlsx"

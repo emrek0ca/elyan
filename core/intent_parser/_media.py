@@ -52,15 +52,40 @@ class MediaParser(BaseParser):
         triggers = ["hatırlat", "hatirlatici", "hatırlatıcı", "reminder", "alarm", "uyar"]
         if not any(t in text for t in triggers):
             return None
-        m = re.search(r'hatırlat[:\s]+(.+)|beni\s+(.+?)\s+için\s+uyar', text, re.IGNORECASE)
         content = ""
-        if m:
-            content = (m.group(1) or m.group(2) or "").strip()
-        time_m = re.search(r'(\d{1,2}:\d{2}|\d+\s*(?:dakika|saat|gün|dk|sn))', text)
-        time_val = time_m.group() if time_m else ""
+        patterns = [
+            r'saat\s*\d{1,2}(?::\d{2})?\s*(?:de|da|te|ta)?\s+(.+?)(?:\s+hatırlat|\s+uyar|$)',
+            r'hatırlat[:\s]+(.+)',
+            r'beni\s+(.+?)\s+için\s+uyar',
+            r'(.+?)\s+hatırlat$',
+        ]
+        for pat in patterns:
+            m = re.search(pat, text, re.IGNORECASE)
+            if m:
+                content = (m.group(1) or "").strip()
+                if content:
+                    break
+
+        content = re.sub(r'\b(bana|beni|lütfen|lutfen)\b', ' ', content, flags=re.IGNORECASE)
+        content = re.sub(r'\s+', ' ', content).strip(" .,:;-")
+
+        time_val = ""
+        tm = re.search(r'\b(\d{1,2})[:.](\d{2})\b', text, re.IGNORECASE)
+        if tm:
+            time_val = f"{int(tm.group(1)):02d}:{int(tm.group(2)):02d}"
+        else:
+            tm2 = re.search(r'saat\s*(\d{1,2})\s*(?:de|da|te|ta)?', text, re.IGNORECASE)
+            if tm2:
+                time_val = f"{int(tm2.group(1)):02d}:00"
+
+        title = content or "Hatırlatma"
+        params = {"title": title}
+        if time_val:
+            params["due_time"] = time_val
+
         return {"action": "create_reminder",
-                "params": {"message": content, "time": time_val},
-                "reply": f"Hatırlatıcı oluşturuluyor{': ' + content if content else ''}..."}
+                "params": params,
+                "reply": f"Hatırlatıcı oluşturuluyor{': ' + title if title else ''}..."}
 
     # ── Music ─────────────────────────────────────────────────────────────────
     def _parse_music(self, text: str, text_norm: str, original: str) -> dict | None:
@@ -126,6 +151,16 @@ class MediaParser(BaseParser):
         }
 
     # ── Help ──────────────────────────────────────────────────────────────────
+    def _parse_scheduled_tasks(self, text: str, text_norm: str, original: str) -> dict | None:
+        triggers = [
+            "planlanmış görevler", "planlanmis gorevler", "planlı görevler",
+            "planli gorevler", "zamanlanmış görevler", "zamanlanmis gorevler",
+            "aktif planlar", "planları göster", "planlari goster",
+        ]
+        if any(t in text for t in triggers):
+            return {"action": "list_plans", "params": {}, "reply": "Planlanmış görevler listeleniyor..."}
+        return None
+
     def _parse_help(self, text: str, text_norm: str, original: str) -> dict | None:
         triggers = ["yardım", "yardim", "help", "ne yapabilirsin", "neler yapabilirsin",
                     "komutlar", "nasıl kullanırım", "özellikler", "kabiliyetler"]

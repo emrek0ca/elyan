@@ -94,18 +94,36 @@ def _lazy_load_tool(tool_name: str):
     # Office Tools
     if tool_name in ["read_word", "write_word", "read_excel", "write_excel",
                      "read_pdf", "get_pdf_info", "summarize_document", "analyze_excel_data", "search_in_pdf"]:
-        from .office_tools import (
-            read_word, write_word, read_excel, write_excel,
-            read_pdf, get_pdf_info, summarize_document, analyze_excel_data, search_in_pdf
-        )
-        tools = {
-            "read_word": read_word, "write_word": write_word,
-            "read_excel": read_excel, "write_excel": write_excel,
-            "read_pdf": read_pdf, "get_pdf_info": get_pdf_info,
-            "summarize_document": summarize_document,
-            "analyze_excel_data": analyze_excel_data,
-            "search_in_pdf": search_in_pdf
-        }
+        tools = {}
+        # Core office tools should remain loadable even if optional PDF/OCR deps are missing.
+        try:
+            from .office_tools.word_tools import read_word, write_word
+            tools.update({"read_word": read_word, "write_word": write_word})
+        except Exception:
+            pass
+        try:
+            from .office_tools.excel_tools import read_excel, write_excel, analyze_excel_data
+            tools.update({
+                "read_excel": read_excel,
+                "write_excel": write_excel,
+                "analyze_excel_data": analyze_excel_data,
+            })
+        except Exception:
+            pass
+        try:
+            from .office_tools.pdf_tools import read_pdf, get_pdf_info, search_in_pdf
+            tools.update({
+                "read_pdf": read_pdf,
+                "get_pdf_info": get_pdf_info,
+                "search_in_pdf": search_in_pdf,
+            })
+        except Exception:
+            pass
+        try:
+            from .office_tools.document_summarizer import summarize_document
+            tools.update({"summarize_document": summarize_document})
+        except Exception:
+            pass
         _loaded_tools.update(tools)
         return _loaded_tools.get(tool_name)
 

@@ -134,25 +134,60 @@ async def get_running_apps() -> dict[str, Any]:
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-@tool("get_process_info", "Search for specific process details.")
-async def get_process_info(process_name: str) -> dict[str, Any]:
+@tool("get_process_info", "Search process details by name. If no name given, list top processes.")
+async def get_process_info(process_name: Optional[str] = None, limit: int = 25) -> dict[str, Any]:
     try:
-        cmd = f"ps aux | grep -i '{process_name}' | grep -v grep"
+        pname = (process_name or "").strip()
+        safe_limit = max(1, min(200, int(limit)))
+
+        if pname:
+            cmd = f"ps aux | grep -i '{pname}' | grep -v grep | head -n {safe_limit}"
+        else:
+            # Top CPU processes when no filter is provided.
+            cmd = f"ps aux | head -n 1 && ps aux | sort -nrk 3 | head -n {safe_limit}"
+
         proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE)
         out, _ = await proc.communicate()
-        lines = out.decode().strip().split('\n')
-        return {"success": True, "count": len(lines) if out else 0, "details": lines}
+        lines = [ln for ln in out.decode(errors="ignore").splitlines() if ln.strip()]
+        return {
+            "success": True,
+            "query": pname or None,
+            "count": max(0, len(lines) - (1 if lines else 0)),
+            "details": lines,
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 # --- MEDIA & INPUT ---
 
-@tool("set_volume", "Change system volume (0-100).")
-async def set_volume(level: int) -> dict[str, Any]:
+@tool("set_volume", "Change system volume (0-100) or mute/unmute.")
+async def set_volume(level: Optional[int] = None, mute: Optional[bool] = None) -> dict[str, Any]:
     try:
-        level = max(0, min(100, level))
-        await asyncio.create_subprocess_exec("osascript", "-e", f"set volume output volume {level}")
-        return {"success": True, "level": level}
+        # Support parser payloads such as {"mute": true} without failing.
+        if mute is not None:
+            # AppleScript syntax:
+            # - mute:   set volume with output muted
+            # - unmute: set volume without output muted
+            script = "set volume with output muted" if bool(mute) else "set volume without output muted"
+            code, _, err = await _run_osascript(script)
+            if code != 0:
+                return {"success": False, "error": err or "Ses durumu değiştirilemedi."}
+            out_level = 0 if bool(mute) else (max(0, min(100, int(level))) if level is not None else None)
+            if out_level is not None and not bool(mute):
+                code2, _, err2 = await _run_osascript(f"set volume output volume {out_level}")
+                if code2 != 0:
+                    return {"success": False, "error": err2 or "Ses seviyesi ayarlanamadı."}
+            return {"success": True, "mute": bool(mute), "level": out_level}
+
+        out_level = 50 if level is None else max(0, min(100, int(level)))
+        code, _, err = await _run_osascript(f"set volume output volume {out_level}")
+        if code != 0:
+            return {"success": False, "error": err or "Ses seviyesi ayarlanamadı."}
+        # Ensure unmuted when explicitly setting level.
+        code2, _, err2 = await _run_osascript("set volume without output muted")
+        if code2 != 0:
+            return {"success": False, "error": err2 or "Ses sessiz modu kaldırılamadı."}
+        return {"success": True, "level": out_level, "mute": False}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -205,8 +240,10 @@ async def take_screenshot(filename: Optional[str] = None) -> dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 @tool("send_notification", "Display a system notification.")
-async def send_notification(title: str, message: str) -> dict[str, Any]:
+async def send_notification(title: str = "Elyan", message: str = "") -> dict[str, Any]:
     try:
+        if not message:
+            message = title or "Bildirim"
         script = f'display notification "{message}" with title "{title}"'
         await _run_osascript(script)
         return {"success": True}

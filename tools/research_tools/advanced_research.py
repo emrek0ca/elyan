@@ -6,6 +6,7 @@ Gelişmiş Araştırma - Advanced Research
 import asyncio
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from enum import Enum
 from dataclasses import dataclass, field
@@ -15,6 +16,8 @@ logger = get_logger("advanced_research")
 
 # Global cache for last research topic (used by report generation)
 _last_research_topic = None
+_last_research_result: dict[str, Any] | None = None
+RESEARCH_REPORT_DIR = Path.home() / ".elyan" / "reports" / "research"
 
 
 class ResearchDepth(Enum):
@@ -104,8 +107,8 @@ def get_research_status(research_id: str) -> dict[str, Any]:
     }
 
 
-def get_research_result(research_id: str) -> dict[str, Any]:
-    """Get completed research result"""
+def get_research_result_snapshot(research_id: str) -> dict[str, Any]:
+    """Get research snapshot (completed-only strict mode)."""
     if research_id not in _research_tasks:
         return {
             "success": False,
@@ -176,6 +179,24 @@ async def advanced_research(
             ResearchDepth.EXPERT: 18
         }
         target_sources = source_counts[research_depth]
+        eval_cap_map = {
+            ResearchDepth.QUICK: 2,
+            ResearchDepth.STANDARD: 6,
+            ResearchDepth.COMPREHENSIVE: 10,
+            ResearchDepth.EXPERT: 14,
+        }
+        eval_concurrency_map = {
+            ResearchDepth.QUICK: 2,
+            ResearchDepth.STANDARD: 4,
+            ResearchDepth.COMPREHENSIVE: 5,
+            ResearchDepth.EXPERT: 6,
+        }
+        eval_timeout_map = {
+            ResearchDepth.QUICK: 8,
+            ResearchDepth.STANDARD: 10,
+            ResearchDepth.COMPREHENSIVE: 12,
+            ResearchDepth.EXPERT: 15,
+        }
 
         # Create research ID
         research_id = f"research_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
@@ -227,12 +248,16 @@ async def advanced_research(
 
             # Step 2: Fetch and evaluate sources (CONCURRENT for speed)
             if include_evaluation:
+                timeout_s = int(eval_timeout_map.get(research_depth, 10))
+                eval_cap = int(eval_cap_map.get(research_depth, target_sources))
+                sources_to_eval = result.sources[:eval_cap]
+
                 async def _evaluate_with_timeout(source):
                     try:
-                        # 15 second timeout per source
+                        # Per-source timeout is adaptive by depth.
                         eval_result = await asyncio.wait_for(
                             evaluate_source(source.url),
-                            timeout=15
+                            timeout=timeout_s
                         )
                         if eval_result.get("success"):
                             source.reliability_score = eval_result.get("reliability_score", 0.5)
@@ -245,13 +270,13 @@ async def advanced_research(
                     except Exception as e:
                         source.error = str(e)
 
-                # Run all evaluations concurrently (max 3 at a time)
-                semaphore = asyncio.Semaphore(3)
+                # Run evaluations concurrently with adaptive limits per depth.
+                semaphore = asyncio.Semaphore(int(eval_concurrency_map.get(research_depth, 3)))
                 async def _with_semaphore(source):
                     async with semaphore:
                         await _evaluate_with_timeout(source)
 
-                await asyncio.gather(*[_with_semaphore(s) for s in result.sources], return_exceptions=True)
+                await asyncio.gather(*[_with_semaphore(s) for s in sources_to_eval], return_exceptions=True)
                 result.progress = 70
 
             # Step 3: Extract findings
@@ -274,6 +299,9 @@ async def advanced_research(
             }
 
             report_paths = []
+            quick_report_path = _persist_quick_research_report(topic, result)
+            if quick_report_path:
+                report_paths.append(quick_report_path)
             if generate_report:
                 try:
                     from .advanced_report import generate_advanced_professional_report
@@ -332,6 +360,16 @@ async def advanced_research(
             try:
                 global _last_research_topic
                 _last_research_topic = topic
+                global _last_research_result
+                _last_research_result = {
+                    "research_id": research_id,
+                    "topic": topic,
+                    "findings": list(result.findings),
+                    "summary": result.summary,
+                    "sources": sources_dict,
+                    "report_paths": list(report_paths),
+                    "completed_at": result.completed_at,
+                }
                 logger.info(f"Stored last research topic in cache: {topic}")
             except Exception as e:
                 logger.debug(f"Could not store topic in cache: {e}")
@@ -519,9 +557,32 @@ async def _perform_web_search(
     """Web araması yap"""
     try:
         from tools.web_tools import web_search
-        result = await web_search(query, num_results=num_results, language=language)
+        result = await web_search(query, num_results=max(int(num_results or 1) * 2, 6), language=language)
         if result.get("success"):
-            return result.get("results", [])
+            raw = result.get("results", []) or []
+            deduped: list[dict[str, Any]] = []
+            seen_urls: set[str] = set()
+            seen_titles: set[str] = set()
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url", "") or "").strip()
+                if not url:
+                    continue
+                title = str(item.get("title", "") or "").strip().lower()
+                url_key = url.split("#", 1)[0].rstrip("/")
+                title_key = title[:120]
+                if url_key in seen_urls:
+                    continue
+                if title_key and title_key in seen_titles:
+                    continue
+                seen_urls.add(url_key)
+                if title_key:
+                    seen_titles.add(title_key)
+                deduped.append(item)
+                if len(deduped) >= int(num_results or 1):
+                    break
+            return deduped
         return []
     except Exception as e:
         logger.warning(f"Web arama hatası: {e}")
@@ -703,15 +764,76 @@ async def _generate_summary(
 
 
 def get_research_result(research_id: str) -> dict[str, Any]:
-    """Araştırma sonucunu getir"""
+    """Araştırma sonucunu getir (yalnızca tamamlandıysa)."""
     if research_id not in _research_tasks:
         return {"success": False, "error": f"Araştırma bulunamadı: {research_id}"}
 
     result = _research_tasks[research_id]
+    if result.status != "completed":
+        return {
+            "success": False,
+            "error": f"Araştırma henüz tamamlanmadı. Durum: {result.status}",
+            "progress": result.progress,
+        }
+
     return {
         "success": True,
         **result.to_dict()
     }
+
+
+def get_last_research_result() -> dict[str, Any]:
+    """Son tamamlanan araştırma özetini döndürür."""
+    if not _last_research_result:
+        return {"success": False, "error": "Önce tamamlanmış bir araştırma gerekli."}
+    return {"success": True, "data": dict(_last_research_result)}
+
+
+def _persist_quick_research_report(topic: str, result: ResearchResult) -> str:
+    """Always persist a lightweight markdown report for reliability and handoff."""
+    try:
+        day = datetime.now().strftime("%Y%m%d")
+        ts = datetime.now().strftime("%H%M%S")
+        safe_topic = "".join(c if c.isalnum() or c in " -_" else "_" for c in topic).strip()[:64] or "research"
+        out_dir = RESEARCH_REPORT_DIR / day
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{safe_topic}_{ts}.md"
+
+        lines = [
+            f"# Araştırma: {topic}",
+            "",
+            f"- Derinlik: {result.depth.value}",
+            f"- Kaynak sayısı: {len(result.sources)}",
+            f"- Tamamlanma: {result.completed_at or datetime.now().isoformat()}",
+            "",
+            "## Özet",
+            result.summary or "Özet üretilemedi.",
+            "",
+            "## Bulgular",
+        ]
+
+        if result.findings:
+            for finding in result.findings[:12]:
+                clean = str(finding or "").lstrip("•- ").strip()
+                if clean:
+                    lines.append(f"- {clean}")
+        else:
+            lines.append("- Bulgu bulunamadı.")
+
+        lines.extend(["", "## Kaynaklar"])
+        for idx, source in enumerate(result.sources[:15], start=1):
+            title = str(source.title or "Başlıksız kaynak").strip()
+            url = str(source.url or "").strip()
+            rel = f"{float(source.reliability_score or 0.0):.2f}"
+            lines.append(f"{idx}. {title} ({rel})")
+            if url:
+                lines.append(f"   - {url}")
+
+        out_path.write_text("\n".join(lines), encoding="utf-8")
+        return str(out_path)
+    except Exception as e:
+        logger.warning(f"Hızlı araştırma raporu yazılamadı: {e}")
+        return ""
 
 
 async def save_research_to_document(

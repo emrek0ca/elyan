@@ -96,3 +96,27 @@ def test_gateway_logs_filters_by_level_and_term(monkeypatch, tmp_path: Path, cap
     assert "ERROR" in out
     assert "connection refused" in out
     assert "started" not in out
+
+
+def test_find_listener_pids_uses_lsof_fallback(monkeypatch):
+    monkeypatch.setattr(gateway.psutil, "net_connections", lambda kind="tcp": (_ for _ in ()).throw(RuntimeError("no access")))
+
+    class _Result:
+        returncode = 0
+        stdout = "111\n222\n"
+        stderr = ""
+
+    monkeypatch.setattr(gateway.subprocess, "run", lambda *a, **k: _Result())
+    pids = gateway._find_listener_pids(18789)
+    assert pids == [111, 222]
+
+
+def test_restart_gateway_calls_stop_then_start(monkeypatch):
+    calls = []
+    monkeypatch.setattr(gateway, "stop_gateway", lambda port=None: calls.append(("stop", port)))
+    monkeypatch.setattr(gateway, "_is_port_listening", lambda port: False)
+    monkeypatch.setattr(gateway, "start_gateway", lambda daemon=False, port=None: calls.append(("start", port, daemon)))
+
+    gateway.restart_gateway(daemon=True, port=18789)
+    assert calls[0] == ("stop", 18789)
+    assert calls[1] == ("start", 18789, True)

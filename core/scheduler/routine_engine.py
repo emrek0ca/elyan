@@ -238,8 +238,23 @@ class RoutineEngine:
         items.sort(key=lambda x: (not bool(x.get("enabled", True)), x.get("name", "")))
         return items
 
+    def match_routine_ids(self, value: str) -> list[str]:
+        needle = _clean_text(value)
+        if not needle:
+            return []
+        if needle in self._routines:
+            return [needle]
+        return sorted([rid for rid in self._routines.keys() if rid.startswith(needle)])
+
+    def resolve_routine_id(self, value: str) -> str | None:
+        matches = self.match_routine_ids(value)
+        return matches[0] if len(matches) == 1 else None
+
     def get_routine(self, routine_id: str) -> Optional[Dict[str, Any]]:
-        item = self._routines.get(_clean_text(routine_id))
+        rid = self.resolve_routine_id(routine_id)
+        if not rid:
+            return None
+        item = self._routines.get(rid)
         return dict(item) if item else None
 
     def add_routine(
@@ -326,7 +341,7 @@ class RoutineEngine:
         )
 
     def update_routine(self, routine_id: str, **patch: Any) -> Optional[Dict[str, Any]]:
-        rid = _clean_text(routine_id)
+        rid = self.resolve_routine_id(routine_id) or _clean_text(routine_id)
         routine = self._routines.get(rid)
         if not routine:
             return None
@@ -361,7 +376,7 @@ class RoutineEngine:
         return dict(routine)
 
     def remove_routine(self, routine_id: str) -> bool:
-        rid = _clean_text(routine_id)
+        rid = self.resolve_routine_id(routine_id) or _clean_text(routine_id)
         if rid not in self._routines:
             return False
         del self._routines[rid]
@@ -369,7 +384,7 @@ class RoutineEngine:
         return True
 
     def set_enabled(self, routine_id: str, enabled: bool) -> Optional[Dict[str, Any]]:
-        rid = _clean_text(routine_id)
+        rid = self.resolve_routine_id(routine_id) or _clean_text(routine_id)
         routine = self._routines.get(rid)
         if not routine:
             return None
@@ -379,7 +394,7 @@ class RoutineEngine:
         return dict(routine)
 
     def get_history(self, routine_id: str, limit: int = 20) -> List[Dict[str, Any]]:
-        rid = _clean_text(routine_id)
+        rid = self.resolve_routine_id(routine_id) or _clean_text(routine_id)
         routine = self._routines.get(rid)
         if not routine:
             return []
@@ -421,7 +436,8 @@ class RoutineEngine:
 
     async def run_routine(self, routine_id: str, agent) -> Dict[str, Any]:
         """Execute routine steps one by one and build an operator report."""
-        routine = self._routines.get(_clean_text(routine_id))
+        resolved_id = self.resolve_routine_id(routine_id) or _clean_text(routine_id)
+        routine = self._routines.get(resolved_id)
         if not routine:
             return {"success": False, "error": "routine not found"}
         if not routine.get("enabled", True):
@@ -490,7 +506,7 @@ class RoutineEngine:
 
         summary = f"{routine.get('name')} {'OK' if ok else 'FAIL'} ({round(duration_total, 2)}s)"
         self._append_history(
-            routine_id=routine_id,
+            routine_id=resolved_id,
             success=ok,
             duration_s=duration_total,
             summary=summary,
@@ -499,7 +515,7 @@ class RoutineEngine:
 
         return {
             "success": ok,
-            "routine_id": routine_id,
+            "routine_id": resolved_id,
             "routine_name": routine.get("name"),
             "duration_s": round(duration_total, 2),
             "report": report,

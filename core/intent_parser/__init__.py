@@ -93,6 +93,7 @@ class IntentParser(
             self._parse_music,
             self._parse_code_run,
             self._parse_visual_generation,
+            self._parse_scheduled_tasks,
             self._parse_help,
         ]
         self._multi_split_re = re.compile(r"\s+(?:ve\s+sonra|ardından|ardindan|sonra)\s+", re.IGNORECASE)

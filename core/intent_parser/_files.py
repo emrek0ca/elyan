@@ -59,7 +59,8 @@ class FileParser(BaseParser):
     # ── Write File ────────────────────────────────────────────────────────────
     def _parse_write_file(self, text: str, text_norm: str, original: str) -> dict | None:
         triggers = ["not yaz", "dosya oluştur", "kaydet", "yaz:", "not oluştur",
-                    "liste yaz", "dosya yaz", "metin kaydet", "not al"]
+                    "liste yaz", "dosya yaz", "metin kaydet", "not al",
+                    "bunu kaydet", "dosya olarak kaydet", "masaüstüne kaydet"]
         if not any(t in text for t in triggers):
             return None
         m = re.search(r'yaz[:\s]+(.+)|oluştur[:\s]+(.+)|kaydet[:\s]+(.+)|içeriği[:\s]+(.+)',
@@ -68,13 +69,19 @@ class FileParser(BaseParser):
         if m:
             content = (m.group(1) or m.group(2) or m.group(3) or m.group(4) or "").strip()
         filename = "not.txt"
-        nm = re.search(r'adı\s*[:\s]*(\w+)|(\w+)\s*dosyası|(\w+)\s*olarak', text)
-        if nm:
-            n = nm.group(1) or nm.group(2) or nm.group(3)
-            if n and n not in ["yaz", "oluştur", "kaydet", "dosya", "not"]:
-                filename = n + ".txt"
+        fm = re.search(r'([\w\-.]+\.[a-z0-9]{2,8})', text, re.IGNORECASE)
+        if fm:
+            filename = fm.group(1)
+        else:
+            nm = re.search(r'adı\s*[:\s]*([\w\-]+)|([\w\-]+)\s*dosyası|([\w\-]+)\s*olarak', text)
+            if nm:
+                n = nm.group(1) or nm.group(2) or nm.group(3)
+                if n and n not in ["yaz", "oluştur", "kaydet", "dosya", "not"]:
+                    filename = n + ".txt"
+
+        base_dir = self._extract_path(text) or str(HOME_DIR / "Desktop")
         return {"action": "write_file",
-                "params": {"path": str(HOME_DIR / "Desktop" / filename), "content": content},
+                "params": {"path": str(Path(base_dir) / filename), "content": content},
                 "reply": f"{filename} oluşturuluyor..."}
 
     # ── Search Files ──────────────────────────────────────────────────────────
@@ -105,7 +112,7 @@ class FileParser(BaseParser):
 
     # ── Read File ─────────────────────────────────────────────────────────────
     def _parse_read_file(self, text: str, text_norm: str, original: str) -> dict | None:
-        if not any(t in text for t in ["oku", "içeriğini göster", "ne yazıyor", "aç ve göster", "içeriği"]):
+        if not any(t in text for t in ["oku", "içeriğini göster", "ne yazıyor", "aç ve göster", "içeriği", "içinde ne var", "icinde ne var"]):
             return None
         m = re.search(r'[\w\-]+\.\w+', text)
         if m:

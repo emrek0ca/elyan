@@ -109,11 +109,11 @@ class TelegramAdapter(BaseChannelAdapter):
             try:
                 await self.app.bot.send_message(
                     chat_id=chat_id,
-                    text=response.text,
-                    parse_mode="Markdown" if response.format == "markdown" else None
+                    text=str(response.text),
+                    parse_mode=None
                 )
             except Exception as e:
-                logger.warning(f"Markdown send failed for {chat_id}, retrying plain text: {e}")
+                logger.warning(f"Telegram send failed for {chat_id}, retrying plain text: {e}")
                 try:
                     await self.app.bot.send_message(
                         chat_id=chat_id,

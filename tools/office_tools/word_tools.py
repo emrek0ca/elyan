@@ -122,6 +122,17 @@ async def write_word(
         if not is_valid:
             return {"success": False, "error": error}
 
+        content_text = str(content or "").strip()
+        paragraph_items: list[str] = []
+        if isinstance(paragraphs, list):
+            for para in paragraphs:
+                para_text = str(para or "").strip()
+                if para_text:
+                    paragraph_items.append(para_text)
+
+        if not str(title or "").strip() and not content_text and not paragraph_items:
+            return {"success": False, "error": "Word dosyası için yazılacak içerik boş."}
+
         try:
             from docx import Document
             from docx.shared import Inches, Pt
@@ -136,12 +147,12 @@ async def write_word(
                 doc.add_heading(title, 0)
 
             # Add content
-            if paragraphs:
-                for para in paragraphs:
+            if paragraph_items:
+                for para in paragraph_items:
                     doc.add_paragraph(para)
-            elif content:
+            elif content_text:
                 # Split by double newlines for paragraphs
-                for para in content.split("\n\n"):
+                for para in content_text.split("\n\n"):
                     if para.strip():
                         doc.add_paragraph(para.strip())
 

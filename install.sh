@@ -64,9 +64,22 @@ else
 fi
 ok "Bağımlılıklar yüklendi"
 
-# ── 5. Paketi kur (editable) ─────────────────────────────────────────
+# ── 5. Paketi kur ─────────────────────────────────────────────────────
 log "Elyan paketi yükleniyor..."
-$PIP install --quiet -e .
+if $PIP install --quiet -e . --config-settings editable_mode=compat; then
+  ok "Editable kurulum tamamlandı (compat)."
+else
+  warn "Editable kurulum başarısız, standart kurulum deneniyor..."
+  $PIP install --quiet .
+fi
+
+# Python 3.12+ bazı ortamlarda editable entrypoint kırılabilir; doğrulayıp fallback uygula.
+if ! .venv/bin/elyan version >/dev/null 2>&1; then
+  warn "CLI doğrulaması başarısız. Standart (non-editable) kurulum uygulanıyor..."
+  $PIP uninstall -y elyan >/dev/null 2>&1 || true
+  $PIP install --quiet .
+fi
+.venv/bin/elyan version >/dev/null 2>&1 || err "'elyan' CLI çalıştırılamadı. Kurulum loglarını kontrol edin."
 ok "'elyan' CLI komutu kullanılabilir"
 
 # ── 6. Dizin yapısı ──────────────────────────────────────────────────
@@ -82,11 +95,12 @@ PROJECT_DIR_ESCAPED=$(printf '%q' "$PROJECT_DIR")
 cat > "$LAUNCHER" <<EOF
 #!/usr/bin/env bash
 PROJECT_DIR=$PROJECT_DIR_ESCAPED
-if [[ ! -x "\$PROJECT_DIR/.venv/bin/elyan" ]]; then
-  echo "Elyan launcher hatası: \$PROJECT_DIR/.venv/bin/elyan bulunamadı." >&2
+if [[ ! -x "\$PROJECT_DIR/.venv/bin/python3" ]]; then
+  echo "Elyan launcher hatası: \$PROJECT_DIR/.venv/bin/python3 bulunamadı." >&2
   exit 1
 fi
-exec "\$PROJECT_DIR/.venv/bin/elyan" "\$@"
+cd "\$PROJECT_DIR" || exit 1
+exec "\$PROJECT_DIR/.venv/bin/python3" -m cli.main "\$@"
 EOF
 chmod +x "$LAUNCHER"
 
