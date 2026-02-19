@@ -1,98 +1,179 @@
 #!/usr/bin/env python3
 """
-Wiqo entrypoint.
-
+Elyan v18.0 - Unified Entry Point
 Usage:
-- python main.py         -> Desktop UI (tray/wizard)
-- python main.py --cli   -> Telegram polling mode
-"""
+  python main.py         -> Starts Desktop UI
+  python main.py --cli   -> Starts Telegram/CLI mode (Gateway)
+  python main.py --onboard -> Starts onboarding wizard
 
-from __future__ import annotations
+FIX BUG-FUNC-001:
+- loop.close() in finally block (always runs)
+- server.stop() called on any exception, not just KeyboardInterrupt
+- --onboard takes priority over --cli
+"""
 
 import argparse
 import asyncio
 import sys
+import os
+import socket
+import time
+from pathlib import Path
 
-from config.settings import TELEGRAM_TOKEN
-from config.settings_manager import SettingsPanel
+# Fix path for imports
+project_root = Path(__file__).parent.resolve()
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 from utils.logger import get_logger
 
 logger = get_logger("main")
-LAUNCHER_VERSION = "24.0.0"
+VERSION = "18.0.0"
+GATEWAY_PORT = int(os.environ.get("ELYAN_PORT", 18789))
 
 
-def _resolve_telegram_token() -> str:
-    """Resolve Telegram token from env/settings."""
-    if TELEGRAM_TOKEN:
-        return TELEGRAM_TOKEN
+def check_port_available(port: int, host: str = "127.0.0.1") -> bool:
+    """
+    BUG-FUNC-009 hardened:
+    Avoid false negatives right after restart (TIME_WAIT) by checking
+    active listeners first, then probing bind with SO_REUSEADDR.
+    """
+    # If something is actively accepting, port is in use.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.3)
+        try:
+            if probe.connect_ex((host, port)) == 0:
+                return False
+        except OSError:
+            pass
+
+    # Fallback bind probe that tolerates restart race windows.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.settimeout(1)
+        try:
+            s.bind((host, port))
+            return True
+        except OSError:
+            return False
+
+
+def find_existing_gateway(port: int, host: str = "127.0.0.1") -> bool:
+    """Check if an Elyan gateway is already running on the port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1)
+        try:
+            s.connect((host, port))
+            return True
+        except (ConnectionRefusedError, OSError):
+            return False
+
+
+def start_ui():
+    """Start the PyQt6 based Desktop application."""
     try:
-        return str(SettingsPanel().get("telegram_token", "") or "")
-    except Exception:
-        return ""
-
-
-def run_with_ui() -> int:
-    """Start desktop UI mode."""
-    try:
-        logger.info(f"Wiqo Launcher v{LAUNCHER_VERSION} starting from {__file__}")
-        from ui.clean_main_app import main as clean_main
-        return int(clean_main() or 0)
-    except Exception as exc:
-        logger.error(f"UI başlatma hatası: {exc}")
+        logger.info(f"Starting Elyan UI v{VERSION}...")
+        from ui.clean_main_app import main as run_ui
+        return run_ui()
+    except Exception as e:
+        logger.error(f"UI failed: {e}", exc_info=True)
         return 1
 
 
-def run_with_cli() -> int:
-    """Start Telegram CLI mode."""
-    token = _resolve_telegram_token()
-    if not token:
-        logger.error("Telegram token bulunamadı. .env veya settings.json üzerinden ayarlayın.")
-        return 1
+def start_cli():
+    """Start the Unified Gateway (API + Telegram + All Channels)."""
+    # BUG-FUNC-009: Check port availability before starting.
+    # Add short retries to survive rapid stop/start races.
+    if not check_port_available(GATEWAY_PORT):
+        if find_existing_gateway(GATEWAY_PORT):
+            logger.error(
+                f"Port {GATEWAY_PORT} is already in use by another Elyan instance. "
+                f"Run 'elyan gateway status' to check, or set ELYAN_PORT env var."
+            )
+            return 1
+        became_free = False
+        for _ in range(8):  # ~2s total
+            if check_port_available(GATEWAY_PORT):
+                became_free = True
+                break
+            time.sleep(0.25)
+        if not became_free:
+            logger.error(
+                f"Port {GATEWAY_PORT} is already in use by another process. "
+                f"Free the port or set ELYAN_PORT=<other_port> and retry."
+            )
+            return 1
 
     try:
-        from telegram.ext import ApplicationBuilder
+        logger.info(f"Starting Elyan Gateway v{VERSION}...")
         from core.agent import Agent
-        from handlers.telegram_handler import setup_handlers
-    except Exception as exc:
-        logger.error(f"CLI bağımlılıkları yüklenemedi: {exc}")
+        from core.gateway.server import ElyanGatewayServer
+
+        agent = Agent()
+        server = ElyanGatewayServer(agent)
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        try:
+            # 1. Initialize Agent
+            if not loop.run_until_complete(agent.initialize()):
+                logger.error("Agent initialization failed.")
+                return 1
+
+            # 2. Start Gateway
+            loop.run_until_complete(server.start())
+
+            logger.info("Gateway and Dashboard are now ONLINE.")
+            logger.info(f"Access Dashboard at: http://localhost:{GATEWAY_PORT}/dashboard")
+
+            # 3. Keep the loop running
+            loop.run_forever()
+
+        except KeyboardInterrupt:
+            logger.info("Keyboard interrupt received, shutting down...")
+        except Exception as e:
+            logger.error(f"Gateway runtime error: {e}", exc_info=True)
+        finally:
+            # BUG-FUNC-001: Always stop server and close loop
+            logger.info("Stopping gateway...")
+            try:
+                loop.run_until_complete(server.stop())
+            except Exception as e:
+                logger.error(f"Error during gateway stop: {e}")
+            finally:
+                loop.close()
+                logger.info("Event loop closed.")
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"Gateway failed to start: {e}", exc_info=True)
         return 1
 
-    agent = Agent()
-    init_ok = asyncio.run(agent.initialize())
-    if not init_ok:
-        logger.error("Agent başlatılamadı.")
-        return 1
 
-    app = ApplicationBuilder().token(token).build()
-    setup_handlers(app, agent)
+def main(argv: list[str] | None = None):
+    parser = argparse.ArgumentParser(description="Elyan Smart Assistant")
+    parser.add_argument("--cli", action="store_true", help="Start in Gateway/CLI mode")
+    parser.add_argument("--onboard", action="store_true", help="Start onboarding wizard")
+    parser.add_argument("--version", action="store_true", help="Show version and exit")
 
-    logger.info("Telegram CLI modu aktif. Durdurmak için Ctrl+C.")
-    try:
-        app.run_polling(drop_pending_updates=True)
-    except KeyboardInterrupt:
-        logger.info("CLI modu durduruldu.")
-    except Exception as exc:
-        logger.error(f"Telegram polling hatası: {exc}")
-        return 1
-    return 0
+    args = parser.parse_args(argv if argv is not None else sys.argv[1:])
 
+    if args.version:
+        print(f"Elyan v{VERSION}")
+        return 0
 
-def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Wiqo launcher")
-    parser.add_argument(
-        "--cli",
-        action="store_true",
-        help="Telegram polling mode (UI açılmaz)",
-    )
-    return parser.parse_args(argv)
+    # --onboard takes priority over --cli
+    if args.onboard:
+        from cli.onboard import start_onboarding
+        return start_onboarding()
 
-
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv or sys.argv[1:])
     if args.cli:
-        return run_with_cli()
-    return run_with_ui()
+        return start_cli()
+    else:
+        return start_ui()
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())
