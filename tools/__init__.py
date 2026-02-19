@@ -3,6 +3,12 @@ LAZY LOADING TOOL SYSTEM - Fast startup, load tools on demand
 """
 
 _loaded_tools = {}
+_tool_load_errors = {}
+
+
+def get_tool_load_errors() -> dict:
+    """Return lazy-load errors collected while resolving tools."""
+    return dict(_tool_load_errors)
 
 def _lazy_load_tool(tool_name: str):
     """Lazy load a single tool when accessed"""
@@ -390,7 +396,16 @@ class LazyToolDict(dict):
 
     def __getitem__(self, key):
         if key not in _loaded_tools and key in self._tool_names:
-            _lazy_load_tool(key)
+            try:
+                _lazy_load_tool(key)
+                if key in _loaded_tools:
+                    _tool_load_errors.pop(key, None)
+                else:
+                    _tool_load_errors[key] = (
+                        "Tool yüklenemedi (eksik bağımlılık veya import sorunu)."
+                    )
+            except Exception as exc:
+                _tool_load_errors[key] = str(exc)
         return _loaded_tools.get(key)
 
     def __contains__(self, key):
@@ -406,14 +421,28 @@ class LazyToolDict(dict):
         # Load all tools and return items
         for tool_name in self._tool_names:
             if tool_name not in _loaded_tools:
-                _lazy_load_tool(tool_name)
+                try:
+                    _lazy_load_tool(tool_name)
+                    if tool_name not in _loaded_tools:
+                        _tool_load_errors[tool_name] = (
+                            "Tool yüklenemedi (eksik bağımlılık veya import sorunu)."
+                        )
+                except Exception as exc:
+                    _tool_load_errors[tool_name] = str(exc)
         return _loaded_tools.items()
 
     def values(self):
         # Load all tools and return values
         for tool_name in self._tool_names:
             if tool_name not in _loaded_tools:
-                _lazy_load_tool(tool_name)
+                try:
+                    _lazy_load_tool(tool_name)
+                    if tool_name not in _loaded_tools:
+                        _tool_load_errors[tool_name] = (
+                            "Tool yüklenemedi (eksik bağımlılık veya import sorunu)."
+                        )
+                except Exception as exc:
+                    _tool_load_errors[tool_name] = str(exc)
         return _loaded_tools.values()
 
     def get(self, key, default=None):

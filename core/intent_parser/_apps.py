@@ -16,9 +16,24 @@ class AppParser(BaseParser):
         if any(w in text for w in ["dosya", "klasör", "http", ".com", ".org"]):
             return None
         wants_research = any(k in text for k in ["araştır", "arastir", "araştırma", "arastirma", "research", "incele", "inceleme"])
+
+        def _alias_match(raw_alias: str) -> bool:
+            alias = str(raw_alias or "").strip()
+            if not alias:
+                return False
+            alias_norm = self._normalize(alias)
+            suffixes_raw = r"(?:yi|yı|yu|yü|i|ı|u|ü|ya|ye|a|e|da|de|dan|den)?"
+            suffixes_norm = r"(?:yi|yu|i|u|ya|ye|a|e|da|de|dan|den)?"
+            pat_raw = rf"(?<!\w){re.escape(alias)}{suffixes_raw}(?!\w)"
+            pat_norm = rf"(?<!\w){re.escape(alias_norm)}{suffixes_norm}(?!\w)"
+            return bool(
+                re.search(pat_raw, text, re.IGNORECASE)
+                or re.search(pat_norm, text_norm, re.IGNORECASE)
+            )
+
         if any(t in text for t in open_t):
             for alias, app in self.app_aliases.items():
-                if alias in text or self._normalize(alias) in text_norm:
+                if _alias_match(alias):
                     if wants_research:
                         topic = ""
                         m_topic = re.search(r"(.+?)\s+hakkında\s+(?:araştır|arastir|araştırma|arastirma|research|incele)", text, re.IGNORECASE)

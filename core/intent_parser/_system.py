@@ -163,9 +163,24 @@ class SystemParser(BaseParser):
 
     # ── System Info ───────────────────────────────────────────────────────────
     def _parse_system_info(self, text: str, text_norm: str, original: str) -> dict | None:
-        triggers = ["sistem", "cpu", "ram", "bellek", "disk", "pil", "batarya",
-                    "işlemci", "hafıza", "depolama", "system info", "performans"]
-        if any(w in text for w in triggers) and "dosya" not in text and "klasör" not in text:
+        norm = text_norm or self._normalize(text)
+        trigger_patterns = [
+            r"\bsistem\b",
+            r"\bcpu\b",
+            r"\bram\b",
+            r"\bbellek\b",
+            r"\bdisk\b",
+            r"\bpil\b",
+            r"\bbatarya\b",
+            r"\bislemci\b",
+            r"\bhafiza\b",
+            r"\bdepolama\b",
+            r"\bsystem\s+info\b",
+            r"\bperformans\b",
+        ]
+        if any(re.search(pat, norm, re.IGNORECASE) for pat in trigger_patterns):
+            if "dosya" in norm or "klasor" in norm:
+                return None
             return {"action": "get_system_info", "params": {}, "reply": "Sistem bilgileri getiriliyor..."}
         return None
 

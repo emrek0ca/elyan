@@ -1,7 +1,9 @@
 import asyncio
+import inspect
 import time
 import json
 from datetime import datetime
+from pathlib import Path
 from aiohttp import web, WSMsgType
 from typing import Optional, Set
 from .router import GatewayRouter
@@ -22,6 +24,12 @@ logger = get_logger("gateway_server")
 _dashboard_ws_clients: Set[web.WebSocketResponse] = set()
 _activity_log: list = []  # Rolling buffer of last 50 events
 _start_time: float = time.time()
+_tool_health_cache: dict = {
+    "ts": 0.0,
+    "probe": False,
+    "items": {},
+    "summary": {},
+}
 
 
 def push_activity(event_type: str, channel: str, detail: str, success: bool = True):
@@ -198,6 +206,7 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/routines/history', self.handle_routine_history)
         self.app.router.add_delete('/api/routines/{id}', self.handle_routine_remove)
         self.app.router.add_get('/api/tools', self.handle_tools)
+        self.app.router.add_get('/api/tools/diagnostics', self.handle_tools_diagnostics)
         self.app.router.add_post('/api/tools/policy', self.handle_tools_policy)
         self.app.router.add_post('/api/tools/test', self.handle_tools_test)
         self.app.router.add_get('/api/skills', self.handle_skills)
@@ -788,10 +797,162 @@ class ElyanGatewayServer:
         return web.json_response({"ok": True})
 
     # ── Tools management (new) ───────────────────────────────────────────────
+    @staticmethod
+    def _tool_probe_params(tool_name: str) -> dict | None:
+        """Return safe probe parameters for selected tools."""
+        probe_dir = Path.home() / ".elyan" / "tmp"
+        probe_dir.mkdir(parents=True, exist_ok=True)
+        probe_file = probe_dir / "tool_probe.txt"
+        if not probe_file.exists():
+            probe_file.write_text("elyan tool probe\n", encoding="utf-8")
+
+        mapping = {
+            "get_system_info": {},
+            "get_running_apps": {},
+            "get_process_info": {"process_name": "python", "limit": 5},
+            "list_files": {"path": "~/Desktop"},
+            "search_files": {"pattern": "*.txt", "directory": "~/Desktop"},
+            "read_file": {"path": str(probe_file)},
+            "write_file": {"path": str(probe_file), "content": "elyan tool probe\n"},
+            "wifi_status": {},
+            "get_public_ip": {},
+            "get_today_events": {},
+            "get_reminders": {},
+        }
+        return mapping.get(str(tool_name or "").strip())
+
+    @staticmethod
+    def _required_params_for_callable(func) -> list[str]:
+        if not callable(func):
+            return []
+        try:
+            sig = inspect.signature(func)
+        except Exception:
+            return []
+        required = []
+        for pname, p in sig.parameters.items():
+            if p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+                continue
+            if p.default is inspect.Parameter.empty:
+                required.append(pname)
+        return required
+
+    async def _compute_tool_health(self, tool_names: list[str], probe: bool = False) -> tuple[dict, dict]:
+        """
+        Build tool health map:
+        - broken: tool is not callable
+        - ready: callable and no required params
+        - needs_params: callable but requires args
+        Optional probe executes a safe smoke test for selected tools.
+        """
+        from tools import get_tool_load_errors
+
+        global _tool_health_cache
+        now = time.time()
+        ttl = 45 if probe else 20
+        if (
+            _tool_health_cache.get("items")
+            and _tool_health_cache.get("probe") == bool(probe)
+            and (now - float(_tool_health_cache.get("ts", 0.0) or 0.0)) <= ttl
+        ):
+            return dict(_tool_health_cache.get("items", {})), dict(_tool_health_cache.get("summary", {}))
+
+        load_errors = get_tool_load_errors()
+        items: dict[str, dict] = {}
+        summary = {
+            "ready": 0,
+            "needs_params": 0,
+            "broken": 0,
+            "probed": 0,
+            "probe_ok": 0,
+            "probe_fail": 0,
+        }
+
+        for name in tool_names:
+            tool_name = str(name or "").strip()
+            if not tool_name:
+                continue
+
+            fn = AVAILABLE_TOOLS.get(tool_name)
+            source = "lazy_catalog"
+            load_error = str(load_errors.get(tool_name, "") or "")
+            if not callable(fn) and hasattr(self.agent, "kernel") and hasattr(self.agent.kernel, "tools"):
+                try:
+                    tdef = self.agent.kernel.tools.get_tool(tool_name)
+                except Exception:
+                    tdef = None
+                if tdef and callable(getattr(tdef, "func", None)):
+                    fn = tdef.func
+                    source = "registry"
+                    load_error = ""
+
+            required_params = self._required_params_for_callable(fn)
+            if not callable(fn):
+                status = "broken"
+            elif required_params:
+                status = "needs_params"
+            else:
+                status = "ready"
+
+            probe_result = {"status": "skipped", "latency_ms": 0, "error": ""}
+            if probe and callable(fn):
+                params = self._tool_probe_params(tool_name)
+                if isinstance(params, dict):
+                    summary["probed"] += 1
+                    started = time.perf_counter()
+                    try:
+                        result = await self.agent._execute_tool(
+                            tool_name,
+                            params,
+                            user_input=f"tool probe {tool_name}",
+                            step_name="tool_probe",
+                        )
+                        latency_ms = int((time.perf_counter() - started) * 1000)
+                        ok = not (isinstance(result, dict) and result.get("success") is False)
+                        if ok:
+                            summary["probe_ok"] += 1
+                            probe_result = {"status": "ok", "latency_ms": latency_ms, "error": ""}
+                        else:
+                            summary["probe_fail"] += 1
+                            err = str(result.get("error", "probe failed")) if isinstance(result, dict) else "probe failed"
+                            probe_result = {"status": "fail", "latency_ms": latency_ms, "error": err}
+                    except Exception as probe_exc:
+                        latency_ms = int((time.perf_counter() - started) * 1000)
+                        summary["probe_fail"] += 1
+                        probe_result = {"status": "fail", "latency_ms": latency_ms, "error": str(probe_exc)}
+                else:
+                    probe_result = {"status": "unsupported", "latency_ms": 0, "error": ""}
+
+            if status == "broken":
+                summary["broken"] += 1
+            elif status == "needs_params":
+                summary["needs_params"] += 1
+            else:
+                summary["ready"] += 1
+
+            items[tool_name] = {
+                "status": status,
+                "callable": bool(callable(fn)),
+                "required_params": required_params,
+                "load_error": load_error,
+                "source": source,
+                "probe": probe_result,
+            }
+
+        _tool_health_cache = {
+            "ts": now,
+            "probe": bool(probe),
+            "items": dict(items),
+            "summary": dict(summary),
+        }
+        return items, summary
+
     async def handle_tools(self, request):
         query = (request.rel_url.query.get("q", "") or "").strip().lower()
         group_filter = (request.rel_url.query.get("group", "") or "").strip().lower()
         policy_filter = (request.rel_url.query.get("policy", "") or "").strip().lower()
+        health_filter = (request.rel_url.query.get("health", "") or "").strip().lower()
+        run_probe = request.rel_url.query.get("probe", "0") in {"1", "true", "yes"}
 
         allow, deny, require_approval = _get_policy_lists()
         usage = get_tool_usage_snapshot().get("stats", {})
@@ -800,11 +961,13 @@ class ElyanGatewayServer:
             reg_desc = {}
 
         tool_names = sorted(set(list(AVAILABLE_TOOLS.keys()) + list(reg_desc.keys())))
+        health_map, health_summary = await self._compute_tool_health(tool_names, probe=run_probe)
         items = []
         group_counts = {}
         total_allowed = 0
         total_denied = 0
         total_approval = 0
+        filtered_health = {"ready": 0, "needs_params": 0, "broken": 0}
 
         for name in tool_names:
             group = tool_policy.infer_group(name) or "other"
@@ -822,11 +985,17 @@ class ElyanGatewayServer:
                 continue
             if policy_filter == "approval" and not needs_approval:
                 continue
+            health = health_map.get(name, {})
+            if health_filter and str(health.get("status", "")).lower() != health_filter:
+                continue
 
             total_allowed += 1 if allowed else 0
             total_denied += 1 if denied else 0
             total_approval += 1 if needs_approval else 0
             group_counts[group] = int(group_counts.get(group, 0)) + 1
+            hstatus = str(health.get("status", "")).lower()
+            if hstatus in filtered_health:
+                filtered_health[hstatus] += 1
 
             u = usage.get(name, {})
             items.append({
@@ -836,6 +1005,7 @@ class ElyanGatewayServer:
                 "allowed": allowed,
                 "denied": denied,
                 "requires_approval": needs_approval,
+                "health": health,
                 "usage": {
                     "calls": int(u.get("calls", 0) or 0),
                     "success_rate": float(u.get("success_rate", 0.0) or 0.0),
@@ -855,12 +1025,37 @@ class ElyanGatewayServer:
                 "denied": total_denied,
                 "approval_required": total_approval,
                 "groups": group_counts,
+                "health": {
+                    **filtered_health,
+                    "probed": int(health_summary.get("probed", 0) or 0),
+                    "probe_ok": int(health_summary.get("probe_ok", 0) or 0),
+                    "probe_fail": int(health_summary.get("probe_fail", 0) or 0),
+                },
             },
             "policy": {
                 "allow": allow,
                 "deny": deny,
                 "requireApproval": require_approval,
             },
+        })
+
+    async def handle_tools_diagnostics(self, request):
+        run_probe = request.rel_url.query.get("probe", "0") in {"1", "true", "yes"}
+        names_raw = str(request.rel_url.query.get("tools", "") or "").strip()
+        selected = []
+        if names_raw:
+            selected = [x.strip() for x in names_raw.split(",") if x.strip()]
+        if not selected:
+            selected = sorted(set(list(AVAILABLE_TOOLS.keys())))
+
+        health_map, summary = await self._compute_tool_health(selected, probe=run_probe)
+        broken = [name for name, h in health_map.items() if h.get("status") == "broken"]
+        return web.json_response({
+            "ok": True,
+            "probe": run_probe,
+            "summary": summary,
+            "broken_tools": broken,
+            "items": health_map,
         })
 
     async def handle_tools_policy(self, request):

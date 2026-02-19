@@ -729,7 +729,7 @@ Telegram / WhatsApp gönder</textarea>
 
         <!-- ══════════ TAB: TOOLS ══════════ -->
         <div id="tab-tools" class="tab-panel space-y-5">
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div class="grid grid-cols-2 md:grid-cols-7 gap-4">
                 <div class="glass-card card-shadow rounded-xl p-4">
                     <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Toplam Tool</p>
                     <p class="text-2xl font-black" id="tools-total">—</p>
@@ -745,6 +745,18 @@ Telegram / WhatsApp gönder</textarea>
                 <div class="glass-card card-shadow rounded-xl p-4">
                     <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Approval</p>
                     <p class="text-2xl font-black text-orange-500" id="tools-approval">—</p>
+                </div>
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Ready</p>
+                    <p class="text-2xl font-black text-emerald-600" id="tools-ready">—</p>
+                </div>
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Needs Params</p>
+                    <p class="text-2xl font-black text-amber-600" id="tools-needs-params">—</p>
+                </div>
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Broken</p>
+                    <p class="text-2xl font-black text-red-600" id="tools-broken">—</p>
                 </div>
             </div>
 
@@ -768,6 +780,12 @@ Telegram / WhatsApp gönder</textarea>
                         <option value="denied">Denied</option>
                         <option value="approval">Approval</option>
                     </select>
+                    <select id="tools-health-filter" class="bg-gray-50 border border-gray-200 rounded px-2 py-1.5 text-xs outline-none">
+                        <option value="">Tüm Health</option>
+                        <option value="ready">ready</option>
+                        <option value="needs_params">needs_params</option>
+                        <option value="broken">broken</option>
+                    </select>
                     <button onclick="loadTools()" class="px-3 py-1.5 bg-gray-900 text-white rounded text-xs font-bold hover:bg-black">Yenile</button>
                 </div>
                 <div class="overflow-x-auto">
@@ -776,6 +794,8 @@ Telegram / WhatsApp gönder</textarea>
                             <tr class="border-b border-gray-100 bg-gray-50/50">
                                 <th class="text-left px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Tool</th>
                                 <th class="text-left px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Group</th>
+                                <th class="text-center px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Health</th>
+                                <th class="text-left px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Params</th>
                                 <th class="text-right px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Calls</th>
                                 <th class="text-right px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Success</th>
                                 <th class="text-center px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Allow</th>
@@ -784,7 +804,7 @@ Telegram / WhatsApp gönder</textarea>
                             </tr>
                         </thead>
                         <tbody id="tools-table" class="divide-y divide-gray-50">
-                            <tr><td colspan="7" class="px-4 py-4 text-center text-xs text-gray-400">Yükleniyor...</td></tr>
+                            <tr><td colspan="9" class="px-4 py-4 text-center text-xs text-gray-400">Yükleniyor...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -1697,24 +1717,51 @@ async function approveAction(id, approved) {
 }
 
 // ── Tools tab ──────────────────────────────────────────────────────────────
+function escapeToolText(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
+function renderToolHealthBadge(health) {
+    const status = String(health?.status || 'unknown');
+    const map = {
+        ready: 'bg-emerald-100 text-emerald-700',
+        needs_params: 'bg-amber-100 text-amber-700',
+        broken: 'bg-red-100 text-red-700',
+        unknown: 'bg-gray-100 text-gray-600',
+    };
+    const label = status === 'needs_params' ? 'needs params' : status;
+    const cls = map[status] || map.unknown;
+    return `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold ${cls}">${label}</span>`;
+}
+
 async function loadTools() {
     const q = encodeURIComponent(document.getElementById('tools-search')?.value || '');
     const group = encodeURIComponent(document.getElementById('tools-group-filter')?.value || '');
     const policy = encodeURIComponent(document.getElementById('tools-policy-filter')?.value || '');
+    const health = encodeURIComponent(document.getElementById('tools-health-filter')?.value || '');
     const table = document.getElementById('tools-table');
     if (!table) return;
     try {
-        const r = await fetch(API + `/api/tools?q=${q}&group=${group}&policy=${policy}`);
+        const r = await fetch(API + `/api/tools?q=${q}&group=${group}&policy=${policy}&health=${health}`);
         const d = await r.json();
         const tools = d.tools || [];
         const sum = d.summary || {};
+        const hs = sum.health || {};
         document.getElementById('tools-total').textContent = sum.total ?? 0;
         document.getElementById('tools-allowed').textContent = sum.allowed ?? 0;
         document.getElementById('tools-denied').textContent = sum.denied ?? 0;
         document.getElementById('tools-approval').textContent = sum.approval_required ?? 0;
+        document.getElementById('tools-ready').textContent = hs.ready ?? 0;
+        document.getElementById('tools-needs-params').textContent = hs.needs_params ?? 0;
+        document.getElementById('tools-broken').textContent = hs.broken ?? 0;
 
         if (!tools.length) {
-            table.innerHTML = '<tr><td colspan="7" class="px-4 py-4 text-center text-xs text-gray-400">Tool bulunamadı</td></tr>';
+            table.innerHTML = '<tr><td colspan="9" class="px-4 py-4 text-center text-xs text-gray-400">Tool bulunamadı</td></tr>';
         } else {
             table.innerHTML = tools.map(t => `
                 <tr>
@@ -1723,6 +1770,11 @@ async function loadTools() {
                         <div class="text-[10px] text-gray-400 truncate">${t.description || ''}</div>
                     </td>
                     <td class="px-4 py-2.5 text-xs text-gray-500">${t.group || 'other'}</td>
+                    <td class="px-4 py-2.5 text-center">${renderToolHealthBadge(t.health || {})}</td>
+                    <td class="px-4 py-2.5 text-xs text-gray-500">
+                        <div class="truncate max-w-52">${escapeToolText((t.health?.required_params || []).join(', ') || '-')}</div>
+                        ${(t.health?.load_error ? `<div class="text-[10px] text-red-500 truncate max-w-52">${escapeToolText(t.health.load_error)}</div>` : '')}
+                    </td>
                     <td class="px-4 py-2.5 text-xs text-right">${t.usage?.calls ?? 0}</td>
                     <td class="px-4 py-2.5 text-xs text-right">${Math.round(t.usage?.success_rate ?? 0)}%</td>
                     <td class="px-4 py-2.5 text-center">
@@ -1743,7 +1795,7 @@ async function loadTools() {
             select.innerHTML = tools.map(t => `<option value="${t.name}">${t.name} (${t.group})</option>`).join('');
         }
     } catch(e) {
-        table.innerHTML = '<tr><td colspan="7" class="px-4 py-4 text-center text-xs text-red-400">Tools API hatası</td></tr>';
+        table.innerHTML = '<tr><td colspan="9" class="px-4 py-4 text-center text-xs text-red-400">Tools API hatası</td></tr>';
     }
 }
 

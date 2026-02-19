@@ -1,11 +1,9 @@
 """Document Summarizer - Use LLM to summarize documents"""
 
-import asyncio
 from pathlib import Path
 from typing import Any
 from utils.logger import get_logger
 from security.validator import validate_path
-from config.settings import OLLAMA_HOST, OLLAMA_MODEL
 
 logger = get_logger("office.summarizer")
 
@@ -46,10 +44,39 @@ async def summarize_document(
                 from .excel_tools import read_excel
                 result = await read_excel(path)
                 if result.get("success"):
-                    document_content = result.get("text_output", "")
+                    rows = result.get("data")
+                    if isinstance(rows, list):
+                        preview_lines = []
+                        for row in rows[:200]:
+                            if isinstance(row, dict):
+                                line = " | ".join(f"{k}: {v}" for k, v in row.items())
+                            elif isinstance(row, (list, tuple)):
+                                line = " | ".join(str(v) for v in row)
+                            else:
+                                line = str(row)
+                            if line.strip():
+                                preview_lines.append(line.strip())
+                        document_content = "\n".join(preview_lines)
+                    elif isinstance(rows, dict):
+                        sections = []
+                        for sheet, sheet_rows in rows.items():
+                            sections.append(f"[Sheet: {sheet}]")
+                            if isinstance(sheet_rows, list):
+                                for row in sheet_rows[:100]:
+                                    if isinstance(row, dict):
+                                        sections.append(" | ".join(f"{k}: {v}" for k, v in row.items()))
+                                    elif isinstance(row, (list, tuple)):
+                                        sections.append(" | ".join(str(v) for v in row))
+                                    else:
+                                        sections.append(str(row))
+                        document_content = "\n".join(sections)
+                    else:
+                        document_content = str(result.get("summary", "") or "")
             elif ext == ".pdf":
                 from .pdf_tools import read_pdf
-                result = await read_pdf(path, max_chars=MAX_CONTENT_LENGTH)
+                result = await read_pdf(path, extract_tables=False, use_ocr=False)
+                if result.get("success"):
+                    document_content = str(result.get("content", "") or "")[:MAX_CONTENT_LENGTH]
             elif ext == ".txt":
                 # Simple text file
                 is_valid, error, _ = validate_path(path)
@@ -84,31 +111,25 @@ async def summarize_document(
         prompt = style_prompts.get(style, style_prompts["brief"])
         full_prompt = f"{prompt}\n\nBelge:\n{document_content}"
 
-        # Call Ollama for summarization
+        # Use the configured global LLM stack (OpenAI/Groq/Gemini/Ollama...)
         try:
-            import httpx
-        except ImportError:
-            return {"success": False, "error": "httpx kurulu değil"}
+            from core.llm_client import LLMClient
+            llm = LLMClient()
+            summary = (await llm.generate(
+                full_prompt,
+                system_prompt=(
+                    "Sen profesyonel bir döküman özetleyicisin. "
+                    "Yanıtını sadece istenen özeti üretmek için kullan. "
+                    "Gereksiz giriş/çıkış cümleleri ekleme."
+                ),
+                role="analysis",
+            )).strip()
+        except Exception as llm_exc:
+            logger.error(f"LLM summarize error: {llm_exc}")
+            return {"success": False, "error": f"LLM özetleme hatası: {llm_exc}"}
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                f"{OLLAMA_HOST}/api/generate",
-                json={
-                    "model": OLLAMA_MODEL,
-                    "prompt": full_prompt,
-                    "stream": False,
-                    "options": {
-                        "num_predict": 500,
-                        "temperature": 0.3
-                    }
-                }
-            )
-
-            if response.status_code != 200:
-                return {"success": False, "error": f"LLM hatası: {response.status_code}"}
-
-            result = response.json()
-            summary = result.get("response", "").strip()
+        if summary.lower().startswith("hata:"):
+            return {"success": False, "error": summary}
 
         if not summary:
             return {"success": False, "error": "Özet oluşturulamadı"}

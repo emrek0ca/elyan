@@ -13,6 +13,32 @@ LOG_FILE = Path.home() / ".elyan" / "logs" / "gateway.log"
 DEFAULT_PORT = int(os.environ.get("ELYAN_PORT", 18789))
 
 
+def _resolve_project_root() -> Path:
+    """
+    Resolve Elyan project root robustly for both editable and wheel installs.
+    Priority:
+    1) ELYAN_PROJECT_DIR env
+    2) current working directory (if it looks like project root)
+    3) parent traversal from this file
+    """
+    env_root = os.environ.get("ELYAN_PROJECT_DIR")
+    if env_root:
+        p = Path(env_root).expanduser().resolve()
+        if (p / "main.py").exists():
+            return p
+
+    cwd = Path.cwd().resolve()
+    if (cwd / "main.py").exists() and (cwd / "cli").exists():
+        return cwd
+
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "main.py").exists() and (parent / "cli").exists():
+            return parent
+
+    # Last resort: current directory
+    return cwd
+
+
 def _read_pidfile() -> int | None:
     if not PID_FILE.exists():
         return None
@@ -176,9 +202,14 @@ def start_gateway(daemon=False, port: int | None = None):
 
     print("🚀  Starting Elyan Gateway...")
     
-    # We are calling main.py from the root
-    root_dir = Path(__file__).parent.parent.parent
+    # Resolve project root even when command is executed from installed wheel.
+    root_dir = _resolve_project_root()
     main_script = root_dir / "main.py"
+    if not main_script.exists():
+        print("❌  main.py bulunamadı.")
+        print(f"    Çalışma dizini: {root_dir}")
+        print("    Çözüm: proje klasöründe çalıştırın veya ELYAN_PROJECT_DIR ayarlayın.")
+        return
     
     if daemon:
         # Launch independent process
@@ -214,10 +245,10 @@ def start_gateway(daemon=False, port: int | None = None):
         for _ in range(40):  # ~20s max
             time.sleep(0.5)
             if proc.poll() is not None:
-                # Process may exit if launchd/service reclaims startup. Re-check listener.
+                # Process may exit if launchd/service reclaims startup. Re-check health.
                 adopted_pid = _running_gateway_pid(gateway_port)
                 status = _fetch_gateway_status(gateway_port)
-                if adopted_pid or status.get("ok"):
+                if status.get("ok"):
                     ready = True
                     break
                 continue
@@ -245,6 +276,43 @@ def start_gateway(daemon=False, port: int | None = None):
                     print(f"    Kontrol: lsof -nP -iTCP:{gateway_port} -sTCP:LISTEN")
                     _clear_pidfile()
                     return
+                # Retry once automatically for transient startup races.
+                print("⚠️  İlk başlangıç başarısız, otomatik olarak bir kez daha deneniyor...")
+                time.sleep(1.0)
+                with open(log_file, "a") as retry_log:
+                    retry_proc = subprocess.Popen(
+                        [sys.executable, str(main_script), "--cli"],
+                        stdout=retry_log,
+                        stderr=retry_log,
+                        cwd=str(root_dir),
+                        env=env,
+                        start_new_session=True,
+                    )
+
+                _write_pidfile(retry_proc.pid)
+                print(f"✅  Retry process başlatıldı (PID: {retry_proc.pid})")
+
+                retry_ready = False
+                for _ in range(30):  # ~15s max
+                    time.sleep(0.5)
+                    retry_status = _fetch_gateway_status(gateway_port)
+                    if retry_status.get("ok"):
+                        retry_ready = True
+                        break
+                    if retry_proc.poll() is not None:
+                        continue
+
+                if retry_ready:
+                    print(f"✅  Gateway is healthy at http://127.0.0.1:{gateway_port}")
+                    return
+
+                retry_takeover = _running_gateway_pid(gateway_port)
+                if retry_takeover and _is_elyan_like_process(retry_takeover):
+                    _write_pidfile(retry_takeover)
+                    print(f"ℹ️  Retry süreci çıktı fakat gateway çalışıyor (PID: {retry_takeover}).")
+                    print(f"✅  Gateway is healthy at http://127.0.0.1:{gateway_port}")
+                    return
+
                 print("❌  Gateway process exited during startup. Logları kontrol edin:")
                 print(f"    tail -n 120 {log_file}")
                 _clear_pidfile()

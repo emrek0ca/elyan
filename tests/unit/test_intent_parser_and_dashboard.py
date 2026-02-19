@@ -76,6 +76,13 @@ def test_running_apps_phrase_routes_to_get_running_apps():
     assert result.get("action") == "get_running_apps"
 
 
+def test_telegram_open_phrase_not_misclassified_as_system_info():
+    parser = IntentParser()
+    result = parser.parse("Telegramı aç ve bana mesaj gönder")
+    assert result.get("action") != "get_system_info"
+    assert result.get("action") in {"open_app", "multi_task"}
+
+
 def test_dashboard_no_browser_mode_does_not_open(monkeypatch):
     opened = []
     monkeypatch.setattr(dashboard.webbrowser, "open", lambda url: opened.append(url))

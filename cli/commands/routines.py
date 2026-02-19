@@ -58,6 +58,32 @@ def _parse_panels(raw: str) -> list[str]:
     return out
 
 
+def _resolve_routine_id(port: int, raw_id: str) -> tuple[str | None, str | None]:
+    rid = str(raw_id or "").strip()
+    if not rid:
+        return None, "id gerekli."
+
+    resp = _api_request("GET", "/api/routines", port=port)
+    if not resp["ok"]:
+        return None, f"Routines API hatası: {resp['data'].get('error', 'unknown')}"
+
+    routines = resp["data"].get("routines", [])
+    ids = [str(x.get("id", "")).strip() for x in routines if isinstance(x, dict)]
+    ids = [x for x in ids if x]
+
+    if rid in ids:
+        return rid, None
+
+    matches = [x for x in ids if x.startswith(rid)]
+    if not matches:
+        return None, "routine not found"
+    if len(matches) > 1:
+        preview = ", ".join(matches[:5])
+        more = "" if len(matches) <= 5 else f", +{len(matches) - 5} more"
+        return None, f"id belirsiz ({len(matches)} eşleşme): {preview}{more}"
+    return matches[0], None
+
+
 def run(args):
     action = getattr(args, "action", None)
     if not action:
@@ -77,11 +103,11 @@ def run(args):
         if not routines:
             print("Kayıtlı rutin yok.")
             return
-        print(f"{'ID':<12} {'DURUM':<8} {'CRON':<14} {'Kanal':<10} {'Ad'}")
+        print(f"{'ID':<16} {'DURUM':<8} {'CRON':<14} {'Kanal':<10} {'Ad'}")
         print("─" * 80)
         for x in routines:
             st = "aktif" if x.get("enabled", True) else "pasif"
-            print(f"{x.get('id','?'):<12} {st:<8} {x.get('expression','?'):<14} {x.get('report_channel','-'):<10} {x.get('name','')}")
+            print(f"{x.get('id','?'):<16} {st:<8} {x.get('expression','?'):<14} {x.get('report_channel','-'):<10} {x.get('name','')}")
     elif action == "templates":
         r = _api_request("GET", "/api/routines/templates", port=port)
         if not r["ok"]:
@@ -146,9 +172,9 @@ def run(args):
         item = r["data"].get("routine", {})
         print(f"✅  Rutin eklendi: {item.get('id')} — {item.get('name')}")
     elif action == "rm":
-        rid = str(getattr(args, "id", "") or "").strip()
-        if not rid:
-            print("❌  id gerekli.")
+        rid, rid_err = _resolve_routine_id(port, getattr(args, "id", ""))
+        if rid_err:
+            print(f"❌  {rid_err}")
             return
         r = _api_request("DELETE", f"/api/routines/{rid}", port=port)
         if not r["ok"]:
@@ -156,9 +182,9 @@ def run(args):
             return
         print(f"✅  Rutin kaldırıldı: {rid}")
     elif action in {"enable", "disable"}:
-        rid = str(getattr(args, "id", "") or "").strip()
-        if not rid:
-            print("❌  id gerekli.")
+        rid, rid_err = _resolve_routine_id(port, getattr(args, "id", ""))
+        if rid_err:
+            print(f"❌  {rid_err}")
             return
         enabled = action == "enable"
         r = _api_request("POST", "/api/routines/toggle", payload={"id": rid, "enabled": enabled}, port=port)
@@ -167,9 +193,9 @@ def run(args):
             return
         print(f"✅  {rid} {'aktif' if enabled else 'pasif'}")
     elif action == "run":
-        rid = str(getattr(args, "id", "") or "").strip()
-        if not rid:
-            print("❌  id gerekli.")
+        rid, rid_err = _resolve_routine_id(port, getattr(args, "id", ""))
+        if rid_err:
+            print(f"❌  {rid_err}")
             return
         r = _api_request("POST", "/api/routines/run", payload={"id": rid}, port=port)
         if not r["ok"]:
@@ -182,6 +208,12 @@ def run(args):
             print(report[:1200])
     elif action == "history":
         rid = str(getattr(args, "id", "") or "").strip()
+        if rid:
+            resolved, rid_err = _resolve_routine_id(port, rid)
+            if rid_err:
+                print(f"❌  {rid_err}")
+                return
+            rid = resolved or rid
         path = "/api/routines/history"
         if rid:
             path += f"?id={rid}"

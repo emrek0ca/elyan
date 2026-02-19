@@ -774,12 +774,30 @@ class Agent:
         if low_action == "multi_task":
             tasks = intent.get("tasks") if isinstance(intent.get("tasks"), list) else []
             outputs = []
-            for i, task in enumerate(tasks, start=1):
+            previous_output_text = ""
+            i = 0
+            while i < len(tasks):
+                task = tasks[i]
                 if not isinstance(task, dict):
+                    i += 1
                     continue
+
+                # If a document write step appears before its content-producing step,
+                # pull the closest research/summary task forward.
+                if self._task_needs_previous_output(task) and not previous_output_text:
+                    next_ctx_idx = self._find_next_context_task_index(tasks, start=i + 1)
+                    if next_ctx_idx is not None:
+                        tasks.insert(i, tasks.pop(next_ctx_idx))
+                        task = tasks[i]
+
                 t_action = str(task.get("action", "") or "")
                 t_params = task.get("params", {}) if isinstance(task.get("params"), dict) else {}
-                t_desc = str(task.get("description", "") or f"Adım {i}")
+                t_desc = str(task.get("description", "") or f"Adım {i + 1}")
+                t_params = self._hydrate_task_params_from_previous(
+                    t_action,
+                    t_params,
+                    previous_output_text,
+                )
                 result = await self._execute_tool(
                     t_action,
                     t_params,
@@ -787,7 +805,10 @@ class Agent:
                     step_name=t_desc,
                 )
                 text = self._format_result_text(result)
-                outputs.append(f"[{i}] {t_desc}\n{text}")
+                if isinstance(text, str) and text.strip() and not text.lower().startswith("hata:"):
+                    previous_output_text = text.strip()
+                outputs.append(f"[{i + 1}] {t_desc}\n{text}")
+                i += 1
             return "\n\n".join(outputs) if outputs else "Çok adımlı görev için yürütülebilir adım bulunamadı."
 
         if low_action == "show_help":
@@ -838,6 +859,106 @@ class Agent:
         result = await self._execute_tool(action, params, user_input=user_input, step_name=intent.get("reply", ""))
         return self._format_result_text(result)
 
+    def _task_needs_previous_output(self, task: dict) -> bool:
+        action = str(task.get("action", "") or "").strip()
+        if not action:
+            return False
+        params = task.get("params", {}) if isinstance(task.get("params"), dict) else {}
+        mapped = ACTION_TO_TOOL.get(action, action)
+
+        if mapped in {"write_file", "write_word"}:
+            content = params.get("content") or params.get("text") or params.get("body") or params.get("message")
+            return not (isinstance(content, str) and content.strip())
+
+        if mapped == "write_excel":
+            if params.get("data"):
+                return False
+            content = params.get("content") or params.get("text") or params.get("message")
+            return not (isinstance(content, str) and content.strip())
+
+        return False
+
+    def _is_context_producer_action(self, action: str) -> bool:
+        mapped = ACTION_TO_TOOL.get(str(action or "").strip(), str(action or "").strip())
+        if not mapped:
+            return False
+        if "research" in mapped:
+            return True
+        return mapped in {
+            "web_search",
+            "fetch_page",
+            "extract_text",
+            "read_file",
+            "read_word",
+            "read_excel",
+            "read_pdf",
+            "summarize_text",
+            "summarize_url",
+            "summarize_file",
+            "smart_summarize",
+            "analyze_document",
+        }
+
+    def _find_next_context_task_index(self, tasks: list, start: int = 0) -> int | None:
+        for idx in range(max(0, int(start or 0)), len(tasks)):
+            task = tasks[idx]
+            if not isinstance(task, dict):
+                continue
+            if self._is_context_producer_action(str(task.get("action", "") or "")):
+                return idx
+        return None
+
+    def _hydrate_task_params_from_previous(self, action: str, params: dict, previous_output: str) -> dict:
+        clean = dict(params or {})
+        prev = str(previous_output or "").strip()
+        if not prev:
+            return clean
+
+        mapped = ACTION_TO_TOOL.get(str(action or "").strip(), str(action or "").strip())
+        if mapped in {"write_file", "write_word"}:
+            content = clean.get("content") or clean.get("text") or clean.get("body") or clean.get("message")
+            if not (isinstance(content, str) and content.strip()):
+                clean["content"] = prev[:12000]
+            return clean
+
+        if mapped == "write_excel" and not clean.get("data"):
+            rows = []
+            for line in prev.splitlines():
+                item = line.strip().lstrip("-• ").strip()
+                if item:
+                    rows.append({"Veri": item[:500]})
+            clean["data"] = rows[:200] if rows else [{"Veri": prev[:1000]}]
+            clean.setdefault("headers", ["Veri"])
+            return clean
+
+        return clean
+
+    @staticmethod
+    def _extract_inline_write_content(text: str) -> str:
+        raw = str(text or "").strip()
+        if not raw:
+            return ""
+
+        patterns = (
+            r"(?:içine|icine|içeriğine|icerigine)\s+(.+?)\s+yaz",
+            r"(?:içerik|icerik|content|konu)\s*[:\-]\s*(.+)$",
+        )
+        for pat in patterns:
+            m = _re.search(pat, raw, _re.IGNORECASE)
+            if not m:
+                continue
+            content = str(m.group(1) or "").strip()
+            content = _re.sub(
+                r"\b(word|excel|dosya(?:sı)?|belge(?:si)?|tablo(?:su)?|oluştur|olustur|kaydet)\b",
+                " ",
+                content,
+                flags=_re.IGNORECASE,
+            )
+            content = _re.sub(r"\s+", " ", content).strip(" .,:;-")
+            if len(content) >= 3:
+                return content
+        return ""
+
     def _extract_topic(self, user_input: str, step_name: str = "") -> str:
         text = " ".join((step_name or "", user_input or "")).strip()
         if not text:
@@ -862,6 +983,8 @@ class Agent:
         )
         for token in sorted(word_tokens, key=len, reverse=True):
             lowered = _re.sub(rf"\b{_re.escape(token)}\b", " ", lowered)
+        lowered = _re.sub(r"\b(?:araştır\w*|arastir\w*|research\w*|incele\w*)\b", " ", lowered, flags=_re.IGNORECASE)
+        lowered = _re.sub(r"\b(?:yaz\w*|kaydet\w*|oluştur\w*|olustur\w*)\b", " ", lowered, flags=_re.IGNORECASE)
         lowered = _re.sub(r"\s+", " ", lowered).strip(" .,:;-")
         return lowered or "genel konu"
 
@@ -905,6 +1028,8 @@ class Agent:
         )
         for token in strip_tokens:
             cleaned = _re.sub(rf"\b{_re.escape(token)}\b", " ", cleaned)
+        cleaned = _re.sub(r"\b(?:araştır\w*|arastir\w*|research\w*|incele\w*)\b", " ", cleaned, flags=_re.IGNORECASE)
+        cleaned = _re.sub(r"\b(?:içine|icine|içeriğine|icerigine|tabloya|dosyaya|belgeye|yaz\w*|kaydet\w*)\b", " ", cleaned, flags=_re.IGNORECASE)
 
         cleaned = _re.sub(r"\s+", " ", cleaned).strip(" .,:;-")
         if len(cleaned) < 2:
@@ -954,9 +1079,10 @@ class Agent:
                 path = f"~/Desktop/{filename}"
                 clean["path"] = path
 
+            inline_content = self._extract_inline_write_content(user_input)
             content = clean.get("content")
             if not isinstance(content, str) or not content.strip():
-                content = clean.get("text") or clean.get("body") or clean.get("message") or ""
+                content = clean.get("text") or clean.get("body") or clean.get("message") or inline_content or ""
             if not isinstance(content, str) or not content.strip():
                 if any(tok in user_input.lower() for tok in ("bunu", "dosya olarak", "kaydet", "masaüst")):
                     content = self._get_recent_assistant_text(user_input)
@@ -971,14 +1097,17 @@ class Agent:
                     filename = f"{Path(filename).stem}.docx"
                 path = f"~/Desktop/{filename}"
             clean["path"] = path
+            clean.pop("filename", None)
 
+            inline_content = self._extract_inline_write_content(user_input)
             content = clean.get("content")
             if not isinstance(content, str) or not content.strip():
-                content = clean.get("text") or clean.get("body") or clean.get("message") or ""
+                content = clean.get("text") or clean.get("body") or clean.get("message") or inline_content or ""
             if not isinstance(content, str) or not content.strip():
                 content = self._get_recent_assistant_text(user_input)
             if not isinstance(content, str) or not content.strip():
-                content = "İçerik belirtilmedi."
+                topic = self._extract_topic(user_input, step_name)
+                content = topic if topic and topic != "genel konu" else "İçerik belirtilmedi."
             clean["content"] = content
             clean.setdefault("title", self._extract_topic(user_input, step_name).title() or "Belge")
         elif tool_name == "write_excel":
@@ -989,14 +1118,18 @@ class Agent:
                     filename = f"{Path(filename).stem}.xlsx"
                 path = f"~/Desktop/{filename}"
             clean["path"] = path
+            clean.pop("filename", None)
 
             data = clean.get("data")
             if not data:
+                inline_content = self._extract_inline_write_content(user_input)
                 text_seed = (
                     clean.get("content")
                     or clean.get("text")
                     or clean.get("message")
+                    or inline_content
                     or self._get_recent_assistant_text(user_input)
+                    or self._extract_topic(user_input, step_name)
                 )
                 if isinstance(text_seed, str) and text_seed.strip():
                     rows = []

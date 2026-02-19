@@ -287,6 +287,53 @@ def test_agent_runs_multi_task_intent_directly(monkeypatch):
     assert "/tmp/elyan_test.png" in response
 
 
+def test_agent_multi_task_reorders_research_before_empty_word_write(monkeypatch):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+    agent.quick_intent = _DummyQuickIntent()
+    agent.intent_parser = SimpleNamespace(
+        parse=lambda _text: {
+            "action": "multi_task",
+            "tasks": [
+                {
+                    "id": "task_1",
+                    "action": "create_word_document",
+                    "params": {"filename": "rapor.docx", "content": "", "path": "~/Desktop/rapor.docx"},
+                    "description": "Word dosyası oluştur",
+                },
+                {
+                    "id": "task_2",
+                    "action": "research",
+                    "params": {"topic": "köpekler", "depth": "standard"},
+                    "description": "Köpekler hakkında araştır",
+                },
+            ],
+        }
+    )
+
+    captured = {}
+
+    async def _fake_advanced_research(topic: str, depth: str = "standard"):
+        _ = (topic, depth)
+        return {"success": True, "summary": "Köpekler hakkında araştırma özeti"}
+
+    async def _fake_write_word(path=None, content="", title=None, paragraphs=None):
+        captured["path"] = path
+        captured["content"] = content
+        _ = (title, paragraphs)
+        return {"success": True, "path": path or "~/Desktop/rapor.docx"}
+
+    monkeypatch.setattr(
+        "core.agent.AVAILABLE_TOOLS",
+        {"advanced_research": _fake_advanced_research, "write_word": _fake_write_word},
+    )
+
+    response = asyncio.run(agent.process("word dosyası oluştur ve içine köpek araştırmasını yaz"))
+    assert "araştırma özeti" in str(captured.get("content", "")).lower()
+    assert "Köpekler hakkında araştırma özeti" in response
+
+
 def test_agent_uses_learning_quick_match_for_safe_action(monkeypatch):
     agent = Agent()
     agent.llm = _DummyLLM()

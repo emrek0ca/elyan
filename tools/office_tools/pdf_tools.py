@@ -1,15 +1,21 @@
 """PDF Tools - Advanced Extraction, OCR, and Table Parsing"""
 
 import asyncio
-import os
 import pdfplumber
 from pathlib import Path
-from typing import Any, List, Dict, Optional
+from typing import Any
 from utils.logger import get_logger
 from security.validator import validate_path
-from PIL import Image
-import pytesseract
-from pdf2image import convert_from_path
+
+try:
+    import pytesseract
+except Exception:  # pragma: no cover - optional dependency
+    pytesseract = None
+
+try:
+    from pdf2image import convert_from_path
+except Exception:  # pragma: no cover - optional dependency
+    convert_from_path = None
 
 logger = get_logger("office.pdf")
 
@@ -29,6 +35,11 @@ async def read_pdf(
 
         file_path = Path(path).expanduser().resolve()
         if not file_path.exists(): return {"success": False, "error": f"Dosya bulunamadı: {file_path.name}"}
+        warnings: list[str] = []
+        ocr_available = bool(pytesseract and convert_from_path)
+        if use_ocr and not ocr_available:
+            warnings.append("OCR bağımlılıkları eksik (pytesseract/pdf2image). OCR atlandı.")
+            logger.warning("read_pdf OCR requested but pytesseract/pdf2image unavailable")
 
         def _read():
             results = []
@@ -44,10 +55,13 @@ async def read_pdf(
                     page = pdf.pages[p_idx]
                     text = page.extract_text() or ""
                     
-                    if use_ocr and not text.strip():
-                        images = convert_from_path(str(file_path), first_page=p_idx+1, last_page=p_idx+1)
-                        if images:
-                            text = pytesseract.image_to_string(images[0], lang='tur+eng')
+                    if use_ocr and ocr_available and not text.strip():
+                        try:
+                            images = convert_from_path(str(file_path), first_page=p_idx + 1, last_page=p_idx + 1)
+                            if images:
+                                text = pytesseract.image_to_string(images[0], lang='tur+eng')
+                        except Exception as ocr_exc:
+                            warnings.append(f"Sayfa {p_idx + 1} OCR başarısız: {ocr_exc}")
                     
                     full_text += f"--- Sayfa {p_idx+1} ---\n{text}\n\n"
                     
@@ -69,7 +83,9 @@ async def read_pdf(
             "filename": file_path.name,
             "content": content,
             "tables": tables,
-            "total_pages": total_pages
+            "total_pages": total_pages,
+            "ocr_used": bool(use_ocr and ocr_available),
+            "warnings": warnings,
         }
     except Exception as e:
         logger.error(f"Read PDF error: {e}")

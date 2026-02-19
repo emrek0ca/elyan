@@ -99,6 +99,7 @@ if [[ ! -x "\$PROJECT_DIR/.venv/bin/python3" ]]; then
   echo "Elyan launcher hatası: \$PROJECT_DIR/.venv/bin/python3 bulunamadı." >&2
   exit 1
 fi
+export ELYAN_PROJECT_DIR="\$PROJECT_DIR"
 cd "\$PROJECT_DIR" || exit 1
 exec "\$PROJECT_DIR/.venv/bin/python3" -m cli.main "\$@"
 EOF

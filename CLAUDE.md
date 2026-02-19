@@ -720,3 +720,120 @@ mkdocs serve
 - `bash -n install.sh` → **OK**
 - `/Users/emrekoca/Desktop/bot/.venv/bin/elyan version` (repo dışından da) → **Elyan CLI v18.0.0**
 - `source .venv/bin/activate && elyan version` → **Elyan CLI v18.0.0**
+
+## OTURUM GÜNCELLEMESİ — 2026-02-19 (TOOL RELIABILITY HOTFIX + GATEWAY STARTUP HARDENING) ✅
+- `tools/system_tools.py` — tool imza/çalıştırma hataları giderildi:
+  - `set_volume()` artık `mute` parametresini destekliyor (`mute/unmute` + seviye ayarı).
+  - AppleScript çağrıları doğru sözdizimiyle ve dönüş kodu kontrolüyle çalıştırılıyor.
+  - `get_process_info()` artık `process_name` olmadan da çalışıyor (top process listesi fallback).
+- `core/intent_parser/_system.py` — doğal dilde process sorguları daha doğru route ediliyor:
+  - `"hangi uygulamalar çalışıyor"` ve benzeri cümleler artık `get_running_apps` aksiyonuna düşüyor.
+- `core/agent.py` — fallback yürütme ve sonuç kalitesi güçlendirildi:
+  - `_execute_tool()` içinde resolved tool unavailable durumunda `NoneType callable` crash engellendi.
+  - `_prepare_tool_params()` içinde `set_volume`/`get_process_info` param normalizasyonu geliştirildi.
+  - `_format_result_text()` insan-dostu çıktı iyileştirmeleri:
+    - çalışan uygulama listesi,
+    - WiFi durum mesajı,
+    - ses durumu mesajı,
+    - sistem özeti.
+- `cli/commands/gateway.py` — non-editable (wheel) kurulumda gateway start çökmesi düzeltildi:
+  - proje kök dizini artık `_resolve_project_root()` ile güvenli şekilde bulunuyor.
+  - `main.py` bulunamazsa net yönlendirici hata veriliyor.
+  - böylece `site-packages/main.py bulunamadı` tipi startup hataları temizlendi.
+- `install.sh` — launcher dayanıklılığı artırıldı:
+  - global launcher artık `ELYAN_PROJECT_DIR` export ediyor.
+
+**Ek testler / güncellemeler:**
+- `tests/unit/test_agent_routing.py`
+  - set_volume mute param hazırlığı testi,
+  - get_process_info default param testi,
+  - unavailable resolved tool için güvenli hata testi.
+- `tests/unit/test_intent_parser_and_dashboard.py`
+  - "hangi uygulamalar çalışıyor" → `get_running_apps` yönlendirme testi.
+
+**Doğrulama:**
+- `PYTHONPATH=. ./.venv/bin/pytest -q tests/unit/test_agent_routing.py tests/unit/test_intent_parser_and_dashboard.py` → **28 passed**
+- `PYTHONPATH=. ./.venv/bin/pytest -q tests/unit/test_gateway_cli.py tests/unit/test_cli_main.py` → **8 passed**
+- canlı smoke (agent):
+  - `sesi kapat` → başarılı,
+  - `hangi uygulamalar çalışıyor` → uygulama listesi döndü,
+  - `wifi durumu` → anlamlı durum çıktısı döndü,
+  - `safariyi aç ve köpekler hakkında araştırma yap` → open_app + research birlikte başarılı.
+- gateway doğrulama:
+  - `elyan gateway restart --daemon --port 18789`
+  - `elyan gateway health --json --port 18789` → **healthy: true**
+
+## OTURUM GÜNCELLEMESİ — 2026-02-19 (NATURAL-LANGUAGE TOOL FIXES + ROUTINE ID RELIABILITY) ✅
+- `core/intent_parser/_system.py` — yanlış intent eşleşmesi düzeltildi:
+  - `get_system_info` parser’ı artık substring ile değil **word-boundary regex** ile tetikleniyor.
+  - kritik hata giderildi: `Telegramı aç...` cümlesindeki `ram` substring’i nedeniyle `get_system_info` tetiklenmesi artık yok.
+- `core/intent_parser/_apps.py` — uygulama adı yakalama profesyonelleştirildi:
+  - `_parse_open_app` içinde alias eşleşmesi Türkçe eklerle (`-ı/-i/-yi/-dan/...`) regex tabanlı hale getirildi.
+  - `telegramı`, `safariyi` gibi doğal kullanımlar daha stabil yakalanıyor.
+- `core/agent.py` — çok adımlı görev yürütme güçlendirildi:
+  - `multi_task` akışında boş içerikli doküman adımı (Word/Excel/TXT), gerekiyorsa araştırma/özet adımından **sonra** çalışacak şekilde yeniden sıralanıyor.
+  - önceki adım çıktısı doküman yazım adımına otomatik hydrate ediliyor:
+    - `write_word`/`write_file` için `content`,
+    - `write_excel` için satırlaştırılmış `data`.
+  - `write_word` ve `write_excel` param hazırlığında `filename` artık tool call’a forward edilmiyor (unexpected keyword hatası giderildi).
+  - inline içerik çıkarımı eklendi (`"içine ... yaz"`, `"içerik: ..."`), boş dosya üretme riski düşürüldü.
+  - araştırma topic temizleme iyileştirildi (`araştırmasını`, `yaz`, `kaydet`, `içine` gibi gürültüler temizleniyor).
+- `cli/commands/routines.py` — rutin ID kullanımında güvenilirlik artırıldı:
+  - `rm/enable/disable/run/history` için prefix-aware ID çözümleme eklendi.
+  - belirsiz prefix durumunda anlaşılır hata veriliyor; geçerli eşleşmede tam ID kullanılıyor.
+  - `routines list` tablo ID kolonu genişletildi.
+- `tests/unit/test_intent_parser_and_dashboard.py`
+  - `Telegramı aç ve bana mesaj gönder` ifadesinin `get_system_info`’ya düşmemesi için regresyon testi eklendi.
+- `tests/unit/test_agent_routing.py`
+  - boş Word adımı + araştırma kombinasyonunda doğru sıra/hydration davranışı için regresyon testi eklendi.
+
+**Doğrulama:**
+- `PYTHONPATH=. ./.venv/bin/pytest -q tests/unit/test_agent_routing.py tests/unit/test_intent_parser_and_dashboard.py` → **30 passed**
+- `PYTHONPATH=. ./.venv/bin/pytest -q tests/unit/test_gateway_cli.py tests/unit/test_cli_main.py tests/unit/test_routine_engine.py` → **14 passed**
+
+## OTURUM GÜNCELLEMESİ — 2026-02-19 (TOOL HEALTH VISIBILITY + OFFICE TOOL STABILITY) ✅
+- `tools/office_tools/document_summarizer.py` — `summarize_document` kırığı giderildi:
+  - hatalı `from config.settings import OLLAMA_HOST, OLLAMA_MODEL` importu kaldırıldı.
+  - özetleme çağrısı tek-provider bağımlılığından çıkarıldı; artık `core.llm_client.LLMClient` üzerinden aktif sağlayıcıyla çalışıyor (OpenAI/Groq/Gemini/Ollama).
+  - PDF için yanlış parametre (`max_chars`) kullanımı düzeltildi.
+  - Excel içeriği stringe dönüştürme eklendi (satır/sheet bazlı normalize).
+- `tools/__init__.py` — lazy tool yükleme gözlemlenebilirliği artırıldı:
+  - tool yüklenemezse `_tool_load_errors` içine standart hata sebebi yazılıyor.
+  - `items()` / `values()` toplu yüklemelerinde import hataları artık swallow edilmeden hata listesine kaydediliyor.
+- `core/gateway/server.py` — tool health API geliştirildi:
+  - `GET /api/tools/diagnostics` route’u aktive edildi.
+  - diagnostics endpoint varsayılanı `probe=0` yapıldı (takılma riskini azaltan hızlı mod).
+  - `/api/tools` summary `health` sayıları artık uygulanan filtreyle tutarlı hesaplanıyor (`ready`, `needs_params`, `broken`).
+- `ui/web/dashboard.html` — Araçlar sekmesi profesyonelleştirildi:
+  - yeni health kartları: `Ready`, `Needs Params`, `Broken`.
+  - yeni health filtresi (`ready / needs_params / broken`).
+  - tool tablosuna `Health` ve `Params` sütunları eklendi.
+  - tool load error metni tabloda görünür hale getirildi.
+
+**Doğrulama:**
+- `source .venv/bin/activate && python -m py_compile core/gateway/server.py tools/__init__.py tools/office_tools/document_summarizer.py` → **OK**
+- `source .venv/bin/activate && PYTHONPATH=. pytest -q tests/unit/test_agent_routing.py tests/unit/test_intent_parser_and_dashboard.py` → **30 passed**
+- tool callable smoke:
+  - `total=118`, `callable=118`, `broken=0`
+- gateway + API smoke:
+  - `elyan gateway start --daemon --port 18789` + `elyan gateway health --json --port 18789` → **healthy: true**
+  - `GET /api/tools` → `total=119`, `health.broken=0`
+  - `GET /api/tools/diagnostics` → `probe=false`, `broken_tools=0`
+- summarize tool smoke (mocked LLM):
+  - `summarize_document(content=...)` → **success=true**, import/runtime kırığı yok
+
+## OTURUM GÜNCELLEMESİ — 2026-02-20 (GATEWAY STARTUP STABILITY + CLI PACKAGE SYNC) ✅
+- `cli/commands/gateway.py` — startup dayanıklılığı artırıldı:
+  - `start_gateway --daemon` içinde erken process exit durumunda otomatik **1 retry** eklendi.
+  - health hazır kabulü, sadece port dinlenmesine değil `/api/status` yanıtına bağlandı.
+  - `restart_gateway` tekrar sadeleştirildi (stop + port release bekleme + tek start), retry mantığı `start_gateway` içinde merkezileştirildi.
+- CLI import kaynak tutarsızlığı giderildi (geliştirme ortamı):
+  - `.venv` içinde paket editable olarak yeniden kuruldu: `pip install -e .`
+  - böylece `elyan` komutu yerel repo kodunu (güncel `cli/commands/gateway.py`) çalıştırır hale getirildi.
+
+**Doğrulama:**
+- `PYTHONPATH=. pytest -q tests/unit/test_gateway_cli.py tests/unit/test_cli_main.py` → **8 passed**
+- canlı smoke:
+  - `elyan gateway restart --daemon --port 18789`
+  - `elyan gateway health --json --port 18789`
+  - başarısız başlangıç senaryosunda retry mesajı doğrulandı.
