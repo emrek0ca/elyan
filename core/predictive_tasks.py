@@ -4,6 +4,8 @@ Analyzes execution context to predict next probable steps and prefetch dependenc
 """
 
 import asyncio
+import json
+import re
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 from enum import Enum
@@ -42,16 +44,81 @@ class PredictiveTaskEngine:
         """
         predictions = []
         
-        # 1. Heuristic Rules
+        # 1. Heuristic Rules (Fast)
         heuristic_preds = self._apply_heuristic_rules(current_step)
         predictions.extend(heuristic_preds)
 
-        # 2. Plan-Context Analysis (if plan is available)
+        # 2. Plan-Context Analysis (Deterministic)
         if plan:
-            # TODO: Analyze remaining steps in the plan to refine predictions
-            pass
+            next_task = self._get_next_planned_task(plan, current_step)
+            if next_task:
+                predictions.append(TaskPrediction(
+                    action=next_task.action,
+                    params=next_task.params,
+                    confidence=PredictionConfidence.HIGH,
+                    reasoning=f"Explicitly planned step: {next_task.name}"
+                ))
+
+        # 3. LLM-Based Prediction (Slow but Smart)
+        # Only use LLM if we don't have high confidence predictions yet, to save tokens/time
+        if not any(p.confidence == PredictionConfidence.HIGH for p in predictions) and self.llm:
+             try:
+                 llm_preds = await self._predict_with_llm(current_step)
+                 predictions.extend(llm_preds)
+             except Exception as e:
+                 logger.warning(f"LLM prediction failed: {e}")
 
         return predictions
+
+    def _get_next_planned_task(self, plan: ExecutionPlan, current_step: SubTask) -> Optional[SubTask]:
+        """Finds the next pending task in the linear sequence of the plan."""
+        found_current = False
+        for task in plan.subtasks:
+            if found_current:
+                # Return the immediate next task
+                return task
+            if task.task_id == current_step.task_id:
+                found_current = True
+        return None
+
+    async def _predict_with_llm(self, current_step: SubTask) -> List[TaskPrediction]:
+        """Asks LLM to predict the next logical step."""
+        if not self.llm:
+            return []
+
+        prompt = f"""Analyze the current executed action and predict the single most likely next tool action.
+Current Action: {current_step.action}
+Params: {current_step.params}
+
+Available Tools: write_file, read_file, web_search, run_code, open_app, send_message.
+
+Return JSON only:
+{{
+  "action": "tool_name",
+  "params": {{ "key": "value" }},
+  "confidence": "MEDIUM",
+  "reasoning": "explanation"
+}}
+"""
+        try:
+            response = await self.llm.generate(prompt, max_tokens=200)
+            # Extract JSON from response
+            match = re.search(r"\{[\s\S]*\}", response)
+            if not match:
+                return []
+            
+            data = json.loads(match.group(0))
+            conf_str = data.get("confidence", "LOW").upper()
+            confidence = PredictionConfidence[conf_str] if conf_str in PredictionConfidence.__members__ else PredictionConfidence.LOW
+            
+            return [TaskPrediction(
+                action=data.get("action", ""),
+                params=data.get("params", {}),
+                confidence=confidence,
+                reasoning=data.get("reasoning", "LLM prediction")
+            )]
+        except Exception:
+            return []
 
     def _apply_heuristic_rules(self, step: SubTask) -> List[TaskPrediction]:
         """Apply static rules to predict next steps."""

@@ -43,6 +43,7 @@ from core.knowledge_base import get_knowledge_base
 from core.pipeline_state import get_pipeline_state
 from security.validator import validate_input, sanitize_input
 from security.privacy_guard import redact_text, sanitize_for_storage, sanitize_object
+from security.tool_policy import tool_policy
 from core.i18n import detect_language
 from utils.logger import get_logger
 
@@ -756,13 +757,14 @@ class Agent:
         # Special case: Chat action fallback
         uid = str(self.current_user_id or "local")
         
-        # --- Intervention Check for Risky Tools ---
-        if mapped_tool == "delete_file":
+        # --- Intervention Check (Policy-Based) ---
+        policy_check = tool_policy.check_access(mapped_tool)
+        if policy_check.get("requires_approval"):
             manager = get_intervention_manager()
-            target = clean_params.get("path") or clean_params.get("file_path", "bilinmeyen dosya")
+            target_desc = str(clean_params.get("path") or clean_params.get("file_path") or clean_params)
             choice = await manager.ask_human(
-                prompt=f"Kritik işlem: '{target}' dosyasını silmek istediğinden emin misin?",
-                context={"tool": mapped_tool, "params": clean_params},
+                prompt=f"Kritik işlem onayı gerekiyor: '{mapped_tool}'\nHedef/Detay: {target_desc}\nBu işlemi onaylıyor musun?",
+                context={"tool": mapped_tool, "params": clean_params, "policy_reason": policy_check.get("reason")},
                 options=["Onayla", "İptal Et"]
             )
             if choice != "Onayla":
@@ -866,8 +868,26 @@ class Agent:
                         clean_params = repaired_params
                         if isinstance(result, dict) and result.get("success") is False:
                             err_text = str(result.get("error", "") or err_text)
+
             result = self._postprocess_tool_result(mapped_tool, clean_params, result, user_input=user_input)
-            
+
+            # --- Self-Correction V2: Retry on Verification Failure ---
+            if isinstance(result, dict) and result.get("verified") is False:
+                # Only retry write operations
+                write_tools = {"write_file", "write_word", "write_excel", "create_web_project_scaffold"}
+                if mapped_tool in write_tools and not clean_params.get("_retry_attempted"):
+                    logger.warning(f"Verification failed for {mapped_tool}. Retrying operation...")
+                    clean_params["_retry_attempted"] = True
+                    try:
+                        retry_res = await self.kernel.tools.execute(mapped_tool, clean_params)
+                        result = self._postprocess_tool_result(mapped_tool, clean_params, retry_res, user_input=user_input)
+                        if result.get("verified"):
+                            result["_healed"] = True
+                            result["_healing_message"] = "Dosya yazma ilk denemede doğrulanamadı, ikinci denemede başarılı oldu."
+                    except Exception as e:
+                        logger.error(f"Retry failed for {mapped_tool}: {e}")
+            # ---------------------------------------------------------
+
             # --- Automatic Contract Repair Loop ---
             if isinstance(result, dict) and result.get("_repair_actions") and not clean_params.get("_repair_attempted"):
                 repair_actions = result.get("_repair_actions")
@@ -886,10 +906,16 @@ class Agent:
                         "failed_reason": repair.get("reason", "")
                     }
                     
-                    repair_res = await self._execute_tool(r_action, r_params, user_input=user_input, step_name=f"Onarım: {r_action}")
-                    if isinstance(repair_res, dict) and repair_res.get("success"):
-                        # If repair succeeded, use its result
-                        result = repair_res
+                    try:
+                        repair_res = await self._execute_tool(r_action, r_params, user_input=user_input, step_name=f"Onarım: {r_action}")
+                        if isinstance(repair_res, dict) and repair_res.get("success"):
+                            # If repair succeeded, use its result
+                            result = repair_res
+                            # Also re-verify if needed (recursive calls handle it)
+                            break
+                    except Exception:
+                        pass
+            # --------------------------------------
                         result["_repair_successful"] = True
                         break
 
