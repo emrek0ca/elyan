@@ -53,14 +53,33 @@ def push_activity(event_type: str, channel: str, detail: str, success: bool = Tr
     asyncio.ensure_future(_broadcast_activity(entry))
 
 
-async def _broadcast_activity(entry: dict):
+def push_suggestion(title: str, description: str, action: str, params: dict, confidence: str = "MEDIUM"):
+    """Push a proactive suggestion card to the dashboard."""
+    payload = {
+        "id": f"sug_{int(time.time()*1000)}",
+        "title": title,
+        "description": description,
+        "action": action,
+        "params": params,
+        "confidence": confidence,
+        "ts": time.strftime("%H:%M:%S")
+    }
+    # Fire-and-forget broadcast
+    asyncio.ensure_future(_broadcast_event("suggestion", payload))
+
+
+async def _broadcast_event(event_type: str, data: dict):
     dead = set()
     for ws in list(_dashboard_ws_clients):
         try:
-            await ws.send_json({"event": "activity", "data": entry})
+            await ws.send_json({"event": event_type, "data": data})
         except Exception:
             dead.add(ws)
     _dashboard_ws_clients.difference_update(dead)
+
+
+async def _broadcast_activity(entry: dict):
+    await _broadcast_event("activity", entry)
 
 
 def _mask_sensitive_fields(data):

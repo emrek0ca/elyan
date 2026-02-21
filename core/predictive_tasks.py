@@ -164,22 +164,34 @@ Return JSON only:
         """
         Executes low-cost preparatory actions for high-confidence predictions.
         """
-        # Lazy import for push_activity
+        # Lazy import for push mechanisms
         try:
-            from core.gateway.server import push_activity
+            from core.gateway.server import push_activity, push_suggestion
         except ImportError:
             push_activity = None
+            push_suggestion = None
 
         for pred in predictions:
             if pred.confidence == PredictionConfidence.HIGH:
                 logger.info(f"Prefetching for predicted action: {pred.action} ({pred.reasoning})")
                 
+                # 1. Notify Log
                 if push_activity:
                     push_activity(
                         "prediction", 
                         "brain", 
                         f"Hazırlanıyor: {pred.action} ({pred.reasoning})", 
                         success=True
+                    )
+
+                # 2. Push Interactive Card
+                if push_suggestion:
+                    push_suggestion(
+                        title=f"Öneri: {pred.action}",
+                        description=pred.reasoning,
+                        action=pred.action,
+                        params=pred.params,
+                        confidence=pred.confidence.name
                     )
                 
                 # Check tool availability (simple check)

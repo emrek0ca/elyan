@@ -767,6 +767,22 @@ class Agent:
                 context={"tool": mapped_tool, "params": clean_params, "policy_reason": policy_check.get("reason")},
                 options=["Onayla", "İptal Et"]
             )
+            
+            # --- Learning: Record Approval/Rejection ---
+            if self.learning:
+                is_approved = (choice == "Onayla")
+                asyncio.create_task(self.learning.record_interaction(
+                    user_id=uid,
+                    input_text=user_input or f"manual_approval_request_{mapped_tool}",
+                    intent="security_approval",
+                    action=mapped_tool,
+                    success=is_approved,
+                    duration_ms=0,
+                    context={"params": clean_params, "policy": policy_check},
+                    feedback="Explicit Approval" if is_approved else "Explicit Rejection"
+                ))
+            # -------------------------------------------
+
             if choice != "Onayla":
                 return {"success": False, "error": "İşlem kullanıcı tarafından iptal edildi.", "error_code": "USER_ABORTED"}
         # --- End Intervention ---

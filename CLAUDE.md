@@ -1,8 +1,10 @@
-## OTURUM GÜNCELLEMESİ — 2026-02-21 (ROBUSTNESS & PROACTIVITY) ✅
-- **Self-Correction V2:** `core/agent.py` içinde dosya yazma işlemleri (`write_file`, `write_word` vb.) doğrulama başarısız olursa (boş dosya vb.), otomatik olarak **bir kez** tekrar deneniyor.
-- **Intervention Integration:** `tool_policy` tarafından "onay gerektirir" olarak işaretlenen işlemler (varsayılan: `delete_file`, `exec`) için Ajan otomatik olarak durup kullanıcıdan dashboard üzerinden onay istiyor.
-- **Advanced Predictions:** `core/predictive_tasks.py` artık sadece statik kuralları değil, karmaşık durumlarda LLM'i kullanarak bir sonraki adımı tahmin ediyor.
+## OTURUM GÜNCELLEMESİ — 2026-02-21 (UX & LEARNING SPRINT) ✅
+- **Proactive Dashboard:**
+  - Tahmin edilen aksiyonlar (`prediction`), artık Dashboard'da tıklanabilir **Öneri Kartları** (`suggestion`) olarak sunuluyor.
+  - Kullanıcı karttaki "Bunu Yap" butonuna tıklayarak işlemi hemen başlatabiliyor.
+- **Intervention Learning:**
+  - Ajanın sorduğu güvenlik onaylarına verilen yanıtlar (Onay/Red), `LearningEngine` veritabanına kaydedilerek kullanıcı profili zenginleştiriliyor.
 
 **Test/Doğrulama:**
-- `tests/unit/test_agent_intervention.py`: Intervention ve Retry mantığı doğrulandı.
-- `tests/unit/test_predictive_tasks.py`: LLM fallback tahmini doğrulandı.
+- `tests/unit/test_agent_intervention.py`: Intervention tetikleme ve iptal mekanizmaları doğrulandı.
+- `ui/web/dashboard.html`: Yeni `renderSuggestion` fonksiyonu ve `suggestions-container` eklendi.
