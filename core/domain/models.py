@@ -26,6 +26,11 @@ class ChannelConfig(BaseModel):
     extra: Dict[str, Any] = Field(default_factory=dict)
     model_config = ConfigDict(extra="allow")
 
+class VoiceConfig(BaseModel):
+    feedback_enabled: bool = True
+    volume: int = 100
+    model_config = ConfigDict(extra="allow")
+
 class SubscriptionConfig(BaseModel):
     enabled: bool = False
     default_tier: SubscriptionTier = SubscriptionTier.FREE
@@ -77,6 +82,7 @@ class AppConfig(BaseModel):
             "localOnly": True,
         }
     )
+    voice: VoiceConfig = Field(default_factory=VoiceConfig)
     security: Dict[str, Any] = Field(default_factory=dict)
     gateway: Dict[str, Any] = Field(default_factory=dict)
     skills: Dict[str, Any] = Field(default_factory=dict)

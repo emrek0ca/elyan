@@ -54,6 +54,7 @@ def _default_config() -> AppConfig:
             "rateLimitPerMinute": 20,
         },
         gateway={"port": 18789, "host": "127.0.0.1", "corsOrigins": ["http://localhost:3000"]},
+        voice={"feedback_enabled": True},
         subscriptions={"enabled": True, "default_tier": "free"},
         monthly_budget_usd=20.0,
         cost_limit_usd=50.0,

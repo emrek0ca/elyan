@@ -945,6 +945,23 @@ class Agent:
                         result["_repair_successful"] = True
                         break
 
+            # --- Audio Feedback ---
+            try:
+                from core.voice.audio_feedback import get_audio_feedback
+                audio = get_audio_feedback()
+                is_success = not (isinstance(result, dict) and result.get("success") is False)
+                
+                if not is_success:
+                    audio.play_error()
+                else:
+                    # Only play success sound for impactful actions (write/exec), silence for read/search
+                    impactful_prefixes = ("write", "create", "delete", "move", "copy", "run", "execute", "send", "generate")
+                    if mapped_tool.startswith(impactful_prefixes) or "screenshot" in mapped_tool:
+                        audio.play_success()
+            except Exception:
+                pass
+            # ----------------------
+
             success = not (isinstance(result, dict) and result.get("success") is False)
             if success:
                 self._update_file_context_after_tool(mapped_tool, clean_params, result)
