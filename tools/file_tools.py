@@ -4,6 +4,31 @@ from typing import Any
 import fnmatch
 from security.validator import validate_path
 
+async def apply_patch(path: str, search_text: str, replacement_text: str) -> dict[str, Any]:
+    """Surgical file modification. Replaces specific blocks without full overwrite."""
+    try:
+        valid, msg, p = validate_path(path)
+        if not valid: return {"success": False, "error": msg}
+        
+        if not p.exists():
+            return {"success": False, "error": "File not found"}
+        
+        content = p.read_text(encoding="utf-8")
+        if search_text not in content:
+            return {"success": False, "error": "Search text not found in file. Patch failed."}
+        
+        new_content = content.replace(search_text, replacement_text)
+        p.write_text(new_content, encoding="utf-8")
+        
+        return {
+            "success": True, 
+            "path": str(p), 
+            "patch_applied": True,
+            "message": "Cerrahi onarım başarıyla uygulandı."
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 async def list_files(path: str = ".") -> dict[str, Any]:
     valid, msg, resolved_path = validate_path(path)
     if not valid:

@@ -46,6 +46,8 @@ class BrowserManager:
         self.page: Optional[Page] = None
         self.session_id: Optional[str] = None
         self.created_at: Optional[float] = None
+        self.console_logs: list = []
+        self.page_errors: list = []
     
     async def start(self) -> bool:
         """Start Playwright and browser"""
@@ -73,6 +75,10 @@ class BrowserManager:
             
             # Create page
             self.page = await self.context.new_page()
+            
+            # Hook errors for Runtime QA
+            self.page.on("console", lambda msg: self.console_logs.append({"type": msg.type, "text": msg.text}))
+            self.page.on("pageerror", lambda exc: self.page_errors.append(str(exc)))
             
             self.session_id = f"browser_{int(time.time())}"
             self.created_at = time.time()
@@ -183,6 +189,16 @@ class BrowserManager:
         if self.page:
             return await self.page.title()
         return None
+
+    def get_and_clear_logs(self) -> Dict[str, list]:
+        """Returns captured console and page errors, and clears the buffer."""
+        res = {
+            "console": self.console_logs.copy(),
+            "page_errors": self.page_errors.copy()
+        }
+        self.console_logs.clear()
+        self.page_errors.clear()
+        return res
 
 
 # Global browser instance (singleton)

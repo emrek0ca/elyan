@@ -31,8 +31,9 @@ class ActionLockManager:
         self.locked_at = None
         self.progress = 0.0
 
-    def update_status(self, progress: float, message: str):
-        self.progress = progress
+    def update_status(self, progress: Optional[float], message: str):
+        if progress is not None:
+            self.progress = progress
         self.status_message = message
 
     def get_status_prefix(self) -> str:

@@ -812,6 +812,86 @@ class LearningEngine:
             logger.error(f"Approval check failed: {e}")
             return {"auto_approve": False, "confidence": 0.0, "reason": "Error"}
 
+    def generate_smart_hint(self, last_error: Optional[str] = None) -> Optional[str]:
+        """
+        Generate a context-aware hint based on recent errors or usage patterns.
+        """
+        # 1. Handle explicit last error (immediate feedback)
+        if last_error:
+            err = str(last_error).lower()
+            if "no such file" in err or "not found" in err:
+                return "Dosyayı bulamıyor musun? 'list_files' ile mevcut dizine göz atabilir veya 'search_files' ile arama yapabilirsin."
+            if "permission denied" in err or "access denied" in err:
+                return "Erişim hatası aldın. Dosya izinlerini kontrol etmeyi veya farklı bir klasör kullanmayı dene."
+            if "timeout" in err or "timed out" in err:
+                return "İşlem zaman aşımına uğradı. Görevi daha küçük parçalara bölerek tekrar deneyebilirsin."
+            if "connection" in err or "nodename" in err:
+                return "Bağlantı veya DNS sorunu var gibi. İnternet bağlantını ve API ayarlarını kontrol et."
+            if "rate limit" in err:
+                return "Çok hızlı gidiyorsun! Model kota sınırına takıldı. Biraz bekleyip tekrar dene."
+            
+            # If we don't recognize the error, fall through to database analysis
+
+        # 2. Database-backed Analysis (Context Awareness)
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                # Query last 10 interactions for the current user (simplified as we don't have user_id here easily, using global recent)
+                cursor = conn.execute("""
+                    SELECT input_text, action, success, timestamp 
+                    FROM interactions 
+                    ORDER BY timestamp DESC LIMIT 10
+                """)
+                recent = cursor.fetchall()
+        except Exception as e:
+            logger.debug(f"Hint database query failed: {e}")
+            recent = []
+
+        if not recent:
+            return None
+
+        # Analyze recent failures
+        failures = [r for r in recent if not r[2]]
+        if len(failures) >= 3:
+            # Check if it's the same action failing
+            failing_actions = Counter([f[1] for f in failures])
+            most_common_fail = failing_actions.most_common(1)[0]
+            if most_common_fail[1] >= 2:
+                action = most_common_fail[0]
+                if "research" in str(action):
+                    return "Araştırma (research) adımı sıkça hata veriyor. Daha spesifik anahtar kelimeler kullanmayı dene."
+                if "write" in str(action) or "file" in str(action):
+                    return "Dosya işlemlerinde sorun yaşıyorsun. Dosya yolunun tam ve doğru olduğundan emin ol."
+            
+            return "Son zamanlarda birkaç hata aldın. Karmaşık istekleri adım adım (örn: önce ara, sonra yaz) yapmayı deneyebilirsin."
+
+        # Analyze repetitive usage (Discovery)
+        actions = Counter([r[1] for r in recent])
+        most_common_action = actions.most_common(1)[0]
+        if most_common_action[1] >= 5:
+            action = most_common_action[0]
+            if action == "chat":
+                return "Sadece sohbet ediyoruz! 'masaüstünde ne var' veya 'ekran görüntüsü al' gibi komutlarla yeteneklerimi keşfedebilirsin."
+            if action in ("list_files", "get_system_info"):
+                return "Sürekli sistem bilgisi alıyorsun. 'araştırma raporu hazırla' gibi daha kompleks görevler verebilirsin."
+
+        # 3. Fallback to random discovery tips
+        import random
+        tips = [
+            "İnternetten derinlemesine araştırma yapmak için 'research' komutunu kullanabilirsin.",
+            "Tekrar eden işlerin var mı? 'Bu işlemi rutin haline getir' diyerek otomatize edebilirsin.",
+            "Bir konuyu anlamadıysan 'bunu açıkla' diyerek detaylı bilgi isteyebilirsin.",
+            "Ekran görüntüsü alıp analiz etmek için 'ekrana bak' diyebilirsin.",
+            "Uzun metinleri özetlemek için dosyayı verip 'özetle' demen yeterli.",
+            "Dosyalarını düzenlemek için 'masaüstünü düzenle' diyebilirsin.",
+            "Excel veya Word dosyaları oluşturmak için 'raporu excel olarak hazırla' demen yeterli.",
+        ]
+        
+        # Only show hint 25% of the time for success/discovery to avoid annoyance
+        if random.random() < 0.25:
+            return random.choice(tips)
+        
+        return None
+
     def self_review(self, window_days: int = 14) -> Dict[str, Any]:
         cutoff = time.time() - (max(1, int(window_days)) * 86400)
         recommendations: List[str] = []

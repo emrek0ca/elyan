@@ -57,3 +57,18 @@ def test_security_events_filter_and_decode_details(tmp_path: Path):
     assert len(rows) == 1
     assert rows[0]["event_type"] == "rate_limit"
     assert rows[0]["details"]["count"] == 30
+
+
+def test_audit_logger_falls_back_when_db_path_is_not_writable():
+    logger = AuditLogger(db_path="/dev/null/audit.db")
+    assert logger.db_path != "/dev/null/audit.db"
+
+    logger.log_operation(
+        user_id=1,
+        operation="health_check",
+        params={"k": "v"},
+        result={"ok": True},
+        success=True,
+    )
+    rows = logger.get_operation_history(user_id=1, operation="health_check", limit=5)
+    assert rows

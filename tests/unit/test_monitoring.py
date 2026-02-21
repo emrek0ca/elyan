@@ -1,7 +1,12 @@
 
 import pytest
-from unittest.mock import MagicMock, patch
-from core.monitoring import ResourceMonitor
+from unittest.mock import patch
+from core.monitoring import (
+    ResourceMonitor,
+    get_monitoring,
+    record_operation,
+    record_error,
+)
 
 def test_monitoring_healthy():
     monitor = ResourceMonitor()
@@ -46,3 +51,26 @@ def test_monitoring_warning_battery():
         health = monitor.get_health_snapshot()
         assert health.status == "warning"
         assert any("Pil" in issue for issue in health.issues)
+
+
+def test_monitoring_tracker_records_operation_and_error():
+    tracker = get_monitoring()
+    before = tracker.get_snapshot()
+
+    record_operation(
+        operation="task_execution",
+        success=True,
+        duration_ms=42,
+        metadata={"task_count": 2},
+    )
+    record_error(
+        component="task_engine",
+        error_msg="boom",
+        error_type="task_execution_error",
+    )
+
+    after = tracker.get_snapshot()
+    assert after["operations_total"] >= before["operations_total"] + 1
+    assert after["errors_total"] >= before["errors_total"] + 1
+    assert after["last_operation"]["operation"] == "task_execution"
+    assert after["last_error"]["component"] == "task_engine"

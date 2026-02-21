@@ -42,6 +42,29 @@ async def ollama_list_models() -> Dict[str, Any]:
         logger.error(f"Ollama list error: {e}")
         return {"success": False, "error": str(e)}
 
+async def ollama_pull_model(model_name: str) -> Dict[str, Any]:
+    """Pull (download) a specific Ollama model"""
+    try:
+        logger.info(f"Pulling Ollama model: {model_name}")
+        process = await asyncio.create_subprocess_exec(
+            "ollama", "pull", model_name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode != 0:
+            return {"success": False, "error": stderr.decode().strip()}
+            
+        return {
+            "success": True,
+            "model": model_name,
+            "message": f"Model {model_name} başarıyla indirildi."
+        }
+    except Exception as e:
+        logger.error(f"Ollama pull error: {e}")
+        return {"success": False, "error": str(e)}
+
 async def ollama_remove_model(model_name: str) -> Dict[str, Any]:
     """Remove a specific Ollama model"""
     try:

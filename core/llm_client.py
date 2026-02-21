@@ -129,7 +129,7 @@ class LLMClient:
 
     async def _call_ollama(self, prompt: str, system_prompt: str, cfg: dict, user_id: str = "local") -> str:
         model = cfg.get("model", "llama3.1:8b")
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post("http://localhost:11434/api/generate", json={
                 "model": model,
                 "prompt": prompt,

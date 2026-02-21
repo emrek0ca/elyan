@@ -84,11 +84,15 @@ class NeuralRoleMapper:
         # Complexity scoring (simple heuristic for now)
         complexity = 0.8 if role in ["code", "reasoning"] else 0.3
         
+        # Reasoning Budget: Decide if this task needs the full factory flow
+        needs_factory = complexity > 0.7 or len(prompt.split()) > 25
+        
         return {
             "role": role,
             "model": model_cfg["model"],
             "provider": model_cfg["provider"],
-            "complexity": complexity
+            "complexity": complexity,
+            "reasoning_budget": "high" if needs_factory else "low"
         }
 
 # Global instance

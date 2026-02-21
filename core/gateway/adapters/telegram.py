@@ -129,19 +129,36 @@ class TelegramAdapter(BaseChannelAdapter):
             logger.error("No Telegram token provided.")
             return
 
-        self.app = ApplicationBuilder().token(self.token).build()
-        
-        # Register handlers
-        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_text))
-        self.app.add_handler(MessageHandler(filters.VOICE, self._handle_voice))
-        
-        # Start polling
-        await self.app.initialize()
-        await self.app.updater.start_polling(drop_pending_updates=True)
-        await self.app.start()
-        
-        self._is_connected = True
-        logger.info("Telegram adapter connected with Voice support.")
+        # DNS Resolution Check (macOS Errno 8 mitigation)
+        import socket
+        try:
+            socket.gethostbyname("api.telegram.org")
+        except socket.gaierror as e:
+            if e.errno == 8:
+                logger.error("Telegram API (api.telegram.org) çözümlenemedi (DNS Hatası - Errno 8). Lütfen internet bağlantınızı veya DNS ayarlarınızı kontrol edin.")
+            else:
+                logger.error(f"Telegram API DNS çözümlenemedi: {e}")
+            # Don't stop here, attempt connection anyway but with warning
+
+        try:
+            self.app = ApplicationBuilder().token(self.token).build()
+            
+            # Register handlers
+            self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_text))
+            self.app.add_handler(MessageHandler(filters.VOICE, self._handle_voice))
+            
+            # Start polling
+            await self.app.initialize()
+            await self.app.updater.start_polling(drop_pending_updates=True)
+            await self.app.start()
+            
+            self._is_connected = True
+            logger.info("Telegram adapter connected with Voice support.")
+        except Exception as e:
+            self._is_connected = False
+            logger.error(f"Telegram connection failed: {e}")
+            if "nodename nor servname provided" in str(e):
+                logger.warning("İpucu: DNS sorunu yaşıyor olabilirsiniz. /etc/hosts dosyanızı veya DNS sağlayıcınızı kontrol edin.")
 
     async def disconnect(self):
         if self.app:

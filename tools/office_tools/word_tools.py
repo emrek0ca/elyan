@@ -132,6 +132,12 @@ async def write_word(
 
         # Rule-1: No empty or skeleton files
         total_len = len(content_text) + sum(len(p) for p in paragraph_items) + len(str(title or ""))
+        if total_len == 0:
+            return {
+                "success": False,
+                "error": "EMPTY_CONTENT: Word içeriği boş. Lütfen yazılacak bir içerik verin.",
+                "error_code": "EMPTY_CONTENT",
+            }
         if total_len < 200:
             return {
                 "success": False, 

@@ -19,41 +19,56 @@ class SpecialistIdentity:
 
 class SpecialistRegistry:
     def __init__(self):
+        # Blueprint v4: Deep Reasoning & Chain of Thought
+        self.protocol_rules = """
+CEVAP FORMATI (STRICT):
+<thought>
+Burada görevi analiz et. Neyi, neden yapacağını, olası hataları ve çözüm planını detaylıca (en az 3 cümle) 'kendi kendine konuşur gibi' açıkla.
+</thought>
+
+{
+  "outputs": ["üretilen dökümanlar / [FILE: /yol] formatında içerikler"],
+  "assumptions": ["varsayımların"],
+  "risks": ["kritik uyarılar"],
+  "next_actions": ["bir sonraki adım"]
+}
+"""
+
         self.specialists = {
-            "coder": SpecialistIdentity(
-                name="Elyan Code",
-                role="Senior Software Engineer",
-                system_prompt="Sen bir yazılım uzmanısın. Kod kalitesi, mimari ve test edilebilirlik senin için kutsaldır. Sadece çalışan ve optimize edilmiş kod üretirsin.",
-                preferred_tools=["run_code", "execute_python_code", "open_project_in_ide", "debug_code"],
-                domain="coding"
+            "pm_agent": SpecialistIdentity(
+                name="Chief Architect",
+                role="Strategic Architect & Systems Designer",
+                system_prompt=f"Sen bir Baş Mimarsın. Görevi sadece parçalamazsın, aynı zamanda en iyi teknoloji yığınını ve veri yapısını belirlersin. Karmaşıklığı %80 azaltacak planlar yapmalısın.{self.protocol_rules}",
+                preferred_tools=["create_plan"],
+                domain="management"
             ),
-            "researcher": SpecialistIdentity(
-                name="Elyan Research",
-                role="Lead Research Analyst",
-                system_prompt="Sen bir araştırma uzmanısın. İnternetteki bilgileri tarar, doğrular ve yapılandırılmış raporlar haline getirirsin. Kaynak göstermek zorunludur.",
-                preferred_tools=["advanced_research", "web_search", "fetch_page", "summarize_document"],
-                domain="research"
+            "executor": SpecialistIdentity(
+                name="Senior Engineer",
+                role="Full-Stack Implementation Lead",
+                system_prompt=f"Sen bir Kıdemli Mühendissin. Kodun sadece çalışması yetmez; temiz, performanslı ve hatasız olmalıdır. [FILE: /yol] formatını asla unutma. Her dosyayı tam ve eksiksiz yaz.{self.protocol_rules}",
+                preferred_tools=["write_file", "run_code"],
+                domain="building"
             ),
-            "sysadmin": SpecialistIdentity(
-                name="Elyan System",
-                role="System Administrator",
-                system_prompt="Sen bir sistem yöneticisisin. Terminal komutları, dosya sistemi yönetimi ve donanım sağlığı senin uzmanlık alanındır. Güvenlikten taviz vermezsin.",
-                preferred_tools=["run_safe_command", "get_system_info", "list_files", "get_process_info"],
-                domain="system"
-            ),
-            "officer": SpecialistIdentity(
-                name="Elyan Office",
-                role="Document & Data Specialist",
-                system_prompt="Sen profesyonel bir dökümantasyon ve veri uzmanısın. Word, Excel ve raporlama formatlarında mükemmel çıktılar üretirsin.",
-                preferred_tools=["write_word", "write_excel", "read_word", "read_excel", "generate_document_pack"],
-                domain="office"
+            "tool_runner": SpecialistIdentity(
+                name="Reliability Officer",
+                role="Operations & Infrastructure Engineer",
+                system_prompt="Sen Güvenilirlik Sorumlususun. Sadece fiziksel tool çağrılarını yaparsın. Her tool öncesi parametreleri doğrula (Pre-flight). Hata alırsan nedenini teknik olarak açıkla.",
+                preferred_tools=["all"],
+                domain="execution"
             ),
             "qa_expert": SpecialistIdentity(
-                name="Elyan QA",
-                role="Senior Quality Assurance Engineer",
-                system_prompt="Sen bir kalite denetçisisin. Diğer uzmanların çıktılarını doğruluk, tamlık ve profesyonellik açısından incelersin. Hataları acımasızca bulur ve yapıcı çözüm önerileri sunarsın. Onay vermediğin hiçbir iş teslim edilemez.",
-                preferred_tools=["analyze_document", "run_code", "verify_web_project_smoke_test"],
+                name="Security & Quality Inspector",
+                role="Auditor",
+                system_prompt=f"Sen bir Müfettişsin. Diğer ajanların hata yapmasını bekler ve onları bulursun. Çok titizsin. En ufak bir tasarım veya mantık hatasında 'FAIL' verirsin.{self.protocol_rules}",
+                preferred_tools=["list_files", "read_file", "verify_visual_quality"],
                 domain="qa"
+            ),
+            "automation_expert": SpecialistIdentity(
+                name="Automation Architect",
+                role="Process Optimization Engineer",
+                system_prompt=f"Görevin karmaşık rutinleri hatasız otomatize etmektir. Akışlardaki darboğazları tespit eder ve giderirsin.{self.protocol_rules}",
+                preferred_tools=["execute_plan", "list_plans"],
+                domain="automation"
             )
         }
 
@@ -65,13 +80,14 @@ class SpecialistRegistry:
         ctx = get_context_intelligence().detect(user_input)
         
         domain_map = {
-            "coding": "coder",
-            "web_dev": "coder",
-            "research": "researcher",
-            "system": "sysadmin",
-            "office": "officer"
+            "coding": "executor",
+            "web_dev": "executor",
+            "research": "executor",
+            "system": "tool_runner",
+            "office": "executor",
+            "automation": "automation_expert"
         }
-        key = domain_map.get(ctx["domain"], "researcher") # Default to researcher for unknown
+        key = domain_map.get(ctx["domain"], "executor") 
         return self.specialists[key]
 
 _registry = SpecialistRegistry()

@@ -10,7 +10,7 @@ import psutil
 import platform
 import time
 from dataclasses import dataclass
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from utils.logger import get_logger
 
 logger = get_logger("monitoring")
@@ -81,7 +81,104 @@ class ResourceMonitor:
             issues=issues
         )
 
+
+class MonitoringTracker:
+    """Lightweight operational telemetry tracker for legacy task engine hooks."""
+
+    def __init__(self):
+        self._operations_total = 0
+        self._operations_failed = 0
+        self._errors_total = 0
+        self._last_operation: Dict[str, Any] = {}
+        self._last_error: Dict[str, Any] = {}
+        self._recent_errors: List[Dict[str, Any]] = []
+
+    def record_operation(
+        self,
+        *,
+        operation: str,
+        success: bool,
+        duration_ms: int,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self._operations_total += 1
+        if not success:
+            self._operations_failed += 1
+        self._last_operation = {
+            "operation": str(operation or "unknown"),
+            "success": bool(success),
+            "duration_ms": int(duration_ms or 0),
+            "metadata": dict(metadata or {}),
+            "timestamp": time.time(),
+        }
+
+    def record_error(
+        self,
+        *,
+        component: str,
+        error_msg: str,
+        error_type: str = "runtime_error",
+    ) -> None:
+        self._errors_total += 1
+        payload = {
+            "component": str(component or "unknown"),
+            "error_msg": str(error_msg or ""),
+            "error_type": str(error_type or "runtime_error"),
+            "timestamp": time.time(),
+        }
+        self._last_error = payload
+        self._recent_errors.append(payload)
+        if len(self._recent_errors) > 50:
+            self._recent_errors.pop(0)
+
+    def get_snapshot(self) -> Dict[str, Any]:
+        return {
+            "operations_total": self._operations_total,
+            "operations_failed": self._operations_failed,
+            "errors_total": self._errors_total,
+            "last_operation": dict(self._last_operation),
+            "last_error": dict(self._last_error),
+            "recent_errors": list(self._recent_errors[-10:]),
+        }
+
+
 _monitor = ResourceMonitor()
+_telemetry = MonitoringTracker()
 
 def get_resource_monitor() -> ResourceMonitor:
     return _monitor
+
+
+def get_monitoring() -> MonitoringTracker:
+    """Legacy compatibility: returns process-level telemetry tracker."""
+    return _telemetry
+
+
+def record_operation(
+    *,
+    operation: str,
+    success: bool,
+    duration_ms: int,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Legacy compatibility wrapper for task_engine metrics recording."""
+    _telemetry.record_operation(
+        operation=operation,
+        success=success,
+        duration_ms=duration_ms,
+        metadata=metadata,
+    )
+
+
+def record_error(
+    *,
+    component: str,
+    error_msg: str,
+    error_type: str = "runtime_error",
+) -> None:
+    """Legacy compatibility wrapper for task_engine error recording."""
+    _telemetry.record_error(
+        component=component,
+        error_msg=error_msg,
+        error_type=error_type,
+    )

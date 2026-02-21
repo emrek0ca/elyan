@@ -130,6 +130,10 @@ class ConfigurationManager:
             return [self._resolve_refs_recursive(v) for v in value]
         return self._resolve_secret_ref(value)
 
+    def get_all(self) -> Dict[str, Any]:
+        """Return all configuration values as a dictionary."""
+        return self._resolve_refs_recursive(self._data.model_dump())
+
     # Helper for legacy code compatibility
     def get(self, key: str, default=None):
         """Retrieve value by dot notation string."""

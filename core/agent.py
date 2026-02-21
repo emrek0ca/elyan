@@ -104,6 +104,14 @@ def _push(event_type: str, channel: str, detail: str, success: bool = True):
     except Exception:
         pass
 
+
+def _push_hint(text: str, icon: str = "lightbulb", color: str = "yellow"):
+    try:
+        from core.gateway.server import push_hint
+        push_hint(text, icon=icon, color=color)
+    except Exception:
+        pass
+
 class Agent:
     def __init__(self):
         self.kernel = kernel
@@ -413,8 +421,14 @@ class Agent:
             if len(subtasks) >= 2:
                 orchestrator = get_orchestrator(self)
                 logger.info(f"Complex task detected with {len(subtasks)} steps. Activating Lead Orchestrator.")
-                result_str = await orchestrator.manage_flow(plan, user_input)
-                overall_success = True # Simplified for flow, individual steps have own success
+                # BP-001: Add total timeout for multi-agent flow
+                result_str = await with_timeout(
+                    orchestrator.manage_flow(plan, user_input),
+                    seconds=300, # 5 minutes max for factory flow
+                    fallback="Üzgünüm, görev çok uzun sürdüğü için zaman aşımına uğradı.",
+                    context="orchestrator_factory"
+                )
+                overall_success = True if "✅" in result_str else False
                 
                 await self._finalize_turn(
                     user_input=user_input,
@@ -762,7 +776,7 @@ class Agent:
         if policy_check.get("requires_approval"):
             # Smart Approval Check
             should_ask = True
-            if self.learning:
+            if self.learning and hasattr(self.learning, "check_approval_confidence"):
                 confidence = self.learning.check_approval_confidence(mapped_tool, clean_params)
                 if confidence.get("auto_approve"):
                     should_ask = False
@@ -794,7 +808,8 @@ class Agent:
                 # -------------------------------------------
 
                 if choice != "Onayla":
-                    return {"success": False, "error": "İşlem kullanıcı tarafından iptal edildi.", "error_code": "USER_ABORTED"}
+                    err_text = "İşlem kullanıcı tarafından iptal edildi."
+                    return {"success": False, "error": err_text, "error_code": "USER_ABORTED"}
         # --- End Intervention ---
 
         if mapped_tool in ("chat", "respond", "answer"):
@@ -1049,10 +1064,10 @@ class Agent:
             raise
         finally:
             latency = int((time.perf_counter() - start) * 1000)
+            _final_result = locals().get("result", {})
             record_tool_usage(used_tool, success=success, latency_ms=latency, source="agent", error=err_text)
             # ToolRequest kaydını tamamla
             try:
-                _final_result = locals().get("result", {})
                 _tr_log.finish_request(
                     _tr_req,
                     _final_result,
@@ -1060,6 +1075,24 @@ class Agent:
                     success=success,
                     error=err_text,
                 )
+            except Exception:
+                pass
+            # Context-aware dashboard hint (best-effort, never blocks execution)
+            try:
+                if self.learning:
+                    hint_error = ""
+                    if not success:
+                        hint_error = str(err_text or "").strip()
+                        if not hint_error and isinstance(_final_result, dict) and _final_result.get("success") is False:
+                            hint_error = str(_final_result.get("error", "") or "").strip()
+                    # Avoid random "success hints" when the operation failed but no reliable error context exists.
+                    if success or hint_error:
+                        hint = self.learning.generate_smart_hint(last_error=hint_error or None)
+                        if hint:
+                            if hint_error:
+                                _push_hint(hint, icon="triangle-alert", color="orange")
+                            else:
+                                _push_hint(hint, icon="lightbulb", color="blue")
             except Exception:
                 pass
 

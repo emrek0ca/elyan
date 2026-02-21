@@ -68,6 +68,18 @@ def push_suggestion(title: str, description: str, action: str, params: dict, con
     asyncio.ensure_future(_broadcast_event("suggestion", payload))
 
 
+def push_hint(text: str, icon: str = "lightbulb", color: str = "yellow"):
+    """Push a context-aware hint to the dashboard."""
+    payload = {
+        "id": f"hnt_{int(time.time()*1000)}",
+        "text": text,
+        "icon": icon,
+        "color": color,
+        "ts": time.strftime("%H:%M:%S")
+    }
+    asyncio.ensure_future(_broadcast_event("hint", payload))
+
+
 async def _broadcast_event(event_type: str, data: dict):
     dead = set()
     for ws in list(_dashboard_ws_clients):
@@ -335,7 +347,13 @@ class ElyanGatewayServer:
         self.app.router.add_post('/api/agent/profile', self.handle_agent_profile_update)
         self.app.router.add_get('/api/models', self.handle_models_get)
         self.app.router.add_post('/api/models', self.handle_models_update)
+        self.app.router.add_get('/api/models/ollama/list', self.handle_ollama_list)
+        self.app.router.add_post('/api/models/ollama/pull', self.handle_ollama_pull)
+        self.app.router.add_get('/api/logs', self.handle_get_logs)
         self.app.router.add_get('/api/canvas/{id}', self.handle_get_canvas)
+        self.app.router.add_post('/api/upload', self.handle_file_upload)
+        self.app.router.add_post('/api/voice', self.handle_voice_upload)
+        self.app.router.add_get('/api/voice/file', self.handle_voice_file_get)
 
         # ── Dashboard API (new) ───────────────────────────────────────────────
         self.app.router.add_get('/api/analytics', self.handle_analytics)
@@ -345,6 +363,7 @@ class ElyanGatewayServer:
         self.app.router.add_post('/api/tasks/suggest', self.handle_task_suggest)
         self.app.router.add_post('/api/tasks', self.handle_create_task)
         self.app.router.add_get('/api/memory/stats', self.handle_memory_stats)
+        self.app.router.add_get('/api/memory/profile', self.handle_get_profile)
         self.app.router.add_get('/api/activity', self.handle_activity_log)
         self.app.router.add_get('/api/routines', self.handle_routines)
         self.app.router.add_get('/api/routines/templates', self.handle_routine_templates)
@@ -640,6 +659,27 @@ class ElyanGatewayServer:
             **_get_runtime_model_info(),
         })
 
+    async def handle_ollama_list(self, request):
+        from tools.ai_tools import ollama_list_models
+        res = await ollama_list_models()
+        return web.json_response(res)
+
+    async def handle_ollama_pull(self, request):
+        try:
+            data = await request.json()
+            model_name = data.get("model")
+            if not model_name:
+                return web.json_response({"success": False, "error": "model name required"}, status=400)
+            
+            from tools.ai_tools import ollama_pull_model
+            # Start pull in background to avoid timeout
+            asyncio.create_task(ollama_pull_model(model_name))
+            
+            push_activity("ollama_pull", "dashboard", f"Pulling {model_name}...")
+            return web.json_response({"success": True, "message": f"{model_name} indirme işlemi arka planda başlatıldı."})
+        except Exception as e:
+            return web.json_response({"success": False, "error": str(e)}, status=500)
+
     # ── Canvas ────────────────────────────────────────────────────────────────
     async def handle_get_canvas(self, request):
         canvas_id = request.match_info.get('id')
@@ -673,6 +713,7 @@ class ElyanGatewayServer:
         }
         adapter_health = self.router.get_adapter_health() if hasattr(self.router, "get_adapter_health") else {}
 
+        from core.action_lock import action_lock
         return web.json_response({
             "status": "online",
             "health_status": health.status,
@@ -688,6 +729,12 @@ class ElyanGatewayServer:
             "adapters": adapter_status,
             "adapter_health": adapter_health,
             "cron_jobs": len(self.cron.scheduler.get_jobs()),
+            "action_lock": {
+                "is_locked": action_lock.is_locked,
+                "progress": action_lock.progress,
+                "message": action_lock.status_message,
+                "task_id": action_lock.current_task_id
+            },
             **_get_runtime_model_info(),
         })
 
@@ -798,6 +845,101 @@ class ElyanGatewayServer:
         intent = self._task_intent_snapshot(text)
         return web.json_response({"ok": True, "intent": intent})
 
+    async def handle_file_upload(self, request):
+        """POST /api/upload — Multi-modal file drop."""
+        try:
+            reader = await request.multipart()
+            field = await reader.next()
+            if not field or field.name != 'file':
+                return web.json_response({"ok": False, "error": "file field required"}, status=400)
+            
+            filename = str(field.filename or f"upload_{int(time.time())}")
+            upload_dir = Path.home() / ".elyan" / "uploads"
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            filepath = upload_dir / filename
+            
+            size = 0
+            with open(filepath, 'wb') as f:
+                while True:
+                    chunk = await field.read_chunk()
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    f.write(chunk)
+            
+            logger.info(f"File uploaded via Dashboard: {filename} ({size} bytes)")
+            push_activity("upload", "dashboard", f"{filename} ({round(size/1024, 1)} KB)")
+            
+            # Analyze intent based on file type
+            prompt = f"Dropped file: {filepath}. Lütfen bu dosyayı analiz et."
+            asyncio.create_task(self.agent.process(prompt))
+            
+            return web.json_response({
+                "ok": True, 
+                "filename": filename, 
+                "path": str(filepath),
+                "size": size
+            })
+        except Exception as e:
+            logger.error(f"Upload failed: {e}")
+            return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+    async def handle_voice_upload(self, request):
+        """POST /api/voice — Voice command upload."""
+        try:
+            reader = await request.multipart()
+            field = await reader.next()
+            if not field or field.name != 'file':
+                return web.json_response({"ok": False, "error": "file field required"}, status=400)
+            
+            filename = f"voice_{int(time.time())}.webm"
+            temp_dir = Path.home() / ".elyan" / "tmp" / "voice"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            filepath = temp_dir / filename
+            
+            with open(filepath, 'wb') as f:
+                while True:
+                    chunk = await field.read_chunk()
+                    if not chunk: break
+                    f.write(chunk)
+            
+            from core.voice.voice_agent import get_voice_agent
+            va = get_voice_agent(self.agent)
+            
+            result = await va.process_voice_input(str(filepath))
+            
+            if result.get("success"):
+                # Return relative audio path for frontend
+                if result.get("response_audio"):
+                    result["audio_url"] = f"/api/voice/file?path={os.path.basename(result['response_audio'])}"
+                
+                push_activity("voice_cmd", "dashboard", result.get("input_text", "")[:60])
+                return web.json_response({"ok": True, **result})
+            else:
+                return web.json_response({"ok": False, "error": result.get("error")}, status=400)
+                
+        except Exception as e:
+            logger.error(f"Voice upload failed: {e}")
+            return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+    async def handle_voice_file_get(self, request):
+        """GET /api/voice/file?path=filename.mp3 — Serve generated speech."""
+        filename = request.query.get("path")
+        if not filename:
+            return web.Response(status=400, text="path required")
+        
+        # Security: only allow files from voice tmp dir
+        voice_dir = Path.home() / ".elyan" / "tmp" / "voice"
+        safe_path = (voice_dir / filename).resolve()
+        
+        if not str(safe_path).startswith(str(voice_dir.resolve())):
+            return web.Response(status=403, text="Forbidden")
+            
+        if not safe_path.exists():
+            return web.Response(status=404, text="File not found")
+            
+        return web.FileResponse(safe_path)
+
     async def handle_create_task(self, request):
         """Create and enqueue a new task."""
         try:
@@ -876,6 +1018,14 @@ class ElyanGatewayServer:
                 "size_bytes": 0,
                 "top_users": [],
             })
+
+    async def handle_get_profile(self, request):
+        """GET /api/memory/profile — Tiered Memory Profile."""
+        from core.memory_v2 import memory_v2
+        return web.json_response({
+            "ok": True,
+            "profile": memory_v2.profile.__dict__
+        })
 
     # ── Activity log (new) ────────────────────────────────────────────────────
     async def handle_activity_log(self, request):
@@ -1673,6 +1823,22 @@ class ElyanGatewayServer:
             "broken_tools": broken,
             "items": health_map,
         })
+
+    async def handle_get_logs(self, request):
+        """GET /api/logs — Latest gateway logs."""
+        from config.settings import LOGS_DIR
+        log_file = LOGS_DIR / "gateway.log"
+        if not log_file.exists():
+            return web.json_response({"ok": False, "error": "Log file not found"}, status=404)
+        
+        try:
+            # Read last 100 lines
+            with open(log_file, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+                latest = lines[-100:]
+            return web.json_response({"ok": True, "logs": latest})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=500)
 
     async def handle_tools_policy_get(self, request):
         allow, deny, require_approval = _get_policy_lists()

@@ -182,10 +182,11 @@ def _lazy_load_tool(tool_name: str):
         return _loaded_tools.get(tool_name)
 
     # AI Provider Tools
-    if tool_name in ["ollama_list_models", "ollama_remove_model"]:
-        from .ai_tools import ollama_list_models, ollama_remove_model
+    if tool_name in ["ollama_list_models", "ollama_pull_model", "ollama_remove_model"]:
+        from .ai_tools import ollama_list_models, ollama_pull_model, ollama_remove_model
         tools = {
             "ollama_list_models": ollama_list_models,
+            "ollama_pull_model": ollama_pull_model,
             "ollama_remove_model": ollama_remove_model,
         }
         _loaded_tools.update(tools)
@@ -203,10 +204,13 @@ def _lazy_load_tool(tool_name: str):
         return _loaded_tools.get(tool_name)
 
     # Advanced Tools
-    if tool_name in ["smart_summarize", "create_smart_file", "analyze_document", "generate_report", "analyze_image"]:
+    if tool_name in ["smart_summarize", "create_smart_file", "analyze_document", "generate_report", "analyze_image", "verify_visual_quality"]:
         if tool_name == "analyze_image":
             from .vision_tools import analyze_image
             _loaded_tools["analyze_image"] = analyze_image
+        elif tool_name == "verify_visual_quality":
+            from .browser.visual_qa import verify_visual_quality
+            _loaded_tools["verify_visual_quality"] = verify_visual_quality
         else:
             from .advanced_tools import smart_summarize, create_smart_file, analyze_document, generate_report
             tools = {
@@ -379,7 +383,7 @@ class LazyToolDict(dict):
             # Web Tools
             "fetch_page", "extract_text", "web_search", "start_research", "get_research_status",
             # Advanced Tools
-            "smart_summarize", "create_smart_file", "analyze_document", "generate_report", "analyze_image",
+            "smart_summarize", "create_smart_file", "analyze_document", "generate_report", "analyze_image", "verify_visual_quality",
             # Note Tools
             "create_note", "list_notes", "search_notes", "update_note", "delete_note", "get_note",
             # Planning Tools

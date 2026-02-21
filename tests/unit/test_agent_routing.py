@@ -57,6 +57,13 @@ class _DummyLearning:
     async def record_interaction(self, **kwargs):
         self.records.append(kwargs)
 
+    def check_approval_confidence(self, _action, _params):
+        return {"auto_approve": True, "confidence": 1.0, "reason": "test-double"}
+
+    def generate_smart_hint(self, last_error=None):
+        _ = last_error
+        return None
+
 
 class _DummyProfile:
     def update_after_interaction(self, user_id, **kwargs):
@@ -1099,6 +1106,7 @@ def test_agent_execute_tool_infers_delete_path_from_user_text(monkeypatch):
     agent = Agent()
     agent.llm = _DummyLLM()
     agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+    agent.learning = _DummyLearning(quick_match_action=None)
 
     captured = {}
 

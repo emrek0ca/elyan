@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from utils.logger import get_logger
+from core.multi_agent.orchestrator import get_orchestrator
+from core.intelligent_planner import get_intelligent_planner
 
 logger = get_logger("routine_engine")
 
@@ -866,13 +868,25 @@ class RoutineEngine:
         step_index: int,
         run_context: dict[str, Any],
     ) -> tuple[bool, str]:
+        # BP-004: Detect if this step requires the full factory flow
+        is_complex = any(kw in step.lower() for kw in ["website", "web sitesi", "proje", "uygulama", "geliştir", "oluştur"])
+        
         prompt = (
             f"Rutin adı: {routine.get('name', 'routine')}\n"
             f"Rutin adımı {step_index}/{len(routine.get('steps', []))}: {step}\n"
             f"Panel URL'leri: {', '.join(run_context.get('panel_urls', [])) or 'tanımlı değil'}\n"
             "Adımı tamamla ve sadece yapılan işin kısa sonucunu yaz."
         )
-        out = await agent.process(prompt)
+
+        if is_complex:
+            logger.info(f"Complex routine step detected: {step}. Activating Multi-Agent Orchestrator.")
+            orchestrator = get_orchestrator(agent)
+            planner = get_intelligent_planner()
+            plan = await planner.create_plan(prompt, {}, user_id="system")
+            out = await orchestrator.manage_flow(plan, prompt)
+        else:
+            out = await agent.process(prompt)
+            
         text = _clean_text(out)
         if _looks_like_hard_failure(text):
             return False, text or "Adım başarısız"

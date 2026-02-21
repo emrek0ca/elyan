@@ -45,6 +45,8 @@ class IntentParser(
         super().__init__()
         # Parser pipeline — sıralı, ilk eşleşen kazanır
         self._pipeline = [
+            # Dashboard drop (yüksek öncelik)
+            self._parse_dropped_file,
             # Sistem kontrolleri (yüksek öncelik)
             self._parse_screenshot,
             self._parse_status_snapshot,

@@ -232,6 +232,48 @@ class MediaParser(BaseParser):
             return None
         return {"action": "show_help", "params": {}, "reply": "Yardım bilgileri gösteriliyor..."}
 
+    # ── Dropped File (Dashboard) ─────────────────────────────────────────────
+    def _parse_dropped_file(self, text: str, text_norm: str, original: str) -> dict | None:
+        if not text.startswith("dropped file:"):
+            return None
+        
+        # Extract path: dropped file: /path/to/file. extension
+        match = re.search(r'dropped file:\s*([^\s\.]+[\.][a-zA-Z0-9]{1,8})', text, re.IGNORECASE)
+        if not match:
+            # Fallback for paths with spaces if they are absolute
+            match = re.search(r'dropped file:\s*(/.+?\.[a-zA-Z0-9]{1,8})', text, re.IGNORECASE)
+            
+        if not match:
+            return None
+            
+        file_path = match.group(1).strip()
+        ext = file_path.split('.')[-1].lower()
+        
+        image_exts = {'jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'}
+        doc_exts = {'pdf', 'doc', 'docx', 'txt', 'csv', 'xlsx', 'xls'}
+        audio_exts = {'mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac'}
+        
+        if ext in image_exts:
+            return {
+                "action": "analyze_image",
+                "params": {"image_path": file_path, "prompt": "Bu görselde ne görüyorsun? Detaylı açıkla."},
+                "reply": f"Görsel analiz ediliyor: {re.sub(r'.+/', '', file_path)}..."
+            }
+        elif ext in audio_exts:
+            return {
+                "action": "transcribe_audio_file",
+                "params": {"audio_file": file_path, "language": "tr"},
+                "reply": f"Ses dosyası deşifre ediliyor: {re.sub(r'.+/', '', file_path)}..."
+            }
+        elif ext in doc_exts:
+            return {
+                "action": "read_file",
+                "params": {"path": file_path},
+                "reply": f"Dosya okunuyor: {re.sub(r'.+/', '', file_path)}..."
+            }
+            
+        return None
+
     # ── Unknown / Chat ────────────────────────────────────────────────────────
     def _parse_chat_fallback(self, text: str, text_norm: str, original: str) -> dict:
         return {"action": "chat", "params": {"message": original},
