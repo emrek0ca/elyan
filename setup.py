@@ -9,8 +9,8 @@ setup(
     description="Elyan — Özerk AI Operatör / Dijital Çalışan",
     author="Elyan Team",
     python_requires=">=3.11",
+    package_dir={"": "."},
     packages=find_packages(exclude=["tests*", "*.tests"]),
-    py_modules=["elyan_entrypoint"],
     install_requires=[
         # Core
         "pydantic>=2.0.0",
@@ -69,7 +69,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "elyan=elyan_entrypoint:main",
+            "elyan=cli.main:main",
         ],
     },
     classifiers=[

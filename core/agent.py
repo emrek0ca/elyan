@@ -760,31 +760,41 @@ class Agent:
         # --- Intervention Check (Policy-Based) ---
         policy_check = tool_policy.check_access(mapped_tool)
         if policy_check.get("requires_approval"):
-            manager = get_intervention_manager()
-            target_desc = str(clean_params.get("path") or clean_params.get("file_path") or clean_params)
-            choice = await manager.ask_human(
-                prompt=f"Kritik işlem onayı gerekiyor: '{mapped_tool}'\nHedef/Detay: {target_desc}\nBu işlemi onaylıyor musun?",
-                context={"tool": mapped_tool, "params": clean_params, "policy_reason": policy_check.get("reason")},
-                options=["Onayla", "İptal Et"]
-            )
-            
-            # --- Learning: Record Approval/Rejection ---
+            # Smart Approval Check
+            should_ask = True
             if self.learning:
-                is_approved = (choice == "Onayla")
-                asyncio.create_task(self.learning.record_interaction(
-                    user_id=uid,
-                    input_text=user_input or f"manual_approval_request_{mapped_tool}",
-                    intent="security_approval",
-                    action=mapped_tool,
-                    success=is_approved,
-                    duration_ms=0,
-                    context={"params": clean_params, "policy": policy_check},
-                    feedback="Explicit Approval" if is_approved else "Explicit Rejection"
-                ))
-            # -------------------------------------------
+                confidence = self.learning.check_approval_confidence(mapped_tool, clean_params)
+                if confidence.get("auto_approve"):
+                    should_ask = False
+                    logger.info(f"Smart Approval: Auto-approved {mapped_tool} ({confidence.get('reason')})")
+                    _push("security", "brain", f"Auto-approved: {mapped_tool} based on history", True)
 
-            if choice != "Onayla":
-                return {"success": False, "error": "İşlem kullanıcı tarafından iptal edildi.", "error_code": "USER_ABORTED"}
+            if should_ask:
+                manager = get_intervention_manager()
+                target_desc = str(clean_params.get("path") or clean_params.get("file_path") or clean_params)
+                choice = await manager.ask_human(
+                    prompt=f"Kritik işlem onayı gerekiyor: '{mapped_tool}'\nHedef/Detay: {target_desc}\nBu işlemi onaylıyor musun?",
+                    context={"tool": mapped_tool, "params": clean_params, "policy_reason": policy_check.get("reason")},
+                    options=["Onayla", "İptal Et"]
+                )
+                
+                # --- Learning: Record Approval/Rejection ---
+                if self.learning:
+                    is_approved = (choice == "Onayla")
+                    asyncio.create_task(self.learning.record_interaction(
+                        user_id=uid,
+                        input_text=user_input or f"manual_approval_request_{mapped_tool}",
+                        intent="security_approval",
+                        action=mapped_tool,
+                        success=is_approved,
+                        duration_ms=0,
+                        context={"params": clean_params, "policy": policy_check},
+                        feedback="Explicit Approval" if is_approved else "Explicit Rejection"
+                    ))
+                # -------------------------------------------
+
+                if choice != "Onayla":
+                    return {"success": False, "error": "İşlem kullanıcı tarafından iptal edildi.", "error_code": "USER_ABORTED"}
         # --- End Intervention ---
 
         if mapped_tool in ("chat", "respond", "answer"):

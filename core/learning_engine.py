@@ -758,6 +758,60 @@ class LearningEngine:
             "confidence": confidence,
         }
 
+    def check_approval_confidence(self, action: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Check if an action with these specific params has been approved before.
+        Strict check: exact param match required for auto-approval.
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                # Fetch recent approvals for this action
+                cursor = conn.execute("""
+                    SELECT context FROM interactions 
+                    WHERE action = ? AND intent = 'security_approval' AND success = 1
+                    AND timestamp > ?
+                    ORDER BY timestamp DESC
+                    LIMIT 50
+                """, (action, time.time() - (30 * 86400)))
+                
+                rows = cursor.fetchall()
+                
+            match_count = 0
+            # Normalize params for comparison (sort keys, ignore transient like '_retry_attempted')
+            # But wait, params might contain dynamic paths.
+            # For V1, we stick to exact match of relevant keys.
+            
+            clean_current = {k: v for k, v in params.items() if not k.startswith("_")}
+            current_json = json.dumps(clean_current, sort_keys=True)
+
+            for (context_json,) in rows:
+                try:
+                    ctx = json.loads(context_json)
+                    hist_params = ctx.get("params", {})
+                    clean_hist = {k: v for k, v in hist_params.items() if not k.startswith("_")}
+                    
+                    if json.dumps(clean_hist, sort_keys=True) == current_json:
+                        match_count += 1
+                except Exception:
+                    continue
+
+            if match_count >= 1:
+                return {
+                    "auto_approve": True,
+                    "confidence": 1.0,
+                    "reason": f"Exact match approved {match_count} times previously."
+                }
+
+            return {
+                "auto_approve": False,
+                "confidence": 0.0,
+                "reason": "No exact prior approval found."
+            }
+
+        except Exception as e:
+            logger.error(f"Approval check failed: {e}")
+            return {"auto_approve": False, "confidence": 0.0, "reason": "Error"}
+
     def self_review(self, window_days: int = 14) -> Dict[str, Any]:
         cutoff = time.time() - (max(1, int(window_days)) * 86400)
         recommendations: List[str] = []

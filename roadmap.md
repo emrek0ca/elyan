@@ -1,11 +1,12 @@
 # Elyan Development Roadmap
 
 ## Project Status
-- **Current Sprint:** Robustness & Proactivity
-- **Version:** 2.1.0 (Alpha)
-- **Focus:** Autonomy, Safety, and User Trust
+- **Current Sprint:** Intelligence & UX
+- **Version:** 2.2.0 (Alpha)
+- **Focus:** Reducing User Friction (Smart Approvals)
 
 ## Recent Accomplishments
+- [x] **Smart Approval Reduction:** Skip manual confirmation for actions explicitly approved before (exact param match).
 - [x] **Predictive UX:** Dashboard displays "preparing..." notifications for background drafts.
 - [x] **Read-After-Write Verification:** File integrity checks.
 - [x] **Self-Correction V2:** Auto-retry on write verification failure.
@@ -13,10 +14,10 @@
 - [x] **Advanced Predictions:** LLM-based next-step prediction when plan is ambiguous.
 
 ## Next Steps
-- [ ] **Proactive Dashboard:** Show "Suggested Actions" cards based on predictive engine confidence.
 - [ ] **Voice/Audio Feedback:** Simple sound cues for success/failure.
-- [ ] **Memory Integration:** Store successful interventions in Learning Engine to avoid repeated questions.
+- [ ] **Context-Aware Hints:** Dashboard "Did you know?" cards based on user habits.
+- [ ] **Multi-Modal Input:** Drag & drop images to dashboard to trigger analysis.
 
 ## Known Issues
 - `apscheduler` requires `sqlalchemy` (Fixed).
-- LLM predictions can be slow; ensure they don't block the main thread (Verified: executed in background/async).
+- `elyan` console script required non-editable install fix (Fixed via `cli.main` entry point and standard install).

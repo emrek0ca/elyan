@@ -1,10 +1,8 @@
-## OTURUM GÜNCELLEMESİ — 2026-02-21 (UX & LEARNING SPRINT) ✅
-- **Proactive Dashboard:**
-  - Tahmin edilen aksiyonlar (`prediction`), artık Dashboard'da tıklanabilir **Öneri Kartları** (`suggestion`) olarak sunuluyor.
-  - Kullanıcı karttaki "Bunu Yap" butonuna tıklayarak işlemi hemen başlatabiliyor.
-- **Intervention Learning:**
-  - Ajanın sorduğu güvenlik onaylarına verilen yanıtlar (Onay/Red), `LearningEngine` veritabanına kaydedilerek kullanıcı profili zenginleştiriliyor.
+## OTURUM GÜNCELLEMESİ — 2026-02-21 (SMART APPROVALS) ✅
+- **Akıllı Onay İndirgeme (Smart Approval):**
+  - `core/learning_engine.py`: `check_approval_confidence` metodu eklendi. Geçmişte "Onayla" denilen ve parametreleri *birebir* uyuşan işlemler (son 30 gün içinde en az 1 kez) artık otomatik onaylanıyor.
+  - `core/agent.py`: `_execute_tool` içinde `ask_human` öncesinde bu kontrol yapılıyor. Otomatik onaylanırsa kullanıcıya sorulmuyor, sadece loglanıyor ve dashboard'a bildirim gidiyor.
 
 **Test/Doğrulama:**
-- `tests/unit/test_agent_intervention.py`: Intervention tetikleme ve iptal mekanizmaları doğrulandı.
-- `ui/web/dashboard.html`: Yeni `renderSuggestion` fonksiyonu ve `suggestions-container` eklendi.
+- `tests/unit/test_smart_approval.py`: Otomatik onay ve fallback senaryoları doğrulandı.
+- `elyan status`: Ortam sorunu çözüldü ve doğrulandı.
