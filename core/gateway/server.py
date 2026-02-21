@@ -2,6 +2,7 @@ import asyncio
 import inspect
 import time
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from aiohttp import web, WSMsgType
@@ -12,9 +13,13 @@ from core.scheduler.cron_engine import CronEngine
 from core.scheduler.heartbeat import HeartbeatManager
 from core.scheduler.routine_engine import routine_engine
 from core.skills.manager import skill_manager
+from core.subscription import subscription_manager
+from core.quota import quota_manager
+from core.proactive.intervention import get_intervention_manager
 from core.tool_usage import get_tool_usage_snapshot
 from config.elyan_config import elyan_config
 from security.tool_policy import tool_policy
+from security.keychain import KeychainManager
 from tools import AVAILABLE_TOOLS
 from utils.logger import get_logger
 
@@ -154,6 +159,120 @@ def _get_policy_lists() -> tuple[list[str], list[str], list[str]]:
     return allow, deny, require
 
 
+_PROVIDER_ENV_KEYS = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "google": "GOOGLE_API_KEY",
+    "groq": "GROQ_API_KEY",
+}
+
+_CHANNEL_SECRET_ENV_KEYS = {
+    "telegram": {"token": "TELEGRAM_BOT_TOKEN"},
+    "discord": {"token": "DISCORD_BOT_TOKEN"},
+    "slack": {
+        "token": "SLACK_BOT_TOKEN",
+        "bot_token": "SLACK_BOT_TOKEN",
+        "app_token": "SLACK_APP_TOKEN",
+    },
+    "whatsapp": {
+        "token": "WHATSAPP_BOT_TOKEN",
+        "bridge_token": "WHATSAPP_BRIDGE_TOKEN",
+        "access_token": "WHATSAPP_ACCESS_TOKEN",
+        "verify_token": "WHATSAPP_VERIFY_TOKEN",
+    },
+    "signal": {"token": "SIGNAL_BOT_TOKEN"},
+}
+
+
+def _provider_env_key(provider: str) -> str:
+    return _PROVIDER_ENV_KEYS.get(str(provider or "").strip().lower(), "")
+
+
+def _provider_key_status(provider: str) -> dict:
+    p = str(provider or "").strip().lower()
+    env_key = _provider_env_key(p)
+    cfg_key = elyan_config.get(f"models.providers.{p}.apiKey", "")
+    if not isinstance(cfg_key, str):
+        cfg_key = ""
+    cfg_key = cfg_key.strip()
+    cfg_uses_ref = bool(cfg_key.startswith("$"))
+    cfg_has_value = bool(cfg_key)
+
+    has_env = bool(env_key and os.getenv(env_key, "").strip())
+    has_keychain = False
+    if env_key:
+        try:
+            keychain_key = KeychainManager.key_for_env(env_key)
+            if keychain_key:
+                has_keychain = bool(KeychainManager.get_key(keychain_key))
+        except Exception:
+            has_keychain = False
+
+    source = "none"
+    available = False
+    if has_keychain:
+        source = "keychain"
+        available = True
+    elif has_env:
+        source = "env"
+        available = True
+    elif cfg_has_value and not cfg_uses_ref:
+        source = "config"
+        available = True
+    elif cfg_uses_ref:
+        source = "config_ref"
+        available = has_env or has_keychain
+
+    return {
+        "provider": p,
+        "env_key": env_key,
+        "configured": bool(available),
+        "source": source,
+        "config_ref": cfg_key if cfg_uses_ref else "",
+        "available_in": {
+            "keychain": bool(has_keychain),
+            "env": bool(has_env),
+            "config": bool(cfg_has_value and not cfg_uses_ref),
+        },
+    }
+
+
+def _sanitize_roles_map(raw_roles: dict, default_provider: str, default_model: str) -> dict:
+    if not isinstance(raw_roles, dict):
+        return {}
+    out: dict = {}
+    allowed_roles = {"reasoning", "inference", "creative", "code"}
+    for role, cfg in raw_roles.items():
+        role_name = str(role or "").strip().lower()
+        if role_name not in allowed_roles or not isinstance(cfg, dict):
+            continue
+        provider = str(cfg.get("provider") or default_provider).strip().lower()
+        model_raw = str(cfg.get("model") or "").strip()
+        model = model_raw if model_raw else _default_model_for_provider(provider)
+        if not model:
+            model = _default_model_for_provider(provider)
+        out[role_name] = {"provider": provider, "model": model}
+    return out
+
+
+def _channel_id(ch: dict) -> str:
+    if not isinstance(ch, dict):
+        return ""
+    cid = str(ch.get("id") or "").strip()
+    ctype = str(ch.get("type") or "").strip().lower()
+    return cid or ctype
+
+
+def _normalize_channel_type(raw: str) -> str:
+    return str(raw or "").strip().lower().replace("-", "_")
+
+
+def _channel_secret_env(field: str, channel_type: str) -> str:
+    ctype = _normalize_channel_type(channel_type)
+    fmap = _CHANNEL_SECRET_ENV_KEYS.get(ctype, {})
+    return str(fmap.get(str(field or "").strip(), "")).strip()
+
+
 class ElyanGatewayServer:
     """Main HTTP/WebSocket server for the Elyan Gateway."""
 
@@ -173,7 +292,7 @@ class ElyanGatewayServer:
         if request.method == "OPTIONS":
             return web.Response(headers={
                 "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+                "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
                 "Access-Control-Allow-Headers": "Content-Type",
             })
         resp = await handler(request)
@@ -185,31 +304,49 @@ class ElyanGatewayServer:
         self.app.router.add_post('/api/message', self.handle_external_message)
         self.app.router.add_get('/api/status', self.handle_status)
         self.app.router.add_get('/api/channels', self.handle_list_channels)
+        self.app.router.add_get('/api/channels/catalog', self.handle_channels_catalog)
+        self.app.router.add_post('/api/channels/upsert', self.handle_channel_upsert)
+        self.app.router.add_post('/api/channels/toggle', self.handle_channel_toggle)
+        self.app.router.add_delete('/api/channels/{id}', self.handle_channel_delete)
+        self.app.router.add_post('/api/channels/test', self.handle_channels_test)
+        self.app.router.add_post('/api/channels/sync', self.handle_channels_sync)
         self.app.router.add_get('/api/config', self.handle_get_config)
         self.app.router.add_post('/api/config', self.handle_update_config)
+        self.app.router.add_get('/api/agent/profile', self.handle_agent_profile_get)
+        self.app.router.add_post('/api/agent/profile', self.handle_agent_profile_update)
         self.app.router.add_get('/api/models', self.handle_models_get)
         self.app.router.add_post('/api/models', self.handle_models_update)
         self.app.router.add_get('/api/canvas/{id}', self.handle_get_canvas)
 
         # ── Dashboard API (new) ───────────────────────────────────────────────
         self.app.router.add_get('/api/analytics', self.handle_analytics)
+        self.app.router.add_get('/api/subscription', self.handle_subscription_get)
+        self.app.router.add_get('/api/quota', self.handle_quota_get)
         self.app.router.add_get('/api/tasks', self.handle_tasks)
+        self.app.router.add_post('/api/tasks/suggest', self.handle_task_suggest)
         self.app.router.add_post('/api/tasks', self.handle_create_task)
         self.app.router.add_get('/api/memory/stats', self.handle_memory_stats)
         self.app.router.add_get('/api/activity', self.handle_activity_log)
         self.app.router.add_get('/api/routines', self.handle_routines)
         self.app.router.add_get('/api/routines/templates', self.handle_routine_templates)
+        self.app.router.add_post('/api/routines/suggest', self.handle_routine_suggest)
+        self.app.router.add_post('/api/routines/from-text', self.handle_routine_from_text)
         self.app.router.add_post('/api/routines', self.handle_routine_create)
         self.app.router.add_post('/api/routines/from-template', self.handle_routine_from_template)
         self.app.router.add_post('/api/routines/toggle', self.handle_routine_toggle)
         self.app.router.add_post('/api/routines/run', self.handle_routine_run)
         self.app.router.add_get('/api/routines/history', self.handle_routine_history)
         self.app.router.add_delete('/api/routines/{id}', self.handle_routine_remove)
+        self.app.router.add_get('/api/tool-requests', self.handle_tool_requests)
+        self.app.router.add_get('/api/tool-requests/stats', self.handle_tool_requests_stats)
         self.app.router.add_get('/api/tools', self.handle_tools)
+        self.app.router.add_get('/api/tools/policy', self.handle_tools_policy_get)
+        self.app.router.add_get('/api/tools/detail', self.handle_tool_detail)
         self.app.router.add_get('/api/tools/diagnostics', self.handle_tools_diagnostics)
         self.app.router.add_post('/api/tools/policy', self.handle_tools_policy)
         self.app.router.add_post('/api/tools/test', self.handle_tools_test)
         self.app.router.add_get('/api/skills', self.handle_skills)
+        self.app.router.add_get('/api/skills/detail', self.handle_skill_detail)
         self.app.router.add_post('/api/skills/install', self.handle_skill_install)
         self.app.router.add_post('/api/skills/toggle', self.handle_skill_toggle)
         self.app.router.add_post('/api/skills/remove', self.handle_skill_remove)
@@ -225,11 +362,15 @@ class ElyanGatewayServer:
 
         # ── Webhook ───────────────────────────────────────────────────────────
         self.app.router.add_post('/hook/{event}', self.handle_webhook)
+        self.app.router.add_get('/whatsapp/webhook', self.handle_whatsapp_webhook_verify)
+        self.app.router.add_post('/whatsapp/webhook', self.handle_whatsapp_webhook)
 
         # ── Security API ─────────────────────────────────────────────────────
         self.app.router.add_get('/api/security/events', self.handle_security_events)
         self.app.router.add_get('/api/security/pending', self.handle_pending_approvals)
         self.app.router.add_post('/api/security/approve', self.handle_approve_action)
+        self.app.router.add_get('/api/interventions', self.handle_interventions_get)
+        self.app.router.add_post('/api/interventions/resolve', self.handle_interventions_resolve)
 
     # ── Page handlers ─────────────────────────────────────────────────────────
     async def handle_dashboard_page(self, request):
@@ -251,12 +392,77 @@ class ElyanGatewayServer:
         except Exception as e:
             return web.json_response({"error": str(e)}, status=400)
 
+    async def handle_agent_profile_get(self, request):
+        profile = {
+            "name": str(elyan_config.get("agent.name", "Elyan") or "Elyan"),
+            "personality": str(elyan_config.get("agent.personality", "professional") or "professional"),
+            "language": str(elyan_config.get("agent.language", "tr") or "tr"),
+            "system_prompt": str(
+                elyan_config.get("agent.system_prompt", "")
+                or elyan_config.get("agent.systemPrompt", "")
+                or ""
+            ),
+            "autonomous": bool(elyan_config.get("agent.autonomous", True)),
+            "memory": {
+                "max_user_storage_gb": float(elyan_config.get("memory.maxUserStorageGB", 10) or 10),
+                "local_only": bool(elyan_config.get("memory.localOnly", True)),
+            },
+        }
+        return web.json_response({"ok": True, "profile": profile})
+
+    async def handle_agent_profile_update(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+
+        name = str(data.get("name", elyan_config.get("agent.name", "Elyan")) or "Elyan").strip()
+        personality = str(data.get("personality", elyan_config.get("agent.personality", "professional")) or "professional").strip().lower()
+        language = str(data.get("language", elyan_config.get("agent.language", "tr")) or "tr").strip().lower()
+        system_prompt = str(
+            data.get("system_prompt", data.get("systemPrompt", elyan_config.get("agent.system_prompt", "")))
+            or ""
+        ).strip()
+        autonomous = bool(data.get("autonomous", elyan_config.get("agent.autonomous", True)))
+        max_user_storage_gb = data.get("max_user_storage_gb", elyan_config.get("memory.maxUserStorageGB", 10))
+        local_only = bool(data.get("local_only", elyan_config.get("memory.localOnly", True)))
+
+        if personality not in {"professional", "technical", "friendly", "concise", "creative"}:
+            personality = "professional"
+        if language not in {"tr", "en"}:
+            language = "tr"
+        if len(system_prompt) > 12000:
+            return web.json_response({"ok": False, "error": "system_prompt too long (max 12000 chars)"}, status=400)
+        try:
+            max_user_storage_gb = max(1.0, min(50.0, float(max_user_storage_gb)))
+        except Exception:
+            max_user_storage_gb = float(elyan_config.get("memory.maxUserStorageGB", 10) or 10)
+
+        elyan_config.set("agent.name", name or "Elyan")
+        elyan_config.set("agent.personality", personality)
+        elyan_config.set("agent.language", language)
+        elyan_config.set("agent.system_prompt", system_prompt)
+        # legacy key for compatibility
+        elyan_config.set("agent.systemPrompt", system_prompt)
+        elyan_config.set("agent.autonomous", autonomous)
+        elyan_config.set("memory.maxUserStorageGB", max_user_storage_gb)
+        elyan_config.set("memory.localOnly", local_only)
+
+        push_activity("agent_profile", "dashboard", f"profile updated ({personality}/{language})", True)
+
+        return await self.handle_agent_profile_get(request)
+
     async def handle_models_get(self, request):
         default = elyan_config.get("models.default", {}) or {}
         fallback = elyan_config.get("models.fallback", {}) or {}
         roles = elyan_config.get("models.roles", {}) or {}
         router_enabled = bool(elyan_config.get("router.enabled", True))
+        providers_cfg = elyan_config.get("models.providers", {}) or {}
+        known = {"openai", "anthropic", "google", "groq", "ollama"}
+        known.update({str(k).strip().lower() for k in providers_cfg.keys() if str(k).strip()})
+        provider_keys = {p: _provider_key_status(p) for p in sorted(known)}
         state = {
+            "ok": True,
             "default": {
                 "provider": default.get("provider", "openai"),
                 "model": default.get("model", "gpt-4o"),
@@ -267,6 +473,7 @@ class ElyanGatewayServer:
             },
             "roles": roles if isinstance(roles, dict) else {},
             "router_enabled": router_enabled,
+            "provider_keys": provider_keys,
             **_get_runtime_model_info(),
         }
         return web.json_response(state)
@@ -306,6 +513,59 @@ class ElyanGatewayServer:
 
         router_enabled = data.get("router_enabled", None)
         sync_roles = bool(data.get("sync_roles", True))
+        requested_roles = data.get("roles", {})
+
+        # Optional API key updates (write-only)
+        api_keys = data.get("api_keys", {})
+        clear_keys = data.get("clear_keys", [])
+        if not isinstance(api_keys, dict):
+            api_keys = {}
+        if not isinstance(clear_keys, list):
+            clear_keys = []
+
+        key_updates = []
+        key_errors = []
+
+        for raw_provider, raw_secret in api_keys.items():
+            provider_name = str(raw_provider or "").strip().lower()
+            if provider_name not in _PROVIDER_ENV_KEYS:
+                continue
+            secret = str(raw_secret or "").strip()
+            if not secret:
+                continue
+            env_key = _provider_env_key(provider_name)
+            keychain_key = KeychainManager.key_for_env(env_key)
+            stored = False
+            store_mode = "config"
+            if keychain_key and KeychainManager.is_available():
+                try:
+                    stored = bool(KeychainManager.set_key(keychain_key, secret))
+                except Exception:
+                    stored = False
+            if stored:
+                elyan_config.set(f"models.providers.{provider_name}.apiKey", f"${env_key}")
+                store_mode = "keychain"
+            else:
+                # Fallback (non-macOS / keychain unavailable): keep in config.
+                elyan_config.set(f"models.providers.{provider_name}.apiKey", secret)
+            key_updates.append({"provider": provider_name, "stored_in": store_mode})
+
+        for raw_provider in clear_keys:
+            provider_name = str(raw_provider or "").strip().lower()
+            if provider_name not in _PROVIDER_ENV_KEYS:
+                continue
+            env_key = _provider_env_key(provider_name)
+            keychain_key = KeychainManager.key_for_env(env_key)
+            cleared = False
+            if keychain_key and KeychainManager.is_available():
+                try:
+                    KeychainManager.delete_key(keychain_key)
+                    cleared = True
+                except Exception as exc:
+                    key_errors.append(f"{provider_name}: {exc}")
+            # Always clear config fallback value.
+            elyan_config.set(f"models.providers.{provider_name}.apiKey", "")
+            key_updates.append({"provider": provider_name, "cleared": True, "keychain": bool(cleared)})
 
         elyan_config.set("models.default.provider", provider)
         elyan_config.set("models.default.model", model)
@@ -323,13 +583,28 @@ class ElyanGatewayServer:
                 "code": {"provider": provider, "model": model},
             }
             elyan_config.set("models.roles", role_map)
+        else:
+            role_map = _sanitize_roles_map(requested_roles, provider, model)
+            if role_map:
+                elyan_config.set("models.roles", role_map)
+
+        # Keep runtime provider cache aligned after updates.
+        try:
+            from core.model_orchestrator import model_orchestrator
+            model_orchestrator._load_providers()
+        except Exception:
+            pass
 
         push_activity("models", "dashboard", f"default={provider}/{model}", True)
         default = elyan_config.get("models.default", {}) or {}
         fallback = elyan_config.get("models.fallback", {}) or {}
         roles = elyan_config.get("models.roles", {}) or {}
         router_enabled = bool(elyan_config.get("router.enabled", True))
+        providers_cfg = elyan_config.get("models.providers", {}) or {}
+        known = {"openai", "anthropic", "google", "groq", "ollama"}
+        known.update({str(k).strip().lower() for k in providers_cfg.keys() if str(k).strip()})
         return web.json_response({
+            "ok": True,
             "default": {
                 "provider": default.get("provider", "openai"),
                 "model": default.get("model", "gpt-4o"),
@@ -340,6 +615,9 @@ class ElyanGatewayServer:
             },
             "roles": roles if isinstance(roles, dict) else {},
             "router_enabled": router_enabled,
+            "provider_keys": {p: _provider_key_status(p) for p in sorted(known)},
+            "key_updates": key_updates,
+            "key_errors": key_errors,
             **_get_runtime_model_info(),
         })
 
@@ -354,9 +632,11 @@ class ElyanGatewayServer:
 
     # ── Status ────────────────────────────────────────────────────────────────
     async def handle_status(self, request):
+        from core.monitoring import get_resource_monitor
+        monitor = get_resource_monitor()
+        health = monitor.get_health_snapshot()
+        
         import psutil
-        cpu = psutil.cpu_percent(interval=0.1)
-        mem = psutil.virtual_memory()
         uptime_s = int(time.time() - _start_time)
         days, rem = divmod(uptime_s, 86400)
         hours, rem = divmod(rem, 3600)
@@ -376,10 +656,13 @@ class ElyanGatewayServer:
 
         return web.json_response({
             "status": "online",
-            "cpu": f"{cpu:.0f}%",
-            "cpu_pct": round(cpu, 1),
-            "ram": f"{mem.used / (1024**3):.1f} GB",
-            "ram_pct": round(mem.percent, 1),
+            "health_status": health.status,
+            "health_issues": health.issues,
+            "cpu_pct": health.cpu_percent,
+            "ram_pct": health.ram_percent,
+            "disk_pct": health.disk_percent,
+            "battery_pct": health.battery_percent,
+            "is_on_ac": health.is_on_ac,
             "uptime": uptime,
             "uptime_s": uptime_s,
             "version": elyan_config.get("version", "18.0.0"),
@@ -456,6 +739,22 @@ class ElyanGatewayServer:
             "model_breakdown": dict(model_counter),
         })
 
+    async def handle_subscription_get(self, request):
+        user_id = request.query.get("user_id", "local")
+        summary = subscription_manager.get_subscription_summary(user_id)
+        return web.json_response({
+            "ok": True,
+            **summary
+        })
+
+    async def handle_quota_get(self, request):
+        user_id = request.query.get("user_id", "local")
+        stats = quota_manager.get_user_stats(user_id)
+        return web.json_response({
+            "ok": True,
+            **stats
+        })
+
     # ── Tasks (new) ───────────────────────────────────────────────────────────
     async def handle_tasks(self, request):
         """Return active + recent task history."""
@@ -468,6 +767,18 @@ class ElyanGatewayServer:
             active, history = [], []
         return web.json_response({"active": active, "history": list(reversed(history))})
 
+    async def handle_task_suggest(self, request):
+        """Analyze quick-task text and return automation intent snapshot."""
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        text = (data.get("text") or "").strip()
+        if not text:
+            return web.json_response({"ok": False, "error": "text required"}, status=400)
+        intent = self._task_intent_snapshot(text)
+        return web.json_response({"ok": True, "intent": intent})
+
     async def handle_create_task(self, request):
         """Create and enqueue a new task."""
         try:
@@ -477,9 +788,40 @@ class ElyanGatewayServer:
         text = (data.get("text") or "").strip()
         if not text:
             return web.json_response({"error": "text required"}, status=400)
+
+        intent = self._task_intent_snapshot(text)
+
+        if intent.get("should_auto_create"):
+            try:
+                suggestion = intent.get("suggestion", {}) if isinstance(intent.get("suggestion"), dict) else {}
+                routine = routine_engine.create_from_text(
+                    text=text,
+                    enabled=True,
+                    created_by="quick_task",
+                    report_channel=str(data.get("report_channel", "")).strip()
+                    or str(suggestion.get("report_channel", "")).strip(),
+                    report_chat_id=str(data.get("report_chat_id", "")).strip()
+                    or str(suggestion.get("report_chat_id", "")).strip(),
+                    expression=str(data.get("expression", "")).strip(),
+                    name=str(data.get("name", "")).strip(),
+                )
+                self.cron.sync_job(self._routine_to_job(routine))
+                push_activity("routine_create", "dashboard", f"{routine.get('name')} ({routine.get('id')})", True)
+                return web.json_response(
+                    {
+                        "status": "routine_created",
+                        "text": text,
+                        "routine": routine,
+                        "note": "Zamanlama ifadesi algılandığı için rutin oluşturuldu.",
+                        "intent": intent,
+                    }
+                )
+            except Exception as e:
+                return web.json_response({"error": f"routine create failed: {e}"}, status=400)
+
         asyncio.create_task(self.agent.process(text))
         push_activity("task_created", "dashboard", text[:60])
-        return web.json_response({"status": "queued", "text": text})
+        return web.json_response({"status": "queued", "text": text, "intent": intent})
 
     # ── Memory stats (new) ────────────────────────────────────────────────────
     async def handle_memory_stats(self, request):
@@ -536,6 +878,125 @@ class ElyanGatewayServer:
         if len(matches) > 1:
             return None, f"ambiguous id prefix ({len(matches)} matches)"
         return matches[0], None
+
+    @staticmethod
+    def _looks_like_automation_request(text: str) -> bool:
+        intent = ElyanGatewayServer._task_intent_snapshot(text)
+        return bool(intent.get("should_auto_create"))
+
+    @staticmethod
+    def _task_intent_snapshot(text: str) -> dict:
+        raw = str(text or "").strip()
+        low = raw.lower()
+        if not low:
+            return {
+                "text": raw,
+                "has_schedule": False,
+                "has_action": False,
+                "automation_score": 0.0,
+                "should_auto_create": False,
+                "suggestion": {},
+            }
+
+        schedule_markers = (
+            "her gün",
+            "hergun",
+            "günlük",
+            "gunluk",
+            "daily",
+            "hafta içi",
+            "haftaici",
+            "hafta sonu",
+            "haftasonu",
+            "haftalık",
+            "haftalik",
+            "weekly",
+            "saat",
+            "cron",
+            "dakikada bir",
+            "saatte bir",
+            "her ay",
+            "ayda bir",
+            "her pazartesi",
+            "her salı",
+            "her sali",
+            "her çarşamba",
+            "her carsamba",
+            "her perşembe",
+            "her persembe",
+            "her cuma",
+            "her cumartesi",
+            "her pazar",
+        )
+        action_markers = (
+            "rutin",
+            "otomasyon",
+            "kontrol et",
+            "rapor",
+            "gönder",
+            "gonder",
+            "panel",
+            "tarayıcı",
+            "tarayici",
+            "sipariş",
+            "siparis",
+            "stok",
+            "mail",
+            "e-posta",
+            "excel",
+            "tablo",
+            "muhasebe",
+            "öğrenci",
+            "ogrenci",
+            "hatırlat",
+            "hatirlat",
+            "anımsat",
+            "animsat",
+            "uyar",
+            "bildir",
+            "takip et",
+        )
+
+        has_schedule_marker = any(m in low for m in schedule_markers)
+        has_action_marker = any(m in low for m in action_markers)
+
+        suggestion: dict = {}
+        schedule_from_parser = False
+        confidence = 0.0
+        try:
+            suggestion = routine_engine.suggest_from_text(raw)
+            expr = str(suggestion.get("expression", "")).strip()
+            schedule_from_parser = bool(expr and expr != "0 9 * * *")
+            confidence = float(suggestion.get("confidence", 0.0) or 0.0)
+        except Exception:
+            suggestion = {}
+
+        has_schedule = bool(has_schedule_marker or schedule_from_parser)
+        has_action = bool(has_action_marker or str(suggestion.get("template_id", "")).strip())
+
+        score = 0.0
+        if has_schedule_marker:
+            score += 0.45
+        if schedule_from_parser:
+            score += 0.2
+        if has_action_marker:
+            score += 0.35
+        if str(suggestion.get("template_id", "")).strip():
+            score += 0.1
+        if confidence >= 0.7:
+            score += 0.05
+        score = min(1.0, score)
+
+        should_auto = bool(has_schedule and has_action and score >= 0.6)
+
+        return {
+            "text": raw,
+            "has_schedule": has_schedule,
+            "has_action": has_action,
+            "automation_score": round(score, 2),
+            "should_auto_create": should_auto,
+            "suggestion": suggestion,
+        }
 
     def _routine_to_job(self, routine: dict) -> dict:
         rid = str(routine.get("id", "")).strip()
@@ -628,6 +1089,48 @@ class ElyanGatewayServer:
     async def handle_routine_templates(self, request):
         templates = routine_engine.list_templates()
         return web.json_response({"ok": True, "templates": templates})
+
+    async def handle_routine_suggest(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        text = str(data.get("text", "")).strip()
+        if not text:
+            return web.json_response({"ok": False, "error": "text required"}, status=400)
+        try:
+            suggestion = routine_engine.suggest_from_text(text)
+            return web.json_response({"ok": True, "suggestion": suggestion})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
+
+    async def handle_routine_from_text(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+
+        text = str(data.get("text", "")).strip()
+        if not text:
+            return web.json_response({"ok": False, "error": "text required"}, status=400)
+
+        try:
+            routine = routine_engine.create_from_text(
+                text=text,
+                enabled=bool(data.get("enabled", True)),
+                created_by=str(data.get("created_by", "dashboard-nl") or "dashboard-nl"),
+                report_chat_id=str(data.get("report_chat_id", "")).strip(),
+                report_channel=str(data.get("report_channel", "")).strip(),
+                expression=str(data.get("expression", "")).strip(),
+                name=str(data.get("name", "")).strip(),
+                panels=data.get("panels", []),
+                tags=data.get("tags", []) if isinstance(data.get("tags"), list) else [],
+            )
+            self.cron.sync_job(self._routine_to_job(routine))
+            push_activity("routine_nl_create", "dashboard", f"{routine.get('name')} ({routine.get('id')})", True)
+            return web.json_response({"ok": True, "routine": routine})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
 
     async def handle_routine_create(self, request):
         try:
@@ -814,6 +1317,8 @@ class ElyanGatewayServer:
             "search_files": {"pattern": "*.txt", "directory": "~/Desktop"},
             "read_file": {"path": str(probe_file)},
             "write_file": {"path": str(probe_file), "content": "elyan tool probe\n"},
+            "write_word": {"path": str(probe_dir / "tool_probe.docx"), "content": "elyan tool probe"},
+            "write_excel": {"path": str(probe_dir / "tool_probe.xlsx"), "data": [{"Veri": "elyan tool probe"}], "headers": ["Veri"]},
             "wifi_status": {},
             "get_public_ip": {},
             "get_today_events": {},
@@ -947,6 +1452,31 @@ class ElyanGatewayServer:
         }
         return items, summary
 
+    # ── Tool Request Log API ──────────────────────────────────────────────────
+
+    async def handle_tool_requests(self, request):
+        """GET /api/tool-requests — Son N tool çağrısı."""
+        from core.tool_request import get_tool_request_log
+        limit = min(int(request.rel_url.query.get("limit", 100) or 100), 500)
+        tool_filter = (request.rel_url.query.get("tool", "") or "").strip()
+        success_only = request.rel_url.query.get("success_only", "0") in {"1", "true"}
+        try:
+            log = get_tool_request_log()
+            records = log.get_recent(limit=limit, tool_name=tool_filter, success_only=success_only)
+            return web.json_response({"ok": True, "records": records, "count": len(records)})
+        except Exception as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+    async def handle_tool_requests_stats(self, request):
+        """GET /api/tool-requests/stats — Tool istek özet istatistikleri."""
+        from core.tool_request import get_tool_request_log
+        try:
+            log = get_tool_request_log()
+            stats = log.get_stats()
+            return web.json_response({"ok": True, **stats})
+        except Exception as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
     async def handle_tools(self, request):
         query = (request.rel_url.query.get("q", "") or "").strip().lower()
         group_filter = (request.rel_url.query.get("group", "") or "").strip().lower()
@@ -1039,6 +1569,73 @@ class ElyanGatewayServer:
             },
         })
 
+    async def handle_tool_detail(self, request):
+        name = str(request.rel_url.query.get("name", "") or "").strip()
+        if not name:
+            return web.json_response({"ok": False, "error": "name required"}, status=400)
+        tool_name = name
+        if tool_name not in AVAILABLE_TOOLS and hasattr(self.agent, "_resolve_tool_name"):
+            resolved = self.agent._resolve_tool_name(tool_name)
+            if resolved:
+                tool_name = resolved
+
+        reg_desc = self.agent.kernel.tools.list_tools() if hasattr(self.agent, "kernel") else {}
+        if not isinstance(reg_desc, dict):
+            reg_desc = {}
+        usage = get_tool_usage_snapshot().get("stats", {}).get(tool_name, {})
+        allow, deny, require_approval = _get_policy_lists()
+        group = tool_policy.infer_group(tool_name) or "other"
+        denied = ("*" in deny) or (tool_name in deny) or (f"group:{group}" in deny)
+        allowed = (not denied) and (("*" in allow) or (tool_name in allow) or (f"group:{group}" in allow))
+        needs_approval = (tool_name in require_approval) or (f"group:{group}" in require_approval)
+        health_map, _ = await self._compute_tool_health([tool_name], probe=False)
+        health = health_map.get(tool_name, {})
+
+        signature = ""
+        parameters = []
+        tdef = None
+        try:
+            if hasattr(self.agent, "kernel") and hasattr(self.agent.kernel, "tools"):
+                tdef = self.agent.kernel.tools.get_tool(tool_name)
+        except Exception:
+            tdef = None
+        if tdef and getattr(tdef, "func", None):
+            try:
+                signature = str(inspect.signature(tdef.func))
+            except Exception:
+                signature = ""
+            parameters = list((getattr(tdef, "parameters", {}) or {}).keys())
+
+        return web.json_response({
+            "ok": True,
+            "tool": {
+                "name": tool_name,
+                "description": reg_desc.get(tool_name, ""),
+                "group": group,
+                "allowed": allowed,
+                "denied": denied,
+                "requires_approval": needs_approval,
+                "signature": signature,
+                "parameters": parameters,
+                "suggested_params": self._tool_probe_params(tool_name) or {},
+                "health": health,
+                "usage": {
+                    "calls": int(usage.get("calls", 0) or 0),
+                    "success_rate": float(usage.get("success_rate", 0.0) or 0.0),
+                    "last_latency_ms": int(usage.get("last_latency_ms", 0) or 0),
+                    "avg_latency_ms": float(usage.get("avg_latency_ms", 0.0) or 0.0),
+                    "last_used_at": usage.get("last_used_at", ""),
+                    "last_success": usage.get("last_success"),
+                    "last_error": usage.get("last_error", ""),
+                },
+            },
+            "policy": {
+                "allow": allow,
+                "deny": deny,
+                "requireApproval": require_approval,
+            },
+        })
+
     async def handle_tools_diagnostics(self, request):
         run_probe = request.rel_url.query.get("probe", "0") in {"1", "true", "yes"}
         names_raw = str(request.rel_url.query.get("tools", "") or "").strip()
@@ -1057,6 +1654,33 @@ class ElyanGatewayServer:
             "broken_tools": broken,
             "items": health_map,
         })
+
+    async def handle_tools_policy_get(self, request):
+        allow, deny, require_approval = _get_policy_lists()
+        return web.json_response(
+            {
+                "ok": True,
+                "policy": {
+                    "allow": allow,
+                    "deny": deny,
+                    "requireApproval": require_approval,
+                },
+                "defaults": {
+                    "allow": [
+                        "group:fs",
+                        "group:web",
+                        "group:ui",
+                        "group:runtime",
+                        "group:messaging",
+                        "group:automation",
+                        "group:memory",
+                        "browser",
+                    ],
+                    "deny": ["exec"],
+                    "requireApproval": ["delete_file", "write_file"],
+                },
+            }
+        )
 
     async def handle_tools_policy(self, request):
         try:
@@ -1153,12 +1777,35 @@ class ElyanGatewayServer:
         if access.get("requires_approval"):
             return web.json_response({"ok": False, "requires_approval": True, "access": access}, status=202)
 
+        suggested_params = self._tool_probe_params(tool) or {}
+        if not params and suggested_params:
+            params = dict(suggested_params)
+
+        health_map, _ = await self._compute_tool_health([tool], probe=False)
+        h = health_map.get(tool, {}) if isinstance(health_map, dict) else {}
+        required_params = h.get("required_params", []) if isinstance(h, dict) else []
+        if execute and required_params and not params:
+            return web.json_response({
+                "ok": False,
+                "error": f"'{tool}' için parametre gerekli.",
+                "required_params": required_params,
+                "suggested_params": suggested_params,
+            }, status=400)
+
         if not execute:
-            return web.json_response({"ok": True, "dry_run": True, "access": access, "tool": tool, "group": group})
+            return web.json_response({
+                "ok": True,
+                "dry_run": True,
+                "access": access,
+                "tool": tool,
+                "group": group,
+                "required_params": required_params,
+                "suggested_params": suggested_params,
+            })
 
         # Keep dashboard-side test execution constrained to diagnostics/safe reads.
         safe_tools = {
-            "list_files", "read_file", "search_files",
+            "list_files", "read_file", "search_files", "write_file", "write_word", "write_excel",
             "get_system_info", "get_process_info", "get_running_apps",
             "web_search", "fetch_page", "extract_text",
             "take_screenshot", "read_clipboard",
@@ -1181,6 +1828,7 @@ class ElyanGatewayServer:
                 "tool": tool,
                 "group": group,
                 "latency_ms": latency_ms,
+                "used_params": params,
                 "formatted": self.agent._format_result_text(result),
                 "result": result,
             })
@@ -1206,6 +1854,20 @@ class ElyanGatewayServer:
                 "enabled": len(enabled),
                 "issues": len(unhealthy),
             },
+        })
+
+    async def handle_skill_detail(self, request):
+        name = str(request.rel_url.query.get("name", "") or "").strip()
+        if not name:
+            return web.json_response({"ok": False, "error": "name required"}, status=400)
+        info = skill_manager.get_skill(name)
+        if not info:
+            return web.json_response({"ok": False, "error": "skill not found"}, status=404)
+        check = skill_manager.check(name=name)
+        return web.json_response({
+            "ok": True,
+            "skill": info,
+            "check": check,
         })
 
     async def handle_skill_install(self, request):
@@ -1323,6 +1985,26 @@ class ElyanGatewayServer:
             pass
         return web.json_response({"pending": pending})
 
+    async def handle_interventions_get(self, request):
+        """List active agent questions/interventions."""
+        manager = get_intervention_manager()
+        return web.json_response({"ok": True, "interventions": manager.list_pending()})
+
+    async def handle_interventions_resolve(self, request):
+        """Resolve an active intervention with user response."""
+        try:
+            data = await request.json()
+            request_id = data.get("id")
+            response = data.get("response")
+            if not request_id or response is None:
+                return web.json_response({"ok": False, "error": "id and response required"}, status=400)
+            
+            manager = get_intervention_manager()
+            success = manager.resolve(request_id, response)
+            return web.json_response({"ok": success})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=500)
+
     async def handle_approve_action(self, request):
         """Approve or reject a pending action."""
         try:
@@ -1386,6 +2068,314 @@ class ElyanGatewayServer:
             enriched.append(entry)
         return web.json_response({"channels": enriched})
 
+    async def _reload_channels_runtime(self) -> int:
+        await self.router.stop_all()
+        self.router.adapters.clear()
+        self.webchat_adapter = None
+        await self._init_adapters()
+        await self.router.start_all()
+        return len(self.router.adapters)
+
+    async def handle_channels_catalog(self, request):
+        catalog = [
+            {
+                "type": "telegram",
+                "label": "Telegram",
+                "fields": [
+                    {"name": "id", "label": "ID", "required": False, "secret": False},
+                    {"name": "token", "label": "Bot Token", "required": True, "secret": True},
+                ],
+            },
+            {
+                "type": "discord",
+                "label": "Discord",
+                "fields": [
+                    {"name": "id", "label": "ID", "required": False, "secret": False},
+                    {"name": "token", "label": "Bot Token", "required": True, "secret": True},
+                ],
+            },
+            {
+                "type": "slack",
+                "label": "Slack",
+                "fields": [
+                    {"name": "id", "label": "ID", "required": False, "secret": False},
+                    {"name": "bot_token", "label": "Bot Token", "required": True, "secret": True},
+                    {"name": "app_token", "label": "App Token", "required": False, "secret": True},
+                ],
+            },
+            {
+                "type": "whatsapp",
+                "label": "WhatsApp",
+                "fields": [
+                    {"name": "id", "label": "ID", "required": False, "secret": False},
+                    {"name": "mode", "label": "Mode (bridge/cloud)", "required": False, "secret": False},
+                    {"name": "bridge_url", "label": "Bridge URL", "required": False, "secret": False},
+                    {"name": "bridge_token", "label": "Bridge Token", "required": False, "secret": True},
+                    {"name": "bridge_port", "label": "Bridge Port", "required": False, "secret": False},
+                    {"name": "session_dir", "label": "Session Dir", "required": False, "secret": False},
+                    {"name": "phone_number_id", "label": "Cloud Phone Number ID", "required": False, "secret": False},
+                    {"name": "access_token", "label": "Cloud Access Token", "required": False, "secret": True},
+                    {"name": "verify_token", "label": "Cloud Verify Token", "required": False, "secret": True},
+                    {"name": "webhook_path", "label": "Webhook Path", "required": False, "secret": False},
+                ],
+                "notes": "Bridge için `elyan channels login whatsapp`; Cloud için mode=cloud + /whatsapp/webhook",
+            },
+            {
+                "type": "signal",
+                "label": "Signal",
+                "fields": [
+                    {"name": "id", "label": "ID", "required": False, "secret": False},
+                    {"name": "phone_number", "label": "Phone Number", "required": True, "secret": False},
+                    {"name": "token", "label": "Token", "required": False, "secret": True},
+                ],
+            },
+            {
+                "type": "webchat",
+                "label": "WebChat",
+                "fields": [
+                    {"name": "id", "label": "ID", "required": False, "secret": False},
+                ],
+            },
+        ]
+        return web.json_response({"ok": True, "catalog": catalog})
+
+    async def handle_channel_upsert(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+
+        incoming = data.get("channel", data)
+        if not isinstance(incoming, dict):
+            return web.json_response({"ok": False, "error": "channel object required"}, status=400)
+
+        ctype = _normalize_channel_type(incoming.get("type"))
+        if not ctype:
+            return web.json_response({"ok": False, "error": "type required"}, status=400)
+
+        channels = elyan_config.get("channels", [])
+        if not isinstance(channels, list):
+            channels = []
+
+        cid = str(incoming.get("id") or "").strip() or ctype
+        idx = None
+        existing: dict = {}
+        for i, ch in enumerate(channels):
+            if not isinstance(ch, dict):
+                continue
+            ch_id = _channel_id(ch)
+            ch_type = _normalize_channel_type(ch.get("type"))
+            if cid == ch_id or (ch_type == ctype and not incoming.get("id")):
+                idx = i
+                existing = dict(ch)
+                break
+
+        merged = dict(existing)
+        merged["type"] = ctype
+        merged["id"] = cid
+        merged["enabled"] = bool(incoming.get("enabled", existing.get("enabled", True)))
+
+        clear_secret_fields = data.get("clear_secret_fields", [])
+        if not isinstance(clear_secret_fields, list):
+            clear_secret_fields = []
+        clear_secret_fields = {str(x).strip() for x in clear_secret_fields if str(x).strip()}
+
+        # Merge non-secret fields first.
+        for k, v in incoming.items():
+            key = str(k or "").strip()
+            if not key or key in {"type", "id"}:
+                continue
+            if key in {"token", "bot_token", "app_token", "bridge_token", "access_token", "verify_token", "password"}:
+                continue
+            if v is None:
+                continue
+            merged[key] = v
+
+        # Merge secret fields with keychain support.
+        secret_fields = {"token", "bot_token", "app_token", "bridge_token", "access_token", "verify_token", "password"}
+        for field in secret_fields:
+            if field in clear_secret_fields:
+                merged.pop(field, None)
+                continue
+
+            raw_val = incoming.get(field, None)
+            if raw_val is None:
+                continue
+            value = str(raw_val).strip()
+            if not value:
+                # Blank means "keep existing" unless explicit clear requested.
+                continue
+            if value.startswith("$"):
+                merged[field] = value
+                continue
+
+            env_key = _channel_secret_env(field, ctype)
+            if env_key:
+                keychain_key = KeychainManager.key_for_env(env_key)
+                if keychain_key and KeychainManager.is_available():
+                    try:
+                        if KeychainManager.set_key(keychain_key, value):
+                            merged[field] = f"${env_key}"
+                            continue
+                    except Exception:
+                        pass
+            merged[field] = value
+
+        # Normalize known defaults.
+        if ctype == "whatsapp":
+            mode = str(merged.get("mode") or "bridge").strip().lower()
+            if mode not in {"bridge", "cloud"}:
+                mode = "bridge"
+            merged["mode"] = mode
+            if mode == "cloud":
+                merged.setdefault("webhook_path", "/whatsapp/webhook")
+                merged.setdefault("graph_base_url", "https://graph.facebook.com/v20.0")
+                merged.setdefault("auto_start_bridge", False)
+            else:
+                merged.setdefault("bridge_host", "127.0.0.1")
+                merged.setdefault("bridge_port", 18792)
+                merged.setdefault("bridge_url", f"http://127.0.0.1:{int(merged.get('bridge_port', 18792))}")
+                merged.setdefault("auto_start_bridge", True)
+                merged.setdefault("client_id", cid)
+
+        if idx is None:
+            channels.append(merged)
+        else:
+            channels[idx] = merged
+
+        elyan_config.set("channels", channels)
+
+        sync_now = bool(data.get("sync", True))
+        runtime_total = len(self.router.adapters)
+        if sync_now:
+            try:
+                runtime_total = await self._reload_channels_runtime()
+            except Exception as e:
+                logger.error(f"Channel upsert sync failed: {e}")
+
+        push_activity("channel_upsert", ctype, f"{cid} saved", True)
+        return web.json_response(
+            {
+                "ok": True,
+                "channel": _mask_sensitive_fields(merged),
+                "runtime_adapters": runtime_total,
+            }
+        )
+
+    async def handle_channel_toggle(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+
+        target = str(data.get("id") or data.get("type") or "").strip()
+        if not target:
+            return web.json_response({"ok": False, "error": "id required"}, status=400)
+        enabled = bool(data.get("enabled", True))
+
+        channels = elyan_config.get("channels", [])
+        if not isinstance(channels, list):
+            channels = []
+
+        found = None
+        for ch in channels:
+            if not isinstance(ch, dict):
+                continue
+            if target in {_channel_id(ch), _normalize_channel_type(ch.get("type"))}:
+                ch["enabled"] = enabled
+                found = ch
+                break
+        if not found:
+            return web.json_response({"ok": False, "error": "channel not found"}, status=404)
+
+        elyan_config.set("channels", channels)
+        runtime_total = await self._reload_channels_runtime()
+        push_activity("channel_toggle", str(found.get("type") or target), f"{target} -> {'on' if enabled else 'off'}", True)
+        return web.json_response(
+            {
+                "ok": True,
+                "channel": _mask_sensitive_fields(found),
+                "runtime_adapters": runtime_total,
+            }
+        )
+
+    async def handle_channel_delete(self, request):
+        target = str(request.match_info.get("id", "")).strip()
+        if not target:
+            return web.json_response({"ok": False, "error": "id required"}, status=400)
+
+        channels = elyan_config.get("channels", [])
+        if not isinstance(channels, list):
+            channels = []
+
+        removed = None
+        kept = []
+        for ch in channels:
+            if not isinstance(ch, dict):
+                continue
+            if target in {_channel_id(ch), _normalize_channel_type(ch.get("type"))} and removed is None:
+                removed = ch
+                continue
+            kept.append(ch)
+
+        if removed is None:
+            return web.json_response({"ok": False, "error": "channel not found"}, status=404)
+
+        elyan_config.set("channels", kept)
+        runtime_total = await self._reload_channels_runtime()
+        push_activity("channel_delete", str(removed.get("type") or target), f"{target} removed", True)
+        return web.json_response(
+            {
+                "ok": True,
+                "removed": _mask_sensitive_fields(removed),
+                "runtime_adapters": runtime_total,
+            }
+        )
+
+    async def handle_channels_test(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+
+        requested = str(data.get("channel", "tümü") or "tümü").strip().lower()
+        status_map = self.router.get_adapter_status() if hasattr(self.router, "get_adapter_status") else {}
+
+        if requested in {"tümü", "all", "*"}:
+            tested = []
+            for ctype, status in status_map.items():
+                tested.append({"channel": ctype, "status": status, "connected": status == "connected"})
+            any_connected = any(item["connected"] for item in tested)
+            return web.json_response(
+                {
+                    "ok": bool(tested),
+                    "connected": any_connected,
+                    "message": f"{len(tested)} kanal kontrol edildi.",
+                    "results": tested,
+                }
+            )
+
+        status = status_map.get(requested)
+        if status is None:
+            return web.json_response({"ok": False, "message": f"Kanal bulunamadı: {requested}"}, status=404)
+
+        return web.json_response(
+            {
+                "ok": True,
+                "connected": status == "connected",
+                "message": f"{requested}: {status}",
+                "result": {"channel": requested, "status": status, "connected": status == "connected"},
+            }
+        )
+
+    async def handle_channels_sync(self, request):
+        try:
+            total = await self._reload_channels_runtime()
+            return web.json_response({"ok": True, "message": f"Senkronizasyon tamamlandı ({total} adapter)."})
+        except Exception as e:
+            logger.error(f"Channels sync failed: {e}")
+            return web.json_response({"ok": False, "message": f"Senkronizasyon hatası: {e}"}, status=500)
+
     # ── External message ──────────────────────────────────────────────────────
     async def handle_external_message(self, request):
         try:
@@ -1411,6 +2401,24 @@ class ElyanGatewayServer:
         except Exception:
             return web.json_response({"error": "invalid json"}, status=400)
 
+    async def handle_whatsapp_webhook_verify(self, request):
+        adapter = self.router.adapters.get("whatsapp")
+        if not adapter:
+            return web.Response(text="whatsapp adapter not active", status=404)
+        handler = getattr(adapter, "handle_webhook_verification", None)
+        if not callable(handler):
+            return web.Response(text="whatsapp adapter webhook verify unsupported", status=400)
+        return await handler(request)
+
+    async def handle_whatsapp_webhook(self, request):
+        adapter = self.router.adapters.get("whatsapp")
+        if not adapter:
+            return web.json_response({"ok": False, "error": "whatsapp adapter not active"}, status=404)
+        handler = getattr(adapter, "handle_webhook", None)
+        if not callable(handler):
+            return web.json_response({"ok": False, "error": "whatsapp adapter webhook unsupported"}, status=400)
+        return await handler(request)
+
     # ── WebChat WS ────────────────────────────────────────────────────────────
     async def handle_webchat_ws(self, request):
         if self.webchat_adapter:
@@ -1419,27 +2427,25 @@ class ElyanGatewayServer:
 
     # ── Adapter init ──────────────────────────────────────────────────────────
     async def _init_adapters(self):
+        from .adapters import get_adapter_class
+
         channels = elyan_config.get("channels", [])
         if not isinstance(channels, list):
             channels = []
         for ch in channels:
             if not isinstance(ch, dict) or not ch.get("enabled", True):
                 continue
-            ctype = ch.get("type")
+            ctype = str(ch.get("type") or "").strip().lower()
             try:
-                if ctype == "telegram":
-                    from .adapters.telegram import TelegramAdapter
-                    self.router.register_adapter("telegram", TelegramAdapter(ch))
-                elif ctype == "discord":
-                    from .adapters.discord import DiscordAdapter
-                    self.router.register_adapter("discord", DiscordAdapter(ch))
-                elif ctype == "slack":
-                    from .adapters.slack import SlackAdapter
-                    self.router.register_adapter("slack", SlackAdapter(ch))
-                elif ctype == "webchat":
-                    from .adapters.webchat import WebChatAdapter
-                    self.webchat_adapter = WebChatAdapter(ch)
-                    self.router.register_adapter("webchat", self.webchat_adapter)
+                adapter_cls = get_adapter_class(ctype)
+                if adapter_cls is None:
+                    logger.warning(f"Adapter {ctype} skipped: unsupported channel type")
+                    continue
+
+                adapter = adapter_cls(ch)
+                if ctype == "webchat":
+                    self.webchat_adapter = adapter
+                self.router.register_adapter(str(ctype).strip().lower(), adapter)
             except ImportError as e:
                 logger.warning(f"Adapter {ctype} skipped: {e}")
             except Exception as e:

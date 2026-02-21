@@ -75,14 +75,43 @@ async def write_file(path: str, content: str) -> dict[str, Any]:
     if not valid:
         return {"success": False, "error": msg}
 
+    # Rule-2: No wrong format fallback (.docx should use write_word)
+    if resolved_path.suffix.lower() == ".docx":
+        return {
+            "success": False, 
+            "error": "DOCX_UNAVAILABLE: .docx dosyaları için 'write_word' aracını kullanmalısınız.",
+            "error_code": "DOCX_UNAVAILABLE"
+        }
+
+    # Rule-1: No empty or skeleton files
+    content_text = str(content or "").strip()
+    if len(content_text) < 50:
+        return {
+            "success": False, 
+            "error": f"CONTENT_TOO_SHORT: Dosya içeriği çok kısa ({len(content_text)} karakter). En az 50 karakter olmalı.",
+            "error_code": "CONTENT_TOO_SHORT"
+        }
+
     try:
         resolved_path.parent.mkdir(parents=True, exist_ok=True)
-        resolved_path.write_text(content, encoding="utf-8")
+        resolved_path.write_text(content_text, encoding="utf-8")
+
+        # Post-check validation
+        if not resolved_path.exists():
+            return {"success": False, "error": "WRITE_FAILED: Dosya diskte bulunamadı.", "error_code": "FILE_NOT_FOUND"}
+        
+        file_size = resolved_path.stat().st_size
+        if file_size < 50:
+            return {
+                "success": False, 
+                "error": f"WRITE_POSTCHECK_FAILED: Dosya boyutu çok küçük ({file_size} bytes).",
+                "error_code": "WRITE_POSTCHECK_FAILED"
+            }
 
         return {
             "success": True,
             "path": str(resolved_path),
-            "size": len(content.encode("utf-8"))
+            "size": file_size
         }
 
     except PermissionError:

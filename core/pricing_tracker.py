@@ -9,6 +9,8 @@ from typing import Any
 
 from utils.logger import get_logger
 
+from core.quota import quota_manager
+
 logger = get_logger("pricing_tracker")
 
 # USD per 1K tokens (rough defaults, editable from settings panel)
@@ -87,6 +89,7 @@ class PricingTracker:
         model: str,
         prompt_tokens: int,
         completion_tokens: int,
+        user_id: str = "local",
         rates: dict[str, dict[str, float]] | None = None,
     ):
         provider_key = str(provider or "unknown").lower()
@@ -95,6 +98,10 @@ class PricingTracker:
         input_cost = (max(prompt_tokens, 0) / 1000.0) * float(provider_rates.get("input", 0.0))
         output_cost = (max(completion_tokens, 0) / 1000.0) * float(provider_rates.get("output", 0.0))
         total_cost = input_cost + output_cost
+
+        # Record in quota manager
+        total_tokens = max(prompt_tokens, 0) + max(completion_tokens, 0)
+        quota_manager.record_message(user_id, tokens=total_tokens)
 
         lifetime = self._data["lifetime"]
         lifetime["requests"] += 1

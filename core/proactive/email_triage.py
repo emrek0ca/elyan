@@ -261,7 +261,7 @@ GÖREV:
 ÖZET:"""
         
         try:
-            summary = await self.llm.generate(prompt)
+            summary = await self.llm.generate(prompt, user_id="system")
             return summary
         except:
             # Fallback summary

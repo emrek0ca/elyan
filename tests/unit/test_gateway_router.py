@@ -25,11 +25,15 @@ def _make_message(**kwargs):
 
 
 class TestGatewayRouter:
-    def _router(self):
+    def _router(self, *, welcome_enabled: bool = False, welcome_state_path: str | None = None):
         mock_agent = AsyncMock()
         mock_agent.process = AsyncMock(return_value="Test yanıt")
         mock_agent.current_user_id = None
-        return GatewayRouter(agent=mock_agent), mock_agent
+        return GatewayRouter(
+            agent=mock_agent,
+            welcome_enabled=welcome_enabled,
+            welcome_state_path=welcome_state_path,
+        ), mock_agent
 
     def test_register_adapter(self):
         router, _ = self._router()
@@ -176,3 +180,49 @@ class TestGatewayRouter:
         assert health.get("failures", 0) >= 1
         assert health.get("status") in {"connected", "connecting", "reconnecting", "error"}
         await router.stop_all()
+
+    @pytest.mark.asyncio
+    async def test_first_contact_welcome_sent_once_for_telegram(self, tmp_path):
+        state_path = tmp_path / "welcome_state.json"
+        router, mock_agent = self._router(welcome_enabled=True, welcome_state_path=str(state_path))
+
+        mock_ar = AsyncMock()
+        mock_ar.route_message = AsyncMock(return_value=mock_agent)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("core.gateway.router.agent_router", mock_ar)
+            router.send_outgoing_response = AsyncMock()
+
+            msg = _make_message(channel_type="telegram", channel_id="123", user_id="123", user_name="Emre", text="merhaba")
+            await router.handle_incoming_message(msg)
+            assert router.send_outgoing_response.await_count == 2
+            first_response = router.send_outgoing_response.await_args_list[0].args[2]
+            assert isinstance(first_response, UnifiedResponse)
+            assert "hoş geldin" in first_response.text.lower()
+
+            router.send_outgoing_response.reset_mock()
+            await router.handle_incoming_message(msg)
+            assert router.send_outgoing_response.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_first_contact_welcome_skips_groups(self, tmp_path):
+        state_path = tmp_path / "welcome_state.json"
+        router, mock_agent = self._router(welcome_enabled=True, welcome_state_path=str(state_path))
+
+        mock_ar = AsyncMock()
+        mock_ar.route_message = AsyncMock(return_value=mock_agent)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("core.gateway.router.agent_router", mock_ar)
+            router.send_outgoing_response = AsyncMock()
+
+            msg = _make_message(
+                channel_type="whatsapp",
+                channel_id="123456@g.us",
+                user_id="905551112233",
+                user_name="Group User",
+                text="selam",
+                metadata={"is_group": True},
+            )
+            await router.handle_incoming_message(msg)
+            assert router.send_outgoing_response.await_count == 1

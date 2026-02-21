@@ -1,11 +1,14 @@
 import asyncio
 import inspect
+import json
 import time
+from pathlib import Path
 from typing import Dict, Any, Optional
 from .message import UnifiedMessage
 from .response import UnifiedResponse
 from .adapters.base import BaseChannelAdapter
 from core.multi_agent.router import agent_router
+from config.settings import ELYAN_DIR
 from utils.logger import get_logger
 
 logger = get_logger("gateway_router")
@@ -13,12 +16,21 @@ logger = get_logger("gateway_router")
 class GatewayRouter:
     """Orchestrates message flow between adapters and the AI Agent pool."""
     
-    def __init__(self, agent=None):
+    def __init__(self, agent=None, *, welcome_enabled: bool = True, welcome_state_path: Optional[str] = None):
         self.default_agent = agent # Kept for backward compatibility
         self.adapters: Dict[str, BaseChannelAdapter] = {}
         self._is_running = False
         self._supervisor_tasks: Dict[str, asyncio.Task] = {}
         self._adapter_health: Dict[str, Dict[str, Any]] = {}
+        self._welcome_enabled = bool(welcome_enabled)
+        self._welcome_channels = {"telegram", "whatsapp"}
+        self._welcome_lock = asyncio.Lock()
+        self._welcomed_users: set[str] = set()
+        if welcome_state_path:
+            self._welcome_state_path = Path(str(welcome_state_path)).expanduser()
+        else:
+            self._welcome_state_path = ELYAN_DIR / "welcome_state.json"
+        self._load_welcome_state()
 
     def register_adapter(self, channel_type: str, adapter: BaseChannelAdapter):
         """Register a new channel adapter."""
@@ -47,6 +59,7 @@ class GatewayRouter:
         """Callback triggered by any adapter when a message is received."""
         logger.info(f"Incoming: [{message.channel_type}] user={message.user_id} text={message.text[:50]}")
         self._mark_incoming_message(message.channel_type)
+        await self._maybe_send_first_contact_welcome(message)
         
         try:
             agent = await agent_router.route_message(message.channel_type, message.user_id)
@@ -73,6 +86,105 @@ class GatewayRouter:
                 pass
             error_resp = UnifiedResponse(text="Üzgünüm, bu isteği işlerken bir hata oluştu.")
             await self.send_outgoing_response(message.channel_type, message.channel_id, error_resp)
+
+    def _welcome_key(self, message: UnifiedMessage) -> str:
+        channel = str(message.channel_type or "").strip().lower()
+        user_id = str(message.user_id or "").strip()
+        return f"{channel}:{user_id}"
+
+    @staticmethod
+    def _is_group_like_message(message: UnifiedMessage) -> bool:
+        meta = message.metadata if isinstance(getattr(message, "metadata", None), dict) else {}
+        if bool(meta.get("is_group")):
+            return True
+        channel_id = str(getattr(message, "channel_id", "") or "").strip()
+        channel_type = str(getattr(message, "channel_type", "") or "").strip().lower()
+        if channel_type == "telegram" and channel_id.startswith("-"):
+            return True
+        if channel_type == "whatsapp" and channel_id.endswith("@g.us"):
+            return True
+        return False
+
+    def _load_welcome_state(self) -> None:
+        try:
+            if not self._welcome_state_path.exists():
+                self._welcomed_users = set()
+                return
+            raw = json.loads(self._welcome_state_path.read_text(encoding="utf-8"))
+            items = raw.get("welcomed_users", []) if isinstance(raw, dict) else []
+            if not isinstance(items, list):
+                items = []
+            self._welcomed_users = {str(x).strip() for x in items if str(x).strip()}
+        except Exception as exc:
+            logger.debug(f"Welcome state load failed: {exc}")
+            self._welcomed_users = set()
+
+    def _save_welcome_state(self) -> None:
+        try:
+            self._welcome_state_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {"welcomed_users": sorted(self._welcomed_users)}
+            self._welcome_state_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.debug(f"Welcome state save failed: {exc}")
+
+    async def _reserve_welcome_key(self, key: str) -> bool:
+        async with self._welcome_lock:
+            if key in self._welcomed_users:
+                return False
+            self._welcomed_users.add(key)
+            self._save_welcome_state()
+            return True
+
+    async def _rollback_welcome_key(self, key: str) -> None:
+        async with self._welcome_lock:
+            if key not in self._welcomed_users:
+                return
+            self._welcomed_users.remove(key)
+            self._save_welcome_state()
+
+    def _build_welcome_text(self, message: UnifiedMessage) -> str:
+        name = str(message.user_name or "").strip() or "merhaba"
+        channel = str(message.channel_type or "").strip().lower()
+        channel_label = {
+            "telegram": "Telegram",
+            "whatsapp": "WhatsApp",
+        }.get(channel, channel.capitalize() or "Kanal")
+        return (
+            f"Merhaba {name}! Elyan'a hoş geldin.\n"
+            f"{channel_label} bağlantın hazır.\n\n"
+            "Hemen deneyebileceğin komutlar:\n"
+            "- masaüstünde ne var\n"
+            "- ekran görüntüsü gönder\n"
+            "- köpekler hakkında araştırma yap ve rapor hazırla"
+        )
+
+    async def _maybe_send_first_contact_welcome(self, message: UnifiedMessage) -> None:
+        if not self._welcome_enabled:
+            return
+        channel = str(message.channel_type or "").strip().lower()
+        if channel not in self._welcome_channels:
+            return
+        if self._is_group_like_message(message):
+            return
+
+        key = self._welcome_key(message)
+        should_send = await self._reserve_welcome_key(key)
+        if not should_send:
+            return
+
+        try:
+            welcome_text = self._build_welcome_text(message)
+            await self.send_outgoing_response(
+                message.channel_type,
+                message.channel_id,
+                UnifiedResponse(text=welcome_text, format="plain"),
+            )
+        except Exception as exc:
+            logger.warning(f"First-contact welcome send failed ({key}): {exc}")
+            await self._rollback_welcome_key(key)
 
 
     async def send_outgoing_response(self, channel_type: str, chat_id: str, response: UnifiedResponse):

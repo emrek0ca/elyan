@@ -1,0 +1,72 @@
+# Core Architecture
+pydantic>=2.0.0
+json5>=0.9.0
+httpx>=0.28.0
+python-dotenv>=1.0.0
+psutil>=5.9.0
+requests>=2.28.0
+qasync>=0.27.0
+aiohttp>=3.9.0
+
+# CLI
+click>=8.1.0
+croniter>=2.0.0
+
+# Desktop UI
+PyQt6>=6.6.0
+pyobjc-framework-Cocoa>=10.1; sys_platform == 'darwin'
+rumps>=0.4.0; sys_platform == 'darwin'
+
+# Messaging
+python-telegram-bot>=22.0
+
+# Channel Adapters (Sprint K)
+discord.py>=2.3.0                        # Discord
+slack-bolt>=1.18.0                       # Slack
+# BlueBubbles iMessage adapter — aiohttp zaten mevcut, ek bağımlılık yok
+# matrix-nio[e2e]>=0.24.0               # Matrix (isteğe bağlı - E2E şifreli)
+# matrix-nio>=0.24.0                     # Matrix (şifresiz)
+# botbuilder-core>=4.14.0               # Microsoft Teams
+# botbuilder-integration-aiohttp>=4.14.0 # Teams aiohttp entegrasyon
+# google-cloud-pubsub>=2.18.0           # Google Chat Pub/Sub
+# google-auth>=2.22.0                   # Google servis hesabı
+
+# Docs site (geliştirme)
+# mkdocs-material>=9.5.0
+# mkdocs-minify-plugin>=0.7.0
+
+# AI & Data
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+matplotlib>=3.7.0
+Pillow>=10.0.0
+groq>=0.11.0
+google-generativeai>=0.8.0
+
+# Office Documents
+python-docx>=1.1.0
+openpyxl>=3.1.0
+pdfplumber>=0.10.0
+pypdf>=3.0.0
+reportlab>=4.0.0
+
+# Scheduling
+apscheduler>=3.10.0
+feedparser>=6.0.0
+watchdog>=3.0.0
+
+# Security
+cryptography>=42.0.0
+keyring>=25.0.0
+
+# Optional: Voice (uncomment if needed)
+# openai-whisper>=20240927
+# pyttsx3>=2.90
+# pydub>=0.25.0
+
+# Optional: Browser Automation (uncomment if needed)
+# playwright>=1.40.0
+
+# Testing / Development
+pytest>=8.0.0
+pytest-asyncio>=0.23.0

@@ -1,0 +1,45 @@
+version: 2
+updates:
+  # Python bağımlılıkları
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: "Europe/Istanbul"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "python"
+    groups:
+      # AI/LLM kütüphaneleri birlikte güncelle
+      ai-libraries:
+        patterns:
+          - "groq*"
+          - "google-generativeai*"
+          - "openai*"
+          - "anthropic*"
+      # Güvenlik kütüphaneleri öncelikli
+      security:
+        patterns:
+          - "cryptography*"
+          - "keyring*"
+      # Web framework
+      web:
+        patterns:
+          - "aiohttp*"
+          - "fastapi*"
+          - "uvicorn*"
+
+  # GitHub Actions
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: "Europe/Istanbul"
+    labels:
+      - "dependencies"
+      - "github-actions"

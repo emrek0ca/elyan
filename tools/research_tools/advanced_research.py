@@ -4,12 +4,15 @@ Gelişmiş Araştırma - Advanced Research
 """
 
 import asyncio
+import re
 import uuid
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 from enum import Enum
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 from utils.logger import get_logger
 
 logger = get_logger("advanced_research")
@@ -18,6 +21,418 @@ logger = get_logger("advanced_research")
 _last_research_topic = None
 _last_research_result: dict[str, Any] | None = None
 RESEARCH_REPORT_DIR = Path.home() / ".elyan" / "reports" / "research"
+
+_TRUSTED_DOMAIN_HINTS = (
+    "wikipedia.org",
+    "who.int",
+    "cdc.gov",
+    "nih.gov",
+    "mayoclinic.org",
+    "akc.org",
+    "vca",
+    "reuters.com",
+    "bbc.",
+    "apnews.com",
+)
+_ACADEMIC_DOMAIN_HINTS = (
+    ".edu",
+    ".ac.",
+    "arxiv.org",
+    "scholar.google",
+    "researchgate.net",
+    "academia.edu",
+    "springer.com",
+    "sciencedirect.com",
+    "nature.com",
+)
+_OFFICIAL_DOMAIN_HINTS = (
+    ".gov",
+    "who.int",
+    "cdc.gov",
+    "nih.gov",
+    "europa.eu",
+)
+_LOW_VALUE_DOMAIN_HINTS = (
+    "blogspot.",
+    "wordpress.",
+    "tumblr.",
+    "pinterest.",
+    "tiktok.",
+    "instagram.com",
+    "facebook.com",
+    "x.com",
+    "twitter.com",
+    "reddit.com",
+)
+_LOW_VALUE_URL_PARTS = (
+    "/tag/",
+    "/tags/",
+    "/kategori/",
+    "/category/",
+    "/search",
+    "/etiket/",
+    "/amp",
+    "?amp",
+)
+_NOISE_PATTERNS = (
+    "cookie",
+    "çerez",
+    "gdpr",
+    "privacy policy",
+    "gizlilik",
+    "kampanya",
+    "indirim",
+    "satın al",
+    "hemen al",
+    "newsletter",
+    "abone ol",
+    "devamını oku",
+    "yorum yap",
+    "paylaş",
+    "share",
+    "oturum aç",
+    "giriş yap",
+    "login",
+)
+_STOPWORDS = {
+    "ve", "ile", "bir", "bu", "için", "olan", "de", "da", "the", "and", "is", "of", "to", "in", "a",
+    "veya", "daha", "çok", "gibi", "ama", "fakat", "hem", "güncel", "genel", "üzerine", "hakkında",
+}
+
+_SOURCE_POLICIES = {"balanced", "trusted", "academic", "official"}
+
+
+def _normalize_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _domain_from_url(url: str) -> str:
+    try:
+        domain = urlparse(str(url or "")).netloc.lower().strip()
+        if domain.startswith("www."):
+            domain = domain[4:]
+        return domain
+    except Exception:
+        return ""
+
+
+def _normalize_source_policy(policy: str) -> str:
+    raw = _normalize_text(policy).lower().replace("-", "_")
+    alias_map = {
+        "safe": "trusted",
+        "reliable": "trusted",
+        "secure": "trusted",
+        "akademik": "academic",
+        "bilimsel": "academic",
+        "academic_only": "academic",
+        "resmi": "official",
+        "official_only": "official",
+        "government": "official",
+    }
+    if raw in alias_map:
+        raw = alias_map[raw]
+    return raw if raw in _SOURCE_POLICIES else "balanced"
+
+
+def _matches_policy_domain(domain: str, policy: str) -> bool:
+    d = str(domain or "").lower().strip()
+    if not d:
+        return False
+
+    if policy == "balanced":
+        return not any(h in d for h in _LOW_VALUE_DOMAIN_HINTS)
+
+    if policy == "trusted":
+        if any(h in d for h in _LOW_VALUE_DOMAIN_HINTS):
+            return False
+        if d.endswith((".gov", ".edu")):
+            return True
+        if any(h in d for h in _TRUSTED_DOMAIN_HINTS):
+            return True
+        if d.endswith(".org"):
+            return True
+        return False
+
+    if policy == "academic":
+        if d.endswith((".edu", ".ac.uk", ".ac.jp", ".ac.tr")):
+            return True
+        return any(h in d for h in _ACADEMIC_DOMAIN_HINTS)
+
+    if policy == "official":
+        if d.endswith(".gov"):
+            return True
+        return any(h in d for h in _OFFICIAL_DOMAIN_HINTS)
+
+    return True
+
+
+def _apply_source_policy(results: list[dict[str, Any]], policy: str, target_sources: int) -> list[dict[str, Any]]:
+    norm_policy = _normalize_source_policy(policy)
+    if not results:
+        return []
+    if norm_policy == "balanced":
+        # Balanced mode already handled by quality scoring; keep ordering intact.
+        return list(results[: max(1, int(target_sources))])
+
+    filtered: list[dict[str, Any]] = []
+    fallback: list[dict[str, Any]] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        domain = _domain_from_url(item.get("url", ""))
+        if _matches_policy_domain(domain, norm_policy):
+            filtered.append(item)
+        else:
+            fallback.append(item)
+
+    need = max(1, int(target_sources))
+    if len(filtered) >= need:
+        return filtered[:need]
+
+    # If strict policy yields too few results, softly backfill from balanced pool.
+    merged = list(filtered)
+    for item in fallback:
+        merged.append(item)
+        if len(merged) >= need:
+            break
+    return merged[:need]
+
+
+def _source_policy_stats(results: list[dict[str, Any]], policy: str) -> dict[str, Any]:
+    norm = _normalize_source_policy(policy)
+    if not results:
+        return {"policy": norm, "compliance_ratio": 0.0, "fallback_used": False}
+    if norm == "balanced":
+        return {"policy": norm, "compliance_ratio": 1.0, "fallback_used": False}
+    total = len(results)
+    matched = 0
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        domain = _domain_from_url(item.get("url", ""))
+        if _matches_policy_domain(domain, norm):
+            matched += 1
+    ratio = matched / max(total, 1)
+    return {
+        "policy": norm,
+        "compliance_ratio": round(ratio, 2),
+        "fallback_used": bool(ratio < 1.0),
+        "matched": matched,
+        "total": total,
+    }
+
+
+def _apply_min_reliability(sources: list["ResearchSource"], min_reliability: float, keep_at_least: int = 2) -> list["ResearchSource"]:
+    if not sources:
+        return []
+    threshold = max(0.0, min(1.0, float(min_reliability or 0.0)))
+    scored = sorted(sources, key=lambda s: float(s.reliability_score or 0.0), reverse=True)
+    strong = [s for s in scored if float(s.reliability_score or 0.0) >= threshold]
+    if len(strong) >= keep_at_least:
+        return strong
+    # Fallback to top-N instead of returning almost empty result.
+    return scored[: max(1, keep_at_least)]
+
+
+def _tokenize_topic(topic: str) -> list[str]:
+    tokens = []
+    for tok in re.findall(r"[a-zA-ZğüşöçıİĞÜŞÖÇ0-9]+", _normalize_text(topic).lower()):
+        if len(tok) >= 3 and tok not in _STOPWORDS:
+            tokens.append(tok)
+    return tokens
+
+
+def _is_noise_sentence(text: str) -> bool:
+    t = _normalize_text(text).lower()
+    if not t:
+        return True
+    if len(t) < 55:
+        return True
+    if len(t) > 320:
+        return True
+    if t.endswith("?"):
+        return True
+    if not re.search(r"[.!]$", t) and len(t) > 170:
+        return True
+    if t.count(",") >= 8:
+        return True
+    if re.search(r"\b\d+\s*(?:milyon\w*|milyar\w*)\b.*\b(?:ırk|irk|cins|tür|tur)\w*\b", t):
+        return True
+    # Menu/navigation-like keyword dumps are common in pet/blog pages.
+    if re.search(r"\b(?:toy|poodle|maltese|maltipoo|yorkshire|pomeranian|bulldog|retriever|terrier|chow|cavalier)\b", t):
+        breed_hits = len(re.findall(r"\b(?:toy|poodle|maltese|maltipoo|yorkshire|pomeranian|bulldog|retriever|terrier|chow|cavalier)\b", t))
+        if breed_hits >= 4 and not re.search(r"[.!?]", t):
+            return True
+    # Repeated short title fragments without a verbal predicate are usually nav blocks.
+    if t.count(" ") >= 12 and not re.search(r"[.!?]", t):
+        if len(re.findall(r"\b(?:en|ile|ve|için|icin|listesi|cinsleri|türleri|turleri)\b", t)) >= 5:
+            return True
+    if any(p in t for p in _NOISE_PATTERNS):
+        return True
+    words = t.split()
+    if len(words) > 45:
+        return True
+    return False
+
+
+def _compact_finding_text(text: str, max_len: int = 210) -> str:
+    t = _normalize_text(text)
+    if len(t) <= max_len:
+        return t
+    cropped = t[:max_len].rstrip(" ,;:-")
+    for sep in (". ", "; ", " - ", ", "):
+        idx = cropped.rfind(sep)
+        if idx >= 90:
+            cropped = cropped[:idx + 1].rstrip(" ,;:-")
+            break
+    if not re.search(r"[.!?]$", cropped):
+        cropped += "."
+    return cropped
+
+
+def _split_sentences(text: str) -> list[str]:
+    raw = _normalize_text(text)
+    if not raw:
+        return []
+    # Keep punctuation boundaries and also split long newline blocks.
+    chunks = re.split(r"(?<=[.!?])\s+|\n+", raw)
+    out = []
+    for chunk in chunks:
+        c = _normalize_text(chunk).strip(" -•")
+        if c:
+            out.append(c)
+    return out
+
+
+def _sentence_relevance_score(sentence: str, topic_terms: list[str], domain: str = "") -> float:
+    s = _normalize_text(sentence)
+    low = s.lower()
+    if not s:
+        return 0.0
+
+    score = 0.0
+    if 80 <= len(s) <= 240:
+        score += 0.18
+    elif 55 <= len(s) <= 300:
+        score += 0.1
+
+    if topic_terms:
+        match = sum(1 for t in topic_terms if t in low)
+        ratio = match / max(len(topic_terms), 1)
+        score += 0.45 * ratio
+    else:
+        score += 0.12
+
+    if re.search(r"\b\d+(?:[.,]\d+)?\b", s):
+        score += 0.08
+
+    if any(k in low for k in ("araştırma", "çalışma", "study", "evidence", "kanıt", "risk", "benefit", "fayda", "hastalık", "sağlık", "beslenme", "davranış")):
+        score += 0.1
+
+    if domain.endswith((".gov", ".edu")):
+        score += 0.08
+    if any(h in domain for h in _TRUSTED_DOMAIN_HINTS):
+        score += 0.07
+    if any(h in domain for h in _LOW_VALUE_DOMAIN_HINTS):
+        score -= 0.12
+
+    return max(0.0, min(1.0, score))
+
+
+def _extract_research_passages(text: str, topic_terms: list[str], domain: str = "", max_sentences: int = 8) -> list[str]:
+    sentences = _split_sentences(text)
+    if not sentences:
+        return []
+
+    ranked: list[tuple[float, str]] = []
+    for sent in sentences:
+        if _is_noise_sentence(sent):
+            continue
+        score = _sentence_relevance_score(sent, topic_terms, domain=domain)
+        if score < 0.24:
+            continue
+        ranked.append((score, sent))
+
+    if not ranked:
+        return []
+
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    picked: list[str] = []
+    seen_keys: set[str] = set()
+    for _, sent in ranked:
+        key = _normalize_text(sent)[:70].lower()
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        picked.append(sent)
+        if len(picked) >= max_sentences:
+            break
+    return picked
+
+
+def _search_result_score(item: dict[str, Any], rank_index: int, total: int) -> float:
+    url = str(item.get("url", "") or "").strip()
+    title = _normalize_text(item.get("title", ""))
+    snippet = _normalize_text(item.get("snippet", ""))
+    domain = _domain_from_url(url)
+    path = urlparse(url).path.lower() if url else ""
+
+    score = max(0.0, 1.0 - (rank_index / max(total, 1)) * 0.35)
+
+    if domain.endswith((".gov", ".edu")):
+        score += 0.28
+    if ".org" in domain:
+        score += 0.07
+    if any(h in domain for h in _TRUSTED_DOMAIN_HINTS):
+        score += 0.22
+    if any(h in domain for h in _LOW_VALUE_DOMAIN_HINTS):
+        score -= 0.35
+    if any(p in path for p in _LOW_VALUE_URL_PARTS):
+        score -= 0.22
+
+    if len(snippet) >= 90:
+        score += 0.08
+    elif len(snippet) < 25:
+        score -= 0.08
+
+    if not title:
+        score -= 0.06
+
+    return max(0.0, min(1.2, score))
+
+
+def _quality_snapshot(sources: list["ResearchSource"], findings: list[str]) -> dict[str, Any]:
+    total = len(sources)
+    if total == 0:
+        return {
+            "total_sources": 0,
+            "reliable_sources": 0,
+            "reliability_pct": 0,
+            "high_reliability": 0,
+            "medium_reliability": 0,
+            "low_reliability": 0,
+            "finding_count": len(findings or []),
+            "top_domains": [],
+        }
+
+    reliable = sum(1 for s in sources if float(s.reliability_score or 0) >= 0.6)
+    high = sum(1 for s in sources if float(s.reliability_score or 0) >= 0.8)
+    medium = sum(1 for s in sources if 0.6 <= float(s.reliability_score or 0) < 0.8)
+    low = total - high - medium
+
+    domains = [_domain_from_url(s.url) for s in sources if s.url]
+    top_domains = [d for d, _ in Counter(domains).most_common(5) if d]
+
+    return {
+        "total_sources": total,
+        "reliable_sources": reliable,
+        "reliability_pct": int((reliable / total) * 100) if total else 0,
+        "high_reliability": high,
+        "medium_reliability": medium,
+        "low_reliability": low,
+        "finding_count": len(findings or []),
+        "top_domains": top_domains,
+    }
 
 
 class ResearchDepth(Enum):
@@ -143,7 +558,10 @@ async def advanced_research(
     sources: list[str] | None = None,
     language: str = "tr",
     include_evaluation: bool = True,
-    generate_report: bool = False  # CHANGED: Report generation disabled for speed (task takes 5 mins otherwise)
+    generate_report: bool = False,  # CHANGED: Report generation disabled for speed (task takes 5 mins otherwise)
+    source_policy: str = "balanced",
+    min_reliability: float = 0.55,
+    max_findings: int = 6,
 ) -> dict[str, Any]:
     """
     Gelişmiş araştırma yap ve rapor oluştur
@@ -155,6 +573,9 @@ async def advanced_research(
         language: Arama dili ("tr", "en")
         include_evaluation: Kaynak güvenilirlik değerlendirmesi dahil et
         generate_report: Profesyonel rapor oluştur
+        source_policy: Kaynak seçim politikası ("balanced", "trusted", "academic", "official")
+        min_reliability: Özet ve bulgular için minimum güvenilirlik eşiği (0-1)
+        max_findings: Döndürülecek maksimum bulgu sayısı
 
     Returns:
         dict: Araştırma sonuçları ve rapor yolu
@@ -164,6 +585,15 @@ async def advanced_research(
             return {"success": False, "error": "Araştırma konusu gerekli"}
 
         topic = topic.strip()
+        source_policy = _normalize_source_policy(source_policy)
+        try:
+            min_reliability = max(0.0, min(1.0, float(min_reliability)))
+        except Exception:
+            min_reliability = 0.55
+        try:
+            max_findings = max(3, min(12, int(max_findings)))
+        except Exception:
+            max_findings = 6
 
         # Parse depth
         try:
@@ -215,7 +645,11 @@ async def advanced_research(
         try:
             # Step 1: Web search for sources
             result.progress = 10
-            search_results = await _perform_web_search(topic, target_sources, language)
+            # Pull larger pool and then filter by source policy.
+            search_pool_size = max(target_sources * 2, target_sources + 4)
+            search_results = await _perform_web_search(topic, search_pool_size, language)
+            search_results = _apply_source_policy(search_results, source_policy, target_sources=target_sources)
+            policy_stats = _source_policy_stats(search_results, source_policy)
 
             if not search_results:
                 result.status = "failed"
@@ -240,7 +674,8 @@ async def advanced_research(
                 source = ResearchSource(
                     url=sr.get("url", ""),
                     title=sr.get("title", ""),
-                    snippet=sr.get("snippet", "")
+                    snippet=sr.get("snippet", ""),
+                    reliability_score=float(sr.get("_rank_score", 0.5) or 0.5),
                 )
                 result.sources.append(source)
 
@@ -279,13 +714,24 @@ async def advanced_research(
                 await asyncio.gather(*[_with_semaphore(s) for s in sources_to_eval], return_exceptions=True)
                 result.progress = 70
 
+            # Filter weakest sources after scoring, but keep enough context.
+            result.sources = _apply_min_reliability(result.sources, min_reliability=min_reliability, keep_at_least=2)
+
             # Step 3: Extract findings
             result.progress = 75
-            result.findings = await _extract_findings(result.sources, topic)
+            result.findings = await _extract_findings(result.sources, topic, max_findings=max_findings)
 
             # Step 4: Generate summary
             result.progress = 90
-            result.summary = await _generate_summary(topic, result.findings, result.sources)
+            result.summary = await _generate_summary(
+                topic,
+                result.findings,
+                result.sources,
+                source_policy=source_policy,
+                min_reliability=min_reliability,
+                source_policy_stats=policy_stats,
+            )
+            quality = _quality_snapshot(result.sources, result.findings)
 
             # Step 5: Generate professional report with visualizations
             result.progress = 95
@@ -295,7 +741,10 @@ async def advanced_research(
                 "sources": sources_dict,
                 "findings": result.findings,
                 "summary": result.summary,
-                "depth": research_depth.value
+                "depth": research_depth.value,
+                "source_policy": source_policy,
+                "min_reliability": min_reliability,
+                "source_policy_stats": policy_stats,
             }
 
             report_paths = []
@@ -367,6 +816,10 @@ async def advanced_research(
                     "findings": list(result.findings),
                     "summary": result.summary,
                     "sources": sources_dict,
+                    "quality": quality,
+                    "source_policy": source_policy,
+                    "min_reliability": min_reliability,
+                    "source_policy_stats": policy_stats,
                     "report_paths": list(report_paths),
                     "completed_at": result.completed_at,
                 }
@@ -379,10 +832,14 @@ async def advanced_research(
                 "research_id": research_id,
                 "topic": topic,
                 "depth": research_depth.value,
+                "source_policy": source_policy,
+                "min_reliability": min_reliability,
+                "source_policy_stats": policy_stats,
                 "source_count": len(result.sources),
                 "sources": sources_dict,
                 "findings": result.findings,
                 "summary": result.summary,
+                "quality": quality,
                 "report_paths": report_paths,
                 "message": message
             }
@@ -432,7 +889,6 @@ async def evaluate_source(
         factors = []
 
         # Domain reliability scoring
-        from urllib.parse import urlparse
         parsed = urlparse(url)
         domain = parsed.netloc.lower()
 
@@ -448,10 +904,10 @@ async def evaluate_source(
         # Domain reliability
         if criteria.get("check_domain", True):
             # Academic and government domains
-            trusted_tlds = [".edu", ".gov", ".ac.", ".org"]
+            trusted_tlds = [".edu", ".gov", ".ac."]
             academic_domains = ["arxiv.org", "scholar.google", "researchgate.net", "academia.edu"]
             news_reliable = ["bbc.", "reuters.", "apnews.", "npr.org"]
-            unreliable_patterns = ["blogspot.", "wordpress.", "tumblr.", "medium.com"]
+            unreliable_patterns = ["blogspot.", "wordpress.", "tumblr.", "medium.com", "pinterest.", "reddit.com"]
 
             for tld in trusted_tlds:
                 if tld in domain:
@@ -477,6 +933,13 @@ async def evaluate_source(
                     factors.append({"name": "User-generated content", "value": True, "weight": -0.15})
                     break
 
+            if any(td in domain for td in _TRUSTED_DOMAIN_HINTS):
+                score += 0.12
+                factors.append({"name": "Trusted source hint", "value": True, "weight": 0.12})
+            if any(ld in domain for ld in _LOW_VALUE_DOMAIN_HINTS):
+                score -= 0.15
+                factors.append({"name": "Low-value source hint", "value": True, "weight": -0.15})
+
         # Try to fetch content preview
         content_preview = ""
         if criteria.get("check_content", True):
@@ -484,19 +947,37 @@ async def evaluate_source(
                 from tools.web_tools import fetch_page
                 fetch_result = await fetch_page(url, extract_content=True)
                 if fetch_result.get("success"):
-                    content = fetch_result.get("content", "")
-                    content_preview = content[:500] if content else ""
+                    content = _normalize_text(fetch_result.get("content", ""))
+                    title_terms = _tokenize_topic(str(fetch_result.get("title", "")))
+                    passages = _extract_research_passages(content, title_terms, domain=domain, max_sentences=10)
+                    if passages:
+                        content_preview = " ".join(passages)[:2000]
+                    elif content:
+                        content_preview = content[:1200]
 
                     # Content quality indicators
                     if len(content) > 1000:
                         score += 0.05
                         factors.append({"name": "Content length", "value": "long", "weight": 0.05})
+                    if len(content) > 2500:
+                        score += 0.05
+                        factors.append({"name": "Content depth", "value": "detailed", "weight": 0.05})
+                    if passages and len(passages) >= 3:
+                        score += 0.06
+                        factors.append({"name": "Extractable passages", "value": len(passages), "weight": 0.06})
+                    if re.search(r"\b\d+(?:[.,]\d+)?\b", content):
+                        score += 0.03
+                        factors.append({"name": "Has quantitative signals", "value": True, "weight": 0.03})
 
                     # Check for citations/references
                     citation_keywords = ["source:", "reference", "citation", "et al.", "study", "research"]
                     if any(kw in content.lower() for kw in citation_keywords):
                         score += 0.1
                         factors.append({"name": "Has citations", "value": True, "weight": 0.1})
+                    noise_hits = sum(1 for p in _NOISE_PATTERNS if p in content.lower())
+                    if noise_hits >= 4:
+                        score -= 0.07
+                        factors.append({"name": "High noise content", "value": noise_hits, "weight": -0.07})
             except Exception as e:
                 factors.append({"name": "Content fetch", "value": False, "error": str(e)})
 
@@ -557,7 +1038,8 @@ async def _perform_web_search(
     """Web araması yap"""
     try:
         from tools.web_tools import web_search
-        result = await web_search(query, num_results=max(int(num_results or 1) * 2, 6), language=language)
+        target_n = max(int(num_results or 1), 1)
+        result = await web_search(query, num_results=max(target_n * 2, 8), language=language)
         if result.get("success"):
             raw = result.get("results", []) or []
             deduped: list[dict[str, Any]] = []
@@ -580,9 +1062,34 @@ async def _perform_web_search(
                 if title_key:
                     seen_titles.add(title_key)
                 deduped.append(item)
-                if len(deduped) >= int(num_results or 1):
+
+            ranked: list[tuple[float, dict[str, Any]]] = []
+            total = len(deduped)
+            for idx, item in enumerate(deduped):
+                score = _search_result_score(item, idx, total)
+                ranked.append((score, item))
+
+            ranked.sort(key=lambda x: x[0], reverse=True)
+            final_results: list[dict[str, Any]] = []
+            for score, item in ranked:
+                domain = _domain_from_url(str(item.get("url", "") or ""))
+                if score < 0.20 and len(final_results) >= min(3, target_n):
+                    continue
+                if any(h in domain for h in _LOW_VALUE_DOMAIN_HINTS) and len(final_results) >= min(3, target_n):
+                    continue
+                item_with_score = dict(item)
+                item_with_score["_rank_score"] = round(float(score), 3)
+                final_results.append(item_with_score)
+                if len(final_results) >= target_n:
                     break
-            return deduped
+
+            if not final_results:
+                final_results = []
+                for score, item in ranked[:target_n]:
+                    item_with_score = dict(item)
+                    item_with_score["_rank_score"] = round(float(score), 3)
+                    final_results.append(item_with_score)
+            return final_results
         return []
     except Exception as e:
         logger.warning(f"Web arama hatası: {e}")
@@ -591,174 +1098,208 @@ async def _perform_web_search(
 
 async def _extract_findings(
     sources: list[ResearchSource],
-    topic: str
+    topic: str,
+    max_findings: int = 10,
 ) -> list[str]:
-    """Kaynaklardan yüksek kaliteli bulgular çıkar"""
-    findings = []
-    
-    # Kapsamlı gürültü ve spam filtreleri
-    spam_patterns = [
-        "cookie", "çerez", "gdpr", "privacy", "gizlilik",
-        "subscribe", "abone", "newsletter", "bülten",
-        "login", "giriş", "sign up", "kayıt",
-        "buy now", "satın al", "indirim", "kampanya",
-        "free trial", "ücretsiz dene", "premium",
-        "advertisement", "reklam", "sponsored",
-        "click here", "buraya tıkla", "download",
-        "app store", "google play", "upgrade",
-        "% off", "% indirim", "fiyat", "ücret",
-        "characters", "karakter", "limit",
-        "ai detector", "ai-generated", "human-written",
-        "yandeks", "yandex", "arama sonuçları", "tıklayın",
-        "tüm hakları", "copyright", "sayfa", "menü",
-        # Web scraping junk
-        "share", "facebook", "twitter", "pinterest", "linkedin",
-        "okuma süresi", "okunma sayısı", "tarihinde düzenlendi",
-        "tarafından yazıldı", "tarafından", "yorum yap",
-        "beğen", "paylaş", "oku", "dk, ", "dk.", "sn",
-        "yazıya gitmek için", "devamını oku"
-    ]
-    
-    # Gereksiz kategori ve SEO terimleri
-    noise_keywords = [
-        "en iyi", "fiyatları", "nedir", "nasıl yapılır",
-        "yorumları", "şikayet", "satın alma", "rehberi",
-        "tarif", "liste", "künefe", "aspirin", "kedi" # Kullanıcı örneğindeki alakasızlar
-    ]
-    
-    topic_words = [w.lower() for w in topic.split() if len(w) > 2]
-    
-    def is_junk(text: str) -> bool:
-        """İçeriğin gürültü/çöp olup olmadığını kontrol et"""
-        text_lower = text.lower()
-        
-        # Spam pattern check
-        if any(spam in text_lower for spam in spam_patterns):
-            return True
-            
-        # Alakasız gürültü kelimeleri (eğer konuyla çok alakasızsa)
-        if not any(word in text_lower for word in topic_words):
-            if any(noise in text_lower for noise in noise_keywords):
-                return True
-                
-        # Çok kısa veya çok uzun
-        if len(text) < 60 or len(text) > 600:
-            return True
-            
-        # Özel karakter yoğunluğu (UI elemanı olma riski)
-        special_chars = sum(1 for c in text if not c.isalnum() and c not in ' .,;:!?()-İıĞğÜüŞşÖöÇç')
-        if special_chars / len(text) > 0.12:
-            return True
-            
-        # Soru listesi veya link listesi gibi duran yapılar
-        if text.count('?') > 2 or text.count('-') > 4:
-            return True
-            
-        return False
-    
-    def clean_finding(text: str) -> str:
-        """Metni temizle ve normalize et"""
-        import re
-        # HTML etiketlerini temizle (varsa)
-        text = re.sub(r'<[^>]+>', '', text)
-        # Fazla boşlukları temizle
-        text = re.sub(r'\s+', ' ', text)
-        # Markdown linklerini temizle
-        text = re.sub(r'\[([^\]]+)\]\(([^\)]+)\)', r'\1', text)
-        # Baştaki sembolleri temizle
-        text = text.lstrip("•-* 1234567890. ")
-        return text.strip()
-    
-    seen_content = set()
-    
-    for source in sources:
-        content = ""
-        if source.fetched and source.content:
-            content = source.content
-        elif source.snippet:
-            content = source.snippet
-        
-        if not content:
-            continue
-            
-        # İçeriği cümlelere böl (daha akıllıca)
-        import re
-        sentences = re.split(r'(?<=[.!?])\s+', content)
-        
-        source_findings = []
-        for s in sentences:
-            cleaned = clean_finding(s)
-            
-            if is_junk(cleaned):
-                continue
-                
-            # Konuyla ilgililik kontrolü (Anahtar kelime geçişi)
-            match_count = sum(1 for word in topic_words if word in cleaned.lower())
-            relevance = match_count / max(len(topic_words), 1)
-            
-            if relevance >= 0.25: # En az %25 alaka düzeyi
-                # Benzerlik kontrolü (Duplicate check)
-                content_key = cleaned[:40].lower()
-                if content_key not in seen_content:
-                    source_findings.append((cleaned, relevance))
-                    seen_content.add(content_key)
-        
-        # Kaynaktan gelen en alakalı 2 bulguyu al
-        source_findings.sort(key=lambda x: x[1], reverse=True)
-        for f, _ in source_findings[:2]:
-            findings.append(f"• {f}")
-            
-    # Eğer sonuç yoksa veya çok azsa, snippet'ları daha esnek tara
-    if len(findings) < 3:
-        for source in sources:
-            if source.snippet:
-                cleaned = clean_finding(source.snippet)
-                if len(cleaned) > 40 and cleaned[:40].lower() not in seen_content:
-                    findings.append(f"• {cleaned}")
-                    seen_content.add(cleaned[:40].lower())
-                    if len(findings) >= 5: break
+    """Kaynaklardan yüksek kaliteli, dedupe edilmiş ve konuya alakalı bulgular çıkar."""
+    topic_terms = _tokenize_topic(topic)
+    findings: list[str] = []
+    seen_keys: set[str] = set()
+    candidates: list[tuple[float, str, str, float]] = []
 
-    return findings[:10]
+    for source in sources:
+        domain = _domain_from_url(source.url)
+        source_rel = max(0.0, min(1.0, float(source.reliability_score or 0.0)))
+        body = _normalize_text(source.content if source.fetched and source.content else source.snippet)
+        if not body:
+            continue
+
+        passages = _extract_research_passages(
+            body,
+            topic_terms=topic_terms,
+            domain=domain,
+            max_sentences=3,
+        )
+
+        if not passages and source.snippet:
+            snippet = _normalize_text(source.snippet)
+            if not _is_noise_sentence(snippet):
+                passages = [snippet]
+
+        for passage in passages:
+            clean = _compact_finding_text(_normalize_text(passage).lstrip("•- "))
+            if not clean:
+                continue
+            if len(clean) < 35:
+                continue
+            if not re.search(r"[a-zA-ZğüşöçıİĞÜŞÖÇ]{8,}", clean):
+                continue
+            key = clean[:90].lower()
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+
+            relevance = _sentence_relevance_score(clean, topic_terms, domain=domain)
+            composite = (relevance * 0.75) + (source_rel * 0.25)
+            if any(p in clean.lower() for p in _NOISE_PATTERNS):
+                composite -= 0.2
+            candidates.append((max(0.0, composite), clean, domain, source_rel))
+
+    if candidates:
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        domain_counts: dict[str, int] = {}
+        findings.clear()
+        for score, clean, domain, source_rel in candidates:
+            _ = score
+            if domain and domain_counts.get(domain, 0) >= 2:
+                continue
+            confidence_pct = int(round(max(0.0, min(1.0, source_rel)) * 100))
+            if domain:
+                domain_counts[domain] = domain_counts.get(domain, 0) + 1
+                findings.append(f"• {clean} (Kaynak: {domain}, Güven: %{confidence_pct})")
+            else:
+                findings.append(f"• {clean} (Güven: %{confidence_pct})")
+            if len(findings) >= max(3, int(max_findings or 10)):
+                return findings
+
+    # Ultra fallback: en azından snippet tabanlı 3 bulgu üret.
+    if len(findings) < 3:
+        seen_keys = {str(item).lower()[:90] for item in findings}
+        for source in sources:
+            snippet = _normalize_text(source.snippet)
+            if not snippet:
+                continue
+            if _is_noise_sentence(snippet):
+                continue
+            snippet = _compact_finding_text(snippet)
+            key = snippet[:90].lower()
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            domain = _domain_from_url(source.url)
+            findings.append(f"• {snippet}" + (f" (Kaynak: {domain})" if domain else ""))
+            if len(findings) >= 5:
+                break
+
+    return findings[: max(3, int(max_findings or 10))]
+
+
+def _suggest_followup_actions(topic: str, findings: list[str], reliability_pct: int) -> list[str]:
+    low_topic = _normalize_text(topic).lower()
+    has_health = any(k in low_topic for k in ("sağlık", "saglik", "hastalık", "hastalik", "beslenme", "veteriner"))
+    has_business = any(k in low_topic for k in ("e-ticaret", "eticaret", "satış", "satis", "stok", "sipariş", "siparis"))
+    has_tech = any(k in low_topic for k in ("yazılım", "yazilim", "kod", "api", "framework", "model"))
+
+    actions: list[str] = []
+    if reliability_pct < 70:
+        actions.append("Kaynak havuzunu akademik/resmi filtre ile yeniden çalıştır.")
+    else:
+        actions.append("En yüksek güvenilir 3 kaynağı referans alarak kısa karar notu çıkar.")
+
+    if has_health:
+        actions.append("Bulguları klinik/uzman doğrulaması gerektiren başlıklar için ayrı etiketle.")
+    elif has_business:
+        actions.append("Bulgulardan KPI etkisi olan maddeleri tabloya dönüştür (hacim, risk, fırsat).")
+    elif has_tech:
+        actions.append("Teknik bulgular için uygulanabilir backlog maddeleri (P0/P1/P2) üret.")
+    else:
+        actions.append("Bulguları tema bazında gruplayıp eylem planına dönüştür.")
+
+    if findings:
+        actions.append("Çelişkili görünen maddeleri kaynak karşılaştırması ile netleştir.")
+    return actions[:3]
 
 
 async def _generate_summary(
     topic: str,
     findings: list[str],
-    sources: list[ResearchSource]
+    sources: list[ResearchSource],
+    source_policy: str = "balanced",
+    min_reliability: float = 0.55,
+    source_policy_stats: dict[str, Any] | None = None,
 ) -> str:
-    """Araştırma sonuçlarını sade ve profesyonel bir özet metnine dönüştürür."""
-    source_count = len(sources)
-    reliable_count = sum(1 for s in sources if s.reliability_score >= 0.6)
-    reliability_pct = int((reliable_count / source_count) * 100) if source_count else 0
+    """Araştırma sonuçlarını profesyonel, kanıt odaklı bir özet metnine dönüştür."""
+    quality = _quality_snapshot(sources, findings)
+    source_count = quality["total_sources"]
+    reliable_count = quality["reliable_sources"]
+    reliability_pct = quality["reliability_pct"]
+    high_rel = quality["high_reliability"]
+    med_rel = quality["medium_reliability"]
+    low_rel = quality["low_reliability"]
+    top_domains = quality["top_domains"]
 
     cleaned_findings: list[str] = []
-    seen = set()
+    seen: set[str] = set()
     for finding in findings:
-        item = str(finding or "").lstrip("•- ").strip()
-        item = " ".join(item.split())
-        if len(item) < 20:
+        item = _normalize_text(str(finding or "").lstrip("•- "))
+        if len(item) < 24:
             continue
-        key = item[:80].lower()
+        key = item[:90].lower()
         if key in seen:
             continue
         seen.add(key)
         cleaned_findings.append(item)
 
-    lines = [
-        f"'{topic}' konusunda {source_count} kaynak incelendi.",
-        f"Güvenilirlik eşiğini (>=0.60) geçen kaynaklar: {reliable_count}/{source_count} (%{reliability_pct}).",
-    ]
+    avg_reliability = 0.0
+    if sources:
+        avg_reliability = sum(float(s.reliability_score or 0.0) for s in sources) / max(len(sources), 1)
+    confidence_label = "yüksek" if reliability_pct >= 80 else ("orta" if reliability_pct >= 60 else "düşük")
+    actions = _suggest_followup_actions(topic, cleaned_findings, reliability_pct)
+
+    lines: list[str] = []
+    lines.append("Yönetici Özeti:")
+    lines.append(
+        f"'{topic}' araştırmasında {source_count} kaynak incelendi; güvenilirlik eşiğini geçen kaynak oranı %{reliability_pct} ({confidence_label} güven)."
+    )
+    lines.append("")
+    lines.append(f"Araştırma Konusu: {topic}")
+    lines.append(f"Kapsam: {source_count} kaynak tarandı; güvenilirlik eşiğini geçen kaynak {reliable_count}/{source_count} (%{reliability_pct}).")
+    lines.append(
+        f"Kaynak Profili: yüksek={high_rel}, orta={med_rel}, düşük={low_rel}, ortalama güven={avg_reliability:.2f}."
+    )
+    if source_policy != "balanced":
+        lines.append(f"Kaynak Politikası: {source_policy} (min güvenilirlik: {min_reliability:.2f}).")
+        stats = source_policy_stats or {}
+        if bool(stats.get("fallback_used")):
+            lines.append("Not: Seçilen politika için yeterli kaynak bulunamadığından sınırlı fallback uygulandı.")
+    if top_domains:
+        lines.append("Öne Çıkan Alan Adları: " + ", ".join(top_domains[:5]))
 
     if cleaned_findings:
         lines.append("")
-        lines.append("Öne çıkan bulgular:")
-        for finding in cleaned_findings[:5]:
-            lines.append(f"- {finding}")
+        lines.append("Ana Bulgular (kanıt odaklı):")
+        for idx, finding in enumerate(cleaned_findings[:6], 1):
+            lines.append(f"{idx}. {finding}")
     else:
         lines.append("")
-        lines.append(
-            "Bu taramada doğrudan kullanılabilir bulgu az. Daha net anahtar kelimelerle tekrar arama önerilir."
-        )
+        lines.append("Ana Bulgular: Bu taramada doğrudan kullanılabilir bulgu sınırlı kaldı.")
+
+    lines.append("")
+    lines.append("Kanıt Matrisi (ilk 5 kaynak):")
+    ranked_sources = sorted(sources, key=lambda s: float(s.reliability_score or 0.0), reverse=True)[:5]
+    if ranked_sources:
+        for idx, src in enumerate(ranked_sources, 1):
+            domain = _domain_from_url(src.url)
+            title = _normalize_text(src.title) or domain or "Başlıksız kaynak"
+            rel = float(src.reliability_score or 0.0)
+            lines.append(f"{idx}. {title} | {domain} | güven={rel:.2f}")
+    else:
+        lines.append("- Kaynak bilgisi sınırlı.")
+
+    lines.append("")
+    lines.append("Operasyonel Öneriler:")
+    if actions:
+        for item in actions:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- Ek öneri üretilemedi.")
+
+    lines.append("")
+    lines.append("Sınırlılıklar:")
+    lines.append("- Bulgular web kaynaklarından otomatik çıkarılmıştır; alan uzmanı doğrulaması önerilir.")
+    lines.append("- Tarih/bölge bilgisi olmayan kaynaklarda genelleme yapılmamalıdır.")
+    lines.append("")
+    lines.append("Önerilen Devam Adımı: İstersen bu başlığı alt konulara bölüp (sağlık, beslenme, eğitim, ırklar) karşılaştırmalı rapor üretebilirim.")
 
     return "\n".join(lines)
 

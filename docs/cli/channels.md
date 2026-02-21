@@ -37,9 +37,13 @@ Yeni kanal ekler.
 elyan channels add telegram
 elyan channels add discord
 elyan channels add slack
+elyan channels add whatsapp
 ```
 
-Komut, ilgili kanalın token/webhook yapılandırmasını interaktif olarak sorar.
+Komut, ilgili kanalın token/webhook yapılandırmasını interaktif olarak sorar.  
+`whatsapp` için iki seçenek sunulur:
+- QR/Bridge (yerel hesap eşleştirme)
+- Cloud API (Meta webhook)
 
 ### `channels remove`
 
@@ -71,9 +75,11 @@ elyan channels test telegram-1
 OAuth/oturum gerektiren kanallar için.
 
 ```bash
-elyan channels login slack-1
-elyan channels logout slack-1
+elyan channels login whatsapp
+elyan channels logout whatsapp
 ```
+
+`whatsapp` login adımı terminalde QR kod gösterir ve bridge token'ını güvenli saklar.
 
 ### `channels info`
 
@@ -88,7 +94,7 @@ elyan channels info telegram-1
 Kanal yapılandırmasını günceller.
 
 ```bash
-elyan channels sync telegram-1
+elyan channels sync
 ```
 
 ## Desteklenen Kanallar
@@ -108,7 +114,7 @@ elyan channels sync telegram-1
 
 ## Kanal Yapılandırması
 
-Kanal ayarları `~/.elyan/config.json5` dosyasında `channels` dizisi içinde tutulur:
+Kanal ayarları `~/.elyan/elyan.json` dosyasında `channels` dizisi içinde tutulur:
 
 ```json5
 {

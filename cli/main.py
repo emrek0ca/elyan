@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Elyan CLI — v18.0 Ana giriş noktası"""
 import argparse
+import os
 import sys
 from difflib import get_close_matches
+from pathlib import Path
 
 
 TOP_LEVEL_COMMANDS = [
@@ -30,7 +32,38 @@ TOP_LEVEL_COMMANDS = [
     "update",
     "version",
     "completion",
+    "subscription",
+    "quota",
 ]
+
+
+def _bootstrap_project_path():
+    """
+    Prefer workspace source tree over stale site-packages copy when available.
+
+    This keeps CLI behavior consistent during active development and local installs.
+    """
+    candidates: list[Path] = []
+    env_project = os.environ.get("ELYAN_PROJECT_DIR", "").strip()
+    if env_project:
+        candidates.append(Path(env_project).expanduser())
+    candidates.append(Path.cwd())
+
+    for base in candidates:
+        try:
+            cli_main = base / "cli" / "main.py"
+            has_core = (base / "core").exists()
+            has_config = (base / "config").exists()
+            if cli_main.exists() and has_core and has_config:
+                base_str = str(base)
+                if base_str not in sys.path:
+                    sys.path.insert(0, base_str)
+                return
+        except Exception:
+            continue
+
+
+_bootstrap_project_path()
 
 
 def _suggest_command(raw: str) -> str:
@@ -67,8 +100,10 @@ def main(argv: list[str] | None = None):
 
     # ── routines ────────────────────────────────────────────────────────
     p = sub.add_parser("routines", help="Rutin otomasyon yönetimi")
-    p.add_argument("action", nargs="?", choices=["list", "templates", "add", "rm", "enable", "disable", "run", "history"])
+    p.add_argument("action", nargs="?", choices=["list", "templates", "suggest", "add", "rm", "enable", "disable", "run", "history"])
     p.add_argument("id", nargs="?")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--text", metavar="TEXT")
     p.add_argument("--name", metavar="NAME")
     p.add_argument("--expression", metavar="CRON_EXPR")
     p.add_argument("--steps", metavar="STEP1;STEP2;STEP3")
@@ -228,6 +263,18 @@ def main(argv: list[str] | None = None):
     p.add_argument("action", nargs="?", choices=["show", "install", "uninstall"], default="show")
     p.add_argument("--shell", choices=["zsh", "bash", "fish"])
 
+    # ── subscription ─────────────────────────────────────────────────────
+    p = sub.add_parser("subscription", help="Abonelik yönetimi")
+    p.add_argument("subcommand", nargs="?", choices=["status", "set", "list-tiers"], default="status")
+    p.add_argument("--user-id", dest="user_id", metavar="USER_ID")
+    p.add_argument("--tier", choices=["free", "pro", "enterprise"])
+    p.add_argument("--days", type=int, help="Geçerlilik süresi (gün)")
+
+    # ── quota ────────────────────────────────────────────────────────────
+    p = sub.add_parser("quota", help="Kota ve kullanım takibi")
+    p.add_argument("subcommand", nargs="?", choices=["status", "check"], default="status")
+    p.add_argument("--user", metavar="USER_ID")
+
     # ════════════════════════════════════════════════════════════════════
     if argv:
         first = str(argv[0]).strip()
@@ -256,11 +303,32 @@ def main(argv: list[str] | None = None):
 
     elif args.command == "health":
         from cli.commands import health
-        health.run_health()
+        runner = getattr(health, "run_health", None) or getattr(health, "run", None)
+        if runner:
+            try:
+                runner(args)
+            except TypeError:
+                runner()
+        else:
+            print("Health komutu bulunamadı.")
+            return 1
 
     elif args.command == "status":
         from cli.commands import status
-        status.run_status(args)
+        runner = getattr(status, "run_status", None) or getattr(status, "run", None)
+        if runner:
+            runner(args)
+        else:
+            print("Status komutu bulunamadı.")
+            return 1
+
+    elif args.command == "subscription":
+        from cli.commands import subscription
+        subscription.run(args)
+
+    elif args.command == "quota":
+        from cli.commands import quota
+        quota.run(args)
 
     elif args.command == "routines":
         from cli.commands import routines

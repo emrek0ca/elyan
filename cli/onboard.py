@@ -105,9 +105,10 @@ class OnboardingWizard:
         # 5. Channel Setup
         print("\n[3] İletişim Kanalı:")
         print("  1. Telegram (Mobil Erişim)")
-        print("  2. Sadece Masaüstü (Web/CLI)")
+        print("  2. WhatsApp (QR ile bağlan)")
+        print("  3. Sadece Masaüstü (Web/CLI)")
         
-        ch_choice = input("\nSeçiminiz (1-2) [1]: ").strip() or "1"
+        ch_choice = input("\nSeçiminiz (1-3) [1]: ").strip() or "1"
         
         if ch_choice == "1":
             token = input("🤖 Telegram Bot Token girin: ").strip()
@@ -135,6 +136,18 @@ class OnboardingWizard:
                 
                 elyan_config.set("channels", channels)
                 print("✅ Telegram yapılandırıldı.")
+        elif ch_choice == "2":
+            try:
+                from cli.commands.channels import login_whatsapp
+
+                ok = login_whatsapp(channel_id="whatsapp")
+                if ok:
+                    print("✅ WhatsApp yapılandırıldı.")
+                else:
+                    print("⚠️ WhatsApp yapılandırması tamamlanamadı. Sonradan: `elyan channels login whatsapp`")
+            except Exception as e:
+                print(f"❌ WhatsApp onboarding başarısız: {e}")
+                print("   Sonradan deneyin: `elyan channels login whatsapp`")
 
         # 6. Production Mode (Action-Lock)
         print("\n[4] Üretim Modu (Action-Lock):")

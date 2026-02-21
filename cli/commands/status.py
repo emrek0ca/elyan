@@ -2,6 +2,7 @@ import os
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def run(args):
@@ -62,6 +63,17 @@ def run(args):
     skill_count = sum(1 for d in skills_dir.iterdir() if d.is_dir()) if skills_dir.exists() else 0
     print(f"  Skills:      {skill_count} harici skill")
 
+    # Subscription
+    try:
+        from core.subscription import subscription_manager
+        from core.quota import quota_manager
+        tier = subscription_manager.get_user_tier("local")
+        stats = quota_manager.get_user_stats("local")
+        print(f"  Abonelik:    {tier.upper()}")
+        print(f"  Mesaj Kota:  {stats['daily_messages']}/{stats['daily_limit'] if stats['daily_limit'] != -1 else '∞'}")
+    except Exception:
+        pass
+
     if getattr(args, "deep", False):
         print(f"\n  --- DEEP STATUS ---")
 
@@ -102,3 +114,8 @@ def run(args):
                 pass
 
     print("\n" + "=" * 50)
+
+
+def run_status(args=None):
+    """Backward-compatible entrypoint used by older CLI callers."""
+    run(args or SimpleNamespace(deep=False, json=False))

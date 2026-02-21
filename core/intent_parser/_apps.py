@@ -12,7 +12,7 @@ class AppParser(BaseParser):
 
     # ── Open App ──────────────────────────────────────────────────────────────
     def _parse_open_app(self, text: str, text_norm: str, original: str) -> dict | None:
-        open_t = ["aç", "başlat", "çalıştır", "open", "run", "start", "launch"]
+        open_t = ["aç", "ac", "başlat", "çalıştır", "open", "run", "start", "launch"]
         if any(w in text for w in ["dosya", "klasör", "http", ".com", ".org"]):
             return None
         wants_research = any(k in text for k in ["araştır", "arastir", "araştırma", "arastirma", "research", "incele", "inceleme"])
@@ -36,20 +36,38 @@ class AppParser(BaseParser):
                 if _alias_match(alias):
                     if wants_research:
                         topic = ""
-                        m_topic = re.search(r"(.+?)\s+hakkında\s+(?:araştır|arastir|araştırma|arastirma|research|incele)", text, re.IGNORECASE)
+                        m_topic = re.search(
+                            r"(.+?)\s+hakkında\s+(?:araştır|arastir|araştırma|arastirma|research|incele)",
+                            text,
+                            re.IGNORECASE,
+                        )
                         if m_topic:
                             topic = m_topic.group(1).strip()
                         if not topic:
                             m_topic2 = re.search(r"(?:araştır|arastir|research|incele)\s+(.+)", text, re.IGNORECASE)
                             if m_topic2:
                                 topic = m_topic2.group(1).strip()
+                        if not topic:
+                            # Fallback: remove app-open phrase and keep the remainder.
+                            topic = re.sub(
+                                rf"\b{re.escape(alias)}(?:yi|yı|yu|yü|i|ı|u|ü)?\b",
+                                " ",
+                                text,
+                                flags=re.IGNORECASE,
+                            )
                         topic = re.sub(
                             rf"\b{re.escape(alias)}(?:yi|yı|yu|yü|i|ı|u|ü)?\b",
                             " ",
                             topic,
                             flags=re.IGNORECASE,
                         )
-                        topic = re.sub(r"\b(aç|ac|ve)\b", " ", topic, flags=re.IGNORECASE)
+                        topic = re.sub(r"\b(aç|ac|ve|sonra|ardından|ardindan|lütfen|lutfen)\b", " ", topic, flags=re.IGNORECASE)
+                        topic = re.sub(
+                            r"\b(araştır|arastir|araştırma|arastirma|research|incele|inceleme)\b",
+                            " ",
+                            topic,
+                            flags=re.IGNORECASE,
+                        )
                         topic = " ".join(topic.split()).strip() or "genel konu"
                         return {
                             "action": "multi_task",
@@ -150,7 +168,12 @@ class AppParser(BaseParser):
 
     # ── YouTube ───────────────────────────────────────────────────────────────
     def _parse_media_play(self, text: str, text_norm: str, original: str) -> dict | None:
-        if "youtube" not in text and "yt" not in text:
+        import re as _re2
+        # BUGFIX: "yt" substring check caused "python" to match (py-t-hon contains "yt")
+        # Use word-boundary aware matching instead of substring check
+        has_youtube = "youtube" in text
+        has_yt = bool(_re2.search(r'\byt\b', text))
+        if not has_youtube and not has_yt:
             return None
         query = None
         m = _RE_YOUTUBE_QUERY.search(text)

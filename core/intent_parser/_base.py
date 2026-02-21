@@ -81,6 +81,8 @@ class BaseParser:
             "apple music": "Music", "spotify": "Spotify", "müzik": "Music",
             "vscode": "Visual Studio Code", "vs code": "Visual Studio Code",
             "visual studio code": "Visual Studio Code", "code": "Visual Studio Code",
+            "cursor": "Cursor", "windsurf": "Windsurf", "codeium windsurf": "Windsurf",
+            "antigravity": "Antigravity", "anti gravity": "Antigravity", "gravity": "Antigravity",
             "discord": "Discord", "slack": "Slack", "whatsapp": "WhatsApp",
             "telegram": "Telegram", "zoom": "zoom.us", "teams": "Microsoft Teams",
             "word": "Microsoft Word", "excel": "Microsoft Excel", "powerpoint": "Microsoft PowerPoint",
@@ -120,12 +122,32 @@ class BaseParser:
             text = text.replace(old, new)
         return text
 
+    def _resolve_alias_folder_path(self, folder: str) -> str:
+        """
+        Resolve alias folder paths with a Desktop fallback.
+
+        Some users keep folders like "Projects" under Desktop instead of HOME.
+        """
+        folder = str(folder or "").strip()
+        if not folder:
+            return str(HOME_DIR)
+
+        primary = HOME_DIR / folder
+        if primary.exists():
+            return str(primary)
+
+        desktop_alt = HOME_DIR / "Desktop" / folder
+        if desktop_alt.exists():
+            return str(desktop_alt)
+
+        return str(primary)
+
     def _extract_path(self, text: str) -> str | None:
         text_norm = self._normalize(text)
         for alias, folder in self.path_aliases.items():
             alias_norm = self._normalize(alias)
             if alias_norm in text_norm or alias in text:
-                return str(HOME_DIR / folder) if folder else str(HOME_DIR)
+                return self._resolve_alias_folder_path(folder)
         path_match = re.search(r'[~/][a-zA-Z0-9_/\-\.]+', text)
         if path_match:
             path = path_match.group()

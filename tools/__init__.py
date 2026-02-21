@@ -31,34 +31,39 @@ def _lazy_load_tool(tool_name: str):
         return _loaded_tools.get(tool_name)
     
     # System Tools
-    if tool_name in ["get_system_info", "open_app", "open_url", "get_running_apps",
+    if tool_name in ["get_system_info", "get_battery_status", "open_app", "open_url", "get_running_apps",
                      "take_screenshot", "read_clipboard", "write_clipboard",
                      "close_app", "shutdown_system", "restart_system", "sleep_system", "lock_screen",
                      "set_volume", "send_notification", "kill_process",
-                     "get_process_info", "run_safe_command", "get_installed_apps", "get_display_info", "record_screen"]:
+                     "get_process_info", "run_safe_command", "get_installed_apps", "get_display_info",
+                     "open_project_in_ide", "record_screen", "get_weather", "run_code"]:
         if tool_name == "record_screen":
             from .screen_recorder import record_screen
             _loaded_tools["record_screen"] = record_screen
             return _loaded_tools["record_screen"]
 
         from .system_tools import (
-            get_system_info, open_app, open_url, get_running_apps,
+            get_system_info, get_battery_status, open_app, open_url, get_running_apps,
             take_screenshot, read_clipboard, write_clipboard,
             close_app, shutdown_system, restart_system, sleep_system, lock_screen,
             set_volume, send_notification, kill_process, get_process_info,
-            run_safe_command, get_installed_apps, get_display_info
+            run_safe_command, get_installed_apps, get_display_info, open_project_in_ide,
+            get_weather, run_code,
         )
         tools = {
-            "get_system_info": get_system_info, "open_app": open_app, "open_url": open_url,
+            "get_system_info": get_system_info, "get_battery_status": get_battery_status, "open_app": open_app, "open_url": open_url,
             "get_running_apps": get_running_apps, "take_screenshot": take_screenshot,
             "read_clipboard": read_clipboard, "write_clipboard": write_clipboard,
             "shutdown_system": shutdown_system, "restart_system": restart_system,
             "sleep_system": sleep_system, "lock_screen": lock_screen,
             "close_app": close_app, "set_volume": set_volume, "send_notification": send_notification,
-            "kill_process": kill_process, "get_process_info": get_process_info, 
+            "kill_process": kill_process, "get_process_info": get_process_info,
             "run_safe_command": run_safe_command,
             "get_installed_apps": get_installed_apps,
-            "get_display_info": get_display_info
+            "get_display_info": get_display_info,
+            "open_project_in_ide": open_project_in_ide,
+            "get_weather": get_weather,
+            "run_code": run_code,
         }
         _loaded_tools.update(tools)
         return _loaded_tools.get(tool_name)
@@ -295,7 +300,7 @@ def _lazy_load_tool(tool_name: str):
         return _loaded_tools.get(tool_name)
 
     # Professional Workflows
-    if tool_name in ["create_web_project_scaffold", "generate_document_pack", "create_image_workflow_profile", "create_software_project_pack", "create_delivery_project"]:
+    if tool_name in ["create_web_project_scaffold", "generate_document_pack", "research_document_delivery", "create_image_workflow_profile", "create_software_project_pack", "create_coding_delivery_plan", "create_coding_verification_report", "create_delivery_project", "verify_web_project_smoke_test"]:
         if tool_name == "create_delivery_project":
             from core.delivery.engine import delivery_engine
             _loaded_tools["create_delivery_project"] = delivery_engine.create_project
@@ -303,14 +308,22 @@ def _lazy_load_tool(tool_name: str):
         from .pro_workflows import (
             create_web_project_scaffold,
             generate_document_pack,
+            research_document_delivery,
             create_image_workflow_profile,
             create_software_project_pack,
+            create_coding_delivery_plan,
+            create_coding_verification_report,
+            verify_web_project_smoke_test,
         )
         tools = {
             "create_web_project_scaffold": create_web_project_scaffold,
             "generate_document_pack": generate_document_pack,
+            "research_document_delivery": research_document_delivery,
             "create_image_workflow_profile": create_image_workflow_profile,
             "create_software_project_pack": create_software_project_pack,
+            "create_coding_delivery_plan": create_coding_delivery_plan,
+            "create_coding_verification_report": create_coding_verification_report,
+            "verify_web_project_smoke_test": verify_web_project_smoke_test,
         }
         _loaded_tools.update(tools)
         return _loaded_tools.get(tool_name)
@@ -346,11 +359,12 @@ class LazyToolDict(dict):
             "list_files", "read_file", "write_file", "search_files", "delete_file",
             "move_file", "copy_file", "rename_file", "create_folder",
             # System Tools
-            "get_system_info", "run_command", "run_safe_command", "open_app", "open_url",
+            "get_system_info", "get_battery_status", "run_command", "run_safe_command", "open_app", "open_url",
             "get_running_apps", "take_screenshot", "read_clipboard", "write_clipboard",
             "close_app", "shutdown_system", "restart_system", "sleep_system", "lock_screen",
             "set_volume", "send_notification", "kill_process", "get_process_info",
-            "get_installed_apps", "get_display_info", "record_screen",
+            "get_installed_apps", "get_display_info", "open_project_in_ide", "record_screen",
+            "get_weather", "run_code",
             # macOS Tools
             "toggle_dark_mode", "get_appearance", "set_brightness", "get_brightness",
             "wifi_status", "wifi_toggle", "bluetooth_status",
@@ -387,8 +401,8 @@ class LazyToolDict(dict):
             # AI Tools
             "ollama_list_models", "ollama_remove_model",
             # Professional Workflows
-            "create_web_project_scaffold", "generate_document_pack", "create_image_workflow_profile", "create_software_project_pack",
-            "create_delivery_project",
+            "create_web_project_scaffold", "generate_document_pack", "research_document_delivery", "create_image_workflow_profile", "create_software_project_pack", "create_coding_delivery_plan", "create_coding_verification_report",
+            "create_delivery_project", "verify_web_project_smoke_test",
             # Multimodal Tools
             "transcribe_audio_file", "speak_text_local", "create_visual_asset_pack", "analyze_and_narrate_image",
             "get_multimodal_capability_report",
@@ -460,10 +474,11 @@ from .file_tools import (
     move_file, copy_file, rename_file, create_folder
 )
 from .system_tools import (
-    get_system_info, open_app, open_url, get_running_apps,
+    get_system_info, get_battery_status, open_app, open_url, get_running_apps,
     take_screenshot, read_clipboard, write_clipboard,
     close_app, shutdown_system, restart_system, sleep_system, lock_screen,
-    set_volume, send_notification, kill_process, get_process_info, run_safe_command
+    set_volume, send_notification, kill_process, get_process_info, run_safe_command,
+    open_project_in_ide,
 )
 from .script_tools import run_command
 
@@ -472,14 +487,15 @@ _loaded_tools.update({
     "list_files": list_files, "read_file": read_file, "write_file": write_file,
     "search_files": search_files, "delete_file": delete_file, "move_file": move_file,
     "copy_file": copy_file, "rename_file": rename_file, "create_folder": create_folder,
-    "get_system_info": get_system_info, "open_app": open_app, "open_url": open_url,
+    "get_system_info": get_system_info, "get_battery_status": get_battery_status, "open_app": open_app, "open_url": open_url,
     "get_running_apps": get_running_apps, "take_screenshot": take_screenshot,
     "read_clipboard": read_clipboard, "write_clipboard": write_clipboard,
     "shutdown_system": shutdown_system, "restart_system": restart_system,
     "sleep_system": sleep_system, "lock_screen": lock_screen,
     "close_app": close_app, "set_volume": set_volume, "send_notification": send_notification,
     "kill_process": kill_process, "get_process_info": get_process_info,
-    "run_safe_command": run_safe_command, "run_command": run_command
+    "run_safe_command": run_safe_command, "open_project_in_ide": open_project_in_ide,
+    "run_command": run_command
 })
 
 # Use lazy dict for AVAILABLE_TOOLS

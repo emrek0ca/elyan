@@ -1,96 +1,115 @@
 # WhatsApp Entegrasyonu
 
-Elyan, WhatsApp Business API (Meta Cloud API) üzerinden mesajlaşır.
+Elyan, WhatsApp için iki mod destekler:
 
-!!! info "Business API Gereksinimi"
-    WhatsApp entegrasyonu, kişisel WhatsApp hesapları için **çalışmaz**. WhatsApp Business API erişimi gerektirir.
+- `bridge` (yerel QR eşleştirme, hızlı başlangıç)
+- `cloud` (Meta WhatsApp Cloud API + webhook, bot-benzeri üretim modu)
 
-## Gereksinimler
+## Hızlı Kurulum (Bridge / QR)
 
-- Meta Business hesabı
-- WhatsApp Business API erişimi
-- Onaylı telefon numarası
+```bash
+elyan channels login whatsapp
+```
 
-## Meta Developer Kurulumu
+Komut:
+- Yerel WhatsApp bridge runtime'ını hazırlar
+- Terminalde QR kod üretir
+- Telefon ile eşleşmeyi tamamlar
+- Kanalı `~/.elyan/elyan.json` içine otomatik kaydeder
 
-1. [developers.facebook.com](https://developers.facebook.com) → Uygulama oluşturun
-2. **WhatsApp** ürününü ekleyin
-3. **Test telefon numarası** alın
-4. **Webhooks** yapılandırın
-
-### Webhook Yapılandırması
-
-Meta Dashboard → **WhatsApp → Configuration → Webhooks**:
-- Callback URL: `https://yourdomain.com/whatsapp/webhook`
-- Verify Token: herhangi bir gizli dize
-- Subscribe: `messages`
-
-## Kurulum
+## Cloud API Kurulumu (Bot Benzeri)
 
 ```bash
 elyan channels add whatsapp
 ```
 
-veya `~/.elyan/config.json5`:
+Kanal ekleme adımında `2=Cloud API` seçin ve şunları girin:
+- `phone_number_id`
+- `access_token`
+- `verify_token` (boş bırakılırsa otomatik üretilir)
+
+Webhook endpoint:
+
+```text
+/whatsapp/webhook
+```
+
+Meta dashboard tarafında:
+- Verify URL: `https://<public-domain>/whatsapp/webhook`
+- Verify Token: CLI'da verdiğiniz `verify_token`
+
+## Onboarding İçinden Kurulum
+
+```bash
+elyan onboard
+```
+
+Kanal adımında **WhatsApp (QR ile bağlan)** seçeneğini seçin.
+
+## Güvenlik
+
+- Bridge sadece `127.0.0.1` üzerinde dinler (dış ağa açık değildir)
+- Bridge API erişimi için bearer benzeri bir local token kullanılır
+- Token mümkünse macOS Keychain'de saklanır (`WHATSAPP_BRIDGE_TOKEN`)
+- Cloud mode tokenları mümkünse Keychain'de saklanır (`WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_VERIFY_TOKEN`)
+- WhatsApp mesaj şifrelemesi WhatsApp tarafında uçtan uca korunur
+
+## Yapılandırma Örneği
 
 ```json5
 {
   "channels": [
     {
       "type": "whatsapp",
-      "phone_number_id": "123456789012345",
-      "access_token": "EAAxxxxxxxxxxxxxxxxxxxxxx",
-      "verify_token": "my_verify_token_here",
-      "webhook_path": "/whatsapp/webhook",
-      "enabled": true
+      "id": "whatsapp",
+      "mode": "bridge",
+      "enabled": true,
+      "bridge_url": "http://127.0.0.1:18792",
+      "bridge_token": "$WHATSAPP_BRIDGE_TOKEN",
+      "session_dir": "~/.elyan/channels/whatsapp/whatsapp",
+      "auto_start_bridge": true
     }
   ]
 }
 ```
 
-## Mesaj Şablonları
-
-İlk mesaj her zaman onaylı bir şablonla başlamalıdır (Meta politikası):
+Cloud mode örneği:
 
 ```json5
 {
-  "type": "whatsapp",
-  "access_token": "...",
-  "welcome_template": "elyan_welcome",
-  "template_language": "tr"
+  "channels": [
+    {
+      "type": "whatsapp",
+      "id": "whatsapp",
+      "mode": "cloud",
+      "enabled": true,
+      "phone_number_id": "123456789012345",
+      "access_token": "$WHATSAPP_ACCESS_TOKEN",
+      "verify_token": "$WHATSAPP_VERIFY_TOKEN",
+      "webhook_path": "/whatsapp/webhook"
+    }
+  ]
 }
 ```
 
-## Desteklenen Özellikler
+## Sık Komutlar
 
-| Özellik | Durum |
-|---------|-------|
-| Metin mesajı | ✅ |
-| Görsel/video | ✅ |
-| Belge | ✅ |
-| Konum | ✅ |
-| Sesli mesaj | ✅ |
-| Etkileşimli butonlar | ✅ |
-| Liste menüsü | ✅ |
-| Grup mesajı | ❌ |
-
-## Üretim Onayı
-
-Test ortamında yalnızca beyaz listedeki numaralara mesaj gönderilebilir. Üretim için:
-
-1. Meta Business hesabı doğrulaması
-2. WhatsApp Business hesabı onayı
-3. Telefon numarası geçiş (test → üretim)
+```bash
+elyan channels login whatsapp
+elyan channels info whatsapp
+elyan channels status
+elyan channels logout whatsapp
+```
 
 ## Sorun Giderme
 
-**"Invalid access token":**
-- Token süresi dolmuş olabilir. Kalıcı token için sistem kullanıcısı oluşturun
+**Node.js bulunamadı**
+- Node.js 18+ kurun ve tekrar deneyin.
 
-**Webhook doğrulanamıyor:**
-- `verify_token` Meta Dashboard ile eşleşiyor mu?
-- URL genel erişime açık mı?
+**QR çıkıyor ama eşleşme olmuyor**
+- Telefonda `WhatsApp > Bağlı Cihazlar > Cihaz Bağla` akışını kullanın.
+- VPN/proxy varsa kapatıp tekrar deneyin.
 
-**Mesaj gönderilemiyor:**
-- Alıcı son 24 saat içinde mesaj gönderdi mi? (24 saat kuralı)
-- Şablon kullanmayı deneyin
+**Gateway başlatıldığında WhatsApp bağlanmıyor**
+- `elyan channels login whatsapp` ile tekrar eşleştirin.
+- `elyan gateway logs --filter whatsapp` ile bridge/adapter loglarını kontrol edin.

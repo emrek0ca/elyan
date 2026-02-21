@@ -2,7 +2,22 @@ import psutil
 import shutil
 import platform
 import time
+import os
 from pathlib import Path
+from types import SimpleNamespace
+from security.keychain import keychain
+
+
+def _provider_state(env_key: str, keychain_key: str) -> str:
+    """Return provider credential state: ENV, KEYCHAIN, or missing."""
+    if str(os.getenv(env_key, "") or "").strip():
+        return "YAPILANDIRILDI (ENV)"
+    try:
+        if keychain.is_available() and str(keychain.get_key(keychain_key) or "").strip():
+            return "YAPILANDIRILDI (KEYCHAIN)"
+    except Exception:
+        pass
+    return "YOK"
 
 
 def run(args):
@@ -59,15 +74,13 @@ def run(args):
 
     # LLM check
     print("\n  LLM Provider Check:")
-    import os
     providers = [
-        ("Groq", "GROQ_API_KEY"),
-        ("Gemini", "GOOGLE_API_KEY"),
-        ("OpenAI", "OPENAI_API_KEY"),
+        ("Groq", "GROQ_API_KEY", "groq_api_key"),
+        ("Gemini", "GOOGLE_API_KEY", "google_api_key"),
+        ("OpenAI", "OPENAI_API_KEY", "openai_api_key"),
     ]
-    for name, env_key in providers:
-        key = os.getenv(env_key, "")
-        status = "YAPILANDIRILDI" if key else "YOK"
+    for name, env_key, keychain_key in providers:
+        status = _provider_state(env_key, keychain_key)
         print(f"    {name:12s} {status}")
 
     # Ollama
@@ -83,3 +96,8 @@ def run(args):
         print(f"    {'Ollama':12s} KURULU DEGIL")
 
     print("\n" + "=" * 50)
+
+
+def run_health():
+    """Backward-compatible entrypoint used by older CLI callers."""
+    run(SimpleNamespace())

@@ -149,3 +149,68 @@ async def test_run_routine_deterministic_tools(tmp_path, monkeypatch):
     assert out["report_path"]
     assert len(out["steps"]) == 6
     assert any(step["success"] for step in out["steps"])
+
+
+def test_suggest_from_text_detects_template_schedule_and_channel(tmp_path, monkeypatch):
+    path = tmp_path / "routines.json"
+    monkeypatch.setattr(re_mod, "ROUTINE_PERSIST_PATH", path)
+    engine = re_mod.RoutineEngine()
+
+    suggestion = engine.suggest_from_text(
+        "Her gün saat 09:15 e-ticaret panelini kontrol et, excel oluştur ve telegram gönder"
+    )
+    assert suggestion["template_id"] == "ecommerce-daily"
+    assert suggestion["expression"] == "15 9 * * *"
+    assert suggestion["report_channel"] == "telegram"
+    assert len(suggestion["steps"]) >= 5
+
+
+def test_suggest_from_text_detects_weekday_schedule(tmp_path, monkeypatch):
+    path = tmp_path / "routines.json"
+    monkeypatch.setattr(re_mod, "ROUTINE_PERSIST_PATH", path)
+    engine = re_mod.RoutineEngine()
+
+    suggestion = engine.suggest_from_text("Hafta içi saat 18:30 panel raporu gönder")
+    assert suggestion["expression"] == "30 18 * * 1-5"
+
+
+def test_create_from_text_uses_template_when_detected(tmp_path, monkeypatch):
+    path = tmp_path / "routines.json"
+    monkeypatch.setattr(re_mod, "ROUTINE_PERSIST_PATH", path)
+    engine = re_mod.RoutineEngine()
+
+    routine = engine.create_from_text(
+        text="Her gün saat 09:00 e-ticaret siparişlerini kontrol et ve telegram gönder",
+        created_by="unit-test",
+    )
+    assert routine["template_id"] == "ecommerce-daily"
+    assert routine["expression"] == "0 9 * * *"
+    assert routine["created_by"] == "unit-test"
+
+
+def test_suggest_from_text_detects_interval_hours(tmp_path, monkeypatch):
+    path = tmp_path / "routines.json"
+    monkeypatch.setattr(re_mod, "ROUTINE_PERSIST_PATH", path)
+    engine = re_mod.RoutineEngine()
+
+    suggestion = engine.suggest_from_text("Her 2 saatte bir stok kontrol et ve rapor gönder")
+    assert suggestion["expression"] == "0 */2 * * *"
+
+
+def test_suggest_from_text_detects_evening_time_without_clock(tmp_path, monkeypatch):
+    path = tmp_path / "routines.json"
+    monkeypatch.setattr(re_mod, "ROUTINE_PERSIST_PATH", path)
+    engine = re_mod.RoutineEngine()
+
+    suggestion = engine.suggest_from_text("Her akşam paneli kontrol et ve whatsapp gönder")
+    assert suggestion["expression"] == "0 20 * * *"
+    assert suggestion["report_channel"] == "whatsapp"
+
+
+def test_suggest_from_text_detects_hour_suffix_da(tmp_path, monkeypatch):
+    path = tmp_path / "routines.json"
+    monkeypatch.setattr(re_mod, "ROUTINE_PERSIST_PATH", path)
+    engine = re_mod.RoutineEngine()
+
+    suggestion = engine.suggest_from_text("Her gün 9'da rapor gönder")
+    assert suggestion["expression"] == "0 9 * * *"

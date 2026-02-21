@@ -14,7 +14,11 @@ ENV_TO_KEYCHAIN = {
     "TELEGRAM_BOT_TOKEN": "telegram_bot_token",
     "DISCORD_BOT_TOKEN": "discord_bot_token",
     "SLACK_BOT_TOKEN": "slack_bot_token",
+    "SLACK_APP_TOKEN": "slack_app_token",
     "WHATSAPP_BOT_TOKEN": "whatsapp_bot_token",
+    "WHATSAPP_BRIDGE_TOKEN": "whatsapp_bridge_token",
+    "WHATSAPP_ACCESS_TOKEN": "whatsapp_access_token",
+    "WHATSAPP_VERIFY_TOKEN": "whatsapp_verify_token",
     "SIGNAL_BOT_TOKEN": "signal_bot_token",
     "OPENAI_API_KEY": "openai_api_key",
     "ANTHROPIC_API_KEY": "anthropic_api_key",
@@ -155,7 +159,8 @@ class KeychainManager:
     @staticmethod
     def audit_config_plaintext(config_path: str | Path) -> dict:
         """
-        Detect plaintext channel tokens in elyan.json (channels[*].token).
+        Detect plaintext channel tokens in elyan.json.
+        Checks channels[*].token/bridge_token/access_token/verify_token.
         """
         path = Path(config_path).expanduser()
         if not path.exists():
@@ -172,27 +177,37 @@ class KeychainManager:
             if not isinstance(ch, dict):
                 continue
             ctype = str(ch.get("type", "") or "").lower()
-            token = str(ch.get("token", "") or "").strip()
-            if not token or token.startswith("$"):
-                continue
+            token_fields = [
+                ("token", str(ch.get("token", "") or "").strip()),
+                ("bridge_token", str(ch.get("bridge_token", "") or "").strip()),
+                ("access_token", str(ch.get("access_token", "") or "").strip()),
+                ("verify_token", str(ch.get("verify_token", "") or "").strip()),
+            ]
+            for field_name, token in token_fields:
+                if not token or token.startswith("$"):
+                    continue
 
-            env_key = {
-                "telegram": "TELEGRAM_BOT_TOKEN",
-                "discord": "DISCORD_BOT_TOKEN",
-                "slack": "SLACK_BOT_TOKEN",
-                "whatsapp": "WHATSAPP_BOT_TOKEN",
-                "signal": "SIGNAL_BOT_TOKEN",
-            }.get(ctype)
-            keychain_key = KeychainManager.key_for_env(env_key) if env_key else None
-            if env_key and keychain_key:
-                findings.append(
-                    {
-                        "channel_type": ctype,
-                        "index": idx,
-                        "env_key": env_key,
-                        "keychain_key": keychain_key,
-                    }
-                )
+                env_key = {
+                    ("telegram", "token"): "TELEGRAM_BOT_TOKEN",
+                    ("discord", "token"): "DISCORD_BOT_TOKEN",
+                    ("slack", "token"): "SLACK_BOT_TOKEN",
+                    ("whatsapp", "token"): "WHATSAPP_BOT_TOKEN",
+                    ("whatsapp", "bridge_token"): "WHATSAPP_BRIDGE_TOKEN",
+                    ("whatsapp", "access_token"): "WHATSAPP_ACCESS_TOKEN",
+                    ("whatsapp", "verify_token"): "WHATSAPP_VERIFY_TOKEN",
+                    ("signal", "token"): "SIGNAL_BOT_TOKEN",
+                }.get((ctype, field_name))
+                keychain_key = KeychainManager.key_for_env(env_key) if env_key else None
+                if env_key and keychain_key:
+                    findings.append(
+                        {
+                            "channel_type": ctype,
+                            "index": idx,
+                            "field": field_name,
+                            "env_key": env_key,
+                            "keychain_key": keychain_key,
+                        }
+                    )
 
         return {"exists": True, "findings": findings}
 
@@ -220,11 +235,12 @@ class KeychainManager:
             idx = finding["index"]
             env_key = finding["env_key"]
             keychain_key = finding["keychain_key"]
-            token = str(channels[idx].get("token", "") or "")
+            field_name = str(finding.get("field") or "token")
+            token = str(channels[idx].get(field_name, "") or "")
             if token and KeychainManager.set_key(keychain_key, token):
                 migrated += 1
                 if clear_config:
-                    channels[idx]["token"] = f"${env_key}"
+                    channels[idx][field_name] = f"${env_key}"
                     updated = True
 
         if updated:

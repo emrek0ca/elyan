@@ -39,6 +39,19 @@ class FileParser(BaseParser):
                     "içindekiler", "neleri var", "dosyaları göster"]
         if not any(t in text for t in triggers):
             return None
+        # Dosya içeriği isteklerini read_file parser'ına bırak.
+        if re.search(
+            r"[\w\-.]+\.[a-z0-9]{2,8}\s+(?:içinde ne var|icinde ne var|içeriğini göster|icerigini goster|oku|ne yazıyor)",
+            text,
+            re.IGNORECASE,
+        ):
+            return None
+        if re.search(
+            r"\b([a-z0-9][\w\-]{0,80})\s+dosya\w*\s+(?:içinde ne var|icinde ne var|içeriğini göster|icerigini goster|oku|ne yazıyor)\b",
+            text,
+            re.IGNORECASE,
+        ):
+            return None
         path = self._extract_path(text)
         fs_context_tokens = [
             "dosya", "file", "klasör", "klasor", "folder", "dizin", "directory",
@@ -88,6 +101,16 @@ class FileParser(BaseParser):
     def _parse_search_files(self, text: str, text_norm: str, original: str) -> dict | None:
         if not any(t in text for t in ["ara", "bul", "search", "find", "tara"]):
             return None
+        research_markers = [
+            "araştır", "arastir", "araştırma", "arastirma", "hakkında", "hakkinda",
+            "internette", "webde", "web'de", "kaynak", "özet", "ozet",
+        ]
+        file_context_markers = [
+            "dosya", "file", "klasör", "klasor", "folder", "dizin", "uzant",
+            "masaüst", "masaust", "desktop", "indirilen", "documents",
+        ]
+        if any(k in text for k in research_markers) and not any(k in text for k in file_context_markers):
+            return None
         m = re.search(r'\*\.(\w+)', text)
         if m:
             pattern = f"*.{m.group(1)}"
@@ -120,6 +143,19 @@ class FileParser(BaseParser):
             path = self._extract_path(text)
             full = str(Path(path) / filename) if path else str(HOME_DIR / "Desktop" / filename)
             return {"action": "read_file", "params": {"path": full}, "reply": f"{filename} okunuyor..."}
+        m2 = re.search(
+            r"\b([a-z0-9][\w\-]{0,80})\s+dosya\w*\s*(?:içinde ne var|icinde ne var|içeriğini göster|icerigini goster|oku|ne yazıyor)?\b",
+            text,
+            re.IGNORECASE,
+        )
+        if m2:
+            filename = str(m2.group(1) or "").strip()
+            if filename and filename.lower() not in {"bu", "bunu", "şunu", "sunu", "onu", "dosya", "klasor", "klasör"}:
+                path = self._extract_path(text)
+                full = str(Path(path) / filename) if path else str(HOME_DIR / "Desktop" / filename)
+                return {"action": "read_file", "params": {"path": full}, "reply": f"{filename} okunuyor..."}
+        if any(p in text for p in ["bunu oku", "şunu oku", "sunu oku", "onu oku"]):
+            return {"action": "read_file", "params": {"path": ""}, "reply": "Dosya okunuyor..."}
         return None
 
     # ── Delete File ───────────────────────────────────────────────────────────
@@ -135,4 +171,18 @@ class FileParser(BaseParser):
             full = str(Path(path) / filename) if path else str(HOME_DIR / "Desktop" / filename)
             return {"action": "delete_file", "params": {"path": full, "force": False},
                     "reply": f"{filename} siliniyor..."}
+        m2 = re.search(
+            r"\b([a-z0-9][\w\-]{0,80})\s+dosya\w*\s*(?:sil|kald[ıi]r|delete|remove)\b",
+            text,
+            re.IGNORECASE,
+        )
+        if m2:
+            filename = str(m2.group(1) or "").strip()
+            if filename and filename.lower() not in {"bu", "bunu", "şunu", "sunu", "onu", "dosya", "klasor", "klasör"}:
+                path = self._extract_path(text)
+                full = str(Path(path) / filename) if path else str(HOME_DIR / "Desktop" / filename)
+                return {"action": "delete_file", "params": {"path": full, "force": False},
+                        "reply": f"{filename} siliniyor..."}
+        if any(p in text for p in ["bunu sil", "şunu sil", "sunu sil", "onu sil"]):
+            return {"action": "delete_file", "params": {"path": "", "force": False}, "reply": "Dosya siliniyor..."}
         return None

@@ -256,7 +256,8 @@
             <button class="office-pill" onclick="switchTab('tasks')"><i data-lucide="list-checks" class="w-3.5 h-3.5"></i>Görevler</button>
             <button class="office-pill" onclick="switchTab('automation')"><i data-lucide="repeat" class="w-3.5 h-3.5"></i>Rutinler</button>
             <button class="office-pill" onclick="switchTab('tools')"><i data-lucide="wrench" class="w-3.5 h-3.5"></i>Araçlar</button>
-            <button class="office-pill office-pill-primary" onclick="pollStatus(); pollAnalytics(); pollTasks(); pollMemory();"><i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>Yenile</button>
+            <button class="office-pill" onclick="switchTab('subscription')"><i data-lucide="credit-card" class="w-3.5 h-3.5"></i>Abonelik</button>
+            <button class="office-pill office-pill-primary" onclick="pollStatus(); pollAnalytics(); pollTasks(); pollMemory(); pollSubscription(); pollQuota();"><i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>Yenile</button>
         </div>
         <div class="flex items-center gap-2.5 text-xs text-slate-600">
             <span id="ribbon-clock" class="status-chip">--:--</span>
@@ -326,6 +327,20 @@
                 </div>
             </div>
 
+            <!-- Active Interventions -->
+            <div id="intervention-container" class="hidden glass-card card-shadow rounded-xl border-l-4 border-l-orange-500 overflow-hidden bg-orange-50/30">
+                <div class="px-5 py-3 border-b border-orange-100 flex items-center justify-between">
+                    <div class="flex items-center gap-2 text-orange-700">
+                        <i data-lucide="help-circle" class="w-4 h-4"></i>
+                        <h4 class="font-bold text-sm">Karar Desteği Gerekiyor</h4>
+                    </div>
+                    <span class="text-[10px] text-orange-500 font-bold uppercase animate-pulse">Bekliyor</span>
+                </div>
+                <div id="intervention-list" class="p-5 space-y-4">
+                    <!-- Interventions injected here -->
+                </div>
+            </div>
+
             <!-- Activity Feed + Quick Task -->
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
@@ -350,6 +365,7 @@
                     </div>
                     <div class="p-5 flex flex-col gap-3 flex-1">
                         <textarea id="quick-task-input" rows="4" placeholder="Bir görev tanımla... örn. 'Masaüstünde ne var?'" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm resize-none outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400"></textarea>
+                        <div id="quick-task-hint" class="hidden text-[11px] rounded-md border px-2 py-1.5"></div>
                         <select id="quick-task-priority" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm outline-none">
                             <option value="normal">Normal Öncelik</option>
                             <option value="high">Yüksek Öncelik</option>
@@ -365,14 +381,91 @@
         </div>
 
         <!-- ══════════ TAB: CHANNELS ══════════ -->
-        <div id="tab-channels" class="tab-panel space-y-4">
+        <div id="tab-channels" class="tab-panel space-y-5">
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Toplam Kanal</p>
+                    <p class="text-2xl font-black" id="channels-total">—</p>
+                </div>
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Connected</p>
+                    <p class="text-2xl font-black text-emerald-600" id="channels-connected">—</p>
+                </div>
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Degraded</p>
+                    <p class="text-2xl font-black text-amber-600" id="channels-degraded">—</p>
+                </div>
+                <div class="glass-card card-shadow rounded-xl p-4">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Disabled</p>
+                    <p class="text-2xl font-black text-gray-500" id="channels-disabled">—</p>
+                </div>
+            </div>
+
+            <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60 flex items-center justify-between">
+                    <h4 class="font-bold text-sm">Kanal Düzenle / Ekle</h4>
+                    <span class="text-[11px] text-gray-500">Tüm alanlar dashboard’dan yönetilebilir</span>
+                </div>
+                <div class="p-5 space-y-4">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div class="space-y-1.5">
+                            <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Kanal Tipi</label>
+                            <select id="channel-form-type" onchange="onChannelTypeChange()" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm outline-none">
+                                <option value="telegram">telegram</option>
+                                <option value="discord">discord</option>
+                                <option value="slack">slack</option>
+                                <option value="whatsapp">whatsapp</option>
+                                <option value="signal">signal</option>
+                                <option value="webchat">webchat</option>
+                            </select>
+                        </div>
+                        <div class="space-y-1.5">
+                            <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">ID</label>
+                            <input id="channel-form-id" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm outline-none" placeholder="telegram (boşsa type kullanılır)" />
+                        </div>
+                        <div class="space-y-1.5">
+                            <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Durum</label>
+                            <label class="w-full h-[42px] inline-flex items-center gap-2 px-3 bg-gray-50 border border-gray-200 rounded-lg text-sm">
+                                <input id="channel-form-enabled" type="checkbox" class="rounded border-gray-300" checked />
+                                Kanal etkin
+                            </label>
+                        </div>
+                    </div>
+
+                    <div id="channel-form-fields" class="grid grid-cols-1 md:grid-cols-2 gap-3"></div>
+
+                    <div class="flex flex-wrap items-center gap-2">
+                        <button onclick="saveChannelFromForm()" class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-bold hover:bg-emerald-700">Kaydet</button>
+                        <button onclick="resetChannelForm()" class="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-bold hover:bg-gray-200">Yeni Form</button>
+                        <button onclick="loadChannels()" class="px-3 py-2 bg-gray-900 text-white rounded-lg text-sm font-bold hover:bg-black">Yenile</button>
+                        <button onclick="syncChannelsRuntime()" class="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700">Runtime Sync</button>
+                        <button onclick="testAllChannels()" class="px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700">Tümünü Test Et</button>
+                        <span id="channel-form-status" class="text-xs text-gray-500"></span>
+                    </div>
+                    <div id="channel-form-note" class="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 hidden"></div>
+                </div>
+            </div>
+
             <div class="glass-card card-shadow rounded-xl overflow-hidden">
                 <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60 flex items-center justify-between">
                     <h4 class="font-bold text-sm">Kanal Bağlantıları</h4>
                     <span id="channels-count" class="text-xs text-gray-400">Yükleniyor...</span>
                 </div>
-                <div id="channels-list" class="divide-y divide-gray-50">
-                    <div class="p-8 text-center text-sm text-gray-400">Kanallar yükleniyor...</div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="border-b border-gray-100 bg-gray-50/50">
+                                <th class="text-left px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Kanal</th>
+                                <th class="text-left px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">ID</th>
+                                <th class="text-left px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Status</th>
+                                <th class="text-left px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Health</th>
+                                <th class="text-right px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="channels-list" class="divide-y divide-gray-50">
+                            <tr><td colspan="5" class="px-4 py-4 text-center text-xs text-gray-400">Kanallar yükleniyor...</td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
@@ -406,6 +499,8 @@
                         <option value="installed">Yalnızca Yüklü</option>
                         <option value="enabled">Yalnızca Aktif</option>
                     </select>
+                    <input id="skills-install-name" placeholder="skill adı (custom install)" class="bg-gray-50 border border-gray-200 rounded px-2.5 py-1.5 text-xs outline-none w-52" />
+                    <button onclick="installCustomSkill()" class="px-3 py-1.5 bg-indigo-600 text-white rounded text-xs font-bold hover:bg-indigo-700">Install Custom</button>
                     <button onclick="loadSkills()" class="px-3 py-1.5 bg-gray-900 text-white rounded text-xs font-bold hover:bg-black">Yenile</button>
                     <button onclick="updateAllSkills()" class="px-3 py-1.5 bg-blue-600 text-white rounded text-xs font-bold hover:bg-blue-700">Update All</button>
                     <button onclick="checkSkillsHealth()" class="px-3 py-1.5 bg-emerald-600 text-white rounded text-xs font-bold hover:bg-emerald-700">Health Check</button>
@@ -428,6 +523,7 @@
                 </div>
             </div>
             <pre id="skills-check-output" class="bg-gray-900 text-gray-100 rounded p-3 text-xs overflow-auto max-h-56">Skill health çıktısı burada.</pre>
+            <pre id="skills-detail-output" class="bg-gray-900 text-gray-100 rounded p-3 text-xs overflow-auto max-h-72">Skill detayları burada.</pre>
         </div>
 
         <!-- ══════════ TAB: TASKS ══════════ -->
@@ -479,6 +575,15 @@
                     <h4 class="font-bold text-sm">Yeni Rutin</h4>
                 </div>
                 <div class="p-5 space-y-3">
+                    <div class="bg-blue-50/60 border border-blue-100 rounded-lg p-3 space-y-2">
+                        <div class="text-xs font-bold text-blue-700">Akıllı Rutin Oluşturucu</div>
+                        <textarea id="rt-natural" rows="3" class="w-full bg-white border border-blue-200 rounded p-2 text-xs outline-none" placeholder="Örn: Her gün saat 09:00 e-ticaret panelini kontrol et, excel oluştur ve telegram gönder"></textarea>
+                        <div class="flex items-center gap-2">
+                            <button onclick="suggestRoutineFromText()" class="px-3 py-1.5 bg-blue-600 text-white rounded text-xs font-bold hover:bg-blue-700">Öneri Üret</button>
+                            <button onclick="createRoutineFromText()" class="px-3 py-1.5 bg-emerald-600 text-white rounded text-xs font-bold hover:bg-emerald-700">Metinden Oluştur</button>
+                            <span id="rt-natural-status" class="text-[11px] text-gray-500"></span>
+                        </div>
+                    </div>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                         <select id="rt-template" onchange="applyRoutineTemplate()" class="bg-gray-50 border border-gray-200 rounded px-3 py-2 text-sm outline-none">
                             <option value="">Template (opsiyonel) — custom rutin</option>
@@ -786,6 +891,28 @@ Telegram / WhatsApp gönder</textarea>
                         <option value="needs_params">needs_params</option>
                         <option value="broken">broken</option>
                     </select>
+                    <select id="tools-group-policy-target" class="bg-gray-50 border border-gray-200 rounded px-2 py-1.5 text-xs outline-none">
+                        <option value="">Grup seç</option>
+                        <option value="fs">fs</option>
+                        <option value="runtime">runtime</option>
+                        <option value="web">web</option>
+                        <option value="ui">ui</option>
+                        <option value="messaging">messaging</option>
+                        <option value="automation">automation</option>
+                        <option value="memory">memory</option>
+                        <option value="other">other</option>
+                    </select>
+                    <select id="tools-group-policy-field" class="bg-gray-50 border border-gray-200 rounded px-2 py-1.5 text-xs outline-none">
+                        <option value="allow">allow</option>
+                        <option value="deny">deny</option>
+                        <option value="approval">approval</option>
+                    </select>
+                    <select id="tools-group-policy-value" class="bg-gray-50 border border-gray-200 rounded px-2 py-1.5 text-xs outline-none">
+                        <option value="true">ON</option>
+                        <option value="false">OFF</option>
+                    </select>
+                    <button onclick="applyGroupPolicy()" class="px-3 py-1.5 bg-indigo-600 text-white rounded text-xs font-bold hover:bg-indigo-700">Grup Policy Uygula</button>
+                    <button onclick="probeVisibleTools()" class="px-3 py-1.5 bg-sky-600 text-white rounded text-xs font-bold hover:bg-sky-700">Visible Probe</button>
                     <button onclick="loadTools()" class="px-3 py-1.5 bg-gray-900 text-white rounded text-xs font-bold hover:bg-black">Yenile</button>
                 </div>
                 <div class="overflow-x-auto">
@@ -801,10 +928,11 @@ Telegram / WhatsApp gönder</textarea>
                                 <th class="text-center px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Allow</th>
                                 <th class="text-center px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Deny</th>
                                 <th class="text-center px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Approval</th>
+                                <th class="text-center px-4 py-2 text-[10px] font-bold text-gray-400 uppercase">Action</th>
                             </tr>
                         </thead>
                         <tbody id="tools-table" class="divide-y divide-gray-50">
-                            <tr><td colspan="9" class="px-4 py-4 text-center text-xs text-gray-400">Yükleniyor...</td></tr>
+                            <tr><td colspan="10" class="px-4 py-4 text-center text-xs text-gray-400">Yükleniyor...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -821,17 +949,77 @@ Telegram / WhatsApp gönder</textarea>
                     </div>
                     <textarea id="tool-test-params" rows="4" class="w-full bg-gray-50 border border-gray-200 rounded p-3 text-xs font-mono outline-none" placeholder='{"path":"~/Desktop"}'>{}</textarea>
                     <pre id="tool-test-output" class="bg-gray-900 text-gray-100 rounded p-3 text-xs overflow-auto max-h-72">Çıktı burada görünecek...</pre>
+                    <pre id="tool-detail-output" class="bg-gray-900 text-gray-100 rounded p-3 text-xs overflow-auto max-h-72">Tool detayları burada.</pre>
+                </div>
+            </div>
+
+            <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60 flex items-center justify-between">
+                    <h4 class="font-bold text-sm">Tool Policy JSON Editor</h4>
+                    <div class="flex items-center gap-2">
+                        <button onclick="loadToolsPolicy()" class="px-2.5 py-1.5 bg-gray-100 text-gray-700 rounded text-xs font-bold hover:bg-gray-200">Yükle</button>
+                        <button onclick="resetToolsPolicyDefault()" class="px-2.5 py-1.5 bg-amber-100 text-amber-700 rounded text-xs font-bold hover:bg-amber-200">Default</button>
+                        <button onclick="saveToolsPolicyJson()" class="px-2.5 py-1.5 bg-blue-600 text-white rounded text-xs font-bold hover:bg-blue-700">Kaydet</button>
+                    </div>
+                </div>
+                <div class="p-5 space-y-3">
+                    <textarea id="tools-policy-json" rows="8" class="w-full bg-gray-50 border border-gray-200 rounded p-3 text-xs font-mono outline-none" placeholder='{"allow":["group:fs"],"deny":["exec"],"requireApproval":["delete_file"]}'></textarea>
+                    <div class="flex items-center justify-between">
+                        <span id="tools-policy-status" class="text-xs text-gray-500"></span>
+                        <span class="text-[11px] text-gray-400">Not: listeleri tamamen değiştirir.</span>
+                    </div>
                 </div>
             </div>
         </div>
 
+        <!-- Tool Request Geçmişi -->
+        <div class="glass-card card-shadow rounded-xl overflow-hidden">
+            <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60 flex items-center justify-between">
+                <h4 class="font-bold text-sm">Tool Çağrı Geçmişi</h4>
+                <div class="flex items-center gap-2">
+                    <span id="tool-req-stats" class="text-xs text-gray-500"></span>
+                    <select id="tool-req-filter" class="text-xs border border-gray-200 rounded px-2 py-1 bg-white">
+                        <option value="">Tümü</option>
+                        <option value="advanced_research">research</option>
+                        <option value="write_file">write_file</option>
+                        <option value="write_word">write_word</option>
+                        <option value="write_excel">write_excel</option>
+                        <option value="list_files">list_files</option>
+                        <option value="take_screenshot">screenshot</option>
+                    </select>
+                    <select id="tool-req-success" class="text-xs border border-gray-200 rounded px-2 py-1 bg-white">
+                        <option value="">Hepsi</option>
+                        <option value="1">Başarılı</option>
+                    </select>
+                    <button onclick="loadToolRequests()" class="px-2.5 py-1.5 bg-gray-900 text-white rounded text-xs font-bold hover:bg-black">Yenile</button>
+                </div>
+            </div>
+            <div class="p-4 overflow-auto max-h-96">
+                <table class="w-full text-xs">
+                    <thead>
+                        <tr class="text-left text-gray-400 border-b border-gray-100">
+                            <th class="pb-2 pr-3 font-medium">ID</th>
+                            <th class="pb-2 pr-3 font-medium">Tool</th>
+                            <th class="pb-2 pr-3 font-medium">Süre</th>
+                            <th class="pb-2 pr-3 font-medium">Durum</th>
+                            <th class="pb-2 pr-3 font-medium">Artifact</th>
+                            <th class="pb-2 pr-3 font-medium">Contract</th>
+                            <th class="pb-2 font-medium">Özet</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tool-req-tbody" class="divide-y divide-gray-50"></tbody>
+                </table>
+                <p id="tool-req-empty" class="text-center text-gray-400 py-4 text-xs hidden">Henüz tool çağrısı yok.</p>
+            </div>
+        </div>
+
         <!-- ══════════ TAB: SETTINGS ══════════ -->
-        <div id="tab-settings" class="tab-panel">
+        <div id="tab-settings" class="tab-panel space-y-5">
             <div class="glass-card card-shadow rounded-xl overflow-hidden">
                 <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60">
                     <h4 class="font-bold text-sm">Model Yönlendirme</h4>
                 </div>
-                <div class="p-6 space-y-5 max-w-2xl">
+                <div class="p-6 space-y-5">
                     <div class="text-xs text-gray-500 space-y-1">
                         <div><span class="font-bold text-gray-700">Aktif:</span> <span id="settings-runtime-model">—</span></div>
                         <div><span class="font-bold text-gray-700">Config:</span> <span id="settings-config-model">—</span></div>
@@ -880,11 +1068,201 @@ Telegram / WhatsApp gönder</textarea>
                         </label>
                     </div>
 
+                    <div class="space-y-1.5">
+                        <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Role Override (JSON, opsiyonel)</label>
+                        <textarea id="settings-roles-json" rows="5" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-xs font-mono outline-none focus:ring-2 focus:ring-blue-500/20" placeholder='{"reasoning":{"provider":"openai","model":"gpt-4o"}}'></textarea>
+                    </div>
+
                     <div class="flex items-center gap-2">
                         <button onclick="saveModelSettings()" class="px-5 py-2.5 bg-gray-900 text-white rounded-lg text-sm font-bold hover:bg-black transition-all">Kaydet</button>
                         <button onclick="loadModelSettings()" class="px-3 py-2.5 bg-gray-100 text-gray-700 rounded-lg text-sm font-bold hover:bg-gray-200 transition-all">Yenile</button>
                         <span id="settings-save-status" class="text-xs text-gray-500"></span>
                     </div>
+                </div>
+            </div>
+
+            <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60">
+                    <h4 class="font-bold text-sm">API Key Yönetimi (Keychain önerilir)</h4>
+                </div>
+                <div class="p-6 space-y-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="space-y-1.5">
+                            <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">OpenAI API Key</label>
+                            <input id="settings-key-openai" type="password" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="sk-..." />
+                            <p id="settings-key-status-openai" class="text-[11px] text-gray-500">—</p>
+                        </div>
+                        <div class="space-y-1.5">
+                            <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Anthropic API Key</label>
+                            <input id="settings-key-anthropic" type="password" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="sk-ant-..." />
+                            <p id="settings-key-status-anthropic" class="text-[11px] text-gray-500">—</p>
+                        </div>
+                        <div class="space-y-1.5">
+                            <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Google API Key</label>
+                            <input id="settings-key-google" type="password" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="AIza..." />
+                            <p id="settings-key-status-google" class="text-[11px] text-gray-500">—</p>
+                        </div>
+                        <div class="space-y-1.5">
+                            <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Groq API Key</label>
+                            <input id="settings-key-groq" type="password" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="gsk_..." />
+                            <p id="settings-key-status-groq" class="text-[11px] text-gray-500">—</p>
+                        </div>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <button onclick="saveProviderKeys()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700">API Key Kaydet</button>
+                        <button onclick="clearProviderKey('openai')" class="px-3 py-2 bg-red-100 text-red-700 rounded-lg text-xs font-bold hover:bg-red-200">OpenAI Temizle</button>
+                        <button onclick="clearProviderKey('anthropic')" class="px-3 py-2 bg-red-100 text-red-700 rounded-lg text-xs font-bold hover:bg-red-200">Anthropic Temizle</button>
+                        <button onclick="clearProviderKey('google')" class="px-3 py-2 bg-red-100 text-red-700 rounded-lg text-xs font-bold hover:bg-red-200">Google Temizle</button>
+                        <button onclick="clearProviderKey('groq')" class="px-3 py-2 bg-red-100 text-red-700 rounded-lg text-xs font-bold hover:bg-red-200">Groq Temizle</button>
+                        <span id="settings-keys-status" class="text-xs text-gray-500"></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60">
+                    <h4 class="font-bold text-sm">Kişiselleştirme ve System Prompt</h4>
+                </div>
+                <div class="p-6 space-y-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="space-y-1.5">
+                            <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Asistan Adı</label>
+                            <input id="settings-agent-name" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="Elyan" />
+                        </div>
+                        <div class="space-y-1.5">
+                            <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Kişilik</label>
+                            <select id="settings-agent-personality" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500/20">
+                                <option value="professional">Professional</option>
+                                <option value="technical">Technical</option>
+                                <option value="friendly">Friendly</option>
+                                <option value="concise">Concise</option>
+                                <option value="creative">Creative</option>
+                            </select>
+                        </div>
+                        <div class="space-y-1.5">
+                            <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Dil</label>
+                            <select id="settings-agent-language" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500/20">
+                                <option value="tr">Türkçe</option>
+                                <option value="en">English</option>
+                            </select>
+                        </div>
+                        <div class="space-y-1.5">
+                            <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Kullanıcı başı local limit (GB)</label>
+                            <input id="settings-max-user-storage-gb" type="number" min="1" max="50" step="1" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500/20" />
+                        </div>
+                    </div>
+                    <div class="flex flex-wrap gap-4 text-xs text-gray-600">
+                        <label class="inline-flex items-center gap-2">
+                            <input id="settings-agent-autonomous" type="checkbox" class="rounded border-gray-300" />
+                            Otonom çalışma açık
+                        </label>
+                        <label class="inline-flex items-center gap-2">
+                            <input id="settings-memory-local-only" type="checkbox" class="rounded border-gray-300" />
+                            Sadece yerel bellek (localOnly)
+                        </label>
+                    </div>
+                    <div class="space-y-1.5">
+                        <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">System Prompt (opsiyonel override)</label>
+                        <textarea id="settings-system-prompt" rows="8" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-xs font-mono outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="Özel system prompt..."></textarea>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button onclick="saveAgentProfile()" class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-bold hover:bg-emerald-700">Profili Kaydet</button>
+                        <button onclick="loadAgentProfile()" class="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-xs font-bold hover:bg-gray-200">Yenile</button>
+                        <span id="settings-profile-status" class="text-xs text-gray-500"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ══════════ TAB: SUBSCRIPTION ══════════ -->
+        <div id="tab-subscription" class="tab-panel space-y-5">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Current Plan Card -->
+                <div class="glass-card card-shadow rounded-xl overflow-hidden flex flex-col">
+                    <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60">
+                        <h4 class="font-bold text-sm">Mevcut Plan Bilgileri</h4>
+                    </div>
+                    <div class="p-6 space-y-6">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-0.5">Aktif Paket</p>
+                                <h3 id="sub-tier-display" class="text-2xl font-black text-blue-600 uppercase">—</h3>
+                            </div>
+                            <div id="sub-status-badge" class="px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-gray-100 text-gray-500">
+                                Yükleniyor
+                            </div>
+                        </div>
+
+                        <div class="space-y-4 pt-4 border-t border-gray-50">
+                            <div class="flex justify-between items-center text-sm">
+                                <span class="text-gray-500">Kullanıcı ID</span>
+                                <span id="sub-user-id" class="font-mono font-medium text-gray-700">—</span>
+                            </div>
+                            <div class="flex justify-between items-center text-sm">
+                                <span class="text-gray-500">Geçerlilik</span>
+                                <span id="sub-expiry" class="font-medium text-gray-700">—</span>
+                            </div>
+                        </div>
+
+                        <div class="pt-4 flex flex-col gap-2">
+                            <button onclick="pollSubscription()" class="w-full py-2.5 bg-gray-100 text-gray-700 rounded-lg text-sm font-bold hover:bg-gray-200 transition-all">Yenile</button>
+                            <button id="upgrade-button" onclick="alert('Ödeme sistemi yakında aktif edilecek! (Checkout integration pending)')" class="w-full py-2.5 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 transition-all flex items-center justify-center gap-2">
+                                <i data-lucide="zap" class="w-4 h-4"></i> Pro Pakete Geç
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Usage / Quota Card -->
+                <div class="glass-card card-shadow rounded-xl overflow-hidden flex flex-col">
+                    <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60">
+                        <h4 class="font-bold text-sm">Kullanım ve Kota</h4>
+                    </div>
+                    <div class="p-6 space-y-6">
+                        <!-- Daily Messages -->
+                        <div class="space-y-2">
+                            <div class="flex justify-between text-xs font-bold uppercase tracking-wider">
+                                <span class="text-gray-400">Günlük Mesaj</span>
+                                <span id="quota-daily-text" class="text-blue-600">0 / 0</span>
+                            </div>
+                            <div class="h-2 bg-gray-100 rounded-full overflow-hidden">
+                                <div id="quota-daily-bar" class="h-full bg-blue-500 rounded-full" style="width: 0%"></div>
+                            </div>
+                        </div>
+
+                        <!-- Monthly Tokens -->
+                        <div class="space-y-2">
+                            <div class="flex justify-between text-xs font-bold uppercase tracking-wider">
+                                <span class="text-gray-400">Aylık Token</span>
+                                <span id="quota-monthly-text" class="text-purple-600">0 / 0</span>
+                            </div>
+                            <div class="h-2 bg-gray-100 rounded-full overflow-hidden">
+                                <div id="quota-monthly-bar" class="h-full bg-purple-500 rounded-full" style="width: 0%"></div>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-4 pt-4 border-t border-gray-50">
+                            <div class="p-3 bg-gray-50 rounded-lg">
+                                <p class="text-[9px] text-gray-400 uppercase font-bold tracking-wider mb-1">Toplam Mesaj</p>
+                                <p id="quota-lifetime-msgs" class="text-lg font-bold text-gray-700">—</p>
+                            </div>
+                            <div class="p-3 bg-gray-50 rounded-lg">
+                                <p class="text-[9px] text-gray-400 uppercase font-bold tracking-wider mb-1">Toplam Token</p>
+                                <p id="quota-lifetime-tokens" class="text-lg font-bold text-gray-700">—</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tier Limits Table -->
+            <div class="glass-card card-shadow rounded-xl overflow-hidden">
+                <div class="px-5 py-3.5 border-b border-gray-100 bg-white/60 flex justify-between items-center">
+                    <h4 class="font-bold text-sm">Paket Limitleri ve Özellikler</h4>
+                </div>
+                <div id="sub-limits-container" class="p-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <!-- Limits will be injected here -->
+                    <div class="col-span-full text-center py-8 text-gray-400 text-sm italic">Yükleniyor...</div>
                 </div>
             </div>
         </div>
@@ -911,6 +1289,11 @@ Telegram / WhatsApp gönder</textarea>
 let ws = null;
 let wsConnected = false;
 const API = '';  // same origin
+let lastLoadedTools = [];
+let lastLoadedChannels = [];
+let channelsCatalog = [];
+let channelEditingId = '';
+let quickTaskSuggestTimer = null;
 
 // ── Tab navigation ─────────────────────────────────────────────────────────
 function switchTab(name) {
@@ -931,8 +1314,132 @@ function switchTab(name) {
     if (name === 'automation') loadRoutines();
     if (name === 'analytics') loadAnalytics();
     if (name === 'security') loadSecurity();
-    if (name === 'tools') loadTools();
-    if (name === 'settings') loadModelSettings();
+    if (name === 'tools') {
+        loadTools();
+        loadToolsPolicy();
+        loadToolRequests();
+    }
+    if (name === 'settings') {
+        loadModelSettings();
+        loadAgentProfile();
+    }
+    if (name === 'subscription') {
+        pollSubscription();
+        pollQuota();
+    }
+}
+
+// ── Subscription & Quota ───────────────────────────────────────────────────
+async function pollSubscription() {
+    try {
+        const resp = await fetch('/api/subscription');
+        const data = await resp.json();
+        if (data.ok) {
+            document.getElementById('sub-tier-display').textContent = data.tier;
+            document.getElementById('sub-user-id').textContent = data.user_id;
+            document.getElementById('sub-status-badge').textContent = data.status;
+            document.getElementById('sub-status-badge').className = `px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest ${data.status === 'active' ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-500'}`;
+            
+            const upgradeBtn = document.getElementById('upgrade-button');
+            if (data.tier === 'pro' || data.tier === 'enterprise') {
+                upgradeBtn.classList.add('hidden');
+            } else {
+                upgradeBtn.classList.remove('hidden');
+            }
+            
+            if (data.expiry_at > 0) {
+                const date = new Date(data.expiry_at * 1000);
+                document.getElementById('sub-expiry').textContent = date.toLocaleDateString();
+            } else {
+                document.getElementById('sub-expiry').textContent = 'Süresiz';
+            }
+
+            // Render limits cards
+            const container = document.getElementById('sub-limits-container');
+            container.innerHTML = '';
+            for (const [key, val] of Object.entries(data.limits)) {
+                const card = document.createElement('div');
+                card.className = 'p-4 bg-gray-50 rounded-lg border border-gray-100';
+                card.innerHTML = `
+                    <p class="text-[9px] text-gray-400 uppercase font-bold tracking-wider mb-1">${key.replace(/_/g, ' ')}</p>
+                    <p class="text-sm font-bold text-gray-700">${typeof val === 'boolean' ? (val ? '✓ EVET' : '✗ HAYIR') : val}</p>
+                `;
+                container.appendChild(card);
+            }
+        }
+    } catch (e) {
+        console.error('Subscription error:', e);
+    }
+}
+
+async function pollQuota() {
+    try {
+        const resp = await fetch('/api/quota');
+        const data = await resp.json();
+        if (data.ok) {
+            // Daily Messages
+            const dText = document.getElementById('quota-daily-text');
+            const dBar = document.getElementById('quota-daily-bar');
+            const dLimit = data.daily_limit === -1 ? '∞' : data.daily_limit;
+            dText.textContent = `${data.daily_messages} / ${dLimit}`;
+            const dPct = data.daily_limit === -1 ? 0 : Math.min(100, (data.daily_messages / data.daily_limit) * 100);
+            dBar.style.width = `${dPct}%`;
+            dBar.className = `h-full rounded-full ${dPct > 90 ? 'bg-red-500' : (dPct > 70 ? 'bg-orange-500' : 'bg-blue-500')}`;
+
+            // Monthly Tokens
+            const mText = document.getElementById('quota-monthly-text');
+            const mBar = document.getElementById('quota-monthly-bar');
+            const mLimit = data.monthly_limit === -1 ? '∞' : data.monthly_limit;
+            mText.textContent = `${data.monthly_tokens.toLocaleString()} / ${typeof mLimit === 'number' ? mLimit.toLocaleString() : mLimit}`;
+            const mPct = data.monthly_limit === -1 ? 0 : Math.min(100, (data.monthly_tokens / data.monthly_limit) * 100);
+            mBar.style.width = `${mPct}%`;
+            mBar.className = `h-full rounded-full ${mPct > 90 ? 'bg-red-500' : (mPct > 70 ? 'bg-orange-500' : 'bg-purple-500')}`;
+
+            document.getElementById('quota-lifetime-msgs').textContent = data.lifetime_messages.toLocaleString();
+            document.getElementById('quota-lifetime-tokens').textContent = data.lifetime_tokens.toLocaleString();
+        }
+    } catch (e) {
+        console.error('Quota error:', e);
+    }
+}
+
+async function pollInterventions() {
+    const container = document.getElementById('intervention-container');
+    const list = document.getElementById('intervention-list');
+    if (!container || !list) return;
+    try {
+        const r = await fetch(API + '/api/interventions');
+        const d = await r.json();
+        const items = d.interventions || [];
+        if (items.length === 0) {
+            container.classList.add('hidden');
+            return;
+        }
+        container.classList.remove('hidden');
+        list.innerHTML = items.map(iv => `
+            <div class="p-4 bg-white border border-orange-200 rounded-lg shadow-sm space-y-3">
+                <p class="text-sm font-semibold text-gray-800">${iv.prompt}</p>
+                <div class="flex flex-wrap gap-2">
+                    ${iv.options.map(opt => `
+                        <button onclick="resolveIntervention('${iv.id}', '${opt}')" class="px-3 py-1.5 bg-orange-600 text-white text-xs font-bold rounded-md hover:bg-orange-700 transition-all">
+                            ${opt}
+                        </button>
+                    `).join('')}
+                </div>
+            </div>
+        `).join('');
+    } catch(e) {}
+}
+
+async function resolveIntervention(id, response) {
+    try {
+        await fetch(API + '/api/interventions/resolve', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({id, response}),
+        });
+        pollInterventions();
+    } catch(e) {}
 }
 
 // ── WebSocket ──────────────────────────────────────────────────────────────
@@ -970,7 +1477,7 @@ function appendActivity(ev) {
     const placeholder = feed.querySelector('.text-center');
     if (placeholder) placeholder.remove();
 
-    const colors = { task_created:'blue', message:'green', webhook:'purple', error:'red' };
+    const colors = { task_created:'blue', message:'green', webhook:'purple', error:'red', prediction:'purple' };
     const color = colors[ev.type] || 'gray';
     const row = document.createElement('div');
     row.className = 'activity-row px-5 py-2.5 flex items-center gap-3 hover:bg-gray-50/50';
@@ -1009,6 +1516,7 @@ async function pollStatus() {
             const now = new Date();
             sync.textContent = `Senkron: ${now.toLocaleTimeString('tr-TR', {hour: '2-digit', minute: '2-digit', second: '2-digit'})}`;
         }
+        pollInterventions();
     } catch(e) {}
 }
 
@@ -1048,6 +1556,13 @@ function _defaultModelForProvider(provider) {
     return map[p] || 'gpt-4o';
 }
 
+function _providerStatusText(row) {
+    if (!row) return '—';
+    if (row.configured) return `Configured (${row.source || 'unknown'})`;
+    if (row.config_ref) return `Ref: ${row.config_ref} (missing secret)`;
+    return 'Not configured';
+}
+
 async function loadModelSettings() {
     const statusEl = document.getElementById('settings-save-status');
     if (statusEl) statusEl.textContent = 'Yükleniyor...';
@@ -1066,11 +1581,22 @@ async function loadModelSettings() {
         document.getElementById('settings-fallback-provider').value = fb.provider || 'openai';
         document.getElementById('settings-fallback-model').value = fb.model || _defaultModelForProvider(fb.provider || 'openai');
         document.getElementById('settings-router-enabled').checked = !!d.router_enabled;
+        const rolesJsonEl = document.getElementById('settings-roles-json');
+        if (rolesJsonEl) {
+            rolesJsonEl.value = JSON.stringify(d.roles || {}, null, 2);
+        }
 
         document.getElementById('settings-runtime-model').textContent = `${activeProvider}:${activeModel}`;
         document.getElementById('settings-config-model').textContent = `${cfgProvider}:${cfgModel}`;
         const mismatch = d.model_consistent === false;
         document.getElementById('settings-runtime-note').classList.toggle('hidden', !mismatch);
+
+        const pks = d.provider_keys || {};
+        ['openai', 'anthropic', 'google', 'groq'].forEach(p => {
+            const row = pks[p] || null;
+            const el = document.getElementById(`settings-key-status-${p}`);
+            if (el) el.textContent = _providerStatusText(row);
+        });
 
         if (statusEl) statusEl.textContent = '';
     } catch (e) {
@@ -1088,6 +1614,16 @@ async function saveModelSettings() {
         const fallbackModel = (document.getElementById('settings-fallback-model')?.value || _defaultModelForProvider(fallbackProvider)).trim();
         const routerEnabled = !!document.getElementById('settings-router-enabled')?.checked;
         const syncRoles = !!document.getElementById('settings-sync-roles')?.checked;
+        const rolesRaw = (document.getElementById('settings-roles-json')?.value || '').trim();
+        let roles = {};
+        if (!syncRoles && rolesRaw) {
+            try {
+                roles = JSON.parse(rolesRaw);
+            } catch (e) {
+                if (statusEl) statusEl.textContent = 'Role JSON parse hatası';
+                return;
+            }
+        }
 
         const resp = await fetch(API + '/api/models', {
             method: 'POST',
@@ -1099,6 +1635,7 @@ async function saveModelSettings() {
                 fallback_model: fallbackModel,
                 router_enabled: routerEnabled,
                 sync_roles: syncRoles,
+                roles,
             }),
         });
         if (!resp.ok) {
@@ -1109,6 +1646,121 @@ async function saveModelSettings() {
         if (statusEl) statusEl.textContent = 'Kaydedildi';
     } catch (e) {
         if (statusEl) statusEl.textContent = 'Kaydetme hatası';
+    }
+}
+
+async function saveProviderKeys() {
+    const statusEl = document.getElementById('settings-keys-status');
+    if (statusEl) statusEl.textContent = 'Kaydediliyor...';
+    const getVal = (id) => (document.getElementById(id)?.value || '').trim();
+    const keys = {
+        openai: getVal('settings-key-openai'),
+        anthropic: getVal('settings-key-anthropic'),
+        google: getVal('settings-key-google'),
+        groq: getVal('settings-key-groq'),
+    };
+    const api_keys = {};
+    Object.entries(keys).forEach(([k, v]) => {
+        if (v) api_keys[k] = v;
+    });
+    if (!Object.keys(api_keys).length) {
+        if (statusEl) statusEl.textContent = 'Kaydedilecek yeni key girilmedi.';
+        return;
+    }
+    try {
+        const resp = await fetch(API + '/api/models', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ api_keys }),
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.ok === false) {
+            throw new Error(data.error || 'API key update failed');
+        }
+        ['settings-key-openai', 'settings-key-anthropic', 'settings-key-google', 'settings-key-groq'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = '';
+        });
+        if (statusEl) statusEl.textContent = 'API key kaydedildi.';
+        await loadModelSettings();
+    } catch (e) {
+        if (statusEl) statusEl.textContent = 'Hata: ' + e.message;
+    }
+}
+
+async function clearProviderKey(provider) {
+    const statusEl = document.getElementById('settings-keys-status');
+    if (statusEl) statusEl.textContent = `${provider} temizleniyor...`;
+    try {
+        const resp = await fetch(API + '/api/models', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ clear_keys: [provider] }),
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.ok === false) {
+            throw new Error(data.error || 'clear key failed');
+        }
+        if (statusEl) statusEl.textContent = `${provider} key temizlendi.`;
+        await loadModelSettings();
+    } catch (e) {
+        if (statusEl) statusEl.textContent = 'Hata: ' + e.message;
+    }
+}
+
+async function loadAgentProfile() {
+    const statusEl = document.getElementById('settings-profile-status');
+    if (statusEl) statusEl.textContent = 'Yükleniyor...';
+    try {
+        const r = await fetch(API + '/api/agent/profile');
+        const d = await r.json();
+        const p = d.profile || {};
+        const mem = p.memory || {};
+        const setVal = (id, val) => {
+            const el = document.getElementById(id);
+            if (el) el.value = val ?? '';
+        };
+        setVal('settings-agent-name', p.name || 'Elyan');
+        setVal('settings-agent-personality', p.personality || 'professional');
+        setVal('settings-agent-language', p.language || 'tr');
+        setVal('settings-system-prompt', p.system_prompt || '');
+        setVal('settings-max-user-storage-gb', mem.max_user_storage_gb ?? 10);
+        const autoEl = document.getElementById('settings-agent-autonomous');
+        if (autoEl) autoEl.checked = !!p.autonomous;
+        const localEl = document.getElementById('settings-memory-local-only');
+        if (localEl) localEl.checked = !!mem.local_only;
+        if (statusEl) statusEl.textContent = '';
+    } catch (e) {
+        if (statusEl) statusEl.textContent = 'Yükleme hatası';
+    }
+}
+
+async function saveAgentProfile() {
+    const statusEl = document.getElementById('settings-profile-status');
+    if (statusEl) statusEl.textContent = 'Kaydediliyor...';
+    try {
+        const payload = {
+            name: (document.getElementById('settings-agent-name')?.value || '').trim() || 'Elyan',
+            personality: (document.getElementById('settings-agent-personality')?.value || 'professional').trim(),
+            language: (document.getElementById('settings-agent-language')?.value || 'tr').trim(),
+            system_prompt: (document.getElementById('settings-system-prompt')?.value || '').trim(),
+            autonomous: !!document.getElementById('settings-agent-autonomous')?.checked,
+            local_only: !!document.getElementById('settings-memory-local-only')?.checked,
+            max_user_storage_gb: Number(document.getElementById('settings-max-user-storage-gb')?.value || 10),
+        };
+        const resp = await fetch(API + '/api/agent/profile', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.ok === false) {
+            throw new Error(data.error || 'profile update failed');
+        }
+        if (statusEl) statusEl.textContent = 'Kaydedildi';
+        await loadAgentProfile();
+    } catch (e) {
+        if (statusEl) statusEl.textContent = 'Hata: ' + e.message;
     }
 }
 
@@ -1144,41 +1796,334 @@ async function pollMemory() {
 }
 
 // ── Channels tab ───────────────────────────────────────────────────────────
+const CHANNEL_FORM_SCHEMA = {
+    telegram: [
+        {name: 'token', label: 'Bot Token', secret: true, placeholder: '123456:ABC...'},
+    ],
+    discord: [
+        {name: 'token', label: 'Bot Token', secret: true, placeholder: 'discord token'},
+    ],
+    slack: [
+        {name: 'bot_token', label: 'Bot Token', secret: true, placeholder: 'xoxb-...'},
+        {name: 'app_token', label: 'App Token', secret: true, placeholder: 'xapp-...'},
+    ],
+    whatsapp: [
+        {name: 'bridge_url', label: 'Bridge URL', secret: false, placeholder: 'http://127.0.0.1:18792'},
+        {name: 'bridge_token', label: 'Bridge Token', secret: true, placeholder: 'WHATSAPP_BRIDGE_TOKEN'},
+        {name: 'bridge_port', label: 'Bridge Port', secret: false, placeholder: '18792'},
+        {name: 'session_dir', label: 'Session Dir', secret: false, placeholder: '~/.elyan/channels/whatsapp/whatsapp'},
+    ],
+    signal: [
+        {name: 'phone_number', label: 'Phone Number', secret: false, placeholder: '+90555...'},
+        {name: 'token', label: 'Token', secret: true, placeholder: 'signal token'},
+    ],
+    webchat: [],
+};
+
+function _channelSchemaFor(type) {
+    const t = String(type || '').trim().toLowerCase();
+    const fromCatalog = (channelsCatalog || []).find(x => (x.type || '') === t);
+    if (fromCatalog && Array.isArray(fromCatalog.fields)) {
+        const mapped = fromCatalog.fields
+            .filter(f => f && f.name !== 'id')
+            .map(f => ({
+                name: String(f.name || ''),
+                label: String(f.label || f.name || ''),
+                secret: !!f.secret,
+                placeholder: '',
+            }))
+            .filter(f => !!f.name);
+        if (mapped.length) return mapped;
+    }
+    return CHANNEL_FORM_SCHEMA[t] || [];
+}
+
+function _renderChannelFormFields(type, prefill = {}) {
+    const el = document.getElementById('channel-form-fields');
+    if (!el) return;
+    const schema = _channelSchemaFor(type);
+    if (!schema.length) {
+        el.innerHTML = '<div class="text-xs text-gray-500">Bu kanal için ek alan gerekmiyor.</div>';
+        return;
+    }
+    el.innerHTML = schema.map(field => {
+        const name = field.name;
+        const rawVal = prefill && Object.prototype.hasOwnProperty.call(prefill, name) ? prefill[name] : '';
+        const value = (rawVal === '***') ? '' : (rawVal ?? '');
+        const inputType = field.secret ? 'password' : 'text';
+        const placeholder = field.secret
+            ? 'Boş bırak = mevcut secret korunur'
+            : (field.placeholder || '');
+        return `
+            <div class="space-y-1.5">
+                <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">${field.label}</label>
+                <input
+                    data-channel-field="${name}"
+                    type="${inputType}"
+                    class="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm outline-none"
+                    placeholder="${escapeToolText(placeholder)}"
+                    value="${escapeToolText(String(value))}"
+                />
+            </div>
+        `;
+    }).join('');
+}
+
+function _applyChannelTypeNote(type) {
+    const noteEl = document.getElementById('channel-form-note');
+    if (!noteEl) return;
+    const info = (channelsCatalog || []).find(x => (x.type || '') === String(type || '').toLowerCase());
+    const note = (info && info.notes) ? String(info.notes) : '';
+    if (!note) {
+        noteEl.classList.add('hidden');
+        noteEl.textContent = '';
+        return;
+    }
+    noteEl.classList.remove('hidden');
+    noteEl.textContent = note;
+}
+
+function onChannelTypeChange() {
+    const type = document.getElementById('channel-form-type')?.value || 'telegram';
+    _renderChannelFormFields(type, {});
+    _applyChannelTypeNote(type);
+}
+
+function resetChannelForm(type = null) {
+    channelEditingId = '';
+    const typeEl = document.getElementById('channel-form-type');
+    const idEl = document.getElementById('channel-form-id');
+    const enabledEl = document.getElementById('channel-form-enabled');
+    const statusEl = document.getElementById('channel-form-status');
+    if (typeEl) typeEl.value = type || typeEl.value || 'telegram';
+    if (idEl) idEl.value = '';
+    if (enabledEl) enabledEl.checked = true;
+    if (statusEl) statusEl.textContent = '';
+    onChannelTypeChange();
+}
+
+function _channelPayloadFromForm() {
+    const type = (document.getElementById('channel-form-type')?.value || '').trim().toLowerCase();
+    const idInput = (document.getElementById('channel-form-id')?.value || '').trim();
+    const enabled = !!document.getElementById('channel-form-enabled')?.checked;
+    const payload = {
+        type,
+        id: idInput || channelEditingId || type,
+        enabled,
+    };
+
+    document.querySelectorAll('[data-channel-field]').forEach(input => {
+        const key = input.getAttribute('data-channel-field');
+        if (!key) return;
+        const value = String(input.value || '').trim();
+        if (!value) return;
+        if (key === 'bridge_port') {
+            const n = Number(value);
+            payload[key] = Number.isFinite(n) ? Math.max(1, Math.floor(n)) : value;
+            return;
+        }
+        if (value === 'true') payload[key] = true;
+        else if (value === 'false') payload[key] = false;
+        else payload[key] = value;
+    });
+    return payload;
+}
+
+async function loadChannelsCatalog() {
+    try {
+        const r = await fetch(API + '/api/channels/catalog');
+        const d = await r.json();
+        channelsCatalog = Array.isArray(d.catalog) ? d.catalog : [];
+    } catch (e) {
+        channelsCatalog = [];
+    }
+}
+
+async function saveChannelFromForm() {
+    const statusEl = document.getElementById('channel-form-status');
+    if (statusEl) statusEl.textContent = 'Kaydediliyor...';
+    try {
+        const channel = _channelPayloadFromForm();
+        if (!channel.type) throw new Error('Kanal tipi gerekli');
+
+        const r = await fetch(API + '/api/channels/upsert', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({channel, sync: true}),
+        });
+        const d = await r.json();
+        if (!r.ok || !d.ok) throw new Error(d.error || d.message || 'Kaydetme hatası');
+        if (statusEl) statusEl.textContent = '✅ Kanal kaydedildi.';
+        await loadChannels();
+        resetChannelForm(channel.type);
+    } catch (e) {
+        if (statusEl) statusEl.textContent = '❌ ' + e.message;
+    }
+}
+
+function editChannel(id) {
+    const target = String(id || '').trim().toLowerCase();
+    const row = (lastLoadedChannels || []).find(ch => {
+        const cid = String(ch.id || ch.type || '').trim().toLowerCase();
+        const ctype = String(ch.type || '').trim().toLowerCase();
+        return target === cid || target === ctype;
+    });
+    if (!row) return;
+
+    const type = String(row.type || 'telegram').toLowerCase();
+    const typeEl = document.getElementById('channel-form-type');
+    const idEl = document.getElementById('channel-form-id');
+    const enabledEl = document.getElementById('channel-form-enabled');
+    if (typeEl) typeEl.value = type;
+    if (idEl) idEl.value = String(row.id || row.type || '');
+    if (enabledEl) enabledEl.checked = !!row.enabled;
+    channelEditingId = String(row.id || row.type || '');
+    _renderChannelFormFields(type, row);
+    _applyChannelTypeNote(type);
+    const statusEl = document.getElementById('channel-form-status');
+    if (statusEl) statusEl.textContent = 'Düzenleme modu: ' + channelEditingId;
+}
+
+async function deleteChannel(id) {
+    const target = String(id || '').trim();
+    if (!target) return;
+    if (!confirm(`Kanal silinsin mi? (${target})`)) return;
+    const statusEl = document.getElementById('channel-form-status');
+    if (statusEl) statusEl.textContent = 'Siliniyor...';
+    try {
+        const r = await fetch(API + `/api/channels/${encodeURIComponent(target)}`, {method: 'DELETE'});
+        const d = await r.json();
+        if (!r.ok || !d.ok) throw new Error(d.error || d.message || 'Silme hatası');
+        if (statusEl) statusEl.textContent = '✅ Kanal silindi.';
+        await loadChannels();
+    } catch (e) {
+        if (statusEl) statusEl.textContent = '❌ ' + e.message;
+    }
+}
+
+async function toggleChannel(id, enabled) {
+    const target = String(id || '').trim();
+    if (!target) return;
+    const statusEl = document.getElementById('channel-form-status');
+    if (statusEl) statusEl.textContent = 'Güncelleniyor...';
+    try {
+        const r = await fetch(API + '/api/channels/toggle', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({id: target, enabled: !!enabled}),
+        });
+        const d = await r.json();
+        if (!r.ok || !d.ok) throw new Error(d.error || d.message || 'Toggle hatası');
+        if (statusEl) statusEl.textContent = '✅ Kanal durumu güncellendi.';
+        await loadChannels();
+    } catch (e) {
+        if (statusEl) statusEl.textContent = '❌ ' + e.message;
+    }
+}
+
+async function testChannel(id) {
+    const target = String(id || '').trim() || 'tümü';
+    const statusEl = document.getElementById('channel-form-status');
+    if (statusEl) statusEl.textContent = `Test çalışıyor: ${target}...`;
+    try {
+        const r = await fetch(API + '/api/channels/test', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({channel: target}),
+        });
+        const d = await r.json();
+        if (statusEl) statusEl.textContent = (d.message || (d.ok ? '✅ Test başarılı' : '❌ Test hatası'));
+    } catch (e) {
+        if (statusEl) statusEl.textContent = '❌ ' + e.message;
+    }
+}
+
+async function testAllChannels() {
+    await testChannel('tümü');
+}
+
+async function syncChannelsRuntime() {
+    const statusEl = document.getElementById('channel-form-status');
+    if (statusEl) statusEl.textContent = 'Runtime sync...';
+    try {
+        const r = await fetch(API + '/api/channels/sync', {method: 'POST'});
+        const d = await r.json();
+        if (statusEl) statusEl.textContent = d.message || (d.ok ? '✅ Sync başarılı' : '❌ Sync hatası');
+        await loadChannels();
+    } catch (e) {
+        if (statusEl) statusEl.textContent = '❌ ' + e.message;
+    }
+}
+
+function _channelHealthLabel(ch) {
+    if (!ch.enabled) return 'offline';
+    if (ch.connected) return 'connected';
+    return 'degraded';
+}
+
 async function loadChannels() {
     const list = document.getElementById('channels-list');
     try {
+        if (!channelsCatalog.length) await loadChannelsCatalog();
         const r = await fetch(API + '/api/channels');
         const d = await r.json();
         const channels = d.channels || [];
+        lastLoadedChannels = channels;
         document.getElementById('channels-count').textContent = channels.length + ' kanal';
+
+        const connected = channels.filter(c => c.connected).length;
+        const disabled = channels.filter(c => !c.enabled).length;
+        const degraded = Math.max(0, channels.length - connected - disabled);
+        document.getElementById('channels-total').textContent = channels.length;
+        document.getElementById('channels-connected').textContent = connected;
+        document.getElementById('channels-degraded').textContent = degraded;
+        document.getElementById('channels-disabled').textContent = disabled;
+
         if (!channels.length) {
-            list.innerHTML = '<div class="p-8 text-center text-sm text-gray-400">Yapılandırılmış kanal yok</div>';
+            list.innerHTML = '<tr><td colspan="5" class="px-4 py-4 text-center text-xs text-gray-400">Yapılandırılmış kanal yok</td></tr>';
+            if (!document.querySelector('[data-channel-field]')) onChannelTypeChange();
             return;
         }
-        list.innerHTML = channels.map(ch => `
-            <div class="px-5 py-4 flex items-center justify-between">
-                <div class="flex items-center gap-3">
-                    <div class="w-9 h-9 bg-gray-200 rounded-full flex items-center justify-center text-gray-500">
-                        <i data-lucide="message-square" class="w-4 h-4"></i>
-                    </div>
-                    <div>
-                        <p class="text-sm font-semibold">${ch.type || ch.name || 'Kanal'}</p>
-                        <p class="text-[10px] text-gray-400">
-                            ${ch.enabled ? 'Etkin' : 'Devre dışı'} · status: ${ch.status || 'unknown'}
-                            ${(ch.health && typeof ch.health.retries === 'number') ? ` · retry: ${ch.health.retries}` : ''}
-                            ${(ch.health && typeof ch.health.failures === 'number') ? ` · fail: ${ch.health.failures}` : ''}
-                            ${(ch.message_metrics) ? ` · in/out: ${ch.message_metrics.received || 0}/${ch.message_metrics.sent || 0}` : ''}
-                            ${(typeof ch.failure_rate_pct === 'number') ? ` · err: ${ch.failure_rate_pct}%` : ''}
-                        </p>
-                        ${(ch.last_activity) ? `<p class="text-[10px] text-gray-400">Son aktivite: ${new Date(ch.last_activity).toLocaleString('tr-TR')}</p>` : ''}
-                    </div>
-                </div>
-                <span class="text-[10px] font-bold ${ch.connected ? 'text-green-500' : 'text-orange-500'} uppercase">${ch.connected ? 'Connected' : (ch.enabled ? 'Degraded' : 'Offline')}</span>
-            </div>
-        `).join('');
-        lucide.createIcons();
-    } catch(e) {
-        list.innerHTML = '<div class="p-8 text-center text-sm text-red-400">API bağlantı hatası</div>';
+
+        list.innerHTML = channels.map(ch => {
+            const id = String(ch.id || ch.type || '');
+            const health = _channelHealthLabel(ch);
+            const statusCls = health === 'connected'
+                ? 'bg-emerald-100 text-emerald-700'
+                : health === 'degraded'
+                    ? 'bg-amber-100 text-amber-700'
+                    : 'bg-gray-100 text-gray-600';
+            const retries = Number(ch.health?.retries || 0);
+            const fails = Number(ch.health?.failures || 0);
+            const inOut = `${Number(ch.message_metrics?.received || 0)}/${Number(ch.message_metrics?.sent || 0)}`;
+            return `
+                <tr>
+                    <td class="px-4 py-2.5">
+                        <div class="font-semibold text-xs capitalize">${escapeToolText(ch.type || 'kanal')}</div>
+                        <div class="text-[10px] text-gray-400">${ch.enabled ? 'enabled' : 'disabled'}</div>
+                    </td>
+                    <td class="px-4 py-2.5 text-xs text-gray-600">${escapeToolText(id)}</td>
+                    <td class="px-4 py-2.5 text-xs">
+                        <span class="inline-flex px-2 py-0.5 rounded font-bold text-[10px] uppercase ${statusCls}">${escapeToolText(health)}</span>
+                    </td>
+                    <td class="px-4 py-2.5 text-[10px] text-gray-500">
+                        retry=${retries} · fail=${fails} · in/out=${inOut}
+                    </td>
+                    <td class="px-4 py-2.5 text-right">
+                        <div class="inline-flex flex-wrap justify-end gap-1">
+                            <button onclick="editChannel(decodeURIComponent('${encodeURIComponent(String(id))}'))" class="px-2 py-1 rounded bg-slate-100 text-slate-700 text-[10px] font-bold hover:bg-slate-200">Düzenle</button>
+                            <button onclick="toggleChannel(decodeURIComponent('${encodeURIComponent(String(id))}'), ${!ch.enabled})" class="px-2 py-1 rounded ${ch.enabled ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'} text-[10px] font-bold hover:opacity-80">${ch.enabled ? 'Disable' : 'Enable'}</button>
+                            <button onclick="testChannel(decodeURIComponent('${encodeURIComponent(String(id))}'))" class="px-2 py-1 rounded bg-blue-100 text-blue-700 text-[10px] font-bold hover:bg-blue-200">Test</button>
+                            <button onclick="deleteChannel(decodeURIComponent('${encodeURIComponent(String(id))}'))" class="px-2 py-1 rounded bg-red-100 text-red-700 text-[10px] font-bold hover:bg-red-200">Sil</button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+
+        if (!document.querySelector('[data-channel-field]')) onChannelTypeChange();
+    } catch (e) {
+        list.innerHTML = '<tr><td colspan="5" class="px-4 py-4 text-center text-xs text-red-400">API bağlantı hatası</td></tr>';
     }
 }
 
@@ -1231,6 +2176,7 @@ async function loadSkills() {
                     <td class="px-4 py-2.5 text-xs text-gray-500">${s.source || 'local'}</td>
                     <td class="px-4 py-2.5 text-xs">${status}</td>
                     <td class="px-4 py-2.5 text-right">
+                        <button onclick="showSkillDetails('${s.name}')" class="text-[10px] px-2 py-1 rounded bg-slate-100 text-slate-700 font-bold hover:bg-slate-200 mr-1">Detay</button>
                         ${s.installed
                             ? `
                                 <button onclick="toggleSkill('${s.name}', ${!s.enabled})" class="text-[10px] px-2 py-1 rounded ${s.enabled ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'} font-bold hover:opacity-80">${s.enabled ? 'Disable' : 'Enable'}</button>
@@ -1256,6 +2202,14 @@ async function installSkill(name) {
         });
         await loadSkills();
     } catch(e) { console.error(e); }
+}
+
+async function installCustomSkill() {
+    const name = (document.getElementById('skills-install-name')?.value || '').trim();
+    if (!name) return;
+    await installSkill(name);
+    const el = document.getElementById('skills-install-name');
+    if (el) el.value = '';
 }
 
 async function toggleSkill(name, enabled) {
@@ -1305,6 +2259,19 @@ async function checkSkillsHealth() {
     }
 }
 
+async function showSkillDetails(name) {
+    const out = document.getElementById('skills-detail-output');
+    if (!out || !name) return;
+    out.textContent = `Detay yükleniyor: ${name}...`;
+    try {
+        const r = await fetch(API + `/api/skills/detail?name=${encodeURIComponent(name)}`);
+        const d = await r.json();
+        out.textContent = JSON.stringify(d, null, 2);
+    } catch (e) {
+        out.textContent = 'Skill detay hatası: ' + e.message;
+    }
+}
+
 // ── Automation tab ─────────────────────────────────────────────────────────
 let routineTemplates = [];
 
@@ -1330,6 +2297,88 @@ function applyRoutineTemplate() {
     }
     if (stepsEl) {
         stepsEl.value = (template.steps || []).join('\n');
+    }
+}
+
+function applyRoutineSuggestion(suggestion) {
+    if (!suggestion || typeof suggestion !== 'object') return;
+    const setVal = (id, value) => {
+        const el = document.getElementById(id);
+        if (el && value !== undefined && value !== null) el.value = String(value);
+    };
+    setVal('rt-name', suggestion.name || '');
+    setVal('rt-expression', suggestion.expression || '0 9 * * *');
+    if (Array.isArray(suggestion.steps)) {
+        setVal('rt-steps', suggestion.steps.join('\n'));
+    }
+    if (Array.isArray(suggestion.panels)) {
+        setVal('rt-panels', suggestion.panels.join(','));
+    }
+    if (suggestion.report_channel) setVal('rt-channel', suggestion.report_channel);
+    if (suggestion.report_chat_id) setVal('rt-chat-id', suggestion.report_chat_id);
+    const tpl = document.getElementById('rt-template');
+    if (tpl && suggestion.template_id) tpl.value = suggestion.template_id;
+}
+
+async function suggestRoutineFromText() {
+    const status = document.getElementById('rt-natural-status');
+    const text = (document.getElementById('rt-natural')?.value || '').trim();
+    if (!text) {
+        if (status) status.textContent = 'Metin gerekli.';
+        return;
+    }
+    if (status) status.textContent = 'Öneri hazırlanıyor...';
+    try {
+        const r = await fetch(API + '/api/routines/suggest', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({text}),
+        });
+        const d = await r.json();
+        if (!r.ok || !d.ok) {
+            if (status) status.textContent = 'Hata: ' + (d.error || 'öneri üretilemedi');
+            return;
+        }
+        applyRoutineSuggestion(d.suggestion || {});
+        if (status) status.textContent = `Öneri uygulandı (güven: ${d.suggestion?.confidence ?? '-'})`;
+    } catch (e) {
+        if (status) status.textContent = 'Hata: ' + e.message;
+    }
+}
+
+async function createRoutineFromText() {
+    const status = document.getElementById('rt-natural-status');
+    const text = (document.getElementById('rt-natural')?.value || '').trim();
+    if (!text) {
+        if (status) status.textContent = 'Metin gerekli.';
+        return;
+    }
+    if (status) status.textContent = 'Rutin oluşturuluyor...';
+    try {
+        const payload = {
+            text,
+            name: (document.getElementById('rt-name')?.value || '').trim(),
+            expression: (document.getElementById('rt-expression')?.value || '').trim(),
+            report_channel: (document.getElementById('rt-channel')?.value || 'telegram').trim(),
+            report_chat_id: (document.getElementById('rt-chat-id')?.value || '').trim(),
+            panels: _parsePanelInput(document.getElementById('rt-panels')?.value || ''),
+            enabled: true,
+            created_by: 'dashboard-nl',
+        };
+        const r = await fetch(API + '/api/routines/from-text', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+        });
+        const d = await r.json();
+        if (!r.ok || !d.ok) {
+            if (status) status.textContent = 'Hata: ' + (d.error || 'rutin oluşturulamadı');
+            return;
+        }
+        if (status) status.textContent = `Rutin eklendi: ${d.routine?.id || '-'}`;
+        await loadRoutines();
+    } catch (e) {
+        if (status) status.textContent = 'Hata: ' + e.message;
     }
 }
 
@@ -1520,9 +2569,18 @@ async function loadTasks() {
                 <span class="text-[10px] shrink-0 ${t.success ? 'text-green-500' : 'text-red-400'}">${t.success ? '✓' : '✗'}</span>
                 <span class="text-sm flex-1 truncate">${t.user_input || t.id || '—'}</span>
                 <span class="text-[10px] text-gray-400">${t.domain || ''}</span>
+                <button onclick="rerunTaskFromHistory(decodeURIComponent('${encodeURIComponent(String(t.user_input || ''))}'))" class="text-[10px] px-2 py-1 rounded bg-blue-100 text-blue-700 font-bold hover:bg-blue-200">Tekrar</button>
             </div>
         `).join('') : '<div class="p-6 text-center text-sm text-gray-400">Geçmiş yok</div>';
     } catch(e) {}
+}
+
+async function rerunTaskFromHistory(text) {
+    const prompt = String(text || '').trim();
+    if (!prompt) return;
+    const input = document.getElementById('quick-task-input');
+    if (input) input.value = prompt;
+    await createTask();
 }
 
 // ── Analytics tab ──────────────────────────────────────────────────────────
@@ -1739,6 +2797,73 @@ function renderToolHealthBadge(health) {
     return `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold ${cls}">${label}</span>`;
 }
 
+// ── Tool Request Log ──────────────────────────────────────────────────────────
+async function loadToolRequests() {
+    const toolFilter = document.getElementById('tool-req-filter')?.value || '';
+    const successOnly = document.getElementById('tool-req-success')?.value === '1' ? '1' : '0';
+    const tbody = document.getElementById('tool-req-tbody');
+    const empty = document.getElementById('tool-req-empty');
+    const statsEl = document.getElementById('tool-req-stats');
+    if (!tbody) return;
+    try {
+        // Stats
+        const statsRes = await fetch('/api/tool-requests/stats').then(r => r.json()).catch(() => ({}));
+        if (statsEl && statsRes.total !== undefined) {
+            statsEl.textContent = `${statsRes.total} çağrı · %${statsRes.success_rate_pct ?? 0} başarı · ort. ${statsRes.avg_latency_ms ?? 0}ms`;
+        }
+        // Records
+        let url = `/api/tool-requests?limit=100`;
+        if (toolFilter) url += `&tool=${encodeURIComponent(toolFilter)}`;
+        if (successOnly === '1') url += `&success_only=1`;
+        const data = await fetch(url).then(r => r.json());
+        const records = data.records || [];
+        if (records.length === 0) {
+            tbody.innerHTML = '';
+            if (empty) empty.classList.remove('hidden');
+            return;
+        }
+        if (empty) empty.classList.add('hidden');
+        tbody.innerHTML = records.map(rec => {
+            const badge = rec.success
+                ? '<span class="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-[10px] font-bold">OK</span>'
+                : '<span class="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-bold">ERR</span>';
+            
+            // Contract status with detailed icon
+            let contractBadge = '<span class="text-gray-300 text-[10px]">–</span>';
+            if (rec.contract_verified === true) {
+                contractBadge = '<span class="text-green-600 text-[10px]" title="Sözleşme Doğrulandı">✓</span>';
+            } else if (rec.contract_verified === false) {
+                contractBadge = '<span class="text-red-500 text-[10px]" title="Sözleşme Başarısız">✗</span>';
+            }
+
+            // Repair status icon
+            let repairBadge = '';
+            if (rec.params && rec.params._repair_attempted) {
+                repairBadge = '<span class="ml-1 text-orange-500 text-[10px]" title="Onarım Girişimi">🛠</span>';
+            }
+            if (rec.result_preview && rec.result_preview.includes('_repair_successful')) {
+                repairBadge = '<span class="ml-1 text-emerald-500 text-[10px]" title="Onarım Başarılı">✅🛠</span>';
+            }
+
+            const artifact = rec.artifacts && rec.artifacts.length
+                ? `<span class="text-blue-600 truncate max-w-[120px] block" title="${rec.artifacts[0]}">${rec.artifacts[0].split('/').pop()}</span>`
+                : '<span class="text-gray-300">–</span>';
+            const preview = (rec.result_preview || rec.error || '').substring(0, 60);
+            return `<tr class="hover:bg-gray-50">
+                <td class="py-1 pr-3 font-mono text-[10px] text-gray-400">${rec.request_id}</td>
+                <td class="py-1 pr-3 font-semibold text-gray-700">${rec.tool}${repairBadge}</td>
+                <td class="py-1 pr-3 text-gray-500">${rec.latency_ms}ms</td>
+                <td class="py-1 pr-3">${badge}</td>
+                <td class="py-1 pr-3">${artifact}</td>
+                <td class="py-1 pr-3 text-center">${contractBadge}</td>
+                <td class="py-1 text-gray-400 max-w-[200px] truncate" title="${preview}">${preview}</td>
+            </tr>`;
+        }).join('');
+    } catch(e) {
+        tbody.innerHTML = `<tr><td colspan="7" class="text-center text-red-400 py-2">${e.message}</td></tr>`;
+    }
+}
+
 async function loadTools() {
     const q = encodeURIComponent(document.getElementById('tools-search')?.value || '');
     const group = encodeURIComponent(document.getElementById('tools-group-filter')?.value || '');
@@ -1750,6 +2875,7 @@ async function loadTools() {
         const r = await fetch(API + `/api/tools?q=${q}&group=${group}&policy=${policy}&health=${health}`);
         const d = await r.json();
         const tools = d.tools || [];
+        lastLoadedTools = tools;
         const sum = d.summary || {};
         const hs = sum.health || {};
         document.getElementById('tools-total').textContent = sum.total ?? 0;
@@ -1761,7 +2887,7 @@ async function loadTools() {
         document.getElementById('tools-broken').textContent = hs.broken ?? 0;
 
         if (!tools.length) {
-            table.innerHTML = '<tr><td colspan="9" class="px-4 py-4 text-center text-xs text-gray-400">Tool bulunamadı</td></tr>';
+            table.innerHTML = '<tr><td colspan="10" class="px-4 py-4 text-center text-xs text-gray-400">Tool bulunamadı</td></tr>';
         } else {
             table.innerHTML = tools.map(t => `
                 <tr>
@@ -1786,6 +2912,12 @@ async function loadTools() {
                     <td class="px-4 py-2.5 text-center">
                         <input type="checkbox" ${t.requires_approval ? 'checked' : ''} onchange="toggleToolPolicy('${t.name}', 'approval', this.checked)" />
                     </td>
+                    <td class="px-4 py-2.5 text-center">
+                        <div class="inline-flex gap-1">
+                            <button onclick="showToolDetails('${t.name}')" class="px-2 py-1 bg-slate-100 text-slate-700 rounded text-[10px] font-bold hover:bg-slate-200">Detay</button>
+                            <button onclick="runToolProbe('${t.name}')" class="px-2 py-1 bg-sky-100 text-sky-700 rounded text-[10px] font-bold hover:bg-sky-200">Probe</button>
+                        </div>
+                    </td>
                 </tr>
             `).join('');
         }
@@ -1795,7 +2927,71 @@ async function loadTools() {
             select.innerHTML = tools.map(t => `<option value="${t.name}">${t.name} (${t.group})</option>`).join('');
         }
     } catch(e) {
-        table.innerHTML = '<tr><td colspan="9" class="px-4 py-4 text-center text-xs text-red-400">Tools API hatası</td></tr>';
+        table.innerHTML = '<tr><td colspan="10" class="px-4 py-4 text-center text-xs text-red-400">Tools API hatası</td></tr>';
+    }
+}
+
+async function loadToolsPolicy() {
+    const el = document.getElementById('tools-policy-json');
+    const statusEl = document.getElementById('tools-policy-status');
+    if (!el) return;
+    if (statusEl) statusEl.textContent = 'Policy yükleniyor...';
+    try {
+        const r = await fetch(API + '/api/tools/policy');
+        const d = await r.json();
+        if (!r.ok || !d.ok) throw new Error(d.error || 'Policy yüklenemedi');
+        el.value = JSON.stringify(d.policy || {}, null, 2);
+        if (statusEl) statusEl.textContent = 'Policy yüklendi.';
+    } catch (e) {
+        if (statusEl) statusEl.textContent = '❌ ' + e.message;
+    }
+}
+
+async function saveToolsPolicyJson() {
+    const el = document.getElementById('tools-policy-json');
+    const statusEl = document.getElementById('tools-policy-status');
+    if (!el) return;
+    let payload = {};
+    try {
+        payload = JSON.parse(el.value || '{}');
+    } catch (e) {
+        if (statusEl) statusEl.textContent = '❌ JSON parse hatası: ' + e.message;
+        return;
+    }
+    if (statusEl) statusEl.textContent = 'Kaydediliyor...';
+    try {
+        const r = await fetch(API + '/api/tools/policy', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+        });
+        const d = await r.json();
+        if (!r.ok || !d.ok) throw new Error(d.error || 'Policy kaydedilemedi');
+        el.value = JSON.stringify(d.policy || payload, null, 2);
+        if (statusEl) statusEl.textContent = '✅ Policy kaydedildi.';
+        await loadTools();
+    } catch (e) {
+        if (statusEl) statusEl.textContent = '❌ ' + e.message;
+    }
+}
+
+async function resetToolsPolicyDefault() {
+    const statusEl = document.getElementById('tools-policy-status');
+    const el = document.getElementById('tools-policy-json');
+    if (!el) return;
+    if (statusEl) statusEl.textContent = 'Default policy yükleniyor...';
+    try {
+        const r = await fetch(API + '/api/tools/policy');
+        const d = await r.json();
+        const defaults = d.defaults || {
+            allow: ["group:fs", "group:web", "group:ui", "group:runtime", "group:messaging", "group:automation", "group:memory", "browser"],
+            deny: ["exec"],
+            requireApproval: ["delete_file", "write_file"],
+        };
+        el.value = JSON.stringify(defaults, null, 2);
+        if (statusEl) statusEl.textContent = 'Default policy hazır. Kaydet ile uygula.';
+    } catch (e) {
+        if (statusEl) statusEl.textContent = '❌ ' + e.message;
     }
 }
 
@@ -1819,6 +3015,7 @@ async function toggleToolPolicy(toolName, field, enabled) {
 async function runToolTest() {
     const name = document.getElementById('tool-test-name')?.value;
     const raw = document.getElementById('tool-test-params')?.value || '{}';
+    const paramsEl = document.getElementById('tool-test-params');
     const out = document.getElementById('tool-test-output');
     if (!name || !out) return;
     let params = {};
@@ -1836,16 +3033,145 @@ async function runToolTest() {
             body: JSON.stringify({ tool: name, params, execute: true }),
         });
         const d = await r.json();
+        if (!r.ok && d?.suggested_params && Object.keys(params || {}).length === 0 && paramsEl) {
+            paramsEl.value = JSON.stringify(d.suggested_params, null, 2);
+        }
         out.textContent = JSON.stringify(d, null, 2);
     } catch(e) {
         out.textContent = 'Tool test hatası: ' + e.message;
     }
 }
 
+async function runToolProbe(toolName) {
+    const out = document.getElementById('tool-test-output');
+    const select = document.getElementById('tool-test-name');
+    const paramsEl = document.getElementById('tool-test-params');
+    if (!out) return;
+    if (select && toolName) select.value = toolName;
+    if (paramsEl) paramsEl.value = '{}';
+    out.textContent = `Probe çalıştırılıyor: ${toolName}...`;
+    try {
+        const r = await fetch(API + '/api/tools/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tool: toolName, params: {}, execute: true }),
+        });
+        const d = await r.json();
+        out.textContent = JSON.stringify(d, null, 2);
+        await loadTools();
+    } catch (e) {
+        out.textContent = 'Probe hatası: ' + e.message;
+    }
+}
+
+async function showToolDetails(toolName) {
+    const out = document.getElementById('tool-detail-output');
+    if (!out || !toolName) return;
+    out.textContent = `Detay yükleniyor: ${toolName}...`;
+    try {
+        const r = await fetch(API + `/api/tools/detail?name=${encodeURIComponent(toolName)}`);
+        const d = await r.json();
+        out.textContent = JSON.stringify(d, null, 2);
+    } catch (e) {
+        out.textContent = 'Tool detay hatası: ' + e.message;
+    }
+}
+
+async function probeVisibleTools() {
+    const out = document.getElementById('tool-test-output');
+    if (!out) return;
+    const names = (lastLoadedTools || []).map(t => t.name).filter(Boolean).slice(0, 50);
+    if (!names.length) {
+        out.textContent = 'Probe edilecek görünür tool yok.';
+        return;
+    }
+    out.textContent = `Visible probe çalıştırılıyor (${names.length} tool)...`;
+    try {
+        const q = encodeURIComponent(names.join(','));
+        const r = await fetch(API + `/api/tools/diagnostics?probe=1&tools=${q}`);
+        const d = await r.json();
+        out.textContent = JSON.stringify(d, null, 2);
+        await loadTools();
+    } catch (e) {
+        out.textContent = 'Visible probe hatası: ' + e.message;
+    }
+}
+
+async function applyGroupPolicy() {
+    const group = document.getElementById('tools-group-policy-target')?.value || '';
+    const field = document.getElementById('tools-group-policy-field')?.value || '';
+    const valueRaw = document.getElementById('tools-group-policy-value')?.value || 'true';
+    const value = valueRaw === 'true';
+    if (!group || !field) return;
+    const payload = { group };
+    if (field === 'allow') payload.allow = value;
+    if (field === 'deny') payload.deny = value;
+    if (field === 'approval') payload.requireApproval = value;
+    try {
+        await fetch(API + '/api/tools/policy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        await loadTools();
+    } catch (e) {
+        console.error('Group policy update hatası', e);
+    }
+}
+
 // ── Quick task ─────────────────────────────────────────────────────────────
+function _setQuickTaskHint(msg, tone = 'info') {
+    const hint = document.getElementById('quick-task-hint');
+    if (!hint) return;
+    if (!msg) {
+        hint.className = 'hidden text-[11px] rounded-md border px-2 py-1.5';
+        hint.textContent = '';
+        return;
+    }
+    const cls = tone === 'ok'
+        ? 'text-[11px] rounded-md border px-2 py-1.5 border-blue-200 bg-blue-50 text-blue-800'
+        : tone === 'warn'
+            ? 'text-[11px] rounded-md border px-2 py-1.5 border-orange-200 bg-orange-50 text-orange-800'
+            : 'text-[11px] rounded-md border px-2 py-1.5 border-gray-200 bg-gray-50 text-gray-700';
+    hint.className = cls;
+    hint.textContent = msg;
+}
+
+async function suggestQuickTaskIntent() {
+    const input = document.getElementById('quick-task-input');
+    const text = (input?.value || '').trim();
+    if (!text) {
+        _setQuickTaskHint('');
+        return;
+    }
+    try {
+        const r = await fetch(API + '/api/tasks/suggest', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text }),
+        });
+        const d = await r.json();
+        const intent = d.intent || {};
+        if (intent.should_auto_create) {
+            const suggestion = intent.suggestion || {};
+            const expr = suggestion.expression || '—';
+            _setQuickTaskHint(`Otomasyon algılandı (cron: ${expr}). Gönderince rutin olarak kaydedilir.`, 'ok');
+            return;
+        }
+        if (intent.has_schedule && !intent.has_action) {
+            _setQuickTaskHint('Zamanlama algılandı ama aksiyon net değil. Örn: "her gün 09:00 paneli kontrol et ve rapor gönder".', 'warn');
+            return;
+        }
+        _setQuickTaskHint('');
+    } catch (e) {
+        _setQuickTaskHint('');
+    }
+}
+
 async function createTask() {
     const input = document.getElementById('quick-task-input');
     const status = document.getElementById('quick-task-status');
+    if (!input || !status) return;
     const text = input.value.trim();
     if (!text) return;
     status.textContent = 'Gönderiliyor...';
@@ -1857,10 +3183,24 @@ async function createTask() {
             body: JSON.stringify({text})
         });
         const d = await r.json();
+        if (d.status === 'routine_created') {
+            status.textContent = `✓ Rutin oluşturuldu (${d.routine?.id || 'ok'})`;
+            status.className = 'text-xs text-center text-blue-600';
+            input.value = '';
+            _setQuickTaskHint('');
+            await loadRoutines();
+            switchTab('automation');
+            setTimeout(() => {
+                status.classList.add('hidden');
+                status.className = 'text-xs text-center text-gray-400 hidden';
+            }, 3500);
+            return;
+        }
         if (d.status === 'queued') {
             status.textContent = '✓ Görev kuyruğa alındı';
             status.className = 'text-xs text-center text-green-500';
             input.value = '';
+            _setQuickTaskHint('');
             setTimeout(() => { status.classList.add('hidden'); status.className = 'text-xs text-center text-gray-400 hidden'; }, 3000);
         } else {
             status.textContent = d.error || 'Hata';
@@ -1882,12 +3222,25 @@ pollStatus();
 pollAnalytics();
 pollTasks();
 pollMemory();
+loadChannels();
 loadTools();
+loadToolsPolicy();
 loadSkills();
 loadRoutines();
 loadModelSettings();
+loadAgentProfile();
 
-['tools-search', 'tools-group-filter', 'tools-policy-filter'].forEach(id => {
+const quickTaskInput = document.getElementById('quick-task-input');
+if (quickTaskInput) {
+    quickTaskInput.addEventListener('input', () => {
+        if (quickTaskSuggestTimer) clearTimeout(quickTaskSuggestTimer);
+        quickTaskSuggestTimer = setTimeout(() => {
+            suggestQuickTaskIntent();
+        }, 320);
+    });
+}
+
+['tools-search', 'tools-group-filter', 'tools-policy-filter', 'tools-health-filter'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     const evt = id === 'tools-search' ? 'input' : 'change';
@@ -1942,6 +3295,7 @@ setInterval(() => {
 setInterval(() => {
     if (document.getElementById('tab-settings')?.classList.contains('active')) {
         loadModelSettings();
+        loadAgentProfile();
     }
 }, 30000);
 setInterval(updateRibbonClock, 15000);

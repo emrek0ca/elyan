@@ -186,7 +186,20 @@ async def write_excel(
         wrote, row_count = await loop.run_in_executor(None, _write)
         if not wrote:
             return {"success": False, "error": "Yazılacak veri bulunamadı (data boş)."}
-        return {"success": True, "path": str(file_path), "row_count": row_count}
+
+        # Post-check validation
+        if not file_path.exists():
+            return {"success": False, "error": "WRITE_FAILED: Dosya diskte bulunamadı.", "error_code": "FILE_NOT_FOUND"}
+        
+        file_size = file_path.stat().st_size
+        if file_size < 1000: # Minimum xlsx structure size
+            return {
+                "success": False, 
+                "error": f"WRITE_POSTCHECK_FAILED: Excel dosyası boyutu şüpheli şekilde küçük ({file_size} bytes).",
+                "error_code": "WRITE_POSTCHECK_FAILED"
+            }
+
+        return {"success": True, "path": str(file_path), "row_count": row_count, "size_bytes": file_size}
     except Exception as e:
         logger.error(f"Write Excel error: {e}")
         return {"success": False, "error": str(e)}

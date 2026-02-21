@@ -27,6 +27,21 @@ class ResearchParser(BaseParser):
             topic = _RE_RESEARCH_CLEAN2.sub(" ", topic)
             topic = _RE_RESEARCH_CLEAN3.sub("", topic)
             topic = _RE_RESEARCH_CLEAN4.sub("", topic).strip()
+        # Remove common command/noise fragments to keep topic semantic.
+        topic = re.sub(
+            r"\b(aç|ac|başlat|baslat|çalıştır|calistir|open|launch|safari|chrome|tarayıcı|tarayici|browser)\b",
+            " ",
+            topic,
+            flags=re.IGNORECASE,
+        )
+        topic = re.sub(
+            r"\b(kaydet|yaz|oluştur|olustur|dosya|belge|word|excel|tablo|içine|icine)\b",
+            " ",
+            topic,
+            flags=re.IGNORECASE,
+        )
+        topic = re.sub(r"\b(kopyala|copy|clipboard|pano|panoya)\b", " ", topic, flags=re.IGNORECASE)
+        topic = re.sub(r"\s+", " ", topic).strip(" .,:;-")
         if not topic or len(topic) < 2:
             return None
         depth = "standard"
@@ -34,7 +49,62 @@ class ResearchParser(BaseParser):
             depth = "deep"
         elif any(w in text for w in ["kısa", "hızlı", "özet"]):
             depth = "quick"
-        return {"action": "research", "params": {"topic": topic, "depth": depth},
+
+        params = {"topic": topic, "depth": depth}
+        if any(k in text for k in ["akademik", "bilimsel", "hakemli", "makale", "journal", "paper"]):
+            params["source_policy"] = "academic"
+            params["min_reliability"] = 0.72
+        elif any(k in text for k in ["resmi", "official", "devlet", "bakanlık", "bakanlik", ".gov"]):
+            params["source_policy"] = "official"
+            params["min_reliability"] = 0.75
+        elif any(k in text for k in ["güvenilir", "guvenilir", "trusted", "doğrulanmış", "dogrulanmis"]):
+            params["source_policy"] = "trusted"
+            params["min_reliability"] = 0.65
+
+        m = re.search(r"%\s*(\d{1,3})", text)
+        if not m:
+            m = re.search(r"\b(\d{1,3})\s*%\b", text)
+        if m:
+            try:
+                params["min_reliability"] = max(0.0, min(1.0, int(m.group(1)) / 100.0))
+            except Exception:
+                pass
+
+        doc_markers = [
+            "rapor", "belge", "dokuman", "doküman", "word", "docx", "excel", "xlsx", "tablo", "dosya",
+        ]
+        deliver_markers = [
+            "gönder", "gonder", "kopya", "ilet", "paylaş", "paylas", "telegram", "whatsapp", "telefon",
+        ]
+        if any(k in text for k in doc_markers):
+            depth_for_delivery = {
+                "quick": "quick",
+                "standard": "standard",
+                "deep": "comprehensive",
+            }.get(depth, "comprehensive")
+            include_word = any(k in text for k in ["rapor", "belge", "word", "docx", "dokuman", "doküman"])
+            include_excel = any(k in text for k in ["excel", "xlsx", "tablo", "csv"])
+            if not include_word and not include_excel:
+                include_word = True
+                include_excel = True
+            return {
+                "action": "research_document_delivery",
+                "params": {
+                    "topic": topic,
+                    "brief": original or text,
+                    "depth": depth_for_delivery,
+                    "language": "tr",
+                    "include_word": include_word,
+                    "include_excel": include_excel,
+                    "include_report": True,
+                    "deliver_copy": any(k in text for k in deliver_markers),
+                    "source_policy": params.get("source_policy", "trusted"),
+                    "min_reliability": params.get("min_reliability", 0.62),
+                },
+                "reply": f"'{topic}' için araştırma ve belge paketi hazırlanıyor...",
+            }
+
+        return {"action": "research", "params": params,
                 "reply": f"'{topic}' hakkında araştırma yapılıyor..."}
 
     # ── Web Search ────────────────────────────────────────────────────────────
@@ -62,10 +132,25 @@ class ResearchParser(BaseParser):
 
     # ── Summarize ─────────────────────────────────────────────────────────────
     def _parse_summarize(self, text: str, text_norm: str, original: str) -> dict | None:
-        triggers = ["özetle", "ozetle", "özet", "ozet", "summarize", "summary",
-                    "kısalt", "kisalt", "ana noktalar", "key points"]
-        if not any(t in text for t in triggers):
+        command_patterns = [
+            r"\bözetle\b",
+            r"\bozetle\b",
+            r"\bsummarize\b",
+            r"\bsummary\b",
+            r"\bkısalt\b",
+            r"\bkisalt\b",
+            r"\bana noktalar\b",
+            r"\bkey points\b",
+            r"\bözet çıkar\b",
+            r"\bozet cikar\b",
+        ]
+        if not any(re.search(pat, text, re.IGNORECASE) for pat in command_patterns):
             return None
+        # Avoid false positives in document creation prompts like
+        # "word belgesi oluştur ... satış özeti yaz".
+        if any(k in text for k in ["word", "excel", "belge", "dosya", "oluştur", "olustur", "kaydet"]):
+            if not any(k in text for k in ["özetle", "ozetle", "summarize", "summary"]):
+                return None
         m = re.search(r'(https?://[^\s]+|www\.[^\s]+)', text)
         if m:
             url = m.group()

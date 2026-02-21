@@ -1,0 +1,7 @@
+Collecting sqlalchemy
+  Downloading sqlalchemy-2.0.46-cp312-cp312-macosx_11_0_arm64.whl.metadata (9.5 kB)
+Requirement already satisfied: typing-extensions>=4.6.0 in ./.venv/lib/python3.12/site-packages (from sqlalchemy) (4.15.0)
+Downloading sqlalchemy-2.0.46-cp312-cp312-macosx_11_0_arm64.whl (2.2 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.2/2.2 MB 2.8 MB/s  0:00:00
+Installing collected packages: sqlalchemy
+Successfully installed sqlalchemy-2.0.46

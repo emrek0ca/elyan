@@ -130,8 +130,14 @@ async def write_word(
                 if para_text:
                     paragraph_items.append(para_text)
 
-        if not str(title or "").strip() and not content_text and not paragraph_items:
-            return {"success": False, "error": "Word dosyası için yazılacak içerik boş."}
+        # Rule-1: No empty or skeleton files
+        total_len = len(content_text) + sum(len(p) for p in paragraph_items) + len(str(title or ""))
+        if total_len < 200:
+            return {
+                "success": False, 
+                "error": f"CONTENT_TOO_SHORT: Word içeriği çok kısa ({total_len} karakter). En az 200 karakter olmalı.",
+                "error_code": "CONTENT_TOO_SHORT"
+            }
 
         try:
             from docx import Document
@@ -165,12 +171,25 @@ async def write_word(
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _write)
 
-        logger.info(f"Created Word file: {file_path.name}")
+        # Post-check validation
+        if not file_path.exists():
+            return {"success": False, "error": "WRITE_FAILED: Dosya diskte bulunamadı.", "error_code": "FILE_NOT_FOUND"}
+        
+        file_size = file_path.stat().st_size
+        if file_size < 2000: # Minimum docx structure size + small content
+            return {
+                "success": False, 
+                "error": f"WRITE_POSTCHECK_FAILED: Dosya boyutu çok küçük ({file_size} bytes). İçerik tam yazılamamış olabilir.",
+                "error_code": "WRITE_POSTCHECK_FAILED"
+            }
+
+        logger.info(f"Created Word file: {file_path.name} ({file_size} bytes)")
 
         return {
             "success": True,
             "path": str(file_path),
-            "filename": file_path.name
+            "filename": file_path.name,
+            "size_bytes": file_size
         }
 
     except Exception as e:

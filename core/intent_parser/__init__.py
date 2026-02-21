@@ -81,6 +81,7 @@ class IntentParser(
             self._parse_summarize,
             self._parse_translate,
             # Belgeler
+            self._parse_create_coding_project,
             self._parse_create_website,
             self._parse_create_word,
             self._parse_create_excel,
@@ -92,11 +93,15 @@ class IntentParser(
             self._parse_reminder,
             self._parse_music,
             self._parse_code_run,
+            self._parse_code_write,
             self._parse_visual_generation,
             self._parse_scheduled_tasks,
             self._parse_help,
         ]
-        self._multi_split_re = re.compile(r"\s+(?:ve\s+sonra|ardından|ardindan|sonra)\s+", re.IGNORECASE)
+        self._multi_split_re = re.compile(
+            r"\s*(?:[,;]+\s*|\s+(?:ve\s+sonra|ardından|ardindan|sonra|sonrasında|sonrasinda|then)\s+)\s*",
+            re.IGNORECASE,
+        )
 
     # ── Public API ────────────────────────────────────────────────────────────
     def parse(self, text: str) -> dict[str, Any]:
@@ -117,6 +122,10 @@ class IntentParser(
         original = text.strip()
         text = original.lower()
         text_norm = self._normalize(text)
+
+        coding_intent = self._parse_create_coding_project(text, text_norm, original)
+        if coding_intent:
+            return coding_intent
 
         multi = self._parse_multi_task(original)
         if multi:
@@ -147,8 +156,14 @@ class IntentParser(
         """
         parts = [p.strip() for p in self._multi_split_re.split(original) if p.strip()]
         if len(parts) < 2 and " ve " in original.lower():
-            # Plain "ve" fallback: only accepted if every segment maps to a real action.
-            parts = [p.strip() for p in re.split(r"\s+ve\s+", original, flags=re.IGNORECASE) if p.strip()]
+            # Plain "ve" fallback only when both sides look action-like.
+            raw_parts = [p.strip() for p in re.split(r"\s+ve\s+", original, flags=re.IGNORECASE) if p.strip()]
+            action_like = 0
+            for p in raw_parts:
+                if self._looks_like_action_segment(p):
+                    action_like += 1
+            if action_like >= 2:
+                parts = raw_parts
         if len(parts) < 2:
             return None
 
@@ -180,6 +195,24 @@ class IntentParser(
             "reply": "Çok adımlı görev planlandı ve sırayla çalıştırılacak.",
             "confidence": 0.9,
         }
+
+    def _looks_like_action_segment(self, segment: str) -> bool:
+        raw = str(segment or "").strip()
+        if len(raw) < 3:
+            return False
+        low = raw.lower()
+        action_verbs = (
+            "aç", "ac", "kapat", "araştır", "arastir", "ara", "search", "kaydet",
+            "yaz", "oluştur", "olustur", "listele", "göster", "goster", "oku",
+            "çevir", "cevir", "özetle", "ozetle", "hatırlat", "hatirlat",
+        )
+        if any(v in low for v in action_verbs):
+            return True
+        parsed = self._parse_single(low, self._normalize(low), raw)
+        if not parsed:
+            return False
+        action = str(parsed.get("action", "") or "").strip().lower()
+        return bool(action and action not in {"chat", "unknown", "multi_task"})
 
     def parse_batch(self, texts: list[str]) -> list[dict[str, Any]]:
         """Toplu parse — birden fazla mesaj için"""

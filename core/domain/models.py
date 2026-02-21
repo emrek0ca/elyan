@@ -8,6 +8,11 @@ class Environment(str, Enum):
     DEVELOPMENT = "development"
     TESTING = "testing"
 
+class SubscriptionTier(str, Enum):
+    FREE = "free"
+    PRO = "pro"
+    ENTERPRISE = "enterprise"
+
 class AgentConfig(BaseModel):
     autonomous: bool = True
     personality: str = "professional"
@@ -21,6 +26,35 @@ class ChannelConfig(BaseModel):
     extra: Dict[str, Any] = Field(default_factory=dict)
     model_config = ConfigDict(extra="allow")
 
+class SubscriptionConfig(BaseModel):
+    enabled: bool = False
+    default_tier: SubscriptionTier = SubscriptionTier.FREE
+    tiers: Dict[SubscriptionTier, Dict[str, Any]] = Field(
+        default_factory=lambda: {
+            SubscriptionTier.FREE: {
+                "max_messages_daily": 20,
+                "max_tokens_monthly": 100000,
+                "max_storage_gb": 1,
+                "advanced_models": False,
+                "research_allowed": False,
+            },
+            SubscriptionTier.PRO: {
+                "max_messages_daily": 500,
+                "max_tokens_monthly": 5000000,
+                "max_storage_gb": 50,
+                "advanced_models": True,
+                "research_allowed": True,
+            },
+            SubscriptionTier.ENTERPRISE: {
+                "max_messages_daily": 10000,
+                "max_tokens_monthly": 100000000,
+                "max_storage_gb": 500,
+                "advanced_models": True,
+                "research_allowed": True,
+            },
+        }
+    )
+
 class AppConfig(BaseModel):
     """Master configuration model with safe defaults."""
     version: str = "18.0.0"
@@ -29,6 +63,7 @@ class AppConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=lambda: AgentConfig())
     models: Dict[str, Any] = Field(default_factory=dict)
     channels: List[ChannelConfig] = Field(default_factory=list)
+    subscriptions: SubscriptionConfig = Field(default_factory=SubscriptionConfig)
     tools: Dict[str, Any] = Field(default_factory=dict)
     sandbox: Dict[str, Any] = Field(default_factory=dict)
     cron: List[Dict[str, Any]] = Field(default_factory=list)
@@ -45,5 +80,7 @@ class AppConfig(BaseModel):
     security: Dict[str, Any] = Field(default_factory=dict)
     gateway: Dict[str, Any] = Field(default_factory=dict)
     skills: Dict[str, Any] = Field(default_factory=dict)
+    monthly_budget_usd: float = 20.0
+    cost_limit_usd: float = 50.0
 
     model_config = ConfigDict(extra="allow")

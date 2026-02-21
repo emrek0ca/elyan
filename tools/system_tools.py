@@ -3,6 +3,7 @@ import platform
 import subprocess
 import os
 import time
+import shutil
 from pathlib import Path
 from typing import Any, Optional, Dict, List
 from core.registry import tool
@@ -93,8 +94,17 @@ async def open_app(app_name: Optional[str] = None) -> dict[str, Any]:
                 "error": "app_name gerekli (örnek: Safari, Google Chrome, Finder)."
             }
         app_name = str(app_name).strip()
-        process = await asyncio.create_subprocess_exec("open", "-a", app_name)
-        await process.wait()
+        process = await asyncio.create_subprocess_exec(
+            "open",
+            "-a",
+            app_name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode != 0:
+            error = (stderr.decode("utf-8", errors="ignore") or stdout.decode("utf-8", errors="ignore")).strip()
+            return {"success": False, "error": error or f"{app_name} açılamadı."}
         return {"success": True, "message": f"{app_name} opened."}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -313,6 +323,244 @@ async def run_safe_command(command: str) -> dict[str, Any]:
         }
     except asyncio.TimeoutError:
         return {"success": False, "error": "Command timed out (30s)"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def _normalize_ide_name(raw: str) -> str:
+    text = str(raw or "").strip().lower()
+    if text in {"", "default"}:
+        return "vscode"
+
+    aliases = {
+        "vscode": "vscode",
+        "vs code": "vscode",
+        "visual studio code": "vscode",
+        "code": "vscode",
+        "cursor": "cursor",
+        "windsurf": "windsurf",
+        "codeium windsurf": "windsurf",
+        "antigravity": "antigravity",
+        "gravity": "antigravity",
+        "ag": "antigravity",
+    }
+    return aliases.get(text, text)
+
+
+@tool("open_project_in_ide", "Open a project folder in IDE (VS Code/Cursor/Windsurf/Antigravity).")
+async def open_project_in_ide(project_path: str, ide: str = "vscode") -> dict[str, Any]:
+    try:
+        normalized_ide = _normalize_ide_name(ide)
+        target = Path(str(project_path or "")).expanduser()
+        if not target.exists():
+            return {"success": False, "error": f"Project path bulunamadı: {target}"}
+        if not target.is_dir():
+            return {"success": False, "error": f"Project path klasör olmalı: {target}"}
+
+        ide_map = {
+            "vscode": {
+                "app_candidates": ["Visual Studio Code", "Code"],
+                "cli_candidates": ["code"],
+            },
+            "cursor": {
+                "app_candidates": ["Cursor"],
+                "cli_candidates": ["cursor"],
+            },
+            "windsurf": {
+                "app_candidates": ["Windsurf", "Codeium Windsurf"],
+                "cli_candidates": ["windsurf"],
+            },
+            "antigravity": {
+                "app_candidates": ["Antigravity", "Antigravity IDE", "AntiGravity"],
+                "cli_candidates": ["antigravity", "gravity"],
+            },
+        }
+        config = ide_map.get(normalized_ide) or ide_map["vscode"]
+
+        # Prefer native CLI when installed (faster and opens folder directly).
+        for cli_name in config.get("cli_candidates", []):
+            cli_bin = shutil.which(cli_name)
+            if not cli_bin:
+                continue
+            proc = await asyncio.create_subprocess_exec(
+                cli_bin,
+                str(target),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode == 0:
+                return {
+                    "success": True,
+                    "ide": normalized_ide,
+                    "project_path": str(target),
+                    "method": "cli",
+                    "command": f"{cli_name} {target}",
+                    "message": f"Proje IDE'de açıldı ({normalized_ide}).",
+                }
+            err = (stderr.decode("utf-8", errors="ignore") or stdout.decode("utf-8", errors="ignore")).strip()
+            logger.warning(f"IDE CLI open failed ({cli_name}): {err}")
+
+        # Fallback: macOS open -a "<app>" "<path>"
+        errors: list[str] = []
+        for app_name in config.get("app_candidates", []):
+            proc = await asyncio.create_subprocess_exec(
+                "open",
+                "-a",
+                app_name,
+                str(target),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode == 0:
+                return {
+                    "success": True,
+                    "ide": normalized_ide,
+                    "project_path": str(target),
+                    "method": "open-app",
+                    "app": app_name,
+                    "message": f"Proje {app_name} ile açıldı.",
+                }
+            err = (stderr.decode("utf-8", errors="ignore") or stdout.decode("utf-8", errors="ignore")).strip()
+            if err:
+                errors.append(f"{app_name}: {err}")
+
+        details = " | ".join(errors[:3]) if errors else "uygulama bulunamadı veya açılamadı"
+        return {
+            "success": False,
+            "error": f"IDE açılamadı ({normalized_ide}): {details}",
+            "ide": normalized_ide,
+            "project_path": str(target),
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@tool("get_weather", "Get current weather and forecast for a city using web search.")
+async def get_weather(city: str = "") -> dict[str, Any]:
+    """Hava durumu bilgisi — wttr.in servisi üzerinden JSON."""
+    try:
+        import httpx
+        location = (city or "Istanbul").strip()
+        # wttr.in provides free weather data in JSON format
+        url = f"https://wttr.in/{location}?format=j1"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, headers={"User-Agent": "Elyan-Bot/1.0"})
+            if resp.status_code != 200:
+                raise ValueError(f"wttr.in returned {resp.status_code}")
+            data = resp.json()
+
+        current = data.get("current_condition", [{}])[0]
+        temp_c = current.get("temp_C", "?")
+        feels_like = current.get("FeelsLikeC", "?")
+        humidity = current.get("humidity", "?")
+        desc = (current.get("weatherDesc", [{}])[0] or {}).get("value", "Bilinmiyor")
+        wind_kmph = current.get("windspeedKmph", "?")
+
+        # Nearest area
+        nearest = data.get("nearest_area", [{}])[0]
+        area_name = (nearest.get("areaName", [{}])[0] or {}).get("value", location)
+        country = (nearest.get("country", [{}])[0] or {}).get("value", "")
+
+        # Forecast (next 2 days)
+        forecasts = []
+        for day in data.get("weather", [])[:3]:
+            date = day.get("date", "")
+            max_c = day.get("maxtempC", "?")
+            min_c = day.get("mintempC", "?")
+            desc_day = (day.get("hourly", [{}])[4] or {})
+            desc_day_txt = (desc_day.get("weatherDesc", [{}])[0] or {}).get("value", "")
+            forecasts.append({"date": date, "max_c": max_c, "min_c": min_c, "desc": desc_day_txt})
+
+        location_str = f"{area_name}, {country}" if country else area_name
+        summary = (
+            f"🌤 **{location_str}** hava durumu:\n"
+            f"Sıcaklık: {temp_c}°C (hissedilen {feels_like}°C)\n"
+            f"Durum: {desc}\n"
+            f"Nem: %{humidity} | Rüzgar: {wind_kmph} km/s"
+        )
+
+        return {
+            "success": True,
+            "location": location_str,
+            "current": {
+                "temp_c": temp_c,
+                "feels_like_c": feels_like,
+                "humidity_pct": humidity,
+                "description": desc,
+                "wind_kmph": wind_kmph,
+            },
+            "forecast": forecasts,
+            "summary": summary,
+        }
+    except Exception as e:
+        logger.warning(f"Weather lookup failed: {e}")
+        # Fallback: basic macOS weather via Siri/weather URL
+        try:
+            city_enc = (city or "Istanbul").replace(" ", "+")
+            proc = await asyncio.create_subprocess_shell(
+                f"curl -s 'https://wttr.in/{city_enc}?format=3'",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            out, _ = await proc.communicate()
+            text = out.decode("utf-8", errors="ignore").strip()
+            if text:
+                return {"success": True, "location": city or "Istanbul",
+                        "summary": f"🌤 {text}", "current": {}, "forecast": []}
+        except Exception:
+            pass
+        return {"success": False, "error": f"Hava durumu alınamadı: {e}. İnternet bağlantısını kontrol et."}
+
+
+@tool("run_code", "Write and execute Python code, show output.")
+async def run_code(code: str = "", language: str = "python", description: str = "") -> dict[str, Any]:
+    """Python kodu yaz ve çalıştır — çıktıyı döndür."""
+    import tempfile
+    try:
+        if not code or not code.strip():
+            return {"success": False, "error": "Çalıştırılacak kod boş. Lütfen kod girin."}
+
+        lang = (language or "python").lower()
+        if lang not in ("python", "python3", "py"):
+            return {"success": False, "error": f"Desteklenmeyen dil: {language}. Şu an sadece Python destekleniyor."}
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
+            f.write(code)
+            tmp_path = f.name
+
+        proc = await asyncio.create_subprocess_exec(
+            "python3", tmp_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return {"success": False, "error": "Kod 30 saniye içinde tamamlanamadı (timeout)."}
+        finally:
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        stdout_text = stdout_b.decode("utf-8", errors="ignore").strip()
+        stderr_text = stderr_b.decode("utf-8", errors="ignore").strip()
+        ok = proc.returncode == 0
+
+        return {
+            "success": ok,
+            "code": code,
+            "language": "python",
+            "output": stdout_text,
+            "error_output": stderr_text,
+            "return_code": proc.returncode,
+            "summary": (
+                f"✅ Kod çalıştı.\n```\n{stdout_text[:2000]}\n```" if ok
+                else f"❌ Hata:\n```\n{stderr_text[:1000]}\n```"
+            ),
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 

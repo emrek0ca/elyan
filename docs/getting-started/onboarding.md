@@ -52,7 +52,7 @@ Hangi kanalları eklemek istersiniz? (birden fazla seçilebilir)
   [1] Telegram (en kolay)
   [2] Discord
   [3] Slack
-  [4] WhatsApp Business
+  [4] WhatsApp (QR)
   [5] Web Sohbet (dashboard)
   [6] Diğerleri (Signal, Matrix, Teams, Google Chat, iMessage)
   [7] Şimdi atla
@@ -71,6 +71,14 @@ Telegram Bot Token:
 > 1234567890:AAFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 ✅ Telegram bağlantısı test edildi. Bot adı: @ElyanBot
+```
+
+WhatsApp seçilirse terminalde QR gösterilir:
+
+```text
+WhatsApp QR eşleştirme başlatılıyor...
+Telefonda WhatsApp > Bağlı Cihazlar > Cihaz Bağla ile QR okutun.
+✅ WhatsApp eşleşmesi tamamlandı.
 ```
 
 ### Adım 4: Güvenlik Ayarları
@@ -123,7 +131,7 @@ Veya hemen başlatmak için [E] tuşuna basın:
 
 ## Yapılandırma Dosyası
 
-Onboarding tamamlandıktan sonra `~/.elyan/config.json5` oluşturulur:
+Onboarding tamamlandıktan sonra `~/.elyan/elyan.json` oluşturulur:
 
 ```json5
 {

@@ -64,6 +64,15 @@ else
 fi
 ok "Bağımlılıklar yüklendi"
 
+# ── 4.5 Node.js (WhatsApp QR bridge için) ────────────────────────────
+log "Node.js kontrolü (WhatsApp QR için)..."
+if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+  NODE_VER=$(node -v 2>/dev/null || true)
+  ok "Node.js mevcut (${NODE_VER:-unknown})"
+else
+  warn "Node.js/npm bulunamadı. WhatsApp QR login için Node.js 18+ önerilir."
+fi
+
 # ── 5. Paketi kur ─────────────────────────────────────────────────────
 log "Elyan paketi yükleniyor..."
 if $PIP install --quiet -e . --config-settings editable_mode=compat; then
@@ -101,9 +110,20 @@ if [[ ! -x "\$PROJECT_DIR/.venv/bin/python3" ]]; then
 fi
 export ELYAN_PROJECT_DIR="\$PROJECT_DIR"
 cd "\$PROJECT_DIR" || exit 1
-exec "\$PROJECT_DIR/.venv/bin/python3" -m cli.main "\$@"
+exec "\$PROJECT_DIR/.venv/bin/python3" -m elyan_entrypoint "\$@"
 EOF
 chmod +x "$LAUNCHER"
+
+# Keep .venv/bin/elyan aligned with workspace source, even if pip falls back
+# to a non-editable install.
+VENV_LAUNCHER="$PROJECT_DIR/.venv/bin/elyan"
+cat > "$VENV_LAUNCHER" <<EOF
+#!/usr/bin/env bash
+PROJECT_DIR=$PROJECT_DIR_ESCAPED
+cd "\$PROJECT_DIR" || exit 1
+exec "\$PROJECT_DIR/.venv/bin/python3" -m elyan_entrypoint "\$@"
+EOF
+chmod +x "$VENV_LAUNCHER"
 
 SHELL_NAME=$(basename "${SHELL:-bash}")
 if [[ "$SHELL_NAME" == "zsh" ]]; then
@@ -125,6 +145,7 @@ else
 fi
 export PATH="$HOME/.local/bin:$PATH"
 ok "Global launcher kuruldu: $LAUNCHER"
+ok "Venv launcher kuruldu: $VENV_LAUNCHER"
 
 # ── 8. Shell completion ──────────────────────────────────────────────
 log "Shell completion kuruluyor ($SHELL_NAME)..."

@@ -20,7 +20,7 @@ def _channel_requirements(channel_type: str) -> list[str]:
         "telegram": ["token"],
         "discord": ["token"],
         "slack": ["bot_token", "app_token"],
-        "whatsapp": ["token"],
+        "whatsapp": [],
         "signal": ["phone_number"],
         "matrix": ["homeserver", "user_id", "access_token"],
         "google_chat": ["mode"],
@@ -90,6 +90,8 @@ def run_doctor(fix=False):
         "Skills":  Path.home() / ".elyan" / "skills",
         "Sandbox": Path.home() / ".elyan" / "sandbox",
         "Cron":    Path.home() / ".elyan" / "cron_jobs.json",
+        "Subscription": Path.home() / ".elyan" / "subscriptions.json",
+        "Usage":   Path.home() / ".elyan" / "user_usage.json",
     }
 
     for name, path in dirs.items():
@@ -190,8 +192,16 @@ def run_doctor(fix=False):
             print(f"  - {ctype:<12} ⏸️ disabled")
             continue
         enabled_count += 1
+        requirements = _channel_requirements(ctype)
+        if ctype == "whatsapp":
+            wa_mode = str(ch.get("mode", "bridge") or "bridge").strip().lower()
+            if wa_mode == "cloud":
+                requirements = ["phone_number_id", "access_token", "verify_token"]
+            else:
+                requirements = ["bridge_url", "bridge_token"]
+
         missing = []
-        for key in _channel_requirements(ctype):
+        for key in requirements:
             value = ch.get(key)
             if value is None or (isinstance(value, str) and not value.strip()):
                 missing.append(key)
@@ -199,6 +209,16 @@ def run_doctor(fix=False):
                 resolved = elyan_config._resolve_secret_ref(value)  # noqa: SLF001 (intentional internal use)
                 if resolved == value:
                     missing.append(f"{key}(unresolved)")
+
+        if ctype == "whatsapp":
+            wa_mode = str(ch.get("mode", "bridge") or "bridge").strip().lower()
+            if wa_mode != "cloud":
+                # Legacy compatibility: old config may still store whatsapp token under "token".
+                legacy_token = ch.get("token")
+                if isinstance(legacy_token, str) and legacy_token.strip():
+                    missing = [m for m in missing if m != "bridge_token"]
+                if "bridge_url" in missing and ch.get("bridge_port"):
+                    missing = [m for m in missing if m != "bridge_url"]
         if missing:
             print(f"  ❌  {ctype:<12} missing auth/config: {', '.join(missing)}")
             issues += 1

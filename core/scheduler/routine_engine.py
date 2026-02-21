@@ -29,6 +29,14 @@ ROUTINE_REPORT_DIR = Path.home() / ".elyan" / "reports" / "routines"
 _RE_URL = re.compile(r"https?://[^\s]+", re.IGNORECASE)
 _RE_DOMAIN = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s]*)?", re.IGNORECASE)
 _RE_NON_WORD = re.compile(r"[^a-z0-9]+", re.IGNORECASE)
+_RE_TIME_HM = re.compile(r"\b(\d{1,2})[:.](\d{2})\b")
+_RE_TIME_TR = re.compile(r"\bsaat\s*(\d{1,2})(?:[:.](\d{2}))?\b", re.IGNORECASE)
+_RE_TIME_SUFFIX_HOUR = re.compile(r"\b(\d{1,2})\s*(?:'|’)?(?:da|de)\b", re.IGNORECASE)
+_RE_EVERY_N_HOURS = re.compile(r"\bher\s+(\d{1,2})\s*saat(?:te)?(?:\s*bir)?\b", re.IGNORECASE)
+_RE_EVERY_N_MINUTES = re.compile(r"\bher\s+(\d{1,2})\s*dakika(?:da)?(?:\s*bir)?\b", re.IGNORECASE)
+_RE_EVERY_HOUR = re.compile(r"\b(?:her\s+saat(?:te)?|saatte\s*bir|saat\s*başı)\b", re.IGNORECASE)
+_RE_EVERY_MINUTE = re.compile(r"\b(?:her\s+dakika(?:da)?|dakikada\s*bir)\b", re.IGNORECASE)
+_RE_CHAT_ID = re.compile(r"\b(?:chat\s*id|chat_id|id)\s*[:=]?\s*(\d{5,20})\b", re.IGNORECASE)
 
 _HARD_FAIL_MARKERS = (
     "missing required positional argument",
@@ -37,6 +45,218 @@ _HARD_FAIL_MARKERS = (
     "permission denied",
     "hata: tool",
 )
+
+_TR_DAY_MAP = {
+    "pazartesi": "1",
+    "salı": "2",
+    "sali": "2",
+    "çarşamba": "3",
+    "carsamba": "3",
+    "perşembe": "4",
+    "persembe": "4",
+    "cuma": "5",
+    "cumartesi": "6",
+    "pazar": "0",
+}
+
+
+def _extract_time_from_text(text: str, default_hour: int = 9, default_minute: int = 0) -> tuple[int, int]:
+    raw = _clean_text(text)
+    if raw:
+        low = raw.lower()
+        period_pm = any(
+            k in low
+            for k in (
+                "öğleden sonra",
+                "ogleden sonra",
+                "ikindi",
+                "akşam",
+                "aksam",
+                "gece",
+            )
+        )
+
+        m = _RE_TIME_HM.search(raw)
+        if m:
+            h = min(23, max(0, int(m.group(1))))
+            mi = min(59, max(0, int(m.group(2))))
+            if period_pm and 1 <= h <= 11:
+                h += 12
+            return h, mi
+        m = _RE_TIME_TR.search(raw)
+        if m:
+            h = min(23, max(0, int(m.group(1))))
+            mi_raw = m.group(2)
+            mi = min(59, max(0, int(mi_raw))) if mi_raw is not None else 0
+            if period_pm and 1 <= h <= 11:
+                h += 12
+            return h, mi
+        m = _RE_TIME_SUFFIX_HOUR.search(raw)
+        if m:
+            h = min(23, max(0, int(m.group(1))))
+            if period_pm and 1 <= h <= 11:
+                h += 12
+            return h, 0
+
+        if "sabah" in low:
+            return 9, 0
+        if "öğlen" in low or "oglen" in low:
+            return 12, 0
+        if "öğleden sonra" in low or "ogleden sonra" in low or "ikindi" in low:
+            return 15, 0
+        if "akşam" in low or "aksam" in low:
+            return 20, 0
+        if "gece" in low:
+            return 22, 0
+    return int(default_hour), int(default_minute)
+
+
+def _detect_schedule_expression(text: str, *, default_expression: str = "0 9 * * *") -> str:
+    low = _clean_text(text).lower()
+    if not low:
+        return default_expression
+
+    m = _RE_EVERY_N_MINUTES.search(low)
+    if m:
+        n = min(59, max(1, int(m.group(1))))
+        return f"*/{n} * * * *"
+    if _RE_EVERY_MINUTE.search(low):
+        return "* * * * *"
+
+    m = _RE_EVERY_N_HOURS.search(low)
+    if m:
+        n = min(23, max(1, int(m.group(1))))
+        return f"0 */{n} * * *"
+    if _RE_EVERY_HOUR.search(low):
+        return "0 * * * *"
+
+    hour, minute = _extract_time_from_text(low, default_hour=9, default_minute=0)
+    base = f"{minute} {hour}"
+
+    if "hafta içi" in low or "haftaici" in low:
+        return f"{base} * * 1-5"
+    if "hafta sonu" in low or "haftasonu" in low:
+        return f"{base} * * 6,0"
+    if "haftada bir" in low:
+        return f"{base} * * 1"
+    if any(k in low for k in ("ayda bir", "aylık", "aylik", "her ay")):
+        return f"{base} 1 * *"
+
+    days: list[str] = []
+    for tr_day, dow in _TR_DAY_MAP.items():
+        if tr_day in low and dow not in days:
+            days.append(dow)
+    if days:
+        return f"{base} * * {','.join(days)}"
+
+    if any(
+        k in low
+        for k in (
+            "her gün",
+            "hergun",
+            "günlük",
+            "gunluk",
+            "daily",
+            "her sabah",
+            "her akşam",
+            "her aksam",
+            "her gece",
+            "her öğlen",
+            "her oglen",
+        )
+    ):
+        return f"{base} * * *"
+
+    return default_expression
+
+
+def _detect_template_id(text: str) -> str:
+    low = _clean_text(text).lower()
+    if not low:
+        return ""
+
+    score_map = {
+        "ecommerce-daily": 0,
+        "agency-daily": 0,
+        "academic-daily": 0,
+        "office-daily": 0,
+    }
+    ecommerce_keys = ("e-ticaret", "eticaret", "sipariş", "siparis", "kargo", "stok", "satıcı", "satici", "marketplace")
+    agency_keys = ("ajans", "danışman", "danisman", "form", "lead", "crm", "müşteri", "musteri", "kampanya")
+    academic_keys = ("akademik", "öğrenci", "ogrenci", "duyuru", "sınav", "sinav", "ders", "fakülte", "fakulte")
+    office_keys = ("ofis", "muhasebe", "tahsilat", "cari", "fatura", "ödeme", "odeme", "finans")
+
+    for key in ecommerce_keys:
+        if key in low:
+            score_map["ecommerce-daily"] += 2
+    for key in agency_keys:
+        if key in low:
+            score_map["agency-daily"] += 2
+    for key in academic_keys:
+        if key in low:
+            score_map["academic-daily"] += 2
+    for key in office_keys:
+        if key in low:
+            score_map["office-daily"] += 2
+
+    best_template = max(score_map.keys(), key=lambda k: score_map[k])
+    return best_template if score_map[best_template] > 0 else ""
+
+
+def _default_steps_for_text(text: str) -> list[str]:
+    low = _clean_text(text).lower()
+    if not low:
+        return [
+            "Tarayıcıyı aç",
+            "Belirlenen panelleri kontrol et",
+            "Yeni veri var mı kontrol et",
+            "Excel / tablo oluştur",
+            "Özet rapor hazırla",
+            "Telegram / WhatsApp gönder",
+        ]
+
+    wants_file_report = any(k in low for k in ("excel", "xlsx", "tablo", "csv"))
+    wants_browser = any(k in low for k in ("tarayıcı", "tarayici", "browser", "panel", "site", "giriş", "giris"))
+    wants_delivery = any(k in low for k in ("telegram", "whatsapp", "discord", "slack", "gönder", "gonder", "ilet"))
+    wants_summary = any(k in low for k in ("özet", "ozet", "rapor", "briefing"))
+
+    steps: list[str] = []
+    if wants_browser:
+        steps.append("Tarayıcıyı aç")
+        steps.append("Belirlenen panellere giriş yap")
+        steps.append("Yeni veri var mı kontrol et")
+    else:
+        steps.append("Belirlenen kaynakları kontrol et")
+        steps.append("Yeni veri var mı kontrol et")
+
+    if wants_file_report:
+        steps.append("Excel / tablo oluştur")
+    else:
+        steps.append("Çıktı dosyası oluştur")
+
+    if wants_summary:
+        steps.append("Özet rapor hazırla")
+    else:
+        steps.append("Bulgu özeti çıkar")
+
+    if wants_delivery:
+        steps.append("Telegram / WhatsApp gönder")
+    else:
+        steps.append("Raporu kaydet")
+    return steps
+
+
+def _detect_report_channel(text: str, fallback: str = "telegram") -> str:
+    low = _clean_text(text).lower()
+    for channel in ("telegram", "whatsapp", "discord", "slack", "webchat"):
+        if channel in low:
+            return channel
+    return fallback
+
+
+def _extract_chat_id(text: str) -> str:
+    m = _RE_CHAT_ID.search(_clean_text(text))
+    return str(m.group(1)) if m else ""
 
 ROUTINE_TEMPLATES: dict[str, dict[str, Any]] = {
     "ecommerce-daily": {
@@ -338,6 +558,120 @@ class RoutineEngine:
             panels=panels,
             template_id=str(template.get("id", "")),
             metadata={"template": template},
+        )
+
+    def suggest_from_text(
+        self,
+        text: str,
+        *,
+        default_expression: str = "0 9 * * *",
+        default_channel: str = "telegram",
+    ) -> Dict[str, Any]:
+        raw = _clean_text(text)
+        if not raw:
+            raise ValueError("text required")
+
+        template_id = _detect_template_id(raw)
+        template = self.get_template(template_id) if template_id else None
+        expression = _detect_schedule_expression(raw, default_expression=default_expression)
+        panels = _normalize_panels(_extract_urls(raw))
+        report_channel = _detect_report_channel(raw, fallback=default_channel)
+        report_chat_id = _extract_chat_id(raw)
+
+        if template:
+            steps = _normalize_steps(template.get("steps", []))
+            category = str(template.get("category", "") or "")
+            base_name = _clean_text(template.get("name")) or "Akıllı Rutin"
+        else:
+            steps = _default_steps_for_text(raw)
+            category = "custom"
+            base_name = "Akıllı Rutin"
+
+        cleaned_name = _clean_text(raw)
+        if len(cleaned_name) > 72:
+            cleaned_name = cleaned_name[:72].rstrip(" ,.;:")
+        name = cleaned_name or base_name
+
+        confidence = 0.55
+        reasons: list[str] = []
+        if template_id:
+            confidence += 0.2
+            reasons.append(f"template:{template_id}")
+        if expression != default_expression:
+            confidence += 0.1
+            reasons.append("schedule_detected")
+        if panels:
+            confidence += 0.1
+            reasons.append("panel_urls_detected")
+        if report_channel != default_channel:
+            confidence += 0.05
+            reasons.append(f"channel:{report_channel}")
+        if report_chat_id:
+            confidence += 0.05
+            reasons.append("chat_id_detected")
+        confidence = min(0.95, max(0.5, confidence))
+
+        return {
+            "name": name,
+            "expression": expression,
+            "steps": steps,
+            "template_id": template_id,
+            "template_name": template.get("name") if template else "",
+            "category": category,
+            "panels": panels,
+            "report_channel": report_channel,
+            "report_chat_id": report_chat_id,
+            "confidence": round(confidence, 2),
+            "reasons": reasons,
+            "source_text": raw,
+        }
+
+    def create_from_text(
+        self,
+        *,
+        text: str,
+        enabled: bool = True,
+        created_by: str = "nl",
+        report_chat_id: str = "",
+        report_channel: str = "",
+        expression: str = "",
+        name: str = "",
+        panels: Optional[List[str] | str] = None,
+        tags: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        suggestion = self.suggest_from_text(text)
+        final_name = _clean_text(name) or suggestion.get("name", "Akıllı Rutin")
+        final_expression = _clean_text(expression) or suggestion.get("expression", "0 9 * * *")
+        final_channel = _clean_text(report_channel) or suggestion.get("report_channel", "telegram")
+        final_chat_id = _clean_text(report_chat_id) or suggestion.get("report_chat_id", "")
+
+        panel_list = _normalize_panels(panels if panels is not None else suggestion.get("panels", []))
+        template_id = _clean_text(suggestion.get("template_id", ""))
+        if template_id and template_id in ROUTINE_TEMPLATES:
+            return self.create_from_template(
+                template_id=template_id,
+                expression=final_expression,
+                report_channel=final_channel,
+                report_chat_id=final_chat_id,
+                enabled=enabled,
+                created_by=created_by,
+                name=final_name,
+                panels=panel_list,
+                tags=tags or [suggestion.get("category", "nl")],
+            )
+
+        return self.add_routine(
+            name=final_name,
+            expression=final_expression,
+            steps=suggestion.get("steps", []),
+            report_channel=final_channel,
+            report_chat_id=final_chat_id,
+            enabled=enabled,
+            created_by=created_by,
+            tags=tags or [suggestion.get("category", "nl")],
+            panels=panel_list,
+            template_id="",
+            metadata={"source_text": _clean_text(text), "suggestion": suggestion},
         )
 
     def update_routine(self, routine_id: str, **patch: Any) -> Optional[Dict[str, Any]]:

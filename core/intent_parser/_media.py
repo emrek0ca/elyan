@@ -89,8 +89,20 @@ class MediaParser(BaseParser):
 
     # ── Music ─────────────────────────────────────────────────────────────────
     def _parse_music(self, text: str, text_norm: str, original: str) -> dict | None:
-        if not any(t in text for t in ["müzik", "muzik", "şarkı", "sarki", "çal", "cal",
-                                        "music", "play", "spotify", "apple music"]):
+        import re as _re_music
+        # BUGFIX: "çal" substring match was catching "çalıştır" (run/execute)
+        # Use word-boundary aware check for "çal" and "cal"
+        has_music_kw = any(t in text for t in ["müzik", "muzik", "şarkı", "sarki",
+                                                 "music", "spotify", "apple music"])
+        has_play_kw = any(t in text for t in ["play"])
+        # Word-boundary check for "çal/cal" to avoid matching "çalıştır/calıştır"
+        has_cal = bool(_re_music.search(r'\bçal\b|\bcal\b', text))
+        if not (has_music_kw or has_play_kw or has_cal):
+            return None
+        # Extra guard: if code/run context is present, don't match as music
+        code_ctx = any(k in text for k in ["python", "kod", "script", "çalıştır", "calistir",
+                                             "execute", "run", "program", "hesap"])
+        if code_ctx and not has_music_kw:
             return None
         if "youtube" in text:
             return None
@@ -111,15 +123,67 @@ class MediaParser(BaseParser):
 
     # ── Code Run ──────────────────────────────────────────────────────────────
     def _parse_code_run(self, text: str, text_norm: str, original: str) -> dict | None:
-        triggers = ["python kodu", "kod çalıştır", "kodu çalıştır", "script çalıştır",
-                    "run code", "execute code", "python script"]
-        if not any(t in text for t in triggers):
+        exec_triggers = [
+            "kod çalıştır", "kodu çalıştır", "kodu calistir", "kod calistir",
+            "script çalıştır", "script calistir",
+            "run code", "execute code",
+            "python çalıştır", "python calistir",
+            "python ile çalıştır", "python ile calistir",
+        ]
+        # "python kodu" tek başına tetikleyici OLMASIN; sadece exec_trigger ile birlikte geçerliyse veya
+        # açıkça kod bloğu (``` ...) varsa çalıştır
+        has_code_block = bool(re.search(r'```', text))
+        has_exec = any(t in text for t in exec_triggers) or any(t in text_norm for t in exec_triggers)
+        if not has_exec and not has_code_block:
+            return None
+        # "yaz" var ama "çalıştır" yoksa → code_write'a bırak
+        has_write_only = any(t in text for t in ["yaz", "yazdir", "yazar misin", "yazabilir misin"]) and not has_exec
+        if has_write_only:
             return None
         m = re.search(r'```python\n(.+?)```|kod[:\s]+(.+)', text, re.DOTALL | re.IGNORECASE)
         code = ""
         if m:
             code = (m.group(1) or m.group(2) or "").strip()
-        return {"action": "run_python", "params": {"code": code}, "reply": "Python kodu çalıştırılıyor..."}
+        return {"action": "run_code", "params": {"code": code, "language": "python"},
+                "reply": "Python kodu çalıştırılıyor..."}
+
+    # ── Code Write ────────────────────────────────────────────────────────────
+    def _parse_code_write(self, text: str, text_norm: str, original: str) -> dict | None:
+        """'Bana X kodu yaz' tarzı istekleri yakala → LLM ile kod üretimi."""
+        # Triggers: code writing without execution
+        write_triggers = [
+            "kodu yaz", "kod yaz", "python yaz", "python kodu yaz",
+            "javascript yaz", "js yaz", "html yaz", "css yaz",
+            "fonksiyon yaz", "class yaz", "algoritma yaz", "script yaz",
+            "write code", "write a", "kod oluştur",
+        ]
+        # Execution triggers — if both write AND execute, skip here (handled by multi_task)
+        exec_triggers = ["çalıştır", "calistir", "execute", "run", "koştur", "kostir"]
+
+        has_write = any(t in text for t in write_triggers)
+        has_exec = any(t in text for t in exec_triggers)
+
+        if not has_write:
+            return None
+        if has_exec:
+            # "yaz ve çalıştır" → multi_task will handle it
+            return None
+
+        # Extract what kind of code
+        topic = ""
+        m = re.search(r'(?:bana\s+|bir\s+)?(.+?)\s+(?:kodu?\s*)?yaz|write\s+(.+?)\s+code', text, re.IGNORECASE)
+        if m:
+            topic = (m.group(1) or m.group(2) or "").strip()
+        topic = re.sub(r'\b(bana|bir|lütfen|lutfen)\b', ' ', topic, flags=re.IGNORECASE).strip()
+        if not topic or len(topic) < 2:
+            topic = original
+
+        return {
+            "action": "chat",
+            "params": {"message": original, "_code_request": True, "topic": topic},
+            "reply": f"'{topic}' için kod yazılıyor...",
+            "_route_to_llm": True,
+        }
 
     # ── Visual Generation ─────────────────────────────────────────────────────
     def _parse_visual_generation(self, text: str, text_norm: str, original: str) -> dict | None:

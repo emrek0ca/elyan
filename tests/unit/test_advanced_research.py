@@ -10,6 +10,8 @@ ar = importlib.import_module("tools.research_tools.advanced_research")
 def test_advanced_research_writes_quick_report(monkeypatch, tmp_path: Path):
     ar._research_tasks.clear()
     monkeypatch.setattr(ar, "RESEARCH_REPORT_DIR", tmp_path)
+    monkeypatch.setattr(ar, "_last_research_result", None)
+    monkeypatch.setattr(ar, "_last_research_topic", None)
 
     async def _fake_search(query: str, num_results: int, language: str):
         return [
@@ -18,10 +20,12 @@ def test_advanced_research_writes_quick_report(monkeypatch, tmp_path: Path):
             {"url": "https://example.com/c", "title": "C", "snippet": "C snippet"},
         ]
 
-    async def _fake_findings(_sources, _topic):
+    async def _fake_findings(_sources, _topic, max_findings=10):
+        _ = max_findings
         return ["• Köpekler düzenli veteriner kontrolü ile daha sağlıklı yaşar."]
 
-    async def _fake_summary(_topic, _findings, _sources):
+    async def _fake_summary(_topic, _findings, _sources, **kwargs):
+        _ = kwargs
         return "Kısa özet"
 
     monkeypatch.setattr(ar, "_perform_web_search", _fake_search)
@@ -56,3 +60,176 @@ def test_get_research_result_rejects_non_completed():
     out = ar.get_research_result(rid)
     assert out["success"] is False
     assert "henüz tamamlanmadı" in out["error"]
+
+
+def test_generate_summary_is_structured():
+    sources = [
+        ar.ResearchSource(
+            url="https://akc.org/dog-care",
+            title="Dog care guide",
+            snippet="",
+            reliability_score=0.82,
+            fetched=True,
+        ),
+        ar.ResearchSource(
+            url="https://example.com/blog",
+            title="Blog",
+            snippet="",
+            reliability_score=0.62,
+            fetched=True,
+        ),
+    ]
+    findings = [
+        "• Köpeklerde düzenli egzersiz davranışsal problemleri azaltır (Kaynak: akc.org).",
+        "• Aşılama ve parazit kontrolü, bulaşıcı hastalık riskini düşürür (Kaynak: akc.org).",
+    ]
+    text = asyncio.run(ar._generate_summary("köpekler", findings, sources))
+    assert "Yönetici Özeti:" in text
+    assert "Araştırma Konusu: köpekler" in text
+    assert "Ana Bulgular (kanıt odaklı)" in text
+    assert "Kanıt Matrisi (ilk 5 kaynak):" in text
+    assert "Operasyonel Öneriler:" in text
+    assert "Sınırlılıklar:" in text
+
+
+def test_extract_findings_filters_noise():
+    sources = [
+        ar.ResearchSource(
+            url="https://example.com/noisy",
+            title="Noisy",
+            snippet="Köpek bakımı kampanya ve indirim duyuruları burada.",
+            reliability_score=0.4,
+            content="Cookie kabul et paylaş yorum yap devamını oku kampanya indirim",
+            fetched=True,
+        ),
+        ar.ResearchSource(
+            url="https://akc.org/healthy-dogs",
+            title="Healthy Dogs",
+            snippet="Köpeklerde düzenli aşı takvimi ve parazit kontrolü önemlidir.",
+            reliability_score=0.9,
+            content=(
+                "Köpeklerde düzenli aşı takvimi uygulanması bulaşıcı hastalık riskini azaltır. "
+                "Veteriner kontrolü ile beslenme ve kilo takibi yapıldığında uzun dönem sağlık sonuçları iyileşir."
+            ),
+            fetched=True,
+        ),
+    ]
+    findings = asyncio.run(ar._extract_findings(sources, "köpek sağlığı"))
+    joined = "\n".join(findings).lower()
+    assert "aşı" in joined or "asi" in joined
+    assert "kampanya" not in joined
+
+
+def test_extract_findings_prioritizes_reliable_domain():
+    sources = [
+        ar.ResearchSource(
+            url="https://weak.example.com/post",
+            title="Weak",
+            snippet="Köpek bakımı için en popüler ürünleri hemen satın alabilirsiniz.",
+            reliability_score=0.2,
+            content="Köpek bakımı için en popüler ürünleri hemen satın alabilirsiniz.",
+            fetched=True,
+        ),
+        ar.ResearchSource(
+            url="https://akc.org/health",
+            title="AKC",
+            snippet="Köpeklerde düzenli veteriner kontrolü ve aşı takvimi hastalık riskini azaltır.",
+            reliability_score=0.9,
+            content=(
+                "Köpeklerde düzenli veteriner kontrolü ve aşı takvimi bulaşıcı hastalık riskini azaltır. "
+                "Erken tanı ve koruyucu bakım, uzun dönem sağlık sonuçlarını iyileştirir."
+            ),
+            fetched=True,
+        ),
+    ]
+    findings = asyncio.run(ar._extract_findings(sources, "köpek sağlığı", max_findings=4))
+    assert findings
+    assert "akc.org" in findings[0].lower()
+    assert "güven:" in findings[0].lower()
+
+
+def test_quality_snapshot_counts():
+    sources = [
+        ar.ResearchSource(url="https://a.com", title="A", snippet="", reliability_score=0.81),
+        ar.ResearchSource(url="https://b.com", title="B", snippet="", reliability_score=0.66),
+        ar.ResearchSource(url="https://c.com", title="C", snippet="", reliability_score=0.2),
+    ]
+    q = ar._quality_snapshot(sources, ["x", "y"])
+    assert q["total_sources"] == 3
+    assert q["reliable_sources"] == 2
+    assert q["high_reliability"] == 1
+
+
+def test_apply_source_policy_prefers_academic_domains():
+    raw = [
+        {"url": "https://blog.example.com/a", "title": "Blog A", "snippet": "x", "_rank_score": 0.8},
+        {"url": "https://mit.edu/paper", "title": "MIT", "snippet": "x", "_rank_score": 0.7},
+        {"url": "https://arxiv.org/abs/1234", "title": "Arxiv", "snippet": "x", "_rank_score": 0.9},
+    ]
+    out = ar._apply_source_policy(raw, "academic", target_sources=2)
+    urls = [x["url"] for x in out]
+    assert any("mit.edu" in u for u in urls)
+    assert any("arxiv.org" in u for u in urls)
+
+
+def test_apply_min_reliability_filters_weak_sources():
+    sources = [
+        ar.ResearchSource(url="https://a.com", title="A", snippet="", reliability_score=0.9),
+        ar.ResearchSource(url="https://b.com", title="B", snippet="", reliability_score=0.82),
+        ar.ResearchSource(url="https://c.com", title="C", snippet="", reliability_score=0.4),
+    ]
+    out = ar._apply_min_reliability(sources, min_reliability=0.8, keep_at_least=2)
+    assert len(out) == 2
+    assert all(s.reliability_score >= 0.8 for s in out)
+
+
+def test_advanced_research_returns_policy_metadata(monkeypatch, tmp_path: Path):
+    ar._research_tasks.clear()
+    monkeypatch.setattr(ar, "RESEARCH_REPORT_DIR", tmp_path)
+    monkeypatch.setattr(ar, "_last_research_result", None)
+    monkeypatch.setattr(ar, "_last_research_topic", None)
+
+    async def _fake_search(_query: str, _num_results: int, _language: str):
+        return [
+            {"url": "https://mit.edu/a", "title": "MIT A", "snippet": "A", "_rank_score": 0.91},
+            {"url": "https://arxiv.org/abs/1", "title": "Arxiv", "snippet": "B", "_rank_score": 0.88},
+            {"url": "https://stanford.edu/c", "title": "Stanford", "snippet": "C", "_rank_score": 0.87},
+        ]
+
+    async def _fake_eval(url: str, criteria=None):
+        _ = criteria
+        return {
+            "success": True,
+            "url": url,
+            "domain": url.split("/")[2],
+            "reliability_score": 0.85,
+            "content_preview": "Köpek sağlığı için düzenli veteriner kontrolü önemlidir.",
+        }
+
+    async def _fake_findings(_sources, _topic, max_findings=10):
+        _ = max_findings
+        return ["• Köpeklerde koruyucu sağlık takibi uzun dönem riskleri azaltır."]
+
+    async def _fake_summary(_topic, _findings, _sources, **kwargs):
+        _ = kwargs
+        return "Yapılandırılmış özet"
+
+    monkeypatch.setattr(ar, "_perform_web_search", _fake_search)
+    monkeypatch.setattr(ar, "evaluate_source", _fake_eval)
+    monkeypatch.setattr(ar, "_extract_findings", _fake_findings)
+    monkeypatch.setattr(ar, "_generate_summary", _fake_summary)
+
+    out = asyncio.run(
+        ar.advanced_research(
+            topic="köpek sağlığı",
+            depth="quick",
+            include_evaluation=True,
+            generate_report=False,
+            source_policy="academic",
+            min_reliability=0.8,
+        )
+    )
+    assert out["success"] is True
+    assert out["source_policy"] == "academic"
+    assert out["min_reliability"] == 0.8
+    assert "source_policy_stats" in out

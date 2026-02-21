@@ -6,6 +6,7 @@ import asyncio
 import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from pathlib import Path
 
 from core.gateway.adapters import ADAPTER_REGISTRY, get_adapter_class
 from core.gateway.adapters.base import BaseChannelAdapter
@@ -43,6 +44,257 @@ class TestAdapterRegistry:
     def test_all_adapters_subclass_base(self):
         for name, cls in ADAPTER_REGISTRY.items():
             assert issubclass(cls, BaseChannelAdapter), f"{name} BaseChannelAdapter'dan türemeli"
+
+
+class TestTelegramAdapter:
+    def _make(self, **kwargs):
+        from core.gateway.adapters.telegram import TelegramAdapter
+        cfg = {"token": "test-token", **kwargs}
+        return TelegramAdapter(cfg)
+
+    def test_extract_local_image_path_from_absolute_path(self, tmp_path):
+        adapter = self._make()
+        image_file = tmp_path / "shot.png"
+        image_file.write_bytes(b"png")
+        text = f"İşlem tamamlandı: {image_file}"
+        extracted = adapter._extract_local_image_path(text)
+        assert extracted == str(image_file)
+
+    def test_extract_local_image_path_returns_empty_when_not_found(self):
+        adapter = self._make()
+        extracted = adapter._extract_local_image_path("Ekran görüntüsü alındı.")
+        assert extracted == ""
+
+    def test_extract_local_image_path_ignores_url(self):
+        adapter = self._make()
+        extracted = adapter._extract_local_image_path("Kaynak: https://example.com/image.png")
+        assert extracted == ""
+
+    @pytest.mark.asyncio
+    async def test_send_message_auto_sends_document_from_text(self, tmp_path):
+        adapter = self._make()
+        adapter.app = MagicMock()
+        adapter.app.bot = AsyncMock()
+
+        doc = tmp_path / "report.docx"
+        doc.write_bytes(b"doc")
+        response = UnifiedResponse(text=f"Belge hazır: {doc}")
+
+        await adapter.send_message("123", response)
+
+        adapter.app.bot.send_document.assert_awaited_once()
+        assert adapter.app.bot.send_photo.await_count == 0
+        assert adapter.app.bot.send_message.await_count == 0
+
+
+class TestWhatsAppAdapter:
+    def _make(self, **kwargs):
+        from core.gateway.adapters.whatsapp import WhatsAppAdapter
+        cfg = {
+            "id": "whatsapp",
+            "bridge_url": "http://127.0.0.1:18792",
+            "bridge_token": "tok",
+            "auto_start_bridge": False,
+            **kwargs,
+        }
+        return WhatsAppAdapter(cfg)
+
+    @pytest.mark.asyncio
+    async def test_connect_ready_state(self, monkeypatch):
+        adapter = self._make()
+
+        monkeypatch.setattr(adapter, "_get_bridge_state", AsyncMock(return_value={"ready": True}))
+
+        async def _dummy_poll():
+            await asyncio.sleep(0.01)
+
+        monkeypatch.setattr(adapter, "_poll_incoming_loop", _dummy_poll)
+        await adapter.connect()
+        assert adapter.get_status() == "connected"
+        await adapter.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_connect_not_ready_raises(self, monkeypatch):
+        adapter = self._make()
+        monkeypatch.setattr(adapter, "_get_bridge_state", AsyncMock(return_value={"ready": False}))
+        with pytest.raises(RuntimeError):
+            await adapter.connect()
+
+    @pytest.mark.asyncio
+    async def test_send_message_posts_to_bridge(self, monkeypatch):
+        adapter = self._make()
+        adapter._is_connected = True
+        bridge_call = AsyncMock(return_value={"ok": True})
+        monkeypatch.setattr(adapter, "_bridge_call", bridge_call)
+
+        await adapter.send_message("905551112233", UnifiedResponse(text="Merhaba"))
+        bridge_call.assert_awaited_once()
+        kwargs = bridge_call.await_args.kwargs
+        assert kwargs["path"] == "/send"
+        assert kwargs["payload"]["to"] == "905551112233"
+
+    @pytest.mark.asyncio
+    async def test_send_message_bridge_media_when_file_present(self, monkeypatch, tmp_path):
+        adapter = self._make()
+        adapter._is_connected = True
+        bridge_call = AsyncMock(return_value={"ok": True})
+        monkeypatch.setattr(adapter, "_bridge_call", bridge_call)
+
+        report = tmp_path / "daily_report.pdf"
+        report.write_bytes(b"pdf")
+
+        await adapter.send_message("905551112233", UnifiedResponse(text=f"Rapor hazır: {report}"))
+
+        called_paths = [c.kwargs.get("path") for c in bridge_call.await_args_list]
+        assert "/send-media" in called_paths
+
+    @pytest.mark.asyncio
+    async def test_cloud_send_media_document_payload(self, monkeypatch, tmp_path):
+        from core.gateway.adapters.whatsapp import WhatsAppAdapter
+
+        adapter = WhatsAppAdapter(
+            {
+                "type": "whatsapp",
+                "mode": "cloud",
+                "phone_number_id": "123456",
+                "access_token": "token",
+                "verify_token": "verify-me",
+            }
+        )
+        upload_mock = AsyncMock(return_value="media-123")
+        payload_mock = AsyncMock(return_value=None)
+        monkeypatch.setattr(adapter, "_upload_cloud_media", upload_mock)
+        monkeypatch.setattr(adapter, "_send_cloud_payload", payload_mock)
+
+        doc = tmp_path / "ops.xlsx"
+        doc.write_bytes(b"xlsx")
+
+        await adapter._send_cloud_media("905551112233", str(doc), caption="Rapor")
+        payload = payload_mock.await_args.args[0]
+        assert payload["type"] == "document"
+        assert payload["document"]["id"] == "media-123"
+        assert payload["document"]["filename"] == "ops.xlsx"
+
+    @pytest.mark.asyncio
+    async def test_poll_incoming_maps_message(self, monkeypatch):
+        adapter = self._make()
+        received = []
+
+        async def _on_message(msg):
+            received.append(msg)
+            adapter._is_connected = False
+
+        adapter.on_message(_on_message)
+        adapter._is_connected = True
+
+        monkeypatch.setattr(
+            adapter,
+            "_bridge_call",
+            AsyncMock(
+                return_value={
+                    "items": [
+                        {
+                            "id": "m1",
+                            "from": "905551112233@c.us",
+                            "body": "Selam",
+                            "type": "chat",
+                            "timestamp": 1700000000,
+                            "pushName": "Emre",
+                            "isGroup": False,
+                        }
+                    ]
+                }
+            ),
+        )
+        await adapter._poll_incoming_loop()
+        assert len(received) == 1
+        assert received[0].channel_type == "whatsapp"
+        assert received[0].text == "Selam"
+
+    @pytest.mark.asyncio
+    async def test_cloud_connect_requires_credentials(self):
+        from core.gateway.adapters.whatsapp import WhatsAppAdapter
+
+        adapter = WhatsAppAdapter({"type": "whatsapp", "mode": "cloud"})
+        with pytest.raises(RuntimeError):
+            await adapter.connect()
+
+    @pytest.mark.asyncio
+    async def test_cloud_webhook_verification_success(self):
+        from aiohttp.test_utils import make_mocked_request
+        from core.gateway.adapters.whatsapp import WhatsAppAdapter
+
+        adapter = WhatsAppAdapter(
+            {
+                "type": "whatsapp",
+                "mode": "cloud",
+                "phone_number_id": "123456",
+                "access_token": "token",
+                "verify_token": "verify-me",
+            }
+        )
+        req = make_mocked_request(
+            "GET",
+            "/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=verify-me&hub.challenge=ok123",
+        )
+        resp = await adapter.handle_webhook_verification(req)
+        assert resp.status == 200
+        assert resp.text == "ok123"
+
+    @pytest.mark.asyncio
+    async def test_cloud_webhook_maps_incoming_text(self):
+        from aiohttp.test_utils import make_mocked_request
+        from core.gateway.adapters.whatsapp import WhatsAppAdapter
+
+        adapter = WhatsAppAdapter(
+            {
+                "type": "whatsapp",
+                "mode": "cloud",
+                "phone_number_id": "123456",
+                "access_token": "token",
+                "verify_token": "verify-me",
+            }
+        )
+        got = []
+
+        async def _on_message(msg):
+            got.append(msg)
+
+        adapter.on_message(_on_message)
+
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "contacts": [{"wa_id": "905551112233", "profile": {"name": "Emre"}}],
+                                "messages": [
+                                    {
+                                        "id": "wamid-1",
+                                        "from": "905551112233",
+                                        "timestamp": "1700000000",
+                                        "type": "text",
+                                        "text": {"body": "Selam Elyan"},
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+        req = make_mocked_request("POST", "/whatsapp/webhook")
+        req._post = None
+        req._read_bytes = json.dumps(payload).encode("utf-8")
+        req.json = AsyncMock(return_value=payload)
+
+        resp = await adapter.handle_webhook(req)
+        assert resp.status == 200
+        assert len(got) == 1
+        assert got[0].channel_type == "whatsapp"
+        assert got[0].user_id == "905551112233"
+        assert got[0].text == "Selam Elyan"
 
 
 # ── Signal Adapter ────────────────────────────────────────────────────────────

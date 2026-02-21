@@ -31,3 +31,12 @@ def test_migrate_from_env_no_keychain_returns_reason(tmp_path: Path, monkeypatch
     result = KeychainManager.migrate_from_env(env_file, clear_env=True)
     assert result["migrated"] == 0
     assert result["reason"] == "Keychain unavailable"
+
+
+def test_key_for_env_supports_slack_app_token():
+    assert KeychainManager.key_for_env("SLACK_APP_TOKEN") == "slack_app_token"
+
+
+def test_key_for_env_supports_whatsapp_cloud_tokens():
+    assert KeychainManager.key_for_env("WHATSAPP_ACCESS_TOKEN") == "whatsapp_access_token"
+    assert KeychainManager.key_for_env("WHATSAPP_VERIFY_TOKEN") == "whatsapp_verify_token"

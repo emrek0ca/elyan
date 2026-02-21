@@ -93,7 +93,7 @@ KURALLAR:
 BRİFİNG:"""
         
         try:
-            response = await self.llm.generate(prompt)
+            response = await self.llm.generate(prompt, user_id="system")
             return response
         except:
             return "Sistem şu an stabil görünüyor. Size nasıl yardımcı olabilirim?"

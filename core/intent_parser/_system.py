@@ -15,6 +15,8 @@ class SystemParser(BaseParser):
             "ekranı kaydet", "ekranı yakala", "ekran al", "görüntü al",
             "ekranın resmini", "ekran yakala", "screen capture",
             "ss al", " ss ", "ss?", " ss,",
+            "ss gönder", "ss gonder", "ss yolla", "ss at",
+            "ekran görüntüsü gönder", "ekran goruntusu gonder",
         ]
         matched = False
         for trigger in triggers:
@@ -135,6 +137,9 @@ class SystemParser(BaseParser):
                 content = (m.group(1) or m.group(2)).strip()
                 return {"action": "write_clipboard", "params": {"text": content},
                         "reply": "Metin panoya kopyalanıyor..."}
+            # "bunu kopyala" gibi içeriksiz cümlelerde agent son çıktıyı doldurur.
+            return {"action": "write_clipboard", "params": {"text": ""},
+                    "reply": "Son yanıt panoya kopyalanıyor..."}
         return None
 
     # ── Notification ──────────────────────────────────────────────────────────
@@ -164,6 +169,24 @@ class SystemParser(BaseParser):
     # ── System Info ───────────────────────────────────────────────────────────
     def _parse_system_info(self, text: str, text_norm: str, original: str) -> dict | None:
         norm = text_norm or self._normalize(text)
+        battery_patterns = [
+            r"\bpil\w*\b",
+            r"\bbatarya\w*\b",
+            r"\bsarj\w*\b",
+            r"\bşarj\w*\b",
+            r"\bbattery\w*\b",
+            r"\bcharge\w*\b",
+            r"\bcharging\w*\b",
+        ]
+        if any(re.search(pat, norm, re.IGNORECASE) for pat in battery_patterns):
+            if "dosya" in norm or "klasor" in norm:
+                return None
+            return {
+                "action": "get_battery_status",
+                "params": {},
+                "reply": "Pil durumu kontrol ediliyor...",
+            }
+
         trigger_patterns = [
             r"\bsistem\b",
             r"\bcpu\b",
@@ -202,7 +225,29 @@ class SystemParser(BaseParser):
 
     # ── Weather ───────────────────────────────────────────────────────────────
     def _parse_weather(self, text: str, text_norm: str, original: str) -> dict | None:
-        triggers = ["hava durumu", "hava nasıl", "sıcaklık", "hava kac derece", "gökyüzü", "yağmur", "weather"]
-        if any(t in text for t in triggers) or "hava nasil" in text_norm:
-            return {"action": "get_weather", "params": {}, "reply": "Hava durumu bilgileri getiriliyor..."}
-        return None
+        triggers = ["hava durumu", "hava nasıl", "sıcaklık", "sicaklik", "hava kac derece",
+                    "hava kaç derece", "gökyüzü", "goksuzu", "yağmur yağacak mı", "weather",
+                    "bugün hava", "yarın hava", "hava tahmini"]
+        if not (any(t in text for t in triggers) or "hava nasil" in text_norm):
+            return None
+        # Şehir adı çıkarımı — soru sözcüklerini ve hava kelimelerini dışla
+        city = ""
+        _stop_words = {"hava", "durumu", "nasıl", "nasil", "kaç", "kac", "derece", "bugün",
+                       "bugun", "yarın", "yarin", "weather", "tahmini", "için", "icin", "sicaklik", "sıcaklık"}
+        import re as _re_w
+        m = _re_w.search(r"([A-ZÇĞİÖŞÜa-zçğışöşü]{2,}(?:\s+[A-ZÇĞİÖŞÜa-zçğışöşü]{2,})?)\s+(?:hava|sıcaklık|sicaklik|weather)\b", original, _re_w.IGNORECASE)
+        if m:
+            candidate = m.group(1).strip().lower()
+            if candidate not in _stop_words and len(candidate) > 2:
+                city = m.group(1).strip().title()
+        if not city:
+            m2 = _re_w.search(r"\b(in|için)\s+([A-ZÇĞİÖŞÜa-zçğışöşü]{3,})", original, _re_w.IGNORECASE)
+            if m2:
+                candidate = m2.group(2).strip().lower()
+                if candidate not in _stop_words:
+                    city = m2.group(2).strip()
+        params = {}
+        if city:
+            params["city"] = city
+        city_str = f" ({city})" if city else ""
+        return {"action": "get_weather", "params": params, "reply": f"Hava durumu bilgileri getiriliyor{city_str}..."}

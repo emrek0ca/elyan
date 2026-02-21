@@ -16,6 +16,52 @@ from utils.logger import get_logger
 logger = get_logger("intelligent_planner")
 
 
+KNOWN_TOOL_ACTIONS: Set[str] = {
+    "open_url",
+    "open_app",
+    "close_app",
+    "advanced_research",
+    "web_search",
+    "read_file",
+    "write_file",
+    "list_files",
+    "search_files",
+    "create_folder",
+    "delete_file",
+    "move_file",
+    "copy_file",
+    "rename_file",
+    "take_screenshot",
+    "run_safe_command",
+    "write_word",
+    "write_excel",
+    "generate_document_pack",
+    "research_document_delivery",
+    "create_web_project_scaffold",
+    "create_software_project_pack",
+    "create_coding_delivery_plan",
+    "create_coding_verification_report",
+    "open_project_in_ide",
+    "send_email",
+    "analyze_document",
+    "generate_report",
+    "chat",
+}
+
+ACTION_ALIASES: Dict[str, str] = {
+    "research": "advanced_research",
+    "deep_research": "advanced_research",
+    "internet_research": "advanced_research",
+    "browser_search": "web_search",
+    "search_web": "web_search",
+    "create_word_document": "write_word",
+    "create_excel": "write_excel",
+    "create_website": "create_web_project_scaffold",
+    "status_snapshot": "take_screenshot",
+    "run_command": "run_safe_command",
+}
+
+
 class TaskPriority(Enum):
     """Task execution priority"""
     LOW = 0
@@ -108,7 +154,9 @@ class IntelligentPlanner:
         task_description: str,
         llm_client=None,
         context: Optional[Dict[str, Any]] = None,
-        use_llm: bool = True
+        use_llm: bool = True,
+        user_id: str = "local",
+        preferred_tools: Optional[List[str]] = None
     ) -> List[SubTask]:
         """
         Decompose a complex task into executable subtasks
@@ -121,16 +169,18 @@ class IntelligentPlanner:
         if use_llm and client:
             try:
                 context_hint = self._format_context_for_planner(context or {})
+                pref_hint = f"\nPreferred tools for this domain: {', '.join(preferred_tools)}" if preferred_tools else ""
+                
                 prompt = f"""Goal: {task_description}
 
-Plan 3-10 executable steps. Use valid actions (open_url, advanced_research, read_file, write_file, take_screenshot, create_folder, list_files, run_safe_command, send_email, analyze_document, web_search, generate_report).
+Plan 3-10 executable steps. Use valid actions (open_url, advanced_research, read_file, write_file, take_screenshot, create_folder, list_files, run_safe_command, send_email, analyze_document, web_search, generate_report).{pref_hint}
 Return JSON array:
 [{{"id":"task_1","name":"...","action":"tool","params":{{"path":"~/Desktop"}},"depends_on":[]}}]
 """
                 if context_hint:
                     prompt += f"\nContext: {context_hint}"
 
-                resp = await client.generate(prompt, max_tokens=600)
+                resp = await client.generate(prompt, max_tokens=600, user_id=user_id)
                 subtasks = self._parse_subtasks_from_response(resp, task_description, limit=10)
             except Exception as e:
                 logger.debug(f"LLM decomposition failed, fallback heuristic: {e}")
@@ -157,6 +207,7 @@ Return JSON array:
                     priority=TaskPriority.NORMAL
                 ))
 
+        subtasks = self._sanitize_subtasks(subtasks, task_description)
         logger.info(f"Decomposed task into {len(subtasks)} subtasks")
         return subtasks
 
@@ -191,7 +242,178 @@ Return JSON array:
                     priority=TaskPriority.NORMAL,
                 )
             )
-        return subtasks
+        return self._sanitize_subtasks(subtasks, task_description)
+
+    def _normalize_action_name(self, action: str, *, fallback_text: str = "") -> str:
+        raw = str(action or "").split("(")[0].strip().lower()
+        if not raw:
+            return self._infer_action(fallback_text or "")
+        mapped = ACTION_ALIASES.get(raw, raw)
+        if mapped in KNOWN_TOOL_ACTIONS:
+            return mapped
+        inferred = self._infer_action(fallback_text or mapped)
+        inferred_mapped = ACTION_ALIASES.get(inferred, inferred)
+        if inferred_mapped in KNOWN_TOOL_ACTIONS:
+            return inferred_mapped
+        return mapped
+
+    def _sanitize_subtask_params(self, action: str, params: Dict[str, Any], *, name: str = "", goal: str = "") -> Dict[str, Any]:
+        cleaned = dict(params or {})
+        hint = str(name or goal or "").strip() or "görev"
+
+        if action == "open_url" and not str(cleaned.get("url", "")).strip():
+            query = str(hint).replace("\n", " ").strip()
+            cleaned["url"] = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+        elif action == "web_search" and not str(cleaned.get("query", "")).strip():
+            cleaned["query"] = hint
+            cleaned.setdefault("num_results", 5)
+        elif action == "advanced_research" and not str(cleaned.get("topic", "")).strip():
+            cleaned["topic"] = hint
+            cleaned.setdefault("depth", "standard")
+        elif action == "read_file" and not str(cleaned.get("path", "")).strip():
+            cleaned["path"] = "~/Desktop/not.txt"
+        elif action == "write_file":
+            if not str(cleaned.get("path", "")).strip():
+                cleaned["path"] = "~/Desktop/not.txt"
+            if not str(cleaned.get("content", "")).strip():
+                cleaned["content"] = str(goal or hint).strip()
+        elif action == "list_files" and not str(cleaned.get("path", "")).strip():
+            cleaned["path"] = "~/Desktop"
+        elif action == "create_folder" and not str(cleaned.get("path", "")).strip():
+            cleaned["path"] = "~/Desktop/yeni_klasor"
+        elif action == "move_file":
+            if not str(cleaned.get("source", "")).strip():
+                cleaned["source"] = "~/Desktop/not.txt"
+            if not str(cleaned.get("destination", "")).strip():
+                cleaned["destination"] = "~/Desktop"
+        elif action == "copy_file":
+            if not str(cleaned.get("source", "")).strip():
+                cleaned["source"] = "~/Desktop/not.txt"
+            if not str(cleaned.get("destination", "")).strip():
+                cleaned["destination"] = "~/Desktop"
+        elif action == "delete_file" and not str(cleaned.get("path", "")).strip():
+            cleaned["path"] = "~/Desktop/not.txt"
+            cleaned.setdefault("force", False)
+        elif action == "write_word":
+            if not str(cleaned.get("path", "")).strip():
+                cleaned["path"] = "~/Desktop/belge.docx"
+            if not str(cleaned.get("content", "")).strip():
+                cleaned["content"] = str(goal or hint).strip()
+        elif action == "write_excel":
+            if not str(cleaned.get("path", "")).strip():
+                cleaned["path"] = "~/Desktop/tablo.xlsx"
+            if not cleaned.get("data"):
+                cleaned["data"] = [{"Veri": str(goal or hint).strip()}]
+            cleaned.setdefault("headers", ["Veri"])
+        elif action == "create_web_project_scaffold":
+            cleaned.setdefault("project_name", "web-projesi")
+            cleaned.setdefault("stack", "vanilla")
+            cleaned.setdefault("theme", "professional")
+            cleaned.setdefault("output_dir", "~/Desktop")
+            cleaned.setdefault("brief", str(goal or hint).strip())
+        elif action == "create_software_project_pack":
+            cleaned.setdefault("project_name", "uygulama-projesi")
+            cleaned.setdefault("project_type", "app")
+            cleaned.setdefault("stack", "python")
+            cleaned.setdefault("complexity", "advanced")
+            cleaned.setdefault("output_dir", "~/Desktop")
+            cleaned.setdefault("brief", str(goal or hint).strip())
+        elif action == "research_document_delivery":
+            cleaned.setdefault("topic", str(goal or hint).strip() or "genel konu")
+            cleaned.setdefault("depth", "comprehensive")
+            cleaned.setdefault("output_dir", "~/Desktop")
+            cleaned.setdefault("include_word", True)
+            cleaned.setdefault("include_excel", True)
+            cleaned.setdefault("include_report", True)
+
+        return cleaned
+
+    def _sanitize_subtasks(self, subtasks: List[SubTask], goal: str) -> List[SubTask]:
+        if not subtasks:
+            return [
+                SubTask(
+                    task_id="subtask_1",
+                    name=str(goal or "görev"),
+                    action=self._normalize_action_name("", fallback_text=goal),
+                    params=self._sanitize_subtask_params(
+                        self._normalize_action_name("", fallback_text=goal),
+                        {},
+                        name=str(goal or "görev"),
+                        goal=goal,
+                    ),
+                )
+            ]
+
+        normalized: List[SubTask] = []
+        id_map: Dict[str, str] = {}
+        used_ids: Set[str] = set()
+
+        # Pass 1: normalize identity/action/params.
+        for idx, task in enumerate(subtasks[:12], start=1):
+            old_id = str(getattr(task, "task_id", "") or f"subtask_{idx}")
+            new_id = old_id.strip() or f"subtask_{idx}"
+            if new_id in used_ids:
+                new_id = f"subtask_{idx}"
+                while new_id in used_ids:
+                    idx2 = len(used_ids) + 1
+                    new_id = f"subtask_{idx2}"
+            used_ids.add(new_id)
+            id_map[old_id] = new_id
+
+            raw_name = str(getattr(task, "name", "") or f"Adım {idx}")
+            norm_action = self._normalize_action_name(
+                str(getattr(task, "action", "") or ""),
+                fallback_text=f"{raw_name} {goal}",
+            )
+            norm_params = self._sanitize_subtask_params(
+                norm_action,
+                getattr(task, "params", {}) if isinstance(getattr(task, "params", {}), dict) else {},
+                name=raw_name,
+                goal=goal,
+            )
+
+            normalized.append(
+                SubTask(
+                    task_id=new_id,
+                    name=raw_name,
+                    action=norm_action,
+                    params=norm_params,
+                    dependencies=list(getattr(task, "dependencies", []) or []),
+                    priority=getattr(task, "priority", TaskPriority.NORMAL),
+                    max_retries=getattr(task, "max_retries", 3),
+                    estimated_duration=float(getattr(task, "estimated_duration", 10.0) or 10.0),
+                )
+            )
+
+        # Pass 2: sanitize dependencies (only previous known ids, no self-ref).
+        known = {t.task_id for t in normalized}
+        for idx, task in enumerate(normalized):
+            valid_deps: List[str] = []
+            for dep in list(task.dependencies or []):
+                dep_key = str(dep).strip()
+                if not dep_key:
+                    continue
+                dep_norm = id_map.get(dep_key, dep_key)
+                if dep_norm == task.task_id or dep_norm not in known:
+                    continue
+                # forward-dependency risk: keep only dependencies that appear before this step
+                dep_pos = next((i for i, st in enumerate(normalized) if st.task_id == dep_norm), -1)
+                if dep_pos >= idx:
+                    continue
+                if dep_norm not in valid_deps:
+                    valid_deps.append(dep_norm)
+            task.dependencies = valid_deps
+
+        if not any(t.action != "chat" for t in normalized):
+            normalized[0].action = self._normalize_action_name("", fallback_text=goal)
+            normalized[0].params = self._sanitize_subtask_params(
+                normalized[0].action,
+                normalized[0].params,
+                name=normalized[0].name,
+                goal=goal,
+            )
+
+        return normalized
 
     def _format_context_for_planner(self, context: Dict[str, Any]) -> str:
         if not context:
@@ -240,6 +462,11 @@ Return JSON array:
             issues.append("contains_chat_actions")
             score -= 0.15
 
+        unknown_actions = [t.action for t in subtasks if str(t.action or "").strip() not in KNOWN_TOOL_ACTIONS]
+        if unknown_actions:
+            issues.append(f"unknown_actions:{','.join(sorted(set(unknown_actions))[:5])}")
+            score -= min(0.35, 0.08 * len(set(unknown_actions)))
+
         # 2) Dependency sanity
         known_ids = {t.task_id for t in subtasks}
         for t in subtasks:
@@ -272,8 +499,19 @@ Return JSON array:
             issues.append("too_many_steps")
             score -= 0.1
 
+        # 5) Repeated redundant actions (likely hallucinated loops)
+        repeated_pairs = 0
+        for i in range(1, len(subtasks)):
+            prev = subtasks[i - 1]
+            cur = subtasks[i]
+            if prev.action == cur.action and prev.params == cur.params:
+                repeated_pairs += 1
+        if repeated_pairs > 0:
+            issues.append("repeated_redundant_steps")
+            score -= min(0.2, repeated_pairs * 0.06)
+
         score = max(0.0, min(1.0, score))
-        safe_to_run = score >= 0.55 and "all_chat_actions" not in issues
+        safe_to_run = score >= 0.60 and "all_chat_actions" not in issues and not unknown_actions
         return {"score": score, "issues": issues, "safe_to_run": safe_to_run}
 
     async def revise_plan(
@@ -285,6 +523,7 @@ Return JSON array:
         failure_feedback: str = "",
         llm_client=None,
         use_llm: bool = True,
+        user_id: str = "local"
     ) -> List[SubTask]:
         """Try a second-pass plan synthesis using failure feedback."""
         if not use_llm:
@@ -315,13 +554,13 @@ Return JSON array:
             if context_hint:
                 prompt += f"\nContext: {context_hint}"
 
-            resp = await client.generate(prompt, max_tokens=650)
+            resp = await client.generate(prompt, max_tokens=650, user_id=user_id)
             revised = self._parse_subtasks_from_response(resp, goal, limit=10)
             if revised:
-                return revised
+                return self._sanitize_subtasks(revised, goal)
         except Exception as exc:
             logger.debug(f"Plan revision failed: {exc}")
-        return current_subtasks
+        return self._sanitize_subtasks(current_subtasks, goal)
 
     def _infer_action(self, task_text: str) -> str:
         """Infer action from task text"""
@@ -378,14 +617,25 @@ Return JSON array:
         subtasks: Optional[List[SubTask]] = None,
         llm_client=None,
         context: Optional[Dict[str, Any]] = None,
-        use_llm: bool = True
+        use_llm: bool = True,
+        user_id: str = "local",
+        preferred_tools: Optional[List[str]] = None
     ) -> ExecutionPlan:
         """Create and return an execution plan (returns the plan object)."""
         plan_id = str(uuid.uuid4())[:8]
 
         if not subtasks:
             # Decompose automatically
-            subtasks = await self.decompose_task(description, llm_client, context=context, use_llm=use_llm and self.use_llm)
+            subtasks = await self.decompose_task(
+                description, 
+                llm_client, 
+                context=context, 
+                use_llm=use_llm and self.use_llm, 
+                user_id=user_id,
+                preferred_tools=preferred_tools
+            )
+        else:
+            subtasks = self._sanitize_subtasks(subtasks, description)
 
         plan = ExecutionPlan(
             plan_id=plan_id,
