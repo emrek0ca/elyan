@@ -28,6 +28,9 @@ from core.tool_usage import record_tool_usage
 from core.tool_request import get_tool_request_log
 from core.subscription import subscription_manager
 from core.quota import quota_manager
+from core.evidence_gate import evidence_gate
+from core.job_templates import detect_job_type, get_template
+from core.pipeline import PipelineContext
 from core.predictive_tasks import get_predictive_task_engine
 from core.timeout_guard import (
     with_timeout, friendly_timeout_message,
@@ -429,7 +432,10 @@ class Agent:
                     context="orchestrator_factory"
                 )
                 overall_success = True if "✅" in result_str else False
-                
+
+                # ── Evidence Gate: proof-only delivery ──
+                result_str = evidence_gate.enforce(result_str, [])
+
                 await self._finalize_turn(
                     user_input=user_input,
                     response_text=result_str,
@@ -586,6 +592,11 @@ class Agent:
 
         result_str = "\n".join(result_lines).strip() or "Görev tamamlandı, ancak görüntülenecek çıktı üretilmedi."
         overall_success = bool(executed_steps)
+
+        # ── Evidence Gate: proof-only delivery ──
+        _tool_evidence = [s.get("result", {}) for s in (subtask_results if 'subtask_results' in dir() else []) if isinstance(s, dict)]
+        result_str = evidence_gate.enforce(result_str, _tool_evidence)
+
         await self._finalize_turn(
             user_input=user_input,
             response_text=result_str,

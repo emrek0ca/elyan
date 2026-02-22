@@ -293,8 +293,13 @@ class LearningEngine:
             logger.error(f"Failed to store interaction: {e}")
 
     async def _learn_from_interaction(self, interaction: Interaction):
-        """Learn patterns and preferences from interaction"""
-        # 1. Update pattern learning
+        """Learn patterns and preferences from interaction.
+        
+        POLICY: Sadece kanıtlı başarılardan öğren.
+        - Başarılı → pattern oluştur veya güçlendir
+        - Başarısız → mevcut pattern'ın güvenini düşür, yeni pattern oluşturma
+        - confidence < 0.3 → pattern'ı sil (yanlış öğrenmeyi kes)
+        """
         pattern_key = interaction.input_text.lower().strip()
 
         if pattern_key in self._pattern_cache:
@@ -303,38 +308,55 @@ class LearningEngine:
             pattern.frequency += 1
             pattern.last_used = interaction.timestamp
 
-            # Update success rate (running average)
-            new_success = 1.0 if interaction.success else 0.0
-            pattern.success_rate = (pattern.success_rate * 0.9) + (new_success * 0.1)
+            if interaction.success:
+                # Başarı → güven artır
+                new_success = 1.0
+                pattern.success_rate = (pattern.success_rate * 0.9) + (new_success * 0.1)
+                pattern.confidence = min(1.0, pattern.confidence + 0.05)
+            else:
+                # Başarısız → güven DÜŞÜR
+                new_success = 0.0
+                pattern.success_rate = (pattern.success_rate * 0.9) + (new_success * 0.1)
+                pattern.confidence = max(0.0, pattern.confidence - 0.1)
 
             # Update avg duration
             pattern.avg_duration_ms = int(
                 (pattern.avg_duration_ms * 0.9) + (interaction.duration_ms * 0.1)
             )
 
-            # Increase confidence
-            pattern.confidence = min(1.0, pattern.confidence + 0.05)
+            # PRUNE: confidence çok düşükse pattern'ı sil
+            if pattern.confidence < 0.3:
+                logger.info(f"Pruning low-confidence pattern: '{pattern_key}' (conf={pattern.confidence:.2f})")
+                del self._pattern_cache[pattern_key]
+                self._quick_patterns.pop(pattern_key, None)
+                asyncio.create_task(self._delete_pattern(pattern_key))
+                return
 
-        else:
-            # Create new pattern
+        elif interaction.success:
+            # SADECE BAŞARILI etkileşimlerden yeni pattern oluştur
             pattern = LearnedPattern(
                 pattern=pattern_key,
                 intent=interaction.intent,
                 action=interaction.action,
                 frequency=1,
-                success_rate=1.0 if interaction.success else 0.0,
+                success_rate=1.0,
                 avg_duration_ms=interaction.duration_ms,
                 last_used=interaction.timestamp,
                 confidence=0.5
             )
             self._pattern_cache[pattern_key] = pattern
             self._quick_patterns[pattern_key] = interaction.action
+        else:
+            # Başarısız + yeni pattern → KAYDETME (yanlış öğrenmeyi engelle)
+            logger.debug(f"Skipping pattern creation for failed interaction: '{pattern_key[:50]}'")
+            return
 
         # 2. Update success metrics
         await self._update_success_metrics(interaction)
 
-        # 3. Learn preferences (if any signals)
-        await self._learn_preferences(interaction)
+        # 3. Learn preferences (if any signals) — sadece explicit tercihler
+        if interaction.success:
+            await self._learn_preferences(interaction)
 
         # 4. Persist to database (async)
         asyncio.create_task(self._persist_learned_pattern(pattern))
@@ -566,6 +588,15 @@ class LearningEngine:
         except Exception as e:
             logger.error(f"Failed to persist pattern: {e}")
 
+    async def _delete_pattern(self, pattern_key: str):
+        """Delete a low-confidence pattern from database."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("DELETE FROM learned_patterns WHERE pattern = ?", (pattern_key,))
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to delete pattern: {e}")
+
     def quick_match(self, input_text: str) -> Optional[str]:
         """
         Ultra-fast pattern matching using learned patterns.
@@ -666,8 +697,13 @@ class LearningEngine:
         })
         if success and publish_ready:
             current["success_count"] = int(current.get("success_count", 0)) + 1
-        else:
+        elif not success:
             current["failure_count"] = int(current.get("failure_count", 0)) + 1
+            # POLICY: Başarısız işlerden skill memory güncelleme
+            # Sadece failure count artır, preference güncelleme
+            current["last_used"] = time.time()
+            self._skill_memory_cache[key] = current
+            return  # ← Başarısız → tool/quality preference YAZMA
 
         prev_quality = float(current.get("avg_quality", 0.0))
         if prev_quality <= 0:
