@@ -60,22 +60,47 @@ class GatewayRouter:
         logger.info(f"Incoming: [{message.channel_type}] user={message.user_id} text={message.text[:50]}")
         self._mark_incoming_message(message.channel_type)
         await self._maybe_send_first_contact_welcome(message)
-        
+
         try:
             agent = await agent_router.route_message(message.channel_type, message.user_id)
             agent.current_user_id = message.user_id
-            
+
             # Notify dashboard
             try:
                 from core.gateway.server import push_activity
                 push_activity("message", message.channel_type, message.text[:60])
             except Exception:
                 pass
-            
-            response_text = await agent.process(message.text)
+
+            # ── Specialist Detection & Typing Indicator ──
+            try:
+                from core.multi_agent.specialists import get_specialist_registry
+                specialist = get_specialist_registry().select_for_input(message.text)
+                specialist_tag = f"{specialist.emoji} {specialist.name}" if specialist else ""
+            except Exception:
+                specialist_tag = ""
+
+            # Send typing/processing indicator
+            typing_text = f"⏳ Çalışıyorum..." + (f" ({specialist_tag})" if specialist_tag else "")
+            try:
+                await self._send_typing_indicator(message.channel_type, message.channel_id, typing_text)
+            except Exception:
+                pass
+
+            # ── Notify callback for step-by-step progress ──
+            async def _notify_progress(status_msg: str):
+                try:
+                    progress_resp = UnifiedResponse(text=status_msg, format="plain")
+                    await self.send_outgoing_response(
+                        message.channel_type, message.channel_id, progress_resp
+                    )
+                except Exception:
+                    pass
+
+            response_text = await agent.process(message.text, notify=_notify_progress)
             response = UnifiedResponse(text=response_text, format="markdown")
             await self.send_outgoing_response(message.channel_type, message.channel_id, response)
-            
+
         except Exception as e:
             logger.error(f"Error processing message: {e}", exc_info=True)
             self._increment_counter(message.channel_type, "processing_errors")
@@ -84,8 +109,19 @@ class GatewayRouter:
                 push_activity("error", message.channel_type, str(e)[:60], success=False)
             except Exception:
                 pass
-            error_resp = UnifiedResponse(text="Üzgünüm, bu isteği işlerken bir hata oluştu.")
+            error_resp = UnifiedResponse(text="Üzgünüm, bu isteği işlerken bir hata oluştu. Tekrar dener misin?")
             await self.send_outgoing_response(message.channel_type, message.channel_id, error_resp)
+
+    async def _send_typing_indicator(self, channel_type: str, chat_id: str, text: str = ""):
+        """Send a typing action or status message to indicate processing."""
+        if channel_type in self.adapters:
+            adapter = self.adapters[channel_type]
+            # Try native typing action first (Telegram supports this)
+            try:
+                if hasattr(adapter, 'app') and adapter.app:
+                    await adapter.app.bot.send_chat_action(chat_id=chat_id, action="typing")
+            except Exception:
+                pass
 
     def _welcome_key(self, message: UnifiedMessage) -> str:
         channel = str(message.channel_type or "").strip().lower()

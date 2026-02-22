@@ -880,6 +880,67 @@ def update():
 
 
 # ═══════════════════════════════════════════════════════════════
+#  elyan team
+# ═══════════════════════════════════════════════════════════════
+
+@cli.group(invoke_without_command=True)
+@click.pass_context
+def team(ctx):
+    """🏢 Agent team management."""
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(team_status)
+
+
+@team.command("status")
+def team_status():
+    """Show agent team composition."""
+    from core.multi_agent.specialists import get_specialist_registry
+    registry = get_specialist_registry()
+    click.echo(f"\n{registry.format_team_status()}")
+    click.echo(f"\n  Kullan: `elyan team test 'mesajın'` — hangi ajan yakalar test et\n")
+
+
+@team.command("test")
+@click.argument("message")
+def team_test(message):
+    """Test which agent handles a specific message."""
+    from core.multi_agent.specialists import get_specialist_registry
+    registry = get_specialist_registry()
+    selected = registry.select_for_input(message)
+    click.echo(f"\n  📨 Mesaj: \"{message}\"")
+    click.echo(f"  ➜  {selected.emoji} {selected.name} ({selected.role})")
+    click.echo(f"  📋 Domain: {selected.domain}")
+    click.echo(f"  🔧 Araçlar: {', '.join(selected.preferred_tools[:5])}")
+    click.echo()
+
+
+@team.command("bench")
+def team_bench():
+    """Run agent routing benchmark with sample messages."""
+    from core.multi_agent.specialists import get_specialist_registry
+    registry = get_specialist_registry()
+
+    samples = [
+        "bitcoin fiyatlarını araştır",
+        "bir web sitesi yaz",
+        "masaüstünü listele",
+        "bu kodu test et",
+        "nasılsın bugün",
+        "hava durumunu söyle",
+        "projeyi temizle ve düzenle",
+        "yapay zeka hakkında rapor hazırla",
+        "ekran görüntüsü al",
+        "bu dosyayı sil",
+    ]
+    click.echo(f"\n🏢 Agent Routing Benchmark")
+    click.echo(f"{'═' * 55}")
+    for msg in samples:
+        s = registry.select_for_input(msg)
+        click.echo(f"  {s.emoji} {s.name:<15} ← \"{msg}\"")
+    click.echo()
+
+
+# ═══════════════════════════════════════════════════════════════
 #  ENTRY POINT
 # ═══════════════════════════════════════════════════════════════
 

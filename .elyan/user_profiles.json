@@ -1,0 +1,22 @@
+{
+  "0": {
+    "preferred_language": "tr",
+    "top_topics": {
+      "masaüstünde": 8,
+      "var": 8,
+      "ekran": 2,
+      "görüntüsü": 2,
+      "word": 2,
+      "dosyası": 2,
+      "içine": 2,
+      "köpek": 2
+    },
+    "successful_actions": {
+      "list_files": 8,
+      "multi_task": 4
+    },
+    "failed_actions": {},
+    "response_length_bias": "short",
+    "updated_at": 1771668251
+  }
+}
