@@ -50,19 +50,26 @@ class IdleWorker:
                 # Pick a random chore
                 chores = [
                     "Bütün log dosyalarındaki gereksiz kalıntıları tespit et ve bir özet çıkar.",
-                    "HackerNews ve teknoloji sitelerinde bugünkü yapay zeka haberlerini derleyip text olarak kaydet."
+                    "HackerNews ve teknoloji sitelerinde bugünkü yapay zeka haberlerini derleyip text olarak kaydet.",
+                    "_MUTATOR_RUN_"
                 ]
                 import random
                 chore = random.choice(chores)
-                logger.info(f"Idle Task Selected: {chore}")
                 
-                try:
-                    router = NeuralRouter(self.agent)
-                    template = await router.route_request(chore)
-                    orchestrator = AgentOrchestrator(self.agent)
-                    await orchestrator.manage_flow(template, chore)
-                except Exception as e:
-                    logger.error(f"Idle chore failed: {e}")
+                if chore == "_MUTATOR_RUN_":
+                    logger.info("🧬 IdleWorker triggering Auto-Refactoring Core Sweep...")
+                    from core.mutator import CoreMutator
+                    mutator = CoreMutator(self.agent)
+                    await mutator.auto_refactor()
+                else:
+                    logger.info(f"Idle Task Selected: {chore}")
+                    try:
+                        router = NeuralRouter(self.agent)
+                        template = await router.route_request(chore)
+                        orchestrator = AgentOrchestrator(self.agent)
+                        await orchestrator.manage_flow(template, chore)
+                    except Exception as e:
+                        logger.error(f"Idle chore failed: {e}")
                 
                 # Reset timer so we don't spam chores
                 self.ping() 

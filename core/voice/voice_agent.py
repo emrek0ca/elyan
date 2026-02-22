@@ -9,6 +9,12 @@ import time
 from pathlib import Path
 from typing import Dict, Any, Optional
 
+try:
+    import pyaudio
+    HAS_AUDIO_DEPS = True
+except ImportError:
+    HAS_AUDIO_DEPS = False
+
 from core.voice.speech_to_text import get_stt_service
 from core.voice.text_to_speech import get_tts_service
 from core.voice.audio_utils import convert_ogg_to_wav, cleanup_temp_files
@@ -23,6 +29,72 @@ class VoiceAgent:
         self.tts = get_tts_service()
         self.temp_dir = Path.home() / ".elyan" / "tmp" / "voice"
         self.temp_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Continuous listening props
+        self.CHUNK = 1024
+        self.FORMAT = pyaudio.paInt16 if HAS_AUDIO_DEPS else None
+        self.CHANNELS = 1
+        self.RATE = 16000
+        self._running = False
+        self.p_audio = pyaudio.PyAudio() if HAS_AUDIO_DEPS else None
+
+    async def listen_loop(self):
+        """Infinite loop simulating Voice Activity Detection (VAD) buffer."""
+        if not HAS_AUDIO_DEPS: 
+            logger.warning("pyaudio missing. Background voice loop disabled.")
+            return
+        
+        self._running = True
+        logger.info("🎙️ VoiceAgent Background Listener Started.")
+        
+        # Audio stream setup
+        try:
+            stream = self.p_audio.open(format=self.FORMAT,
+                                     channels=self.CHANNELS,
+                                     rate=self.RATE,
+                                     input=True,
+                                     frames_per_buffer=self.CHUNK)
+        except Exception as e:
+            logger.error(f"Microphone access failed: {e}")
+            self._running = False
+            return
+            
+        logger.info("🎙️ Listening for Voice-First reasoning...")
+        
+        while self._running:
+            # Simulated read and VAD block. In a production pipeline:
+            # 1. Accumulate chunks into a silience-delimited buffer
+            # 2. Pass buffer byte array to Whisper STT
+            # 3. If whisper returns text, call self._route_to_orchestrator(text)
+            await asyncio.sleep(1.0)
+            
+        stream.stop_stream()
+        stream.close()
+        
+    async def _route_to_orchestrator(self, text_intent: str):
+        """Passes transcribed text seamlessly to the neural engine."""
+        logger.info(f"🗣️ Voice Intent Triggered: {text_intent}")
+        from core.multi_agent.neural_router import NeuralRouter
+        from core.multi_agent.orchestrator import AgentOrchestrator
+        
+        try:
+            router = NeuralRouter(self.agent)
+            template = await router.route_request(text_intent)
+            orchestrator = AgentOrchestrator(self.agent)
+            
+            # Fire and forget execution to keep voice loop unblocked
+            asyncio.create_task(orchestrator.manage_flow(template, text_intent))
+            
+            if self.tts:
+               await self.tts.synthesize("Komut alındı, uyguluyorum.", output_file=str(self.temp_dir / "ack.mp3"))
+        except Exception as e:
+            logger.error(f"Voice to Orchestrator fail: {e}")
+            
+    def stop(self):
+        self._running = False
+        if self.p_audio:
+            self.p_audio.terminate()
+        logger.info("🛑 VoiceAgent offline.")
 
     async def process_voice_input(self, audio_path: str, user_id: str = "local") -> Dict[str, Any]:
         """

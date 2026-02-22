@@ -18,7 +18,8 @@ class SwarmConsensus:
         self.tribunal_personas = {
             "security": "SEN BİR SİBER GÜVENLİK UZMANISIN (SecOps). SADECE güvenlik zafiyetleri ve data sızıntılarını, yetki aşımını ara.",
             "performance": "SEN BİR PERFORMANS MÜHENDİSİSİN. Big-O karmaşıklığı, gereksiz döngüler ve yavaşlatıcı memory/cpu sızıntılarını denetle.",
-            "ux": "SEN UX VE PRODUCT MÜHENDİSİSİN. Sistem kullanıcının gerçekte istediği faydayı sunuyor mu buna bak."
+            "ux": "SEN UX VE PRODUCT MÜHENDİSİSİN. Sistem kullanıcının gerçekte istediği faydayı sunuyor mu buna bak.",
+            "risk_manager": "SEN BİR FİNANSAL RİSK YÖNETİCİSİSİSİN (RiskOps). İşlemde (eğer varsa) yüksek drawdown riski, bakiye sıfırlama veya hatalı token ticareti risklerini bloke et."
         }
         
     async def _evaluate_persona(self, persona: str, prompt: str, artifact_dump: str) -> Tuple[bool, str]:
