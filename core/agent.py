@@ -416,6 +416,68 @@ class Agent:
                 issues_text = ", ".join(health.issues)
                 health_notice = f"> 💡 **Sistem Notu:** {issues_text}. İşlem biraz yavaş seyredebilir.\n\n"
 
+            # ── CDG Engine Master Architecture (Phase 3) ──
+            job_type = detect_job_type(user_input)
+            if job_type != "communication":
+                logger.info(f"CDG Engine activated for job: {job_type}")
+                cdg_plan = cdg_engine.create_plan(f"job_{int(time.time())}", job_type, user_input)
+                
+                async def cdg_executor(node):
+                    if node.action in ("plan", "refine"):
+                        prompt = f"{style_profile.to_prompt_lines()}\n\nGirdi: {user_input}\nGörev: {node.name}\nAçıklama: Bu adımda ne yapılmalı planla."
+                        resp = await self.llm.generate(prompt)
+                        return {"output": resp}
+                    else:
+                        res = await self._execute_tool(node.action, node.params, user_input=user_input, step_name=node.name)
+                        return res if isinstance(res, dict) else {"output": str(res)}
+                
+                cdg_plan = await cdg_engine.execute(cdg_plan, cdg_executor)
+                manifest = cdg_engine.get_evidence_manifest(cdg_plan)
+                
+                overall_success = cdg_plan.status == "passed"
+                tool_results = [n.result for n in cdg_plan.nodes]
+                
+                if overall_success:
+                    base_msg = "✅ İşlem tamamlandı."
+                    if manifest["artifacts"]:
+                        paths = [a.get("path") for a in manifest["artifacts"] if a.get("path")]
+                        base_msg += f"\nÜretilen dosyalar: {', '.join(paths)}"
+                else:
+                    base_msg = "❌ İşlem sırasında hatalar oluştu."
+                
+                # Constraint Engine (hard rules update response)
+                result_str, violations = constraint_engine.enforce(
+                    base_msg,
+                    tool_results=tool_results,
+                    job_type=job_type,
+                    contract_passed=overall_success
+                )
+                
+                # Evidence Gate
+                result_str = evidence_gate.enforce(result_str, tool_results)
+                
+                # Failure Clustering
+                if not overall_success:
+                    for node in cdg_plan.nodes:
+                        if node.state.value == "failed":
+                            fail_code = failure_clustering.detect_failure_code(node.error or str(node.result), node.action, str(node.result))
+                            failure_clustering.record(fail_code, job_type, node.error or str(node.result))
+                            # Add auto-patch playbook suggestion to error
+                            suggestion = failure_clustering.suggest_fix(fail_code)
+                            result_str += f"\n\n**Hata Analizi ({node.name})**\n{suggestion}"
+
+                await self._finalize_turn(
+                    user_input=user_input,
+                    response_text=result_str,
+                    action="cdg_engine_execution",
+                    success=overall_success,
+                    started_at=started_at,
+                    context={"job_type": job_type, "nodes": len(cdg_plan.nodes)}
+                )
+                if action_lock.is_locked: action_lock.unlock()
+                return status_prefix + health_notice + result_str
+            # ── End CDG Engine ──
+
             plan = await with_timeout(
                 self.planner.create_plan(user_input, {}, user_id=uid, preferred_tools=preferred_tools),
                 seconds=PLANNER_TIMEOUT,
