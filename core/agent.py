@@ -920,7 +920,9 @@ class Agent:
                     logger.warning(f"Verification failed for {mapped_tool}. Retrying operation...")
                     clean_params["_retry_attempted"] = True
                     try:
-                        retry_res = await self.kernel.tools.execute(mapped_tool, clean_params)
+                        # Strip internal keys before passing to tool
+                        exec_params = {k: v for k, v in clean_params.items() if not k.startswith("_")}
+                        retry_res = await self.kernel.tools.execute(mapped_tool, exec_params)
                         result = self._postprocess_tool_result(mapped_tool, clean_params, retry_res, user_input=user_input)
                         if result.get("verified"):
                             result["_healed"] = True
@@ -948,7 +950,8 @@ class Agent:
                     }
                     
                     try:
-                        repair_res = await self._execute_tool(r_action, r_params, user_input=user_input, step_name=f"Onarım: {r_action}")
+                        exec_r_params = {k: v for k, v in r_params.items() if not k.startswith("_")}
+                        repair_res = await self._execute_tool(r_action, exec_r_params, user_input=user_input, step_name=f"Onarım: {r_action}")
                         if isinstance(repair_res, dict) and repair_res.get("success"):
                             # If repair succeeded, use its result
                             result = repair_res

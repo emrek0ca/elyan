@@ -556,7 +556,15 @@ def models_use(model):
     cfg["provider"] = provider
     cfg["model_name"] = model_name
     # Sync with elyan_config format
-    cfg.setdefault("models", {})["default"] = {"provider": provider, "model": model_name}
+    model_entry = {"provider": provider, "model": model_name}
+    cfg.setdefault("models", {})["default"] = dict(model_entry)
+    # Sync all roles so neural router uses the same model
+    cfg["models"]["roles"] = {
+        "reasoning": dict(model_entry),
+        "inference": dict(model_entry),
+        "creative": dict(model_entry),
+        "code": dict(model_entry),
+    }
     _save(cfg)
     click.echo(f"  ✅ {model} ({provider})")
 
