@@ -183,54 +183,9 @@ class Agent:
         started_at = time.perf_counter()
         uid = str(self.current_user_id or "local")
 
-        # 0. Quota Check
-        quota = quota_manager.check_quota(uid)
-        if not quota.get("allowed", True):
-            limit_msg = f"\n\nGünlük mesaj sınırına ulaştın ({quota.get('limit')} mesaj). Devam etmek için Pro plana geçebilirsin."
-            if quota.get("reason") == "monthly_token_limit_reached":
-                limit_msg = f"\n\nAylık token sınırına ulaştın ({quota.get('limit')} token). Devam etmek için Pro plana geçebilirsin."
-            
-            # Record failed attempt if needed, but usually we just block.
-            return f"Üzgünüm, {limit_msg}"
-
-        # 1. Validation
-        valid, msg = validate_input(user_input)
-        if not valid:
-            return f"Hata: {msg}"
-
-        user_id = int(self.current_user_id or 0)
-        history = self.kernel.memory.get_recent_conversations(user_id, limit=5)
-
-        # 2. Action-Lock Check
-        if action_lock.is_locked:
-            if any(kw in user_input.lower() for kw in ["dur", "iptal", "cancel", "stop"]):
-                action_lock.unlock()
-                return "Üretim modu durduruldu ve kilit açıldı."
-            return f"{action_lock.get_status_prefix()}Şu an bir göreve odaklanmış durumdayım. İptal etmek için 'iptal' yazabilirsin."
-
-        status_prefix = action_lock.get_status_prefix()
-        
-        # 3. Context7 Injection Check
-        context_docs = ""
-        if "use context7" in user_input.lower():
-            tech = "React" if "react" in user_input.lower() else "Python"
-            context_docs = await context7_client.fetch_docs(tech)
-            user_input = user_input.replace("use context7", "").strip()
-            logger.info(f"Context7 docs injected for {tech}")
-
         user_input = self._normalize_user_input(user_input)
         user_input = sanitize_input(user_input)
         
-        # 3c. Context Intelligence - Dynamic Morphing
-        ctx_intel = get_context_intelligence()
-        op_context = ctx_intel.detect(user_input)
-        specialized_prompt = ctx_intel.get_specialized_prompt(op_context)
-        preferred_tools = ctx_intel.get_preferred_tools(op_context["domain"])
-        
-        logger.info(f"Operation Context: {op_context['domain']} (Stack: {op_context['stack']})")
-        if specialized_prompt:
-            logger.info("Injecting specialized behavior prompt.")
-
         self._ensure_llm()
 
         # 3b. Feedback / Correction Detection
@@ -401,285 +356,32 @@ class Agent:
             _push("chat", "agent", user_input[:60])
             return status_prefix + chat_resp
 
-        # 8. Strategic Planning & Execution (Registry-based)
-        try:
-            # 8a. Resource Health Check
-            monitor = get_resource_monitor()
-            health = monitor.get_health_snapshot()
-            health_notice = ""
-            
-            if health.status == "critical":
-                issues_text = ", ".join(health.issues)
-                return f"⚠️ **İşlem Durduruldu:** Sistem kaynakları kritik seviyede ({issues_text}). Lütfen bazı uygulamaları kapatıp tekrar dene."
-            
-            if health.status == "warning":
-                issues_text = ", ".join(health.issues)
-                health_notice = f"> 💡 **Sistem Notu:** {issues_text}. İşlem biraz yavaş seyredebilir.\n\n"
-
-            # ── CDG Engine Master Architecture (Phase 3) ──
-            job_type = detect_job_type(user_input)
-            if job_type != "communication":
-                logger.info(f"CDG Engine activated for job: {job_type}")
-                cdg_plan = cdg_engine.create_plan(f"job_{int(time.time())}", job_type, user_input)
-                
-                async def cdg_executor(node):
-                    patch_inst = node.params.pop("_auto_patch_instruction", "")
-                    if node.action in ("plan", "refine"):
-                        prompt = f"{style_profile.to_prompt_lines()}\n\nGirdi: {user_input}\nGörev: {node.name}\nAçıklama: Bu adımda ne yapılmalı planla.{patch_inst}"
-                        resp = await self.llm.generate(prompt)
-                        return {"output": resp}
-                    else:
-                        patched_input = user_input + patch_inst if patch_inst else user_input
-                        res = await self._execute_tool(node.action, node.params, user_input=patched_input, step_name=node.name)
-                        return res if isinstance(res, dict) else {"output": str(res)}
-                
-                cdg_plan = await cdg_engine.execute(cdg_plan, cdg_executor)
-                manifest = cdg_engine.get_evidence_manifest(cdg_plan)
-                
-                overall_success = cdg_plan.status == "passed"
-                tool_results = [n.result for n in cdg_plan.nodes]
-                
-                if overall_success:
-                    base_msg = "✅ İşlem tamamlandı."
-                    if manifest["artifacts"]:
-                        paths = [a.get("path") for a in manifest["artifacts"] if a.get("path")]
-                        base_msg += f"\nÜretilen dosyalar: {', '.join(paths)}"
-                else:
-                    base_msg = "❌ İşlem sırasında hatalar oluştu."
-                
-                # Constraint Engine (hard rules update response)
-                result_str, violations = constraint_engine.enforce(
-                    base_msg,
-                    tool_results=tool_results,
-                    job_type=job_type,
-                    contract_passed=overall_success
-                )
-                
-                # Evidence Gate
-                result_str = evidence_gate.enforce(result_str, tool_results)
-                
-                # Failure Clustering
-                if not overall_success:
-                    for node in cdg_plan.nodes:
-                        if node.state.value == "failed":
-                            fail_code = failure_clustering.detect_failure_code(node.error or str(node.result), node.action, str(node.result))
-                            failure_clustering.record(fail_code, job_type, node.error or str(node.result))
-                            # Add auto-patch playbook suggestion to error
-                            suggestion = failure_clustering.suggest_fix(fail_code)
-                            result_str += f"\n\n**Hata Analizi ({node.name})**\n{suggestion}"
-
-                await self._finalize_turn(
-                    user_input=user_input,
-                    response_text=result_str,
-                    action="cdg_engine_execution",
-                    success=overall_success,
-                    started_at=started_at,
-                    context={"job_type": job_type, "nodes": len(cdg_plan.nodes)}
-                )
-                if action_lock.is_locked: action_lock.unlock()
-                return status_prefix + health_notice + result_str
-            # ── End CDG Engine ──
-
-            plan = await with_timeout(
-                self.planner.create_plan(user_input, {}, user_id=uid, preferred_tools=preferred_tools),
-                seconds=PLANNER_TIMEOUT,
-                fallback=None,
-                context="planner",
-            )
-            
-            # --- Multi-Agent Delegation ---
-            subtasks = getattr(plan, "subtasks", []) or []
-            if len(subtasks) >= 2:
-                orchestrator = get_orchestrator(self)
-                logger.info(f"Complex task detected with {len(subtasks)} steps. Activating Lead Orchestrator.")
-                # BP-001: Add total timeout for multi-agent flow
-                result_str = await with_timeout(
-                    orchestrator.manage_flow(plan, user_input),
-                    seconds=300, # 5 minutes max for factory flow
-                    fallback="Üzgünüm, görev çok uzun sürdüğü için zaman aşımına uğradı.",
-                    context="orchestrator_factory"
-                )
-                overall_success = True if "✅" in result_str else False
-
-                # ── Evidence Gate: proof-only delivery ──
-                result_str = evidence_gate.enforce(result_str, [])
-
-                await self._finalize_turn(
-                    user_input=user_input,
-                    response_text=result_str,
-                    action="multi_agent_delegation",
-                    success=overall_success,
-                    started_at=started_at,
-                    context={"subtask_count": len(subtasks), "method": "orchestrator"}
-                )
-                if action_lock.is_locked: action_lock.unlock()
-                return status_prefix + health_notice + result_str
-            # --- End Multi-Agent Delegation ---
-        except asyncio.TimeoutError:
-            if action_lock.is_locked:
-                action_lock.unlock()
-            return status_prefix + friendly_timeout_message("planner")
+        # 8. Pipeline Execution (Phase 2 Modularization)
+        from core.pipeline import pipeline_runner
         
-        quality = self.planner.evaluate_plan_quality(getattr(plan, "subtasks", []) or [], user_input)
-        if not quality.get("safe_to_run", True):
-            # One controlled self-revision pass before rejecting complex tasks.
-            revise_fn = getattr(self.planner, "revise_plan", None)
-            if callable(revise_fn):
-                try:
-                    revised_subtasks = await revise_fn(
-                        user_input,
-                        current_subtasks=getattr(plan, "subtasks", []) or [],
-                        context={},
-                        failure_feedback="; ".join(quality.get("issues", [])[:8]),
-                        llm_client=self.llm,
-                        use_llm=True,
-                        user_id=uid,
-                    )
-                    if isinstance(revised_subtasks, list) and revised_subtasks:
-                        plan.subtasks = revised_subtasks
-                        quality = self.planner.evaluate_plan_quality(getattr(plan, "subtasks", []) or [], user_input)
-                except Exception as exc:
-                    logger.debug(f"Plan revision skipped due to error: {exc}")
-
-        if not quality.get("safe_to_run", True):
-            should_chat_fallback = (
-                self._is_information_question(user_input)
-                or self._is_likely_chat_message(user_input)
-                or action_name in {"", "chat", "unknown"}
-            )
-            if should_chat_fallback:
-                full_prompt = f"Docs: {context_docs}\n\nUser: {user_input}" if context_docs else user_input
-                if self._ensure_llm():
-                    try:
-                        chat_resp = await with_timeout(
-                            self.llm.generate(full_prompt, role=role, history=history, user_id=uid),
-                            seconds=LLM_TIMEOUT,
-                            fallback=friendly_timeout_message("llm"),
-                            context="llm_chat_unsafe_plan",
-                        )
-                    except Exception:
-                        chat_resp = self._fallback_chat_without_llm(user_input)
-                else:
-                    chat_resp = self._fallback_chat_without_llm(user_input)
-                await self._finalize_turn(
-                    user_input=user_input,
-                    response_text=chat_resp,
-                    action="chat_fallback_unsafe_plan",
-                    success=True,
-                    started_at=started_at,
-                    context={"route_role": role, "fallback": "unsafe_plan_to_chat"},
-                )
-                _push("chat", "agent", user_input[:60], success=True)
-                if action_lock.is_locked:
-                    action_lock.unlock()
-                return status_prefix + chat_resp
-            if action_lock.is_locked:
-                action_lock.unlock()
-            # Do not hard-fail with planner jargon on user-facing path.
-            return "Bu isteği güvenli şekilde çalıştırmak için biraz daha açık adım gerekiyor. Örn: 'masaüstünde Projects klasörünü listele'."
-
-        final_results = []
-        executed_steps = set()
-        failed_steps = []
-        subtasks = plan.subtasks or []
-        pending_steps = list(subtasks)
-
-        # Execution Loop
-        while pending_steps and len(executed_steps) < (len(subtasks) + 5):
-            # Dependency Resolution
-            runnable = [
-                s for s in pending_steps
-                if all(d in executed_steps for d in (getattr(s, "dependencies", []) or []))
-            ]
-            if not runnable:
-                rescue = self._select_dependency_rescue_step(pending_steps, executed_steps)
-                if rescue is None:
-                    break
-                runnable = [rescue]
-
-            for step in runnable:
-                # Update Lock
-                progress = (len(executed_steps) + 1) / max(len(subtasks), 1)
-                step_name = str(getattr(step, "name", "") or "Adım")
-                action_lock.update_status(progress, step_name)
-                
-                if notify and step_name != "_chat_":
-                    await notify(f"🛠️ {step_name}")
-
-                try:
-                    step_result_text, step_ok = await self._execute_planned_step_with_recovery(
-                        step,
-                        user_input=user_input,
-                    )
-                    final_results.append(step_result_text)
-                    step_id = str(getattr(step, "task_id", "") or f"step_{len(executed_steps)+1}")
-                    if step_ok:
-                        executed_steps.add(step_id)
-                    else:
-                        failed_steps.append(
-                            {
-                                "id": step_id,
-                                "name": step_name,
-                                "action": str(getattr(step, "action", "") or ""),
-                                "error": step_result_text[:300],
-                            }
-                        )
-                    pending_steps.remove(step)
-                except Exception as e:
-                    logger.error(f"Execution error ({getattr(step, 'action', '')}): {e}")
-                    failed_steps.append(
-                        {
-                            "id": str(getattr(step, "task_id", "") or f"step_{len(failed_steps)+1}"),
-                            "name": step_name,
-                            "action": str(getattr(step, "action", "") or ""),
-                            "error": str(e),
-                        }
-                    )
-                    pending_steps.remove(step)
-
-        if action_lock.is_locked: action_lock.unlock()
-
-        # Final fallback for complex tasks: try direct intent once if planner path produced no successful execution.
-        if not executed_steps and failed_steps:
-            fallback_intent = self._infer_general_tool_intent(user_input)
-            if isinstance(fallback_intent, dict) and str(fallback_intent.get("action", "")).strip().lower() not in {"", "chat", "unknown"}:
-                try:
-                    fallback_text = await self._run_direct_intent(fallback_intent, user_input, role, history)
-                    if isinstance(fallback_text, str) and fallback_text.strip():
-                        final_results.append(fallback_text)
-                        if not self._result_text_is_error(fallback_text):
-                            executed_steps.add("fallback_direct")
-                except Exception as exc:
-                    logger.debug(f"Direct fallback after planner failure failed: {exc}")
-
-        result_lines = [x for x in final_results if x]
-        if failed_steps:
-            result_lines.append("Başarısız adımlar:")
-            for item in failed_steps[:6]:
-                result_lines.append(f"- {item['name']} ({item['action']}): {item['error'][:160]}")
-
-        result_str = "\n".join(result_lines).strip() or "Görev tamamlandı, ancak görüntülenecek çıktı üretilmedi."
-        overall_success = bool(executed_steps)
-
-        # ── Evidence Gate: proof-only delivery ──
-        _tool_evidence = [s.get("result", {}) for s in (subtask_results if 'subtask_results' in dir() else []) if isinstance(s, dict)]
-        result_str = evidence_gate.enforce(result_str, _tool_evidence)
+        ctx = PipelineContext(
+            user_input=user_input,
+            user_id=uid,
+            role=role,
+            job_type=detect_job_type(user_input),
+            action=action_name,
+        )
+        
+        ctx = await pipeline_runner.run(ctx, agent=self)
 
         await self._finalize_turn(
             user_input=user_input,
-            response_text=result_str,
-            action="multi_step",
-            success=overall_success,
+            response_text=ctx.final_response,
+            action=ctx.action or "pipeline_execution",
+            success=not bool(ctx.errors),
             started_at=started_at,
-            context={
-                "route_role": role,
-                "subtask_count": len(subtasks),
-                "executed_steps": len(executed_steps),
-                "failed_steps": len(failed_steps),
-            },
+            context={"job_type": ctx.job_type, "errors": len(ctx.errors)}
         )
-        _push("task_done", "agent", user_input[:60], success=overall_success)
-        return status_prefix + health_notice + result_str
+        
+        if action_lock.is_locked:
+            action_lock.unlock()
+            
+        return status_prefix + ctx.final_response
 
     @staticmethod
     def _result_text_is_error(text: str) -> bool:
