@@ -164,13 +164,19 @@ class AgentOrchestrator:
                     # Fallback implementation (old Markdown blocks) removed to force state-machine compliance.
                     pass
 
-                # --- Phase 3: VERIFY ---
-                action_lock.update_status(0.7, "Validator: Kalite Denetimi...")
+                # --- Phase 3: VERIFY (Swarm Consensus) ---
+                action_lock.update_status(0.7, "Validator: Swarm Consensus Debate...")
             
-                # Layered QA (Static -> Visual)
-                passed, issues = await self.qa_pipeline.run_full_audit(workspace_dir, contract.artifacts)
+                # Layered Swarm QA (Security, Performance, UX)
+                from core.multi_agent.swarm_consensus import SwarmConsensus
+                tribunal = SwarmConsensus(self.main_agent)
+                passed, issues = await tribunal.run_tribunal_debate(original_input, contract.artifacts)
+                
+                # Update integrity (Static/Syntax) for metrics
+                passed_static, static_issues = await self.qa_pipeline.run_full_audit(workspace_dir, contract.artifacts)
+                issues.extend(static_issues)
+                if not passed_static: passed = False
             
-                # Update integrity for metrics
                 for artifact in contract.artifacts.values():
                     quality_engine.verify_integrity(artifact, workspace_dir)
             
@@ -212,6 +218,18 @@ class AgentOrchestrator:
                         logger.warning(f"QA Fail: {issue}")
                         for path in contract.artifacts:
                             if path in issue: contract.artifacts[path].errors.append(issue)
+
+                        # Self-Coding Meta-Loop
+                        if "ToolNotFound" in issue or "Eksik Yetenek" in issue:
+                            from core.multi_agent.tool_governance import ToolGovernance
+                            governance = ToolGovernance(self.main_agent)
+                            missing_tool = await self._run_specialist("pm_agent", f"Şu hataya göre eksik aracın adını ve amacını tek cümle yaz: {issue}")
+                            logger.info(f"Yetenek eksikliği tespit edildi: {missing_tool}. Kendi kendine yazma denenecek...")
+                            
+                            success = await governance.author_and_inject_tool(missing_tool, f"dynamic_tool_{job_id[:4]}")
+                            if success:
+                                action_lock.update_status(0.8, "Eksik yetenek kodlandı ve sisteme entegre edildi!")
+                                issues.append("Yeni araç yazıldı. Bir sonraki revizyonda planı tekrar dene.")
                 
                     # If no artifacts at all, specifically tell the builder
                     if not contract.artifacts:

@@ -1265,5 +1265,33 @@ class RoutineEngine:
             logger.error(f"Routine load failed: {e}")
             self._routines = {}
 
+    def start_background_loop(self, agent_instance):
+        """Infinite async loop evaluating triggers."""
+        import asyncio
+        if getattr(self, "_bg_running", False):
+            return
+            
+        self._bg_running = True
+        logger.info("🕰️ Chronos Routine Background Loop Started.")
+        
+        async def _loop():
+            from core.multi_agent.orchestrator import AgentOrchestrator
+            from core.multi_agent.neural_router import NeuralRouter
+            
+            while self._bg_running:
+                for rid, routine in self._routines.items():
+                    if not routine.get("enabled"): continue
+                    # A production branch uses croniter. For now, we will simulate a lightweight trigger pass.
+                    pass 
+                await asyncio.sleep(60) # Poll every minute
+                
+        self._bg_task = asyncio.create_task(_loop())
+        
+    def stop_background_loop(self):
+        if hasattr(self, "_bg_task"):
+            self._bg_task.cancel()
+        self._bg_running = False
+        logger.info("🛑 Chronos Routine Background Loop Stopped.")
+
 
 routine_engine = RoutineEngine()
