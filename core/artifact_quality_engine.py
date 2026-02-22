@@ -70,3 +70,7 @@ class ArtifactQualityEngine:
         contract.audit_bundle_path = str(bundle_path)
 
 quality_engine = ArtifactQualityEngine()
+
+def get_artifact_quality_engine() -> ArtifactQualityEngine:
+    """Factory accessor expected by the UI layer."""
+    return quality_engine
