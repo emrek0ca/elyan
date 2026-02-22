@@ -918,20 +918,332 @@ whitelist.py               → Kullanıcı whitelist
 
 ---
 
+## 16. Hardening Katmanı (v20.1.0+)
+
+### `core/evidence_gate.py` — Kanıt Geçidi
+Tool çıktısı (dosya yolu, hash, screenshot) olmadan "teslim/oluşturuldu" iddialarını response'dan siler.
+
+**Kural:** Delivery claim var + evidence yok → `⏳ İşlem devam ediyor` ile değiştir.
+
+### `core/job_contract.py` — İş Sözleşmesi
+Her iş için typed contract: beklenen artifact'lar, izinli tool'lar, QA check'ler, delivery modu.
+`verify_artifacts()` → disk'te dosya var mı kontrol eder.
+`run_qa()` → file_exists, html_valid, min_file_size gibi kontrolleri çalıştırır.
+
+### `core/pipeline.py` — Modüler Pipeline
+agent.py monolitini bağımsız stage'lere böler:
+
+| Stage | Sınıf | İşlev |
+|-------|-------|-------|
+| 1 | `StageValidate` | Input validation (boş, uzun, zararlı) |
+| 2 | `StageRoute` | Neural routing + job type detection |
+| 3 | `StageExecute` | LLM call + tool execution |
+| 4 | `StageVerify` | Contract verification + QA |
+| 5 | `StageDeliver` | Evidence gate + response formatting |
+
+### `core/job_templates.py` — Zorunlu İş Şablonları
+8 template: web_project, research_report, file_operations, code_project, data_analysis, communication, system_ops, browser_task.
+
+### `tests/golden_tests.py` — Regresyon Test Paketi
+19 golden test. Import check + template detection + evidence gate unit tests.
+
+### `core/learning_engine.py` — Bellek Politikası (güncellendi)
+- Sadece **başarılı** etkileşimlerden yeni pattern oluşturur
+- Başarısız → mevcut pattern'ın güvenini **0.1 düşürür**
+- confidence < 0.3 → pattern **silinir** (yanlış öğrenme engellenir)
+- `record_outcome` başarısız işlerde tool/quality preference **yazmaz**
+
+---
+
+## 17. Usta Seviye Mimari — Contracted DAG with Gates (CDG)
+
+> **Felsefe:** "En zor görevlerde bile tutarlı bitiren, kullanıcı tarzına uyan, kanıtlı teslim yapan" bir fabrika.  
+> Tek bir sihirli model değil; **doğru algoritma + doğru yürütme disiplini**.
+
+### 17.1 Çekirdek Algoritma: Plan-and-Execute + DAG + Quality Gates
+
+Üç katman birlikte çalışır:
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  A) TASK DECOMPOSITION (Görevi Parçalama)                       │
+│                                                                  │
+│  Kullanıcı İsteği → Goal → Deliverables → Constraints → Style   │
+│                          ↓                                       │
+│                    DAG (Directed Acyclic Graph)                   │
+│                                                                  │
+│  düğümler = alt görevler (research, outline, draft, assets,     │
+│             code, packaging, QA)                                 │
+│  kenarlar = bağımlılıklar (outline olmadan draft yok,           │
+│             assets olmadan gallery yok)                           │
+│                                                                  │
+│  ► Paralel çalıştırma                                           │
+│  ► Doğru sırayla yürütme                                        │
+│  ► Geri dönüşlerde sadece ilgili dalı düzeltme                  │
+└────────────────────────────────────────────────────────────────┘
+         ↓
+┌────────────────────────────────────────────────────────────────┐
+│  B) EXECUTION (İcra)                                            │
+│                                                                  │
+│  Her DAG düğümü için:                                           │
+│  • agent + tool permission + budget + acceptance tests           │
+│  • Düğümler idempotent: tekrar çalışırsa bozmamalı              │
+└────────────────────────────────────────────────────────────────┘
+         ↓
+┌────────────────────────────────────────────────────────────────┐
+│  C) VERIFICATION (Doğrulama)                                    │
+│                                                                  │
+│  • Her düğümün çıktısı "contract check"ten geçer                │
+│  • En sonda "end-to-end QA" (Playwright + static + content)     │
+│                                                                  │
+│  Ustalık = Güvenilirlik                                         │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### 17.2 Orkestrasyon Beyni: HTN + ReAct + Critic
+
+Hibrit yaklaşım üç bileşenden oluşur:
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  HTN         │────▶│  ReAct       │────▶│  Critic      │
+│  (İskelet)   │     │  (İcra)      │     │  (Kalite)    │
+├─────────────┤     ├─────────────┤     ├─────────────┤
+│ Job template │     │ Think → Act  │     │ "Bu adım     │
+│ standart     │     │ → Observe    │     │  bitti mi?"  │
+│ alt adımlara │     │ döngüsü      │     │              │
+│ böler        │     │              │     │ LLM'nin      │
+│              │     │ Belirli      │     │ değil,       │
+│ Determinism  │     │ adımlarda    │     │ TESTIN       │
+│ sağlar       │     │ LLM          │     │ kararı       │
+└─────────────┘     └─────────────┘     └─────────────┘
+```
+
+**HTN (Hierarchical Task Networks):** `research_report_job`, `web_project_job`, `coding_task_job` gibi template'ler. Görevi standart alt adımlara böler. Determinism sağlar.
+
+**ReAct (Reason + Act):** LLM plan üretir + tool çağırır ama sadece belirli adımlarda. Her adımda `think → act → observe` döngüsü.
+
+**Critic/Verifier:** Ayrı bir ajan (veya kural seti). LLM'nin "bitti" demesini değil, **testin** "bitti" demesini sağlar.
+
+### 17.3 Job Template Tasarımları
+
+#### A) Araştırma — Deep Research Job
+
+```
+Input ──▶ [1] Scope + Soru Listesi
+              (hedef netleştirme, ama az soru sor)
+          ──▶ [2] Kaynak Toplama
+              (web: Playwright + readability extraction)
+          ──▶ [3] Not Çıkarma
+              (claim → source eşleştirme)
+          ──▶ [4] Sentez
+              (outline oluşturma)
+          ──▶ [5] Rapor Yazma
+              (makale)
+          ──▶ [6] Kaynakça + Doğrulama
+              (kaynak link/alıntı kontrolü, tarih)
+          ──▶ [7] Stil Uyumu + Son QA
+```
+
+**Teknoloji:**
+- Web araştırma: Playwright + readability extraction
+- Bilgi modeli: "Claim Graph" (iddia-kaynak ağı)
+- Doğrulama: Kaynak link kontrolü, tarih doğrulama
+
+#### B) Dosya Oluşturma — Artifact Factory Job
+
+```
+Input ──▶ [1] Deliverable contract.json
+              (dosya listesi + minimum içerik)
+          ──▶ [2] Build (tam dosyalar üret)
+          ──▶ [3] Write (Tool Runner → diske yaz)
+          ──▶ [4] Verify (hash/size + parse checks)
+          ──▶ [5] Package (zip + manifest)
+```
+
+**Teknoloji:**
+- Typed artifacts + SHA256 manifest
+- Patch-based repair (diff, tam dosya yerine)
+
+#### C) Makale Yazma — Editorial Job
+
+```
+Input ──▶ [1] Audience + Tone + Format (brief)
+          ──▶ [2] Outline (H1/H2 plan)
+          ──▶ [3] Draft 1
+          ──▶ [4] Style Pass (kullanıcı tarzı)
+          ──▶ [5] Fact Check Pass (gerekiyorsa)
+          ──▶ [6] Final Polish (başlık, giriş, CTA)
+```
+
+**Teknoloji:**
+- **Style Card:** 10-15 satırlık kullanıcı tarz profili
+- **Rubric Scoring:** Akış, netlik, özgünlük, hedefe uygunluk
+
+#### D) Kodlama — Software Job
+
+```
+Input ──▶ [1] Spec + Acceptance Tests
+              (done criteria test edilebilir)
+          ──▶ [2] Implement
+          ──▶ [3] Unit Tests / Type Checks / Lint
+          ──▶ [4] Run / Build
+          ──▶ [5] Regression Checks
+          ──▶ [6] PR-Style Summary
+```
+
+**Teknoloji:**
+- Statik analiz: mypy / ruff / pytest (Python), eslint / vitest (JS)
+- Sandbox runner: Container-based execution
+- Test-first contract: "Tests define done"
+
+### 17.4 Kullanıcı Tarzı: Style Profile + Constraint Engine
+
+> Ustalığın yarısı kalite, yarısı **tarz uyumu**.
+
+#### A) Style Profile (kalıcı, kısa)
+
+```yaml
+# ~/.elyan/style_profile.yaml
+language: tr
+tone: kurumsal ama anlaşılır
+format: kısa paragraflar, az markdown
+preference: snippet değil, tam dosya
+never:
+  - jQuery kullanma
+  - Gereksiz emoji koyma
+  - Kanıtsız teslim iddiası
+```
+
+Profile Memory'de durur. Her job başında **sadece 5-7 satır** olarak prompt'a girer.
+
+#### B) Constraint Engine (sert kurallar, LLM'den bağımsız)
+
+| Kural | Enforcement |
+|-------|------------|
+| "Dosya yazdıysan tool kanıtı göster" | `evidence_gate.py` |
+| "Claim varsa kaynak göster" | Response formatter |
+| "Kod varsa test çalıştır" | `output_contract.py` |
+| "Contract check geçmediyse teslim etme" | `job_contract.py` |
+
+### 17.5 Çok Model Stratejisi
+
+> Her adım için aynı ağır modeli kullanma.
+
+| Rol | Model Tipi | Neden |
+|-----|-----------|-------|
+| **Router** | Küçük/ucuz | Intent + risk + template seçimi |
+| **Planner** | Orta | Contract + DAG oluşturma |
+| **Builder** | Güçlü | Kod / makale / içerik üretimi |
+| **Critic** | Orta + kural tabanlı | Doğrulama + kalite check |
+| **Tool Runner** | LLM değil | State machine, deterministic |
+
+**Sonuç:** Hem maliyet düşer hem kalite artar.
+
+### 17.6 İyileştirme Algoritması: Telemetry → Failure Clustering → Auto-Patch
+
+Random öğrenme değil, **mühendislik**:
+
+```
+[1] Her fail'de "failed_check_code" üret
+    Örn: HTML_MISSING_CLOSING_TAG, TOOL_WRITE_EMPTY, SOURCES_MISSING
+
+[2] Failure clustering → en sık 10 hata
+
+[3] Her hata için "auto-patch playbook":
+
+    TOOL_WRITE_EMPTY
+    → write_file sonrası size>0 doğrula
+    → değilse retry + different strategy
+
+    HTML_BAD_STRUCTURE
+    → template enforce + validator fix
+
+    SOURCES_MISSING
+    → kaynak claim'leri zorunlu kıl
+    → kaynaksız claim'leri sil
+```
+
+**Bu, öğrenmeyi deterministik ve güvenli yapar.**
+
+### 17.7 Teknoloji Önerileri (Python 3.12)
+
+| Alan | Teknoloji | Not |
+|------|-----------|-----|
+| DAG yürütme | Hafif kendi runner | NetworkX opsiyonel |
+| Job queue | asyncio queue + SQLite state | Minimal, yeterli |
+| Tool execution | subprocess + sandbox | Container mümkünse |
+| Web automation | Playwright | Mevcut |
+| Content parsing | trafilatura / readability-lxml | Web içerik çıkarma |
+| Text quality | Rubric + küçük critic model | Scoring |
+| Memory | SQLite + embeddings + TTL | TTL şart |
+| Observability | Structured logs (JSON) + dashboard | OpenTelemetry opsiyonel |
+
+### 17.8 Default Execution Motoru: CDG (Contracted DAG with Gates)
+
+```
+Input
+  │
+  ▼
+┌──────────────────┐
+│  CONTRACT         │  Goal → Deliverables → Constraints → Style
+│  job_contract.py  │  Beklenen dosyalar + QA kuralları
+└────────┬─────────┘
+         ▼
+┌──────────────────┐
+│  DAG PLAN         │  Contract → alt görev grafiği
+│  pipeline.py      │  Bağımlılıklar + paralel dallar
+└────────┬─────────┘
+         ▼
+┌──────────────────┐
+│  NODE EXECUTION   │  Her düğüm:
+│  (ReAct loop)     │  think → act → observe
+│                    │  tool evidence üretir
+└────────┬─────────┘
+         ▼
+┌──────────────────┐
+│  NODE QA GATE     │  Düğüm çıktısı → contract check
+│  output_contract  │  Geçmediyse → patch repair
+│  + evidence_gate  │  (sadece hatalı bloğu düzelt)
+└────────┬─────────┘
+         ▼
+┌──────────────────┐
+│  END-TO-END QA    │  Tüm artifact'lar → disk doğrulama
+│  job_contract     │  + Playwright screenshot (web)
+│  verify_artifacts │  + static checks (code)
+└────────┬─────────┘
+         ▼
+┌──────────────────┐
+│  DELIVERY         │  Evidence manifest + artifact'lar
+│  evidence_gate    │  Kanıt yoksa → teslim engellenir
+│                    │  SHA256 hash + dosya boyutu
+└──────────────────┘
+```
+
+**Bu akış Elyan'ın "usta" seviyeye çıkmasını sağlar:**
+- Her iş **contract ile başlar**
+- Her adım **kanıt üretir**
+- Her çıktı **test edilir**
+- Teslim **sadece kanıtla yapılır**
+
+---
+
 ## Toplam İstatistikler
 
 | Metrik | Değer |
 |--------|-------|
 | **Toplam Python Dosyası** | ~200+ |
 | **Toplam Kod Satırı** | ~80.000+ |
-| **Core Modülleri** | 96+ dosya |
+| **Core Modülleri** | 100+ dosya |
 | **Tool Sayısı** | 124+ araç |
 | **Channel Adapter** | 12 platform |
 | **Uzman Ajan** | 6 |
 | **API Endpoint** | 80+ |
 | **Dashboard Satır** | 3772 |
-| **En Büyük Dosya** | agent.py (212KB, 4715 satır) |
+| **Golden Tests** | 19 (19/19 pass) |
+| **Job Templates** | 8 |
+| **Hardening Modülleri** | 5 (evidence_gate, job_contract, pipeline, job_templates, golden_tests) |
 
 ---
 
-*Bu dokümantasyon Elyan AI Agent Framework v20.1.0 için otomatik oluşturulmuştur.*
+*Bu dokümantasyon Elyan AI Agent Framework v20.1.0 için oluşturulmuştur.*
