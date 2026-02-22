@@ -434,6 +434,38 @@ class GoldenTestRunner:
 
         return results
 
+    def run_auto_patch_tests(self) -> Dict[str, Any]:
+        """Auto-patch engine rules tests."""
+        from core.auto_patch import auto_patch
+        from core.cdg_engine import DAGNode, QAGate
+        import copy
+
+        results = {"total": 0, "passed": 0, "failed": 0, "details": []}
+        
+        # Test 1: HTML Bad Structure patch
+        node1 = DAGNode(id="n1", name="html", action="write_file", params={"content": "test"})
+        gate1 = QAGate(name="html_check", check_type="html_valid")
+        gate1.passed = False
+        patched1 = auto_patch.apply_patch(node1, [gate1])
+        ok1 = patched1 is True and "[AUTO-PATCH HTML_BAD_STRUCTURE]" in node1.params.get("content", "")
+        results["total"] += 1
+        if ok1: results["passed"] += 1
+        else: results["failed"] += 1
+        results["details"].append({"test": "html_bad_structure_patch", "ok": ok1})
+        
+        # Test 2: Missing File patch
+        node2 = DAGNode(id="n2", name="file", action="write_file", params={})
+        gate2 = QAGate(name="file_check", check_type="file_exists", params={"path": "/tmp/a.txt"})
+        gate2.passed = False
+        patched2 = auto_patch.apply_patch(node2, [gate2])
+        ok2 = patched2 is True and "[AUTO-PATCH ARTIFACT_MISSING]" in node2.params.get("_auto_patch_instruction", "")
+        results["total"] += 1
+        if ok2: results["passed"] += 1
+        else: results["failed"] += 1
+        results["details"].append({"test": "artifact_missing_patch", "ok": ok2})
+
+        return results
+
     def run_all_offline(self) -> Dict[str, Any]:
         """Run all offline tests."""
         return {
@@ -443,6 +475,7 @@ class GoldenTestRunner:
             "cdg_plans": self.run_cdg_plan_tests(),
             "constraint_engine": self.run_constraint_engine_tests(),
             "style_profile": self.run_style_profile_tests(),
+            "auto_patch": self.run_auto_patch_tests(),
             "golden_test_count": len(GOLDEN_TESTS),
         }
 

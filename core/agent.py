@@ -423,12 +423,14 @@ class Agent:
                 cdg_plan = cdg_engine.create_plan(f"job_{int(time.time())}", job_type, user_input)
                 
                 async def cdg_executor(node):
+                    patch_inst = node.params.pop("_auto_patch_instruction", "")
                     if node.action in ("plan", "refine"):
-                        prompt = f"{style_profile.to_prompt_lines()}\n\nGirdi: {user_input}\nGörev: {node.name}\nAçıklama: Bu adımda ne yapılmalı planla."
+                        prompt = f"{style_profile.to_prompt_lines()}\n\nGirdi: {user_input}\nGörev: {node.name}\nAçıklama: Bu adımda ne yapılmalı planla.{patch_inst}"
                         resp = await self.llm.generate(prompt)
                         return {"output": resp}
                     else:
-                        res = await self._execute_tool(node.action, node.params, user_input=user_input, step_name=node.name)
+                        patched_input = user_input + patch_inst if patch_inst else user_input
+                        res = await self._execute_tool(node.action, node.params, user_input=patched_input, step_name=node.name)
                         return res if isinstance(res, dict) else {"output": str(res)}
                 
                 cdg_plan = await cdg_engine.execute(cdg_plan, cdg_executor)

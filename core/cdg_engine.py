@@ -156,6 +156,16 @@ class CDGEngine:
                     node.retry_count += 1
                     node.state = NodeState.RETRYING
                     logger.info(f"Node {node_id} QA failed, retrying ({node.retry_count}/{node.max_retries})")
+                    
+                    # 🔥 AUTO-PATCH TRIGGER
+                    failed_gates = [g for g in gates if g.passed is False]
+                    try:
+                        from core.auto_patch import auto_patch
+                        if auto_patch.apply_patch(node, failed_gates):
+                            logger.info(f"Auto-patched node {node_id} before retry.")
+                    except Exception as e:
+                        logger.error(f"Auto-patch failed: {e}")
+
                     await self._execute_node(node, executor_fn)
 
         # E2E QA
