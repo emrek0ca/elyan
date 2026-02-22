@@ -98,9 +98,9 @@ class CDGEngine:
 
     # ── Plan Oluşturma ────────────────────────────────────────
 
-    def create_plan(self, job_id: str, job_type: str, user_input: str,
-                    contract: Optional[Any] = None) -> CDGPlan:
-        """Job template'den DAG planı oluştur."""
+    async def create_plan(self, job_id: str, job_type: str, user_input: str,
+                    contract: Optional[Any] = None, llm_client=None) -> CDGPlan:
+        """Job template'den veya LLM'den DAG planı oluştur."""
         from core.job_templates import get_template
         template = get_template(job_type)
 
@@ -112,7 +112,13 @@ class CDGEngine:
 
         # Template'e göre DAG düğümleri oluştur
         builder = _PLAN_BUILDERS.get(job_type, _build_generic_plan)
-        builder(plan, user_input, template)
+        
+        # Eğer builder async ise await et (Dynamic Plan Builder gibi)
+        import inspect
+        if inspect.iscoroutinefunction(builder):
+            await builder(plan, user_input, template, llm_client)
+        else:
+            builder(plan, user_input, template)
 
         self._plans[job_id] = plan
         logger.info(f"CDG plan created: {job_id} ({job_type}) — {len(plan.nodes)} nodes")
@@ -517,6 +523,81 @@ def _build_file_ops_plan(plan: CDGPlan, user_input: str, template: dict):
     ]
 
 
+async def _build_dynamic_plan(plan: CDGPlan, user_input: str, template: dict, llm_client=None):
+    """
+    IntelligentPlanner kullanarak LLM ile dinamik DAG planı oluştur.
+    Şablon kuralları (allowed_tools, evidence_gates) yine katı şekilde uygulanır.
+    """
+    if not llm_client:
+        # LLM yoksa fallback: statik generic/iletişim node atar
+        logger.warning("LLM client not provided for dynamic plan. Falling back.")
+        _build_generic_plan(plan, user_input, template)
+        return
+
+    from core.intelligent_planner import IntelligentPlanner
+    planner = IntelligentPlanner()
+    planner.llm = llm_client
+
+    # Planner üzerinden SubTask'leri al
+    subtasks = await planner.decompose_task(
+        task_description=user_input,
+        llm_client=llm_client,
+        use_llm=True,
+        user_id="local",
+        preferred_tools=template.get("allowed_tools", [])
+    )
+
+    if not subtasks:
+        _build_generic_plan(plan, user_input, template)
+        return
+
+    # SubTask -> DAGNode Çevirisi
+    plan.nodes = []
+    allowed_tools = template.get("allowed_tools", [])
+    
+    for st in subtasks:
+        # Action güvenlik denetimi: Eğer action allowed tools içinde yoksa, en uygununa çevir.
+        final_action = st.action
+        if allowed_tools and final_action not in allowed_tools and final_action != "chat" and final_action != "plan" and final_action != "verify":
+            logger.warning(f"Action '{final_action}' not in allowed_tools. Reverting to LLM plan action limitations.")
+            # Eğer tool izinsiz ise güvenli "plan" ya da "chat" action'ına düşür (EvidenceGate fail olmasın)
+            final_action = "plan"
+
+        node = DAGNode(
+            id=st.task_id,
+            name=st.name,
+            action=final_action,
+            params=st.params,
+            depends_on=st.dependencies,
+            allowed_tools=allowed_tools,
+            max_retries=st.max_retries,
+            budget_tokens=2000
+        )
+        plan.nodes.append(node)
+
+    # Otomatik QA Gate'leri Basma (Delivery Mode ve Beklenen Extension'a göre)
+    e2e_gates = []
+    
+    # QA checks from job template 
+    template_qa_checks = template.get("qa_checks", [])
+    if "file_exists" in template_qa_checks:
+        e2e_gates.append(QAGate(name="Artifact Creation Verifier", check_type="file_exists", params={}))
+
+    # Her Node'un çıkışında kendi tool'una göre QAGate basma
+    for node in plan.nodes:
+        if node.action in ("write_file", "create_web_project_scaffold", "write_excel", "write_word"):
+            path_hint = str(node.params.get("path") or node.params.get("output_dir", ""))
+            plan.node_qa_gates[node.id] = [
+                QAGate(name=f"Data Persistence Check ({node.id})", check_type="file_exists", params={"path": path_hint} if path_hint else {})
+            ]
+        elif node.action == "take_screenshot":
+            # screenshot kanıtı beklenir (QA kapısı evidence manifest oluşturur)
+            pass
+
+    plan.e2e_qa_gates = e2e_gates
+    logger.info(f"Dynamic Plan Built. {len(plan.nodes)} DAG nodes constructed.")
+
+
 def _build_generic_plan(plan: CDGPlan, user_input: str, template: dict):
     """Genel (chat/system) DAG planı — tek düğüm."""
     plan.nodes = [
@@ -525,16 +606,16 @@ def _build_generic_plan(plan: CDGPlan, user_input: str, template: dict):
                 budget_tokens=2000),
     ]
 
-
 # Template → Builder eşlemesi
+# Tüm karmaşık görevleri yapay zekalı dinamik planlamaya (Omnipotence) devrediyoruz.
 _PLAN_BUILDERS = {
-    "web_project": _build_web_project_plan,
-    "research_report": _build_research_plan,
-    "code_project": _build_code_project_plan,
-    "data_analysis": _build_code_project_plan,  # benzer yapı
-    "file_operations": _build_file_ops_plan,
-    "browser_task": _build_file_ops_plan,
-    "system_ops": _build_file_ops_plan,
+    "web_project": _build_dynamic_plan,
+    "research_report": _build_dynamic_plan,
+    "code_project": _build_dynamic_plan,
+    "data_analysis": _build_dynamic_plan,
+    "file_operations": _build_dynamic_plan,
+    "browser_task": _build_dynamic_plan,
+    "system_ops": _build_dynamic_plan,
     "communication": _build_generic_plan,
 }
 

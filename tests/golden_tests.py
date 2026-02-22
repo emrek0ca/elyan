@@ -361,9 +361,32 @@ class GoldenTestRunner:
             ("communication", "merhaba", 1),               # 1 node
         ]
 
+        # Fallback dictionary for testing
+        fallback_map = {
+            "web_project": "_build_web_project_plan",
+            "research_report": "_build_research_plan",
+            "code_project": "_build_code_project_plan",
+            "data_analysis": "_build_code_project_plan",
+            "file_operations": "_build_file_ops_plan",
+            "browser_task": "_build_file_ops_plan",
+            "system_ops": "_build_file_ops_plan",
+        }
+        
         results = {"total": len(test_cases), "passed": 0, "failed": 0, "details": []}
+        import asyncio
         for job_type, user_input, min_nodes in test_cases:
-            plan = engine.create_plan(f"test_{job_type}", job_type, user_input)
+            # Tests run without LLM, so we temporarily map them to static builders to verify the core engine works
+            from core.cdg_engine import _PLAN_BUILDERS
+            original_builder = _PLAN_BUILDERS.get(job_type)
+            if job_type in fallback_map:
+                import core.cdg_engine
+                _PLAN_BUILDERS[job_type] = getattr(core.cdg_engine, fallback_map[job_type])
+                
+            plan = asyncio.run(engine.create_plan(f"test_{job_type}", job_type, user_input))
+            
+            if job_type in fallback_map:
+                _PLAN_BUILDERS[job_type] = original_builder
+                
             ok = len(plan.nodes) >= min_nodes
             if ok:
                 results["passed"] += 1

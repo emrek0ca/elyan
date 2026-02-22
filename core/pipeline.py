@@ -219,7 +219,9 @@ class StageExecute(PipelineStage):
                 
                 logger.info(f"CDG Engine activated for job: {ctx.job_type}")
                 job_id = f"job_{int(time.time())}"
-                cdg_plan = cdg_engine.create_plan(job_id, ctx.job_type, ctx.user_input)
+                cdg_plan = await cdg_engine.create_plan(
+                    job_id, ctx.job_type, ctx.user_input, llm_client=agent.llm
+                )
                 
                 async def cdg_executor(node):
                     patch_inst = node.params.pop("_auto_patch_instruction", "")
@@ -362,7 +364,7 @@ class PipelineRunner:
         self.stages: List[PipelineStage] = [
             StageValidate(),
             StageRoute(),
-            # StageExecute delegated to agent for now
+            StageExecute(),
             StageVerify(),
             StageDeliver(),
         ]
