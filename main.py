@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import sys
 import os
+import json
 import socket
 import time
 from pathlib import Path
@@ -150,6 +151,348 @@ def start_cli():
     except Exception as e:
         logger.error(f"Gateway failed to start: {e}", exc_info=True)
         return 1
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ENTERPRISE CLI — Click-based subcommand architecture
+# ═══════════════════════════════════════════════════════════════════════
+
+def _cli_main():
+    """Click-based CLI entry point for the `elyan` command."""
+    try:
+        import click
+    except ImportError:
+        # Fallback to legacy argparse if Click is missing
+        return main()
+
+    @click.group(invoke_without_command=True)
+    @click.option("--cli", is_flag=True, help="Start Gateway/CLI mode")
+    @click.option("--onboard", is_flag=True, help="Start onboarding wizard")
+    @click.option("--version", is_flag=True, help="Show version")
+    @click.pass_context
+    def cli(ctx, cli, onboard, version):
+        """🧠 Elyan AGI Framework — Autonomous AI Agent"""
+        if version:
+            click.echo(f"Elyan AGI Framework v{VERSION}")
+            ctx.exit(0)
+        if onboard:
+            from cli.onboard import start_onboarding
+            ctx.exit(start_onboarding())
+        if cli:
+            ctx.exit(start_cli())
+        if ctx.invoked_subcommand is None:
+            ctx.exit(start_ui())
+
+    # ─── gateway ───────────────────────────────────────────────────
+    @cli.group()
+    def gateway():
+        """🌐 Gateway server management"""
+        pass
+
+    @gateway.command("start")
+    @click.option("--port", default=GATEWAY_PORT, help="Port to listen on")
+    @click.option("--daemon", is_flag=True, help="Run in background (daemonize)")
+    def gateway_start(port, daemon):
+        """Start the Elyan Gateway server."""
+        os.environ["ELYAN_PORT"] = str(port)
+        if daemon:
+            click.echo(f"🚀 Starting Elyan Gateway on port {port} (daemon mode)...")
+            import subprocess
+            proc = subprocess.Popen(
+                [sys.executable, __file__, "--cli"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True
+            )
+            click.echo(f"✅ Gateway started (PID: {proc.pid})")
+        else:
+            click.echo(f"🚀 Starting Elyan Gateway on port {port}...")
+            sys.exit(start_cli())
+
+    @gateway.command("restart")
+    @click.option("--port", default=GATEWAY_PORT, help="Port to listen on")
+    @click.option("--daemon", is_flag=True, help="Run in background")
+    def gateway_restart(port, daemon):
+        """Restart the Elyan Gateway server."""
+        click.echo("🔄 Stopping existing gateway...")
+        _kill_gateway(port)
+        time.sleep(1)
+        click.echo(f"🚀 Restarting gateway on port {port}...")
+        os.environ["ELYAN_PORT"] = str(port)
+        if daemon:
+            import subprocess
+            proc = subprocess.Popen(
+                [sys.executable, __file__, "--cli"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True
+            )
+            click.echo(f"✅ Gateway restarted (PID: {proc.pid})")
+        else:
+            sys.exit(start_cli())
+
+    @gateway.command("stop")
+    @click.option("--port", default=GATEWAY_PORT)
+    def gateway_stop(port):
+        """Stop the running Gateway."""
+        _kill_gateway(port)
+
+    @gateway.command("health")
+    @click.option("--port", default=GATEWAY_PORT)
+    @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+    def gateway_health(port, as_json):
+        """Check gateway health status."""
+        alive = find_existing_gateway(port)
+        data = {
+            "gateway": "online" if alive else "offline",
+            "port": port,
+            "version": VERSION,
+            "timestamp": time.time()
+        }
+        if as_json:
+            click.echo(json.dumps(data, indent=2))
+        else:
+            status = "🟢 ONLINE" if alive else "🔴 OFFLINE"
+            click.echo(f"Gateway: {status} (port {port})")
+
+    # ─── health ────────────────────────────────────────────────────
+    @cli.command("health")
+    def health():
+        """💊 Show Elyan system health (CPU, RAM, Disk)."""
+        try:
+            from core.genesis.self_diagnostic import diagnostics
+            report = diagnostics.get_health_report()
+            status_icon = {"healthy": "🟢", "degraded": "🟡", "critical": "🔴"}.get(report.status, "⚪")
+
+            click.echo(f"\n{status_icon} Elyan Health Report")
+            click.echo(f"{'─' * 40}")
+            click.echo(f"  Status:     {report.status.upper()}")
+            click.echo(f"  CPU:        {report.cpu_percent}%")
+            click.echo(f"  RAM:        {report.ram_used_mb:.0f} MB / {report.ram_total_mb:.0f} MB")
+            click.echo(f"  Disk Free:  {report.disk_free_gb:.1f} GB")
+            click.echo(f"  Avg Resp:   {report.avg_response_ms:.0f} ms")
+            click.echo(f"  Uptime:     {report.uptime_hours} hours")
+            click.echo()
+        except Exception as e:
+            click.echo(f"❌ Health check failed: {e}")
+
+    # ─── status ────────────────────────────────────────────────────
+    @cli.command("status")
+    def status():
+        """📊 Show Elyan system status and module inventory."""
+        click.echo(f"\n🧠 Elyan AGI Framework v{VERSION}")
+        click.echo(f"{'═' * 50}")
+
+        # Core modules check
+        modules = {
+            "Reasoning Engine": "core.reasoning.chain_of_thought",
+            "Task Decomposer": "core.reasoning.task_decomposer",
+            "Code Validator": "core.reasoning.code_validator",
+            "Deep Researcher": "core.reasoning.deep_researcher",
+            "Multi-Model Router": "core.reasoning.multi_model_router",
+            "Context Fusion": "core.genesis.context_fusion",
+            "Self Diagnostic": "core.genesis.self_diagnostic",
+            "Adaptive Learning": "core.genesis.adaptive_learning",
+            "Secure Vault": "core.security.secure_vault",
+            "Prompt Firewall": "core.security.prompt_firewall",
+            "Zero Trust Runtime": "core.security.zero_trust_runtime",
+            "Plugin Manager": "core.plugins.plugin_manager",
+            "Audit Engine": "core.compliance.audit_engine",
+            "Crash Protection": "core.resilience.global_handler",
+            "Progress Tracker": "core.ux.progress_tracker",
+            "Error Explainer": "core.ux.error_explainer",
+            "Omni-Channel Gateway": "core.net.abstract_gateway",
+            "Cloud Spawner": "core.net.cloud_spawner",
+            "Bio Symbiosis": "core.genesis.bio_symbiosis",
+            "Evo Compiler": "core.genesis.evo_compiler",
+        }
+
+        loaded = 0
+        for name, module_path in modules.items():
+            try:
+                __import__(module_path)
+                click.echo(f"  🟢 {name}")
+                loaded += 1
+            except Exception:
+                click.echo(f"  🔴 {name} (not loadable)")
+
+        click.echo(f"\n{'─' * 50}")
+        click.echo(f"  Modules: {loaded}/{len(modules)} loaded")
+        click.echo(f"  Platform: {sys.platform}")
+        click.echo(f"  Python: {sys.version.split()[0]}")
+        click.echo()
+
+    # ─── skills ────────────────────────────────────────────────────
+    @cli.command("skills")
+    def skills():
+        """🛠️ List all available Elyan skills and tools."""
+        click.echo(f"\n🛠️ Elyan Skills & Capabilities")
+        click.echo(f"{'═' * 50}")
+
+        skill_categories = {
+            "🧠 Intelligence": [
+                "Chain-of-Thought Reasoning (4-phase structured thinking)",
+                "Task Decomposition (dependency-ordered subtask graphs)",
+                "Code Generation + Auto-Test + Self-Repair loop",
+                "Deep Research with source cross-verification",
+                "Adaptive Learning (user pattern profiling)",
+            ],
+            "🌐 Communication": [
+                "Telegram Bot Integration",
+                "Discord Gateway",
+                "Slack Bolt Connector",
+                "Omni-Channel Abstract Gateway",
+            ],
+            "🔒 Security": [
+                "AES-256-GCM Secure Vault",
+                "Prompt Injection Firewall",
+                "Zero-Trust Code Sandbox",
+                "GDPR/KVKK Compliance Engine",
+            ],
+            "⚡ Autonomy": [
+                "Bio-Digital Symbiosis (screen context awareness)",
+                "Pre-emptive Email/Calendar Execution",
+                "Cloud Instance Spawning (DigitalOcean)",
+                "Autonomous Microservice Builder",
+                "C++ Native Compilation (Evo Compiler)",
+            ],
+            "🎯 Infrastructure": [
+                "Multi-Model LLM Router (Gemini/Claude/GPT/Groq)",
+                "Plugin Marketplace (~/.elyan/plugins/)",
+                "Global Crash Protection (@never_crash)",
+                "Rate Limiter & Quota Management",
+                "Self-Diagnostic Health Monitor",
+            ],
+        }
+
+        for category, items in skill_categories.items():
+            click.echo(f"\n  {category}")
+            for item in items:
+                click.echo(f"    • {item}")
+
+        click.echo(f"\n{'─' * 50}")
+        click.echo(f"  Total: {sum(len(v) for v in skill_categories.values())} skills across {len(skill_categories)} categories")
+        click.echo()
+
+    # ─── logs ──────────────────────────────────────────────────────
+    @cli.command("logs")
+    @click.option("--tail", default=20, help="Number of log lines to show")
+    @click.option("--level", default="all", help="Filter by level (info, warning, error)")
+    def logs(tail, level):
+        """📜 Show recent Elyan log entries."""
+        log_dir = Path.home() / ".elyan" / "logs"
+        if not log_dir.exists():
+            # Try project-local logs
+            log_dir = project_root / "logs"
+
+        if not log_dir.exists():
+            click.echo("📜 No log directory found. Checking audit trail...")
+            audit_dir = Path.home() / ".elyan" / "audit"
+            if audit_dir.exists():
+                log_files = sorted(audit_dir.glob("audit_*.jsonl"), reverse=True)
+                if log_files:
+                    lines = log_files[0].read_text(encoding="utf-8").strip().split("\n")
+                    click.echo(f"\n📜 Last {min(tail, len(lines))} audit entries:")
+                    for line in lines[-tail:]:
+                        try:
+                            entry = json.loads(line)
+                            ts = time.strftime("%H:%M:%S", time.localtime(entry["ts"]))
+                            click.echo(f"  [{ts}] {entry['action']} → {entry['target']} ({entry['result']})")
+                        except:
+                            click.echo(f"  {line}")
+                    return
+            click.echo("No logs found.")
+            return
+
+        log_files = sorted(log_dir.glob("*.log"), reverse=True)
+        if not log_files:
+            click.echo("📜 No log files found.")
+            return
+
+        latest_log = log_files[0]
+        lines = latest_log.read_text(encoding="utf-8").strip().split("\n")
+
+        if level != "all":
+            lines = [l for l in lines if level.upper() in l.upper()]
+
+        click.echo(f"\n📜 Last {min(tail, len(lines))} log entries ({latest_log.name}):")
+        for line in lines[-tail:]:
+            click.echo(f"  {line}")
+        click.echo()
+
+    # ─── vault ─────────────────────────────────────────────────────
+    @cli.group()
+    def vault():
+        """🔐 Manage the encrypted secret vault"""
+        pass
+
+    @vault.command("list")
+    def vault_list():
+        """List stored secret keys."""
+        from core.security.secure_vault import vault as sv
+        sv.unlock()
+        keys = sv.list_keys()
+        if keys:
+            click.echo(f"\n🔐 Vault Keys ({len(keys)}):")
+            for k in keys:
+                click.echo(f"  • {k}")
+        else:
+            click.echo("🔐 Vault is empty.")
+
+    @vault.command("set")
+    @click.argument("key")
+    @click.argument("value")
+    def vault_set(key, value):
+        """Store a secret: elyan vault set API_KEY sk-xxx"""
+        from core.security.secure_vault import vault as sv
+        sv.unlock()
+        sv.store_secret(key, value)
+        click.echo(f"✅ Secret '{key}' stored.")
+
+    @vault.command("get")
+    @click.argument("key")
+    def vault_get(key):
+        """Retrieve a secret."""
+        from core.security.secure_vault import vault as sv
+        sv.unlock()
+        val = sv.get_secret(key)
+        if val:
+            click.echo(f"🔑 {key} = {val}")
+        else:
+            click.echo(f"❌ Key '{key}' not found.")
+
+    # ─── plugins ───────────────────────────────────────────────────
+    @cli.command("plugins")
+    def plugins_cmd():
+        """🧩 List installed plugins."""
+        from core.plugins.plugin_manager import plugins as pm
+        pm.load_all()
+        plugin_list = pm.list_plugins()
+        if plugin_list:
+            click.echo(f"\n🧩 Installed Plugins ({len(plugin_list)}):")
+            for p in plugin_list:
+                click.echo(f"  • {p['name']} v{p['version']} by {p['author']} ({len(p['tools'])} tools)")
+        else:
+            click.echo("🧩 No plugins installed. Add plugins to ~/.elyan/plugins/")
+
+    # ─── helper ────────────────────────────────────────────────────
+    def _kill_gateway(port):
+        """Find and kill the process on the given port."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["lsof", "-ti", f":{port}"], capture_output=True, text=True
+            )
+            if result.stdout.strip():
+                pids = result.stdout.strip().split("\n")
+                for pid in pids:
+                    subprocess.run(["kill", "-9", pid.strip()], capture_output=True)
+                click.echo(f"🛑 Killed {len(pids)} process(es) on port {port}")
+            else:
+                click.echo(f"ℹ️ No process found on port {port}")
+        except Exception as e:
+            click.echo(f"⚠️ Could not kill gateway: {e}")
+
+    # Run the CLI
+    cli(standalone_mode=False)
 
 
 def main(argv: list[str] | None = None):

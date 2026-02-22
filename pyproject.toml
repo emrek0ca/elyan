@@ -57,7 +57,7 @@ all = [
 ]
 
 [project.scripts]
-elyan = "main:main"
+elyan = "main:_cli_main"
 
 [tool.setuptools.packages.find]
 include = ["core*", "tools*", "utils*", "config*"]
