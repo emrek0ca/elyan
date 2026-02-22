@@ -141,6 +141,29 @@ class MonitoringTracker:
             "recent_errors": list(self._recent_errors[-10:]),
         }
 
+    def get_health_status(self) -> Dict[str, Any]:
+        """Dashboard-compatible health status summary."""
+        total = self._operations_total or 1
+        success = total - self._operations_failed
+        rate = f"{(success / total) * 100:.0f}%"
+        return {
+            "total_operations": self._operations_total,
+            "failed_operations": self._operations_failed,
+            "success_rate": rate,
+            "errors_total": self._errors_total,
+            "status": "healthy" if self._operations_failed < total * 0.1 else "degraded",
+        }
+
+    def get_dashboard(self) -> Dict[str, Any]:
+        """Dashboard-compatible metrics summary."""
+        last_latency = self._last_operation.get("duration_ms", 0)
+        return {
+            "metrics_summary": {
+                "llm_latency": {"avg": last_latency, "max": last_latency, "min": last_latency},
+            },
+            "operations": self.get_snapshot(),
+        }
+
 
 _monitor = ResourceMonitor()
 _telemetry = MonitoringTracker()

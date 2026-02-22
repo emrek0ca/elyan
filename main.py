@@ -253,6 +253,21 @@ def _cli_main():
             status = "🟢 ONLINE" if alive else "🔴 OFFLINE"
             click.echo(f"Gateway: {status} (port {port})")
 
+    @gateway.command("status")
+    @click.option("--port", default=GATEWAY_PORT)
+    def gateway_status(port):
+        """Show gateway process status."""
+        alive = find_existing_gateway(port)
+        if alive:
+            import subprocess
+            result = subprocess.run(
+                ["lsof", "-ti", f":{port}"], capture_output=True, text=True
+            )
+            pids = result.stdout.strip() or "unknown"
+            click.echo(f"🟢 Gateway RUNNING on port {port} (PID: {pids})")
+        else:
+            click.echo(f"🔴 Gateway NOT RUNNING on port {port}")
+
     # ─── health ────────────────────────────────────────────────────
     @cli.command("health")
     def health():
