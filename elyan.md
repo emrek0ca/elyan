@@ -60,10 +60,15 @@
 └──────────┴──────────┴──────────┴─────────────┘
 ```
 
-**Ana Akış:**
+**Ana Akış (Modüler Pipeline):**
 1. Kullanıcı bir kanaldan mesaj gönderir
 2. Gateway Server mesajı alır, Router'a yönlendirir
-3. Agent pipeline başlar: validation → context → routing → intent → LLM → tool execution → response
+3. Modüler Pipeline başlatılır (`core/pipeline.py`):
+   - **Stage 1 (Validate):** Güvenlik, quota (kota) ve action lock kontrolleri
+   - **Stage 2 (Route):** Niyet (intent) çözümü, Context Intelligence ve rol belirleme
+   - **Stage 3 (Execute):** Basit iletişim için LLM, iş/görev odaklı istekler için CDG Engine motoru devreye girer
+   - **Stage 4 (Verify):** Constraint Engine ve QA (kalite) testleri çalışır
+   - **Stage 5 (Deliver):** Evidence Gate (kanıt kontrolü) ile yanıt kullanıcıya ulaştırılır
 4. Yanıt aynı kanaldan geri gönderilir
 
 ---
@@ -106,27 +111,23 @@ Doğrudan Python ile çalıştırma alternatifi.
 ### `core/agent.py` — Beyin (4715 satır, 212KB)
 **Elyan'ın kalbi.** Tüm pipeline'ı orkestrasyonlar.
 
-**Ana Metot: `process(user_input, channel, user_id)`**
+**Ana Metot: `PipelineRunner.run(ctx)` üzerinden modüler çalıştırma**
 
 ```
-Pipeline Adımları:
-1. Input Validation     → Boş/zararlı girdi kontrolü
-2. Short Input Guard    → Kısa/belirsiz mesajları yakalar
-3. Context Intelligence → Kullanıcı bağlamını analiz eder
-4. Neural Routing       → Rolü (code/reasoning/creative/inference) belirler
-5. Intent Parsing       → Komutu deterministic olarak çözer
-6. LLM Call            → AI modeline sorar
-7. Tool Extraction     → LLM yanıtından tool çağrısı çıkarır
-8. Tool Execution      → Aracı çalıştırır
-9. Self-Correction     → Sonucu doğrular, gerekirse tekrar dener
-10. Response Format    → Kullanıcıya uygun formatta yanıt
+Pipeline Adımları (Phase 2):
+1. StageValidate   → Quota (Kota), Action Lock ve Güvenlik giriş kontrolleri
+2. StageRoute      → Context Intelligence, Neural Router (Rol) ve Intent belirleme
+3. StageExecute    → 
+     - İletişim (Communication): Doğrudan Context-aware LLM yanıtı
+     - Karmaşık Görev (Task): CDG (Contracted DAG with Gates) Master Engine tetiklenir
+4. StageVerify     → Output Contract, Hard Constraints doğrulama
+5. StageDeliver    → Evidence Gate (Kanıtlı veri dönüşü) ve Kullanıcı teslimatı
 ```
 
 **Önemli İç Mekanizmalar:**
-- **Self-Correction V2** (satır 916): `write_file`, `create_web_project_scaffold` gibi yazma araçları için doğrulama + otomatik tekrar
-- **Contract Repair Loop** (satır 934): Çıktı sözleşmesi ihlallerinde otomatik onarım
-- **Feedback Store**: Kullanıcı geri bildirimlerinden öğrenme
-- **LLM Fallback**: Ana model başarısız olursa yedek modele geçiş
+- **CDG Motoru** (Phase 3): Eski monolithic orkestratör yerine Plan-ve-Uygula mantığıyla çalışan DAG tabanlı çalışma motoru.
+- **Auto-Patch Self Healing**: Hata alan CDG düğümlerindeki Failure Code'ları okuyan ve Auto-Patch Playbook'larını yürüterek anında onarım/retry yapan motor.
+- **Constraint Engine / Evidence Gate**: Sistem kurallarını katı bir şekilde uygular ve kanıt sunulmayan iddiaları halüsinasyon filtresi ile engeller.
 
 ### `core/neural_router.py` — Model ve Rol Yönlendirici (100 satır)
 Kullanıcı girdisini analiz ederek hangi LLM rolüne yönlendirileceğini belirler.
@@ -749,81 +750,34 @@ Kullanıcı Mesajı
 └──────────┬──────────────┘
            ▼
 ┌─────────────────────────┐
-│ 3. Agent.process()      │  Ana pipeline başlar
+│ 3. Pipeline Runner      │  Modüler Ana pipeline başlar
+│    pipeline.py           │
 └──────────┬──────────────┘
            ▼
 ┌─────────────────────────┐
-│ 4. Input Validation     │  Boş/zararlı girdi kontrolü
-│    security/validator    │  XSS, injection, max length
+│ 4. Stage Validate       │  Boş girdi, Quota Limit (Kota),
+│    + Action Lock         │  Görev kilidi, Güvenlik checkleri
 └──────────┬──────────────┘
            ▼
 ┌─────────────────────────┐
-│ 5. Short Input Guard    │  "tamam", "ok" gibi kısa girdiler
-│                          │  LLM çağırmadan yanıt verir
+│ 5. Stage Route          │  Context7 dökümanı yükle
+│    (Context Intel)       │  Neural Router ile rol seçimi
 └──────────┬──────────────┘
            ▼
 ┌─────────────────────────┐
-│ 6. Context Intelligence │  Domain tespiti (web_dev, file_ops...)
-│    context_intelligence  │  Özel prompt injection
+│ 6. Stage Execute        │  Job Type değerlendirilmesi:
+│    (CDG Engine / Chat)   │  İletişim ise → Hızlı LLM chat
+│                          │  Görev ise → CDG Plan & Execute
 └──────────┬──────────────┘
            ▼
 ┌─────────────────────────┐
-│ 7. Neural Routing       │  Rol: code/reasoning/creative/inference
-│    neural_router         │  Complexity: 0.3 veya 0.8
-│                          │  Model seçimi: ollama/gpt/claude
+│ 7. Stage Verify         │  CDG QA Geçitleri / Constraint
+│    (Quality & AutoPatch) │  Failure Clustering & Self Healing
 └──────────┬──────────────┘
            ▼
 ┌─────────────────────────┐
-│ 8. Quick Intent         │  Regex ile hızlı komut eşleştirme
-│    quick_intent          │  "masaüstünü listele" → ls ~/Desktop
-└──────────┬──────────────┘
-           ▼
-┌─────────────────────────┐
-│ 9. Intent Parser        │  Deterministic intent parsing
-│    intent_parser         │  action: "create_file" params: {...}
-└──────────┬──────────────┘
-           ▼
-┌─────────────────────────┐
-│ 10. LLM Call            │  AI modeline sorgu
-│     llm_client           │  System prompt + context + user input
-│     + llm_optimizer      │  Token optimizasyonu
-│     + llm_cache          │  Cache kontrolü
-└──────────┬──────────────┘
-           ▼
-┌─────────────────────────┐
-│ 11. Tool Extraction     │  LLM yanıtından tool çağrısı çıkar
-│     parameter_extractor  │  Parametre doğrulama
-└──────────┬──────────────┘
-           ▼
-┌─────────────────────────┐
-│ 12. Tool Execution      │  Aracı çalıştır
-│     kernel.tools.execute │  Timeout guard, error handling
-└──────────┬──────────────┘
-           ▼
-┌─────────────────────────┐
-│ 13. Output Contract     │  Sonuç doğrulama
-│     output_contract      │  Dosya yazıldı mı? İçerik doğru mu?
-└──────────┬──────────────┘
-           ▼
-┌─────────────────────────┐
-│ 14. Self-Correction     │  Doğrulama başarısız → tekrar dene
-│     (retry/repair loop)  │  Max 1 retry
-└──────────┬──────────────┘
-           ▼
-┌─────────────────────────┐
-│ 15. Response Format     │  Yanıtı kullanıcı diline çevir
-│     response_tone        │  Emoji, markdown, özet
-│     i18n                 │
-└──────────┬──────────────┘
-           ▼
-┌─────────────────────────┐
-│ 16. Learning            │  Başarılı/başarısız kalıp kaydet
-│     learning_engine      │  Feedback store güncelle
-└──────────┬──────────────┘
-           ▼
-┌─────────────────────────┐
-│ 17. Memory Save         │  Sohbet geçmişine kaydet
-│     memory               │  Kullanıcı profili güncelle
+│ 8. Stage Deliver        │  Evidence Gate onayı (Kanıtlı mı?)
+│    (Response Formatting) │  Bellek / Tone / Dönüş
 └──────────┬──────────────┘
            ▼
       Kullanıcıya Yanıt
@@ -862,14 +816,13 @@ learning_engine.py         → Öğrenme motoru
 context_intelligence.py    → Bağlam analizi
 intent_parser.py           → Niyet çözücü
 quick_intent.py            → Hızlı niyet
-fuzzy_intent.py            → Bulanık eşleştirme
-fast_response.py           → Hızlı yanıt
 parameter_extractor.py     → Parametre çıkarıcı
-output_contract.py         → Çıktı doğrulama
-task_engine.py             → Görev motoru (86KB)
-intelligent_planner.py     → Akıllı planlayıcı
-comprehensive_executor.py  → Kapsamlı yürütücü
-workflow_engine.py         → İş akışı motoru
+cdg_engine.py              → CDG Master Architecture Node executor 
+pipeline.py                → Aşama bazlı (validate, route, execute...) modüler ana Pipeline
+auto_patch.py              → Otonom Playbook Self-Healing onarım motoru
+constraint_engine.py       → Katı Sistem Kuralları (LLM Bağımsız)
+evidence_gate.py           → Kanıt denetleme kapısı (Halüsinasyon filtresi)
+failure_clustering.py      → Başarısızlık kümeleri ve kodları yöneticisi
 action_lock.py             → Çakışma önleyici
 monitoring.py              → Sistem izleme
 pricing_tracker.py         → Maliyet takibi
@@ -918,40 +871,36 @@ whitelist.py               → Kullanıcı whitelist
 
 ---
 
-## 16. Hardening Katmanı (v20.1.0+)
-
 ### `core/evidence_gate.py` — Kanıt Geçidi
 Tool çıktısı (dosya yolu, hash, screenshot) olmadan "teslim/oluşturuldu" iddialarını response'dan siler.
 
-**Kural:** Delivery claim var + evidence yok → `⏳ İşlem devam ediyor` ile değiştir.
+**Kural:** Delivery claim var + evidence yok → İşlem durdurulur ve halüsinasyon engellenir.
 
-### `core/job_contract.py` — İş Sözleşmesi
-Her iş için typed contract: beklenen artifact'lar, izinli tool'lar, QA check'ler, delivery modu.
-`verify_artifacts()` → disk'te dosya var mı kontrol eder.
-`run_qa()` → file_exists, html_valid, min_file_size gibi kontrolleri çalıştırır.
+### `core/constraint_engine.py` — Sert Kurallar Motoru
+LLM tarafından çiğnenemeyen mutlak görev/güvenlik kurallarının uygulayıcısıdır. Çıktıyı doğrudan kontrol eder.
 
-### `core/pipeline.py` — Modüler Pipeline
-agent.py monolitini bağımsız stage'lere böler:
+### `core/pipeline.py` — Modüler Pipeline (Phase 2)
+agent.py monolitini bağımsız, sıralı stage'lere böler:
 
 | Stage | Sınıf | İşlev |
 |-------|-------|-------|
-| 1 | `StageValidate` | Input validation (boş, uzun, zararlı) |
-| 2 | `StageRoute` | Neural routing + job type detection |
-| 3 | `StageExecute` | LLM call + tool execution |
-| 4 | `StageVerify` | Contract verification + QA |
-| 5 | `StageDeliver` | Evidence gate + response formatting |
+| 1 | `StageValidate` | Input validation, Quota limitleri, Action Lock |
+| 2 | `StageRoute` | Neural routing, Context7 Injection + Context Intel |
+| 3 | `StageExecute` | Basit görevlerde Chat modeli, karmaşık görevler de CDG Engine (Node tabanlı icra) |
+| 4 | `StageVerify` | Constraints verification + QA ve Failure Handling (Auto-Patch) |
+| 5 | `StageDeliver` | Evidence gate (Sadece kanıt içeren yanıt teslimatı) |
+
+### `core/cdg_engine.py` — Ana İcra Tesisatı (Phase 3)
+Çok Adımlı Planlayıcıyı saf dışı bırakıp görevleri DAG dizilerine (Node) çeviren motor. Her node kendi içinde çalışıp bağımsız Output Testine/Evidences'a sahip olur.
+
+### `core/auto_patch.py` — Otonom Hata Giderici (Self-Healing)
+Çalışması başarısız olan veya QA testlerinden geçemeyen CDG düğümlerinin "Failure Code" verisini okuyarak arızaya spesifik (örn `HTML_BAD_STRUCTURE` veya `CONTRACT_ARTIFACT_MISSING`) otomatik kurtarma algoritmalarını (Playbook) uygular.
 
 ### `core/job_templates.py` — Zorunlu İş Şablonları
 8 template: web_project, research_report, file_operations, code_project, data_analysis, communication, system_ops, browser_task.
 
 ### `tests/golden_tests.py` — Regresyon Test Paketi
-19 golden test. Import check + template detection + evidence gate unit tests.
-
-### `core/learning_engine.py` — Bellek Politikası (güncellendi)
-- Sadece **başarılı** etkileşimlerden yeni pattern oluşturur
-- Başarısız → mevcut pattern'ın güvenini **0.1 düşürür**
-- confidence < 0.3 → pattern **silinir** (yanlış öğrenme engellenir)
-- `record_outcome` başarısız işlerde tool/quality preference **yazmaz**
+Tam 37 adet golden test bulunur. Import testlerinden, template discovery, intent catching, LLM fallbacks, Auto-Patch simulasyonu ve Evidence Gate denetlemelerine kadar tam teşekküllü stabilizasyon arşividir. (37/37 passing)
 
 ---
 
@@ -1240,9 +1189,9 @@ Input
 | **Uzman Ajan** | 6 |
 | **API Endpoint** | 80+ |
 | **Dashboard Satır** | 3772 |
-| **Golden Tests** | 19 (19/19 pass) |
+| **Golden Tests** | 37 (37/37 pass) |
 | **Job Templates** | 8 |
-| **Hardening Modülleri** | 5 (evidence_gate, job_contract, pipeline, job_templates, golden_tests) |
+| **Önemli Motorlar (Engines)** | CDG Motoru, Auto-Patch (Healing), Constraint & Evidence |
 
 ---
 
