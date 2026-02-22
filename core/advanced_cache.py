@@ -363,7 +363,7 @@ class AdvancedCache:
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Hash key for filename
-        key_hash = hashlib.md5(key.encode()).hexdigest()
+        key_hash = hashlib.sha256(key.encode()).hexdigest()
         return str(cache_dir / f"{key_hash}.cache")
 
     def _load_from_disk(self, key: str) -> Any:

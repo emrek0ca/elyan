@@ -244,7 +244,7 @@ class LLMOptimizer:
         # Add complexity to key
         key_string = f"{complexity.value}:{normalized}"
         # Hash for consistent key
-        return hashlib.md5(key_string.encode()).hexdigest()
+        return hashlib.sha256(key_string.encode()).hexdigest()
 
     def optimize_batch(self, queries: List[str]) -> List[OptimizedPrompt]:
         """Optimize multiple queries at once"""

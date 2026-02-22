@@ -461,12 +461,31 @@ class EnhancedFileOperations:
             if source_path.suffix == '.zip':
                 import zipfile
                 with zipfile.ZipFile(source_path, 'r') as zf:
+                    # Zip-Slip Patch
+                    for member in zf.namelist():
+                        member_path = (dest_path / member).resolve()
+                        if not str(member_path).startswith(str(dest_path)):
+                            raise Exception("BANNED: Zip-Slip Path Traversal detected.")
                     zf.extractall(dest_path)
 
             elif source_path.suffix in ['.tar', '.gz', '.tgz']:
                 import tarfile
                 with tarfile.open(source_path, 'r:*') as tar:
-                    tar.extractall(dest_path)
+                    # Tar Zip-Slip Patch
+                    def is_within_directory(directory, target):
+                        abs_directory = os.path.abspath(directory)
+                        abs_target = os.path.abspath(target)
+                        prefix = os.path.commonprefix([abs_directory, abs_target])
+                        return prefix == abs_directory
+
+                    def safe_tar_extract(tar, path=".", members=None, *, numeric_owner=False):
+                        for member in tar.getmembers():
+                            member_path = os.path.join(path, member.name)
+                            if not is_within_directory(path, member_path):
+                                raise Exception("BANNED: Zip-Slip Path Traversal in Tar detected.")
+                        tar.extractall(path, members, numeric_owner=numeric_owner)
+
+                    safe_tar_extract(tar, str(dest_path))
 
             return FileOperationResult(
                 success=True,

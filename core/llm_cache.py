@@ -57,7 +57,7 @@ class LLMCache:
     def _hash_key(self, text: str) -> str:
         """Create a hash key from the input text."""
         normalized = " ".join(text.lower().split())
-        return hashlib.md5(normalized.encode()).hexdigest()
+        return hashlib.sha256(normalized.encode()).hexdigest()
 
     def get(self, text: str) -> Optional[dict]:
         """

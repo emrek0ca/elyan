@@ -138,7 +138,7 @@ class ResponseCache:
         # Remove punctuation
         normalized = ''.join(c for c in normalized if c.isalnum() or c.isspace())
         # Hash for consistent key
-        return hashlib.md5(normalized.encode()).hexdigest()
+        return hashlib.sha256(normalized.encode()).hexdigest()
 
     def _is_expired(self, entry: CachedResponse) -> bool:
         """Check if cache entry is expired"""

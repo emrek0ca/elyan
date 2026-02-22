@@ -66,9 +66,11 @@ class DockerSandbox:
             return {"success": False, "error": str(e), "sandboxed": True}
 
     async def _execute_host(self, command: str, workspace_dir: str = None) -> Dict[str, Any]:
-        # Fallback host execution (logic from old system)
+        # Fallback host execution (logic from old system) - Patched shell=True
+        import shlex
         try:
-            result = subprocess.run(command, shell=True, capture_output=True, text=True, cwd=workspace_dir, timeout=60)
+            safe_cmd = shlex.split(command)
+            result = subprocess.run(safe_cmd, capture_output=True, text=True, cwd=workspace_dir, timeout=60)
             return {
                 "success": result.returncode == 0,
                 "stdout": result.stdout,

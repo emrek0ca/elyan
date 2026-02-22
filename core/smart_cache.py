@@ -55,7 +55,7 @@ class SmartCache:
     def _make_key(self, namespace: str, query: str, **kwargs) -> str:
         """Generate cache key from namespace and parameters"""
         key_data = f"{namespace}:{query}:{json.dumps(kwargs, sort_keys=True, default=str)}"
-        return hashlib.md5(key_data.encode()).hexdigest()
+        return hashlib.sha256(key_data.encode()).hexdigest()
 
     def get(self, namespace: str, query: str, **kwargs) -> Optional[Any]:
         """Get cached value"""

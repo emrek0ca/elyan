@@ -123,7 +123,7 @@ class SmartFileOrganizer:
     def calculate_file_hash(self, file_path: str) -> str:
         """Calculate MD5 hash of file"""
         try:
-            hasher = hashlib.md5()
+            hasher = hashlib.sha256()
             with open(file_path, 'rb') as f:
                 while chunk := f.read(8192):
                     hasher.update(chunk)

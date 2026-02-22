@@ -236,7 +236,7 @@ class ConfigManager:
             # Simple hash-based deterministic rollout
             if user_id:
                 import hashlib
-                hash_value = int(hashlib.md5(f"{feature_name}:{user_id}".encode()).hexdigest(), 16)
+                hash_value = int(hashlib.sha256(f"{feature_name}:{user_id}".encode()).hexdigest(), 16)
                 percentage = (hash_value % 100)
                 if percentage >= flag.rollout_percentage:
                     return False
@@ -341,7 +341,7 @@ class ConfigManager:
 
         # Deterministic assignment based on user_id
         import hashlib
-        hash_value = int(hashlib.md5(f"{experiment_name}:{user_id}".encode()).hexdigest(), 16)
+        hash_value = int(hashlib.sha256(f"{experiment_name}:{user_id}".encode()).hexdigest(), 16)
         variant_index = hash_value % len(variants)
 
         return variants[variant_index]
