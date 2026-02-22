@@ -31,35 +31,12 @@ class BioSymbiosis:
         self.poll_interval = 5.0 # seconds
 
     def _get_active_mac_window(self) -> dict:
-        """Uses AppleScript to extract the currently focused App and Window Title."""
-        script = '''
-        global frontApp, frontAppName, windowTitle
-        set windowTitle to ""
-        tell application "System Events"
-            set frontApp to first application process whose frontmost is true
-            set frontAppName to name of frontApp
-            tell process frontAppName
-                tell (1st window whose value of attribute "AXMain" is true)
-                    set windowTitle to value of attribute "AXTitle"
-                end tell
-            end tell
-        end tell
-        return {frontAppName, windowTitle}
-        '''
+        """Cross-Platform context reading leveraging the OS Adapters."""
         try:
-            result = subprocess.check_output(
-                ['osascript', '-e', script], 
-                stderr=subprocess.DEVNULL, timeout=2
-            ).decode('utf-8').strip()
-            
-            parts = [p.strip() for p in result.split(",")]
-            if len(parts) >= 2:
-                return {"app": parts[0], "title": parts[1]}
-            elif len(parts) == 1:
-                return {"app": parts[0], "title": ""}
-        except Exception:
-            pass
-        return {"app": "Unknown", "title": "Unknown"}
+            from core.os_adapters.window_manager import get_active_window_context
+            return get_active_window_context()
+        except:
+            return {"app": "Unknown", "title": "Unknown"}
 
     async def _update_context_loop(self):
         self._running = True
