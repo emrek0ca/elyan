@@ -51,7 +51,8 @@ class IdleWorker:
                 chores = [
                     "Bütün log dosyalarındaki gereksiz kalıntıları tespit et ve bir özet çıkar.",
                     "HackerNews ve teknoloji sitelerinde bugünkü yapay zeka haberlerini derleyip text olarak kaydet.",
-                    "_MUTATOR_RUN_"
+                    "_MUTATOR_RUN_",
+                    "_AUTO_CONTRIBUTE_"
                 ]
                 import random
                 chore = random.choice(chores)
@@ -61,6 +62,11 @@ class IdleWorker:
                     from core.mutator import CoreMutator
                     mutator = CoreMutator(self.agent)
                     await mutator.auto_refactor()
+                elif chore == "_AUTO_CONTRIBUTE_":
+                    logger.info("🟢 IdleWorker triggering Auto-Contributor (GitHub Green Squares)...")
+                    from core.genesis.auto_contributor import AutoContributor
+                    contributor = AutoContributor(self.agent)
+                    await contributor.generate_contribution()
                 else:
                     logger.info(f"Idle Task Selected: {chore}")
                     try:
