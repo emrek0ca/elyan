@@ -31,6 +31,20 @@ HOME = Path.home() / ".elyan"
 CFG_FILE = HOME / "elyan.json"
 
 
+def _load_dotenv():
+    """Load .env files into os.environ (project root + ~/.elyan)."""
+    for env_path in [project_root / ".env", project_root / "bot" / ".env", HOME / ".env"]:
+        if env_path.exists():
+            for line in env_path.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key, val = key.strip(), val.strip()
+                if val and not os.environ.get(key):
+                    os.environ[key] = val
+
+
 # ── Helpers ──────────────────────────────────────────────────
 
 def _port_alive(port=PORT):
@@ -397,6 +411,8 @@ def start(port, daemon):
 
 def _run_gateway(port: int):
     os.environ["ELYAN_PORT"] = str(port)
+    # Load .env before imports so tokens are available
+    _load_dotenv()
     from core.agent import Agent
     from core.gateway.server import ElyanGatewayServer
     import asyncio

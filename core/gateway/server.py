@@ -2625,6 +2625,9 @@ class ElyanGatewayServer:
         channels = elyan_config.get("channels", [])
         if not isinstance(channels, list):
             channels = []
+
+        registered_types = set()
+
         for ch in channels:
             if not isinstance(ch, dict) or not ch.get("enabled", True):
                 continue
@@ -2639,10 +2642,34 @@ class ElyanGatewayServer:
                 if ctype == "webchat":
                     self.webchat_adapter = adapter
                 self.router.register_adapter(str(ctype).strip().lower(), adapter)
+                registered_types.add(ctype)
             except ImportError as e:
                 logger.warning(f"Adapter {ctype} skipped: {e}")
             except Exception as e:
                 logger.error(f"Adapter {ctype} init failed: {e}")
+
+        # ── Auto-detect from env tokens if not already registered ──
+        env_channels = {
+            "telegram": "TELEGRAM_BOT_TOKEN",
+            "discord": "DISCORD_BOT_TOKEN",
+        }
+        for ctype, env_key in env_channels.items():
+            if ctype in registered_types:
+                continue
+            token = os.environ.get(env_key, "").strip()
+            if not token:
+                continue
+            try:
+                adapter_cls = get_adapter_class(ctype)
+                if adapter_cls is None:
+                    continue
+                ch_cfg = {"type": ctype, "enabled": True, "token": token}
+                adapter = adapter_cls(ch_cfg)
+                self.router.register_adapter(ctype, adapter)
+                registered_types.add(ctype)
+                logger.info(f"Auto-detected {ctype} from {env_key}")
+            except Exception as e:
+                logger.warning(f"Auto-detect {ctype} failed: {e}")
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
     async def start(self, host="127.0.0.1", port=18789):
