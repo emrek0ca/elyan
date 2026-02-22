@@ -59,6 +59,12 @@ watchdog>=3.0.0
 # Security
 cryptography>=42.0.0
 keyring>=25.0.0
+bandit>=1.7.0                              # SAST Static Analysis (Phase 27)
+
+# Cross-Platform OS Adapters (Phase 26)
+pywin32>=306; sys_platform == 'win32'      # Windows Window Manager
+ewmh>=0.1.6; sys_platform == 'linux'       # Linux X11 Window Manager
+psutil>=5.9.0                              # Already present, shared
 
 # Optional: Voice (uncomment if needed)
 # openai-whisper>=20240927
