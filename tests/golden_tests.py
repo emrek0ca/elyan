@@ -264,6 +264,10 @@ class GoldenTestRunner:
             ("pipeline", "from core.pipeline import PipelineRunner, PipelineContext"),
             ("neural_router", "from core.neural_router import neural_router"),
             ("learning_engine", "from core.learning_engine import get_learning_engine"),
+            ("cdg_engine", "from core.cdg_engine import cdg_engine, CDGEngine"),
+            ("style_profile", "from core.style_profile import style_profile"),
+            ("constraint_engine", "from core.constraint_engine import constraint_engine"),
+            ("failure_clustering", "from core.failure_clustering import failure_clustering, FailureCode"),
         ]
 
         for name, import_stmt in checks:
@@ -344,12 +348,101 @@ class GoldenTestRunner:
 
         return results
 
+    def run_cdg_plan_tests(self) -> Dict[str, Any]:
+        """CDG plan builder tests."""
+        from core.cdg_engine import CDGEngine
+        engine = CDGEngine()
+
+        test_cases = [
+            ("web_project", "portfolio sitesi yap", 4),    # min 4 nodes
+            ("research_report", "AI hakkında rapor", 5),   # min 5 nodes
+            ("code_project", "Python script yaz", 3),      # min 3 nodes
+            ("file_operations", "dosya oluştur", 2),       # min 2 nodes
+            ("communication", "merhaba", 1),               # 1 node
+        ]
+
+        results = {"total": len(test_cases), "passed": 0, "failed": 0, "details": []}
+        for job_type, user_input, min_nodes in test_cases:
+            plan = engine.create_plan(f"test_{job_type}", job_type, user_input)
+            ok = len(plan.nodes) >= min_nodes
+            if ok:
+                results["passed"] += 1
+            else:
+                results["failed"] += 1
+            results["details"].append({
+                "job_type": job_type,
+                "nodes": len(plan.nodes),
+                "min_expected": min_nodes,
+                "ok": ok,
+            })
+        return results
+
+    def run_constraint_engine_tests(self) -> Dict[str, Any]:
+        """Constraint engine violation detection tests."""
+        from core.constraint_engine import ConstraintEngine
+        engine = ConstraintEngine()
+
+        test_cases = [
+            # (response, tool_results, job_type, contract_ok, expected_violations)
+            ("Merhaba!", [], "communication", True, 0),
+            ("✅ dosya oluşturuldu", [], "file_operations", True, 1),  # FILE_CLAIM_NO_EVIDENCE
+            ("✅ dosya oluşturuldu", [{"success": True, "path": "/tmp/x"}], "file_operations", True, 0),
+            ("Kod yazıldı", [], "code_project", False, 1),  # CONTRACT_FAILED
+        ]
+
+        results = {"total": len(test_cases), "passed": 0, "failed": 0, "details": []}
+        for response, tool_results, job_type, contract_ok, expected_min in test_cases:
+            violations = engine.check_response(response, tool_results, job_type, contract_ok)
+            ok = len(violations) >= expected_min
+            if ok:
+                results["passed"] += 1
+            else:
+                results["failed"] += 1
+            results["details"].append({
+                "response": response[:40],
+                "violations": len(violations),
+                "expected_min": expected_min,
+                "ok": ok,
+            })
+        return results
+
+    def run_style_profile_tests(self) -> Dict[str, Any]:
+        """Style profile prompt generation tests."""
+        from core.style_profile import StyleProfile
+        profile = StyleProfile()
+
+        results = {"total": 3, "passed": 0, "failed": 0, "details": []}
+
+        # Test 1: prompt lines not empty
+        lines = profile.to_prompt_lines()
+        ok1 = len(lines) > 20
+        results["details"].append({"test": "prompt_not_empty", "len": len(lines), "ok": ok1})
+        if ok1: results["passed"] += 1
+        else: results["failed"] += 1
+
+        # Test 2: contains language
+        ok2 = "Dil:" in lines
+        results["details"].append({"test": "has_language", "ok": ok2})
+        if ok2: results["passed"] += 1
+        else: results["failed"] += 1
+
+        # Test 3: contains ASLA
+        ok3 = "ASLA:" in lines
+        results["details"].append({"test": "has_never_rules", "ok": ok3})
+        if ok3: results["passed"] += 1
+        else: results["failed"] += 1
+
+        return results
+
     def run_all_offline(self) -> Dict[str, Any]:
         """Run all offline tests."""
         return {
             "imports": self.run_offline_validation(),
             "template_detection": self.run_template_detection_tests(),
             "evidence_gate": self.run_evidence_gate_tests(),
+            "cdg_plans": self.run_cdg_plan_tests(),
+            "constraint_engine": self.run_constraint_engine_tests(),
+            "style_profile": self.run_style_profile_tests(),
             "golden_test_count": len(GOLDEN_TESTS),
         }
 

@@ -31,6 +31,10 @@ from core.quota import quota_manager
 from core.evidence_gate import evidence_gate
 from core.job_templates import detect_job_type, get_template
 from core.pipeline import PipelineContext
+from core.cdg_engine import cdg_engine
+from core.style_profile import style_profile
+from core.constraint_engine import constraint_engine
+from core.failure_clustering import failure_clustering
 from core.predictive_tasks import get_predictive_task_engine
 from core.timeout_guard import (
     with_timeout, friendly_timeout_message,
