@@ -412,10 +412,18 @@ class ElyanGatewayServer:
 
     # ── Page handlers ─────────────────────────────────────────────────────────
     async def handle_dashboard_page(self, request):
-        return web.FileResponse('ui/web/dashboard.html')
+        base = Path(__file__).resolve().parent.parent.parent
+        p = base / 'ui' / 'web' / 'dashboard.html'
+        if not p.exists():
+            return web.Response(text="Dashboard file not found", status=404)
+        return web.FileResponse(p)
 
     async def handle_canvas_page(self, request):
-        return web.FileResponse('ui/web/canvas/index.html')
+        base = Path(__file__).resolve().parent.parent.parent
+        p = base / 'ui' / 'web' / 'canvas' / 'index.html'
+        if not p.exists():
+            return web.Response(text="Canvas file not found", status=404)
+        return web.FileResponse(p)
 
     # ── Config ────────────────────────────────────────────────────────────────
     async def handle_get_config(self, request):
