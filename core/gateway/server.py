@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from aiohttp import web, WSMsgType
-from typing import Optional, Set
+from typing import Any, Optional, Set
 from .router import GatewayRouter
 from .response import UnifiedResponse
 from core.scheduler.cron_engine import CronEngine
@@ -17,7 +17,10 @@ from core.subscription import subscription_manager
 from core.quota import quota_manager
 from core.proactive.intervention import get_intervention_manager
 from core.tool_usage import get_tool_usage_snapshot
+from core.runtime_policy import get_runtime_policy_resolver
+from core.compliance.audit_trail import audit_trail
 from config.elyan_config import elyan_config
+from config.settings import ELYAN_DIR
 from security.tool_policy import tool_policy
 from security.keychain import KeychainManager
 from tools import AVAILABLE_TOOLS
@@ -190,6 +193,56 @@ def _get_policy_lists() -> tuple[list[str], list[str], list[str]]:
     return allow, deny, require
 
 
+def _iter_memory_candidates(memory_obj: Any) -> list[Any]:
+    candidates: list[Any] = []
+    seen: set[int] = set()
+    for obj in (
+        memory_obj,
+        getattr(memory_obj, "memory", None),
+        getattr(memory_obj, "manager", None),
+        getattr(memory_obj, "_memory", None),
+        getattr(memory_obj, "backend", None),
+    ):
+        if obj is None:
+            continue
+        oid = id(obj)
+        if oid in seen:
+            continue
+        seen.add(oid)
+        candidates.append(obj)
+    return candidates
+
+
+async def _safe_optional_call(target: Any, method_name: str, **kwargs) -> Any:
+    method = getattr(target, method_name, None)
+    if not callable(method):
+        return None
+    try:
+        result = method(**kwargs) if kwargs else method()
+        if inspect.isawaitable(result):
+            result = await result
+        return result
+    except Exception as e:
+        logger.debug(f"{target.__class__.__name__}.{method_name} failed: {e}")
+        return None
+
+
+async def _fetch_memory_stats(memory_obj: Any) -> dict[str, Any]:
+    for candidate in _iter_memory_candidates(memory_obj):
+        fetched = await _safe_optional_call(candidate, "get_stats")
+        if isinstance(fetched, dict):
+            return fetched
+    return {}
+
+
+async def _fetch_memory_top_users(memory_obj: Any, *, limit: int) -> list[dict[str, Any]]:
+    for candidate in _iter_memory_candidates(memory_obj):
+        fetched = await _safe_optional_call(candidate, "get_top_users_storage", limit=limit)
+        if isinstance(fetched, list):
+            return fetched
+    return []
+
+
 _PROVIDER_ENV_KEYS = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
@@ -317,6 +370,7 @@ class ElyanGatewayServer:
         self.cron.set_report_callback(self._on_cron_report)
         self._setup_routes()
         self.runner: Optional[web.AppRunner] = None
+        self._telemetry_task: Optional[asyncio.Task] = None
 
     @web.middleware
     async def _cors_middleware(self, request, handler):
@@ -365,6 +419,7 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/memory/stats', self.handle_memory_stats)
         self.app.router.add_get('/api/memory/profile', self.handle_get_profile)
         self.app.router.add_get('/api/activity', self.handle_activity_log)
+        self.app.router.add_get('/api/runs/recent', self.handle_recent_runs)
         self.app.router.add_get('/api/routines', self.handle_routines)
         self.app.router.add_get('/api/routines/templates', self.handle_routine_templates)
         self.app.router.add_post('/api/routines/suggest', self.handle_routine_suggest)
@@ -390,6 +445,8 @@ class ElyanGatewayServer:
         self.app.router.add_post('/api/skills/remove', self.handle_skill_remove)
         self.app.router.add_post('/api/skills/update', self.handle_skill_update)
         self.app.router.add_get('/api/skills/check', self.handle_skill_check)
+        self.app.router.add_get('/api/skills/workflows', self.handle_skill_workflows)
+        self.app.router.add_post('/api/skills/workflows/toggle', self.handle_skill_workflow_toggle)
 
         # ── Dashboard & Web UI ────────────────────────────────────────────────
         self.app.router.add_get('/', self.handle_dashboard_page)
@@ -407,8 +464,11 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/security/events', self.handle_security_events)
         self.app.router.add_get('/api/security/pending', self.handle_pending_approvals)
         self.app.router.add_post('/api/security/approve', self.handle_approve_action)
+        self.app.router.add_get('/api/privacy/export', self.handle_privacy_export)
+        self.app.router.add_post('/api/privacy/delete', self.handle_privacy_delete)
         self.app.router.add_get('/api/interventions', self.handle_interventions_get)
         self.app.router.add_post('/api/interventions/resolve', self.handle_interventions_resolve)
+        self.app.router.add_get('/api/health/telemetry', self.handle_health_telemetry)
 
     # ── Page handlers ─────────────────────────────────────────────────────────
     async def handle_dashboard_page(self, request):
@@ -453,6 +513,65 @@ class ElyanGatewayServer:
                 "max_user_storage_gb": float(elyan_config.get("memory.maxUserStorageGB", 10) or 10),
                 "local_only": bool(elyan_config.get("memory.localOnly", True)),
             },
+            "capability": {
+                "enabled": bool(elyan_config.get("agent.capability_router.enabled", True)),
+                "override_confidence": float(
+                    elyan_config.get("agent.capability_router.min_confidence_override", 0.5) or 0.5
+                ),
+                "api_tools_enabled": bool(elyan_config.get("agent.api_tools.enabled", True)),
+            },
+            "planning": {
+                "use_llm": bool(elyan_config.get("agent.planning.use_llm", True)),
+                "max_subtasks": int(elyan_config.get("agent.planning.max_subtasks", 10) or 10),
+            },
+            "flags": {
+                "agentic_v2": bool(elyan_config.get("agent.flags.agentic_v2", False)),
+                "dag_exec": bool(elyan_config.get("agent.flags.dag_exec", False)),
+                "strict_taskspec": bool(elyan_config.get("agent.flags.strict_taskspec", False)),
+            },
+            "orchestration": {
+                "multi_agent_enabled": bool(elyan_config.get("agent.multi_agent.enabled", True)),
+                "complexity_threshold": float(
+                    elyan_config.get("agent.multi_agent.complexity_threshold", 0.9) or 0.9
+                ),
+                "capability_confidence_threshold": float(
+                    elyan_config.get("agent.multi_agent.capability_confidence_threshold", 0.7) or 0.7
+                ),
+                "max_parallel": int(
+                    elyan_config.get(
+                        "agent.orchestration.max_parallel",
+                        elyan_config.get("agent.team_mode.max_parallel", 4),
+                    )
+                    or 4
+                ),
+                "team_mode_enabled": bool(elyan_config.get("agent.team_mode.enabled", True)),
+                "team_threshold": float(elyan_config.get("agent.team_mode.threshold", 0.95) or 0.95),
+                "team_max_parallel": int(elyan_config.get("agent.team_mode.max_parallel", 4) or 4),
+                "team_timeout_s": int(elyan_config.get("agent.team_mode.timeout_s", 900) or 900),
+                "team_max_retries_per_task": int(elyan_config.get("agent.team_mode.max_retries_per_task", 1) or 1),
+            },
+            "skills": {
+                "enabled": list(elyan_config.get("skills.enabled", []) or []),
+                "workflows_enabled": list(elyan_config.get("skills.workflows.enabled", []) or []),
+            },
+            "runtime_policy": {
+                "preset": str(elyan_config.get("agent.runtime_policy.preset", "balanced") or "balanced"),
+                "available_presets": ["strict", "balanced", "full-autonomy"],
+                "model_local_first": bool(elyan_config.get("agent.model.local_first", True)),
+                "response_mode": str(elyan_config.get("agent.response_style.mode", "friendly") or "friendly"),
+                "response_friendly": bool(elyan_config.get("agent.response_style.friendly", True)),
+                "share_manifest_default": bool(elyan_config.get("agent.response_style.share_manifest_default", False)),
+                "share_attachments_default": bool(elyan_config.get("agent.response_style.share_attachments_default", False)),
+                "kvkk_strict_mode": bool(elyan_config.get("security.kvkk.strict", True)),
+                "redact_cloud_prompts": bool(elyan_config.get("security.kvkk.redactCloudPrompts", True)),
+                "allow_cloud_fallback": bool(elyan_config.get("security.kvkk.allowCloudFallback", True)),
+                "default_user_role": str(elyan_config.get("security.defaultUserRole", "operator") or "operator"),
+                "enforce_rbac": bool(elyan_config.get("security.enforceRBAC", True)),
+                "path_guard_enabled": bool(elyan_config.get("security.pathGuard.enabled", True)),
+                "dangerous_tools_enabled": bool(elyan_config.get("security.enableDangerousTools", True)),
+                "require_confirmation_for_risky": bool(elyan_config.get("security.requireConfirmationForRisky", True)),
+                "require_evidence_for_dangerous": bool(elyan_config.get("security.requireEvidenceForDangerous", True)),
+            },
         }
         return web.json_response({"ok": True, "profile": profile})
 
@@ -473,6 +592,210 @@ class ElyanGatewayServer:
         max_user_storage_gb = data.get("max_user_storage_gb", elyan_config.get("memory.maxUserStorageGB", 10))
         local_only = bool(data.get("local_only", elyan_config.get("memory.localOnly", True)))
 
+        capability_data = data.get("capability", {}) if isinstance(data.get("capability"), dict) else {}
+        planning_data = data.get("planning", {}) if isinstance(data.get("planning"), dict) else {}
+        orchestration_data = data.get("orchestration", {}) if isinstance(data.get("orchestration"), dict) else {}
+        flags_data = data.get("flags", {}) if isinstance(data.get("flags"), dict) else {}
+        skills_data = data.get("skills", {}) if isinstance(data.get("skills"), dict) else {}
+        runtime_policy_data = data.get("runtime_policy", {}) if isinstance(data.get("runtime_policy"), dict) else {}
+
+        capability_enabled = bool(
+            capability_data.get(
+                "enabled",
+                data.get("capability_enabled", elyan_config.get("agent.capability_router.enabled", True)),
+            )
+        )
+        capability_override_conf = capability_data.get(
+            "override_confidence",
+            data.get(
+                "capability_override_confidence",
+                elyan_config.get("agent.capability_router.min_confidence_override", 0.5),
+            ),
+        )
+        api_tools_enabled = bool(
+            capability_data.get(
+                "api_tools_enabled",
+                data.get("api_tools_enabled", elyan_config.get("agent.api_tools.enabled", True)),
+            )
+        )
+
+        planning_use_llm = bool(
+            planning_data.get("use_llm", data.get("planning_use_llm", elyan_config.get("agent.planning.use_llm", True)))
+        )
+        planning_max_subtasks = planning_data.get(
+            "max_subtasks",
+            data.get("planning_max_subtasks", elyan_config.get("agent.planning.max_subtasks", 10)),
+        )
+        flag_agentic_v2 = bool(
+            flags_data.get(
+                "agentic_v2",
+                data.get("flag_agentic_v2", elyan_config.get("agent.flags.agentic_v2", False)),
+            )
+        )
+        flag_dag_exec = bool(
+            flags_data.get(
+                "dag_exec",
+                data.get("flag_dag_exec", elyan_config.get("agent.flags.dag_exec", False)),
+            )
+        )
+        flag_strict_taskspec = bool(
+            flags_data.get(
+                "strict_taskspec",
+                data.get("flag_strict_taskspec", elyan_config.get("agent.flags.strict_taskspec", False)),
+            )
+        )
+
+        multi_agent_enabled = bool(
+            orchestration_data.get(
+                "multi_agent_enabled",
+                data.get("multi_agent_enabled", elyan_config.get("agent.multi_agent.enabled", True)),
+            )
+        )
+        multi_agent_complexity_threshold = orchestration_data.get(
+            "complexity_threshold",
+            data.get("multi_agent_complexity_threshold", elyan_config.get("agent.multi_agent.complexity_threshold", 0.9)),
+        )
+        multi_agent_capability_threshold = orchestration_data.get(
+            "capability_confidence_threshold",
+            data.get(
+                "multi_agent_capability_threshold",
+                elyan_config.get("agent.multi_agent.capability_confidence_threshold", 0.7),
+            ),
+        )
+        orchestration_max_parallel = orchestration_data.get(
+            "max_parallel",
+            data.get(
+                "orchestration_max_parallel",
+                elyan_config.get(
+                    "agent.orchestration.max_parallel",
+                    elyan_config.get("agent.team_mode.max_parallel", 4),
+                ),
+            ),
+        )
+        team_mode_enabled = bool(
+            orchestration_data.get(
+                "team_mode_enabled",
+                data.get("team_mode_enabled", elyan_config.get("agent.team_mode.enabled", True)),
+            )
+        )
+        team_mode_threshold = orchestration_data.get(
+            "team_threshold",
+            data.get("team_mode_threshold", elyan_config.get("agent.team_mode.threshold", 0.95)),
+        )
+        team_max_parallel = orchestration_data.get(
+            "team_max_parallel",
+            data.get("team_max_parallel", elyan_config.get("agent.team_mode.max_parallel", 4)),
+        )
+        team_timeout_s = orchestration_data.get(
+            "team_timeout_s",
+            data.get("team_timeout_s", elyan_config.get("agent.team_mode.timeout_s", 900)),
+        )
+        team_max_retries_per_task = orchestration_data.get(
+            "team_max_retries_per_task",
+            data.get("team_max_retries_per_task", elyan_config.get("agent.team_mode.max_retries_per_task", 1)),
+        )
+        skills_enabled = skills_data.get("enabled", data.get("skills_enabled", elyan_config.get("skills.enabled", [])))
+        workflows_enabled = skills_data.get(
+            "workflows_enabled",
+            data.get("workflows_enabled", elyan_config.get("skills.workflows.enabled", [])),
+        )
+        runtime_policy_preset = str(
+            runtime_policy_data.get(
+                "preset",
+                data.get("runtime_policy_preset", elyan_config.get("agent.runtime_policy.preset", "balanced")),
+            )
+            or "balanced"
+        ).strip().lower()
+        model_local_first = bool(
+            runtime_policy_data.get(
+                "model_local_first",
+                data.get("model_local_first", elyan_config.get("agent.model.local_first", True)),
+            )
+        )
+        response_mode = str(
+            runtime_policy_data.get(
+                "response_mode",
+                data.get("response_mode", elyan_config.get("agent.response_style.mode", "friendly")),
+            )
+            or "friendly"
+        ).strip().lower()
+        response_friendly = bool(
+            runtime_policy_data.get(
+                "response_friendly",
+                data.get("response_friendly", elyan_config.get("agent.response_style.friendly", True)),
+            )
+        )
+        share_manifest_default = bool(
+            runtime_policy_data.get(
+                "share_manifest_default",
+                data.get("share_manifest_default", elyan_config.get("agent.response_style.share_manifest_default", False)),
+            )
+        )
+        share_attachments_default = bool(
+            runtime_policy_data.get(
+                "share_attachments_default",
+                data.get(
+                    "share_attachments_default",
+                    elyan_config.get("agent.response_style.share_attachments_default", False),
+                ),
+            )
+        )
+        kvkk_strict_mode = bool(
+            runtime_policy_data.get(
+                "kvkk_strict_mode",
+                data.get("kvkk_strict_mode", elyan_config.get("security.kvkk.strict", True)),
+            )
+        )
+        redact_cloud_prompts = bool(
+            runtime_policy_data.get(
+                "redact_cloud_prompts",
+                data.get("redact_cloud_prompts", elyan_config.get("security.kvkk.redactCloudPrompts", True)),
+            )
+        )
+        allow_cloud_fallback = bool(
+            runtime_policy_data.get(
+                "allow_cloud_fallback",
+                data.get("allow_cloud_fallback", elyan_config.get("security.kvkk.allowCloudFallback", True)),
+            )
+        )
+        default_user_role = str(
+            runtime_policy_data.get(
+                "default_user_role",
+                data.get("default_user_role", elyan_config.get("security.defaultUserRole", "operator")),
+            )
+            or "operator"
+        ).strip().lower()
+        enforce_rbac = bool(
+            runtime_policy_data.get(
+                "enforce_rbac",
+                data.get("enforce_rbac", elyan_config.get("security.enforceRBAC", True)),
+            )
+        )
+        path_guard_enabled = bool(
+            runtime_policy_data.get(
+                "path_guard_enabled",
+                data.get("path_guard_enabled", elyan_config.get("security.pathGuard.enabled", True)),
+            )
+        )
+        dangerous_tools_enabled = bool(
+            runtime_policy_data.get(
+                "dangerous_tools_enabled",
+                data.get("dangerous_tools_enabled", elyan_config.get("security.enableDangerousTools", True)),
+            )
+        )
+        require_confirmation_for_risky = bool(
+            runtime_policy_data.get(
+                "require_confirmation_for_risky",
+                data.get("require_confirmation_for_risky", elyan_config.get("security.requireConfirmationForRisky", True)),
+            )
+        )
+        require_evidence_for_dangerous = bool(
+            runtime_policy_data.get(
+                "require_evidence_for_dangerous",
+                data.get("require_evidence_for_dangerous", elyan_config.get("security.requireEvidenceForDangerous", True)),
+            )
+        )
+
         if personality not in {"professional", "technical", "friendly", "concise", "creative"}:
             personality = "professional"
         if language not in {"tr", "en"}:
@@ -483,6 +806,56 @@ class ElyanGatewayServer:
             max_user_storage_gb = max(1.0, min(50.0, float(max_user_storage_gb)))
         except Exception:
             max_user_storage_gb = float(elyan_config.get("memory.maxUserStorageGB", 10) or 10)
+        try:
+            capability_override_conf = max(0.0, min(1.0, float(capability_override_conf)))
+        except Exception:
+            capability_override_conf = float(elyan_config.get("agent.capability_router.min_confidence_override", 0.5) or 0.5)
+        try:
+            planning_max_subtasks = max(1, min(20, int(planning_max_subtasks)))
+        except Exception:
+            planning_max_subtasks = int(elyan_config.get("agent.planning.max_subtasks", 10) or 10)
+        try:
+            multi_agent_complexity_threshold = max(0.5, min(1.0, float(multi_agent_complexity_threshold)))
+        except Exception:
+            multi_agent_complexity_threshold = float(elyan_config.get("agent.multi_agent.complexity_threshold", 0.9) or 0.9)
+        try:
+            multi_agent_capability_threshold = max(0.3, min(1.0, float(multi_agent_capability_threshold)))
+        except Exception:
+            multi_agent_capability_threshold = float(
+                elyan_config.get("agent.multi_agent.capability_confidence_threshold", 0.7) or 0.7
+            )
+        try:
+            team_mode_threshold = max(0.6, min(1.0, float(team_mode_threshold)))
+        except Exception:
+            team_mode_threshold = float(elyan_config.get("agent.team_mode.threshold", 0.95) or 0.95)
+        try:
+            team_max_parallel = max(1, min(8, int(team_max_parallel)))
+        except Exception:
+            team_max_parallel = int(elyan_config.get("agent.team_mode.max_parallel", 4) or 4)
+        try:
+            orchestration_max_parallel = max(1, min(8, int(orchestration_max_parallel)))
+        except Exception:
+            orchestration_max_parallel = int(
+                elyan_config.get(
+                    "agent.orchestration.max_parallel",
+                    elyan_config.get("agent.team_mode.max_parallel", 4),
+                )
+                or 4
+            )
+        try:
+            team_timeout_s = max(60, min(3600, int(team_timeout_s)))
+        except Exception:
+            team_timeout_s = int(elyan_config.get("agent.team_mode.timeout_s", 900) or 900)
+        try:
+            team_max_retries_per_task = max(0, min(4, int(team_max_retries_per_task)))
+        except Exception:
+            team_max_retries_per_task = int(elyan_config.get("agent.team_mode.max_retries_per_task", 1) or 1)
+        if not isinstance(skills_enabled, list):
+            skills_enabled = list(elyan_config.get("skills.enabled", []) or [])
+        if not isinstance(workflows_enabled, list):
+            workflows_enabled = list(elyan_config.get("skills.workflows.enabled", []) or [])
+        skills_enabled = [str(x).strip() for x in skills_enabled if str(x).strip()]
+        workflows_enabled = [str(x).strip() for x in workflows_enabled if str(x).strip()]
 
         elyan_config.set("agent.name", name or "Elyan")
         elyan_config.set("agent.personality", personality)
@@ -493,8 +866,55 @@ class ElyanGatewayServer:
         elyan_config.set("agent.autonomous", autonomous)
         elyan_config.set("memory.maxUserStorageGB", max_user_storage_gb)
         elyan_config.set("memory.localOnly", local_only)
+        elyan_config.set("agent.capability_router.enabled", capability_enabled)
+        elyan_config.set("agent.capability_router.min_confidence_override", capability_override_conf)
+        elyan_config.set("agent.api_tools.enabled", api_tools_enabled)
+        elyan_config.set("agent.planning.use_llm", planning_use_llm)
+        elyan_config.set("agent.planning.max_subtasks", planning_max_subtasks)
+        elyan_config.set("agent.flags.agentic_v2", flag_agentic_v2)
+        elyan_config.set("agent.flags.dag_exec", flag_dag_exec)
+        elyan_config.set("agent.flags.strict_taskspec", flag_strict_taskspec)
+        elyan_config.set("agent.multi_agent.enabled", multi_agent_enabled)
+        elyan_config.set("agent.multi_agent.complexity_threshold", multi_agent_complexity_threshold)
+        elyan_config.set("agent.multi_agent.capability_confidence_threshold", multi_agent_capability_threshold)
+        elyan_config.set("agent.orchestration.max_parallel", orchestration_max_parallel)
+        elyan_config.set("agent.team_mode.enabled", team_mode_enabled)
+        elyan_config.set("agent.team_mode.threshold", team_mode_threshold)
+        elyan_config.set("agent.team_mode.max_parallel", team_max_parallel)
+        elyan_config.set("agent.team_mode.timeout_s", team_timeout_s)
+        elyan_config.set("agent.team_mode.max_retries_per_task", team_max_retries_per_task)
+        elyan_config.set("agent.model.local_first", model_local_first)
+        elyan_config.set("skills.enabled", skills_enabled)
+        elyan_config.set("skills.workflows.enabled", workflows_enabled)
 
-        push_activity("agent_profile", "dashboard", f"profile updated ({personality}/{language})", True)
+        if runtime_policy_preset in {"strict", "balanced", "full-autonomy"}:
+            try:
+                get_runtime_policy_resolver().apply_preset(runtime_policy_preset)
+            except Exception:
+                elyan_config.set("agent.runtime_policy.preset", runtime_policy_preset)
+        else:
+            elyan_config.set("agent.runtime_policy.preset", "custom")
+
+        # Manual runtime security toggles override preset values when explicitly saved from dashboard.
+        if default_user_role not in {"admin", "operator", "viewer"}:
+            default_user_role = "operator"
+        if response_mode not in {"friendly", "concise", "formal"}:
+            response_mode = "friendly"
+        elyan_config.set("security.kvkk.strict", kvkk_strict_mode)
+        elyan_config.set("security.kvkk.redactCloudPrompts", redact_cloud_prompts)
+        elyan_config.set("security.kvkk.allowCloudFallback", allow_cloud_fallback)
+        elyan_config.set("security.defaultUserRole", default_user_role)
+        elyan_config.set("security.enforceRBAC", enforce_rbac)
+        elyan_config.set("security.pathGuard.enabled", path_guard_enabled)
+        elyan_config.set("security.enableDangerousTools", dangerous_tools_enabled)
+        elyan_config.set("security.requireConfirmationForRisky", require_confirmation_for_risky)
+        elyan_config.set("security.requireEvidenceForDangerous", require_evidence_for_dangerous)
+        elyan_config.set("agent.response_style.mode", response_mode)
+        elyan_config.set("agent.response_style.friendly", response_friendly)
+        elyan_config.set("agent.response_style.share_manifest_default", share_manifest_default)
+        elyan_config.set("agent.response_style.share_attachments_default", share_attachments_default)
+
+        push_activity("agent_profile", "dashboard", f"profile updated ({personality}/{language}, ma={multi_agent_enabled})", True)
 
         return await self.handle_agent_profile_get(request)
 
@@ -998,9 +1418,9 @@ class ElyanGatewayServer:
             from core.memory import get_memory
 
             memory = get_memory()
-            stats = memory.get_stats()
             limit = int(request.rel_url.query.get("limit", 5))
-            top_users = memory.get_top_users_storage(limit=limit)
+            stats = await _fetch_memory_stats(memory)
+            top_users = await _fetch_memory_top_users(memory, limit=limit)
 
             total_items = (
                 int(stats.get("conversations", 0))
@@ -1019,7 +1439,7 @@ class ElyanGatewayServer:
                 "top_users": top_users,
             })
         except Exception as e:
-            logger.warning(f"Memory stats unavailable: {e}")
+            logger.debug(f"Memory stats unavailable: {e}")
             return web.json_response({
                 "total_items": 0,
                 "size_mb": 0.0,
@@ -1035,9 +1455,118 @@ class ElyanGatewayServer:
             "profile": memory_v2.profile.__dict__
         })
 
+    async def handle_health_telemetry(self, request):
+        """Aggregate all health and performance metrics for the live dashboard."""
+        try:
+            from core.model_orchestrator import model_orchestrator
+            from core.resilience.circuit_breaker import resilience_manager
+            from core.llm.token_budget import token_budget
+            from core.automation_registry import automation_registry
+            from core.monitoring import get_resource_monitor
+            
+            monitor = get_resource_monitor()
+            hw = monitor.get_health_snapshot()
+            
+            return web.json_response({
+                "ok": True,
+                "timestamp": time.time(),
+                "hardware": {
+                    "cpu": hw.cpu_percent,
+                    "ram": hw.ram_percent,
+                    "disk": hw.disk_percent,
+                    "on_ac": hw.is_on_ac
+                },
+                "resilience": {
+                    "providers": model_orchestrator.get_health_report(),
+                    "circuits": resilience_manager.get_all_states(),
+                    "budget": token_budget.get_usage_summary()
+                },
+                "automations": {
+                    "active_count": len(automation_registry.get_active()),
+                    "tasks": automation_registry.get_active()[:10]
+                },
+                "uptime_s": int(time.time() - _start_time)
+            })
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=500)
+
     # ── Activity log (new) ────────────────────────────────────────────────────
     async def handle_activity_log(self, request):
         return web.json_response({"events": list(reversed(_activity_log))})
+
+    async def handle_recent_runs(self, request):
+        """Return recent run summaries from ~/.elyan/runs."""
+        try:
+            limit = int(request.rel_url.query.get("limit", 10))
+        except Exception:
+            limit = 10
+        limit = max(1, min(50, limit))
+
+        runs_root = (ELYAN_DIR / "runs").expanduser()
+        if not runs_root.exists():
+            return web.json_response({"runs": [], "count": 0})
+
+        run_dirs = [p for p in runs_root.iterdir() if p.is_dir()]
+        run_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+        items = []
+        for run_dir in run_dirs[:limit]:
+            evidence_path = run_dir / "evidence.json"
+            task_path = run_dir / "task.json"
+            summary_path = run_dir / "summary.md"
+            status = "unknown"
+            action = ""
+            error_code = ""
+            duration_ms = 0
+            artifacts = 0
+
+            if evidence_path.exists():
+                try:
+                    ev = json.loads(evidence_path.read_text(encoding="utf-8"))
+                    meta = ev.get("metadata", {}) if isinstance(ev, dict) else {}
+                    if isinstance(meta, dict):
+                        status = str(meta.get("status", status) or status)
+                        errors = meta.get("errors", [])
+                        if isinstance(errors, list):
+                            for e in errors:
+                                e_s = str(e or "")
+                                if "error_code" in e_s.lower():
+                                    error_code = e_s
+                                    break
+                    steps = ev.get("steps", []) if isinstance(ev, dict) else []
+                    if isinstance(steps, list):
+                        for step in steps:
+                            if isinstance(step, dict):
+                                duration_ms += int(step.get("duration_ms", 0) or 0)
+                    arts = ev.get("artifacts", []) if isinstance(ev, dict) else []
+                    artifacts = len(arts) if isinstance(arts, list) else 0
+                except Exception:
+                    pass
+
+            if task_path.exists():
+                try:
+                    task = json.loads(task_path.read_text(encoding="utf-8"))
+                    meta = task.get("metadata", {}) if isinstance(task, dict) else {}
+                    if isinstance(meta, dict):
+                        action = str(meta.get("action", "") or "")
+                except Exception:
+                    pass
+
+            items.append(
+                {
+                    "run_id": run_dir.name,
+                    "status": status,
+                    "action": action,
+                    "duration_ms": duration_ms,
+                    "error_code": error_code,
+                    "artifacts": artifacts,
+                    "summary_path": str(summary_path),
+                    "evidence_path": str(evidence_path),
+                    "created_at": int(run_dir.stat().st_mtime),
+                }
+            )
+
+        return web.json_response({"runs": items, "count": len(items)})
 
     # ── Routine automation (new) ────────────────────────────────────────────
     @staticmethod
@@ -1669,12 +2198,34 @@ class ElyanGatewayServer:
 
         tool_names = sorted(set(list(AVAILABLE_TOOLS.keys()) + list(reg_desc.keys())))
         health_map, health_summary = await self._compute_tool_health(tool_names, probe=run_probe)
+        skill_tool_links: dict[str, list[str]] = {}
+        workflow_tool_links: dict[str, list[str]] = {}
+        try:
+            for s in skill_manager.list_skills(available=True):
+                s_name = str(s.get("name", "")).strip()
+                for t in list(s.get("required_tools", []) or []):
+                    tool = str(t or "").strip()
+                    if not tool:
+                        continue
+                    skill_tool_links.setdefault(tool, []).append(s_name)
+            for wf in skill_manager.list_workflows():
+                wf_id = str(wf.get("id", "")).strip()
+                for t in list(wf.get("required_tools", []) or []):
+                    tool = str(t or "").strip()
+                    if not tool:
+                        continue
+                    workflow_tool_links.setdefault(tool, []).append(wf_id)
+        except Exception:
+            skill_tool_links = {}
+            workflow_tool_links = {}
         items = []
         group_counts = {}
         total_allowed = 0
         total_denied = 0
         total_approval = 0
         filtered_health = {"ready": 0, "needs_params": 0, "broken": 0}
+        with_skill_links = 0
+        with_workflow_links = 0
 
         for name in tool_names:
             group = tool_policy.infer_group(name) or "other"
@@ -1703,6 +2254,12 @@ class ElyanGatewayServer:
             hstatus = str(health.get("status", "")).lower()
             if hstatus in filtered_health:
                 filtered_health[hstatus] += 1
+            linked_skills = sorted(list(dict.fromkeys(skill_tool_links.get(name, []) or [])))
+            linked_workflows = sorted(list(dict.fromkeys(workflow_tool_links.get(name, []) or [])))
+            if linked_skills:
+                with_skill_links += 1
+            if linked_workflows:
+                with_workflow_links += 1
 
             u = usage.get(name, {})
             items.append({
@@ -1713,6 +2270,8 @@ class ElyanGatewayServer:
                 "denied": denied,
                 "requires_approval": needs_approval,
                 "health": health,
+                "linked_skills": linked_skills,
+                "linked_workflows": linked_workflows,
                 "usage": {
                     "calls": int(u.get("calls", 0) or 0),
                     "success_rate": float(u.get("success_rate", 0.0) or 0.0),
@@ -1738,6 +2297,8 @@ class ElyanGatewayServer:
                     "probe_ok": int(health_summary.get("probe_ok", 0) or 0),
                     "probe_fail": int(health_summary.get("probe_fail", 0) or 0),
                 },
+                "linked_skills": with_skill_links,
+                "linked_workflows": with_workflow_links,
             },
             "policy": {
                 "allow": allow,
@@ -2039,6 +2600,9 @@ class ElyanGatewayServer:
         installed = [s for s in items if s.get("installed")]
         enabled = [s for s in installed if s.get("enabled")]
         unhealthy = [s for s in installed if not s.get("health_ok")]
+        runtime_ready = [s for s in installed if s.get("runtime_ready")]
+        workflows = skill_manager.list_workflows()
+        workflows_enabled = [w for w in workflows if w.get("enabled")]
         return web.json_response({
             "skills": items,
             "summary": {
@@ -2046,6 +2610,9 @@ class ElyanGatewayServer:
                 "installed": len(installed),
                 "enabled": len(enabled),
                 "issues": len(unhealthy),
+                "runtime_ready": len(runtime_ready),
+                "workflows_total": len(workflows),
+                "workflows_enabled": len(workflows_enabled),
             },
         })
 
@@ -2115,6 +2682,39 @@ class ElyanGatewayServer:
         name = request.rel_url.query.get("name")
         result = skill_manager.check(name=name)
         return web.json_response(result)
+
+    async def handle_skill_workflows(self, request):
+        enabled_only = request.rel_url.query.get("enabled", "0") in {"1", "true", "yes"}
+        q = (request.rel_url.query.get("q", "") or "").strip()
+        items = skill_manager.list_workflows(enabled_only=enabled_only, query=q)
+        executable = [x for x in items if x.get("executable")]
+        auto_intent = [x for x in items if x.get("auto_intent")]
+        enabled = [x for x in items if x.get("enabled")]
+        runtime_ready = [x for x in items if x.get("runtime_ready")]
+        return web.json_response({
+            "ok": True,
+            "workflows": items,
+            "summary": {
+                "total": len(items),
+                "enabled": len(enabled),
+                "executable": len(executable),
+                "auto_intent": len(auto_intent),
+                "runtime_ready": len(runtime_ready),
+            },
+        })
+
+    async def handle_skill_workflow_toggle(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        workflow_id = str(data.get("id", "")).strip()
+        enabled = bool(data.get("enabled", True))
+        if not workflow_id:
+            return web.json_response({"ok": False, "error": "id required"}, status=400)
+        ok, msg, info = skill_manager.set_workflow_enabled(workflow_id, enabled)
+        push_activity("workflow_toggle", "dashboard", f"{workflow_id}: {'on' if enabled else 'off'}", success=ok)
+        return web.json_response({"ok": ok, "message": msg, "workflow": info}, status=200 if ok else 400)
 
     # ── WebSocket: Dashboard push (new) ───────────────────────────────────────
     async def handle_dashboard_ws(self, request):
@@ -2210,6 +2810,33 @@ class ElyanGatewayServer:
             return web.json_response({"ok": True})
         except Exception as e:
             return web.json_response({"ok": False, "error": str(e)}, status=400)
+
+    async def handle_privacy_export(self, request):
+        """KVKK/GDPR: export user audit footprint."""
+        user_id = str(request.rel_url.query.get("user_id", "") or "").strip()
+        if not user_id:
+            return web.json_response({"ok": False, "error": "user_id required"}, status=400)
+        try:
+            data = audit_trail.export_for_user(user_id)
+            return web.json_response({"ok": True, "export": data})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+    async def handle_privacy_delete(self, request):
+        """KVKK/GDPR: right to be forgotten (audit trail scope)."""
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        user_id = str(payload.get("user_id", "") or "").strip()
+        if not user_id:
+            return web.json_response({"ok": False, "error": "user_id required"}, status=400)
+        try:
+            result = audit_trail.delete_user_data(user_id)
+            push_activity("privacy", "dashboard", f"user_data_deleted:{user_id}", True)
+            return web.json_response({"ok": True, "result": result})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=500)
 
     # ── Channels ──────────────────────────────────────────────────────────────
     async def handle_list_channels(self, request):
@@ -2578,8 +3205,39 @@ class ElyanGatewayServer:
         text = data.get("text")
         if not text:
             return web.json_response({"error": "text required"}, status=400)
-        asyncio.create_task(self.agent.process(text))
-        push_activity("message", data.get("channel", "api"), text[:60])
+        channel = str(data.get("channel", "api") or "api")
+        wait_response = bool(data.get("wait", False))
+        timeout_s = data.get("timeout_s", 90)
+        try:
+            timeout_s = max(5, min(300, int(timeout_s)))
+        except Exception:
+            timeout_s = 90
+
+        push_activity("message", channel, str(text)[:60])
+
+        if wait_response:
+            try:
+                out = await asyncio.wait_for(
+                    self.agent.process(
+                        str(text),
+                        channel=channel,
+                        metadata=data.get("metadata") if isinstance(data.get("metadata"), dict) else None,
+                    ),
+                    timeout=timeout_s,
+                )
+                return web.json_response({"status": "ok", "response": str(out or "")})
+            except asyncio.TimeoutError:
+                return web.json_response({"status": "timeout", "error": f"message processing timed out ({timeout_s}s)"}, status=504)
+            except Exception as e:
+                return web.json_response({"status": "error", "error": str(e)}, status=500)
+
+        asyncio.create_task(
+            self.agent.process(
+                str(text),
+                channel=channel,
+                metadata=data.get("metadata") if isinstance(data.get("metadata"), dict) else None,
+            )
+        )
         return web.json_response({"status": "processing"})
 
     # ── Webhook ───────────────────────────────────────────────────────────────
@@ -2687,10 +3345,77 @@ class ElyanGatewayServer:
         await site.start()
         logger.info(f"Gateway server ready at http://{host}:{port}")
 
+        # Phase 20: Start Automation Scheduler
+        try:
+            from core.automation_registry import automation_registry
+            asyncio.create_task(automation_registry.start_scheduler(self.agent))
+        except Exception as e:
+            logger.error(f"Automation scheduler start failed: {e}")
+
+        # Phase 21: Start Dashboard Telemetry Broadcast
+        self._telemetry_task = asyncio.create_task(self._telemetry_broadcast_loop())
+
     async def stop(self):
         logger.info("Stopping Gateway Server...")
+        if self._telemetry_task:
+            self._telemetry_task.cancel()
         await self.heartbeat.stop()
         await self.cron.stop()
         if self.runner:
             await self.runner.cleanup()
         await self.router.stop_all()
+
+    async def _telemetry_broadcast_loop(self):
+        """Broadcast health telemetry to all dashboard clients every 5s."""
+        while True:
+            try:
+                if _dashboard_ws_clients:
+                    # Reuse handle_health_telemetry logic or call it
+                    # Since handle_health_telemetry returns web.Response, we need a clean dict
+                    data = await self._get_telemetry_data()
+                    await self.broadcast_to_dashboard("telemetry", data)
+            except Exception as e:
+                logger.error(f"Telemetry broadcast error: {e}")
+            await asyncio.sleep(5)
+
+    async def _get_telemetry_data(self) -> dict:
+        """Internal helper for telemetry data."""
+        from core.model_orchestrator import model_orchestrator
+        from core.resilience.circuit_breaker import resilience_manager
+        from core.llm.token_budget import token_budget
+        from core.automation_registry import automation_registry
+        from core.monitoring import get_resource_monitor
+        
+        monitor = get_resource_monitor()
+        hw = monitor.get_health_snapshot()
+        
+        return {
+            "timestamp": time.time(),
+            "hardware": {
+                "cpu": hw.cpu_percent,
+                "ram": hw.ram_percent,
+                "disk": hw.disk_percent,
+                "on_ac": hw.is_on_ac
+            },
+            "resilience": {
+                "providers": model_orchestrator.get_health_report(),
+                "circuits": resilience_manager.get_all_states(),
+                "budget": token_budget.get_usage_summary()
+            },
+            "automations": {
+                "active_count": len(automation_registry.get_active())
+            },
+            "uptime_s": int(time.time() - _start_time)
+        }
+
+    async def broadcast_to_dashboard(self, event_type: str, data: dict):
+        """Send event to all active dashboard WS clients."""
+        if not _dashboard_ws_clients:
+            return
+        
+        payload = json.dumps({"type": event_type, "data": data})
+        for ws in list(_dashboard_ws_clients):
+            try:
+                await ws.send_str(payload)
+            except Exception:
+                _dashboard_ws_clients.remove(ws)

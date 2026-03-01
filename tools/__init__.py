@@ -32,7 +32,7 @@ def _lazy_load_tool(tool_name: str):
     
     # System Tools
     if tool_name in ["get_system_info", "get_battery_status", "open_app", "open_url", "get_running_apps",
-                     "take_screenshot", "read_clipboard", "write_clipboard",
+                     "take_screenshot", "analyze_screen", "read_clipboard", "write_clipboard", "set_wallpaper",
                      "close_app", "shutdown_system", "restart_system", "sleep_system", "lock_screen",
                      "set_volume", "send_notification", "kill_process",
                      "get_process_info", "run_safe_command", "get_installed_apps", "get_display_info",
@@ -43,8 +43,8 @@ def _lazy_load_tool(tool_name: str):
             return _loaded_tools["record_screen"]
 
         from .system_tools import (
-            get_system_info, get_battery_status, open_app, open_url, get_running_apps,
-            take_screenshot, read_clipboard, write_clipboard,
+            get_system_info, get_battery_status, open_app, open_url, get_running_apps, set_wallpaper,
+            take_screenshot, analyze_screen, capture_region, read_clipboard, write_clipboard,
             close_app, shutdown_system, restart_system, sleep_system, lock_screen,
             set_volume, send_notification, kill_process, get_process_info,
             run_safe_command, get_installed_apps, get_display_info, open_project_in_ide,
@@ -53,6 +53,7 @@ def _lazy_load_tool(tool_name: str):
         tools = {
             "get_system_info": get_system_info, "get_battery_status": get_battery_status, "open_app": open_app, "open_url": open_url,
             "get_running_apps": get_running_apps, "take_screenshot": take_screenshot,
+            "analyze_screen": analyze_screen, "capture_region": capture_region,
             "read_clipboard": read_clipboard, "write_clipboard": write_clipboard,
             "shutdown_system": shutdown_system, "restart_system": restart_system,
             "sleep_system": sleep_system, "lock_screen": lock_screen,
@@ -64,6 +65,7 @@ def _lazy_load_tool(tool_name: str):
             "open_project_in_ide": open_project_in_ide,
             "get_weather": get_weather,
             "run_code": run_code,
+            "set_wallpaper": set_wallpaper,
         }
         _loaded_tools.update(tools)
         return _loaded_tools.get(tool_name)
@@ -149,6 +151,25 @@ def _lazy_load_tool(tool_name: str):
             "fetch_page": fetch_page, "extract_text": extract_text,
             "web_search": web_search, "start_research": start_research,
             "get_research_status": get_research_status,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Browser Tools
+    if tool_name in ["browser_open", "browser_click", "browser_type", "browser_screenshot", 
+                     "browser_get_text", "browser_scroll", "browser_wait", "browser_close", 
+                     "browser_status", "scrape_page", "scrape_links", "scrape_table"]:
+        from .browser import (
+            browser_open, browser_click, browser_type, browser_screenshot,
+            browser_get_text, browser_scroll, browser_wait, browser_close,
+            browser_status, scrape_page, scrape_links, scrape_table
+        )
+        tools = {
+            "browser_open": browser_open, "browser_click": browser_click, "browser_type": browser_type,
+            "browser_screenshot": browser_screenshot, "browser_get_text": browser_get_text,
+            "browser_scroll": browser_scroll, "browser_wait": browser_wait,
+            "browser_close": browser_close, "browser_status": browser_status,
+            "scrape_page": scrape_page, "scrape_links": scrape_links, "scrape_table": scrape_table
         }
         _loaded_tools.update(tools)
         return _loaded_tools.get(tool_name)
@@ -350,6 +371,111 @@ def _lazy_load_tool(tool_name: str):
         }
         _loaded_tools.update(tools)
         return _loaded_tools.get(tool_name)
+
+    # Database Tools
+    if tool_name in ["db_connect", "db_execute", "db_schema", "db_backup"]:
+        from .database_tools import db_connect, db_execute, db_schema, db_backup
+        tools = {"db_connect": db_connect, "db_execute": db_execute, "db_schema": db_schema, "db_backup": db_backup}
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Git Tools
+    if tool_name in ["git_clone", "git_status", "git_commit", "git_push", "git_pull", "git_branch", "git_diff", "git_log"]:
+        from .git_tools import git_clone, git_status, git_commit, git_push, git_pull, git_branch, git_diff, git_log
+        tools = {"git_clone": git_clone, "git_status": git_status, "git_commit": git_commit, "git_push": git_push, "git_pull": git_pull, "git_branch": git_branch, "git_diff": git_diff, "git_log": git_log}
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Container Tools
+    if tool_name in ["docker_build", "docker_run", "docker_stop", "docker_ps", "docker_logs", "docker_images", "docker_compose_up", "docker_compose_down", "generate_dockerfile"]:
+        from .container_tools import docker_build, docker_run, docker_stop, docker_ps, docker_logs, docker_images, docker_compose_up, docker_compose_down, generate_dockerfile
+        tools = {"docker_build": docker_build, "docker_run": docker_run, "docker_stop": docker_stop, "docker_ps": docker_ps, "docker_logs": docker_logs, "docker_images": docker_images, "docker_compose_up": docker_compose_up, "docker_compose_down": docker_compose_down, "generate_dockerfile": generate_dockerfile}
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Deploy Tools
+    if tool_name in ["deploy_to_vercel", "deploy_to_netlify", "deploy_docker", "get_deploy_status"]:
+        from .deploy_tools import deploy_to_vercel, deploy_to_netlify, deploy_docker, get_deploy_status
+        tools = {"deploy_to_vercel": deploy_to_vercel, "deploy_to_netlify": deploy_to_netlify, "deploy_docker": deploy_docker, "get_deploy_status": get_deploy_status}
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # API Test Tools
+    if tool_name in ["http_request", "graphql_query", "api_health_check"]:
+        from .api_tools import http_request, graphql_query, api_health_check
+        tools = {"http_request": http_request, "graphql_query": graphql_query, "api_health_check": api_health_check}
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Data Tools
+    if tool_name in ["read_csv", "read_json", "analyze_data", "data_query"]:
+        from .data_tools import read_csv, read_json, analyze_data, data_query
+        tools = {"read_csv": read_csv, "read_json": read_json, "analyze_data": analyze_data, "data_query": data_query}
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Package Tools
+    if tool_name in ["pip_install", "pip_list", "npm_install", "npm_run", "brew_install", "brew_list"]:
+        from .package_tools import pip_install, pip_list, npm_install, npm_run, brew_install, brew_list
+        tools = {"pip_install": pip_install, "pip_list": pip_list, "npm_install": npm_install, "npm_run": npm_run, "brew_install": brew_install, "brew_list": brew_list}
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    # Free API Tools (Zero cost, no API key)
+    if tool_name in ["get_wikipedia_summary", "get_word_definition", "get_random_advice",
+                     "get_random_fact", "get_random_quote"]:
+        from .free_apis.free_knowledge_apis import (
+            get_wikipedia_summary, get_word_definition, get_random_advice,
+            get_random_fact, get_random_quote
+        )
+        tools = {
+            "get_wikipedia_summary": get_wikipedia_summary,
+            "get_word_definition": get_word_definition,
+            "get_random_advice": get_random_advice,
+            "get_random_fact": get_random_fact,
+            "get_random_quote": get_random_quote,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    if tool_name in ["get_weather_by_city", "get_weather_openmeteo",
+                     "get_crypto_price", "get_exchange_rate"]:
+        from .free_apis.free_realtime_apis import (
+            get_weather_by_city, get_weather_openmeteo,
+            get_crypto_price, get_exchange_rate
+        )
+        tools = {
+            "get_weather_by_city": get_weather_by_city,
+            "get_weather_openmeteo": get_weather_openmeteo,
+            "get_crypto_price": get_crypto_price,
+            "get_exchange_rate": get_exchange_rate,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    if tool_name in ["get_ip_geolocation", "get_country_info", "get_postal_code_info"]:
+        from .free_apis.free_geo_apis import (
+            get_ip_geolocation, get_country_info, get_postal_code_info
+        )
+        tools = {
+            "get_ip_geolocation": get_ip_geolocation,
+            "get_country_info": get_country_info,
+            "get_postal_code_info": get_postal_code_info,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    if tool_name in ["ddg_instant_answer", "search_academic_papers"]:
+        from .free_apis.free_search_apis import (
+            ddg_instant_answer, search_academic_papers
+        )
+        tools = {
+            "ddg_instant_answer": ddg_instant_answer,
+            "search_academic_papers": search_academic_papers,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
     return None
 
 # Lazy dictionary class
@@ -364,7 +490,7 @@ class LazyToolDict(dict):
             "move_file", "copy_file", "rename_file", "create_folder",
             # System Tools
             "get_system_info", "get_battery_status", "run_command", "run_safe_command", "open_app", "open_url",
-            "get_running_apps", "take_screenshot", "read_clipboard", "write_clipboard",
+            "get_running_apps", "take_screenshot", "analyze_screen", "capture_region", "read_clipboard", "write_clipboard",
             "close_app", "shutdown_system", "restart_system", "sleep_system", "lock_screen",
             "set_volume", "send_notification", "kill_process", "get_process_info",
             "get_installed_apps", "get_display_info", "open_project_in_ide", "record_screen",
@@ -410,6 +536,31 @@ class LazyToolDict(dict):
             # Multimodal Tools
             "transcribe_audio_file", "speak_text_local", "create_visual_asset_pack", "analyze_and_narrate_image",
             "get_multimodal_capability_report",
+            # Browser Tools
+            "browser_open", "browser_click", "browser_type", "browser_screenshot", 
+            "browser_get_text", "browser_scroll", "browser_wait", "browser_close", 
+            "browser_status", "scrape_page", "scrape_links", "scrape_table",
+            # Database Tools
+            "db_connect", "db_execute", "db_schema", "db_backup",
+            # Git Tools
+            "git_clone", "git_status", "git_commit", "git_push", "git_pull", "git_branch", "git_diff", "git_log",
+            # Container Tools
+            "docker_build", "docker_run", "docker_stop", "docker_ps", "docker_logs", "docker_images",
+            "docker_compose_up", "docker_compose_down", "generate_dockerfile",
+            # Deploy Tools
+            "deploy_to_vercel", "deploy_to_netlify", "deploy_docker", "get_deploy_status",
+            # API Tools
+            "http_request", "graphql_query", "api_health_check",
+            # Data Tools
+            "read_csv", "read_json", "analyze_data", "data_query",
+            # Package Tools
+            "pip_install", "pip_list", "npm_install", "npm_run", "brew_install", "brew_list",
+            # Free API Tools (Zero cost, no API key)
+            "get_wikipedia_summary", "get_word_definition", "get_random_advice",
+            "get_random_fact", "get_random_quote",
+            "get_weather_by_city", "get_weather_openmeteo", "get_crypto_price", "get_exchange_rate",
+            "get_ip_geolocation", "get_country_info", "get_postal_code_info",
+            "ddg_instant_answer", "search_academic_papers",
         }
 
     def __getitem__(self, key):

@@ -54,11 +54,26 @@ class SystemParser(BaseParser):
         if any(t in text for t in ["sesi aç", "sessizden çık", "unmute", "ses aç"]):
             return {"action": "set_volume", "params": {"mute": False}, "reply": "Ses açılıyor..."}
         if any(t in text for t in ["ses", "volume", "ses seviyesi", "sesi"]):
-            m = re.search(r'%\s*(\d+)|(\d+)\s*%|yüzde\s*(\d+)|(\d+)\s*yap', text)
+            _word_nums = {
+                "sıfır": 0, "bir": 1, "iki": 2, "üç": 3, "dört": 4, "bes": 5, "beş": 5,
+                "alti": 6, "altı": 6, "yedi": 7, "sekiz": 8, "dokuz": 9, "on": 10,
+                "yirmi": 20, "otuz": 30, "kirk": 40, "kırk": 40, "elli": 50,
+                "altmis": 60, "altmış": 60, "yetmis": 70, "yetmiş": 70,
+                "seksen": 80, "doksan": 90, "yuz": 100, "yüz": 100,
+            }
+            m = re.search(r'%\s*(\d+)|(\d+)\s*%|yüzde\s*(\d+)|yuzde\s*(\d+)|(\d+)\s*yap', text)
             if m:
-                level = int(m.group(1) or m.group(2) or m.group(3) or m.group(4))
+                level = int(next(g for g in m.groups() if g is not None))
                 return {"action": "set_volume", "params": {"level": min(100, max(0, level))},
                         "reply": f"Ses seviyesi %{level} yapılıyor..."}
+            # Sözcüksel sayı: "yüzde elli" → 50
+            word_m = re.search(r'yüzde\s+(\w+)|yuzde\s+(\w+)', text)
+            if word_m:
+                word = (word_m.group(1) or word_m.group(2) or "").lower()
+                if word in _word_nums:
+                    level = _word_nums[word]
+                    return {"action": "set_volume", "params": {"level": level},
+                            "reply": f"Ses seviyesi %{level} yapılıyor..."}
             if any(w in text for w in ["arttır", "artır", "yükselt", "aç"]):
                 return {"action": "set_volume", "params": {"level": 70}, "reply": "Ses yükseltiliyor..."}
             if any(w in text for w in ["azalt", "düşür", "kıs"]):
@@ -110,11 +125,12 @@ class SystemParser(BaseParser):
     def _parse_power_control(self, text: str, text_norm: str, original: str) -> dict | None:
         if any(k in text for k in ["ekranı kilitle", "ekrani kilitle", "lock screen"]):
             return {"action": "lock_screen", "params": {}, "reply": "Ekran kilitleniyor..."}
+        # Restart/reboot recognised regardless of subject word
+        if any(k in text for k in ["yeniden başlat", "yeniden baslat", "restart", "reboot"]):
+            return {"action": "restart_system", "params": {}, "reply": "Sistem yeniden başlatılıyor..."}
         subjects = ["bilgisayar", "sistem", "mac", "macbook", "cihaz", "computer", "laptop"]
         if not any(s in text for s in subjects):
             return None
-        if any(k in text for k in ["yeniden başlat", "yeniden baslat", "restart", "reboot"]):
-            return {"action": "restart_system", "params": {}, "reply": "Sistem yeniden başlatılıyor..."}
         if any(k in text for k in ["uykuya al", "uyku modu", "sleep"]):
             return {"action": "sleep_system", "params": {}, "reply": "Sistem uyku moduna alınıyor..."}
         if any(k in text for k in ["kilitle", "lock"]):
@@ -251,3 +267,79 @@ class SystemParser(BaseParser):
             params["city"] = city
         city_str = f" ({city})" if city else ""
         return {"action": "get_weather", "params": params, "reply": f"Hava durumu bilgileri getiriliyor{city_str}..."}
+
+    # ── UI Input Control (Keyboard/Mouse) ───────────────────────────────────
+    def _parse_input_control(self, text: str, text_norm: str, original: str) -> dict | None:
+        low = text.lower()
+        norm = text_norm or self._normalize(text)
+
+        # key combo: "cmd+l bas", "command + shift + 4"
+        combo_match = re.search(
+            r"\b(cmd|command|ctrl|control|alt|option|shift)\s*(?:\+\s*[a-z0-9]+)+",
+            low,
+            re.IGNORECASE,
+        )
+        if combo_match and any(k in low for k in ["bas", "press", "tuş", "tus", "kısayol", "kisayol"]):
+            raw_combo = combo_match.group(0)
+            raw_combo = re.sub(r"\s+", "", raw_combo)
+            raw_combo = raw_combo.replace("command", "cmd").replace("control", "ctrl").replace("option", "alt")
+            return {
+                "action": "key_combo",
+                "params": {"combo": raw_combo},
+                "reply": f"Klavye kısayolu uygulanıyor: {raw_combo}",
+            }
+
+        # "enter bas", "esc bas"
+        key_match = re.search(
+            r"\b(enter|return|tab|space|esc|escape|left|right|up|down|delete|backspace)\b.*\b(bas|press|tuş|tus)\b",
+            norm,
+            re.IGNORECASE,
+        )
+        if key_match:
+            key = str(key_match.group(1) or "").strip().lower()
+            return {
+                "action": "press_key",
+                "params": {"key": key},
+                "reply": f"{key} tuşuna basılıyor...",
+            }
+
+        # "500,300 tıkla"
+        click_match = re.search(r"\b(\d{1,4})\s*[,x]\s*(\d{1,4})\b.*\b(tıkla|tikla|click)\b", low, re.IGNORECASE)
+        if click_match:
+            x = int(click_match.group(1))
+            y = int(click_match.group(2))
+            return {
+                "action": "mouse_click",
+                "params": {"x": x, "y": y, "button": "left"},
+                "reply": f"Mouse tıklaması yapılıyor ({x},{y})...",
+            }
+
+        # "mouse'u 500,300 taşı"
+        move_match = re.search(
+            r"\b(mouse|imlec|cursor)\b.*\b(\d{1,4})\s*[,x]\s*(\d{1,4})\b.*\b(taşı|tasi|git|move)\b",
+            low,
+            re.IGNORECASE,
+        )
+        if move_match:
+            x = int(move_match.group(2))
+            y = int(move_match.group(3))
+            return {
+                "action": "mouse_move",
+                "params": {"x": x, "y": y},
+                "reply": f"Mouse imleci taşınıyor ({x},{y})...",
+            }
+
+        # "şunu yaz: ...", "yaz ..."
+        write_match = re.search(r"(?:şunu yaz|sunu yaz|yaz)\s*[:\\-]?\s*(.+)", original, re.IGNORECASE)
+        if write_match:
+            payload = str(write_match.group(1) or "").strip()
+            payload = re.sub(r"\s+(?:ve\s+|sonra\s+)?(?:enter|return)\s+bas.*$", "", payload, flags=re.IGNORECASE)
+            if payload:
+                press_enter = bool(re.search(r"\b(enter|return)\b", low, re.IGNORECASE))
+                return {
+                    "action": "type_text",
+                    "params": {"text": payload, "press_enter": press_enter},
+                    "reply": "Metin yazılıyor...",
+                }
+
+        return None

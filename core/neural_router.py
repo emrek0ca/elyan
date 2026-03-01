@@ -33,6 +33,7 @@ class NeuralRoleMapper:
 
     def _default_model_config(self) -> Dict[str, Any]:
         provider = elyan_config.get("models.default.provider", "ollama")
+        provider = str(provider or "").strip() or "ollama"
         model = elyan_config.get("models.default.model")
         if not model:
             model = "llama3.1:8b" if provider == "ollama" else "gpt-4o"
@@ -87,10 +88,15 @@ class NeuralRoleMapper:
         # Reasoning Budget: Decide if this task needs the full factory flow
         needs_factory = complexity > 0.7 or len(prompt.split()) > 25
         
+        # Fallback configuration
+        fallback_cfg = self._default_model_config()
+        
         return {
             "role": role,
             "model": model_cfg["model"],
             "provider": model_cfg["provider"],
+            "fallback_model": fallback_cfg["model"],
+            "fallback_provider": fallback_cfg["provider"],
             "complexity": complexity,
             "reasoning_budget": "high" if needs_factory else "low"
         }

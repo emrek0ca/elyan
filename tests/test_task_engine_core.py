@@ -118,7 +118,7 @@ def test_multi_task_bypass_executes_declared_tasks():
                 ],
             }
 
-        async def fake_execute_tasks(tasks, notify_callback=None, user_id=None):
+        async def fake_execute_tasks(tasks, notify_callback=None, user_id=None, pipeline_id=None):
             assert len(tasks) == 2
             assert tasks[0].action == "create_folder"
             assert tasks[1].action == "write_file"
@@ -173,7 +173,17 @@ def test_planner_max_steps_respected():
         def __init__(self):
             self.subtasks = [DummyTask(i) for i in range(10)]
 
-    engine.intelligent_planner = type("P", (), {"create_plan": lambda self, goal, context=None: DummyPlan(), "max_depth": 0})()
+    async def async_create_plan(self, goal, context=None):
+        return DummyPlan()
+
+    def eval_quality(self, subtasks, goal):
+        return {"safe_to_run": True}
+
+    engine.intelligent_planner = type("P", (), {
+        "create_plan": async_create_plan,
+        "evaluate_plan_quality": eval_quality,
+        "max_depth": 0,
+    })()
 
     tasks = asyncio.run(engine._plan_with_intelligent_planner("dummy", {"type": "UNKNOWN"}, {}))
     assert len(tasks) == 5

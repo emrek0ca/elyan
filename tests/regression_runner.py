@@ -56,16 +56,16 @@ GOLDEN_SCENARIOS = [
 async def run_regression():
     try:
         agent = Agent()
-        # Initialize conditionally without side effects if possible
+        await agent.initialize()
+        orchestrator = AgentOrchestrator(agent)
     except Exception as e:
-        logger.error(f"Agent init failed during test setup: {e}")
+        logger.error(f"Agent/Orchestrator init failed: {e}")
         return False
         
     router = NeuralRouter(agent)
-    
     passed = 0
     failed = 0
-    print(f"🚀 Starting Headless E2E Regression Harness with {len(GOLDEN_SCENARIOS)} Golden Scenarios...\n")
+    print(f"🚀 Starting Real E2E Regression Harness with {len(GOLDEN_SCENARIOS)} Golden Scenarios...\n")
     
     for scenario in GOLDEN_SCENARIOS:
         print(f"▶ Running Scenario: {scenario['id']} ({scenario['description']})")
@@ -78,37 +78,31 @@ async def run_regression():
             continue
         print(f"  ✔ Routing Passed: {template.id}")
         
-        # 2. Execution metrics thresholds Check (Mocked for safety during harness design, 
-        # actual CI would invoke orchestrator.manage_flow and read AuditBundle.json)
-        # Using placeholder results for demonstration:
-        mock_audit = {
-            "metrics": {
-                "task_success_rate": 1.0,
-                "output_completeness": 1.0,
-                "tool_correctness": 1.0,
-                "duration_s": 45.0
-            }
-        }
-        
-        metrics = mock_audit["metrics"]
-        valid = True
-        
-        if metrics["task_success_rate"] < scenario["min_success_rate"]:
-            print(f"  ❌ FAILED SUCCESS RATE: Expected {scenario['min_success_rate']}, got {metrics['task_success_rate']}")
-            valid = False
+        # 2. Real Execution
+        print(f"  ⚙ Executing Job Flow (this may take a minute)...")
+        try:
+            result_text = await orchestrator.manage_flow(None, scenario['input'])
             
-        if metrics["output_completeness"] < scenario["min_completeness"]:
-            print(f"  ❌ FAILED COMPLETENESS: Expected {scenario['min_completeness']}, got {metrics['output_completeness']}")
-            valid = False
+            # The orchestrator returns a success string with metrics or a failure string.
+            if "İB BAŞARIYLA TESLİM EDİLDİ" not in result_text and "SUCCESS" not in result_text.upper():
+                print(f"  ❌ FAILED EXECUTION: {result_text[:200]}...")
+                failed += 1
+                continue
             
-        if metrics["duration_s"] > scenario["max_duration_s"]:
-            print(f"  ❌ FAILED LATENCY: Expected < {scenario['max_duration_s']}s, took {metrics['duration_s']}s")
-            valid = False
+            print(f"  ✔ Execution Finished.")
             
-        if valid:
-            print(f"  ✅ PASSED: {scenario['id']}\n")
-            passed += 1
-        else:
+            # 3. Metric Verification (extracted from result or audit bundle)
+            # In a real run, the orchestrator updates contract.metrics.
+            # For the runner, we check for '✅' emoji as a proxy for success rate >= 1.0 logic in orchestrator.py
+            if "✅" in result_text:
+                print(f"  ✅ PASSED: {scenario['id']}\n")
+                passed += 1
+            else:
+                print(f"  ❌ FAILED QUALITY GATE: Success signal not found in output.")
+                failed += 1
+
+        except Exception as e:
+            print(f"  ❌ CRASH: {e}")
             failed += 1
             
     print(f"========================================")

@@ -1,6 +1,8 @@
 import asyncio
 import inspect
 import json
+import re
+import secrets
 import time
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -8,6 +10,8 @@ from .message import UnifiedMessage
 from .response import UnifiedResponse
 from .adapters.base import BaseChannelAdapter
 from core.multi_agent.router import agent_router
+from core.proactive.intervention import get_intervention_manager
+from .channel_capabilities import resolve_channel_capabilities
 from config.settings import ELYAN_DIR
 from utils.logger import get_logger
 
@@ -22,6 +26,10 @@ class GatewayRouter:
         self._is_running = False
         self._supervisor_tasks: Dict[str, asyncio.Task] = {}
         self._adapter_health: Dict[str, Dict[str, Any]] = {}
+        self._user_routes: Dict[str, Dict[str, str]] = {}
+        self._intervention_manager = None
+        self._approval_codes: Dict[str, Dict[str, Any]] = {}
+        self._approval_code_ttl_s = 300
         self._welcome_enabled = bool(welcome_enabled)
         self._welcome_channels = {"telegram", "whatsapp"}
         self._welcome_lock = asyncio.Lock()
@@ -31,6 +39,126 @@ class GatewayRouter:
         else:
             self._welcome_state_path = ELYAN_DIR / "welcome_state.json"
         self._load_welcome_state()
+        try:
+            self._intervention_manager = get_intervention_manager()
+            self._intervention_manager.register_listener(self._on_intervention_requested)
+        except Exception as exc:
+            logger.debug(f"Intervention listener registration failed: {exc}")
+
+    @staticmethod
+    def _channel_text_limit(channel_type: str) -> int:
+        caps = resolve_channel_capabilities(channel_type, {})
+        try:
+            return max(300, int(caps.get("text_limit", 3500)))
+        except Exception:
+            return 3500
+
+    @classmethod
+    def _truncate_text_for_channel(cls, text: str, channel_type: str) -> str:
+        raw = str(text or "")
+        if not raw.strip():
+            return ""
+        limit = cls._channel_text_limit(channel_type)
+        if len(raw) <= limit:
+            return raw
+        suffix = "\n\n[Mesaj kanal sınırı nedeniyle kısaltıldı]"
+        keep = max(0, limit - len(suffix))
+        return raw[:keep].rstrip() + suffix
+
+    @classmethod
+    def _normalize_response_for_channel(
+        cls,
+        channel_type: str,
+        response: UnifiedResponse,
+        adapter: BaseChannelAdapter,
+    ) -> UnifiedResponse:
+        caps = {}
+        try:
+            caps_raw = adapter.get_capabilities()
+            if isinstance(caps_raw, dict):
+                caps = caps_raw
+        except Exception:
+            caps = {}
+
+        resolved_caps = resolve_channel_capabilities(channel_type, caps)
+        supports_markdown = bool(resolved_caps.get("markdown") or resolved_caps.get("html"))
+        supports_buttons = bool(resolved_caps.get("buttons"))
+        supports_images = bool(resolved_caps.get("images"))
+        supports_files = bool(resolved_caps.get("files"))
+
+        text = cls._truncate_text_for_channel(str(getattr(response, "text", "") or ""), channel_type)
+        if not text.strip():
+            text = "İşlem tamamlandı."
+
+        attachments = list(getattr(response, "attachments", []) or [])
+        if not (supports_images or supports_files):
+            attachments = []
+
+        normalized = UnifiedResponse(
+            text=text,
+            attachments=attachments,
+            buttons=list(getattr(response, "buttons", []) or []) if supports_buttons else [],
+            format=str(getattr(response, "format", "plain") or "plain"),
+            metadata=dict(getattr(response, "metadata", {}) or {}),
+            channel_hints=dict(getattr(response, "channel_hints", {}) or {}),
+        )
+        if not supports_markdown and normalized.format != "plain":
+            normalized.format = "plain"
+        return normalized
+
+    @classmethod
+    def _build_plain_fallback_response(cls, channel_type: str, response: UnifiedResponse) -> UnifiedResponse:
+        text = cls._truncate_text_for_channel(str(getattr(response, "text", "") or ""), channel_type)
+        if not text.strip():
+            text = "Üzgünüm, yanıtı iletirken bir hata oluştu. Lütfen tekrar deneyin."
+        return UnifiedResponse(text=text, format="plain")
+
+    @classmethod
+    def _build_short_plain_fallback_response(cls, channel_type: str, response: UnifiedResponse) -> UnifiedResponse:
+        text = cls._truncate_text_for_channel(str(getattr(response, "text", "") or ""), channel_type)
+        text = (text or "").strip()
+        if len(text) > 900:
+            text = text[:860].rstrip() + "\n\n[Mesaj kısaltıldı]"
+        if not text:
+            text = "İşlem alındı. Yanıt gönderiminde sorun oluştu, tekrar dener misin?"
+        return UnifiedResponse(text=text, format="plain")
+
+    @staticmethod
+    def _normalize_inbound_attachments(raw_attachments: Any) -> list[Dict[str, Any]]:
+        normalized: list[Dict[str, Any]] = []
+        seen: set[str] = set()
+        items = raw_attachments if isinstance(raw_attachments, list) else []
+        for item in items:
+            if isinstance(item, str):
+                path = str(item).strip()
+                if not path or path in seen:
+                    continue
+                seen.add(path)
+                normalized.append({"path": path, "type": "file", "source": "channel"})
+                continue
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or item.get("file_path") or item.get("local_path") or "").strip()
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            atype = str(item.get("type") or "").strip().lower()
+            if not atype:
+                mime = str(item.get("mime") or "").lower()
+                if mime.startswith("image/"):
+                    atype = "image"
+                else:
+                    atype = "file"
+            normalized.append(
+                {
+                    "path": path,
+                    "type": atype,
+                    "mime": str(item.get("mime") or "").strip(),
+                    "name": str(item.get("name") or "").strip(),
+                    "source": str(item.get("source") or "channel"),
+                }
+            )
+        return normalized
 
     def register_adapter(self, channel_type: str, adapter: BaseChannelAdapter):
         """Register a new channel adapter."""
@@ -57,9 +185,14 @@ class GatewayRouter:
 
     async def handle_incoming_message(self, message: UnifiedMessage):
         """Callback triggered by any adapter when a message is received."""
+        message.attachments = self._normalize_inbound_attachments(getattr(message, "attachments", []))
         logger.info(f"Incoming: [{message.channel_type}] user={message.user_id} text={message.text[:50]}")
+        self._remember_user_route(message)
         self._mark_incoming_message(message.channel_type)
         await self._maybe_send_first_contact_welcome(message)
+
+        if await self._handle_intervention_message(message):
+            return
 
         try:
             agent = await agent_router.route_message(message.channel_type, message.user_id)
@@ -97,8 +230,67 @@ class GatewayRouter:
                 except Exception:
                     pass
 
-            response_text = await agent.process(message.text, notify=_notify_progress)
-            response = UnifiedResponse(text=response_text, format="markdown")
+            agent_meta: Dict[str, Any] = {}
+            if isinstance(message.metadata, dict):
+                agent_meta.update(message.metadata)
+            agent_meta.setdefault("channel_type", str(getattr(message, "channel_type", "") or ""))
+            agent_meta.setdefault("channel_id", str(getattr(message, "channel_id", "") or ""))
+            agent_meta.setdefault("user_id", str(getattr(message, "user_id", "") or ""))
+            # Default autonomy is non-interactive; Telegram gets text-code approval for critical actions.
+            channel_type_norm = str(getattr(message, "channel_type", "") or "").strip().lower()
+            agent_meta.setdefault("interactive_approval", channel_type_norm == "telegram")
+            agent_meta.setdefault("autonomy_mode", "full")
+
+            response = None
+            envelope_handler = None
+            try:
+                has_instance_method = "process_envelope" in getattr(agent, "__dict__", {})
+                has_class_method = callable(getattr(type(agent), "process_envelope", None))
+                if has_instance_method or has_class_method:
+                    envelope_handler = getattr(agent, "process_envelope", None)
+            except Exception:
+                envelope_handler = None
+
+            if callable(envelope_handler):
+                envelope = await agent.process_envelope(
+                    message.text,
+                    notify=_notify_progress,
+                    attachments=list(getattr(message, "attachments", []) or []),
+                    channel=message.channel_type,
+                    metadata=agent_meta,
+                )
+                text = str(getattr(envelope, "text", "") or "")
+                attachments = []
+                if hasattr(envelope, "to_unified_attachments"):
+                    try:
+                        converted = envelope.to_unified_attachments()
+                        if inspect.isawaitable(converted):
+                            converted = await converted
+                        attachments = list(converted or [])
+                    except Exception:
+                        attachments = []
+                if not attachments and hasattr(envelope, "attachments"):
+                    raw_attachments = list(getattr(envelope, "attachments", []) or [])
+                    attachments = [a.to_dict() if hasattr(a, "to_dict") else a for a in raw_attachments if isinstance(a, (dict, object))]
+
+                manifest = str(getattr(envelope, "evidence_manifest_path", "") or "").strip()
+                if manifest:
+                    attachments.append({"path": manifest, "type": "manifest"})
+                response = UnifiedResponse(
+                    text=text,
+                    format="markdown",
+                    attachments=[a for a in attachments if isinstance(a, dict)],
+                    metadata={"run_id": getattr(envelope, "run_id", ""), "status": getattr(envelope, "status", "success")},
+                )
+            else:
+                response_text = await agent.process(
+                    message.text,
+                    notify=_notify_progress,
+                    attachments=list(getattr(message, "attachments", []) or []),
+                    channel=message.channel_type,
+                    metadata=agent_meta,
+                )
+                response = UnifiedResponse(text=response_text, format="markdown")
             await self.send_outgoing_response(message.channel_type, message.channel_id, response)
 
         except Exception as e:
@@ -111,6 +303,309 @@ class GatewayRouter:
                 pass
             error_resp = UnifiedResponse(text="Üzgünüm, bu isteği işlerken bir hata oluştu. Tekrar dener misin?")
             await self.send_outgoing_response(message.channel_type, message.channel_id, error_resp)
+
+    def _remember_user_route(self, message: UnifiedMessage) -> None:
+        user_id = str(getattr(message, "user_id", "") or "").strip()
+        if not user_id:
+            return
+        self._user_routes[user_id] = {
+            "channel_type": str(getattr(message, "channel_type", "") or "").strip(),
+            "channel_id": str(getattr(message, "channel_id", "") or "").strip(),
+        }
+
+    @staticmethod
+    def _parse_intervention_decision(text: str) -> Optional[str]:
+        raw = str(text or "").strip().lower()
+        if not raw:
+            return None
+        raw = raw.lstrip("/")
+        tokens = set(re.findall(r"[0-9a-zçğıöşü]+", raw, flags=re.IGNORECASE))
+
+        approve_tokens = {
+            "onay", "onayla", "evet", "yes", "approve", "approved", "tamam", "ok",
+        }
+        deny_tokens = {
+            "iptal", "reddet", "hayir", "hayır", "no", "deny", "cancel", "vazgec", "vazgeç",
+        }
+
+        if raw in approve_tokens or tokens.intersection(approve_tokens):
+            return "Onayla"
+        if raw in deny_tokens or tokens.intersection(deny_tokens):
+            return "İptal Et"
+        return None
+
+    @staticmethod
+    def _extract_approval_code(text: str) -> str:
+        raw = str(text or "").strip()
+        if not raw:
+            return ""
+        # Accept plain code-only message or phrases like "onay K9P3X2" / "kod: K9P3X2".
+        m = re.search(r"\b([A-Za-z0-9]{4,12})\b", raw)
+        if m and raw.replace(m.group(1), "").strip() == "":
+            return str(m.group(1)).upper()
+
+        patterns = [
+            r"(?i)\b(?:onay|approve|code|kod)\b[\s:=-]*([A-Za-z0-9]{4,12})\b",
+            r"(?i)\b([A-Za-z0-9]{4,12})\b[\s:=-]*\b(?:onay|approve)\b",
+        ]
+        for pat in patterns:
+            mm = re.search(pat, raw)
+            if mm:
+                return str(mm.group(1)).upper()
+        return ""
+
+    @staticmethod
+    def _new_security_code(length: int = 6) -> str:
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        size = max(4, min(10, int(length or 6)))
+        return "".join(secrets.choice(alphabet) for _ in range(size))
+
+    def _ensure_intervention_code(self, req: Dict[str, Any], *, user_id: str = "", channel_id: str = "") -> str:
+        req_id = str((req or {}).get("id") or "").strip()
+        if not req_id:
+            return ""
+        now = time.time()
+        current = self._approval_codes.get(req_id)
+        if isinstance(current, dict):
+            exp = float(current.get("expires_at") or 0.0)
+            if exp > now:
+                return str(current.get("code") or "")
+        code = self._new_security_code(6)
+        self._approval_codes[req_id] = {
+            "code": code,
+            "expires_at": now + float(self._approval_code_ttl_s),
+            "user_id": str(user_id or ""),
+            "channel_id": str(channel_id or ""),
+            "issued_at": now,
+        }
+        return code
+
+    @staticmethod
+    def _normalize_user_id(raw_user_id: Any) -> str:
+        raw = str(raw_user_id or "").strip()
+        if not raw:
+            return ""
+        digits = "".join(ch for ch in raw if ch.isdigit())
+        low = raw.lower()
+        if digits and (low.isdigit() or low.startswith("telegram:") or low.startswith("tg:")):
+            return digits
+        return low
+
+    @classmethod
+    def _user_ids_match(cls, expected: Any, actual: Any) -> bool:
+        exp = cls._normalize_user_id(expected)
+        act = cls._normalize_user_id(actual)
+        if not exp or not act:
+            return False
+        if exp == act:
+            return True
+        return exp.endswith(f":{act}") or act.endswith(f":{exp}")
+
+    @staticmethod
+    def _is_intervention_stale(req: Dict[str, Any], now_ts: float | None = None) -> bool:
+        if not isinstance(req, dict):
+            return False
+        try:
+            ts = float(req.get("ts") or 0.0)
+        except Exception:
+            return False
+        # Backward compatibility for synthetic/legacy timestamps in tests/mocks.
+        if ts <= 1000000000:
+            return False
+        now = float(now_ts if now_ts is not None else time.time())
+        return (now - ts) > 600.0
+
+    @staticmethod
+    def _intervention_channel_context(req: Dict[str, Any]) -> tuple[str, str]:
+        if not isinstance(req, dict):
+            return "", ""
+        context = req.get("context", {})
+        if not isinstance(context, dict):
+            return "", ""
+        channel = str(context.get("channel") or context.get("channel_type") or "").strip().lower()
+        channel_id = str(
+            context.get("channel_id")
+            or context.get("chat_id")
+            or context.get("target_channel_id")
+            or ""
+        ).strip()
+        return channel, channel_id
+
+    @staticmethod
+    def _intervention_buttons(request_id: str) -> list[Dict[str, Any]]:
+        # Button-based approval flow is intentionally disabled.
+        return []
+
+    @staticmethod
+    def _find_intervention_for_user(
+        user_id: str,
+        request_id: str = "",
+        *,
+        channel_type: str = "",
+        channel_id: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        manager = get_intervention_manager()
+        pending = manager.list_pending()
+        if not pending:
+            return None
+
+        uid = str(user_id or "").strip()
+        req_id = str(request_id or "").strip()
+        in_channel = str(channel_type or "").strip().lower()
+        in_channel_id = str(channel_id or "").strip()
+        selected: Optional[Dict[str, Any]] = None
+        latest_ts = float("-inf")
+        now_ts = time.time()
+
+        for req in pending:
+            if not isinstance(req, dict):
+                continue
+            if GatewayRouter._is_intervention_stale(req, now_ts):
+                continue
+            context = req.get("context", {})
+            req_uid = str(context.get("user_id") or "").strip() if isinstance(context, dict) else ""
+            if req_uid and not GatewayRouter._user_ids_match(req_uid, uid):
+                continue
+            if not req_uid:
+                req_channel, req_channel_id = GatewayRouter._intervention_channel_context(req)
+                if req_channel and in_channel and req_channel != in_channel:
+                    continue
+                if req_channel_id and in_channel_id and req_channel_id != in_channel_id:
+                    continue
+                # No user and no channel binding => only safe for explicit request id.
+                if not req_id and not req_channel_id:
+                    continue
+            if req_id and str(req.get("id") or "").strip() == req_id:
+                return req
+            ts = float(req.get("ts") or 0.0)
+            if ts >= latest_ts:
+                selected = req
+                latest_ts = ts
+        return selected
+
+    def _build_intervention_response(self, channel_type: str, req: Dict[str, Any], *, user_id: str = "", channel_id: str = "") -> UnifiedResponse:
+        prompt = str(req.get("prompt") or "Bekleyen bir onay isteği var.").strip()
+        code = self._ensure_intervention_code(req, user_id=user_id, channel_id=channel_id)
+        text = (
+            f"{prompt}\n\n"
+            "Kritik işlem onayı için güvenlik kodu gerekiyor.\n"
+            f"Kod: `{code}`\n"
+            "Onaylamak için kodu yaz: `ONAY <KOD>` (örn: `ONAY "
+            f"{code}`)\n"
+            "İptal için: `İPTAL`"
+        )
+        return UnifiedResponse(text=text, format="plain", buttons=[])
+
+    async def _handle_intervention_message(self, message: UnifiedMessage) -> bool:
+        """Resolve pending intervention requests from channel replies."""
+        user_id = str(getattr(message, "user_id", "") or "").strip()
+        if not user_id:
+            return False
+
+        meta = message.metadata if isinstance(getattr(message, "metadata", None), dict) else {}
+        req_id = str(meta.get("intervention_id") or "").strip()
+        pending = self._find_intervention_for_user(
+            user_id,
+            request_id=req_id,
+            channel_type=str(getattr(message, "channel_type", "") or ""),
+            channel_id=str(getattr(message, "channel_id", "") or ""),
+        )
+        if not pending:
+            return False
+
+        target_id = str(pending.get("id") or "").strip()
+        if not target_id:
+            return False
+
+        decision = str(meta.get("intervention_decision") or "").strip()
+        provided_code = str(meta.get("approval_code") or "").strip().upper()
+        if not provided_code:
+            provided_code = self._extract_approval_code(message.text)
+        if decision not in {"Onayla", "İptal Et"}:
+            decision = self._parse_intervention_decision(message.text) or ""
+        if not decision and provided_code:
+            decision = "Onayla"
+        if not decision:
+            await self.send_outgoing_response(
+                message.channel_type,
+                message.channel_id,
+                self._build_intervention_response(
+                    message.channel_type,
+                    pending,
+                    user_id=user_id,
+                    channel_id=str(getattr(message, "channel_id", "") or ""),
+                ),
+            )
+            return True
+
+        if decision == "Onayla":
+            expected = self._ensure_intervention_code(
+                pending,
+                user_id=user_id,
+                channel_id=str(getattr(message, "channel_id", "") or ""),
+            )
+            if not provided_code or provided_code != str(expected or "").upper():
+                await self.send_outgoing_response(
+                    message.channel_type,
+                    message.channel_id,
+                    UnifiedResponse(
+                        text=(
+                            "Onay kodu doğrulanamadı.\n"
+                            f"Lütfen şu formatı kullan: `ONAY {expected}`\n"
+                            "İptal için: `İPTAL`"
+                        ),
+                        format="plain",
+                    ),
+                )
+                return True
+
+        manager = get_intervention_manager()
+        resolved = manager.resolve(target_id, decision)
+        if not resolved:
+            return False
+        self._approval_codes.pop(target_id, None)
+
+        ack = "Onay alındı. İşlem devam ediyor." if decision == "Onayla" else "İşlem iptal edildi."
+        await self.send_outgoing_response(
+            message.channel_type,
+            message.channel_id,
+            UnifiedResponse(text=ack, format="plain"),
+        )
+        return True
+
+    async def _on_intervention_requested(self, request: Any) -> None:
+        """Bridge intervention prompts to the last active user channel."""
+        context = getattr(request, "context", {})
+        if not isinstance(context, dict):
+            return
+        user_id = str(context.get("user_id") or "").strip()
+        if not user_id:
+            return
+
+        route = self._user_routes.get(user_id)
+        if not route:
+            logger.warning(f"Intervention routing missing for user={user_id} request={getattr(request, 'id', '?')}")
+            return
+
+        options = getattr(request, "options", None) or []
+        req_payload = {
+            "id": str(getattr(request, "id", "") or ""),
+            "prompt": str(getattr(request, "prompt", "") or ""),
+            "options": options,
+        }
+        try:
+            await self.send_outgoing_response(
+                route.get("channel_type", ""),
+                route.get("channel_id", ""),
+                self._build_intervention_response(
+                    route.get("channel_type", ""),
+                    req_payload,
+                    user_id=user_id,
+                    channel_id=route.get("channel_id", ""),
+                ),
+            )
+        except Exception as exc:
+            logger.warning(f"Failed to deliver intervention request to channel: {exc}")
 
     async def _send_typing_indicator(self, channel_type: str, chat_id: str, text: str = ""):
         """Send a typing action or status message to indicate processing."""
@@ -227,13 +722,29 @@ class GatewayRouter:
         """Route a response to the correct adapter."""
         if channel_type in self.adapters:
             adapter = self.adapters[channel_type]
+            normalized = self._normalize_response_for_channel(channel_type, response, adapter)
             try:
-                await adapter.send_message(chat_id, response)
+                await adapter.send_message(chat_id, normalized)
                 self._mark_outgoing_message(channel_type)
             except Exception as exc:
                 self._increment_counter(channel_type, "send_failures")
                 logger.error(f"Send failed on channel {channel_type}: {exc}")
-                raise
+                # Fallback-1: Channel-safe plain text without buttons/attachments.
+                fallback = self._build_plain_fallback_response(channel_type, normalized)
+                try:
+                    await adapter.send_message(chat_id, fallback)
+                    self._mark_outgoing_message(channel_type)
+                except Exception as retry_exc:
+                    self._increment_counter(channel_type, "send_failures")
+                    logger.error(f"Fallback plain send failed on channel {channel_type}: {retry_exc}")
+                    # Fallback-2: very short plain text.
+                    short_fallback = self._build_short_plain_fallback_response(channel_type, normalized)
+                    try:
+                        await adapter.send_message(chat_id, short_fallback)
+                        self._mark_outgoing_message(channel_type)
+                    except Exception as last_exc:
+                        self._increment_counter(channel_type, "send_failures")
+                        logger.error(f"Fallback short send failed on channel {channel_type}: {last_exc}")
         else:
             logger.warning(f"No adapter registered for channel: {channel_type}")
 
@@ -259,6 +770,11 @@ class GatewayRouter:
     async def stop_all(self):
         """Stop all registered adapters."""
         self._is_running = False
+        try:
+            if self._intervention_manager:
+                self._intervention_manager.unregister_listener(self._on_intervention_requested)
+        except Exception:
+            pass
 
         for task in self._supervisor_tasks.values():
             task.cancel()

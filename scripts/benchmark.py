@@ -382,6 +382,56 @@ def suite_memory() -> List[BenchResult]:
     return results
 
 
+
+def suite_pipeline() -> List[BenchResult]:
+    """Pipeline Stage Profiler sonuçlarını ölçer."""
+    print("\n🎬 Pipeline Suite")
+    results = []
+    try:
+        from core.pipeline import PipelineRunner, PipelineContext
+        from core.agent import Agent
+        runner = PipelineRunner()
+        agent = Agent()
+        ctx = PipelineContext(user_input="merhaba", role="chat")
+        
+        async def run_pipeline():
+            await runner.run(ctx, agent)
+            
+        r = bench_async(
+            "pipeline/full_run_chat",
+            run_pipeline,
+            threshold_ms=5000,
+            samples=5
+        )
+        results.append(r)
+        print(r.to_row())
+    except Exception as exc:
+        print(f"  ⚠️  Pipeline suite yüklenemedi: {exc}")
+    return results
+
+
+def suite_startup() -> List[BenchResult]:
+    """Sistem açılış hızı (import + init)."""
+    print("\n🏁 Startup Suite")
+    results = []
+    try:
+        def import_core():
+            # Use __import__ to avoid caching issues during repeats if possible
+            import core.agent
+            import core.pipeline
+            
+        r = bench(
+            "startup/core_imports",
+            import_core,
+            threshold_ms=2000,
+            samples=10
+        )
+        results.append(r)
+        print(r.to_row())
+    except Exception as exc:
+        print(f"  ⚠️  Startup suite yüklenemedi: {exc}")
+    return results
+
 # ── Ana Çalıştırıcı ───────────────────────────────────────────────────────────
 
 SUITES = {
@@ -392,6 +442,8 @@ SUITES = {
     "quick_intent": suite_quick_intent,
     "fast_response": suite_fast_response,
     "memory": suite_memory,
+    "pipeline": suite_pipeline,
+    "startup": suite_startup,
 }
 
 

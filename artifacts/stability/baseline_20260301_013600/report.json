@@ -1,0 +1,40 @@
+{
+  "run_id": "baseline_20260301_013600",
+  "started_at": "2026-03-01 01:36:00 +03",
+  "profile": "quick",
+  "kpi": {
+    "commands_total": 3,
+    "commands_passed": 3,
+    "commands_failed": 0
+  },
+  "commands": [
+    {
+      "name": "doctor",
+      "command": "bash scripts/doctor.sh",
+      "status": "PASS",
+      "returncode": 0,
+      "duration_s": 0.137,
+      "error_classes": [],
+      "log_path": "/Users/emrekoca/Desktop/bot/artifacts/stability/baseline_20260301_013600/logs/doctor.log"
+    },
+    {
+      "name": "py_compile_focus",
+      "command": "/Users/emrekoca/Desktop/bot/.venv/bin/python -m py_compile core/agent.py core/pipeline.py core/spec/task_spec.py core/gateway/router.py core/gateway/adapters/telegram.py core/runtime_policy.py core/gateway/server.py",
+      "status": "PASS",
+      "returncode": 0,
+      "duration_s": 0.113,
+      "error_classes": [],
+      "log_path": "/Users/emrekoca/Desktop/bot/artifacts/stability/baseline_20260301_013600/logs/py_compile_focus.log"
+    },
+    {
+      "name": "unit_gateway_core",
+      "command": "/Users/emrekoca/Desktop/bot/.venv/bin/python -m pytest tests/unit/test_gateway_router.py tests/unit/test_gateway_adapters.py -q",
+      "status": "PASS",
+      "returncode": 0,
+      "duration_s": 2.288,
+      "error_classes": [],
+      "log_path": "/Users/emrekoca/Desktop/bot/artifacts/stability/baseline_20260301_013600/logs/unit_gateway_core.log"
+    }
+  ],
+  "error_inventory": []
+}

@@ -19,7 +19,28 @@ logger = get_logger("config")
 def _default_config() -> AppConfig:
     """Roadmap-compatible default configuration."""
     return AppConfig(
-        agent=AgentConfig(),
+        agent=AgentConfig(
+            autonomous=True,
+            personality="professional",
+            language="tr",
+            response_style={"friendly": True, "mode": "friendly", "share_manifest_default": False},
+            runtime_policy={"preset": "balanced"},
+            capability_router={"enabled": True, "min_confidence_override": 0.5},
+            planning={"use_llm": True, "max_subtasks": 10},
+            flags={
+                "agentic_v2": False,
+                "dag_exec": False,
+                "strict_taskspec": False,
+            },
+            multi_agent={
+                "enabled": True,
+                "complexity_threshold": 0.9,
+                "capability_confidence_threshold": 0.7,
+            },
+            team_mode={"enabled": True, "threshold": 0.95},
+            api_tools={"enabled": True},
+            model={"local_first": True},
+        ),
         models={
             "default": {"provider": "anthropic", "model": "claude-opus-4-5-20251101"},
             "fallback": {"provider": "openai", "model": "gpt-4o"},
@@ -46,15 +67,46 @@ def _default_config() -> AppConfig:
             "maxSizeMB": 500,
             "maxUserStorageGB": 10,
             "localOnly": True,
+            "attachmentRetentionDays": 7,
         },
         security={
             "operatorMode": "Confirmed",
             "requirePlanApproval": True,
             "auditLog": True,
             "rateLimitPerMinute": 20,
+            "defaultUserRole": "operator",
+            "enforceRBAC": True,
+            "enableDangerousTools": True,
+            "requireConfirmationForRisky": True,
+            "requireEvidenceForDangerous": True,
+            "pathGuard": {
+                "enabled": True,
+                "allowedRoots": [str(Path.home()), "/tmp", "/private", "/var/tmp", "/var/folders", str(Path.home() / ".elyan")],
+                "deniedRoots": ["/System", "/usr", "/bin", "/sbin", "/etc", "/var/root"],
+            },
+            "dangerousCommandPatterns": [
+                "rm -rf",
+                "mkfs",
+                "dd if=",
+                "shutdown -h",
+                "reboot",
+                "kill -9 1",
+                ":(){:|:&};:",
+            ],
+            "kvkk": {
+                "strict": True,
+                "redactCloudPrompts": True,
+                "allowCloudFallback": True,
+            },
         },
         gateway={"port": 18789, "host": "127.0.0.1", "corsOrigins": ["http://localhost:3000"]},
         voice={"feedback_enabled": True},
+        skills={
+            "enabled": ["system", "files", "research", "browser", "office"],
+            "workflows": {
+                "enabled": ["wallpaper_with_proof", "api_health_get_save"],
+            },
+        },
         subscriptions={"enabled": True, "default_tier": "free"},
         monthly_budget_usd=20.0,
         cost_limit_usd=50.0,

@@ -19,6 +19,7 @@ from typing import Optional
 
 from ._state import TaskResult, TaskDefinition
 from ._constants import _NON_TOOL_ACTIONS, _EXPLICIT_APPROVAL_ACTIONS
+from tools import AVAILABLE_TOOLS
 
 _legacy_module: Optional[ModuleType] = None
 
@@ -54,6 +55,7 @@ __all__ = [
     "TaskDefinition",
     "_NON_TOOL_ACTIONS",
     "_EXPLICIT_APPROVAL_ACTIONS",
+    "AVAILABLE_TOOLS",
     "get_task_engine",
     "TaskEngine",
 ]

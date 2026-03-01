@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import json
+import inspect
 import urllib.request
 import subprocess
 from collections import deque
@@ -240,6 +241,15 @@ def start_gateway(daemon=False, port: int | None = None):
         print(f"    Çalışma dizini: {root_dir}")
         print("    Çözüm: proje klasöründe çalıştırın veya ELYAN_PROJECT_DIR ayarlayın.")
         return
+
+    run_gateway_cmd = [
+        sys.executable,
+        "-c",
+        (
+            f"import sys; sys.path.insert(0, {str(root_dir)!r}); "
+            f"from main import _run_gateway; _run_gateway({gateway_port})"
+        ),
+    ]
     
     if daemon:
         # Launch independent process
@@ -279,7 +289,7 @@ def start_gateway(daemon=False, port: int | None = None):
             env = dict(os.environ)
             env["ELYAN_PORT"] = str(gateway_port)
             proc = subprocess.Popen(
-                [sys.executable, str(main_script), "--cli"],
+                run_gateway_cmd,
                 stdout=log,
                 stderr=log,
                 cwd=str(root_dir),
@@ -334,7 +344,7 @@ def start_gateway(daemon=False, port: int | None = None):
                 time.sleep(1.0)
                 with open(log_file, "a") as retry_log:
                     retry_proc = subprocess.Popen(
-                        [sys.executable, str(main_script), "--cli"],
+                        run_gateway_cmd,
                         stdout=retry_log,
                         stderr=retry_log,
                         cwd=str(root_dir),
@@ -380,10 +390,24 @@ def start_gateway(daemon=False, port: int | None = None):
             # Add root to path
             sys.path.insert(0, str(root_dir))
             import main as root_module
-            root_main = getattr(root_module, 'main')
+            run_gateway = getattr(root_module, "_run_gateway", None)
+            if callable(run_gateway):
+                run_gateway(gateway_port)
+                return
+
+            root_main = getattr(root_module, "_cli_main", None) or getattr(root_module, "main", None)
+            if not callable(root_main):
+                print("❌  Geçerli gateway giriş fonksiyonu bulunamadı (_run_gateway/main/_cli_main).")
+                return
             prev_port = os.environ.get("ELYAN_PORT")
             os.environ["ELYAN_PORT"] = str(gateway_port)
-            root_main(['--cli'])
+            sig = inspect.signature(root_main)
+            params = list(sig.parameters.values())
+            has_varargs = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params)
+            if has_varargs or len(params) >= 1:
+                root_main(["--cli"])
+            else:
+                root_main()
             if prev_port is None:
                 os.environ.pop("ELYAN_PORT", None)
             else:

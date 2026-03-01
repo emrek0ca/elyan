@@ -16,16 +16,17 @@ class SwarmConsensus:
     def __init__(self, agent_instance):
         self.agent = agent_instance
         self.tribunal_personas = {
-            "security": "SEN BİR SİBER GÜVENLİK UZMANISIN (SecOps). SADECE güvenlik zafiyetleri ve data sızıntılarını, yetki aşımını ara.",
-            "performance": "SEN BİR PERFORMANS MÜHENDİSİSİN. Big-O karmaşıklığı, gereksiz döngüler ve yavaşlatıcı memory/cpu sızıntılarını denetle.",
-            "ux": "SEN UX VE PRODUCT MÜHENDİSİSİN. Sistem kullanıcının gerçekte istediği faydayı sunuyor mu buna bak.",
-            "risk_manager": "SEN BİR FİNANSAL RİSK YÖNETİCİSİSİSİN (RiskOps). İşlemde (eğer varsa) yüksek drawdown riski, bakiye sıfırlama veya hatalı token ticareti risklerini bloke et."
+            "security": {"model": "gpt-4o", "prompt": "SEN BİR SİBER GÜVENLİK UZMANISIN (SecOps). SADECE güvenlik zafiyetleri ve data sızıntılarını, yetki aşımını ara."},
+            "performance": {"model": "claude-3-5-sonnet", "prompt": "SEN BİR PERFORMANS MÜHENDİSİSİN. Big-O karmaşıklığı, gereksiz döngüler ve yavaşlatıcı memory/cpu sızıntılarını denetle."},
+            "ux": {"model": "google/gemini-1.5-pro", "prompt": "SEN UX VE PRODUCT MÜHENDİSİSİN. Sistem kullanıcının gerçekte istediği faydayı sunuyor mu buna bak."},
+            "risk_manager": {"model": "gpt-4o", "prompt": "SEN BİR FİNANSAL RİSK YÖNETİCİSİSİSİN (RiskOps). İşlemde (eğer varsa) yüksek drawdown riski, bakiye sıfırlama veya hatalı token ticareti risklerini bloke et."}
         }
         
     async def _evaluate_persona(self, persona: str, prompt: str, artifact_dump: str) -> Tuple[bool, str]:
         """A single swarm node evaluating the payload."""
+        persona_cfg = self.tribunal_personas[persona]
         eval_prompt = f"""
-{self.tribunal_personas[persona]}
+{persona_cfg['prompt']}
 GÖREV BAĞLAMI: {prompt}
 
 ÜRETİLEN ARTIFACTS:
@@ -42,7 +43,12 @@ RİSKLER: [Eğer varsa liste]
         from core.multi_agent.orchestrator import AgentOrchestrator
         orch = AgentOrchestrator(self.agent)
         try:
-            report = await orch._run_specialist("executor", eval_prompt)
+            # Multi-LLM Routing for the node
+            target_model = persona_cfg.get("model", "gpt-4o")
+            logger.info(f"Swarm Node ({persona}) triggering debate using model: {target_model}")
+            
+            # Using specific model for this node
+            report = await self.agent.llm.generate(eval_prompt, model=target_model, role="qa", user_id="system")
             # Circuit Breaker Budget Check
             if "BÜTÇE LİMİT AŞILDI" in report: return False, "Budget"
             

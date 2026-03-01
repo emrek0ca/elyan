@@ -13,11 +13,11 @@ class Kernel:
         # Lazy imports to break circularity
         from config.elyan_config import elyan_config
         from core.registry import registry
-        from core.memory import get_memory
+        from core.memory import memory
         
         self.config = elyan_config
         self.tools = registry
-        self.memory = get_memory()
+        self.memory = memory
         self.llm = None
         self._initialized = False
 
@@ -42,6 +42,7 @@ class Kernel:
         This keeps planner/registry visibility in sync with executable tools.
         """
         from core.registry import ToolDefinition
+        from core.evidence.adapters import adapt_evidence
         from tools import AVAILABLE_TOOLS
 
         added = 0
@@ -68,6 +69,20 @@ class Kernel:
             except Exception:
                 parameters = {}
 
+            required = []
+            try:
+                sig2 = inspect.signature(func)
+                for p_name, param in sig2.parameters.items():
+                    if param.default == inspect.Parameter.empty:
+                        required.append(p_name)
+            except Exception:
+                required = []
+            input_schema = {
+                "type": "object",
+                "required": required,
+                "properties": {k: {"type": str(v)} for k, v in parameters.items()},
+            }
+
             desc = (getattr(func, "__doc__", "") or "").strip()
             if not desc:
                 desc = f"{name} tool"
@@ -78,6 +93,10 @@ class Kernel:
                 func=func,
                 parameters=parameters,
                 requires_approval=False,
+                input_schema=input_schema,
+                output_schema={"type": "object"},
+                retry_policy={"max_attempts": 2, "backoff_s": 0.25, "circuit_breaker": name in {"http_request", "graphql_query", "api_health_check"}},
+                evidence_adapter=(lambda result, _name=name: adapt_evidence(_name, result if isinstance(result, dict) else {})),
             )
             added += 1
 

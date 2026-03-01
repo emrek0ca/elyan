@@ -1,6 +1,4 @@
-"""
-Built-in and curated skills catalog for Elyan.
-"""
+"""Built-in and curated skills/workflow catalog for Elyan."""
 from __future__ import annotations
 
 from typing import Dict, Any, List
@@ -104,5 +102,103 @@ def get_builtin_skill_catalog() -> Dict[str, Dict[str, Any]]:
     }
 
 
+def get_builtin_workflow_catalog() -> Dict[str, Dict[str, Any]]:
+    """
+    Skill+tool linked workflow templates.
+    - executable=True: deterministik olarak doğrudan çalıştırılabilir
+    - executable=False: entegrasyon şablonu (plan/recipe)
+    """
+    return {
+        "wallpaper_with_proof": {
+            "id": "wallpaper_with_proof",
+            "name": "Wallpaper + Proof",
+            "version": "1.0.0",
+            "description": "Görselden duvar kağıdı ayarla ve kanıt ekran görüntüsü üret.",
+            "category": "desktop",
+            "required_skills": ["system", "files"],
+            "required_tools": ["set_wallpaper", "take_screenshot"],
+            "steps": ["set_wallpaper", "take_screenshot"],
+            "trigger_markers": ["duvar kağıdı", "wallpaper", "arka plan"],
+            "executable": True,
+            "auto_intent": True,
+            "source": "builtin",
+        },
+        "api_health_get_save": {
+            "id": "api_health_get_save",
+            "name": "API Health + GET + Save",
+            "version": "1.0.0",
+            "description": "Endpoint health check + GET isteği + result.json/summary.md kaydı.",
+            "category": "integration",
+            "required_skills": ["research", "files"],
+            "required_tools": ["api_health_check", "http_request", "write_file"],
+            "steps": ["api_health_check", "http_request", "write_file", "write_file"],
+            "trigger_markers": ["health check", "get", "result.json", "summary.md"],
+            "executable": True,
+            "auto_intent": True,
+            "source": "builtin",
+        },
+        "office_sales_report_pipeline": {
+            "id": "office_sales_report_pipeline",
+            "name": "Sales Report Pipeline",
+            "version": "1.0.0",
+            "description": "ERP/CRM satış verisi -> analiz -> rapor/PDF -> mail akışı için şablon.",
+            "category": "office",
+            "required_skills": ["office", "email", "research"],
+            "required_tools": ["read_excel", "analyze_excel_data", "write_word", "generate_document_pack", "send_email"],
+            "steps": ["read_excel", "analyze_excel_data", "write_word", "generate_document_pack", "send_email"],
+            "trigger_markers": ["satış raporu", "pdf", "yönetime mail"],
+            "executable": False,
+            "auto_intent": False,
+            "source": "builtin",
+        },
+        "contract_expiry_scan": {
+            "id": "contract_expiry_scan",
+            "name": "Contract Expiry Scan",
+            "version": "1.0.0",
+            "description": "Sözleşme klasörlerini tarayıp bitiş tarihi yaklaşanları raporlar.",
+            "category": "compliance",
+            "required_skills": ["files", "office"],
+            "required_tools": ["search_files", "read_file", "write_file"],
+            "steps": ["search_files", "read_file", "write_file"],
+            "trigger_markers": ["sözleşme", "süresi dolacak", "contract expiry"],
+            "executable": False,
+            "auto_intent": False,
+            "source": "builtin",
+        },
+        "incident_log_analysis": {
+            "id": "incident_log_analysis",
+            "name": "Incident Log Analysis",
+            "version": "1.0.0",
+            "description": "Log dosyalarını analiz edip hata özeti ve aksiyon listesi üretir.",
+            "category": "ops",
+            "required_skills": ["system", "files", "research"],
+            "required_tools": ["search_files", "read_file", "write_file", "run_safe_command"],
+            "steps": ["search_files", "read_file", "run_safe_command", "write_file"],
+            "trigger_markers": ["log analiz", "incident", "hata raporu"],
+            "executable": False,
+            "auto_intent": False,
+            "source": "builtin",
+        },
+        "priority_planning_assistant": {
+            "id": "priority_planning_assistant",
+            "name": "Priority Planning",
+            "version": "1.0.0",
+            "description": "Görevleri önceliklendirip zaman planı şablonu çıkarır.",
+            "category": "planning",
+            "required_skills": ["research", "calendar"],
+            "required_tools": ["create_reminder", "create_event", "write_file"],
+            "steps": ["create_event", "create_reminder", "write_file"],
+            "trigger_markers": ["önceliklendir", "acil 3 iş", "takvime yerleştir"],
+            "executable": False,
+            "auto_intent": False,
+            "source": "builtin",
+        },
+    }
+
+
 def list_catalog() -> List[Dict[str, Any]]:
     return list(get_builtin_skill_catalog().values())
+
+
+def list_workflow_catalog() -> List[Dict[str, Any]]:
+    return list(get_builtin_workflow_catalog().values())

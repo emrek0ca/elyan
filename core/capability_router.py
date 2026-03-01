@@ -18,10 +18,28 @@ class CapabilityPlan:
     output_artifacts: list[str]
     quality_checklist: list[str]
     learning_tags: list[str]
+    complexity_tier: str = "low"
+    suggested_job_type: str = "communication"
+    multi_agent_recommended: bool = False
+    orchestration_mode: str = "single_agent"
 
 
 class CapabilityRouter:
     """Detect major capability domain and provide execution hints."""
+
+    _DOMAIN_TO_JOB_TYPE: dict[str, str] = {
+        "website": "web_project",
+        "code": "code_project",
+        "api_integration": "api_integration",
+        "automation": "system_ops",
+        "research": "research_report",
+        "document": "research_report",
+        "summarization": "research_report",
+        "multimodal": "browser_task",
+        "image": "browser_task",
+        "full_stack_delivery": "code_project",
+        "general": "communication",
+    }
 
     _DOMAIN_KEYWORDS: dict[str, list[str]] = {
         "website": [
@@ -55,6 +73,18 @@ class CapabilityRouter:
             "özet", "ozet", "summarize", "tl;dr", "kısalt", "kisalt",
             "özetle", "sentez", "synthesize"
         ],
+        "api_integration": [
+            "api", "endpoint", "rest", "graphql", "webhook", "json api",
+            "http", "get istegi", "post istegi", "curl", "token yenileme", "integration"
+        ],
+        "automation": [
+            "otomasyon", "automation", "workflow", "cron", "rutin", "schedule",
+            "arka planda", "background", "daemon", "agent team", "multi agent"
+        ],
+        "full_stack_delivery": [
+            "full stack", "uçtan uca", "uctan uca", "production", "deployment",
+            "mimari", "architecture", "pipeline", "microservice", "dashboard"
+        ],
     }
 
     _DOMAIN_HINTS: dict[str, dict[str, Any]] = {
@@ -67,7 +97,13 @@ class CapabilityRouter:
         },
         "code": {
             "objective": "deliver_working_testable_code",
-            "preferred_tools": ["create_software_project_pack", "execute_python_code", "debug_code", "write_file"],
+            "preferred_tools": [
+                "create_software_project_pack",
+                "execute_python_code",
+                "debug_code",
+                "write_file",
+                "run_safe_command",
+            ],
             "output_artifacts": ["source_code", "tests", "implementation_notes"],
             "quality_checklist": ["correctness", "testability", "readability", "safety"],
             "learning_tags": ["code", "debug", "engineering"],
@@ -113,6 +149,33 @@ class CapabilityRouter:
             "quality_checklist": ["conciseness", "fidelity", "clarity"],
             "learning_tags": ["summary", "compression", "knowledge"],
         },
+        "api_integration": {
+            "objective": "design_and_execute_api_integrations",
+            "preferred_tools": ["http_request", "graphql_query", "api_health_check", "write_file", "read_file"],
+            "output_artifacts": ["integration_spec", "request_examples", "response_contracts"],
+            "quality_checklist": ["auth_safety", "retry_strategy", "idempotency", "observability"],
+            "learning_tags": ["api", "integration", "automation"],
+        },
+        "automation": {
+            "objective": "orchestrate_reliable_automation_workflows",
+            "preferred_tools": ["create_plan", "execute_plan", "run_safe_command", "write_file", "list_files"],
+            "output_artifacts": ["workflow_plan", "runbook", "automation_logs"],
+            "quality_checklist": ["safety", "rollback", "monitoring", "repeatability"],
+            "learning_tags": ["automation", "ops", "workflow"],
+        },
+        "full_stack_delivery": {
+            "objective": "deliver_end_to_end_solution_with_validation",
+            "preferred_tools": [
+                "create_software_project_pack",
+                "create_web_project_scaffold",
+                "http_request",
+                "run_safe_command",
+                "write_file",
+            ],
+            "output_artifacts": ["project_pack", "deployment_plan", "verification_report"],
+            "quality_checklist": ["architecture", "quality_gates", "security", "maintainability"],
+            "learning_tags": ["delivery", "architecture", "multi-agent"],
+        },
         "general": {
             "objective": "solve_user_task_reliably",
             "preferred_tools": ["create_plan", "execute_plan"],
@@ -121,6 +184,25 @@ class CapabilityRouter:
             "learning_tags": ["general"],
         },
     }
+
+    @staticmethod
+    def _complexity_tier(*, confidence: float, text: str, domain: str) -> str:
+        low_text = str(text or "").lower()
+        token_count = len(low_text.split())
+        hard_markers = ("uçtan uca", "ucdan uca", "full stack", "mimari", "production", "microservice", "agent team")
+        if domain in {"full_stack_delivery", "automation"} and confidence >= 0.55:
+            return "extreme"
+        if confidence >= 0.8 or token_count >= 30 or any(m in low_text for m in hard_markers):
+            return "high"
+        if confidence >= 0.55 or token_count >= 16:
+            return "medium"
+        return "low"
+
+    @staticmethod
+    def _should_recommend_multi_agent(*, domain: str, confidence: float, complexity_tier: str) -> bool:
+        if complexity_tier in {"high", "extreme"} and confidence >= 0.55:
+            return True
+        return domain in {"full_stack_delivery", "automation"} and confidence >= 0.45
 
     def route(self, text: str) -> CapabilityPlan:
         normalized = str(text or "").lower()
@@ -131,14 +213,32 @@ class CapabilityRouter:
                 scores[domain] = score
 
         if scores:
-            best_domain = max(scores, key=scores.get)
-            max_score = scores[best_domain]
-            confidence = min(0.35 + (0.15 * max_score), 0.95)
+            ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+            best_domain = ranked[0][0]
+            max_score = ranked[0][1]
+            second_domain = ranked[1][0] if len(ranked) > 1 else ""
+            second_score = ranked[1][1] if len(ranked) > 1 else 0
+
+            # Strong mixed-signal requests are treated as full-stack delivery.
+            combo = {best_domain, second_domain}
+            if second_score >= 2 and combo.intersection({"website", "code", "api_integration"}) and len(combo) >= 2:
+                best_domain = "full_stack_delivery"
+                max_score += 1
+
+            confidence = min(0.35 + (0.12 * max_score), 0.96)
         else:
             best_domain = "general"
             confidence = 0.3
 
         hints = self._DOMAIN_HINTS[best_domain]
+        complexity_tier = self._complexity_tier(confidence=confidence, text=normalized, domain=best_domain)
+        multi_agent_recommended = self._should_recommend_multi_agent(
+            domain=best_domain,
+            confidence=confidence,
+            complexity_tier=complexity_tier,
+        )
+        suggested_job_type = self._DOMAIN_TO_JOB_TYPE.get(best_domain, "communication")
+
         return CapabilityPlan(
             domain=best_domain,
             confidence=confidence,
@@ -147,6 +247,10 @@ class CapabilityRouter:
             output_artifacts=list(hints["output_artifacts"]),
             quality_checklist=list(hints["quality_checklist"]),
             learning_tags=list(hints["learning_tags"]),
+            complexity_tier=complexity_tier,
+            suggested_job_type=suggested_job_type,
+            multi_agent_recommended=multi_agent_recommended,
+            orchestration_mode="multi_agent" if multi_agent_recommended else "single_agent",
         )
 
 

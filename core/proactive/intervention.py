@@ -7,6 +7,7 @@ Enables "pause and resume" capability for risky or ambiguous tasks.
 
 from __future__ import annotations
 import asyncio
+import inspect
 import uuid
 import time
 from typing import Dict, Any, List, Optional
@@ -27,6 +28,30 @@ class InterventionRequest:
 class InterventionManager:
     def __init__(self):
         self._pending: Dict[str, InterventionRequest] = {}
+        self._listeners: List[Any] = []
+
+    def register_listener(self, listener: Any) -> None:
+        """Register a callback notified for new intervention requests."""
+        if not callable(listener):
+            return
+        if listener in self._listeners:
+            return
+        self._listeners.append(listener)
+
+    def unregister_listener(self, listener: Any) -> None:
+        """Remove a previously registered callback."""
+        if listener in self._listeners:
+            self._listeners.remove(listener)
+
+    def _notify_listeners(self, request: InterventionRequest) -> None:
+        """Fan-out new intervention requests to channel bridges."""
+        for listener in list(self._listeners):
+            try:
+                result = listener(request)
+                if inspect.isawaitable(result):
+                    asyncio.create_task(result)
+            except Exception as exc:
+                logger.debug(f"Intervention listener failed: {exc}")
 
     async def ask_human(self, prompt: str, context: Dict[str, Any], options: Optional[List[str]] = None) -> str:
         """Ajandan kullanıcıya soru sorar ve yanıt gelene kadar bekler."""
@@ -34,6 +59,7 @@ class InterventionManager:
         self._pending[request.id] = request
         
         logger.info(f"Intervention Required [{request.id}]: {prompt}")
+        self._notify_listeners(request)
         
         # Dashboard üzerinden yanıt gelene kadar bekle
         try:

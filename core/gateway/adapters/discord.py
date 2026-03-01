@@ -88,8 +88,11 @@ class DiscordAdapter(BaseChannelAdapter):
             channel = self.client.get_channel(int(chat_id))
             if channel:
                 await channel.send(response.text)
+            else:
+                raise RuntimeError(f"Discord channel not found: {chat_id}")
         except Exception as e:
             logger.error(f"Failed to send Discord message: {e}")
+            raise
 
     def get_status(self) -> str:
         if self.client.is_closed():

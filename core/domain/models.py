@@ -31,6 +31,10 @@ class VoiceConfig(BaseModel):
     volume: int = 100
     model_config = ConfigDict(extra="allow")
 
+class CodingConfig(BaseModel):
+    max_files_per_project: int = 10
+    model_config = ConfigDict(extra="allow")
+
 class SubscriptionConfig(BaseModel):
     enabled: bool = False
     default_tier: SubscriptionTier = SubscriptionTier.FREE
@@ -83,6 +87,7 @@ class AppConfig(BaseModel):
         }
     )
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
+    coding: CodingConfig = Field(default_factory=CodingConfig)
     security: Dict[str, Any] = Field(default_factory=dict)
     gateway: Dict[str, Any] = Field(default_factory=dict)
     skills: Dict[str, Any] = Field(default_factory=dict)

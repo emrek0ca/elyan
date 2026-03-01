@@ -11,17 +11,22 @@ import time
 import re
 import json
 import os
+import shlex
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 from utils.logger import get_logger
 
 from .specialists import get_specialist_registry
 from .contract import DeliverableContract, Artifact
 from .qa_pipeline import QAPipeline
-from .job_templates import get_template
+from .job_templates import get_template, detect_template_key
 from core.artifact_quality_engine import quality_engine
 from core.memory_v2 import memory_v2
 from core.action_lock import action_lock
 from core.timeout_guard import with_timeout, STEP_TIMEOUT
+from core.reasoning.trace_logger import trace_logger
+from core.capability_router import get_capability_router
+from config.elyan_config import elyan_config
 
 logger = get_logger("multi_agent.orchestrator")
 
@@ -30,18 +35,45 @@ class AgentOrchestrator:
         self.main_agent = agent_instance
         self.registry = get_specialist_registry()
         self.qa_pipeline = QAPipeline(agent_instance)
+        self.team_roster: list[dict[str, str]] = []
 
     async def manage_flow(self, plan: Any, original_input: str) -> str:
         """
         Industrial Loop: Reason -> Plan -> Surgical Execute -> Layered Verify
         """
         job_id = f"job_{int(time.time())}"
-        workspace_dir = f"/tmp/elyan_{job_id}"
         start_time = time.time()
-        
-        # 1. Template selection
-        job_type = "web_site_job" if "site" in original_input.lower() or "html" in original_input.lower() else "generic"
-        template = get_template(job_type)
+
+        # 1. Template selection + capability-aware routing
+        cap_plan = None
+        try:
+            cap_plan = get_capability_router().route(original_input)
+        except Exception:
+            cap_plan = None
+
+        template_key = detect_template_key(original_input)
+        if cap_plan:
+            if cap_plan.domain == "website":
+                template_key = "web_site_job"
+            elif cap_plan.domain in {"code", "full_stack_delivery"}:
+                template_key = "code_delivery_job"
+            elif cap_plan.domain == "api_integration":
+                template_key = "api_integration_job"
+            elif cap_plan.domain == "automation":
+                template_key = "automation_job"
+            elif cap_plan.domain in {"research", "document", "summarization"}:
+                template_key = "research_report_job"
+
+        template = get_template(template_key)
+        self.team_roster = self._build_team_roster(template.id, cap_plan)
+        try:
+            if self.team_roster:
+                trace_logger.push_trace("Team", json.dumps(self.team_roster, ensure_ascii=False))
+        except Exception:
+            pass
+
+        workspace_dir = self._derive_workspace_dir(job_id, template.id, original_input)
+        plan_hint = self._compact_plan_hint(plan)
         
         action_lock.lock(job_id, f"Think-Factory Job: {template.name}")
         context = memory_v2.get_context_for_intent(original_input)
@@ -52,18 +84,36 @@ class AgentOrchestrator:
         try:
             # --- Phase 0: DEEP REASONING (The 'Think' Step) ---
             action_lock.update_status(0.05, "Brainstorming: En iyi çözüm yolu aranıyor...")
-            reason_prompt = f"Girdi: {original_input}. Bu iş için en verimli stratejiyi düşün. Riskleri ve asset ihtiyaçlarını belirle."
-            # Use pm_agent for initial reasoning
-            brainstorm_raw = await self._run_specialist("pm_agent", reason_prompt)
+            
+            # Select Workflow Chain
+            chain_key = self._workflow_for_template(template.id)
+            workflow = self.registry.get_chain(chain_key)
+            if workflow:
+                logger.info(f"Orchestrator: Using workflow chain '{workflow.name}'")
+
+            reason_prompt = (
+                f"Girdi: {original_input}. Bu iş için en verimli stratejiyi düşün. "
+                f"Riskleri ve asset ihtiyaçlarını belirle. Template: {template.id}."
+            )
+            if plan_hint:
+                reason_prompt += f"\nPipeline Plan Hint: {plan_hint}"
+            # Use lead agent for initial reasoning
+            brainstorm_raw = await self._run_specialist("lead", reason_prompt)
             self._log_thought("Planner", brainstorm_raw)
 
             # --- Phase 1: PLAN ---
             action_lock.update_status(0.1, "Planner: Teknik Sözleşme Hazırlanıyor...")
-            plan_prompt = f"Strateji: {brainstorm_raw}\nGirdi: {original_input}. Sözleşmeyi JSON formatında planla."
-            plan_raw = await self._run_specialist("pm_agent", plan_prompt)
+            plan_prompt = (
+                f"Strateji: {brainstorm_raw}\n"
+                f"Girdi: {original_input}. Template: {template.id}. "
+                "Sözleşmeyi JSON formatında planla."
+            )
+            if plan_hint:
+                plan_prompt += f"\nPipeline Plan Hint: {plan_hint}"
+            plan_raw = await self._run_specialist("lead", plan_prompt)
             plan_data = self._safe_parse_json(plan_raw)
 
-            contract = DeliverableContract(job_id=job_id, goal=original_input, job_type=job_type)
+            contract = DeliverableContract(job_id=job_id, goal=original_input, job_type=template.id)
             await self.main_agent._execute_tool("create_folder", {"path": workspace_dir})
 
             from core.deterministic_runner import DeterministicToolRunner, ExecutionPlan
@@ -118,6 +168,13 @@ class AgentOrchestrator:
                     f"{json.dumps(execution_schema, indent=2)}\n"
                     f"Bu bir State Machine Execution Plan'dir. 'execution_plan' arrayi içindeki her adım idempotent olmalıdır."
                 )
+                build_prompt += (
+                    f"\nTemplate ID: {template.id}\n"
+                    f"Workspace: {workspace_dir}\n"
+                    f"Zorunlu artifacts: {template.mandatory_artifacts}\n"
+                )
+                if plan_hint:
+                    build_prompt += f"Pipeline Plan Hint: {plan_hint}\n"
                 if contract.artifacts:
                     issues = [f"{a.path}: {a.errors}" for a in contract.artifacts.values() if a.errors]
                     build_prompt += f"\n\nDERİN DÜŞÜN: Önceki hataları analiz et ve repair/patch (cerrahi çözüm) adımları içeren yeni bir execution plan üret: {issues}"
@@ -127,42 +184,84 @@ class AgentOrchestrator:
             
                 # Extract JSON and execute
                 try:
+                    payload = None
                     match = re.search(r"\{.*\}", build_raw, re.DOTALL)
                     if match:
                         payload = json.loads(match.group(0))
-                        # 1. Register Artifacts from Map
-                        art_map = payload.get("artifact_map", {})
-                        if "artifacts" in art_map:
-                            for art in art_map["artifacts"]:
-                                path = art.get("path", "")
-                                content = art.get("content", "")
-                                mime = art.get("mime", "text/plain")
-                                if path and content:
-                                    contract.add_artifact(
-                                        path=path, type=art.get("type", "code"), content=content, mime=mime,
-                                        required_sections=art.get("required_sections", []),
-                                        min_size_bytes=art.get("min_size_bytes", 0),
-                                        asset_source=art.get("asset_source", "local"),
-                                        encoding=art.get("encoding", "utf-8"), line_endings=art.get("line_endings", "LF")
-                                    )
-                        # 2. Run Deterministic Execution Plan
+
+                    if not isinstance(payload, dict):
+                        payload = self._build_fallback_execution_payload(
+                            template_id=template.id,
+                            original_input=original_input,
+                            workspace_dir=workspace_dir,
+                            plan_hint=plan_hint,
+                        )
+                        logger.warning("Builder JSON parse failed. Using deterministic fallback payload.")
+
+                    # 1. Register Artifacts from Map
+                    art_map = payload.get("artifact_map", {})
+                    if "artifacts" in art_map:
+                        for art in art_map["artifacts"]:
+                            path = art.get("path", "")
+                            content = art.get("content", "")
+                            mime = art.get("mime", "text/plain")
+                            if path and content:
+                                contract.add_artifact(
+                                    path=path, type=art.get("type", "code"), content=content, mime=mime,
+                                    required_sections=art.get("required_sections", []),
+                                    min_size_bytes=art.get("min_size_bytes", 0),
+                                    asset_source=art.get("asset_source", "local"),
+                                    encoding=art.get("encoding", "utf-8"), line_endings=art.get("line_endings", "LF")
+                                )
+
+                    # 2. Run Deterministic Execution Plan
+                    plan_data = payload.get("execution_plan", [])
+                    if not isinstance(plan_data, list) or not plan_data:
+                        payload = self._build_fallback_execution_payload(
+                            template_id=template.id,
+                            original_input=original_input,
+                            workspace_dir=workspace_dir,
+                            plan_hint=plan_hint,
+                        )
                         plan_data = payload.get("execution_plan", [])
-                        exec_plan = ExecutionPlan.from_dict({"job_id": job_id, "steps": plan_data})
+                        logger.warning("Execution plan missing/empty. Applied deterministic fallback steps.")
+
+                    plan_data = self._attach_owners(plan_data)
+                    try:
+                        await self._warm_up_parallel_sub_agents(plan_data, original_input)
+                    except Exception as warm_exc:
+                        logger.debug(f"Sub-agent warmup skipped: {warm_exc}")
+                    exec_plan = ExecutionPlan.from_dict({"job_id": job_id, "steps": plan_data})
+                    runner = DeterministicToolRunner(self.main_agent)
+                
+                    action_lock.update_status(0.4 + (i * 0.2), f"Runner: Adımlar İşleniyor {iter_label}")
+                
+                    step_snapshot = await rollback_mgr.create_snapshot()
+                    run_result = await runner.execute_plan(exec_plan)
+                    if not run_result["success"]:
+                        logger.error(f"Deterministic logic failed: {run_result}. Self-healing via Rollback...")
+                        await rollback_mgr.restore_snapshot(step_snapshot)
+                    else:
+                        await rollback_mgr.clear_snapshot(step_snapshot)
+                except Exception as e:
+                    logger.warning(f"Failed to parse and execute Deterministic Plan JSON: {e}")
+                    payload = self._build_fallback_execution_payload(
+                        template_id=template.id,
+                        original_input=original_input,
+                        workspace_dir=workspace_dir,
+                        plan_hint=plan_hint,
+                    )
+                    try:
+                        exec_plan = ExecutionPlan.from_dict({"job_id": job_id, "steps": payload.get("execution_plan", [])})
                         runner = DeterministicToolRunner(self.main_agent)
-                    
-                        action_lock.update_status(0.4 + (i * 0.2), f"Runner: Adımlar İşleniyor {iter_label}")
-                    
                         step_snapshot = await rollback_mgr.create_snapshot()
                         run_result = await runner.execute_plan(exec_plan)
-                        if not run_result["success"]:
-                            logger.error(f"Deterministic logic failed: {run_result}. Self-healing via Rollback...")
+                        if not run_result.get("success"):
                             await rollback_mgr.restore_snapshot(step_snapshot)
                         else:
                             await rollback_mgr.clear_snapshot(step_snapshot)
-                except Exception as e:
-                    logger.warning(f"Failed to parse and execute Deterministic Plan JSON: {e}")
-                    # Fallback implementation (old Markdown blocks) removed to force state-machine compliance.
-                    pass
+                    except Exception as fallback_exc:
+                        logger.error(f"Fallback deterministic execution failed: {fallback_exc}")
 
                 # --- Phase 3: VERIFY (Swarm Consensus) ---
                 action_lock.update_status(0.7, "Validator: Swarm Consensus Debate...")
@@ -188,7 +287,10 @@ class AgentOrchestrator:
                 
                     # Packaging
                     zip_path = f"{workspace_dir}.zip"
-                    await self.main_agent._execute_tool("run_safe_command", {"command": f"cd {workspace_dir} && zip -r {zip_path} ."})
+                    await self.main_agent._execute_tool(
+                        "run_safe_command",
+                        {"command": f"cd {shlex.quote(workspace_dir)} && zip -r {shlex.quote(zip_path)} ."},
+                    )
                 
                     await rollback_mgr.clear_snapshot(initial_snapshot)
                     
@@ -233,7 +335,7 @@ class AgentOrchestrator:
                 
                     # If no artifacts at all, specifically tell the builder
                     if not contract.artifacts:
-                        plan_data["risks"] = ["Hiçbir dosya bloğu tespit edilemedi. Lütfen [FILE: /yol] formatını kullan."]
+                        logger.warning("No artifacts detected after QA fail; forcing deterministic fallback on next revision.")
 
             await rollback_mgr.restore_snapshot(initial_snapshot)
             action_lock.unlock()
@@ -308,25 +410,28 @@ class AgentOrchestrator:
                 
                 await self.main_agent._execute_tool("write_file", {"path": full_path, "content": content})
 
-    def _log_thought(self, agent_name: str, raw_text: str):
+    def _log_thought(self, agent_name: str, raw_text: str, model: Optional[str] = None):
         """Extract and log the thought block for transparency."""
-        match = re.search(r"<thought>(.*?)</thought>", raw_text, re.DOTALL)
-        if match:
-            thought = match.group(1).strip()
-            logger.info(f"🧠 [{agent_name} Reasoning]: {thought}")
-            # Dashboard'a özel bir ipucu olarak da gönderebiliriz
-            from core.gateway.server import push_hint
-            push_hint(f"{agent_name}: {thought[:120]}...", icon="brain", color="purple")
+        thought = trace_logger.extract_thought(raw_text)
+        if thought:
+            trace_logger.push_trace(agent_name, thought, model)
 
     async def _run_specialist(self, key: str, prompt: str) -> str:
         specialist = self.registry.get(key)
         final_prompt = f"ROLÜN: {specialist.system_prompt}\n\nİSTEK: {prompt}"
         
+        target_model = specialist.preferred_model or "gpt-4o"
+        
         if hasattr(self, "budget_tracker"):
             self.budget_tracker.consume(input_tokens=(len(final_prompt) // 4), output_tokens=0)
             
         result = await with_timeout(
-            self.main_agent.llm.generate(final_prompt, role=specialist.role, user_id="system"),
+            self.main_agent.llm.generate(
+                final_prompt,
+                role=specialist.role,
+                model_config={"model": target_model},
+                user_id="system"
+            ),
             seconds=STEP_TIMEOUT,
             fallback=f'{{"outputs": ["Hata: {specialist.name} zaman aşımı"], "risks": ["Timeout"]}}',
             context=f"factory:{key}"
@@ -343,6 +448,311 @@ class AgentOrchestrator:
             return json.loads(match.group(0)) if match else {"outputs": [text]}
         except:
             return {"outputs": [text], "risks": ["Parse Error"]}
+
+    def _derive_workspace_dir(self, job_id: str, template_id: str, original_input: str) -> str:
+        """Build a deterministic, user-visible workspace path."""
+        base_root = str(elyan_config.get("agent.multi_agent.output_root", "~/Desktop") or "~/Desktop")
+        base = Path(base_root).expanduser()
+
+        raw = str(original_input or "").lower().strip()
+        slug = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
+        if not slug:
+            slug = str(template_id or "job").lower().replace("_", "-")
+        slug = slug[:42].strip("-") or "job"
+
+        workspace = base / f"{slug}-{job_id[-6:]}"
+        return str(workspace)
+
+    def _compact_plan_hint(self, plan: Any) -> str:
+        """Compact pipeline plan into a short textual hint for specialists."""
+        if not plan:
+            return ""
+        if isinstance(plan, dict):
+            plan = [plan]
+        if not isinstance(plan, list):
+            text = str(plan).strip()
+            return text[:500]
+
+        parts: List[str] = []
+        for idx, step in enumerate(plan[:8], start=1):
+            if isinstance(step, dict):
+                title = str(
+                    step.get("title")
+                    or step.get("name")
+                    or step.get("description")
+                    or f"step_{idx}"
+                ).strip()
+                action = str(step.get("action") or "task").strip()
+                deps = step.get("depends_on") or step.get("dependencies") or []
+                if isinstance(deps, str):
+                    deps = [deps]
+                dep_txt = ", ".join(str(d).strip() for d in deps[:3] if str(d).strip())
+                row = f"{idx}. {title} [{action}]"
+                if dep_txt:
+                    row += f" <- {dep_txt}"
+            else:
+                row = f"{idx}. {str(step).strip()}"
+            parts.append(row[:140])
+        return "\n".join(parts)[:900]
+
+    def _workflow_for_template(self, template_id: str) -> str:
+        key = str(template_id or "").strip().lower()
+        if key in {"research_report_job"}:
+            return "RESEARCH_WORKFLOW"
+        if key in {"web_site_job", "code_delivery_job", "api_integration_job", "automation_job"}:
+            return "CODING_WORKFLOW"
+        return "FIX_WORKFLOW"
+
+    def _build_team_roster(self, template_id: str, cap_plan: Any) -> list[dict[str, str]]:
+        roster: list[dict[str, str]] = []
+        chain_key = self._workflow_for_template(template_id)
+        chain = self.registry.get_chain(chain_key)
+        domain = getattr(cap_plan, "domain", "") if cap_plan else ""
+        if chain:
+            for key in chain.steps:
+                spec = self.registry.get(key)
+                if not spec:
+                    continue
+                roster.append(
+                    {
+                        "id": key,
+                        "role": spec.role,
+                        "domain": spec.domain,
+                        "model": spec.preferred_model,
+                        "emoji": spec.emoji,
+                        "cap_domain": domain,
+                    }
+                )
+        return roster
+
+    def _assign_owner(self, action: str) -> str:
+        low = str(action or "").lower()
+        if any(k in low for k in ("research", "search", "analyze", "report")):
+            return "researcher"
+        if any(k in low for k in ("write", "create", "build", "generate", "code", "scaffold")):
+            return "builder"
+        if any(k in low for k in ("list", "read", "delete", "move", "copy", "rename", "run_safe_command", "open_app", "set_wallpaper")):
+            return "ops"
+        if any(k in low for k in ("verify", "qa", "test", "lint")):
+            return "qa"
+        return "lead"
+
+    def _attach_owners(self, plan_data: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        patched = []
+        for step in plan_data or []:
+            s = dict(step or {})
+            if not s.get("owner"):
+                s["owner"] = self._assign_owner(s.get("action", ""))
+            patched.append(s)
+        return patched
+
+    async def _warm_up_parallel_sub_agents(self, plan_data: list[dict[str, Any]], original_input: str) -> None:
+        """
+        Lightweight DAG warmup: run independent specialist reasoning in parallel.
+        This does not mutate deterministic execution plan output; it enriches context.
+        """
+        candidates: list[tuple[str, Any]] = []
+        for step in list(plan_data or []):
+            owner = str(step.get("owner") or "").strip().lower()
+            action = str(step.get("action") or "").strip()
+            pre = step.get("preconditions")
+            if not owner or owner in {"lead", "communicator"}:
+                continue
+            if isinstance(pre, list) and pre:
+                continue
+            if not action:
+                continue
+            candidates.append((owner, step))
+            if len(candidates) >= 3:
+                break
+
+        if not candidates:
+            return
+
+        from core.sub_agent import SubAgentManager, SubAgentTask
+
+        manager = SubAgentManager(self.main_agent, parent_session_id="orchestrator")
+        jobs = []
+        for owner, step in candidates:
+            action = str(step.get("action") or "").strip()
+            params = step.get("params") if isinstance(step.get("params"), dict) else {}
+            jobs.append(
+                (
+                    owner,
+                    SubAgentTask(
+                        name=str(step.get("id") or action or "step"),
+                        action="chat",
+                        params={
+                            "message": (
+                                f"Görev adımı hazırlığı yap. Action={action}, Params={params}, "
+                                f"UserGoal={original_input}"
+                            )
+                        },
+                        description=str(step.get("id") or action or "step"),
+                        domain=owner,
+                    ),
+                )
+            )
+
+        results = await manager.spawn_parallel(jobs, timeout=90)
+        for (owner, step), result in zip(candidates, results):
+            step.setdefault("_sub_agent", {})
+            step["_sub_agent"].update(
+                {
+                    "owner": owner,
+                    "status": result.status,
+                    "notes": list(result.notes or []),
+                }
+            )
+
+    @staticmethod
+    def _artifact_type_and_mime(path: str) -> tuple[str, str]:
+        p = str(path or "").lower()
+        if p.endswith(".html"):
+            return "html", "text/html"
+        if p.endswith(".css"):
+            return "css", "text/css"
+        if p.endswith(".js"):
+            return "js", "application/javascript"
+        if p.endswith(".json"):
+            return "document", "application/json"
+        if p.endswith(".md"):
+            return "document", "text/markdown"
+        if p.endswith(".txt"):
+            return "document", "text/plain"
+        return "code", "text/plain"
+
+    def _default_artifact_content(self, template_id: str, artifact_name: str, original_input: str, plan_hint: str) -> str:
+        artifact = str(artifact_name or "").strip().lower()
+        if artifact.endswith(".html"):
+            title = "Elyan Generated Project"
+            return (
+                "<!doctype html>\n"
+                "<html lang=\"tr\">\n"
+                "<head>\n"
+                "  <meta charset=\"utf-8\" />\n"
+                "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n"
+                f"  <title>{title}</title>\n"
+                "  <link rel=\"stylesheet\" href=\"./styles/main.css\" />\n"
+                "</head>\n"
+                "<body>\n"
+                f"  <h1>{title}</h1>\n"
+                f"  <p>{str(original_input or '').strip()}</p>\n"
+                "  <script src=\"./scripts/main.js\"></script>\n"
+                "</body>\n"
+                "</html>\n"
+            )
+        if artifact.endswith(".css"):
+            return (
+                ":root { --bg:#f8fafc; --text:#0f172a; --accent:#2563eb; }\n"
+                "body { margin:0; padding:40px; font-family: 'Segoe UI', sans-serif; background:var(--bg); color:var(--text); }\n"
+                "h1 { color: var(--accent); }\n"
+            )
+        if artifact.endswith(".js"):
+            return "document.addEventListener('DOMContentLoaded', () => console.log('ready'));\n"
+        if artifact.endswith(".json"):
+            return json.dumps(
+                {
+                    "generated_by": "elyan",
+                    "template": template_id,
+                    "goal": str(original_input or "").strip(),
+                    "plan_hint": str(plan_hint or "").strip(),
+                    "status": "draft",
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        if artifact.endswith(".md"):
+            return (
+                "# Teslim Özeti\n\n"
+                f"- Template: `{template_id}`\n"
+                f"- İstek: {str(original_input or '').strip()}\n\n"
+                "## Plan\n"
+                f"{str(plan_hint or '(yok)').strip()}\n"
+            )
+        return (
+            f"Template: {template_id}\n"
+            f"Goal: {str(original_input or '').strip()}\n"
+            f"Plan Hint:\n{str(plan_hint or '(yok)').strip()}\n"
+        )
+
+    def _build_fallback_execution_payload(
+        self,
+        *,
+        template_id: str,
+        original_input: str,
+        workspace_dir: str,
+        plan_hint: str = "",
+    ) -> Dict[str, Any]:
+        """Deterministic payload when builder output is invalid."""
+        template = get_template(template_id)
+        mandatory = list(getattr(template, "mandatory_artifacts", []) or [])
+        if not mandatory:
+            mandatory = ["summary.md"]
+
+        workspace = Path(str(workspace_dir or "~/Desktop/elyan-fallback")).expanduser()
+        steps: List[Dict[str, Any]] = [
+            {
+                "id": "ensure_workspace",
+                "action": "create_folder",
+                "params": {"path": str(workspace)},
+                "owner": self._assign_owner("create_folder"),
+                "preconditions": [],
+                "postconditions": [{"type": "dir_exists", "path": str(workspace)}],
+            }
+        ]
+        artifacts: List[Dict[str, Any]] = []
+
+        for idx, rel_path in enumerate(mandatory, start=1):
+            rel = str(rel_path or "").strip().lstrip("/")
+            if not rel:
+                rel = f"artifact_{idx}.txt"
+            abs_path = (workspace / rel).resolve()
+            parent = abs_path.parent
+
+            a_type, mime = self._artifact_type_and_mime(rel)
+            content = self._default_artifact_content(template_id, rel, original_input, plan_hint)
+            artifacts.append(
+                {
+                    "path": str(abs_path),
+                    "type": a_type,
+                    "mime": mime,
+                    "content": content,
+                    "required_sections": [],
+                    "min_size_bytes": max(16, min(256, len(content))),
+                    "asset_source": "local",
+                    "encoding": "utf-8",
+                    "line_endings": "LF",
+                }
+            )
+
+            if str(parent) != str(workspace):
+                steps.append(
+                    {
+                        "id": f"ensure_parent_{idx}",
+                        "action": "create_folder",
+                        "params": {"path": str(parent)},
+                        "owner": self._assign_owner("create_folder"),
+                        "preconditions": [{"type": "dir_exists", "path": str(workspace)}],
+                        "postconditions": [{"type": "dir_exists", "path": str(parent)}],
+                    }
+                )
+
+            steps.append(
+                {
+                    "id": f"write_{idx}",
+                    "action": "write_file",
+                    "params": {"path": str(abs_path), "content": content},
+                    "owner": self._assign_owner("write_file"),
+                    "preconditions": [{"type": "dir_exists", "path": str(parent)}],
+                    "postconditions": [
+                        {"type": "file_exists", "path": str(abs_path)},
+                        {"type": "min_size", "path": str(abs_path), "value": 8},
+                    ],
+                }
+            )
+
+        return {"artifact_map": {"artifacts": artifacts}, "execution_plan": steps}
 
 def get_orchestrator(agent_instance) -> AgentOrchestrator:
     return AgentOrchestrator(agent_instance)

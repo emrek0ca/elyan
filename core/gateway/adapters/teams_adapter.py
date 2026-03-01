@@ -169,7 +169,7 @@ class TeamsAdapter(BaseChannelAdapter):
     async def send_message(self, chat_id: str, response: UnifiedResponse):
         if not self._session:
             logger.error("Teams session yok.")
-            return
+            raise RuntimeError("Teams session yok")
         await self._ensure_token()
         service_url = self._service_urls.get(chat_id, BOT_FRAMEWORK_ENDPOINT)
         url = f"{service_url}/v3/conversations/{chat_id}/activities"
@@ -188,8 +188,10 @@ class TeamsAdapter(BaseChannelAdapter):
                 if resp.status not in (200, 201):
                     body = await resp.text()
                     logger.error(f"Teams gönderme hatası {resp.status}: {body}")
+                    raise RuntimeError(f"Teams HTTP {resp.status}: {body[:240]}")
         except Exception as exc:
             logger.error(f"Teams send hatası: {exc}")
+            raise
 
     # ── Status / Capabilities ─────────────────────────────────────────────────
 

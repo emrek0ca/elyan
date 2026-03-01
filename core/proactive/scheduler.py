@@ -34,10 +34,17 @@ class ProactiveScheduler:
         elyan_dir = Path.home() / ".elyan"
         elyan_dir.mkdir(exist_ok=True)
         
-        # Configure job store (SQLite for persistence)
-        jobstores = {
-            'default': SQLAlchemyJobStore(url=f'sqlite:///{elyan_dir}/scheduler.db')
-        }
+        # Configure job store (SQLite for persistence with Memory fallback)
+        try:
+            jobstores = {
+                'default': SQLAlchemyJobStore(url=f'sqlite:///{elyan_dir}/scheduler.db')
+            }
+        except Exception as e:
+            logger.warning(f"Failed to initialize SQLAlchemyJobStore: {e}. Falling back to MemoryJobStore.")
+            from apscheduler.jobstores.memory import MemoryJobStore
+            jobstores = {
+                'default': MemoryJobStore()
+            }
         
         # Configure executor
         executors = {

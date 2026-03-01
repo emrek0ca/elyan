@@ -2,21 +2,38 @@
   "0": {
     "preferred_language": "tr",
     "top_topics": {
-      "masaüstünde": 8,
-      "var": 8,
-      "ekran": 2,
-      "görüntüsü": 2,
-      "word": 2,
-      "dosyası": 2,
-      "içine": 2,
-      "köpek": 2
+      "masaüstünde": 11,
+      "var": 11,
+      "ekran": 5,
+      "görüntüsü": 5,
+      "word": 5,
+      "dosyası": 5,
+      "içine": 5,
+      "köpek": 5
     },
     "successful_actions": {
-      "list_files": 8,
-      "multi_task": 4
+      "list_files": 11,
+      "multi_task": 10
     },
     "failed_actions": {},
     "response_length_bias": "short",
-    "updated_at": 1771668251
+    "updated_at": 1771974664
+  },
+  "8433815573": {
+    "preferred_language": "tr",
+    "top_topics": {
+      "genel": 1,
+      "konu": 1,
+      "merhaba": 1,
+      "ekran": 1,
+      "görüntüsü": 1
+    },
+    "successful_actions": {
+      "chat": 2,
+      "take_screenshot": 1
+    },
+    "failed_actions": {},
+    "response_length_bias": "short",
+    "updated_at": 1771819510
   }
 }

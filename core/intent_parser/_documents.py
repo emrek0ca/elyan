@@ -155,7 +155,7 @@ class DocumentParser(BaseParser):
         if kind == "game":
             if "unity" in low:
                 return "unity"
-            return "python"
+            return "pygame"
 
         if "flutter" in low:
             return "flutter"
@@ -247,7 +247,7 @@ class DocumentParser(BaseParser):
         low = str(text or "").lower()
         create_kw = [
             "yap", "oluştur", "olustur", "geliştir", "gelistir", "kodla", "planla", "tasarla",
-            "build", "develop", "create", "kur",
+            "build", "develop", "create", "kur", "yaz", "hazırla", "hazirla", "geliştirip ver",
         ]
         target_kw = [
             "website", "web sitesi", "web sayfas", "landing page", "frontend",
@@ -255,6 +255,7 @@ class DocumentParser(BaseParser):
             "api", "saas", "dashboard", "panel", "mvp", "oyun", "game",
             "hesap makinesi", "calculator", "todo", "yapılacak", "yapilacak",
             "not defteri", "takvim uygulaması", "chat uygulaması",
+            "proje", "program", "script",
         ]
         if not any(k in low for k in create_kw):
             return None
@@ -266,10 +267,16 @@ class DocumentParser(BaseParser):
             k in low for k in ["uygulama", "app", "website", "web sitesi", "web sayfas", "api", "oyun", "game"]
         ):
             return None
-        if any(k in low for k in ["araştır", "arastir", "araştırma", "arastirma", "hakkında", "hakkinda"]) and any(
-            k in low for k in ["rapor", "belge", "docx", "word", "excel", "xlsx", "tablo"]
-        ):
-            return None
+        research_markers = ["araştır", "arastir", "araştırma", "arastirma", "hakkında", "hakkinda", "research"]
+        if any(k in low for k in research_markers):
+            if any(k in low for k in ["rapor", "belge", "docx", "word", "excel", "xlsx", "tablo"]):
+                return None
+            explicit_build_targets = [
+                "uygulama", "app", "website", "web sitesi", "web sayfas", "api",
+                "dashboard", "panel", "saas", "mvp", "oyun", "game",
+            ]
+            if not any(k in low for k in explicit_build_targets):
+                return None
 
         kind = self._infer_project_kind(low)
         stack = self._infer_stack(low, kind=kind)
@@ -278,6 +285,10 @@ class DocumentParser(BaseParser):
         project_name = self._extract_project_name(original, kind=kind)
         output_dir = str(HOME_DIR / "Desktop")
 
+        brief_clean = re.sub(
+            r'\b(cursor|vscode|windsurf|antigravity|ile aç|ile ac)\b',
+            '', original, flags=re.IGNORECASE
+        ).strip()
         params = {
             "project_kind": kind,
             "project_name": project_name,
@@ -287,7 +298,7 @@ class DocumentParser(BaseParser):
             "ide": ide,
             "complexity": complexity,
             "theme": "professional",
-            "brief": original,
+            "brief": brief_clean or original,
         }
         return {
             "action": "create_coding_project",

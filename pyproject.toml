@@ -58,7 +58,10 @@ all = [
 ]
 
 [project.scripts]
-elyan = "main:_cli_main"
+elyan = "elyan_entrypoint:main"
+
+[tool.setuptools]
+py-modules = ["elyan_entrypoint"]
 
 [tool.setuptools.packages.find]
-include = ["core*", "tools*", "utils*", "config*"]
+include = ["core*", "tools*", "utils*", "config*", "cli*"]

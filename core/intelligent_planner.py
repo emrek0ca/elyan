@@ -4,6 +4,7 @@ Advanced task decomposition, dependency management, parallel execution
 """
 
 import asyncio
+import json
 import time
 import uuid
 from typing import Dict, List, Optional, Any, Set, Callable
@@ -12,6 +13,7 @@ from enum import Enum
 from collections import defaultdict, deque
 
 from utils.logger import get_logger
+from core.spec.extractors import get_domain_fewshot
 
 logger = get_logger("intelligent_planner")
 
@@ -21,6 +23,7 @@ KNOWN_TOOL_ACTIONS: Set[str] = {
     "open_app",
     "close_app",
     "advanced_research",
+    "deep_research",
     "web_search",
     "read_file",
     "write_file",
@@ -32,7 +35,15 @@ KNOWN_TOOL_ACTIONS: Set[str] = {
     "copy_file",
     "rename_file",
     "take_screenshot",
+    "type_text",
+    "press_key",
+    "key_combo",
+    "mouse_move",
+    "mouse_click",
+    "computer_use",
     "run_safe_command",
+    "execute_python_code",
+    "execute_shell_command",
     "write_word",
     "write_excel",
     "generate_document_pack",
@@ -45,6 +56,19 @@ KNOWN_TOOL_ACTIONS: Set[str] = {
     "send_email",
     "analyze_document",
     "generate_report",
+    "http_request",
+    "graphql_query",
+    "api_health_check",
+    "browser_open",
+    "browser_click",
+    "browser_type",
+    "browser_screenshot",
+    "create_directory",
+    "list_directory",
+    "create_visual_asset_pack",
+    "transcribe_audio_file",
+    "speak_text_local",
+    "analyze_and_narrate_image",
     "chat",
 }
 
@@ -59,6 +83,16 @@ ACTION_ALIASES: Dict[str, str] = {
     "create_website": "create_web_project_scaffold",
     "status_snapshot": "take_screenshot",
     "run_command": "run_safe_command",
+    "execute_python": "execute_python_code",
+    "execute_code": "execute_python_code",
+    "terminal_command": "run_safe_command",
+    "create_directory": "create_folder",
+    "list_directory": "list_files",
+    "api_call": "http_request",
+    "make_request": "http_request",
+    "request_api": "http_request",
+    "check_api": "api_health_check",
+    "api_check": "api_health_check",
 }
 
 
@@ -142,12 +176,63 @@ class IntelligentPlanner:
         self.llm = LLMClient()
         # Cost-guard defaults (overridable via TaskEngine)
         self.use_llm = True
+        self.max_subtasks = 10
+        try:
+            from config.elyan_config import elyan_config
+
+            self.use_llm = bool(elyan_config.get("agent.planning.use_llm", True))
+            self.max_subtasks = int(elyan_config.get("agent.planning.max_subtasks", 10) or 10)
+            self.max_subtasks = max(1, min(20, self.max_subtasks))
+        except Exception:
+            self.use_llm = True
+            self.max_subtasks = 10
 
         logger.info("Intelligent Planner initialized")
 
     def register_progress_callback(self, callback: Callable):
         """Register callback for progress updates"""
         self.progress_callbacks.append(callback)
+
+    @staticmethod
+    def _infer_domain_from_request(
+        task_description: str,
+        preferred_tools: Optional[List[str]] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        domain = ""
+        if isinstance(context, dict):
+            goal_graph = context.get("goal_graph", {})
+            if isinstance(goal_graph, dict):
+                domain = str(goal_graph.get("domain", "") or "").strip().lower()
+        if domain:
+            return domain
+
+        tools = {str(t or "").strip().lower() for t in (preferred_tools or []) if str(t or "").strip()}
+        low_desc = str(task_description or "").lower()
+
+        if tools.intersection({"api_health_check", "http_request", "graphql_query"}) or any(
+            k in low_desc for k in ("api", "endpoint", "graphql", "rest", "webhook", "http")
+        ):
+            return "api"
+        if tools.intersection({"advanced_research", "deep_research", "generate_report"}) or any(
+            k in low_desc for k in ("araştır", "arastir", "research", "literature", "kaynak", "analiz")
+        ):
+            return "research"
+        if tools.intersection({"create_software_project_pack", "execute_python_code", "run_safe_command"}) or any(
+            k in low_desc for k in ("kod", "code", "python", "backend", "frontend", "repo", "test", "build")
+        ):
+            return "code"
+        if tools.intersection({"write_word", "write_excel", "analyze_document"}) or any(
+            k in low_desc for k in ("rapor", "belge", "doküman", "dokuman", "excel", "word", "sunum")
+        ):
+            return "office"
+        if any(k in low_desc for k in ("otomasyon", "automation", "cron", "schedule", "zamanla", "her gün", "her gun")):
+            return "automation"
+        if tools.intersection({"create_folder", "write_file", "read_file", "list_files"}) or any(
+            k in low_desc for k in ("dosya", "klasör", "klasor", "folder", "file", "masaüstü", "masaustu")
+        ):
+            return "filesystem"
+        return ""
 
     async def decompose_task(
         self,
@@ -170,18 +255,136 @@ class IntelligentPlanner:
             try:
                 context_hint = self._format_context_for_planner(context or {})
                 pref_hint = f"\nPreferred tools for this domain: {', '.join(preferred_tools)}" if preferred_tools else ""
-                
-                prompt = f"""Goal: {task_description}
+                json_contract = (
+                    "\nELYAN CORE OBJECTIVE:\n"
+                    "- Kullanıcıyı doğru anla, hedefi eksiksiz sıraya koy, hatasız uygulanabilir adımlar üret.\n"
+                    "- Sohbet/öneri değil; yalnızca çalıştırılabilir görev adımları üret.\n"
+                    "\nCRITICAL OUTPUT CONTRACT:\n"
+                    "- SADECE JSON dizi döndür.\n"
+                    "- Markdown, açıklama, başlık, code fence kullanma.\n"
+                    "- Her adım şu alanları içermeli: id, name, action, params, depends_on.\n"
+                    "- action değeri çalıştırılabilir tool adı olmalı.\n"
+                    "- Her adım bir önceki adımla mantıksal olarak tutarlı olmalı.\n"
+                )
+                domain = self._infer_domain_from_request(
+                    task_description,
+                    preferred_tools=preferred_tools,
+                    context=context,
+                )
+                fewshot_hint = ""
+                fewshots = get_domain_fewshot(domain)
+                if fewshots:
+                    rows = []
+                    for item in fewshots[:2]:
+                        user = str(item.get("user", "")).strip()
+                        intent = str(item.get("intent", "")).strip()
+                        step_actions = [
+                            str(s.get("action") or "").strip()
+                            for s in (item.get("steps", []) or [])
+                            if isinstance(s, dict) and str(s.get("action") or "").strip()
+                        ]
+                        step_chain = " -> ".join(step_actions[:6]) if step_actions else "n/a"
+                        if user:
+                            rows.append(
+                                f"- User: {user} | intent={intent or 'n/a'} | actions={step_chain}"
+                            )
+                    if rows:
+                        fewshot_hint = "\nDomain few-shot:\n" + "\n".join(rows)
+
+                low_desc = str(task_description or "").lower()
+                web_mode = "create_web_project_scaffold" in (preferred_tools or []) or any(
+                    k in low_desc for k in ("web", "website", "site", "landing", "html", "frontend")
+                )
+                api_mode = any(
+                    k in low_desc for k in ("api", "endpoint", "graphql", "webhook", "rest", "http")
+                ) or any(t in (preferred_tools or []) for t in ("http_request", "graphql_query", "api_health_check"))
+                code_mode = any(
+                    k in low_desc for k in ("code", "kod", "script", "python", "backend", "program")
+                ) or any(t in (preferred_tools or []) for t in ("create_software_project_pack", "execute_python_code"))
+
+                if web_mode:
+                    prompt = f"""Goal: {task_description}
+
+Plan 6-12 executable steps. Use valid actions:
+- create_web_project_scaffold: Web projesi olustur (params: project_name, stack, theme, output_dir, brief)
+- write_file: Dosya yaz (params: path, content)
+- run_safe_command: smoke/test komutu calistir (params: command)
+- read_file: dogrulama ve kalite kontrol dosyalarini oku (params: path)
+- take_screenshot: Ekran goruntusu al{pref_hint}
+
+The FIRST step MUST use create_web_project_scaffold.
+Mandatory phases:
+1) scaffold
+2) component/section implementation
+3) styling and responsive improvements
+4) interaction/animation enhancement
+5) verification (run_safe_command/read_file)
+6) artifact proof (screenshot/report)
+Steps should be execution-ready, dependency-safe and non-trivial.
+Return JSON array:
+[{{"id":"task_1","name":"...","action":"create_web_project_scaffold","params":{{"project_name":"...","stack":"vanilla","theme":"professional","output_dir":"~/Desktop","brief":"..."}}, "depends_on":[]}}]
+"""
+                elif api_mode:
+                    prompt = f"""Goal: {task_description}
+
+Plan 3-6 executable steps. Use valid actions:
+- http_request: API request at (params: method, url, headers, body, timeout)
+- graphql_query: GraphQL sorgu (params: url, query, variables, headers)
+- api_health_check: Endpoint health (params: url, timeout)
+- write_file: Sonuclari dosyaya kaydet (params: path, content){pref_hint}
+
+Rules:
+- Start with api_health_check OR a safe GET request.
+- Include at least one validation/reporting step.
+- Ensure each step has valid params and deterministic execution order.
+Return JSON array only.
+"""
+                elif code_mode:
+                    prompt = f"""Goal: {task_description}
+
+Plan 7-14 executable steps. Use valid actions:
+- create_software_project_pack (project_name, project_type, stack, complexity, output_dir, brief)
+- write_file (path, content)
+- execute_python_code or run_safe_command for verification
+- read_file for QA/checkpoint{pref_hint}
+
+Mandatory phases:
+1) project pack creation
+2) domain models + core modules
+3) service/controller or CLI layer
+4) tests (unit and integration)
+5) lint/typecheck/test verification
+6) docs/runbook updates
+The plan must include at least two verification steps before finalization.
+Keep dependencies acyclic and execution-safe.
+Return JSON array only.
+"""
+                else:
+                    prompt = f"""Goal: {task_description}
 
 Plan 3-10 executable steps. Use valid actions (open_url, advanced_research, read_file, write_file, take_screenshot, create_folder, list_files, run_safe_command, send_email, analyze_document, web_search, generate_report).{pref_hint}
+Rules: avoid chat-like actions, produce deterministic step order, fill critical params.
 Return JSON array:
 [{{"id":"task_1","name":"...","action":"tool","params":{{"path":"~/Desktop"}},"depends_on":[]}}]
 """
+                prompt += json_contract
+                if fewshot_hint:
+                    prompt += fewshot_hint
                 if context_hint:
                     prompt += f"\nContext: {context_hint}"
 
                 resp = await client.generate(prompt, max_tokens=600, user_id=user_id)
-                subtasks = self._parse_subtasks_from_response(resp, task_description, limit=10)
+                subtasks = self._parse_subtasks_from_response(resp, task_description, limit=self.max_subtasks)
+
+                # LLM serbest metin döndürürse ikinci pas: metni JSON'a zorla.
+                if not subtasks:
+                    salvage_prompt = (
+                        "Aşağıdaki metni yürütülebilir görev planı JSON dizisine dönüştür.\n"
+                        "Sadece JSON döndür. Format: [{id,name,action,params,depends_on}].\n\n"
+                        f"Metin:\n{resp}"
+                    )
+                    salvage_resp = await client.generate(salvage_prompt, max_tokens=500, user_id=user_id)
+                    subtasks = self._parse_subtasks_from_response(salvage_resp, task_description, limit=self.max_subtasks)
             except Exception as e:
                 logger.debug(f"LLM decomposition failed, fallback heuristic: {e}")
 
@@ -212,15 +415,18 @@ Return JSON array:
         return subtasks
 
     def _parse_subtasks_from_response(self, response_text: str, task_description: str, limit: int = 10) -> List[SubTask]:
-        import json
-        import re
-
         subtasks: List[SubTask] = []
-        match = re.search(r"\[[\s\S]*\]", str(response_text), re.DOTALL)
-        if not match:
-            return subtasks
-        actions = json.loads(match.group())
-        if not isinstance(actions, list):
+        payload = self._extract_first_json_payload(response_text)
+        actions: list[Any] = []
+        if isinstance(payload, list):
+            actions = payload
+        elif isinstance(payload, dict):
+            for key in ("steps", "tasks", "subtasks", "plan"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    actions = value
+                    break
+        if not actions:
             return subtasks
 
         for i, a in enumerate(actions[:limit]):
@@ -243,6 +449,43 @@ Return JSON array:
                 )
             )
         return self._sanitize_subtasks(subtasks, task_description)
+
+    @staticmethod
+    def _extract_first_json_payload(response_text: str) -> Any:
+        import re
+
+        raw = str(response_text or "").strip()
+        if not raw:
+            return None
+
+        candidates: list[str] = [raw]
+        fenced = re.findall(r"```(?:json)?\s*([\s\S]*?)```", raw, flags=re.IGNORECASE)
+        for block in fenced:
+            s = str(block or "").strip()
+            if s:
+                candidates.append(s)
+
+        decoder = json.JSONDecoder()
+        for chunk in candidates:
+            probe = chunk.strip()
+            if probe.lower().startswith("json"):
+                probe = probe[4:].strip()
+            try:
+                parsed = json.loads(probe)
+                if isinstance(parsed, (dict, list)):
+                    return parsed
+            except Exception:
+                pass
+            for idx, ch in enumerate(probe):
+                if ch not in "{[":
+                    continue
+                try:
+                    parsed, _end = decoder.raw_decode(probe[idx:])
+                    if isinstance(parsed, (dict, list)):
+                        return parsed
+                except Exception:
+                    continue
+        return None
 
     def _normalize_action_name(self, action: str, *, fallback_text: str = "") -> str:
         raw = str(action or "").split("(")[0].strip().lower()
@@ -270,6 +513,9 @@ Return JSON array:
         elif action == "advanced_research" and not str(cleaned.get("topic", "")).strip():
             cleaned["topic"] = hint
             cleaned.setdefault("depth", "standard")
+        elif action == "deep_research" and not str(cleaned.get("topic", "")).strip():
+            cleaned["topic"] = hint
+            cleaned.setdefault("depth", "comprehensive")
         elif action == "read_file" and not str(cleaned.get("path", "")).strip():
             cleaned["path"] = "~/Desktop/not.txt"
         elif action == "write_file":
@@ -279,7 +525,11 @@ Return JSON array:
                 cleaned["content"] = str(goal or hint).strip()
         elif action == "list_files" and not str(cleaned.get("path", "")).strip():
             cleaned["path"] = "~/Desktop"
+        elif action == "list_directory" and not str(cleaned.get("path", "")).strip():
+            cleaned["path"] = "~/Desktop"
         elif action == "create_folder" and not str(cleaned.get("path", "")).strip():
+            cleaned["path"] = "~/Desktop/yeni_klasor"
+        elif action == "create_directory" and not str(cleaned.get("path", "")).strip():
             cleaned["path"] = "~/Desktop/yeni_klasor"
         elif action == "move_file":
             if not str(cleaned.get("source", "")).strip():
@@ -305,6 +555,38 @@ Return JSON array:
             if not cleaned.get("data"):
                 cleaned["data"] = [{"Veri": str(goal or hint).strip()}]
             cleaned.setdefault("headers", ["Veri"])
+        elif action == "edit_text_file":
+            if not str(cleaned.get("path", "")).strip():
+                cleaned["path"] = "~/Desktop/not.md"
+            ops = cleaned.get("operations")
+            if not isinstance(ops, list) or not ops:
+                cleaned["operations"] = [{"type": "append", "text": str(goal or hint).strip() or "guncelleme"}]
+            cleaned.setdefault("create_backup", True)
+        elif action == "batch_edit_text":
+            if not str(cleaned.get("directory", "")).strip():
+                cleaned["directory"] = "~/Desktop"
+            if not str(cleaned.get("pattern", "")).strip():
+                cleaned["pattern"] = "*.md"
+            ops = cleaned.get("operations")
+            if not isinstance(ops, list) or not ops:
+                cleaned["operations"] = [{"type": "append", "text": str(goal or hint).strip() or "guncelleme"}]
+            cleaned.setdefault("create_backup", True)
+        elif action == "edit_word_document":
+            if not str(cleaned.get("path", "")).strip():
+                cleaned["path"] = "~/Desktop/belge.docx"
+            ops = cleaned.get("operations")
+            if not isinstance(ops, list) or not ops:
+                cleaned["operations"] = [{"type": "add_paragraph", "text": str(goal or hint).strip() or "guncelleme"}]
+            cleaned.setdefault("create_backup", True)
+        elif action == "summarize_document":
+            if not str(cleaned.get("path", "")).strip() and not str(cleaned.get("content", "")).strip():
+                cleaned["path"] = "~/Desktop/not.md"
+            style = str(cleaned.get("style", "")).strip().lower()
+            if style not in {"brief", "detailed", "bullets"}:
+                cleaned["style"] = "brief"
+        elif action == "analyze_document":
+            if not str(cleaned.get("path", "")).strip():
+                cleaned["path"] = "~/Desktop/not.md"
         elif action == "create_web_project_scaffold":
             cleaned.setdefault("project_name", "web-projesi")
             cleaned.setdefault("stack", "vanilla")
@@ -325,6 +607,61 @@ Return JSON array:
             cleaned.setdefault("include_word", True)
             cleaned.setdefault("include_excel", True)
             cleaned.setdefault("include_report", True)
+        elif action == "http_request":
+            cleaned.setdefault("method", "GET")
+            if not str(cleaned.get("url", "")).strip():
+                query = str(hint).replace("\n", " ").strip()
+                cleaned["url"] = f"https://api.duckduckgo.com/?q={query.replace(' ', '+')}&format=json"
+            if not isinstance(cleaned.get("headers"), dict):
+                cleaned["headers"] = {"Accept": "application/json"}
+            cleaned.setdefault("timeout", 15)
+        elif action == "graphql_query":
+            if not str(cleaned.get("url", "")).strip():
+                cleaned["url"] = "https://countries.trevorblades.com/"
+            if not str(cleaned.get("query", "")).strip():
+                cleaned["query"] = "{ __typename }"
+            if not isinstance(cleaned.get("variables"), dict):
+                cleaned["variables"] = {}
+            if not isinstance(cleaned.get("headers"), dict):
+                cleaned["headers"] = {}
+            cleaned.setdefault("timeout", 15)
+        elif action == "api_health_check":
+            if not str(cleaned.get("url", "")).strip():
+                cleaned["url"] = "https://httpbin.org/get"
+            cleaned.setdefault("timeout", 10)
+        elif action == "execute_python_code" and not str(cleaned.get("code", "")).strip():
+            cleaned["code"] = "print('ok')"
+        elif action == "execute_shell_command" and not str(cleaned.get("command", "")).strip():
+            cleaned["command"] = "echo ok"
+        elif action == "type_text":
+            if not str(cleaned.get("text", "")).strip():
+                cleaned["text"] = str(goal or hint).strip() or "test"
+            cleaned.setdefault("press_enter", False)
+        elif action == "press_key":
+            if not str(cleaned.get("key", "")).strip():
+                cleaned["key"] = "enter"
+            if not isinstance(cleaned.get("modifiers"), list):
+                cleaned["modifiers"] = []
+        elif action == "key_combo":
+            if not str(cleaned.get("combo", "")).strip():
+                cleaned["combo"] = "cmd+l"
+        elif action == "mouse_move":
+            cleaned.setdefault("x", 960)
+            cleaned.setdefault("y", 540)
+        elif action == "mouse_click":
+            cleaned.setdefault("x", 960)
+            cleaned.setdefault("y", 540)
+            cleaned.setdefault("button", "left")
+            cleaned.setdefault("double", False)
+        elif action == "computer_use":
+            steps = cleaned.get("steps")
+            if not isinstance(steps, list) or not steps:
+                cleaned["steps"] = [
+                    {"action": "open_app", "params": {"app_name": "Safari"}},
+                    {"action": "open_url", "params": {"url": "https://www.google.com", "browser": "Safari"}},
+                ]
+            cleaned.setdefault("final_screenshot", True)
+            cleaned.setdefault("pause_ms", 200)
 
         return cleaned
 
@@ -349,7 +686,7 @@ Return JSON array:
         used_ids: Set[str] = set()
 
         # Pass 1: normalize identity/action/params.
-        for idx, task in enumerate(subtasks[:12], start=1):
+        for idx, task in enumerate(subtasks[: self.max_subtasks], start=1):
             old_id = str(getattr(task, "task_id", "") or f"subtask_{idx}")
             new_id = old_id.strip() or f"subtask_{idx}"
             if new_id in used_ids:
@@ -403,6 +740,11 @@ Return JSON array:
                 if dep_norm not in valid_deps:
                     valid_deps.append(dep_norm)
             task.dependencies = valid_deps
+
+        # If planner returned no dependencies for a multi-step plan, force linear order.
+        if len(normalized) > 1 and not any(t.dependencies for t in normalized):
+            for idx in range(1, len(normalized)):
+                normalized[idx].dependencies = [normalized[idx - 1].task_id]
 
         if not any(t.action != "chat" for t in normalized):
             normalized[0].action = self._normalize_action_name("", fallback_text=goal)
@@ -484,6 +826,9 @@ Return JSON array:
             "delete_file": ("path",),
             "move_file": ("source", "destination"),
             "copy_file": ("source", "destination"),
+            "http_request": ("url", "method"),
+            "graphql_query": ("url", "query"),
+            "api_health_check": ("url",),
         }
         for t in subtasks:
             req = required_keys.get(t.action)
@@ -495,7 +840,7 @@ Return JSON array:
                 score -= 0.1
 
         # 4) Overly long plan heuristic
-        if len(subtasks) > 10:
+        if len(subtasks) > self.max_subtasks:
             issues.append("too_many_steps")
             score -= 0.1
 
@@ -555,7 +900,7 @@ Return JSON array:
                 prompt += f"\nContext: {context_hint}"
 
             resp = await client.generate(prompt, max_tokens=650, user_id=user_id)
-            revised = self._parse_subtasks_from_response(resp, goal, limit=10)
+            revised = self._parse_subtasks_from_response(resp, goal, limit=self.max_subtasks)
             if revised:
                 return self._sanitize_subtasks(revised, goal)
         except Exception as exc:
@@ -572,6 +917,12 @@ Return JSON array:
             "yaz": "write_file",
             "kaydet": "write_file",
             "sil": "delete_file",
+            "düzenle": "edit_text_file",
+            "duzenle": "edit_text_file",
+            "değiştir": "edit_text_file",
+            "degistir": "edit_text_file",
+            "özet": "summarize_document",
+            "ozet": "summarize_document",
             "taşı": "move_file",
             "tasi": "move_file",
             "kopyala": "copy_file",
@@ -582,7 +933,16 @@ Return JSON array:
             "arastir": "advanced_research",
             "ara": "web_search",
             "search": "web_search",
+            "api": "http_request",
+            "endpoint": "http_request",
+            "graphql": "graphql_query",
+            "webhook": "http_request",
+            "http": "http_request",
+            "curl": "http_request",
             "youtube": "open_url",
+            "çal": "open_url",
+            "cal": "open_url",
+            "play": "open_url",
             "google": "open_url",
             "safari": "open_url",
             "site": "write_file",
@@ -594,6 +954,15 @@ Return JSON array:
             "goster": "list_files",
             "screenshot": "take_screenshot",
             "ekran": "take_screenshot",
+            "tıkla": "mouse_click",
+            "tikla": "mouse_click",
+            "mouse": "mouse_move",
+            "klavye": "type_text",
+            "tuş": "press_key",
+            "tus": "press_key",
+            "otomasyon": "computer_use",
+            "adım": "computer_use",
+            "adim": "computer_use",
             "görsel": "create_visual_asset_pack",
             "gorsel": "create_visual_asset_pack",
             "image": "create_visual_asset_pack",
@@ -627,10 +996,10 @@ Return JSON array:
         if not subtasks:
             # Decompose automatically
             subtasks = await self.decompose_task(
-                description, 
-                llm_client, 
-                context=context, 
-                use_llm=use_llm and self.use_llm, 
+                description,
+                llm_client,
+                context=context,
+                use_llm=use_llm and self.use_llm,
                 user_id=user_id,
                 preferred_tools=preferred_tools
             )

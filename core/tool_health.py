@@ -53,6 +53,7 @@ class ToolHealthManager:
         "open_app",
         "list_files",
         "read_file",
+        "browser_open",
     ]
 
     # macOS CLI tools that might be missing
@@ -75,6 +76,8 @@ class ToolHealthManager:
         "summarize_document": ["read_file"],
         "analyze_document": ["read_file"],
         "spotlight_search": ["search_files"],
+        "browser_open": ["web_search", "open_url"],
+        "scrape_page": ["fetch_page", "extract_text"],
     }
 
     def __init__(self, cache_ttl_seconds: int = 30):

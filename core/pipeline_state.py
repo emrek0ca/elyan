@@ -7,12 +7,42 @@ outputs from previous operations as inputs.
 
 from __future__ import annotations
 import re
+import time
+import uuid
+from contextvars import ContextVar
 from typing import Dict, Any, Optional
 
 class PipelineState:
     def __init__(self):
         self._data: Dict[str, Any] = {}
         self._last_result: Any = None
+        self._pipelines: Dict[str, Any] = {}
+
+    def start(self, user_id: str = "unknown", user_input: str = "",
+              domain: str = "", tasks: list = None) -> str:
+        """Yeni bir pipeline oturumu başlatır ve ID döner."""
+        pipeline_id = str(uuid.uuid4())[:8]
+        self._pipelines[pipeline_id] = {
+            "id": pipeline_id,
+            "user_id": user_id,
+            "user_input": user_input,
+            "domain": domain,
+            "tasks": tasks or [],
+            "started_at": time.time(),
+            "status": "running",
+        }
+        return pipeline_id
+
+    def complete(self, pipeline_id: str, success: bool = True,
+                 summary: str = "", quality_report: Any = None) -> None:
+        """Pipeline oturumunu tamamlandı olarak işaretler."""
+        if pipeline_id in self._pipelines:
+            self._pipelines[pipeline_id].update({
+                "status": "success" if success else "failed",
+                "summary": summary,
+                "quality_report": quality_report,
+                "completed_at": time.time(),
+            })
 
     def store(self, key: str, value: Any):
         """Bir adımın sonucunu belirli bir anahtarla saklar."""
@@ -61,6 +91,25 @@ class PipelineState:
         self._last_result = None
 
 _pipeline_state = PipelineState()
+_pipeline_state_var: ContextVar[PipelineState | None] = ContextVar("pipeline_state_var", default=None)
+
+
+def create_pipeline_state() -> PipelineState:
+    """Create a fresh isolated pipeline state."""
+    return PipelineState()
+
+
+def set_current_pipeline_state(state: PipelineState | None):
+    """Bind state to current async context and return reset token."""
+    return _pipeline_state_var.set(state)
+
+
+def reset_current_pipeline_state(token) -> None:
+    """Reset current async-context pipeline state."""
+    _pipeline_state_var.reset(token)
 
 def get_pipeline_state() -> PipelineState:
+    scoped = _pipeline_state_var.get()
+    if isinstance(scoped, PipelineState):
+        return scoped
     return _pipeline_state

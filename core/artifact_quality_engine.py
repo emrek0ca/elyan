@@ -54,6 +54,38 @@ class ArtifactQualityEngine:
         contract.metrics.task_success_rate = 1.0 if verified == total else 0.5
 
     @staticmethod
+    def evaluate(
+        domain: str = "",
+        pipeline_id: str = "",
+        task_contract: dict = None,
+        execution_result: dict = None,
+        tasks: list = None,
+        publish_threshold: float = 78.0,
+    ) -> dict:
+        """Execution kalitesini değerlendirir ve publish_ready durumunu döner."""
+        result = execution_result or {}
+        succeeded = result.get("succeeded", 0)
+        failed = result.get("failed", 0)
+        total = succeeded + failed
+
+        if total == 0:
+            score = 100.0
+        else:
+            score = (succeeded / total) * 100.0
+
+        publish_ready = score >= publish_threshold
+
+        return {
+            "overall_score": round(score, 1),
+            "threshold": publish_threshold,
+            "publish_ready": publish_ready,
+            "domain": domain,
+            "pipeline_id": pipeline_id,
+            "succeeded": succeeded,
+            "failed": failed,
+        }
+
+    @staticmethod
     def create_audit_bundle(contract: DeliverableContract, workspace_dir: str):
         """Creates a comprehensive proof-of-work bundle."""
         bundle = {

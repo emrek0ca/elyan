@@ -139,7 +139,7 @@ class MatrixAdapter(BaseChannelAdapter):
     async def send_message(self, chat_id: str, response: UnifiedResponse):
         if not self._client:
             logger.error("Matrix client bağlı değil.")
-            return
+            raise RuntimeError("Matrix client bağlı değil")
         try:
             # Markdown destekli mesaj (m.room.message / m.text)
             content = {
@@ -163,6 +163,7 @@ class MatrixAdapter(BaseChannelAdapter):
             )
         except Exception as exc:
             logger.error(f"Matrix gönderme hatası: {exc}")
+            raise
 
     # ── Status / Capabilities ─────────────────────────────────────────────────
 

@@ -200,7 +200,7 @@ class IMessageAdapter(BaseChannelAdapter):
         """BlueBubbles REST API ile mesaj gönder."""
         if not self._session:
             logger.error("iMessage session yok.")
-            return
+            raise RuntimeError("iMessage session yok")
         try:
             url = f"{self.server_url}/api/v1/message/text"
             payload = {
@@ -220,8 +220,10 @@ class IMessageAdapter(BaseChannelAdapter):
                 if resp.status not in (200, 201):
                     body = await resp.text()
                     logger.error(f"iMessage gönderim hatası {resp.status}: {body}")
+                    raise RuntimeError(f"iMessage HTTP {resp.status}: {body[:240]}")
         except Exception as exc:
             logger.error(f"iMessage send hatası: {exc}")
+            raise
 
     async def send_reaction(self, chat_id: str, message_guid: str, reaction: str = "love"):
         """
@@ -229,7 +231,7 @@ class IMessageAdapter(BaseChannelAdapter):
         reaction: love | like | dislike | laugh | emphasize | question
         """
         if not self._session:
-            return
+            raise RuntimeError("iMessage session yok.")
         reaction_map = {
             "love": 2000, "like": 2001, "dislike": 2002,
             "laugh": 2003, "emphasize": 2004, "question": 2005,
@@ -248,9 +250,12 @@ class IMessageAdapter(BaseChannelAdapter):
                 post_ctx = await post_ctx
             async with post_ctx as resp:
                 if resp.status not in (200, 201):
-                    logger.error(f"iMessage tepki hatası {resp.status}")
+                    body = await resp.text()
+                    logger.error(f"iMessage tepki hatası {resp.status}: {body}")
+                    raise RuntimeError(f"iMessage reaction HTTP {resp.status}: {body[:240]}")
         except Exception as exc:
             logger.error(f"iMessage tepki gönderme hatası: {exc}")
+            raise
 
     # ── Status / Capabilities ─────────────────────────────────────────────────
 

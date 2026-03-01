@@ -185,8 +185,11 @@ class SignalAdapter(BaseChannelAdapter):
                 await self._send_socket(chat_id, response.text)
         except Exception as exc:
             logger.error(f"Signal gönderme hatası: {exc}")
+            raise
 
     async def _send_http(self, recipient: str, text: str):
+        if not self._session:
+            raise RuntimeError("Signal HTTP session yok")
         payload = {
             "message": text,
             "number": self.phone_number,
@@ -199,6 +202,7 @@ class SignalAdapter(BaseChannelAdapter):
             if resp.status not in (200, 201):
                 body = await resp.text()
                 logger.error(f"Signal HTTP gönderim hatası {resp.status}: {body}")
+                raise RuntimeError(f"Signal HTTP {resp.status}: {body[:240]}")
 
     async def _send_socket(self, recipient: str, text: str):
         reader, writer = await asyncio.open_unix_connection(self.socket_path)

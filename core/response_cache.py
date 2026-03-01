@@ -133,12 +133,23 @@ class ResponseCache:
 
     def _generate_key(self, question: str) -> str:
         """Generate cache key from question"""
-        # Normalize question
+        # 1. Basic normalization
         normalized = question.lower().strip()
-        # Remove punctuation
-        normalized = ''.join(c for c in normalized if c.isalnum() or c.isspace())
-        # Hash for consistent key
-        return hashlib.sha256(normalized.encode()).hexdigest()
+        # 2. Remove punctuation but keep spaces
+        normalized = ''.join(c if c.isalnum() or c.isspace() else ' ' for c in normalized)
+        # 3. Tokenize and remove stop words
+        words = normalized.split()
+        stop_words = {'ve', 'veya', 'ile', 'için', 'bir', 'bu', 'şu', 'o',
+                      'and', 'or', 'the', 'a', 'an', 'is', 'are', 'was', 'were',
+                      'mı', 'mi', 'mu', 'mü', 'lütfen', 'please', 'can', 'you'}
+        tokens = [w for w in words if w not in stop_words and len(w) > 1]
+        
+        # 4. Sort tokens to handle word order variations (Semantic Hit Improvement)
+        tokens.sort()
+        normalized_query = " ".join(tokens)
+        
+        # 5. Hash for consistent key
+        return hashlib.sha256(normalized_query.encode()).hexdigest()
 
     def _is_expired(self, entry: CachedResponse) -> bool:
         """Check if cache entry is expired"""

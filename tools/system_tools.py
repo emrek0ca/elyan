@@ -1,15 +1,135 @@
 import asyncio
+import json
 import platform
-import subprocess
-import os
+import re
 import time
 import shutil
+import unicodedata
 from pathlib import Path
 from typing import Any, Optional, Dict, List
 from core.registry import tool
 from utils.logger import get_logger
+import urllib.parse
+import urllib.request
 
 logger = get_logger("system_tools")
+
+
+def _extract_quoted_text(raw: str) -> str:
+    text = str(raw or "")
+    m = re.search(r"['\"]([^'\"]{2,280})['\"]", text)
+    return str(m.group(1) or "").strip() if m else ""
+
+
+def _goal_to_computer_steps(goal: str) -> list[dict[str, Any]]:
+    low = str(goal or "").strip().lower()
+    if not low:
+        return []
+
+    steps: list[dict[str, Any]] = []
+    browser = "Safari"
+    if any(k in low for k in ("chrome", "google chrome")):
+        browser = "Google Chrome"
+
+    if any(k in low for k in ("arama", "search", "google", "araştır", "arastir", "resim", "image", "wallpaper")):
+        query = str(goal or "").strip()
+        # Reduce command noise for search query.
+        query = re.sub(r"(?i)\b(safari|chrome|google|aç|ac|open|ara|search|resim|image|duvar kağıdı|wallpaper)\b", " ", query)
+        query = " ".join(query.split()).strip() or "genel arama"
+        tbm = "isch" if any(k in low for k in ("resim", "image", "fotoğraf", "fotograf", "wallpaper", "duvar kağıdı")) else ""
+        url = f"https://www.google.com/search?q={urllib.parse.quote_plus(query)}"
+        if tbm:
+            url += f"&tbm={tbm}"
+        steps.extend(
+            [
+                {"action": "open_app", "params": {"app_name": browser}},
+                {"action": "open_url", "params": {"url": url, "browser": browser}},
+                {"action": "wait", "params": {"seconds": 1.0}},
+            ]
+        )
+
+    typed = _extract_quoted_text(goal)
+    if typed:
+        steps.append({"action": "type_text", "params": {"text": typed, "press_enter": False}})
+
+    if any(k in low for k in ("enter", "gönder", "gonder", "search now")):
+        steps.append({"action": "press_key", "params": {"key": "enter"}})
+
+    if any(k in low for k in ("terminal", "komut", "command")):
+        steps = [{"action": "open_app", "params": {"app_name": "Terminal"}}, {"action": "wait", "params": {"seconds": 0.6}}] + steps
+
+    # Fallback baseline for generic computer-control intent.
+    if not steps:
+        steps = [
+            {"action": "open_app", "params": {"app_name": browser}},
+            {"action": "wait", "params": {"seconds": 0.7}},
+        ]
+    return steps
+
+
+def _normalize_text_for_match(text: str) -> str:
+    raw = str(text or "").strip().lower()
+    if not raw:
+        return ""
+    norm = unicodedata.normalize("NFKD", raw)
+    norm = "".join(ch for ch in norm if not unicodedata.combining(ch))
+    return re.sub(r"\s+", " ", norm).strip()
+
+
+def _goal_markers(goal: str) -> list[str]:
+    low = _normalize_text_for_match(goal)
+    if not low:
+        return []
+    words = re.findall(r"[a-z0-9]{3,}", low)
+    stop = {
+        "safari", "google", "open", "ac", "ara", "search", "enter", "bas", "ve", "ile", "icin",
+        "gore", "hedef", "gorev", "klavye", "mouse", "bilgisayar", "otomatik", "adim",
+    }
+    return [w for w in words if w not in stop][:6]
+
+
+def _screen_matches_goal(goal: str, analysis: Dict[str, Any]) -> bool:
+    markers = _goal_markers(goal)
+    if not markers:
+        return False
+    hay = " ".join(
+        [
+            _normalize_text_for_match(str(analysis.get("summary") or "")),
+            _normalize_text_for_match(str(analysis.get("ocr") or "")),
+            _normalize_text_for_match(json.dumps(analysis.get("objects", []), ensure_ascii=False)),
+        ]
+    )
+    if not hay.strip():
+        return False
+    hits = sum(1 for m in markers if m in hay)
+    return hits >= max(1, min(2, len(markers)))
+
+
+def _should_probe_vision(action: str, generated_from_goal: bool) -> bool:
+    if generated_from_goal:
+        return True
+    return action in {"open_url", "type_text", "press_key", "key_combo", "mouse_click"}
+
+
+def _build_goal_repair_steps(goal: str, analysis: Dict[str, Any]) -> list[dict[str, Any]]:
+    _ = analysis
+    normalized_goal = _normalize_text_for_match(goal)
+    query = " ".join(_goal_markers(goal)) or str(goal or "").strip()
+    if not query:
+        return []
+    steps: list[dict[str, Any]] = [
+        {"action": "key_combo", "params": {"combo": "cmd+l"}},
+        {"action": "type_text", "params": {"text": query, "press_enter": True}},
+        {"action": "wait", "params": {"seconds": 0.9}},
+    ]
+    if any(k in normalized_goal for k in ("indir", "download", "kaydet", "save")):
+        steps.extend(
+            [
+                {"action": "key_combo", "params": {"combo": "cmd+s"}},
+                {"action": "wait", "params": {"seconds": 0.5}},
+            ]
+        )
+    return steps
 
 async def _run_osascript(script: str) -> tuple[int, str, str]:
     """Helper to run AppleScript commands."""
@@ -24,6 +144,21 @@ async def _run_osascript(script: str) -> tuple[int, str, str]:
         stdout.decode("utf-8", errors="ignore").strip(),
         stderr.decode("utf-8", errors="ignore").strip(),
     )
+
+
+def _escape_applescript_text(text: str) -> str:
+    value = str(text or "")
+    value = value.replace("\\", "\\\\")
+    value = value.replace('"', '\\"')
+    return value
+
+
+def _sanitize_xy(x: int, y: int) -> tuple[int, int]:
+    xi = int(x)
+    yi = int(y)
+    if xi < 0 or yi < 0 or xi > 10000 or yi > 10000:
+        raise ValueError("Koordinatlar 0..10000 aralığında olmalı.")
+    return xi, yi
 
 # --- SYSTEM INFORMATION ---
 
@@ -220,6 +355,475 @@ async def toggle_dark_mode() -> dict[str, Any]:
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+
+@tool("type_text", "Type text into the currently focused app.")
+async def type_text(text: str, press_enter: bool = False) -> dict[str, Any]:
+    try:
+        payload = str(text or "")
+        if not payload:
+            return {"success": False, "error": "text boş olamaz."}
+        esc = _escape_applescript_text(payload)
+        script = f'tell application "System Events" to keystroke "{esc}"'
+        code, _out, err = await _run_osascript(script)
+        if code != 0:
+            return {"success": False, "error": err or "Metin yazılamadı."}
+        if bool(press_enter):
+            code2, _out2, err2 = await _run_osascript('tell application "System Events" to key code 36')
+            if code2 != 0:
+                return {"success": False, "error": err2 or "Enter tuşuna basılamadı."}
+        return {"success": True, "typed_chars": len(payload), "press_enter": bool(press_enter)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@tool("press_key", "Press a key with optional modifiers (cmd, ctrl, alt, shift).")
+async def press_key(key: str, modifiers: Optional[List[str]] = None) -> dict[str, Any]:
+    try:
+        raw_key = str(key or "").strip().lower()
+        if not raw_key:
+            return {"success": False, "error": "key gerekli."}
+
+        modifier_map = {
+            "cmd": "command down",
+            "command": "command down",
+            "ctrl": "control down",
+            "control": "control down",
+            "alt": "option down",
+            "option": "option down",
+            "shift": "shift down",
+        }
+        mods: list[str] = []
+        for m in (modifiers or []):
+            mm = str(m or "").strip().lower()
+            if mm in modifier_map and modifier_map[mm] not in mods:
+                mods.append(modifier_map[mm])
+        using_clause = f" using {{{', '.join(mods)}}}" if mods else ""
+
+        keycode_map = {
+            "enter": 36,
+            "return": 36,
+            "tab": 48,
+            "space": 49,
+            "esc": 53,
+            "escape": 53,
+            "left": 123,
+            "right": 124,
+            "down": 125,
+            "up": 126,
+            "delete": 51,
+            "backspace": 51,
+        }
+        if raw_key in keycode_map:
+            script = f'tell application "System Events" to key code {keycode_map[raw_key]}{using_clause}'
+        else:
+            if len(raw_key) != 1:
+                return {"success": False, "error": f"Desteklenmeyen key: {raw_key}"}
+            esc_key = _escape_applescript_text(raw_key)
+            script = f'tell application "System Events" to keystroke "{esc_key}"{using_clause}'
+
+        code, _out, err = await _run_osascript(script)
+        if code != 0:
+            return {"success": False, "error": err or "Tuş basımı başarısız."}
+        return {"success": True, "key": raw_key, "modifiers": modifiers or []}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@tool("key_combo", "Press a key combo like 'cmd+l' or 'cmd+shift+4'.")
+async def key_combo(combo: str) -> dict[str, Any]:
+    try:
+        parts = [p.strip().lower() for p in str(combo or "").split("+") if p.strip()]
+        if len(parts) < 2:
+            return {"success": False, "error": "combo formatı geçersiz. Örnek: cmd+l"}
+        key = parts[-1]
+        modifiers = parts[:-1]
+        return await press_key(key=key, modifiers=modifiers)
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@tool("mouse_move", "Move mouse pointer to given screen coordinates.")
+async def mouse_move(x: int, y: int) -> dict[str, Any]:
+    try:
+        xi, yi = _sanitize_xy(x, y)
+
+        try:
+            import pyautogui  # type: ignore
+            await asyncio.to_thread(pyautogui.moveTo, xi, yi)
+            return {"success": True, "x": xi, "y": yi, "method": "pyautogui"}
+        except Exception:
+            pass
+
+        cliclick = shutil.which("cliclick")
+        if cliclick:
+            proc = await asyncio.create_subprocess_exec(
+                cliclick,
+                f"m:{xi},{yi}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _stdout, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                return {"success": False, "error": stderr.decode("utf-8", errors="ignore").strip() or "Mouse move başarısız."}
+            return {"success": True, "x": xi, "y": yi, "method": "cliclick"}
+
+        return {"success": False, "error": "Mouse kontrolü için pyautogui veya cliclick gerekli."}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@tool("mouse_click", "Click mouse at given coordinates (left/right/double).")
+async def mouse_click(x: int, y: int, button: str = "left", double: bool = False) -> dict[str, Any]:
+    try:
+        xi, yi = _sanitize_xy(x, y)
+        btn = str(button or "left").strip().lower()
+        if btn not in {"left", "right"}:
+            return {"success": False, "error": "button sadece 'left' veya 'right' olabilir."}
+
+        try:
+            import pyautogui  # type: ignore
+            clicks = 2 if bool(double) else 1
+            await asyncio.to_thread(pyautogui.click, xi, yi, clicks=clicks, button=btn)
+            return {"success": True, "x": xi, "y": yi, "button": btn, "double": bool(double), "method": "pyautogui"}
+        except Exception:
+            pass
+
+        cliclick = shutil.which("cliclick")
+        if cliclick:
+            if bool(double):
+                action = "dc"
+            elif btn == "right":
+                action = "rc"
+            else:
+                action = "c"
+            proc = await asyncio.create_subprocess_exec(
+                cliclick,
+                f"{action}:{xi},{yi}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _stdout, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                return {"success": False, "error": stderr.decode("utf-8", errors="ignore").strip() or "Mouse click başarısız."}
+            return {"success": True, "x": xi, "y": yi, "button": btn, "double": bool(double), "method": "cliclick"}
+
+        return {"success": False, "error": "Mouse kontrolü için pyautogui veya cliclick gerekli."}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@tool("computer_use", "Execute a deterministic computer-use step list (app/url/keyboard/mouse/wait).")
+async def computer_use(
+    steps: Optional[List[Dict[str, Any]]] = None,
+    goal: str = "",
+    auto_plan: bool = True,
+    screenshot_after_each: bool = False,
+    final_screenshot: bool = True,
+    pause_ms: int = 200,
+    max_repair_attempts: int = 1,
+    vision_feedback: bool = True,
+    max_feedback_loops: int = 1,
+) -> dict[str, Any]:
+    """
+    Example step:
+    {"action":"open_app","params":{"app_name":"Safari"}}
+    {"action":"open_url","params":{"url":"https://google.com","browser":"Safari"}}
+    {"action":"key_combo","params":{"combo":"cmd+l"}}
+    {"action":"type_text","params":{"text":"köpek resimleri","press_enter":true}}
+    {"action":"mouse_click","params":{"x":500,"y":300}}
+    {"action":"wait","params":{"seconds":1.2}}
+    """
+    try:
+        raw_steps = steps if isinstance(steps, list) else []
+        generated_from_goal = False
+        if (not raw_steps) and auto_plan and str(goal or "").strip():
+            raw_steps = _goal_to_computer_steps(goal)
+            generated_from_goal = True
+        if not isinstance(raw_steps, list) or not raw_steps:
+            return {"success": False, "error": "steps listesi gerekli. Alternatif: goal alanı ile hedef tanımla."}
+        safe_steps = raw_steps[:40]
+        pending_steps: list[dict[str, Any]] = list(safe_steps)
+
+        results: list[dict[str, Any]] = []
+        screenshots: list[str] = []
+        vision_observations: list[dict[str, Any]] = []
+        goal_achieved = False
+        feedback_budget = max(0, min(3, int(max_feedback_loops or 0)))
+        feedback_used = 0
+
+        while pending_steps:
+            idx = len(results) + 1
+            if idx > 60:
+                return {
+                    "success": False,
+                    "error": "Adım limiti aşıldı (60). Plan kararsız olabilir.",
+                    "steps": results,
+                    "screenshots": screenshots,
+                }
+            step = pending_steps.pop(0)
+            if not isinstance(step, dict):
+                return {"success": False, "error": f"Adım {idx} geçersiz."}
+            action = str(step.get("action") or "").strip().lower()
+            params = step.get("params") if isinstance(step.get("params"), dict) else {}
+            if not action:
+                return {"success": False, "error": f"Adım {idx} action boş."}
+
+            def _normalize_url(u: str) -> str:
+                raw_u = str(u or "").strip()
+                if raw_u and not raw_u.startswith(("http://", "https://")):
+                    return f"https://{raw_u}"
+                return raw_u
+
+            async def _exec_step() -> dict[str, Any]:
+                if action == "open_app":
+                    return await open_app(app_name=str(params.get("app_name") or "").strip())
+                if action == "close_app":
+                    return await close_app(app_name=str(params.get("app_name") or "").strip())
+                if action == "open_url":
+                    return await open_url(url=_normalize_url(str(params.get("url") or "").strip()), browser=params.get("browser"))
+                if action == "key_combo":
+                    return await key_combo(combo=str(params.get("combo") or "").strip())
+                if action == "press_key":
+                    mods = params.get("modifiers")
+                    if not isinstance(mods, list):
+                        mods = []
+                    return await press_key(key=str(params.get("key") or "").strip(), modifiers=mods)
+                if action == "type_text":
+                    text_val = str(params.get("text") or "").strip()
+                    if not text_val and str(goal or "").strip():
+                        text_val = _extract_quoted_text(goal) or str(goal).strip()
+                    return await type_text(
+                        text=text_val,
+                        press_enter=bool(params.get("press_enter", False)),
+                    )
+                if action == "mouse_move":
+                    return await mouse_move(x=int(params.get("x", 0)), y=int(params.get("y", 0)))
+                if action == "mouse_click":
+                    return await mouse_click(
+                        x=int(params.get("x", 0)),
+                        y=int(params.get("y", 0)),
+                        button=str(params.get("button") or "left"),
+                        double=bool(params.get("double", False)),
+                    )
+                if action == "wait":
+                    try:
+                        sec = float(params.get("seconds", 0.5) or 0.5)
+                    except Exception:
+                        sec = 0.5
+                    sec = max(0.0, min(10.0, sec))
+                    await asyncio.sleep(sec)
+                    return {"success": True, "waited_seconds": sec}
+                return {"success": False, "error": f"Adım {idx} desteklenmeyen action: {action}"}
+
+            res = await _exec_step()
+            retries_left = max(0, min(2, int(max_repair_attempts or 0)))
+            while retries_left > 0 and not bool(res.get("success")):
+                retries_left -= 1
+                low_err = str(res.get("error") or "").lower()
+                if action == "open_url" and "geçersiz" in low_err:
+                    params["url"] = _normalize_url(str(params.get("url") or ""))
+                elif action in {"mouse_move", "mouse_click"} and any(k in low_err for k in ("pyautogui", "cliclick", "gerekli")):
+                    # Soft repair: fall back to keyboard navigation when pointer control unavailable.
+                    res = {"success": True, "warning": "mouse_unavailable_fallback", "message": "Mouse kontrol aracı yok; adım atlandı."}
+                    break
+                else:
+                    break
+                res = await _exec_step()
+
+            results.append({"step": idx, "action": action, "success": bool(res.get("success")), "result": res})
+            if not bool(res.get("success")):
+                return {"success": False, "error": f"Adım {idx} başarısız: {res.get('error', 'unknown')}", "steps": results, "screenshots": screenshots}
+
+            if screenshot_after_each:
+                shot = await take_screenshot(filename=f"computer_use_step_{idx}_{int(time.time())}.png")
+                if shot.get("success") and shot.get("path"):
+                    screenshots.append(str(shot.get("path")))
+
+            if vision_feedback and str(goal or "").strip() and _should_probe_vision(action, generated_from_goal):
+                analysis = await analyze_screen(prompt=f"Hedef doğrulaması: {goal}")
+                brief = {
+                    "step": idx,
+                    "action": action,
+                    "success": bool(analysis.get("success")),
+                    "summary": str(analysis.get("summary") or "")[:400],
+                    "ocr": str(analysis.get("ocr") or "")[:400],
+                }
+                vision_observations.append(brief)
+                if bool(analysis.get("success")) and _screen_matches_goal(goal, analysis):
+                    goal_achieved = True
+                    break
+                if feedback_used < feedback_budget:
+                    repair_steps = _build_goal_repair_steps(goal, analysis)
+                    if repair_steps:
+                        pending_steps = repair_steps + pending_steps
+                        feedback_used += 1
+
+            if pending_steps:
+                await asyncio.sleep(max(0.0, min(2.0, pause_ms / 1000.0)))
+
+        final_path = ""
+        if final_screenshot:
+            shot = await take_screenshot(filename=f"computer_use_final_{int(time.time())}.png")
+            if shot.get("success") and shot.get("path"):
+                final_path = str(shot.get("path"))
+                screenshots.append(final_path)
+
+        # Final visibility check for externally-triggered flows without step-level probes.
+        if vision_feedback and str(goal or "").strip() and not goal_achieved and not vision_observations:
+            loops = max(0, min(2, int(max_feedback_loops or 0)))
+            for _ in range(loops + 1):
+                analysis = await analyze_screen(prompt=f"Hedef doğrulaması: {goal}")
+                vision_observations.append(
+                    {
+                        "success": bool(analysis.get("success")),
+                        "summary": str(analysis.get("summary") or "")[:400],
+                        "ocr": str(analysis.get("ocr") or "")[:400],
+                    }
+                )
+                if bool(analysis.get("success")) and _screen_matches_goal(goal, analysis):
+                    goal_achieved = True
+                    break
+                repair_steps = _build_goal_repair_steps(goal, analysis)
+                if not repair_steps:
+                    break
+                for repair in repair_steps:
+                    r_action = str(repair.get("action") or "").strip().lower()
+                    r_params = repair.get("params") if isinstance(repair.get("params"), dict) else {}
+                    if r_action == "key_combo":
+                        await key_combo(combo=str(r_params.get("combo") or "").strip())
+                    elif r_action == "type_text":
+                        await type_text(
+                            text=str(r_params.get("text") or "").strip(),
+                            press_enter=bool(r_params.get("press_enter", False)),
+                        )
+                    elif r_action == "wait":
+                        try:
+                            sec = float(r_params.get("seconds", 0.5) or 0.5)
+                        except Exception:
+                            sec = 0.5
+                        await asyncio.sleep(max(0.0, min(5.0, sec)))
+
+        return {
+            "success": True,
+            "steps_executed": len(results),
+            "steps": results,
+            "screenshots": screenshots,
+            "final_screenshot": final_path,
+            "generated_from_goal": generated_from_goal,
+            "planned_steps": safe_steps if generated_from_goal else [],
+            "goal": str(goal or ""),
+            "goal_achieved": bool(goal_achieved),
+            "vision_observations": vision_observations,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+# --- Desktop & Wallpaper ---
+
+@tool("set_wallpaper", "Masaüstü duvar kağıdını verilen görselle değiştirir.")
+async def set_wallpaper(image_path: Optional[str] = None, search_query: Optional[str] = None, image_url: Optional[str] = None) -> dict[str, Any]:
+    """
+    If image_path is provided, use it.
+    If image_url is provided, download it.
+    Otherwise download a wallpaper for search_query (default: 'dog wallpaper')
+    and set it for all desktops (macOS).
+    """
+    try:
+        target_dir = Path.home() / "Pictures"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        dest = target_dir / "elyan_wallpaper.jpg"
+
+        async def _download_to_dest(url: str) -> tuple[bool, str]:
+            cmd = [
+                "curl",
+                "-fL",
+                "--connect-timeout",
+                "10",
+                "--max-time",
+                "45",
+                "-A",
+                "Mozilla/5.0 (Elyan)",
+                "-o",
+                str(dest),
+                url,
+            ]
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, err = await proc.communicate()
+            if proc.returncode == 0 and dest.exists() and dest.stat().st_size > 0:
+                return True, ""
+            return False, err.decode("utf-8", errors="ignore").strip()
+
+        # Resolve source image
+        src_path = None
+        if image_path:
+            src_path = Path(str(image_path)).expanduser()
+            if not src_path.exists():
+                return {"success": False, "error": f"Görsel bulunamadı: {src_path}"}
+        elif image_url:
+            url = image_url.strip()
+            if not url.startswith(("http://", "https://")):
+                return {"success": False, "error": f"Geçersiz URL: {url}"}
+            ok, err = await _download_to_dest(url)
+            if not ok:
+                return {"success": False, "error": f"Görsel indirilemedi: {err or 'download failed'}"}
+            src_path = dest
+        else:
+            query = search_query or "dog wallpaper"
+            candidates = []
+            q = urllib.parse.quote_plus(query)
+            if any(k in query.lower() for k in ("dog", "köpek", "kopek")):
+                candidates.append("https://dog.ceo/api/breeds/image/random")
+            candidates.extend(
+                [
+                    f"https://source.unsplash.com/1920x1080/?{q}",
+                    f"https://picsum.photos/seed/{q}/1920/1080",
+                ]
+            )
+            downloaded = False
+            last_err = ""
+            for candidate in candidates:
+                url = candidate
+                if "dog.ceo" in candidate:
+                    try:
+                        with urllib.request.urlopen(candidate, timeout=10) as resp:
+                            data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+                            msg = str(data.get("message") or "").strip()
+                            if msg.startswith(("http://", "https://")):
+                                url = msg
+                    except Exception:
+                        pass
+                ok, err = await _download_to_dest(url)
+                if ok:
+                    downloaded = True
+                    break
+                last_err = err or last_err
+            if not downloaded:
+                return {"success": False, "error": f"Görsel indirilemedi: {last_err or 'no reachable image source'}"}
+            src_path = dest
+
+        # Copy to destination if needed
+        if src_path != dest:
+            shutil.copyfile(src_path, dest)
+
+        # Set wallpaper on macOS
+        script = f'tell application "System Events" to set picture of every desktop to "{dest}"'
+        code, _, err = await _run_osascript(script)
+        if code != 0:
+            return {"success": False, "error": err or "Duvar kağıdı ayarlanamadı."}
+
+        return {
+            "success": True,
+            "path": str(dest),
+            "message": f"Duvar kağıdı güncellendi: {dest}",
+            "query": search_query,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 @tool("read_clipboard", "Get current text from clipboard.")
 async def read_clipboard() -> dict[str, Any]:
     try:
@@ -244,8 +848,85 @@ async def write_clipboard(text: str) -> dict[str, Any]:
 async def take_screenshot(filename: Optional[str] = None) -> dict[str, Any]:
     try:
         path = Path.home() / "Desktop" / (filename or f"SS_{int(time.time())}.png")
-        await asyncio.create_subprocess_exec("screencapture", "-x", str(path))
-        return {"success": True, "path": str(path)}
+        proc = await asyncio.create_subprocess_exec(
+            "screencapture",
+            "-x",
+            str(path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            error = (stderr.decode("utf-8", errors="ignore") or stdout.decode("utf-8", errors="ignore")).strip()
+            return {"success": False, "error": error or "Ekran görüntüsü alınamadı."}
+        if not path.exists():
+            return {"success": False, "error": f"Ekran görüntüsü dosyası oluşmadı: {path}"}
+        size_bytes = int(path.stat().st_size) if path.is_file() else 0
+        if size_bytes <= 0:
+            return {"success": False, "error": f"Ekran görüntüsü boş görünüyor: {path}"}
+        return {"success": True, "path": str(path), "size_bytes": size_bytes}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@tool("analyze_screen", "Capture current screen and analyze its content with vision AI.")
+async def analyze_screen(prompt: str = "Ekranda ne var? Özetle.") -> dict[str, Any]:
+    """
+    1) Ekran görüntüsü alır (Desktop'a kaydeder)
+    2) Vision modeli ile analiz eder (Gemini varsa onu, yoksa yerel Ollama/Llava)
+    3) Yapılandırılmış çıktı döner: ocr, objects, summary, risks
+    """
+    try:
+        shot_name = f"screen_{int(time.time())}.png"
+        screenshot = await take_screenshot(shot_name)
+        if not screenshot.get("success"):
+            return {"success": False, "error": screenshot.get("error", "Ekran görüntüsü alınamadı.")}
+        shot_path = screenshot.get("path")
+        from tools.vision_tools import analyze_image
+        analysis = await analyze_image(shot_path, prompt=prompt)
+        summary = analysis.get("analysis", "")
+        # Basit ayrıştırma: OCR/objects alanları için placeholders
+        result = {
+            "success": bool(analysis.get("success")),
+            "path": shot_path,
+            "summary": summary,
+            "ocr": analysis.get("ocr", ""),
+            "objects": analysis.get("objects", []),
+            "risks": analysis.get("risks", []),
+            "provider": analysis.get("provider", ""),
+            "error": analysis.get("error", ""),
+        }
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@tool("capture_region", "Capture a selected screen region (macOS screencapture -R).")
+async def capture_region(x: int, y: int, width: int, height: int, filename: Optional[str] = None) -> dict[str, Any]:
+    """
+    Ekranın belirli bir bölgesini yakalar. Parametreler piksel cinsindendir.
+    """
+    try:
+        shot_name = filename or f"region_{int(time.time())}.png"
+        path = Path.home() / "Desktop" / shot_name
+        region_arg = f"{int(x)},{int(y)},{int(width)},{int(height)}"
+        proc = await asyncio.create_subprocess_exec(
+            "screencapture",
+            "-x",
+            "-R",
+            region_arg,
+            str(path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            error = (stderr.decode("utf-8", errors="ignore") or stdout.decode("utf-8", errors="ignore")).strip()
+            return {"success": False, "error": error or "Bölge yakalama başarısız."}
+        if not path.exists():
+            return {"success": False, "error": f"Bölge görüntüsü dosyası oluşmadı: {path}"}
+        size_bytes = int(path.stat().st_size) if path.is_file() else 0
+        if size_bytes <= 0:
+            return {"success": False, "error": f"Bölge görüntüsü boş görünüyor: {path}"}
+        return {"success": True, "path": str(path), "size_bytes": size_bytes}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -260,12 +941,45 @@ async def send_notification(title: str = "Elyan", message: str = "") -> dict[str
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-@tool("open_url", "Open a website in default browser.")
-async def open_url(url: str) -> dict[str, Any]:
+@tool("open_url", "Open a website in default browser or a specific browser app.")
+async def open_url(url: str, browser: Optional[str] = None) -> dict[str, Any]:
     try:
-        if not url.startswith("http"): url = "https://" + url
-        await asyncio.create_subprocess_exec("open", url)
-        return {"success": True}
+        target_url = str(url or "").strip()
+        if not target_url:
+            return {"success": False, "error": "url gerekli."}
+        if not target_url.startswith("http"):
+            target_url = "https://" + target_url
+
+        app_name = str(browser or "").strip()
+        if app_name:
+            if platform.system() == "Darwin":
+                # Open in specific browser app (e.g. Safari) instead of default browser.
+                script = (
+                    f'tell application "{app_name}"\n'
+                    "activate\n"
+                    f'open location "{target_url}"\n'
+                    "end tell"
+                )
+                code, _out, err = await _run_osascript(script)
+                if code != 0:
+                    return {"success": False, "error": err or f"{app_name} içinde URL açılamadı."}
+                return {"success": True, "url": target_url, "browser": app_name}
+
+            proc = await asyncio.create_subprocess_exec(
+                "open",
+                "-a",
+                app_name,
+                target_url,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _stdout, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                return {"success": False, "error": stderr.decode("utf-8", errors="ignore").strip() or f"{app_name} açılamadı."}
+            return {"success": True, "url": target_url, "browser": app_name}
+
+        await asyncio.create_subprocess_exec("open", target_url)
+        return {"success": True, "url": target_url}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -427,9 +1141,27 @@ async def open_project_in_ide(project_path: str, ide: str = "vscode") -> dict[st
                 errors.append(f"{app_name}: {err}")
 
         details = " | ".join(errors[:3]) if errors else "uygulama bulunamadı veya açılamadı"
+        # Graceful fallback: open folder in Finder so workflow can continue.
+        proc = await asyncio.create_subprocess_exec(
+            "open",
+            str(target),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode == 0:
+            return {
+                "success": True,
+                "warning": f"IDE açılamadı ({normalized_ide}): {details}",
+                "ide": normalized_ide,
+                "project_path": str(target),
+                "method": "finder-fallback",
+                "message": f"IDE bulunamadı, proje klasörü Finder'da açıldı: {target}",
+            }
+        fallback_err = (stderr.decode("utf-8", errors="ignore") or stdout.decode("utf-8", errors="ignore")).strip()
         return {
             "success": False,
-            "error": f"IDE açılamadı ({normalized_ide}): {details}",
+            "error": f"IDE açılamadı ({normalized_ide}): {details} | Finder fallback başarısız: {fallback_err or 'open failed'}",
             "ide": normalized_ide,
             "project_path": str(target),
         }

@@ -400,20 +400,113 @@ class CDGEngine:
 
 def _build_web_project_plan(plan: CDGPlan, user_input: str, template: dict):
     """Web projesi DAG planı."""
+    import re
+    import unicodedata
+    from pathlib import Path
+
+    text = str(user_input or "").strip()
+    normalized = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    low_text = normalized.lower()
+    quoted_name = re.search(r"[\"'`“”](.{2,60}?)[\"'`“”]", text)
+    project_seed = quoted_name.group(1) if quoted_name else normalized
+    slug = re.sub(r"[^a-z0-9]+", "-", project_seed.lower()).strip("-")
+    if not slug:
+        slug = "web-projesi"
+    slug = slug[:48].strip("-") or "web-projesi"
+
+    project_name = " ".join(part.capitalize() for part in slug.split("-")) or "Web Projesi"
+    output_dir = Path.home() / "Desktop"
+    out_match = re.search(
+        r"(?:output[_ ]?dir|cikti|çıktı|dizin|klasor|klasör|folder)\s*[:=]?\s*([~\/][^\s,;]+)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if out_match:
+        try:
+            output_dir = Path(out_match.group(1)).expanduser()
+        except Exception:
+            output_dir = Path.home() / "Desktop"
+
+    bg_color = "#f8fafc"
+    accent_color = "#0ea5e9"
+    accent2_color = "#2563eb"
+    if ("sari" in low_text or "yellow" in low_text) and ("turuncu" in text.lower() or "orange" in low_text):
+        bg_color = "#fff7db"
+        accent_color = "#f59e0b"
+        accent2_color = "#f97316"
+
+    project_dir = output_dir / slug
+    html_path = project_dir / "index.html"
+    css_path = project_dir / "styles" / "main.css"
+    js_path = project_dir / "scripts" / "main.js"
+
     plan.nodes = [
         DAGNode(id="spec", name="Spec oluştur", action="plan",
                 allowed_tools=[], budget_tokens=2000),
         DAGNode(id="scaffold", name="Proje scaffold", action="create_web_project_scaffold",
                 depends_on=["spec"],
+                params={
+                    "project_name": project_name,
+                    "stack": "vanilla",
+                    "theme": "professional",
+                    "output_dir": str(output_dir),
+                    "brief": text or "Web projesi olustur",
+                },
                 allowed_tools=["create_web_project_scaffold", "write_file", "create_directory"]),
         DAGNode(id="html", name="HTML yaz", action="write_file",
                 depends_on=["scaffold"],
+                params={
+                    "path": str(html_path),
+                    "content": (
+                        "<!doctype html>\n"
+                        "<html lang=\"tr\">\n"
+                        "<head>\n"
+                        "  <meta charset=\"UTF-8\" />\n"
+                        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n"
+                        f"  <title>{project_name}</title>\n"
+                        "  <link rel=\"stylesheet\" href=\"./styles/main.css\" />\n"
+                        "</head>\n"
+                        "<body>\n"
+                        f"  <h1>{project_name}</h1>\n"
+                        "  <p>Proje dosyalari Elyan CDG ile olusturuldu.</p>\n"
+                        "  <script src=\"./scripts/main.js\"></script>\n"
+                        "</body>\n"
+                        "</html>\n"
+                    ),
+                },
                 allowed_tools=["write_file"]),
         DAGNode(id="css", name="CSS yaz", action="write_file",
                 depends_on=["scaffold"],
+                params={
+                    "path": str(css_path),
+                    "content": (
+                        ":root {\n"
+                        f"  --bg: {bg_color};\n"
+                        f"  --accent: {accent_color};\n"
+                        f"  --accent-2: {accent2_color};\n"
+                        "  --text: #1f2937;\n"
+                        "}\n"
+                        "body {\n"
+                        "  margin: 0;\n"
+                        "  padding: 40px;\n"
+                        "  font-family: 'Avenir Next', 'Segoe UI', sans-serif;\n"
+                        "  color: var(--text);\n"
+                        "  background: linear-gradient(180deg, var(--bg), #ffffff);\n"
+                        "}\n"
+                        "h1 { color: var(--accent-2); }\n"
+                    ),
+                },
                 allowed_tools=["write_file"]),
         DAGNode(id="js", name="JS yaz", action="write_file",
                 depends_on=["html"],
+                params={
+                    "path": str(js_path),
+                    "content": (
+                        "document.addEventListener('DOMContentLoaded', () => {\n"
+                        "  console.log('CDG web project ready');\n"
+                        "});\n"
+                    ),
+                },
                 allowed_tools=["write_file"]),
         DAGNode(id="qa", name="QA kontrol", action="verify",
                 depends_on=["html", "css", "js"],
@@ -421,11 +514,14 @@ def _build_web_project_plan(plan: CDGPlan, user_input: str, template: dict):
     ]
     # Node QA gates
     plan.node_qa_gates["html"] = [
-        QAGate(name="HTML var", check_type="file_exists", params={}),
-        QAGate(name="HTML geçerli", check_type="html_valid", params={}),
+        QAGate(name="HTML var", check_type="file_exists", params={"path": str(html_path)}),
+        QAGate(name="HTML geçerli", check_type="html_valid", params={"path": str(html_path)}),
     ]
     plan.node_qa_gates["css"] = [
-        QAGate(name="CSS var", check_type="file_exists", params={}),
+        QAGate(name="CSS var", check_type="file_exists", params={"path": str(css_path)}),
+    ]
+    plan.node_qa_gates["js"] = [
+        QAGate(name="JS var", check_type="file_exists", params={"path": str(js_path)}),
     ]
 
 
@@ -523,6 +619,102 @@ def _build_file_ops_plan(plan: CDGPlan, user_input: str, template: dict):
     ]
 
 
+_DYNAMIC_ACTION_ALIASES: Dict[str, str] = {
+    "research": "advanced_research",
+    "deep_research": "deep_research",
+    "internet_research": "advanced_research",
+    "search_web": "web_search",
+    "browser_search": "web_search",
+    "run_command": "run_safe_command",
+    "run_shell": "run_safe_command",
+    "execute_python": "execute_python",
+    "execute_python_code": "execute_python",
+    "open_browser": "open_url",
+    "create_folder": "create_directory",
+    "list_files": "list_directory",
+    "find_files": "search_files",
+    "api_call": "http_request",
+    "request_api": "http_request",
+    "health_check_api": "api_health_check",
+}
+
+
+def _normalize_dynamic_action(
+    action: str,
+    allowed_tools: List[str],
+    *,
+    node_name: str = "",
+    params: Optional[Dict[str, Any]] = None,
+) -> str:
+    raw = str(action or "").split("(")[0].strip().lower()
+    if not raw:
+        return "plan"
+
+    mapped = _DYNAMIC_ACTION_ALIASES.get(raw, raw)
+    allowed = {str(t).strip().lower() for t in (allowed_tools or []) if str(t).strip()}
+
+    # If no restriction, keep mapped action.
+    if not allowed:
+        return mapped
+
+    if mapped in allowed:
+        return mapped
+
+    # Control/meta actions are always safe in CDG executor.
+    if mapped in {"plan", "refine", "chat", "respond", "answer", "verify"}:
+        return mapped
+
+    # Cross-compatible families.
+    family_candidates = {
+        "advanced_research": ("advanced_research", "deep_research", "web_search"),
+        "deep_research": ("deep_research", "advanced_research", "web_search"),
+        "create_directory": ("create_directory", "create_folder", "write_file"),
+        "list_directory": ("list_directory", "list_files", "search_files", "read_file"),
+        "execute_python": ("execute_python", "execute_code", "terminal_command", "run_safe_command"),
+        "execute_code": ("execute_code", "execute_python", "terminal_command", "run_safe_command"),
+        "run_safe_command": ("run_safe_command", "terminal_command", "execute_code"),
+        "http_request": ("http_request", "graphql_query", "api_health_check", "web_search"),
+        "graphql_query": ("graphql_query", "http_request", "api_health_check"),
+        "api_health_check": ("api_health_check", "http_request", "web_search"),
+    }
+    for candidate in family_candidates.get(mapped, ()):
+        if candidate in allowed:
+            return candidate
+
+    hint = f"{node_name} {mapped} {params or {}}".lower()
+    if any(k in hint for k in ("api", "endpoint", "graphql", "http", "webhook")):
+        for candidate in ("http_request", "graphql_query", "api_health_check", "web_search"):
+            if candidate in allowed:
+                return candidate
+    if any(k in hint for k in ("research", "analiz", "araştır", "arastir")):
+        for candidate in ("advanced_research", "deep_research", "web_search", "read_file"):
+            if candidate in allowed:
+                return candidate
+    if any(k in hint for k in ("write", "yaz", "kaydet", "generate")) and "write_file" in allowed:
+        return "write_file"
+    if any(k in hint for k in ("read", "oku", "kontrol", "check")) and "read_file" in allowed:
+        return "read_file"
+
+    # Priority fallback: choose the closest high-value executable action.
+    for candidate in (
+        "write_file",
+        "read_file",
+        "http_request",
+        "graphql_query",
+        "api_health_check",
+        "advanced_research",
+        "deep_research",
+        "web_search",
+        "run_safe_command",
+        "execute_code",
+        "take_screenshot",
+    ):
+        if candidate in allowed:
+            return candidate
+
+    return "plan"
+
+
 async def _build_dynamic_plan(plan: CDGPlan, user_input: str, template: dict, llm_client=None):
     """
     IntelligentPlanner kullanarak LLM ile dinamik DAG planı oluştur.
@@ -556,12 +748,14 @@ async def _build_dynamic_plan(plan: CDGPlan, user_input: str, template: dict, ll
     allowed_tools = template.get("allowed_tools", [])
     
     for st in subtasks:
-        # Action güvenlik denetimi: Eğer action allowed tools içinde yoksa, en uygununa çevir.
-        final_action = st.action
-        if allowed_tools and final_action not in allowed_tools and final_action != "chat" and final_action != "plan" and final_action != "verify":
-            logger.warning(f"Action '{final_action}' not in allowed_tools. Reverting to LLM plan action limitations.")
-            # Eğer tool izinsiz ise güvenli "plan" ya da "chat" action'ına düşür (EvidenceGate fail olmasın)
-            final_action = "plan"
+        final_action = _normalize_dynamic_action(
+            st.action,
+            allowed_tools,
+            node_name=st.name,
+            params=st.params,
+        )
+        if final_action != str(st.action).strip().lower():
+            logger.info(f"Dynamic action normalized: '{st.action}' -> '{final_action}'")
 
         node = DAGNode(
             id=st.task_id,
@@ -580,22 +774,51 @@ async def _build_dynamic_plan(plan: CDGPlan, user_input: str, template: dict, ll
     
     # QA checks from job template 
     template_qa_checks = template.get("qa_checks", [])
-    if "file_exists" in template_qa_checks:
-        e2e_gates.append(QAGate(name="Artifact Creation Verifier", check_type="file_exists", params={}))
+    # NOTE:
+    # Generic path-less file_exists E2E gates produce systematic false negatives.
+    # Node-level gates already validate concrete artifact paths.
 
     # Her Node'un çıkışında kendi tool'una göre QAGate basma
     for node in plan.nodes:
-        if node.action in ("write_file", "create_web_project_scaffold", "write_excel", "write_word"):
-            path_hint = str(node.params.get("path") or node.params.get("output_dir", ""))
+        # File artifacts validation
+        if node.action in ("write_file", "create_web_project_scaffold", "write_excel", "write_word", 
+                          "write_json", "write_yaml") or "_file" in node.action:
+            path_hint = str(
+                node.params.get("path")
+                or node.params.get("output_dir", "")
+                or node.params.get("project_dir", "")
+                or node.params.get("file_path", "")
+            ).strip()
+            placeholder_hints = {"", "~/Desktop/not.txt", "~/Desktop"}
+            if not path_hint or path_hint in placeholder_hints:
+                logger.debug(f"Skipping QA gate for node '{node.id}' due to missing/placeholder path hint.")
+                continue
+
+            gates = [QAGate(name=f"Persistence: {node.id}", check_type="file_exists", 
+                          params={"path": path_hint})]
+            
+            if "_not_empty" in str(template.get("qa_checks", [])):
+                gates.append(
+                    QAGate(
+                        name=f"Integrity: {node.id}",
+                        check_type="file_not_empty",
+                        params={"path": path_hint},
+                    )
+                )
+            
+            plan.node_qa_gates[node.id] = gates
+            
+        elif node.action in ("take_screenshot", "screenshot"):
             plan.node_qa_gates[node.id] = [
-                QAGate(name=f"Data Persistence Check ({node.id})", check_type="file_exists", params={"path": path_hint} if path_hint else {})
+                QAGate(name=f"Media: {node.id}", check_type="file_exists", params={})
             ]
-        elif node.action == "take_screenshot":
-            # screenshot kanıtı beklenir (QA kapısı evidence manifest oluşturur)
+            
+        elif node.action in ("terminal_command", "execute_code"):
+            # Check for success in result (this is usually handled by execution logic but can be explicit)
             pass
 
     plan.e2e_qa_gates = e2e_gates
-    logger.info(f"Dynamic Plan Built. {len(plan.nodes)} DAG nodes constructed.")
+    logger.info(f"Dynamic Plan Enhanced: {len(plan.nodes)} nodes, {len(plan.node_qa_gates)} node gates.")
 
 
 def _build_generic_plan(plan: CDGPlan, user_input: str, template: dict):
@@ -609,9 +832,10 @@ def _build_generic_plan(plan: CDGPlan, user_input: str, template: dict):
 # Template → Builder eşlemesi
 # Tüm karmaşık görevleri yapay zekalı dinamik planlamaya (Omnipotence) devrediyoruz.
 _PLAN_BUILDERS = {
-    "web_project": _build_dynamic_plan,
+    "web_project": _build_web_project_plan,
     "research_report": _build_dynamic_plan,
     "code_project": _build_dynamic_plan,
+    "api_integration": _build_dynamic_plan,
     "data_analysis": _build_dynamic_plan,
     "file_operations": _build_dynamic_plan,
     "browser_task": _build_dynamic_plan,

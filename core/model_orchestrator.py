@@ -11,8 +11,36 @@ logger = get_logger("model_orchestrator")
 class ModelOrchestrator:
     def __init__(self):
         self.providers: Dict[str, Dict[str, Any]] = {}
-        self.active_provider = elyan_config.get("models.default.provider", "ollama")
+        self.active_provider = elyan_config.get("models.default.provider", "ollama") or "ollama"
+        self.metrics: Dict[str, Dict[str, Any]] = {}
         self._load_providers()
+
+    def record_metric(self, provider: str, success: bool, latency: float):
+        if provider not in self.metrics:
+            self.metrics[provider] = {"success": 0, "failure": 0, "latencies": []}
+        
+        m = self.metrics[provider]
+        if success:
+            m["success"] += 1
+        else:
+            m["failure"] += 1
+        
+        m["latencies"].append(latency)
+        if len(m["latencies"]) > 50: m["latencies"].pop(0)
+
+    def get_health_report(self) -> Dict[str, Any]:
+        report = {}
+        for p, m in self.metrics.items():
+            total = m["success"] + m["failure"]
+            rate = (m["success"] / total * 100) if total > 0 else 0
+            avg_latency = sum(m["latencies"]) / len(m["latencies"]) if m["latencies"] else 0
+            report[p] = {
+                "success_rate": f"{rate:.1f}%",
+                "avg_latency": f"{avg_latency:.3f}s",
+                "total_calls": total,
+                "status": self.providers.get(p, {}).get("status", "unknown")
+            }
+        return report
 
     def _load_from_keychain(self, provider: str) -> Optional[str]:
         # Try env var first (fastest)
@@ -99,8 +127,9 @@ class ModelOrchestrator:
         # ollama/local: user may have arbitrary local model names.
         return model
 
-    def get_best_available(self, role: str = "inference") -> Dict[str, Any]:
-        """İstenen rol için en iyi aktif sağlayıcıyı döner"""
+    def get_best_available(self, role: str = "inference", exclude: set = None) -> Dict[str, Any]:
+        """İstenen rol için en iyi aktif sağlayıcıyı döner (hariç tutulanlar dışında)"""
+        if exclude is None: exclude = set()
         
         # 1. Ask Neural Router for the preferred provider/model for this role
         try:
@@ -110,27 +139,34 @@ class ModelOrchestrator:
                 preferred = {}
         except Exception:
             preferred = {}
-        pref_provider = preferred.get("provider")
+            
+        pref_provider = preferred.get("provider") or preferred.get("type")
+        if pref_provider and pref_provider not in self.providers:
+            pref_provider = None
         pref_model = preferred.get("model")
         
-        if pref_provider in self.providers:
-            # Return provider config with the specific model requested by the router
+        if pref_provider in self.providers and pref_provider not in exclude:
             config = self.providers[pref_provider].copy()
             if pref_model:
                 config["model"] = self._normalize_model_for_provider(pref_provider, pref_model)
             return config
 
-        # 2. Fallback: Active provider
-        if self.active_provider in self.providers:
-            return self.providers[self.active_provider]
-        
-        # 3. Fallback: First available in priority list
+        # 2. Fallback: Search in priority list, avoiding excluded ones
         priority = ["groq", "openai", "anthropic", "google", "ollama"]
+        # Include active provider at top of priority if not already there
+        if self.active_provider not in priority:
+            priority.insert(0, self.active_provider)
+            
         for p in priority:
-            if p in self.providers:
+            if p in self.providers and p not in exclude:
                 return self.providers[p]
         
-        return {"type": "none", "error": "No providers configured"}
+        # 3. Last resort: any available that is not excluded
+        for p_type, config in self.providers.items():
+            if p_type not in exclude:
+                return config
+
+        return {"type": "none", "error": f"No providers available (excluded: {exclude})"}
 
     def add_provider(self, p_type: str, api_key: str, model: str = None):
         env_key = f"{p_type.upper()}_API_KEY"

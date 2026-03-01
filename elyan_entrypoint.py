@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import inspect
 import os
 import sys
 from pathlib import Path
@@ -61,6 +62,26 @@ def _load_main_from_file(cli_main_path: Path) -> Callable[[list[str] | None], in
     return main_fn
 
 
+def _invoke_main(main_fn: Callable, argv: list[str] | None):
+    """
+    Backward-compatible entrypoint invocation.
+    Supports both `main()` and `main(argv)` signatures.
+    """
+    try:
+        sig = inspect.signature(main_fn)
+        params = list(sig.parameters.values())
+        has_varargs = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params)
+        if has_varargs or len(params) >= 1:
+            return main_fn(argv)
+        return main_fn()
+    except TypeError as exc:
+        # Defensive fallback for dynamically wrapped main() functions.
+        msg = str(exc)
+        if "positional arguments but" in msg and "main()" in msg:
+            return main_fn()
+        raise
+
+
 def main(argv: list[str] | None = None):
     errors: list[str] = []
     for root in _iter_candidate_roots():
@@ -72,7 +93,7 @@ def main(argv: list[str] | None = None):
             sys.path.insert(0, root_str)
         os.environ.setdefault("ELYAN_PROJECT_DIR", root_str)
         try:
-            return _load_main_from_file(cli_main)(argv)
+            return _invoke_main(_load_main_from_file(cli_main), argv)
         except Exception as exc:
             errors.append(f"{cli_main}: {exc}")
             continue

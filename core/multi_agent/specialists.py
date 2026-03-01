@@ -16,8 +16,16 @@ class SpecialistIdentity:
     system_prompt: str
     preferred_tools: List[str]
     domain: str
+    preferred_model: str = "gpt-4o" # Default model for this specialist
     emoji: str = "🤖"
 
+class SpecialistChain:
+    """
+    Defines a sequence of specialists to handle a specific workflow.
+    """
+    def __init__(self, name: str, steps: List[str]):
+        self.name = name
+        self.steps = steps # List of specialist keys
 
 class SpecialistRegistry:
     def __init__(self):
@@ -42,6 +50,7 @@ Kullanıcının asıl niyetini anla — sıradan konuşma diliyle söylenen tekn
                 name="Koordinatör",
                 role="Görev Koordinatörü ve Takım Lideri",
                 emoji="🎯",
+                preferred_model="gpt-4o",
                 system_prompt=(
                     "Sen takımın liderisin. Gelen görevi analiz edip doğru uzmanlara yönlendirirsin. "
                     "Doğal dilde söylenen her talebi anlayıp teknik görevlere çevirirsin.\n\n"
@@ -61,6 +70,7 @@ Kullanıcının asıl niyetini anla — sıradan konuşma diliyle söylenen tekn
                 name="Araştırmacı",
                 role="Derin Araştırma ve Analiz Uzmanı",
                 emoji="🔬",
+                preferred_model="google/gemini-pro",
                 system_prompt=(
                     "Sen bir araştırma uzmanısın. Konuyu derinlemesine araştırır, "
                     "birden fazla kaynaktan veri toplar, çapraz doğrulama yapar ve "
@@ -81,6 +91,7 @@ Kullanıcının asıl niyetini anla — sıradan konuşma diliyle söylenen tekn
                 name="Yazılımcı",
                 role="Full-Stack Geliştirici ve İçerik Üretici",
                 emoji="🏗️",
+                preferred_model="claude-3-5-sonnet",
                 system_prompt=(
                     "Sen kıdemli bir yazılımcısın. Temiz, hatasız, production-ready kod yazarsın. "
                     "Her dosyayı [FILE: /yol] formatında tam ve eksiksiz verirsin.\n\n"
@@ -100,6 +111,7 @@ Kullanıcının asıl niyetini anla — sıradan konuşma diliyle söylenen tekn
                 name="Operasyon",
                 role="Sistem ve Dosya Operasyon Uzmanı",
                 emoji="⚙️",
+                preferred_model="gpt-4o-mini",
                 system_prompt=(
                     "Sen operasyon uzmanısın. Dosya işlemleri, sistem yönetimi, "
                     "terminal komutları ve otomasyon görevlerini yürütürsün.\n\n"
@@ -119,6 +131,7 @@ Kullanıcının asıl niyetini anla — sıradan konuşma diliyle söylenen tekn
                 name="Kalite Kontrol",
                 role="Test ve Kalite Güvence Uzmanı",
                 emoji="🔍",
+                preferred_model="gpt-4o",
                 system_prompt=(
                     "Sen kalite kontrol uzmanısın. Üretilen her çıktıyı titizlikle inceler, "
                     "hataları bulur ve düzeltme önerileri sunarsın.\n\n"
@@ -138,6 +151,7 @@ Kullanıcının asıl niyetini anla — sıradan konuşma diliyle söylenen tekn
                 name="İletişimci",
                 role="Kullanıcı İletişim ve Raporlama Uzmanı",
                 emoji="💬",
+                preferred_model="gpt-4o",
                 system_prompt=(
                     "Sen iletişim uzmanısın. Teknik sonuçları kullanıcının anlayacağı "
                     "dilde, net ve öz şekilde aktarırsın. Türkçe yanıt verirsin.\n\n"
@@ -150,23 +164,28 @@ Kullanıcının asıl niyetini anla — sıradan konuşma diliyle söylenen tekn
                 preferred_tools=["chat"],
                 domain="communication"
             ),
-
-            # Legacy aliases
-            "pm_agent": None,  # → lead
-            "executor": None,  # → builder
-            "tool_runner": None,  # → ops
-            "qa_expert": None,  # → qa
-            "automation_expert": None,  # → ops
         }
+        
+        # ─── Definition of standard chains ───
+        self.chains = {
+            "RESEARCH_WORKFLOW": SpecialistChain("Research & Report", ["lead", "researcher", "qa", "communicator"]),
+            "CODING_WORKFLOW": SpecialistChain("Build & Deploy", ["lead", "builder", "ops", "qa", "communicator"]),
+            "FIX_WORKFLOW": SpecialistChain("Analyze & Patch", ["lead", "ops", "builder", "qa", "communicator"]),
+        }
+
         # Set legacy aliases
         self.specialists["pm_agent"] = self.specialists["lead"]
         self.specialists["executor"] = self.specialists["builder"]
         self.specialists["tool_runner"] = self.specialists["ops"]
         self.specialists["qa_expert"] = self.specialists["qa"]
         self.specialists["automation_expert"] = self.specialists["ops"]
+        self.specialists["coder"] = self.specialists["builder"]
 
     def get(self, key: str) -> Optional[SpecialistIdentity]:
         return self.specialists.get(key)
+
+    def get_chain(self, key: str) -> Optional[SpecialistChain]:
+        return self.chains.get(key)
 
     def get_team(self) -> Dict[str, SpecialistIdentity]:
         """Return all non-alias specialists."""

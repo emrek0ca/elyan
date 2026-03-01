@@ -562,6 +562,8 @@ async def advanced_research(
     source_policy: str = "balanced",
     min_reliability: float = 0.55,
     max_findings: int = 6,
+    citation_style: str = "none",
+    include_bibliography: bool = False,
 ) -> dict[str, Any]:
     """
     Gelişmiş araştırma yap ve rapor oluştur
@@ -586,6 +588,10 @@ async def advanced_research(
 
         topic = topic.strip()
         source_policy = _normalize_source_policy(source_policy)
+        citation_style = str(citation_style or "none").strip().lower()
+        if citation_style not in {"none", "apa7", "mla", "ieee", "chicago"}:
+            citation_style = "none"
+        include_bibliography = bool(include_bibliography)
         try:
             min_reliability = max(0.0, min(1.0, float(min_reliability)))
         except Exception:
@@ -820,6 +826,8 @@ async def advanced_research(
                     "source_policy": source_policy,
                     "min_reliability": min_reliability,
                     "source_policy_stats": policy_stats,
+                    "citation_style": citation_style,
+                    "include_bibliography": include_bibliography,
                     "report_paths": list(report_paths),
                     "completed_at": result.completed_at,
                 }
@@ -835,6 +843,8 @@ async def advanced_research(
                 "source_policy": source_policy,
                 "min_reliability": min_reliability,
                 "source_policy_stats": policy_stats,
+                "citation_style": citation_style,
+                "include_bibliography": include_bibliography,
                 "source_count": len(result.sources),
                 "sources": sources_dict,
                 "findings": result.findings,

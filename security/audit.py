@@ -41,13 +41,22 @@ class AuditLogger:
                 db_path = str(fallback_dir / "audit.db")
 
         self.db_path = db_path
-        # Initialize schema using a temporary connection
-        self._initialize_schema()
+        # Initialize schema using a temporary connection; fallback to tmp if path is not writable
+        try:
+            self._initialize_schema()
+        except Exception:
+            import tempfile
+            self.db_path = str(Path(tempfile.gettempdir()) / "elyan_audit_fallback.db")
+            self._initialize_schema()
         atexit.register(self.close)
 
     def _get_conn(self) -> sqlite3.Connection:
-        """Get or create a per-thread SQLite connection."""
-        if not hasattr(_thread_local, "conn") or _thread_local.conn is None:
+        """Get or create a per-thread, per-path SQLite connection."""
+        # Use a dict keyed by db_path so different instances don't share connections
+        if not hasattr(_thread_local, "conns"):
+            _thread_local.conns = {}
+        conn = _thread_local.conns.get(self.db_path)
+        if conn is None:
             conn = sqlite3.connect(self.db_path, timeout=30)
             conn.row_factory = sqlite3.Row
             try:
@@ -56,8 +65,8 @@ class AuditLogger:
                 conn.execute("PRAGMA foreign_keys=ON")
             except sqlite3.OperationalError:
                 pass
-            _thread_local.conn = conn
-        return _thread_local.conn
+            _thread_local.conns[self.db_path] = conn
+        return conn
 
     def _initialize_schema(self):
         """Initialize audit database schema."""
@@ -120,7 +129,7 @@ class AuditLogger:
 
         except Exception as e:
             logger.error(f"Error initializing audit database: {e}")
-            raise
+            raise  # Re-raise so __init__ can catch and apply fallback
 
     def log_action(self, user_id: int = None, action: str = None,
                    details: Dict[str, Any] = None, success: bool = True):
@@ -297,10 +306,14 @@ class AuditLogger:
             return {}
 
     def close(self):
-        """Close the current thread's connection."""
-        if hasattr(_thread_local, "conn") and _thread_local.conn:
-            _thread_local.conn.close()
-            _thread_local.conn = None
+        """Close this instance's thread-local connection."""
+        conns = getattr(_thread_local, "conns", {})
+        conn = conns.pop(self.db_path, None)
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     @staticmethod
     def _decode_json(value: Any) -> Any:

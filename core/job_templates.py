@@ -32,7 +32,7 @@ JOB_TEMPLATES: Dict[str, Dict[str, Any]] = {
     "research_report": {
         "description": "Araştırma raporu / analiz / derin araştırma",
         "allowed_tools": [
-            "web_search", "deep_research", "write_file", "write_word",
+            "web_search", "deep_research", "advanced_research", "write_file", "write_word",
             "read_file", "write_excel",
         ],
         "qa_checks": ["file_exists", "file_not_empty", "min_file_size"],
@@ -47,7 +47,7 @@ JOB_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "description": "Dosya/klasör işlemleri (oluşturma, kopyalama, taşıma, silme)",
         "allowed_tools": [
             "write_file", "read_file", "delete_file", "copy_file", "move_file",
-            "create_directory", "list_directory", "find_files",
+            "create_directory", "create_folder", "list_directory", "list_files", "find_files", "search_files",
         ],
         "qa_checks": ["file_exists"],
         "delivery_mode": "file_path",
@@ -101,7 +101,7 @@ JOB_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "description": "Sistem operasyonları / kurulum / konfigürasyon",
         "allowed_tools": [
             "terminal_command", "system_info", "list_directory", "read_file",
-            "write_file", "find_files",
+            "write_file", "find_files", "run_safe_command", "execute_shell_command",
         ],
         "qa_checks": [],
         "delivery_mode": "inline",
@@ -124,12 +124,33 @@ JOB_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "keywords": ["aç", "git", "browse", "screenshot", "ekran", "tara", "scrape",
                       "sayfayı", "siteye"],
     },
+
+    "api_integration": {
+        "description": "API entegrasyonu / endpoint test / webhook akışı",
+        "allowed_tools": [
+            "http_request", "graphql_query", "api_health_check",
+            "write_file", "read_file", "run_safe_command",
+        ],
+        "qa_checks": ["file_exists", "file_not_empty"],
+        "delivery_mode": "file_path",
+        "expected_extensions": [".json", ".md", ".txt", ".http"],
+        "min_files": 0,
+        "keywords": [
+            "api", "endpoint", "rest", "graphql", "webhook", "http",
+            "postman", "curl", "integration", "entegrasyon", "request", "response",
+        ],
+    },
 }
 
 
 def detect_job_type(user_input: str) -> str:
     """Kullanıcı girdisinden job tipini tespit et."""
     low = user_input.lower()
+
+    # High-confidence direct routing for API-centric tasks.
+    api_markers = ("api", "graphql", "endpoint", "webhook", "http ", "rest ")
+    if sum(1 for marker in api_markers if marker in low) >= 2:
+        return "api_integration"
     
     best_type = "communication"
     best_score = 0

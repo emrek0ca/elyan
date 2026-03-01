@@ -14,6 +14,7 @@ from ._files import FileParser
 from ._research import ResearchParser
 from ._documents import DocumentParser
 from ._media import MediaParser
+from ._free_apis import FreeApiParser
 
 from utils.logger import get_logger
 
@@ -27,6 +28,7 @@ class IntentParser(
     ResearchParser,
     DocumentParser,
     MediaParser,
+    FreeApiParser,
 ):
     """
     Elyan Intent Parser — Türkçe/İngilizce doğal dil anlama motoru.
@@ -57,6 +59,7 @@ class IntentParser(
             self._parse_power_control,
             self._parse_clipboard,
             self._parse_notification,
+            self._parse_input_control,
             self._parse_system_info,
             self._parse_process_control,
             self._parse_weather,
@@ -99,6 +102,16 @@ class IntentParser(
             self._parse_visual_generation,
             self._parse_scheduled_tasks,
             self._parse_help,
+            # Ücretsiz API Parser'ları (en düşük öncelik)
+            self._parse_crypto,
+            self._parse_exchange_rate,
+            self._parse_weather_city,
+            self._parse_wikipedia,
+            self._parse_dictionary,
+            self._parse_country_info,
+            self._parse_ddg_search,
+            self._parse_academic_search,
+            self._parse_random_content,
         ]
         self._multi_split_re = re.compile(
             r"\s*(?:[,;]+\s*|\s+(?:ve\s+sonra|ardından|ardindan|sonra|sonrasında|sonrasinda|then)\s+)\s*",

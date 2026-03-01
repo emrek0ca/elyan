@@ -229,7 +229,7 @@ class GoogleChatAdapter(BaseChannelAdapter):
         chat_id = space name (spaces/xxxxxxx) veya DM space name.
         """
         if not self._session:
-            return
+            raise RuntimeError("Google Chat session yok.")
         try:
             if self.mode == "webhook":
                 await self._send_webhook(response.text)
@@ -237,6 +237,7 @@ class GoogleChatAdapter(BaseChannelAdapter):
                 await self._send_api(chat_id, response.text)
         except Exception as exc:
             logger.error(f"Google Chat gönderme hatası: {exc}")
+            raise
 
     async def _send_webhook(self, text: str):
         payload = {"text": text}
@@ -247,6 +248,7 @@ class GoogleChatAdapter(BaseChannelAdapter):
             if resp.status not in (200, 201):
                 body = await resp.text()
                 logger.error(f"Google Chat webhook gönderim hatası {resp.status}: {body}")
+                raise RuntimeError(f"Google Chat webhook HTTP {resp.status}: {body[:240]}")
 
     async def _send_api(self, space_name: str, text: str):
         url = f"{GOOGLE_CHAT_API}/{space_name}/messages"
@@ -265,6 +267,7 @@ class GoogleChatAdapter(BaseChannelAdapter):
             if resp.status not in (200, 201):
                 body_txt = await resp.text()
                 logger.error(f"Google Chat API gönderim hatası {resp.status}: {body_txt}")
+                raise RuntimeError(f"Google Chat API HTTP {resp.status}: {body_txt[:240]}")
 
     # ── Status / Capabilities ─────────────────────────────────────────────────
 

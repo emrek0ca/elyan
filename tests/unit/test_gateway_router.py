@@ -3,8 +3,10 @@ Unit testler: GatewayRouter
 Adapter kayıt, mesaj yönlendirme ve hata izolasyonu.
 """
 import asyncio
+import time
 import pytest
 from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
 
 from core.gateway.router import GatewayRouter
 from core.gateway.message import UnifiedMessage
@@ -48,6 +50,7 @@ class TestGatewayRouter:
         router, _ = self._router()
         mock_adapter = AsyncMock()
         mock_adapter.on_message = MagicMock()
+        mock_adapter.get_capabilities = MagicMock(return_value={"markdown": True, "buttons": True, "images": True, "files": True})
         router.register_adapter("telegram", mock_adapter)
 
         response = UnifiedResponse(text="Merhaba!")
@@ -63,6 +66,118 @@ class TestGatewayRouter:
             await router.send_outgoing_response("nonexistent", "chat-123", response)
         except Exception as exc:
             pytest.fail(f"Bilinmeyen kanal exception fırlattı: {exc}")
+
+    @pytest.mark.asyncio
+    async def test_send_outgoing_response_normalizes_by_channel_capabilities(self):
+        router, _ = self._router()
+
+        class _Adapter:
+            def __init__(self):
+                self.sent = []
+
+            def on_message(self, cb):
+                _ = cb
+
+            async def send_message(self, chat_id, response):
+                self.sent.append((chat_id, response))
+
+            def get_capabilities(self):
+                return {"markdown": False, "buttons": False, "images": False, "files": False}
+
+            async def connect(self):
+                return None
+
+            async def disconnect(self):
+                return None
+
+            def get_status(self):
+                return "connected"
+
+        adapter = _Adapter()
+        router.register_adapter("test_channel", adapter)
+        response = UnifiedResponse(
+            text="X" * 4500,
+            format="markdown",
+            buttons=[{"text": "Onayla", "callback_data": "x"}],
+            attachments=[{"path": "/tmp/a.png", "type": "image"}],
+        )
+        await router.send_outgoing_response("test_channel", "chat-1", response)
+        assert len(adapter.sent) == 1
+        sent = adapter.sent[0][1]
+        assert sent.format == "plain"
+        assert sent.buttons == []
+        assert sent.attachments == []
+        assert len(sent.text) <= 3500
+        assert "kısaltıldı" in sent.text
+
+    @pytest.mark.asyncio
+    async def test_send_outgoing_response_retries_with_plain_fallback_on_error(self):
+        router, _ = self._router()
+
+        class _Adapter:
+            def __init__(self):
+                self.calls = 0
+                self.payloads = []
+
+            def on_message(self, cb):
+                _ = cb
+
+            async def send_message(self, chat_id, response):
+                self.calls += 1
+                self.payloads.append((chat_id, response))
+                if self.calls == 1:
+                    raise RuntimeError("primary send failed")
+
+            def get_capabilities(self):
+                return {"markdown": True, "buttons": True, "images": True, "files": True}
+
+            async def connect(self):
+                return None
+
+            async def disconnect(self):
+                return None
+
+            def get_status(self):
+                return "connected"
+
+        adapter = _Adapter()
+        router.register_adapter("retry_channel", adapter)
+        response = UnifiedResponse(text="Merhaba", format="markdown", buttons=[{"text": "B", "callback_data": "c"}])
+        await router.send_outgoing_response("retry_channel", "chat-2", response)
+        assert adapter.calls == 2
+        fallback = adapter.payloads[-1][1]
+        assert fallback.format == "plain"
+        assert fallback.buttons == []
+        assert fallback.attachments == []
+
+    @pytest.mark.asyncio
+    async def test_send_outgoing_response_does_not_raise_when_both_attempts_fail(self):
+        router, _ = self._router()
+
+        class _Adapter:
+            def on_message(self, cb):
+                _ = cb
+
+            async def send_message(self, chat_id, response):
+                _ = (chat_id, response)
+                raise RuntimeError("send failed")
+
+            def get_capabilities(self):
+                return {"markdown": True}
+
+            async def connect(self):
+                return None
+
+            async def disconnect(self):
+                return None
+
+            def get_status(self):
+                return "connected"
+
+        adapter = _Adapter()
+        router.register_adapter("fail_channel", adapter)
+        response = UnifiedResponse(text="Merhaba")
+        await router.send_outgoing_response("fail_channel", "chat-3", response)
 
     @pytest.mark.asyncio
     async def test_start_all_calls_connect(self):
@@ -109,7 +224,48 @@ class TestGatewayRouter:
             msg = _make_message(channel_type="telegram", text="Merhaba!")
             await router.handle_incoming_message(msg)
 
-            mock_agent.process.assert_called_once_with("Merhaba!")
+            mock_agent.process.assert_called_once()
+            called_args, called_kwargs = mock_agent.process.call_args
+            assert called_args == ("Merhaba!",)
+            assert "notify" in called_kwargs
+            assert called_kwargs["metadata"]["channel_type"] == "telegram"
+            assert called_kwargs["metadata"]["channel_id"] == "chan-001"
+            assert called_kwargs["metadata"]["user_id"] == "user-001"
+
+    @pytest.mark.asyncio
+    async def test_handle_incoming_message_forwards_attachments_to_process_envelope(self):
+        router, mock_agent = self._router()
+        mock_agent.process_envelope = AsyncMock(
+            return_value=SimpleNamespace(
+                text="ok",
+                attachments=[],
+                evidence_manifest_path="",
+                run_id="run1",
+                status="success",
+                to_unified_attachments=lambda: [],
+            )
+        )
+
+        mock_ar = AsyncMock()
+        mock_ar.route_message = AsyncMock(return_value=mock_agent)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("core.gateway.router.agent_router", mock_ar)
+            router.send_outgoing_response = AsyncMock()
+
+            msg = _make_message(
+                channel_type="telegram",
+                text="Bunu duvar kağıdı yap",
+                attachments=[{"path": "/tmp/dog.png", "type": "image"}],
+            )
+            await router.handle_incoming_message(msg)
+
+            mock_agent.process_envelope.assert_called_once()
+            _, called_kwargs = mock_agent.process_envelope.call_args
+            assert called_kwargs["attachments"][0]["path"] == "/tmp/dog.png"
+            assert called_kwargs["metadata"]["channel_type"] == "telegram"
+            assert called_kwargs["metadata"]["channel_id"] == "chan-001"
+            assert called_kwargs["metadata"]["user_id"] == "user-001"
 
     @pytest.mark.asyncio
     async def test_handle_incoming_message_error_sends_error_response(self):
@@ -226,3 +382,226 @@ class TestGatewayRouter:
             )
             await router.handle_incoming_message(msg)
             assert router.send_outgoing_response.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_handle_incoming_message_resolves_pending_intervention(self):
+        class _FakeInterventionManager:
+            def __init__(self):
+                self.pending = [
+                    {
+                        "id": "int-1",
+                        "prompt": "Kritik işlem onayı gerekiyor",
+                        "options": ["Onayla", "İptal Et"],
+                        "context": {"user_id": "123"},
+                        "ts": 1.0,
+                    }
+                ]
+                self.resolved = []
+                self.listeners = []
+
+            def register_listener(self, listener):
+                self.listeners.append(listener)
+
+            def list_pending(self):
+                return list(self.pending)
+
+            def resolve(self, request_id, response):
+                self.resolved.append((request_id, response))
+                return True
+
+        fake_manager = _FakeInterventionManager()
+        mock_ar = AsyncMock()
+        mock_ar.route_message = AsyncMock()
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("core.gateway.router.get_intervention_manager", lambda: fake_manager)
+            mp.setattr("core.gateway.router.agent_router", mock_ar)
+            router, _ = self._router()
+            router.send_outgoing_response = AsyncMock()
+
+            first = _make_message(channel_type="telegram", channel_id="chat-1", user_id="123", text="onayla")
+            await router.handle_incoming_message(first)
+            assert fake_manager.resolved == []
+            assert router.send_outgoing_response.await_count == 1
+            sent = router.send_outgoing_response.await_args_list[0].args[2]
+            assert isinstance(sent, UnifiedResponse)
+            assert "onay kodu" in sent.text.lower()
+
+            code = router._approval_codes["int-1"]["code"]
+            router.send_outgoing_response.reset_mock()
+            second = _make_message(channel_type="telegram", channel_id="chat-1", user_id="123", text=f"ONAY {code}")
+            await router.handle_incoming_message(second)
+            assert fake_manager.resolved == [("int-1", "Onayla")]
+            sent2 = router.send_outgoing_response.await_args_list[0].args[2]
+            assert "onay alındı" in sent2.text.lower()
+            mock_ar.route_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_handle_incoming_message_resolves_intervention_with_prefixed_user_id(self):
+        class _FakeInterventionManager:
+            def __init__(self):
+                self.pending = [
+                    {
+                        "id": "int-1",
+                        "prompt": "Kritik işlem onayı gerekiyor",
+                        "options": ["Onayla", "İptal Et"],
+                        "context": {"user_id": "telegram:123"},
+                        "ts": 1.0,
+                    }
+                ]
+                self.resolved = []
+                self.listeners = []
+
+            def register_listener(self, listener):
+                self.listeners.append(listener)
+
+            def list_pending(self):
+                return list(self.pending)
+
+            def resolve(self, request_id, response):
+                self.resolved.append((request_id, response))
+                return True
+
+        fake_manager = _FakeInterventionManager()
+        mock_ar = AsyncMock()
+        mock_ar.route_message = AsyncMock()
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("core.gateway.router.get_intervention_manager", lambda: fake_manager)
+            mp.setattr("core.gateway.router.agent_router", mock_ar)
+            router, _ = self._router()
+            router.send_outgoing_response = AsyncMock()
+
+            code = router._ensure_intervention_code(fake_manager.pending[0], user_id="123", channel_id="chat-1")
+            msg = _make_message(channel_type="telegram", channel_id="chat-1", user_id="123", text=f"onay {code}")
+            await router.handle_incoming_message(msg)
+
+            assert fake_manager.resolved == [("int-1", "Onayla")]
+            mock_ar.route_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_handle_incoming_message_skips_stale_intervention(self):
+        class _FakeInterventionManager:
+            def __init__(self):
+                self.pending = [
+                    {
+                        "id": "int-1",
+                        "prompt": "Kritik işlem onayı gerekiyor",
+                        "options": ["Onayla", "İptal Et"],
+                        "context": {"user_id": "123"},
+                        "ts": time.time() - 900,
+                    }
+                ]
+                self.resolved = []
+                self.listeners = []
+
+            def register_listener(self, listener):
+                self.listeners.append(listener)
+
+            def list_pending(self):
+                return list(self.pending)
+
+            def resolve(self, request_id, response):
+                self.resolved.append((request_id, response))
+                return True
+
+        fake_manager = _FakeInterventionManager()
+        mock_ar = AsyncMock()
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("core.gateway.router.get_intervention_manager", lambda: fake_manager)
+            router, mock_agent = self._router()
+            mock_ar.route_message = AsyncMock(return_value=mock_agent)
+            mp.setattr("core.gateway.router.agent_router", mock_ar)
+            router.send_outgoing_response = AsyncMock()
+
+            msg = _make_message(channel_type="telegram", channel_id="chat-1", user_id="123", text="onayla")
+            await router.handle_incoming_message(msg)
+
+            assert fake_manager.resolved == []
+            mock_ar.route_message.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_handle_incoming_message_skips_unbound_intervention(self):
+        class _FakeInterventionManager:
+            def __init__(self):
+                self.pending = [
+                    {
+                        "id": "int-1",
+                        "prompt": "Kritik işlem onayı gerekiyor",
+                        "options": ["Onayla", "İptal Et"],
+                        "context": {},
+                        "ts": 1.0,
+                    }
+                ]
+                self.resolved = []
+                self.listeners = []
+
+            def register_listener(self, listener):
+                self.listeners.append(listener)
+
+            def list_pending(self):
+                return list(self.pending)
+
+            def resolve(self, request_id, response):
+                self.resolved.append((request_id, response))
+                return True
+
+        fake_manager = _FakeInterventionManager()
+        mock_ar = AsyncMock()
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("core.gateway.router.get_intervention_manager", lambda: fake_manager)
+            router, mock_agent = self._router()
+            mock_ar.route_message = AsyncMock(return_value=mock_agent)
+            mp.setattr("core.gateway.router.agent_router", mock_ar)
+            router.send_outgoing_response = AsyncMock()
+
+            msg = _make_message(channel_type="telegram", channel_id="chat-1", user_id="123", text="onayla")
+            await router.handle_incoming_message(msg)
+
+            assert fake_manager.resolved == []
+            mock_ar.route_message.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_intervention_listener_pushes_prompt_to_last_user_channel(self):
+        class _FakeInterventionManager:
+            def __init__(self):
+                self.listeners = []
+
+            def register_listener(self, listener):
+                self.listeners.append(listener)
+
+            def list_pending(self):
+                return []
+
+            def resolve(self, request_id, response):
+                _ = (request_id, response)
+                return True
+
+        fake_manager = _FakeInterventionManager()
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("core.gateway.router.get_intervention_manager", lambda: fake_manager)
+            router, _ = self._router()
+            router.send_outgoing_response = AsyncMock()
+
+            msg = _make_message(channel_type="telegram", channel_id="chat-22", user_id="22", text="selam")
+            router._remember_user_route(msg)
+
+            req = SimpleNamespace(
+                id="int-22",
+                prompt="Kritik işlem onayı gerekiyor",
+                options=["Onayla", "İptal Et"],
+                context={"user_id": "22"},
+            )
+            assert fake_manager.listeners, "listener register edilmedi"
+
+            await fake_manager.listeners[0](req)
+
+            router.send_outgoing_response.assert_awaited_once()
+            call = router.send_outgoing_response.await_args_list[0].args
+            assert call[0] == "telegram"
+            assert call[1] == "chat-22"
+            assert "onayla" in call[2].text.lower()
+            assert "güvenlik kodu" in call[2].text.lower()
+            assert call[2].buttons == []

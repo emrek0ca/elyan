@@ -67,6 +67,9 @@ class GoalGraphPlanner:
             "urgency": "",
             "quality_mode": "",
             "deliverables": [],
+            "requires_evidence": False,
+            "autonomy_preference": "",
+            "proof_formats": [],
         }
 
         if any(k in t for k in ["pdf"]):
@@ -102,6 +105,24 @@ class GoalGraphPlanner:
             if any(kw in t for kw in kws):
                 ds.append(key)
         constraints["deliverables"] = ds
+
+        evidence_markers = (
+            "kanıt", "kanit", "proof", "manifest", "hash", "sha256",
+            "ss", "screenshot", "ekran görüntüsü", "ekran goruntusu",
+            "dosya paylaş", "dosya paylas",
+        )
+        if any(m in t for m in evidence_markers):
+            constraints["requires_evidence"] = True
+
+        if "screenshot" in t or "ss" in t or "ekran görünt" in t or "ekran gorunt" in t:
+            constraints["proof_formats"].append("screenshot")
+        if any(k in t for k in ("manifest", "hash", "sha256", "log")):
+            constraints["proof_formats"].append("manifest")
+
+        if any(k in t for k in ("tam otonom", "full autonomy", "full-autonomy", "onaysız", "onaysiz", "izin sorma")):
+            constraints["autonomy_preference"] = "full"
+        elif any(k in t for k in ("onay", "approval", "izin al", "izinli")):
+            constraints["autonomy_preference"] = "guarded"
         return constraints
 
     def build(self, user_input: str) -> dict[str, Any]:

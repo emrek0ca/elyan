@@ -148,23 +148,46 @@ class AppParser(BaseParser):
             m2 = _RE_SEARCH_AFTER.search(lower)
             if m2:
                 query = m2.group(1).strip()
-        cleanup = {"safariyi", "safari", "tarayiciyi", "tarayıcıyı", "tarayicida",
-                   "tarayıcıda", "aç", "ac", "ve", "lutfen", "lütfen"}
-        query = " ".join(p for p in (query or "").replace(".", " ").split() if p not in cleanup).strip()
+
+        # Fallback extraction from full command when regex capture is weak.
+        if not query:
+            query = lower
+
+        # Turkish suffix normalization: "safari'den" -> "safari den"
+        query = re.sub(r"([0-9a-zçğıöşü]+)'([0-9a-zçğıöşü]+)", r"\1 \2", query, flags=re.IGNORECASE)
+
+        cleanup_tokens = {
+            "safari", "safariyi", "safariden", "safaride", "safariye", "safariya",
+            "chrome", "chromedan", "chromede", "krom", "kromdan", "kromda",
+            "tarayici", "tarayıcı", "tarayicida", "tarayıcıda", "tarayicidan", "tarayıcıdan",
+            "browser", "browsers", "webde", "internette",
+            "aç", "ac", "git", "gir", "ve", "sonra", "ardından", "ardindan",
+            "lütfen", "lutfen", "ara", "arat", "search", "den", "dan", "de", "da",
+        }
+        query = " ".join(p for p in (query or "").replace(".", " ").split() if p not in cleanup_tokens).strip(" ,.;:-")
         if len(query) < 2:
-            query = "kedi resimleri"
-        url = f"https://www.google.com/search?q={quote_plus(query)}"
-        wants_safari = "safari" in text
+            return None
+
+        images_mode = any(k in lower for k in ("resim", "resimleri", "görsel", "gorsel", "foto", "image", "images", "wallpaper"))
+        if images_mode:
+            url = f"https://www.google.com/search?tbm=isch&q={quote_plus(query)}"
+        else:
+            url = f"https://www.google.com/search?q={quote_plus(query)}"
+
+        wants_safari = "safari" in text or "safari" in text_norm
         tasks = []
         if wants_safari:
             tasks.append({"id": "task_1", "action": "open_app", "params": {"app_name": "Safari"},
                           "description": "Safari'yi aç"})
-        tasks.append({"id": "task_2", "action": "open_url", "params": {"url": url},
+        open_url_params = {"url": url}
+        if wants_safari:
+            open_url_params["browser"] = "Safari"
+        tasks.append({"id": "task_2", "action": "open_url", "params": open_url_params,
                       "description": f"Arama: {query}",
                       "depends_on": ["task_1"] if wants_safari else []})
         if wants_safari:
             return {"action": "multi_task", "tasks": tasks, "reply": f"Safari'de '{query}' aranıyor..."}
-        return {"action": "open_url", "params": {"url": url}, "reply": f"Tarayıcıda '{query}' aranıyor..."}
+        return {"action": "open_url", "params": open_url_params, "reply": f"Tarayıcıda '{query}' aranıyor..."}
 
     # ── YouTube ───────────────────────────────────────────────────────────────
     def _parse_media_play(self, text: str, text_norm: str, original: str) -> dict | None:

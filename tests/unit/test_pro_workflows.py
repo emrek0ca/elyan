@@ -65,6 +65,31 @@ async def test_create_web_project_scaffold_applies_brief_features(monkeypatch, t
 
 
 @pytest.mark.asyncio
+async def test_create_web_project_scaffold_includes_modern_ui_stack(monkeypatch, tmp_path):
+    monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
+
+    result = await create_web_project_scaffold(
+        project_name="Portfolio Modern",
+        stack="vanilla",
+        output_dir=str(tmp_path),
+        brief="github portfolyo sitesi, modern animasyon, galeri bölümü ve etkileyici tasarım",
+    )
+    assert result.get("success") is True
+
+    project_dir = Path(str(result.get("project_dir", "")))
+    html = (project_dir / "index.html").read_text(encoding="utf-8")
+    js = (project_dir / "scripts" / "main.js").read_text(encoding="utf-8")
+    readme = (project_dir / "README.md").read_text(encoding="utf-8")
+
+    assert "cdn.tailwindcss.com" in html
+    assert "gsap.min.js" in html
+    assert "gallery-grid" in html
+    assert "window.gsap" in js
+    assert "tailwind" in readme.lower()
+    assert "motion" in readme.lower()
+
+
+@pytest.mark.asyncio
 async def test_create_software_project_pack_node_generates_js_entry(monkeypatch, tmp_path):
     monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
 
@@ -203,3 +228,12 @@ async def test_research_document_delivery_generates_pack(monkeypatch, tmp_path):
     assert any(str(x).endswith(".docx") for x in outputs)
     assert any(str(x).endswith(".xlsx") for x in outputs)
     assert any("DELIVERY_NOTE.txt" in str(x) for x in outputs)
+    assert isinstance(result.get("quality_summary"), dict)
+    assert "avg_reliability" in result.get("quality_summary", {})
+
+    md_path = next((Path(str(x)) for x in outputs if str(x).endswith(".md")), None)
+    assert md_path is not None and md_path.exists()
+    md_text = md_path.read_text(encoding="utf-8")
+    assert "## Methodology" in md_text
+    assert "## Risk & Limitations" in md_text
+    assert "## Next Actions" in md_text

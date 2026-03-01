@@ -4,9 +4,11 @@ Gerçek ağ bağlantısı gerektirmeyen mock tabanlı testler.
 """
 import asyncio
 import json
+import time
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from pathlib import Path
+from types import SimpleNamespace
 
 from core.gateway.adapters import ADAPTER_REGISTRY, get_adapter_class
 from core.gateway.adapters.base import BaseChannelAdapter
@@ -71,8 +73,70 @@ class TestTelegramAdapter:
         assert extracted == ""
 
     @pytest.mark.asyncio
+    async def test_handle_photo_ingest_emits_unified_message_with_attachment(self, tmp_path):
+        adapter = self._make(inbox_dir=str(tmp_path))
+        received = []
+
+        async def _on_message(msg):
+            received.append(msg)
+
+        adapter.on_message(_on_message)
+
+        async def _download(dest):
+            Path(dest).write_bytes(b"img")
+
+        fake_file = SimpleNamespace(download_to_drive=AsyncMock(side_effect=_download))
+        context = SimpleNamespace(bot=SimpleNamespace(get_file=AsyncMock(return_value=fake_file)))
+        photo = SimpleNamespace(file_id="p-1")
+        message = SimpleNamespace(message_id=11, photo=[photo], caption="bunu duvar kağıdı yap")
+        update = SimpleNamespace(
+            effective_message=message,
+            effective_user=SimpleNamespace(id=42, first_name="Emre"),
+            effective_chat=SimpleNamespace(id=1001),
+            message=message,
+        )
+
+        await adapter._handle_photo(update, context)
+
+        assert len(received) == 1
+        assert received[0].attachments
+        assert received[0].attachments[0]["type"] == "image"
+        assert Path(received[0].attachments[0]["path"]).exists()
+
+    @pytest.mark.asyncio
+    async def test_handle_document_ingest_emits_unified_message_with_attachment(self, tmp_path):
+        adapter = self._make(inbox_dir=str(tmp_path))
+        received = []
+
+        async def _on_message(msg):
+            received.append(msg)
+
+        adapter.on_message(_on_message)
+
+        async def _download(dest):
+            Path(dest).write_bytes(b"doc")
+
+        fake_file = SimpleNamespace(download_to_drive=AsyncMock(side_effect=_download))
+        context = SimpleNamespace(bot=SimpleNamespace(get_file=AsyncMock(return_value=fake_file)))
+        doc = SimpleNamespace(file_id="d-1", file_name="report.pdf", mime_type="application/pdf", file_size=16)
+        message = SimpleNamespace(message_id=12, document=doc, caption="")
+        update = SimpleNamespace(
+            effective_message=message,
+            effective_user=SimpleNamespace(id=42, first_name="Emre"),
+            effective_chat=SimpleNamespace(id=1001),
+            message=message,
+        )
+
+        await adapter._handle_document(update, context)
+
+        assert len(received) == 1
+        assert received[0].attachments
+        assert received[0].attachments[0]["type"] == "document"
+        assert Path(received[0].attachments[0]["path"]).exists()
+
+    @pytest.mark.asyncio
     async def test_send_message_auto_sends_document_from_text(self, tmp_path):
-        adapter = self._make()
+        adapter = self._make(auto_send_paths_from_text=True)
         adapter.app = MagicMock()
         adapter.app.bot = AsyncMock()
 
@@ -85,6 +149,399 @@ class TestTelegramAdapter:
         adapter.app.bot.send_document.assert_awaited_once()
         assert adapter.app.bot.send_photo.await_count == 0
         assert adapter.app.bot.send_message.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_send_message_does_not_auto_send_document_from_text_by_default(self, tmp_path):
+        adapter = self._make()
+        adapter.app = MagicMock()
+        adapter.app.bot = AsyncMock()
+
+        doc = tmp_path / "report.docx"
+        doc.write_bytes(b"doc")
+        response = UnifiedResponse(text=f"Belge hazır: {doc}")
+
+        await adapter.send_message("123", response)
+
+        adapter.app.bot.send_document.assert_not_called()
+        adapter.app.bot.send_photo.assert_not_called()
+        adapter.app.bot.send_message.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_send_message_renders_inline_buttons(self):
+        adapter = self._make()
+        adapter.app = MagicMock()
+        adapter.app.bot = AsyncMock()
+
+        response = UnifiedResponse(
+            text="Onay gerekiyor",
+            buttons=[
+                {"text": "Onayla", "callback_data": "intervention:req1:approve", "row": 0},
+                {"text": "Reddet", "callback_data": "intervention:req1:deny", "row": 0},
+            ],
+        )
+        await adapter.send_message("123", response)
+
+        adapter.app.bot.send_message.assert_awaited_once()
+        kwargs = adapter.app.bot.send_message.await_args.kwargs
+        assert kwargs["chat_id"] == "123"
+        assert kwargs["text"] == "Onay gerekiyor"
+        assert kwargs.get("reply_markup") is not None
+
+    @pytest.mark.asyncio
+    async def test_intervention_callback_oversize_compacted_and_resolved(self, monkeypatch):
+        adapter = self._make()
+
+        long_req = "req_" + ("x" * 120)
+        markup = adapter._build_reply_markup(
+            [{"text": "Onayla", "callback_data": f"intervention:{long_req}:approve", "row": 0}]
+        )
+        assert markup is not None
+        compact_data = markup.inline_keyboard[0][0].callback_data
+        assert len(compact_data.encode("utf-8")) <= 64
+
+        class _FakeManager:
+            def __init__(self):
+                self._resolved = []
+
+            def list_pending(self):
+                return [{"id": long_req, "context": {"user_id": "42"}}]
+
+            def resolve(self, request_id, decision):
+                self._resolved.append((request_id, decision))
+                return True
+
+        fake = _FakeManager()
+        monkeypatch.setattr("core.gateway.adapters.telegram.get_intervention_manager", lambda: fake)
+
+        query = SimpleNamespace(
+            id="cb-1",
+            data=compact_data,
+            from_user=SimpleNamespace(id=42, first_name="Emre"),
+            message=SimpleNamespace(chat=SimpleNamespace(id=777)),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+        )
+        update = SimpleNamespace(
+            callback_query=query,
+            effective_user=query.from_user,
+            effective_chat=SimpleNamespace(id=777),
+        )
+        await adapter._handle_callback_query(update, None)
+        assert fake._resolved == [(long_req, "Onayla")]
+
+    @pytest.mark.asyncio
+    async def test_callback_query_intervention_resolves_pending_request(self, monkeypatch):
+        adapter = self._make()
+        adapter.app = MagicMock()
+        adapter.app.bot = AsyncMock()
+
+        class _FakeManager:
+            def __init__(self):
+                self._resolved = []
+
+            def list_pending(self):
+                return [{"id": "req55", "context": {"user_id": "42"}}]
+
+            def resolve(self, request_id, decision):
+                self._resolved.append((request_id, decision))
+                return True
+
+        fake = _FakeManager()
+        monkeypatch.setattr("core.gateway.adapters.telegram.get_intervention_manager", lambda: fake)
+
+        query = SimpleNamespace(
+            id="cb-1",
+            data="intervention:req55:approve",
+            from_user=SimpleNamespace(id=42, first_name="Emre"),
+            message=SimpleNamespace(chat=SimpleNamespace(id=777)),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+        )
+        update = SimpleNamespace(
+            callback_query=query,
+            effective_user=query.from_user,
+            effective_chat=SimpleNamespace(id=777),
+        )
+
+        await adapter._handle_callback_query(update, None)
+
+        assert fake._resolved == [("req55", "Onayla")]
+        query.edit_message_text.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_callback_query_intervention_rejects_other_user(self, monkeypatch):
+        adapter = self._make()
+
+        class _FakeManager:
+            def __init__(self):
+                self._resolved = []
+
+            def list_pending(self):
+                return [{"id": "req55", "context": {"user_id": "99"}}]
+
+            def resolve(self, request_id, decision):
+                self._resolved.append((request_id, decision))
+                return True
+
+        fake = _FakeManager()
+        monkeypatch.setattr("core.gateway.adapters.telegram.get_intervention_manager", lambda: fake)
+
+        query = SimpleNamespace(
+            id="cb-1",
+            data="intervention:req55:approve",
+            from_user=SimpleNamespace(id=42, first_name="Emre"),
+            message=SimpleNamespace(chat=SimpleNamespace(id=777)),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+        )
+        update = SimpleNamespace(
+            callback_query=query,
+            effective_user=query.from_user,
+            effective_chat=SimpleNamespace(id=777),
+        )
+
+        await adapter._handle_callback_query(update, None)
+
+        assert fake._resolved == []
+        query.edit_message_text.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_callback_query_intervention_fallbacks_to_latest_user_pending(self, monkeypatch):
+        adapter = self._make()
+
+        class _FakeManager:
+            def __init__(self):
+                self._resolved = []
+
+            def list_pending(self):
+                return [
+                    {"id": "old01", "ts": 10, "context": {"user_id": "42"}},
+                    {"id": "new99", "ts": 20, "context": {"user_id": "42"}},
+                ]
+
+            def resolve(self, request_id, decision):
+                self._resolved.append((request_id, decision))
+                return True
+
+        fake = _FakeManager()
+        monkeypatch.setattr("core.gateway.adapters.telegram.get_intervention_manager", lambda: fake)
+
+        # request_id intentionally unknown => should fallback to latest user pending (new99)
+        query = SimpleNamespace(
+            id="cb-1",
+            data="intervention:missing01:approve",
+            from_user=SimpleNamespace(id=42, first_name="Emre"),
+            message=SimpleNamespace(chat=SimpleNamespace(id=777)),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+        )
+        update = SimpleNamespace(
+            callback_query=query,
+            effective_user=query.from_user,
+            effective_chat=SimpleNamespace(id=777),
+        )
+
+        await adapter._handle_callback_query(update, None)
+
+        assert fake._resolved == [("new99", "Onayla")]
+        query.edit_message_text.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_callback_query_intervention_uses_from_user_when_effective_missing(self, monkeypatch):
+        adapter = self._make()
+
+        class _FakeManager:
+            def __init__(self):
+                self._resolved = []
+
+            def list_pending(self):
+                return [{"id": "req55", "context": {"user_id": "42"}}]
+
+            def resolve(self, request_id, decision):
+                self._resolved.append((request_id, decision))
+                return True
+
+        fake = _FakeManager()
+        monkeypatch.setattr("core.gateway.adapters.telegram.get_intervention_manager", lambda: fake)
+
+        query = SimpleNamespace(
+            id="cb-1",
+            data="intervention:req55:approve",
+            from_user=SimpleNamespace(id=42, first_name="Emre"),
+            message=SimpleNamespace(chat=SimpleNamespace(id=777)),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+        )
+        update = SimpleNamespace(
+            callback_query=query,
+            effective_user=None,
+            effective_chat=SimpleNamespace(id=777),
+        )
+
+        await adapter._handle_callback_query(update, None)
+
+        assert fake._resolved == [("req55", "Onayla")]
+        query.edit_message_text.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_callback_query_intervention_accepts_prefixed_user_id(self, monkeypatch):
+        adapter = self._make()
+
+        class _FakeManager:
+            def __init__(self):
+                self._resolved = []
+
+            def list_pending(self):
+                return [{"id": "req55", "context": {"user_id": "telegram:42"}}]
+
+            def resolve(self, request_id, decision):
+                self._resolved.append((request_id, decision))
+                return True
+
+        fake = _FakeManager()
+        monkeypatch.setattr("core.gateway.adapters.telegram.get_intervention_manager", lambda: fake)
+
+        query = SimpleNamespace(
+            id="cb-1",
+            data="intervention:req55:approve",
+            from_user=SimpleNamespace(id=42, first_name="Emre"),
+            message=SimpleNamespace(chat=SimpleNamespace(id=777)),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+        )
+        update = SimpleNamespace(
+            callback_query=query,
+            effective_user=query.from_user,
+            effective_chat=SimpleNamespace(id=777),
+        )
+
+        await adapter._handle_callback_query(update, None)
+
+        assert fake._resolved == [("req55", "Onayla")]
+        query.edit_message_text.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_callback_query_intervention_rejects_stale_request(self, monkeypatch):
+        adapter = self._make(callback_stale_seconds=60)
+
+        class _FakeManager:
+            def __init__(self):
+                self._resolved = []
+
+            def list_pending(self):
+                return [{"id": "req55", "ts": time.time() - 600, "context": {"user_id": "42"}}]
+
+            def resolve(self, request_id, decision):
+                self._resolved.append((request_id, decision))
+                return True
+
+        fake = _FakeManager()
+        monkeypatch.setattr("core.gateway.adapters.telegram.get_intervention_manager", lambda: fake)
+
+        query = SimpleNamespace(
+            id="cb-1",
+            data="intervention:req55:approve",
+            from_user=SimpleNamespace(id=42, first_name="Emre"),
+            message=SimpleNamespace(chat=SimpleNamespace(id=777)),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+        )
+        update = SimpleNamespace(
+            callback_query=query,
+            effective_user=query.from_user,
+            effective_chat=SimpleNamespace(id=777),
+        )
+
+        await adapter._handle_callback_query(update, None)
+
+        assert fake._resolved == []
+        query.answer.assert_awaited()
+        query.edit_message_text.assert_awaited_once()
+        assert "süresi dolmuş" in query.edit_message_text.await_args.args[0].lower()
+
+    @pytest.mark.asyncio
+    async def test_callback_query_intervention_fallback_requires_binding(self, monkeypatch):
+        adapter = self._make()
+
+        class _FakeManager:
+            def __init__(self):
+                self._resolved = []
+
+            def list_pending(self):
+                return [{"id": "free1", "ts": 10, "context": {}}]
+
+            def resolve(self, request_id, decision):
+                self._resolved.append((request_id, decision))
+                return True
+
+        fake = _FakeManager()
+        monkeypatch.setattr("core.gateway.adapters.telegram.get_intervention_manager", lambda: fake)
+
+        query = SimpleNamespace(
+            id="cb-1",
+            data="intervention:missing01:approve",
+            from_user=SimpleNamespace(id=42, first_name="Emre"),
+            message=SimpleNamespace(chat=SimpleNamespace(id=777)),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+        )
+        update = SimpleNamespace(
+            callback_query=query,
+            effective_user=query.from_user,
+            effective_chat=SimpleNamespace(id=777),
+        )
+
+        await adapter._handle_callback_query(update, None)
+
+        assert fake._resolved == []
+        query.edit_message_text.assert_awaited_once()
+        assert "geçerli değil" in query.edit_message_text.await_args.args[0].lower()
+
+    @pytest.mark.asyncio
+    async def test_callback_query_intervention_fallback_uses_channel_binding(self, monkeypatch):
+        adapter = self._make()
+
+        class _FakeManager:
+            def __init__(self):
+                self._resolved = []
+
+            def list_pending(self):
+                return [{"id": "chat-bound", "ts": 10, "context": {"channel": "telegram", "channel_id": "777"}}]
+
+            def resolve(self, request_id, decision):
+                self._resolved.append((request_id, decision))
+                return True
+
+        fake = _FakeManager()
+        monkeypatch.setattr("core.gateway.adapters.telegram.get_intervention_manager", lambda: fake)
+
+        query = SimpleNamespace(
+            id="cb-1",
+            data="intervention:missing01:approve",
+            from_user=SimpleNamespace(id=42, first_name="Emre"),
+            message=SimpleNamespace(chat=SimpleNamespace(id=777)),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+        )
+        update = SimpleNamespace(
+            callback_query=query,
+            effective_user=query.from_user,
+            effective_chat=SimpleNamespace(id=777),
+        )
+
+        await adapter._handle_callback_query(update, None)
+
+        assert fake._resolved == [("chat-bound", "Onayla")]
+        query.edit_message_text.assert_awaited_once()
+
+    def test_parse_intervention_callback_supports_pipe_and_suffix(self):
+        from core.gateway.adapters.telegram import TelegramAdapter
+
+        parsed = TelegramAdapter._parse_intervention_callback("INTERVENTION|req77|approve:v2")
+        assert parsed == ("req77", True)
+
+        parsed2 = TelegramAdapter._parse_intervention_callback("intervention:req88:deny|meta")
+        assert parsed2 == ("req88", False)
 
 
 class TestWhatsAppAdapter:

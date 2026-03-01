@@ -59,37 +59,67 @@ class LLMCache:
         normalized = " ".join(text.lower().split())
         return hashlib.sha256(normalized.encode()).hexdigest()
 
+    def _semantic_match(self, text: str, threshold: float = 0.85) -> Optional[str]:
+        """Find a semantically similar key in the cache using fuzzy matching."""
+        tokens1 = set(text.lower().split())
+        if not tokens1:
+            return None
+
+        for key, entry in self._cache.items():
+            tokens2 = entry.get("tokens")
+            if not tokens2:
+                # Lazy populate tokens if missing
+                tokens2 = set(entry["original_text"].lower().split())
+                entry["tokens"] = tokens2
+            
+            # Jaccard similarity
+            intersection = len(tokens1.intersection(tokens2))
+            union = len(tokens1.union(tokens2))
+            
+            if union > 0 and (intersection / union) >= threshold:
+                logger.debug(f"Semantic cache hit (score: {intersection/union:.2f})")
+                return key
+        
+        return None
+
     def get(self, text: str) -> Optional[dict]:
         """
         Get cached response. Returns None if:
-        - Not in cache
+        - Not in cache (exact or semantic)
         - Expired
         - Bypass keyword detected
         """
-        # BUG-PERF-001: Bypass check
         if should_bypass_cache(text):
             self._bypasses += 1
             logger.debug(f"Cache bypassed for: {text[:40]}...")
             return None
 
+        # Try exact hash match first
         key = self._hash_key(text)
+        if key in self._cache:
+            entry = self._cache[key]
+            # Check if expired
+            if time.time() - entry["timestamp"] <= self.ttl:
+                self._cache.move_to_end(key)
+                self._hits += 1
+                logger.debug(f"Exact cache hit for: {text[:30]}...")
+                return entry["response"]
+            else:
+                del self._cache[key]
 
-        if key not in self._cache:
-            self._misses += 1
-            return None
+        # Try semantic match
+        semantic_key = self._semantic_match(text)
+        if semantic_key:
+            entry = self._cache[semantic_key]
+            if time.time() - entry["timestamp"] <= self.ttl:
+                self._cache.move_to_end(semantic_key)
+                self._hits += 1
+                return entry["response"]
+            else:
+                del self._cache[semantic_key]
 
-        entry = self._cache[key]
-
-        # Check if expired
-        if time.time() - entry["timestamp"] > self.ttl:
-            del self._cache[key]
-            self._misses += 1
-            return None
-
-        self._cache.move_to_end(key)
-        self._hits += 1
-        logger.debug(f"Cache hit for: {text[:30]}...")
-        return entry["response"]
+        self._misses += 1
+        return None
 
     def set(self, text: str, response: Any) -> None:
         """
@@ -123,7 +153,9 @@ class LLMCache:
 
         self._cache[key] = {
             "response": response,
-            "timestamp": time.time()
+            "timestamp": time.time(),
+            "original_text": text,
+            "tokens": set(text.lower().split())
         }
         logger.debug(f"Cached response for: {text[:30]}...")
 

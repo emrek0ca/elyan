@@ -197,3 +197,5 @@ def get_conversation_memory() -> ConversationMemory:
         _conversation_memory = ConversationMemory()
     
     return _conversation_memory
+    
+conversation_memory = get_conversation_memory()

@@ -81,7 +81,8 @@
       "Bash(python -m pytest:*)",
       "Bash(elyan version:*)",
       "Bash(timeout 5 elyan health:*)",
-      "Bash(lsof:*)"
+      "Bash(lsof:*)",
+      "Bash(git:*)"
     ]
   }
 }

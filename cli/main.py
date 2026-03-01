@@ -29,12 +29,24 @@ TOP_LEVEL_COMMANDS = [
     "service",
     "dashboard",
     "onboard",
+    "setup",
     "update",
     "version",
     "completion",
     "subscription",
     "quota",
 ]
+
+
+SETUP_OPTIONAL_COMMANDS = {
+    "onboard",
+    "setup",
+    "version",
+    "completion",
+    "doctor",
+    "health",
+    "status",
+}
 
 
 def _bootstrap_project_path():
@@ -74,8 +86,23 @@ def _suggest_command(raw: str) -> str:
 def main(argv: list[str] | None = None):
     argv = list(sys.argv[1:] if argv is None else argv)
 
+    # Backward-compat gateway aliases (legacy habit: `elyan restart`).
+    if argv:
+        first = str(argv[0]).strip().lower()
+        if first in {"start", "stop", "restart"}:
+            argv = ["gateway", *argv]
+            # Legacy top-level behavior: keep shell responsive by default.
+            if first in {"start", "restart"} and "--daemon" not in argv:
+                argv.append("--daemon")
+
     parser = argparse.ArgumentParser(prog="elyan", description="Elyan CLI v18.0")
     sub = parser.add_subparsers(dest="command", help="Komut")
+
+    def _add_onboard_args(target):
+        target.add_argument("--headless", action="store_true")
+        target.add_argument("--channel", metavar="CHANNEL")
+        target.add_argument("--install-daemon", action="store_true")
+        target.add_argument("--force", action="store_true")
 
     # ── doctor ──────────────────────────────────────────────────────────
     p = sub.add_parser("doctor", help="Sistem tanılaması")
@@ -246,9 +273,11 @@ def main(argv: list[str] | None = None):
 
     # ── onboard ─────────────────────────────────────────────────────────
     p = sub.add_parser("onboard", help="Kurulum sihirbazı")
-    p.add_argument("--headless", action="store_true")
-    p.add_argument("--channel", metavar="CHANNEL")
-    p.add_argument("--install-daemon", action="store_true")
+    _add_onboard_args(p)
+
+    # ── setup (onboard alias) ──────────────────────────────────────────
+    p = sub.add_parser("setup", help="Kurulum sihirbazı (onboard alias)")
+    _add_onboard_args(p)
 
     # ── update ──────────────────────────────────────────────────────────
     p = sub.add_parser("update", help="Güncelleme")
@@ -293,8 +322,16 @@ def main(argv: list[str] | None = None):
     args = parser.parse_args(argv)
 
     if not args.command:
+        from cli.onboard import ensure_first_run_setup
+        if not ensure_first_run_setup(command="", non_interactive=not sys.stdin.isatty()):
+            return 1
         parser.print_help()
         return 0
+
+    if args.command not in SETUP_OPTIONAL_COMMANDS:
+        from cli.onboard import ensure_first_run_setup
+        if not ensure_first_run_setup(command=args.command, non_interactive=not sys.stdin.isatty()):
+            return 1
 
     # ── Routing ─────────────────────────────────────────────────────────
     if args.command == "doctor":
@@ -430,9 +467,16 @@ def main(argv: list[str] | None = None):
             no_browser=getattr(args, "no_browser", False),
         )
 
-    elif args.command == "onboard":
+    elif args.command in {"onboard", "setup"}:
         from cli.onboard import start_onboarding
-        start_onboarding()
+        ok = start_onboarding(
+            headless=getattr(args, "headless", False),
+            channel=getattr(args, "channel", None),
+            install_daemon=getattr(args, "install_daemon", False),
+            force=getattr(args, "force", False),
+        )
+        if not ok:
+            return 1
 
     elif args.command == "update":
         print("Güncelleme kontrolü yapılıyor...")

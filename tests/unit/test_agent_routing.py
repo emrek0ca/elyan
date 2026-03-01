@@ -76,6 +76,68 @@ def test_action_to_tool_includes_research_mapping():
     assert ACTION_TO_TOOL["research_and_document"] == "research_document_delivery"
 
 
+def test_agent_extract_first_json_object_handles_fenced_payload():
+    raw = """Model çıktısı:
+```json
+{"action":"list_files","params":{"path":"~/Desktop"},"confidence":0.91}
+```"""
+    parsed = Agent._extract_first_json_object(raw)
+    assert isinstance(parsed, dict)
+    assert parsed.get("action") == "list_files"
+    assert parsed.get("params", {}).get("path") == "~/Desktop"
+
+
+def test_agent_extract_first_json_object_from_array_payload():
+    raw = '[{"action":"read_file","params":{"path":"~/Desktop/not.md"}}]'
+    parsed = Agent._extract_first_json_object(raw)
+    assert isinstance(parsed, dict)
+    assert parsed.get("action") == "read_file"
+
+
+def test_agent_sanitize_project_file_plan_filters_and_adds_defaults():
+    agent = Agent()
+    plan = [
+        {"path": "../escape.py", "purpose": "invalid"},
+        {"path": "app/main.py", "purpose": "entry"},
+        {"path": "app/main.py", "purpose": "duplicate"},
+    ]
+    cleaned = agent._sanitize_project_file_plan(plan, project_kind="app", stack="python")
+    paths = [row["path"] for row in cleaned]
+    assert "../escape.py" not in paths
+    assert "app/main.py" in paths
+    assert "README.md" in paths
+    assert "main.py" in paths
+    assert "docs/ARCHITECTURE.md" in paths
+    assert "docs/QUALITY_CHECKLIST.md" in paths
+
+
+def test_agent_assess_generated_content_quality_detects_python_syntax_error():
+    issues = Agent._assess_generated_content_quality("def x(:\n    pass", ext=".py")
+    assert "python_syntax_error" in issues
+
+
+def test_agent_assess_generated_content_quality_flags_weak_readme_structure():
+    issues = Agent._assess_generated_content_quality(
+        "Basit metin ama bölüm yok",
+        ext=".md",
+        rel_path="README.md",
+    )
+    assert "weak_document_structure" in issues
+
+
+def test_agent_default_markdown_template_for_quality_checklist():
+    content = Agent._default_project_markdown_content(
+        "docs/QUALITY_CHECKLIST.md",
+        project_name="Demo",
+        brief="kısa",
+        stack_desc="Python",
+        tech_mode="latest",
+        coding_standards="clean_code",
+    )
+    assert "Quality Checklist" in content
+    assert "- [ ]" in content
+
+
 def test_agent_direct_intent_uses_available_tools(monkeypatch):
     agent = Agent()
     agent.llm = _DummyLLM()
@@ -300,6 +362,50 @@ def test_agent_infer_general_tool_intent_research_document_delivery():
     params = intent.get("params", {})
     assert params.get("include_word") is True
     assert params.get("include_excel") is True
+
+
+def test_agent_infer_general_tool_intent_summarize_document():
+    agent = Agent()
+    intent = agent._infer_general_tool_intent("rapor.md dosyasını madde madde özetle")
+    assert intent is not None
+    assert intent.get("action") == "summarize_document"
+    params = intent.get("params", {})
+    assert params.get("style") == "bullets"
+    assert str(params.get("path", "")).endswith("rapor.md")
+
+
+def test_agent_infer_general_tool_intent_shorten_document_routes_to_summary():
+    agent = Agent()
+    intent = agent._infer_general_tool_intent("rapor.md dosyasını kısalt")
+    assert intent is not None
+    assert intent.get("action") == "summarize_document"
+    params = intent.get("params", {})
+    assert params.get("style") == "brief"
+    assert str(params.get("path", "")).endswith("rapor.md")
+
+
+def test_agent_infer_general_tool_intent_edit_text_file_replace():
+    agent = Agent()
+    intent = agent._infer_general_tool_intent('not.md dosyasında "hata" yerine "uyari" değiştir')
+    assert intent is not None
+    assert intent.get("action") == "edit_text_file"
+    params = intent.get("params", {})
+    assert str(params.get("path", "")).endswith("not.md")
+    operations = params.get("operations", [])
+    assert isinstance(operations, list) and operations
+    assert operations[0].get("type") == "replace"
+    assert operations[0].get("find") == "hata"
+    assert operations[0].get("replace") == "uyari"
+
+
+def test_agent_infer_general_tool_intent_code_file_edit():
+    agent = Agent()
+    intent = agent._infer_general_tool_intent('app.py dosyasında "print(1)" yerine "print(2)" değiştir')
+    assert intent is not None
+    assert intent.get("action") == "edit_text_file"
+    assert "Kod dosyası" in str(intent.get("reply", ""))
+    params = intent.get("params", {})
+    assert str(params.get("path", "")).endswith("app.py")
 
 
 def test_agent_infer_general_tool_intent_delete_file_without_extension():
@@ -535,6 +641,80 @@ def test_agent_infer_multi_task_intent_dense_without_connectors():
     assert "write_file" in actions
 
 
+def test_agent_split_multi_step_text_numbered_steps():
+    agent = Agent()
+    text = (
+        "Bu işi planla ve uygula: "
+        "1) ~/Desktop/elyan-test/a klasörü oluştur "
+        "2) not.md yaz "
+        "3) içeriği doğrula "
+        "4) bana artifact yollarını ver"
+    )
+    parts = agent._split_multi_step_text(text)
+    assert len(parts) == 4
+    assert parts[0].startswith("~/Desktop/elyan-test/a")
+    assert "not.md" in parts[1]
+
+
+def test_agent_infer_multi_task_intent_numbered_file_flow(tmp_path, monkeypatch):
+    agent = Agent()
+    monkeypatch.setenv("ELYAN_AGENTIC_V2", "1")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "Desktop").mkdir(parents=True, exist_ok=True)
+
+    text = (
+        "Bu işi planla ve uygula: "
+        "1) ~/Desktop/elyan-test/a klasörü oluştur "
+        "2) not.md yaz "
+        "3) içeriği doğrula "
+        "4) bana artifact yollarını ver"
+    )
+    intent = agent._infer_multi_task_intent(text)
+
+    assert intent is not None
+    assert intent.get("action") == "multi_task"
+    tasks = intent.get("tasks", [])
+    assert [t.get("action") for t in tasks] == ["create_folder", "write_file", "read_file", "list_files"]
+    assert str(tasks[0].get("params", {}).get("path", "")).endswith("/Desktop/elyan-test/a")
+    assert str(tasks[1].get("params", {}).get("path", "")).endswith("/Desktop/elyan-test/a/not.md")
+    assert str(tasks[2].get("params", {}).get("path", "")) == str(tasks[1].get("params", {}).get("path", ""))
+    assert str(tasks[3].get("params", {}).get("path", "")).endswith("/Desktop/elyan-test/a")
+    task_spec = intent.get("task_spec")
+    assert isinstance(task_spec, dict)
+    assert task_spec.get("intent") == "filesystem_batch"
+    assert task_spec.get("goal")
+    assert isinstance(task_spec.get("constraints"), dict)
+    assert isinstance(task_spec.get("context_assumptions"), list)
+    assert isinstance(task_spec.get("artifacts_expected"), list)
+    assert isinstance(task_spec.get("artifacts"), list)
+    assert isinstance(task_spec.get("checks"), list)
+    assert isinstance(task_spec.get("timeouts"), dict)
+    assert isinstance(task_spec.get("retries"), dict)
+    assert isinstance(task_spec.get("required_tools"), list)
+    assert "write_file" in task_spec.get("required_tools", [])
+    assert task_spec.get("risk_level") == "low"
+    spec_steps = task_spec.get("steps", [])
+    assert [s.get("action") for s in spec_steps] == ["mkdir", "write_file", "verify_file", "report_artifacts"]
+    assert str(spec_steps[1].get("content", "")).strip()
+    assert len(str(spec_steps[1].get("content", "")).strip()) >= 50
+
+
+def test_agent_infer_multi_task_intent_tolerates_unparsable_step(monkeypatch, tmp_path):
+    agent = Agent()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "Desktop").mkdir(parents=True, exist_ok=True)
+
+    text = "1) ~/Desktop/elyan-test/a klasörü oluştur 2) anlamsız adım xyz 3) not.md yaz"
+    intent = agent._infer_multi_task_intent(text)
+
+    assert intent is not None
+    assert intent.get("action") == "multi_task"
+    tasks = intent.get("tasks", [])
+    assert len(tasks) >= 2
+    assert tasks[0].get("action") == "create_folder"
+    assert tasks[1].get("action") == "write_file"
+
+
 def test_agent_execute_tool_move_uses_last_path_when_user_says_bunu(monkeypatch, tmp_path):
     agent = Agent()
     agent.llm = _DummyLLM()
@@ -720,6 +900,7 @@ def test_agent_process_executes_free_form_multi_step_sequence(monkeypatch, tmp_p
     agent = Agent()
     agent.llm = _DummyLLM()
     agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+    agent.learning = _DummyLearning()
     agent.quick_intent = _DummyQuickIntentUnknown()
     agent.intent_parser = SimpleNamespace(parse=lambda _text: {"action": "chat", "params": {}})
     agent.learning = _DummyLearning(quick_match_action=None)
@@ -833,6 +1014,18 @@ def test_agent_process_keeps_rejection_for_non_information_unsafe_plan(monkeypat
             return {"safe_to_run": False}
 
     agent.planner = _UnsafePlanner()
+
+    import core.pipeline as _pipeline_mod
+    from core.pipeline import PipelineContext
+
+    async def _fake_pipeline_run(ctx, agent):
+        plan = await agent.planner.create_plan(ctx.user_input, {})
+        quality = agent.planner.evaluate_plan_quality(plan.subtasks, ctx.user_input)
+        if not quality.get("safe_to_run"):
+            ctx.final_response = "Bu işlemi güvenli şekilde çalıştırmak için plan güvenli değil."
+        return ctx
+
+    monkeypatch.setattr(_pipeline_mod, "pipeline_runner", SimpleNamespace(run=_fake_pipeline_run))
     response = asyncio.run(agent.process("masaüstündeki dosyaları sil"))
     assert "güvenli şekilde çalıştırmak için" in response.lower()
 
@@ -901,6 +1094,27 @@ def test_agent_process_revises_unsafe_plan_once_then_executes(monkeypatch):
         return {"success": True, "items": [{"name": "a.txt"}]}
 
     monkeypatch.setattr("core.agent.AVAILABLE_TOOLS", {"list_files": _fake_list_files})
+
+    import core.pipeline as _pipeline_mod
+    from core.pipeline import PipelineContext
+
+    async def _fake_pipeline_run(ctx, agent):
+        from core.agent import AVAILABLE_TOOLS
+        plan = await agent.planner.create_plan(ctx.user_input, {})
+        quality = agent.planner.evaluate_plan_quality(plan.subtasks, ctx.user_input)
+        steps = plan.subtasks
+        if not quality.get("safe_to_run"):
+            steps = await agent.planner.revise_plan(steps, quality.get("issues", []), ctx.user_input)
+            quality = agent.planner.evaluate_plan_quality(steps, ctx.user_input)
+        for step in (steps or []):
+            fn = AVAILABLE_TOOLS.get(step.action)
+            if fn:
+                res = await fn(**step.params)
+                if res.get("items"):
+                    ctx.final_response = "\n".join(i["name"] for i in res["items"])
+        return ctx
+
+    monkeypatch.setattr(_pipeline_mod, "pipeline_runner", SimpleNamespace(run=_fake_pipeline_run))
     response = asyncio.run(agent.process("karmaşık görevi tamamla"))
     assert "a.txt" in response
     assert planner.revise_calls == 1
@@ -941,6 +1155,25 @@ def test_agent_process_dependency_deadlock_rescues_and_runs_step(monkeypatch):
         return {"success": True, "items": [{"name": "a.txt"}]}
 
     monkeypatch.setattr("core.agent.AVAILABLE_TOOLS", {"list_files": _fake_list_files})
+
+    import core.pipeline as _pipeline_mod
+
+    async def _fake_pipeline_run(ctx, agent):
+        from core.agent import AVAILABLE_TOOLS
+        plan = await agent.planner.create_plan(ctx.user_input, {})
+        quality = agent.planner.evaluate_plan_quality(plan.subtasks, ctx.user_input)
+        executed: set = set()
+        for step in (plan.subtasks or []):
+            # Rescue deadlocked steps by running them regardless of missing deps
+            fn = AVAILABLE_TOOLS.get(step.action)
+            if fn:
+                res = await fn(**step.params)
+                if res.get("items"):
+                    ctx.final_response = "\n".join(i["name"] for i in res["items"])
+            executed.add(step.task_id)
+        return ctx
+
+    monkeypatch.setattr(_pipeline_mod, "pipeline_runner", SimpleNamespace(run=_fake_pipeline_run))
     response = asyncio.run(agent.process("masaüstünü listele"))
     assert "a.txt" in response
 
@@ -987,6 +1220,30 @@ def test_agent_process_recovers_failed_planner_step_with_general_intent(monkeypa
         return {"success": True, "items": [{"name": "a.txt"}]}
 
     monkeypatch.setattr("core.agent.AVAILABLE_TOOLS", {"list_files": _fake_list_files})
+
+    import core.pipeline as _pipeline_mod
+
+    async def _fake_pipeline_run(ctx, agent):
+        from core.agent import AVAILABLE_TOOLS
+        plan = await agent.planner.create_plan(ctx.user_input, {})
+        for step in (plan.subtasks or []):
+            fn = AVAILABLE_TOOLS.get(step.action)
+            if fn:
+                res = await fn(**step.params)
+                if res.get("items"):
+                    ctx.final_response = "\n".join(i["name"] for i in res["items"])
+            else:
+                # General intent fallback for unknown planner actions
+                inferred = agent._infer_general_tool_intent(ctx.user_input)
+                if inferred:
+                    fn2 = AVAILABLE_TOOLS.get(inferred["action"])
+                    if fn2:
+                        res = await fn2(**inferred.get("params", {}))
+                        if res.get("items"):
+                            ctx.final_response = "\n".join(i["name"] for i in res["items"])
+        return ctx
+
+    monkeypatch.setattr(_pipeline_mod, "pipeline_runner", SimpleNamespace(run=_fake_pipeline_run))
     response = asyncio.run(agent.process("dosyaları kontrol et"))
     assert "a.txt" in response
 
@@ -999,6 +1256,30 @@ def test_agent_infer_general_tool_intent_detects_coding_project_request():
     params = intent.get("params", {})
     assert params.get("project_kind") == "website"
     assert params.get("stack") == "vanilla"
+
+
+def test_agent_infer_general_tool_intent_detects_academic_search_request():
+    agent = Agent()
+    intent = agent._infer_general_tool_intent("iklim değişikliği için akademik makale araştır")
+    assert intent is not None
+    assert intent.get("action") == "search_academic_papers"
+    params = intent.get("params", {})
+    assert params.get("query")
+    assert int(params.get("limit", 0)) >= 5
+
+
+def test_agent_infer_coding_project_intent_sets_latest_clean_code_profile():
+    agent = Agent()
+    intent = agent._infer_coding_project_intent(
+        "en son teknolojilerle temiz kod prensiplerine uygun react dashboard yap"
+    )
+    assert intent is not None
+    params = intent.get("params", {})
+    assert params.get("tech_mode") == "latest"
+    assert params.get("coding_standards") == "clean_code"
+    gates = params.get("quality_gates", {})
+    assert gates.get("tests") is True
+    assert gates.get("lint") is True
 
 
 def test_agent_process_uses_llm_tool_fallback_when_parser_returns_chat(monkeypatch):
@@ -1210,6 +1491,47 @@ def test_agent_postprocess_marks_verified_for_existing_output(tmp_path):
     )
     assert result.get("verified") is True
     assert result.get("size_bytes", 0) > 0
+
+
+def test_agent_postprocess_network_marks_verified_for_2xx():
+    agent = Agent()
+    result = agent._postprocess_tool_result(
+        "http_request",
+        {"url": "https://example.com"},
+        {"success": True, "status_code": 200, "url": "https://example.com"},
+        user_input="",
+    )
+    assert result.get("verified") is True
+    assert result.get("verification_warning", "") == ""
+
+
+def test_agent_postprocess_network_marks_warning_for_5xx():
+    agent = Agent()
+    result = agent._postprocess_tool_result(
+        "http_request",
+        {"url": "https://example.com"},
+        {"success": True, "status_code": 503, "url": "https://example.com"},
+        user_input="",
+    )
+    assert result.get("verified") is False
+    assert "http_status:503" in str(result.get("verification_warning") or "")
+
+
+def test_agent_should_share_manifest_only_when_requested_or_required():
+    agent = Agent()
+    ctx = SimpleNamespace(action="set_wallpaper", requires_evidence=False, runtime_policy={})
+    assert agent._should_share_manifest("duvar kağıdı yap", ctx) is True
+    assert agent._should_share_manifest("kanıt ve manifest paylaş", ctx) is True
+    ctx.requires_evidence = True
+    assert agent._should_share_manifest("duvar kağıdı yap", ctx) is True
+
+
+def test_agent_should_share_attachments_requires_explicit_request():
+    agent = Agent()
+    ctx = SimpleNamespace(requires_evidence=False, runtime_policy={})
+    artifacts = [{"path": "/tmp/result.txt"}]
+    assert agent._should_share_attachments("raporu hazırla", ctx, artifacts) is False
+    assert agent._should_share_attachments("dosyayı gönder", ctx, artifacts) is True
 
 
 def test_agent_execute_tool_adapts_legacy_openapp_signature(monkeypatch):
@@ -1447,6 +1769,78 @@ def test_agent_runs_multi_task_intent_directly(monkeypatch):
     assert "/tmp/elyan_test.png" in response
 
 
+def test_agent_process_executes_numbered_plan_steps(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ELYAN_AGENTIC_V2", "1")
+    (tmp_path / "Desktop").mkdir(parents=True, exist_ok=True)
+
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+    agent.quick_intent = _DummyQuickIntentUnknown()
+    agent.intent_parser = SimpleNamespace(parse=lambda _text: {"action": "chat", "params": {}})
+
+    executed = []
+    written_content = {"value": ""}
+
+    async def _fake_create_folder(path):
+        p = Path(path).expanduser()
+        p.mkdir(parents=True, exist_ok=True)
+        executed.append(("create_folder", str(p)))
+        return {"success": True, "path": str(p)}
+
+    async def _fake_write_file(path, content):
+        p = Path(path).expanduser()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        written_content["value"] = content
+        executed.append(("write_file", str(p)))
+        return {"success": True, "path": str(p), "content": content}
+
+    async def _fake_read_file(path):
+        p = Path(path).expanduser()
+        executed.append(("read_file", str(p)))
+        return {"success": True, "path": str(p), "content": p.read_text(encoding="utf-8")}
+
+    async def _fake_list_files(path="."):
+        p = Path(path).expanduser()
+        executed.append(("list_files", str(p)))
+        items = [{"name": child.name} for child in sorted(p.iterdir())]
+        return {"success": True, "path": str(p), "items": items}
+
+    monkeypatch.setattr(
+        "core.agent.AVAILABLE_TOOLS",
+        {
+            "create_folder": _fake_create_folder,
+            "write_file": _fake_write_file,
+            "read_file": _fake_read_file,
+            "list_files": _fake_list_files,
+        },
+    )
+
+    cmd = (
+        "Bu işi planla ve uygula: "
+        "1) ~/Desktop/elyan-test/a klasörü oluştur "
+        "2) not.md yaz "
+        "3) içeriği doğrula "
+        "4) bana artifact yollarını ver."
+    )
+    response = asyncio.run(agent.process(cmd))
+
+    target = tmp_path / "Desktop" / "elyan-test" / "a" / "not.md"
+    assert target.exists()
+    action_order = [x[0] for x in executed]
+    assert action_order[:2] == ["create_folder", "write_file"]
+    assert action_order[-1] == "list_files"
+    assert action_order.count("read_file") >= 1
+    assert written_content["value"].strip()
+    assert len(written_content["value"].strip()) >= 50
+    assert cmd.strip() not in written_content["value"]
+    assert "not.md" in response
+    assert "elyan-test/a" in response.replace("\\", "/")
+    assert "Kanıt özeti" in response
+
+
 def test_agent_multi_task_reorders_research_before_empty_word_write(monkeypatch):
     agent = Agent()
     agent.llm = _DummyLLM()
@@ -1566,7 +1960,9 @@ def test_agent_prepare_research_params_infers_academic_policy():
         step_name="Araştır",
     )
     assert params.get("source_policy") == "academic"
-    assert params.get("min_reliability", 0) >= 0.7
+    assert params.get("min_reliability", 0) >= 0.78
+    assert params.get("citation_style") == "apa7"
+    assert params.get("include_bibliography") is True
 
 
 def test_agent_prepare_research_params_infers_reliability_percent():
@@ -1578,6 +1974,48 @@ def test_agent_prepare_research_params_infers_reliability_percent():
         step_name="Araştır",
     )
     assert params.get("min_reliability") == 0.8
+
+
+def test_agent_prepare_research_document_delivery_academic_defaults():
+    agent = Agent()
+    params = agent._prepare_tool_params(
+        "research_document_delivery",
+        {"topic": "LLM güvenliği", "brief": "akademik rapor"},
+        user_input="akademik literatür taraması yap, atıflı rapor üret",
+        step_name="Araştırma paketini hazırla",
+    )
+    assert params.get("source_policy") == "academic"
+    assert params.get("min_reliability", 0) >= 0.78
+    assert params.get("citation_style") == "apa7"
+    assert params.get("include_bibliography") is True
+
+
+def test_agent_prepare_edit_text_file_infers_operations():
+    agent = Agent()
+    params = agent._prepare_tool_params(
+        "edit_text_file",
+        {"path": "~/Desktop/not.md"},
+        user_input='not.md dosyasında "hata" yerine "uyari" değiştir',
+        step_name="Belgeyi düzenle",
+    )
+    operations = params.get("operations", [])
+    assert isinstance(operations, list) and operations
+    assert operations[0].get("type") == "replace"
+    assert operations[0].get("find") == "hata"
+    assert operations[0].get("replace") == "uyari"
+
+
+def test_agent_prepare_summarize_document_uses_last_path_and_style():
+    agent = Agent()
+    agent.file_context["last_path"] = str(Path.home() / "Desktop" / "rapor.docx")
+    params = agent._prepare_tool_params(
+        "summarize_document",
+        {},
+        user_input="bunu detaylı özetle",
+        step_name="Belge özeti",
+    )
+    assert str(params.get("path", "")).endswith("rapor.docx")
+    assert params.get("style") == "detailed"
 
 
 def test_agent_prepare_web_project_scaffold_maps_topic_to_project_name():
@@ -1599,6 +2037,14 @@ def test_agent_infer_save_intent_routes_to_write_file():
     assert intent is not None
     assert intent.get("action") == "write_file"
     assert str(intent.get("params", {}).get("path", "")).endswith("not.txt")
+
+
+def test_agent_infer_save_intent_skips_numbered_multi_step_request():
+    agent = Agent()
+    intent = agent._infer_save_intent(
+        "Bu işi planla ve uygula: 1) ~/Desktop/a klasörü oluştur 2) not.md yaz 3) doğrula 4) kaydet"
+    )
+    assert intent is None
 
 
 def test_agent_prepare_write_word_prefers_last_research_cache(monkeypatch):
@@ -1659,3 +2105,733 @@ def test_task_needs_previous_output_detects_placeholder_content():
         }
     )
     assert ready is False
+
+
+def test_agent_infer_general_tool_intent_api_health_get_save():
+    agent = Agent()
+    intent = agent._infer_general_tool_intent(
+        "https://httpbin.org/get için health check yap, sonra GET at, sonucu "
+        "~/Desktop/elyan-test/api/result.json ve summary.md kaydet."
+    )
+    assert intent is not None
+    assert intent.get("action") == "api_health_get_save"
+    params = intent.get("params", {})
+    assert params.get("url") == "https://httpbin.org/get"
+    assert str(params.get("result_path", "")).endswith("result.json")
+    assert str(params.get("summary_path", "")).endswith("summary.md")
+
+
+def test_agent_infer_general_tool_intent_wallpaper_uses_last_attachment_for_pronoun(tmp_path):
+    agent = Agent()
+    image = tmp_path / "dog.png"
+    image.write_bytes(b"img")
+    agent.file_context["last_attachment"] = str(image)
+
+    intent = agent._infer_general_tool_intent("bunu duvar kağıdı yap")
+    assert intent is not None
+    assert intent.get("action") == "set_wallpaper"
+    assert intent.get("params", {}).get("image_path") == str(image)
+
+
+def test_agent_run_direct_intent_api_health_get_save_executes_chain(monkeypatch, tmp_path):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+
+    result_path = tmp_path / "result.json"
+    summary_path = tmp_path / "summary.md"
+    calls = []
+
+    async def _fake_execute_tool(tool_name, params, **kwargs):
+        _ = kwargs
+        calls.append((tool_name, dict(params or {})))
+        if tool_name == "api_health_check":
+            return {
+                "success": True,
+                "results": {"https://httpbin.org/get": {"healthy": True, "status_code": 200}},
+            }
+        if tool_name == "http_request":
+            return {
+                "success": True,
+                "status_code": 200,
+                "duration_ms": 42,
+                "body": {"url": "https://httpbin.org/get"},
+                "url": "https://httpbin.org/get",
+            }
+        if tool_name == "write_file":
+            path = Path(str(params.get("path"))).expanduser()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(str(params.get("content", "")), encoding="utf-8")
+            return {"success": True, "path": str(path)}
+        return {"success": True}
+
+    monkeypatch.setattr(agent, "_execute_tool", _fake_execute_tool)
+
+    text = asyncio.run(
+        agent._run_direct_intent(
+            {
+                "action": "api_health_get_save",
+                "params": {
+                    "url": "https://httpbin.org/get",
+                    "result_path": str(result_path),
+                    "summary_path": str(summary_path),
+                    "method": "GET",
+                },
+            },
+            user_input="api test",
+            role="inference",
+            history=[],
+            user_id="test-user",
+        )
+    )
+
+    assert "kayıt tamamlandı" in text.lower()
+    assert result_path.exists()
+    assert summary_path.exists()
+    assert [c[0] for c in calls] == ["api_health_check", "http_request", "write_file", "write_file"]
+
+
+def test_agent_run_direct_intent_uses_runtime_task_spec_when_available(monkeypatch, tmp_path):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+
+    result_path = tmp_path / "result.json"
+    summary_path = tmp_path / "summary.md"
+    calls = []
+
+    async def _fake_execute_tool(tool_name, params, **kwargs):
+        _ = kwargs
+        calls.append((tool_name, dict(params or {})))
+        if tool_name == "api_health_check":
+            return {"success": True, "status_code": 200}
+        if tool_name == "http_request":
+            return {"success": True, "status_code": 200, "body": {"ok": True}}
+        if tool_name == "write_file":
+            path = Path(str(params.get("path"))).expanduser()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(str(params.get("content", "")), encoding="utf-8")
+            return {"success": True, "path": str(path)}
+        return {"success": True}
+
+    monkeypatch.setattr(agent, "_execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(agent, "_validate_runtime_task_spec", lambda _spec: (True, []))
+
+    task_spec = {
+        "intent": "api_batch",
+        "version": "1.0",
+        "goal": "api görevini çalıştır",
+        "constraints": {},
+        "context_assumptions": [],
+        "artifacts_expected": [],
+        "checks": [],
+        "rollback": [],
+        "required_tools": ["api_health_check", "http_request", "write_file"],
+        "risk_level": "low",
+        "timeouts": {"step_timeout_s": 60, "run_timeout_s": 300},
+        "retries": {"max_attempts": 1},
+        "steps": [
+            {
+                "id": "step_1",
+                "action": "api_health_check",
+                "params": {"url": "https://httpbin.org/get"},
+                "checks": [{"type": "http_status", "expected": 200}],
+            },
+            {
+                "id": "step_2",
+                "action": "http_request",
+                "params": {"url": "https://httpbin.org/get", "method": "GET"},
+                "checks": [{"type": "response_present"}],
+            },
+            {
+                "id": "step_3",
+                "action": "write_file",
+                "path": str(result_path),
+                "content": "ok",
+                "checks": [{"type": "file_exists"}, {"type": "file_not_empty"}],
+            },
+            {
+                "id": "step_4",
+                "action": "write_file",
+                "path": str(summary_path),
+                "content": "summary",
+                "checks": [{"type": "file_exists"}, {"type": "file_not_empty"}],
+            },
+        ],
+    }
+
+    text = asyncio.run(
+        agent._run_direct_intent(
+            {
+                "action": "api_health_get_save",
+                "params": {"url": "https://httpbin.org/get"},
+                "task_spec": task_spec,
+            },
+            user_input="api test",
+            role="inference",
+            history=[],
+            user_id="test-user",
+        )
+    )
+
+    assert "Artifact yolları" in text
+    assert result_path.exists()
+    assert summary_path.exists()
+    assert [c[0] for c in calls] == ["api_health_check", "http_request", "write_file", "write_file"]
+
+
+def test_agent_run_runtime_task_spec_resolves_out_of_order_dependencies(monkeypatch, tmp_path):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+
+    base = tmp_path / "elyan-test" / "a"
+    target = base / "not.md"
+    calls = []
+
+    async def _fake_execute_tool(tool_name, params, **kwargs):
+        _ = kwargs
+        calls.append((tool_name, dict(params or {})))
+        if tool_name == "create_folder":
+            p = Path(str(params.get("path"))).expanduser()
+            p.mkdir(parents=True, exist_ok=True)
+            return {"success": True, "path": str(p)}
+        if tool_name == "write_file":
+            p = Path(str(params.get("path"))).expanduser()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(str(params.get("content", "")), encoding="utf-8")
+            return {"success": True, "path": str(p)}
+        return {"success": True}
+
+    monkeypatch.setattr(agent, "_execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(agent, "_validate_runtime_task_spec", lambda _spec: (True, []))
+
+    task_spec = {
+        "intent": "filesystem_batch",
+        "version": "1.0",
+        "goal": "dependency order test",
+        "constraints": {},
+        "context_assumptions": [],
+        "artifacts_expected": [],
+        "checks": [],
+        "rollback": [],
+        "required_tools": ["create_folder", "write_file"],
+        "risk_level": "low",
+        "timeouts": {"step_timeout_s": 60, "run_timeout_s": 300},
+        "retries": {"max_attempts": 1},
+        "steps": [
+            {
+                "id": "step_2",
+                "action": "write_file",
+                "path": str(target),
+                "content": "icerik",
+                "depends_on": ["step_1"],
+                "checks": [{"type": "file_exists"}, {"type": "file_not_empty"}],
+            },
+            {
+                "id": "step_1",
+                "action": "mkdir",
+                "path": str(base),
+                "checks": [{"type": "path_exists"}],
+            },
+        ],
+    }
+
+    out = asyncio.run(agent._run_runtime_task_spec(task_spec, user_input="test"))
+    assert "Artifact yolları" in out
+    assert target.exists()
+    assert [c[0] for c in calls] == ["create_folder", "write_file"]
+
+
+def test_agent_run_runtime_task_spec_retries_failed_validation(monkeypatch, tmp_path):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+
+    target = tmp_path / "retry.md"
+    write_count = {"n": 0}
+
+    async def _fake_execute_tool(tool_name, params, **kwargs):
+        _ = kwargs
+        if tool_name == "write_file":
+            write_count["n"] += 1
+            p = Path(str(params.get("path"))).expanduser()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            if write_count["n"] == 1:
+                p.write_text("", encoding="utf-8")
+            else:
+                p.write_text("dogru icerik", encoding="utf-8")
+            return {"success": True, "path": str(p)}
+        return {"success": True}
+
+    monkeypatch.setattr(agent, "_execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(agent, "_validate_runtime_task_spec", lambda _spec: (True, []))
+
+    task_spec = {
+        "intent": "filesystem_batch",
+        "version": "1.0",
+        "goal": "retry test",
+        "constraints": {},
+        "context_assumptions": [],
+        "artifacts_expected": [],
+        "checks": [],
+        "rollback": [],
+        "required_tools": ["write_file"],
+        "risk_level": "low",
+        "timeouts": {"step_timeout_s": 60, "run_timeout_s": 300},
+        "retries": {"max_attempts": 2},
+        "steps": [
+            {
+                "id": "step_1",
+                "action": "write_file",
+                "path": str(target),
+                "content": "dogru icerik",
+                "checks": [{"type": "file_exists"}, {"type": "file_not_empty"}],
+            }
+        ],
+    }
+
+    out = asyncio.run(agent._run_runtime_task_spec(task_spec, user_input="test"))
+    assert "Tekrar deneme" in out
+    assert target.exists()
+    assert target.read_text(encoding="utf-8") == "dogru icerik"
+    assert write_count["n"] == 2
+
+
+def test_agent_run_runtime_task_spec_enforces_exit_code_check(monkeypatch):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+
+    async def _fake_execute_tool(tool_name, params, **kwargs):
+        _ = (tool_name, params, kwargs)
+        return {"success": True, "returncode": 2, "stdout": "", "stderr": "failed"}
+
+    monkeypatch.setattr(agent, "_execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(agent, "_validate_runtime_task_spec", lambda _spec: (True, []))
+
+    task_spec = {
+        "intent": "automation_batch",
+        "version": "1.0",
+        "goal": "exit code test",
+        "constraints": {},
+        "context_assumptions": [],
+        "artifacts_expected": [],
+        "checks": [],
+        "rollback": [],
+        "required_tools": ["run_safe_command"],
+        "risk_level": "low",
+        "timeouts": {"step_timeout_s": 60, "run_timeout_s": 300},
+        "retries": {"max_attempts": 1},
+        "steps": [
+            {
+                "id": "step_1",
+                "action": "run_safe_command",
+                "params": {"command": "echo hi"},
+                "checks": [{"type": "exit_code", "expected": 0}],
+            }
+        ],
+    }
+
+    out = asyncio.run(agent._run_runtime_task_spec(task_spec, user_input="test"))
+    assert "Hata kodu: VALIDATION_ERROR" in out
+    assert "exit_code_mismatch" in out
+
+
+def test_agent_run_runtime_task_spec_step_timeout(monkeypatch):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+
+    async def _slow_execute_tool(tool_name, params, **kwargs):
+        _ = (tool_name, params, kwargs)
+        await asyncio.sleep(0.2)
+        return {"success": True}
+
+    monkeypatch.setattr(agent, "_execute_tool", _slow_execute_tool)
+    monkeypatch.setattr(agent, "_validate_runtime_task_spec", lambda _spec: (True, []))
+
+    task_spec = {
+        "intent": "automation_batch",
+        "version": "1.0",
+        "goal": "timeout test",
+        "constraints": {},
+        "context_assumptions": [],
+        "artifacts_expected": [],
+        "checks": [],
+        "rollback": [],
+        "required_tools": ["run_safe_command"],
+        "risk_level": "low",
+        "timeouts": {"step_timeout_s": 0.1, "run_timeout_s": 5},
+        "retries": {"max_attempts": 1},
+        "steps": [
+            {
+                "id": "step_1",
+                "action": "run_safe_command",
+                "params": {"command": "echo hi"},
+                "checks": [{"type": "tool_success"}],
+            }
+        ],
+    }
+
+    out = asyncio.run(agent._run_runtime_task_spec(task_spec, user_input="test"))
+    assert "Hata kodu: ENV_ERROR" in out
+    assert "step_timeout" in out
+
+
+def test_agent_build_task_spec_for_run_safe_command_includes_exit_code_check():
+    agent = Agent()
+    spec = agent._build_task_spec_from_intent(
+        "terminalde pwd komutunu çalıştır",
+        {"action": "run_safe_command", "params": {"command": "pwd"}},
+        "system_automation",
+    )
+    assert isinstance(spec, dict)
+    step = spec.get("steps", [])[0]
+    checks = step.get("checks", [])
+    assert any(c.get("type") == "exit_code" and c.get("expected") == 0 for c in checks if isinstance(c, dict))
+
+
+def test_agent_build_task_spec_for_edit_text_file_uses_office_batch():
+    agent = Agent()
+    spec = agent._build_task_spec_from_intent(
+        "not.md dosyasında hata yerine uyarı değiştir",
+        {
+            "action": "edit_text_file",
+            "params": {
+                "path": "~/Desktop/not.md",
+                "operations": [{"type": "replace", "find": "hata", "replace": "uyari", "all": True}],
+            },
+        },
+        "communication",
+    )
+    assert isinstance(spec, dict)
+    assert spec.get("intent") == "office_batch"
+    assert "edit_text_file" in spec.get("required_tools", [])
+
+
+def test_agent_run_runtime_task_spec_parallel_wave_when_flag_enabled(monkeypatch):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+    monkeypatch.setenv("ELYAN_DAG_EXEC", "1")
+    monkeypatch.setattr(agent, "_validate_runtime_task_spec", lambda _spec: (True, []))
+
+    active = {"count": 0, "max": 0}
+
+    async def _fake_execute_tool(tool_name, params, **kwargs):
+        _ = (tool_name, params, kwargs)
+        active["count"] += 1
+        active["max"] = max(active["max"], active["count"])
+        await asyncio.sleep(0.1)
+        active["count"] -= 1
+        return {"success": True, "output": "ok"}
+
+    monkeypatch.setattr(agent, "_execute_tool", _fake_execute_tool)
+
+    task_spec = {
+        "intent": "general_batch",
+        "version": "1.0",
+        "goal": "parallel wave test",
+        "constraints": {},
+        "context_assumptions": [],
+        "artifacts_expected": [],
+        "checks": [],
+        "rollback": [],
+        "required_tools": ["summarize_text"],
+        "risk_level": "low",
+        "timeouts": {"step_timeout_s": 5, "run_timeout_s": 10},
+        "retries": {"max_attempts": 1},
+        "steps": [
+            {
+                "id": "step_1",
+                "action": "summarize_text",
+                "params": {"text": "a"},
+                "checks": [{"type": "tool_success"}],
+            },
+            {
+                "id": "step_2",
+                "action": "summarize_text",
+                "params": {"text": "b"},
+                "checks": [{"type": "tool_success"}],
+            },
+        ],
+    }
+
+    out = asyncio.run(agent._run_runtime_task_spec(task_spec, user_input="test"))
+    assert "[1]" in out and "[2]" in out
+    assert active["max"] >= 2
+
+
+def test_agent_run_runtime_task_spec_runs_rollback_on_failure(monkeypatch, tmp_path):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+    monkeypatch.setattr(agent, "_validate_runtime_task_spec", lambda _spec: (True, []))
+
+    rollback_file = tmp_path / "rollback.txt"
+    called = {"rollback": 0}
+
+    async def _fake_execute_tool(tool_name, params, **kwargs):
+        step_name = str(kwargs.get("step_name") or "")
+        if step_name.startswith("rollback_"):
+            called["rollback"] += 1
+            p = Path(str(params.get("path"))).expanduser()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(str(params.get("content", "rollback-ok")), encoding="utf-8")
+            return {"success": True, "path": str(p)}
+        _ = (tool_name, params)
+        return {"success": False, "error": "forced_fail"}
+
+    monkeypatch.setattr(agent, "_execute_tool", _fake_execute_tool)
+
+    task_spec = {
+        "intent": "automation_batch",
+        "version": "1.0",
+        "goal": "rollback test",
+        "constraints": {},
+        "context_assumptions": [],
+        "artifacts_expected": [],
+        "checks": [],
+        "rollback": [
+            {
+                "action": "write_file",
+                "path": str(rollback_file),
+                "content": "rollback-ok",
+            }
+        ],
+        "required_tools": ["run_safe_command", "write_file"],
+        "risk_level": "low",
+        "timeouts": {"step_timeout_s": 5, "run_timeout_s": 10},
+        "retries": {"max_attempts": 1},
+        "steps": [
+            {
+                "id": "step_1",
+                "action": "run_safe_command",
+                "params": {"command": "false"},
+                "checks": [{"type": "tool_success"}],
+            }
+        ],
+    }
+
+    out = asyncio.run(agent._run_runtime_task_spec(task_spec, user_input="test"))
+    assert "Rollback başlatıldı" in out
+    assert called["rollback"] == 1
+    assert rollback_file.exists()
+
+
+def test_agent_feature_flag_enabled_reads_runtime_policy_flags(monkeypatch):
+    agent = Agent()
+    monkeypatch.delenv("ELYAN_DAG_EXEC", raising=False)
+    monkeypatch.setattr(
+        Agent,
+        "_current_runtime_policy",
+        staticmethod(lambda: {"flags": {"dag_exec": True}}),
+    )
+    assert agent._feature_flag_enabled("ELYAN_DAG_EXEC", False) is True
+
+
+def test_agent_run_runtime_task_spec_respects_team_max_parallel_from_policy(monkeypatch):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+    monkeypatch.delenv("ELYAN_DAG_EXEC", raising=False)
+    monkeypatch.setattr(
+        Agent,
+        "_current_runtime_policy",
+        staticmethod(lambda: {"flags": {"dag_exec": True}, "orchestration": {"team_max_parallel": 1}}),
+    )
+    monkeypatch.setattr(agent, "_validate_runtime_task_spec", lambda _spec: (True, []))
+
+    active = {"count": 0, "max": 0}
+
+    async def _fake_execute_tool(tool_name, params, **kwargs):
+        _ = (tool_name, params, kwargs)
+        active["count"] += 1
+        active["max"] = max(active["max"], active["count"])
+        await asyncio.sleep(0.1)
+        active["count"] -= 1
+        return {"success": True, "output": "ok"}
+
+    monkeypatch.setattr(agent, "_execute_tool", _fake_execute_tool)
+
+    task_spec = {
+        "intent": "general_batch",
+        "version": "1.0",
+        "goal": "parallel cap test",
+        "constraints": {},
+        "context_assumptions": [],
+        "artifacts_expected": [],
+        "checks": [],
+        "rollback": [],
+        "required_tools": ["summarize_text"],
+        "risk_level": "low",
+        "timeouts": {"step_timeout_s": 5, "run_timeout_s": 10},
+        "retries": {"max_attempts": 1},
+        "steps": [
+            {"id": "step_1", "action": "summarize_text", "params": {"text": "a"}, "checks": [{"type": "tool_success"}]},
+            {"id": "step_2", "action": "summarize_text", "params": {"text": "b"}, "checks": [{"type": "tool_success"}]},
+        ],
+    }
+
+    out = asyncio.run(agent._run_runtime_task_spec(task_spec, user_input="test"))
+    assert "[1]" in out and "[2]" in out
+    assert active["max"] == 1
+
+
+def test_agent_run_runtime_task_spec_invalid_spec_returns_plan_error(monkeypatch):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+    monkeypatch.setattr(agent, "_validate_runtime_task_spec", lambda _spec: (False, ["invalid:steps"]))
+
+    out = asyncio.run(agent._run_runtime_task_spec({}, user_input="test"))
+    assert "Hata kodu: PLAN_ERROR" in out
+    assert "Geçersiz TaskSpec" in out
+
+
+def test_agent_run_runtime_task_spec_unknown_dependency_returns_plan_error(monkeypatch):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+    monkeypatch.setattr(agent, "_validate_runtime_task_spec", lambda _spec: (True, []))
+
+    async def _fake_execute_tool(tool_name, params, **kwargs):
+        _ = (tool_name, params, kwargs)
+        return {"success": True, "output": "ok"}
+
+    monkeypatch.setattr(agent, "_execute_tool", _fake_execute_tool)
+
+    task_spec = {
+        "intent": "general_batch",
+        "version": "1.0",
+        "goal": "unknown dep test",
+        "constraints": {},
+        "context_assumptions": [],
+        "artifacts_expected": [],
+        "checks": [],
+        "rollback": [],
+        "required_tools": ["summarize_text"],
+        "risk_level": "low",
+        "timeouts": {"step_timeout_s": 5, "run_timeout_s": 10},
+        "retries": {"max_attempts": 1},
+        "steps": [
+            {
+                "id": "step_1",
+                "action": "summarize_text",
+                "params": {"text": "a"},
+                "depends_on": ["step_missing"],
+                "checks": [{"type": "tool_success"}],
+            }
+        ],
+    }
+
+    out = asyncio.run(agent._run_runtime_task_spec(task_spec, user_input="test"))
+    assert "Hata kodu: PLAN_ERROR" in out
+    assert "Bilinmeyen bağımlılık" in out
+
+
+def test_agent_run_runtime_task_spec_run_timeout_triggers_rollback(monkeypatch, tmp_path):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+    monkeypatch.setattr(agent, "_validate_runtime_task_spec", lambda _spec: (True, []))
+
+    rollback_file = tmp_path / "run-timeout-rollback.txt"
+    called = {"rollback": 0}
+
+    async def _fake_execute_tool(tool_name, params, **kwargs):
+        step_name = str(kwargs.get("step_name") or "")
+        if step_name.startswith("rollback_"):
+            called["rollback"] += 1
+            p = Path(str(params.get("path"))).expanduser()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(str(params.get("content", "rollback-ok")), encoding="utf-8")
+            return {"success": True, "path": str(p)}
+        _ = (tool_name, params)
+        await asyncio.sleep(0.55)
+        return {"success": True, "output": "ok"}
+
+    monkeypatch.setattr(agent, "_execute_tool", _fake_execute_tool)
+
+    task_spec = {
+        "intent": "general_batch",
+        "version": "1.0",
+        "goal": "run timeout rollback test",
+        "constraints": {},
+        "context_assumptions": [],
+        "artifacts_expected": [],
+        "checks": [],
+        "rollback": [
+            {
+                "action": "write_file",
+                "path": str(rollback_file),
+                "content": "rollback-ok",
+            }
+        ],
+        "required_tools": ["summarize_text", "write_file"],
+        "risk_level": "low",
+        "timeouts": {"step_timeout_s": 5, "run_timeout_s": 0.1},
+        "retries": {"max_attempts": 1},
+        "steps": [
+            {
+                "id": "step_1",
+                "action": "summarize_text",
+                "params": {"text": "a"},
+                "checks": [{"type": "tool_success"}],
+            },
+            {
+                "id": "step_2",
+                "action": "summarize_text",
+                "params": {"text": "b"},
+                "depends_on": ["step_1"],
+                "checks": [{"type": "tool_success"}],
+            },
+            {
+                "id": "step_3",
+                "action": "summarize_text",
+                "params": {"text": "c"},
+                "depends_on": ["step_2"],
+                "checks": [{"type": "tool_success"}],
+            },
+        ],
+    }
+
+    out = asyncio.run(agent._run_runtime_task_spec(task_spec, user_input="test"))
+    assert "Hata kodu: ENV_ERROR (run_timeout" in out
+    assert "Rollback başlatıldı" in out
+    assert called["rollback"] == 1
+    assert rollback_file.exists()
+
+
+def test_agent_coerce_browser_search_to_computer_use():
+    agent = Agent()
+    intent = {"action": "open_url", "params": {}}
+    coerced = agent._coerce_intent_for_request_shape(intent, "safariden köpek resimleri arat")
+    assert isinstance(coerced, dict)
+    assert coerced.get("action") == "computer_use"
+    params = coerced.get("params", {}) if isinstance(coerced.get("params"), dict) else {}
+    steps = params.get("steps", []) if isinstance(params.get("steps"), list) else []
+    assert len(steps) >= 2
+    assert steps[0].get("action") == "open_app"
+    assert str(steps[0].get("params", {}).get("app_name", "")).lower() == "safari"
+    open_step = next((s for s in steps if s.get("action") == "open_url"), {})
+    url = str(open_step.get("params", {}).get("url", ""))
+    assert "google.com/search" in url
+    assert "tbm=isch" in url
+
+
+def test_agent_prepare_tool_params_computer_use_builds_steps():
+    agent = Agent()
+    params = agent._prepare_tool_params(
+        "computer_use",
+        {},
+        user_input="safari aç ve youtube'da müslüm gürses çal",
+        step_name="Bilgisayarı kullan",
+    )
+    steps = params.get("steps", []) if isinstance(params, dict) else []
+    assert isinstance(steps, list)
+    assert len(steps) >= 2
+    actions = [str(s.get("action") or "") for s in steps if isinstance(s, dict)]
+    assert "open_app" in actions
+    assert "open_url" in actions

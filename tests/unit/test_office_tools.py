@@ -2,11 +2,22 @@
 
 import asyncio
 
-from tools.office_tools import excel_tools
-from tools.office_tools import word_tools
+import pytest
+
+try:
+    from tools.office_tools import excel_tools
+except ImportError:
+    excel_tools = None
+
+try:
+    from tools.office_tools import word_tools
+except ImportError:
+    word_tools = None
 
 
 def test_write_word_rejects_empty_payload(monkeypatch, tmp_path):
+    if word_tools is None:
+        pytest.skip("word_tools (python-docx) not available")
     monkeypatch.setattr(word_tools, "validate_path", lambda _p: (True, "", None))
     result = asyncio.run(
         word_tools.write_word(
@@ -21,6 +32,8 @@ def test_write_word_rejects_empty_payload(monkeypatch, tmp_path):
 
 
 def test_write_excel_accepts_single_dict(monkeypatch, tmp_path):
+    if excel_tools is None:
+        pytest.skip("excel_tools (openpyxl) not available")
     monkeypatch.setattr(excel_tools, "validate_path", lambda _p: (True, "", None))
     out_path = tmp_path / "single_row.xlsx"
     result = asyncio.run(
@@ -35,6 +48,8 @@ def test_write_excel_accepts_single_dict(monkeypatch, tmp_path):
 
 
 def test_write_excel_accepts_scalar_list(monkeypatch, tmp_path):
+    if excel_tools is None:
+        pytest.skip("excel_tools (openpyxl) not available")
     monkeypatch.setattr(excel_tools, "validate_path", lambda _p: (True, "", None))
     out_path = tmp_path / "scalar_list.xlsx"
     result = asyncio.run(

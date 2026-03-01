@@ -1,3 +1,5 @@
+import pytest
+
 from core.gateway import server
 
 
@@ -93,3 +95,30 @@ def test_channel_id_prefers_id_then_type():
 
 def test_normalize_channel_type_converts_hyphen():
     assert server._normalize_channel_type("google-chat") == "google_chat"
+
+
+@pytest.mark.asyncio
+async def test_fetch_memory_stats_uses_nested_memory_fallback():
+    class _Inner:
+        def get_stats(self):
+            return {"conversations": 7, "database_size_bytes": 123}
+
+    class _Outer:
+        memory = _Inner()
+
+    stats = await server._fetch_memory_stats(_Outer())
+    assert stats["conversations"] == 7
+    assert stats["database_size_bytes"] == 123
+
+
+@pytest.mark.asyncio
+async def test_fetch_memory_top_users_uses_first_available():
+    class _Inner:
+        def get_top_users_storage(self, limit=5):
+            return [{"user_id": 1, "used_bytes": 42}][:limit]
+
+    class _Outer:
+        memory = _Inner()
+
+    rows = await server._fetch_memory_top_users(_Outer(), limit=3)
+    assert rows and rows[0]["user_id"] == 1

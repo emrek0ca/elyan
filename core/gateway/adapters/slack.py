@@ -62,6 +62,7 @@ class SlackAdapter(BaseChannelAdapter):
         except Exception as e:
             self._is_connected = False
             logger.error(f"Failed to send Slack message: {e}")
+            raise
 
     def get_status(self) -> str:
         return "connected" if self._is_connected else "disconnected"

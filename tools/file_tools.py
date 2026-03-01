@@ -298,6 +298,13 @@ async def create_folder(path: str) -> dict[str, Any]:
 
     try:
         if resolved_path.exists():
+            if resolved_path.is_dir():
+                return {
+                    "success": True,
+                    "path": str(resolved_path),
+                    "name": resolved_path.name,
+                    "message": f"Klasor zaten mevcut: {resolved_path.name}"
+                }
             return {"success": False, "error": f"Bu isimde dosya/klasor zaten var: {path}"}
 
         resolved_path.mkdir(parents=True, exist_ok=True)

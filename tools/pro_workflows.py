@@ -83,7 +83,15 @@ def _derive_web_profile(project_name: str, brief: str, theme: str) -> dict[str, 
         "contact_form": any(k in low for k in ("form", "iletişim", "iletisim", "contact", "lead")),
         "theme_toggle": any(k in low for k in ("dark mode", "tema", "theme")) or style == "futuristic",
         "timer": any(k in low for k in ("timer", "pomodoro", "süre", "sure", "zamanlayıcı", "zamanlayici")),
+        "tailwind": any(k in low for k in ("tailwind", "modern css", "utility first", "responsive ui")),
+        "motion": any(k in low for k in ("animation", "animasyon", "gsap", "framer", "scroll reveal")),
+        "gallery_mode": any(k in low for k in ("galeri", "gallery", "portfolio", "portföy", "portfoy")),
     }
+    # Default modern UI on web scaffold; keeps baseline quality higher.
+    if not features["tailwind"]:
+        features["tailwind"] = True
+    if not features["motion"]:
+        features["motion"] = True
 
     if layout == "dashboard":
         sections = ["Genel Görünüm", "KPI Kartları", "Aktivite Akışı", "Aksiyon Listesi"]
@@ -221,6 +229,26 @@ def _build_vanilla_assets(project_name: str, brief: str, theme: str) -> tuple[st
     if features.get("theme_toggle"):
         theme_toggle = '<button id="themeToggle" type="button" class="btn ghost small">Tema Değiştir</button>'
 
+    tailwind_cdn = ""
+    gsap_cdn = ""
+    if features.get("tailwind"):
+        tailwind_cdn = '  <script src="https://cdn.tailwindcss.com"></script>\n'
+    if features.get("motion"):
+        gsap_cdn = (
+            '  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>\n'
+            '  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>\n'
+        )
+
+    gallery_block = ""
+    if features.get("gallery_mode"):
+        gallery_block = """
+    <section class="gallery-grid" aria-label="Fotoğraf Galerisi">
+      <figure class="gallery-item reveal"><img src="https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=1200&q=80" alt="Galeri görseli 1" loading="lazy" /><figcaption>Öne Çıkan Görsel</figcaption></figure>
+      <figure class="gallery-item reveal"><img src="https://images.unsplash.com/photo-1518717758536-85ae29035b6d?auto=format&fit=crop&w=1200&q=80" alt="Galeri görseli 2" loading="lazy" /><figcaption>Doğal Işık</figcaption></figure>
+      <figure class="gallery-item reveal"><img src="https://images.unsplash.com/photo-1507146426996-ef05306b995a?auto=format&fit=crop&w=1200&q=80" alt="Galeri görseli 3" loading="lazy" /><figcaption>Yaratıcı Kare</figcaption></figure>
+    </section>
+"""
+
     html = f"""<!doctype html>
 <html lang="tr">
 <head>
@@ -228,7 +256,7 @@ def _build_vanilla_assets(project_name: str, brief: str, theme: str) -> tuple[st
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{_escape_html(profile['title'])}</title>
   <meta name="description" content="{_escape_html(profile['subtitle'])}">
-  <link rel="stylesheet" href="./styles/main.css">
+{tailwind_cdn}{gsap_cdn}  <link rel="stylesheet" href="./styles/main.css">
 </head>
 <body data-style="{_escape_html(profile['style'])}">
   <header class="site-header">
@@ -247,6 +275,7 @@ def _build_vanilla_assets(project_name: str, brief: str, theme: str) -> tuple[st
     <section class="grid-sections">
       {section_cards_html}
     </section>
+{gallery_block}
     <section class="tool-grid">
 {widgets_html}
     </section>
@@ -319,6 +348,30 @@ h1 {{ margin: 6px 0; font-size: clamp(28px, 4vw, 42px); }}
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 14px;
+}}
+.gallery-grid {{
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 0 0 16px;
+}}
+.gallery-item {{
+  margin: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+}}
+.gallery-item img {{
+  width: 100%;
+  height: 220px;
+  object-fit: cover;
+  display: block;
+}}
+.gallery-item figcaption {{
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 13px;
 }}
 .tool-card {{
   background: var(--surface);
@@ -469,6 +522,25 @@ body[data-theme="dark"] textarea {{
                 "    if (leadStatus) leadStatus.textContent = 'Mesaj alındı. Teşekkürler.';",
                 "    leadForm.reset();",
                 "  });",
+            ]
+        )
+    if features.get("motion"):
+        js_lines.extend(
+            [
+                "  if (window.gsap) {",
+                "    if (window.ScrollTrigger) window.gsap.registerPlugin(window.ScrollTrigger);",
+                "    window.gsap.from('.site-header', { opacity: 0, y: -20, duration: 0.8, ease: 'power2.out' });",
+                "    const reveals = document.querySelectorAll('.reveal, .info-card, .tool-card');",
+                "    reveals.forEach((node, idx) => {",
+                "      window.gsap.from(node, {",
+                "        opacity: 0,",
+                "        y: 18,",
+                "        duration: 0.6,",
+                "        delay: Math.min(idx * 0.04, 0.24),",
+                "        scrollTrigger: window.ScrollTrigger ? { trigger: node, start: 'top 92%' } : undefined,",
+                "      });",
+                "    });",
+                "  }",
             ]
         )
 
@@ -1490,6 +1562,8 @@ async def research_document_delivery(
     include_report: bool = True,
     source_policy: str = "trusted",
     min_reliability: float = 0.62,
+    citation_style: str = "none",
+    include_bibliography: bool = False,
 ) -> dict[str, Any]:
     """
     Execute a high-quality research workflow, generate deliverable documents,
@@ -1517,6 +1591,10 @@ async def research_document_delivery(
         policy = str(source_policy or "trusted").strip().lower()
         if policy not in {"balanced", "trusted", "academic", "official"}:
             policy = "trusted"
+        citation_style = str(citation_style or "none").strip().lower()
+        if citation_style not in {"none", "apa7", "mla", "ieee", "chicago"}:
+            citation_style = "none"
+        include_bibliography = bool(include_bibliography)
 
         try:
             min_rel = float(min_reliability)
@@ -1542,6 +1620,8 @@ async def research_document_delivery(
             source_policy=policy,
             min_reliability=min_rel,
             max_findings=8,
+            citation_style=citation_style,
+            include_bibliography=include_bibliography,
         )
         if not isinstance(research_result, dict) or not research_result.get("success"):
             err = str((research_result or {}).get("error") or "Araştırma başarısız.")
@@ -1556,6 +1636,29 @@ async def research_document_delivery(
         summary = str(research_result.get("summary") or "").strip()
         sources = research_result.get("sources") if isinstance(research_result.get("sources"), list) else []
         source_count = int(research_result.get("source_count") or len(sources))
+        reliability_scores = []
+        for src in sources:
+            if not isinstance(src, dict):
+                continue
+            try:
+                reliability_scores.append(float(src.get("reliability_score", 0.0) or 0.0))
+            except Exception:
+                continue
+        avg_reliability = (sum(reliability_scores) / len(reliability_scores)) if reliability_scores else 0.0
+        methodology_text = (
+            f"Kaynaklar {policy} politikasına göre toplandı, min güvenilirlik eşiği {min_rel:.2f} olarak uygulandı. "
+            f"Derinlik seviyesi: {normalized_depth}."
+        )
+        risks_and_limits = [
+            "Gerçek zamanlı veri değişimleri sonuçları etkileyebilir.",
+            "Seçilen kaynak havuzu konuya göre önyargı barındırabilir.",
+            "Özet, mevcut kaynak kalitesiyle sınırlıdır.",
+        ]
+        next_actions = [
+            "Kritik bulguları kurum içi veriyle karşılaştır.",
+            "Gerekli ise kaynak havuzunu genişletip ikinci tur doğrulama yap.",
+            "Karar öncesi uygulama etkisini küçük ölçekli pilotla test et.",
+        ]
 
         report_md = delivery_dir / "RESEARCH_DELIVERY.md"
         report_md.write_text(
@@ -1568,10 +1671,15 @@ async def research_document_delivery(
                     f"- Depth: {normalized_depth}",
                     f"- Source policy: {policy}",
                     f"- Min reliability: {min_rel:.2f}",
+                    f"- Citation style: {citation_style}",
                     f"- Source count: {source_count}",
+                    f"- Avg reliability: {avg_reliability:.2f}",
                     "",
                     "## Executive Summary",
                     summary or "Özet üretilemedi.",
+                    "",
+                    "## Methodology",
+                    methodology_text,
                     "",
                     "## Findings",
                     *([f"- {item}" for item in findings] or ["- Bulgu üretilemedi."]),
@@ -1582,6 +1690,23 @@ async def research_document_delivery(
                         for src in sources[:20]
                         if isinstance(src, dict)
                     ],
+                    "",
+                    "## Risk & Limitations",
+                    *[f"- {line}" for line in risks_and_limits],
+                    "",
+                    "## Next Actions",
+                    *[f"- {line}" for line in next_actions],
+                    "",
+                    "## Bibliography" if include_bibliography else "## Notes",
+                    *(
+                        [
+                            f"- {str(src.get('title') or src.get('url') or 'source')} | {str(src.get('url') or '').strip()}"
+                            for src in sources[:20]
+                            if isinstance(src, dict)
+                        ]
+                        if include_bibliography
+                        else [f"- Citation style: {citation_style}"]
+                    ),
                 ]
             ),
             encoding="utf-8",
@@ -1595,13 +1720,24 @@ async def research_document_delivery(
                     "=" * 58,
                     f"Date: {now_str}",
                     f"Depth: {normalized_depth}",
+                    f"Citation style: {citation_style}",
                     f"Source count: {source_count}",
+                    f"Avg reliability: {avg_reliability:.2f}",
                     "",
                     "Executive Summary:",
                     summary or "Özet üretilemedi.",
                     "",
+                    "Methodology:",
+                    methodology_text,
+                    "",
                     "Findings:",
                     *([f"* {item}" for item in findings] or ["* Bulgu üretilemedi."]),
+                    "",
+                    "Risk & Limitations:",
+                    *([f"* {line}" for line in risks_and_limits] or ["* -"]),
+                    "",
+                    "Next Actions:",
+                    *([f"* {line}" for line in next_actions] or ["* -"]),
                 ]
             ),
             encoding="utf-8",
@@ -1618,12 +1754,22 @@ async def research_document_delivery(
                     f"Hedef Kitle: {audience}",
                     f"Araştırma Derinliği: {normalized_depth}",
                     f"Kaynak Sayısı: {source_count}",
+                    f"Ortalama Güvenilirlik: {avg_reliability:.2f}",
                     "",
                     "Yönetici Özeti",
                     summary or "Özet üretilemedi.",
                     "",
+                    "Yöntem",
+                    methodology_text,
+                    "",
                     "Temel Bulgular",
                     *([f"- {item}" for item in findings] or ["- Bulgu üretilemedi."]),
+                    "",
+                    "Risk ve Kısıtlar",
+                    *([f"- {line}" for line in risks_and_limits] or ["- Yok"]),
+                    "",
+                    "Sonraki Adımlar",
+                    *([f"- {line}" for line in next_actions] or ["- Yok"]),
                 ]
             )
             word_result = await write_word(
@@ -1705,6 +1851,7 @@ async def research_document_delivery(
                 [
                     f"Research delivery hazır: {topic_clean}",
                     "",
+                    f"Citation style: {citation_style}",
                     "Kopya gönderimi için dosyalar:",
                     *[f"- {p}" for p in outputs[:10]],
                 ]
@@ -1717,6 +1864,7 @@ async def research_document_delivery(
             f"Araştırma + belge paketi hazır: {delivery_dir}",
             f"Konu: {topic_clean}",
             f"Kaynak: {source_count} | Bulgu: {len(findings)}",
+            f"Ortalama güvenilirlik: {avg_reliability:.2f}",
             "Kopya gönderimi için dosyalar:",
             *[f"- {p}" for p in outputs[:8]],
         ]
@@ -1727,10 +1875,17 @@ async def research_document_delivery(
             "depth": normalized_depth,
             "source_policy": policy,
             "min_reliability": min_rel,
+            "citation_style": citation_style,
+            "include_bibliography": include_bibliography,
             "delivery_dir": str(delivery_dir),
             "outputs": outputs,
             "source_count": source_count,
             "finding_count": len(findings),
+            "quality_summary": {
+                "avg_reliability": avg_reliability,
+                "min_reliability_threshold": min_rel,
+                "source_policy": policy,
+            },
             "summary": summary,
             "message": "\n".join(message_lines),
         }
