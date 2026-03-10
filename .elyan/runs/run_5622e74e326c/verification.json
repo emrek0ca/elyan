@@ -1,0 +1,33 @@
+{
+  "run_id": "run_5622e74e326c",
+  "written_at": 1773156234.0322208,
+  "status": "success",
+  "manifest_path": "/Users/emrekoca/Desktop/bot/.elyan/proofs/run_5622e74e326c/manifest.json",
+  "steps": [
+    {
+      "step": "Listele",
+      "tool": "list_files",
+      "status": "success",
+      "input_hash": "7f93f8637d7f4682ea94ef2b081e6e438027bc5399e84ccb11461351c54199ce",
+      "params_hash": "8d30317f484e717862459eb2ce87f837d3f67a3421fa56e4cc223b88ad3c3c8b",
+      "result_hash": "7bfddf913e027c8392d07460a854908162b0aa2fd4151347809f8b50528f2bf2",
+      "duration_ms": 1,
+      "ts": 1773156234.014168
+    },
+    {
+      "step": "Ekran",
+      "tool": "take_screenshot",
+      "status": "success",
+      "input_hash": "f0442e414aa984f5f00565d182b7a0231d57d585fadc2f0be6ef2c892c704657",
+      "params_hash": "0b38d781b26aed9de1078b263fd0de7444c5e20fb0b9cd45ce0632815c248332",
+      "result_hash": "231d5bb19dd42ed4acb9526a713cdbffc1e507aa5a1ef99fd68f44ef06f745e2",
+      "duration_ms": 1,
+      "ts": 1773156234.017468
+    }
+  ],
+  "artifacts": [],
+  "metadata": {
+    "status": "success",
+    "errors": []
+  }
+}

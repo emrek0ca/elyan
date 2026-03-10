@@ -1,0 +1,14 @@
+{
+  "run_id": "run_6c02873c38fc",
+  "written_at": 1773157075.060373,
+  "status": "partial",
+  "manifest_path": "/Users/emrekoca/Desktop/bot/.elyan/proofs/run_6c02873c38fc/manifest.json",
+  "steps": [],
+  "artifacts": [],
+  "metadata": {
+    "status": "partial",
+    "errors": [
+      "chat_failed: 'NoneType' object has no attribute 'generate'"
+    ]
+  }
+}

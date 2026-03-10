@@ -10,11 +10,16 @@ import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from core.storage_paths import resolve_elyan_data_dir
 from utils.logger import get_logger
 
 logger = get_logger("episodic_memory")
 
-DB_PATH = Path.home() / ".elyan" / "memory" / "episodic.db"
+def _default_episodic_db_path() -> Path:
+    return resolve_elyan_data_dir() / "memory" / "episodic.db"
+
+
+DB_PATH = _default_episodic_db_path()
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 class EpisodicMemory:

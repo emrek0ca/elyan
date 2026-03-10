@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""Elyan CLI — v18.0 Ana giriş noktası"""
+"""Elyan CLI ana giriş noktası."""
 import argparse
+import asyncio
+import json
 import os
 import sys
 from difflib import get_close_matches
 from pathlib import Path
+from core.version import APP_VERSION
 
 
 TOP_LEVEL_COMMANDS = [
+    "chat",
     "doctor",
     "health",
     "logs",
@@ -46,6 +50,7 @@ SETUP_OPTIONAL_COMMANDS = {
     "doctor",
     "health",
     "status",
+    "chat",
 }
 
 
@@ -83,6 +88,148 @@ def _suggest_command(raw: str) -> str:
     return matches[0] if matches else ""
 
 
+def _read_cli_config() -> dict:
+    config_file = Path.home() / ".elyan" / "elyan.json"
+    if not config_file.exists():
+        return {}
+    try:
+        return json.loads(config_file.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _gateway_running() -> tuple[bool, int | None]:
+    pid_file = Path.home() / ".elyan" / "gateway.pid"
+    if not pid_file.exists():
+        return False, None
+    try:
+        gateway_pid = int(pid_file.read_text(encoding="utf-8").strip())
+        os.kill(gateway_pid, 0)
+        return True, gateway_pid
+    except Exception:
+        return False, None
+
+
+def _print_cli_home() -> None:
+    config = _read_cli_config()
+    models = config.get("models", {}) if isinstance(config, dict) else {}
+    default_model = models.get("default", {}) if isinstance(models, dict) else {}
+    role_map = models.get("roles", {}) if isinstance(models, dict) else {}
+    channels = config.get("channels", []) if isinstance(config, dict) else []
+    active_channels = []
+    if isinstance(channels, list):
+        active_channels = [str(ch.get("type", "?")) for ch in channels if isinstance(ch, dict) and ch.get("enabled", False)]
+
+    gateway_running, gateway_pid = _gateway_running()
+    router_role = role_map.get("router", {}) if isinstance(role_map, dict) else {}
+
+    print("Elyan CLI hazir.")
+    print(f"Gateway: {'active' if gateway_running else 'inactive'}" + (f" (PID {gateway_pid})" if gateway_pid else ""))
+    print(f"Varsayilan model: {default_model.get('provider', '?')} / {default_model.get('model', '?')}")
+    if router_role:
+        print(f"Router modeli: {router_role.get('provider', '?')} / {router_role.get('model', '?')}")
+    if active_channels:
+        print(f"Aktif kanal: {', '.join(active_channels)}")
+
+    print("")
+    print("Hizli baslangic:")
+    if not gateway_running:
+        print("  elyan gateway start --daemon")
+    print("  elyan chat")
+    print("  elyan doctor")
+    print("  elyan status")
+    print("  elyan setup --force")
+
+
+def _render_agent_response(response) -> int:
+    text = str(getattr(response, "text", "") or "").strip()
+    if text:
+        print(text)
+
+    attachments = list(getattr(response, "attachments", []) or [])
+    if attachments:
+        print("")
+        print("Uretilen ciktilar:")
+        for item in attachments:
+            name = str(getattr(item, "name", "") or "").strip()
+            kind = str(getattr(item, "type", "") or "file").strip()
+            path = str(getattr(item, "path", "") or "").strip()
+            if not path:
+                continue
+            label = name or Path(path).name
+            print(f"  - [{kind}] {label}: {path}")
+
+    metadata = getattr(response, "metadata", {}) or {}
+    away_task_id = str(metadata.get("away_task_id") or "").strip()
+    if away_task_id:
+        print("")
+        print(f"Takip: elyan gorev durumu {away_task_id}")
+
+    return 0 if str(getattr(response, "status", "success") or "success") != "failed" else 1
+
+
+def _run_natural_language(prompt: str) -> int:
+    cleaned = str(prompt or "").strip()
+    if not cleaned:
+        print("Bos istek calistirilamadi.")
+        return 1
+
+    from core.agent import Agent
+
+    async def _invoke() -> int:
+        agent = Agent()
+        response = await agent.process_envelope(
+            cleaned,
+            channel="cli",
+            metadata={"channel_type": "cli", "channel_id": "local", "entrypoint": "cli_natural_language"},
+        )
+        return _render_agent_response(response)
+
+    return asyncio.run(_invoke())
+
+
+def _run_chat_session(initial_prompt: str = "") -> int:
+    from core.agent import Agent
+
+    async def _chat() -> int:
+        agent = Agent()
+        print("Elyan chat hazir. Cikmak icin 'exit' veya 'quit' yaz.")
+        first = str(initial_prompt or "").strip()
+        if first:
+            print("")
+            print(f"> {first}")
+            response = await agent.process_envelope(
+                first,
+                channel="cli",
+                metadata={"channel_type": "cli", "channel_id": "local", "entrypoint": "cli_chat"},
+            )
+            _render_agent_response(response)
+
+        while True:
+            try:
+                raw = input("\n> ").strip()
+            except EOFError:
+                print("")
+                return 0
+            except KeyboardInterrupt:
+                print("\n")
+                return 0
+
+            if not raw:
+                continue
+            if raw.lower() in {"exit", "quit", "cik", "çik"}:
+                return 0
+
+            response = await agent.process_envelope(
+                raw,
+                channel="cli",
+                metadata={"channel_type": "cli", "channel_id": "local", "entrypoint": "cli_chat"},
+            )
+            _render_agent_response(response)
+
+    return asyncio.run(_chat())
+
+
 def main(argv: list[str] | None = None):
     argv = list(sys.argv[1:] if argv is None else argv)
 
@@ -95,8 +242,12 @@ def main(argv: list[str] | None = None):
             if first in {"start", "restart"} and "--daemon" not in argv:
                 argv.append("--daemon")
 
-    parser = argparse.ArgumentParser(prog="elyan", description="Elyan CLI v18.0")
+    parser = argparse.ArgumentParser(prog="elyan", description=f"Elyan CLI v{APP_VERSION}")
     sub = parser.add_subparsers(dest="command", help="Komut")
+
+    # ── chat ────────────────────────────────────────────────────────────
+    p = sub.add_parser("chat", help="Dogal dil ile interaktif Elyan oturumu")
+    p.add_argument("prompt", nargs="*", help="Istersen ilk mesaji dogrudan verebilirsin")
 
     def _add_onboard_args(target):
         target.add_argument("--headless", action="store_true")
@@ -106,6 +257,7 @@ def main(argv: list[str] | None = None):
 
     # ── doctor ──────────────────────────────────────────────────────────
     p = sub.add_parser("doctor", help="Sistem tanılaması")
+    p.add_argument("action", nargs="?", choices=["fix"], help="Kisa kullanim: 'elyan doctor fix'")
     p.add_argument("--fix", action="store_true", help="Sorunları otomatik düzelt")
     p.add_argument("--deep", action="store_true")
     p.add_argument("--report", action="store_true")
@@ -270,6 +422,7 @@ def main(argv: list[str] | None = None):
     p = sub.add_parser("dashboard", help="Web kontrol panelini aç")
     p.add_argument("--port", type=int)
     p.add_argument("--no-browser", action="store_true")
+    p.add_argument("--ops", action="store_true", help="Admin ops console ac")
 
     # ── onboard ─────────────────────────────────────────────────────────
     p = sub.add_parser("onboard", help="Kurulum sihirbazı")
@@ -309,15 +462,17 @@ def main(argv: list[str] | None = None):
         first = str(argv[0]).strip()
         if first and not first.startswith("-") and first not in TOP_LEVEL_COMMANDS:
             suggestion = _suggest_command(first)
-            parser.print_usage(sys.stderr)
             if suggestion:
+                parser.print_usage(sys.stderr)
                 print(
                     f"elyan: error: bilinmeyen komut: '{first}'. Şunu mu demek istediniz: '{suggestion}'?",
                     file=sys.stderr,
                 )
-            else:
-                print(f"elyan: error: bilinmeyen komut: '{first}'", file=sys.stderr)
-            return 2
+                return 2
+            from cli.onboard import ensure_first_run_setup
+            if not ensure_first_run_setup(command="prompt", non_interactive=not sys.stdin.isatty()):
+                return 1
+            return _run_natural_language(" ".join(argv))
 
     args = parser.parse_args(argv)
 
@@ -325,7 +480,7 @@ def main(argv: list[str] | None = None):
         from cli.onboard import ensure_first_run_setup
         if not ensure_first_run_setup(command="", non_interactive=not sys.stdin.isatty()):
             return 1
-        parser.print_help()
+        _print_cli_home()
         return 0
 
     if args.command not in SETUP_OPTIONAL_COMMANDS:
@@ -336,7 +491,8 @@ def main(argv: list[str] | None = None):
     # ── Routing ─────────────────────────────────────────────────────────
     if args.command == "doctor":
         from cli.commands import doctor
-        doctor.run_doctor(fix=args.fix)
+        doctor_fix = bool(getattr(args, "fix", False) or getattr(args, "action", "") == "fix")
+        doctor.run_doctor(fix=doctor_fix)
 
     elif args.command == "health":
         from cli.commands import health
@@ -349,6 +505,9 @@ def main(argv: list[str] | None = None):
         else:
             print("Health komutu bulunamadı.")
             return 1
+
+    elif args.command == "chat":
+        return _run_chat_session(" ".join(getattr(args, "prompt", []) or []))
 
     elif args.command == "status":
         from cli.commands import status
@@ -394,7 +553,7 @@ def main(argv: list[str] | None = None):
                 filter_term=getattr(args, "filter", None),
             )
         elif args.action == "reload":
-            print("elyan gateway reload — yakında eklenecek.")
+            gateway.gateway_reload(port=getattr(args, "port", None), as_json=getattr(args, "json", False))
 
     elif args.command == "channels":
         from cli.commands import channels
@@ -439,19 +598,27 @@ def main(argv: list[str] | None = None):
 
     elif args.command == "agents":
         from cli.commands import agents
-        agents.handle_agents(args)
+        result = agents.handle_agents(args)
+        if isinstance(result, int):
+            return result
 
     elif args.command == "browser":
         from cli.commands import browser
-        browser.handle_browser(args)
+        result = browser.handle_browser(args)
+        if isinstance(result, int):
+            return result
 
     elif args.command == "voice":
         from cli.commands import voice
-        voice.handle_voice(args)
+        result = voice.handle_voice(args)
+        if isinstance(result, int):
+            return result
 
     elif args.command == "message":
         from cli.commands import message
-        message.handle_message(args)
+        result = message.handle_message(args)
+        if isinstance(result, int):
+            return result
 
     elif args.command == "service":
         from cli.daemon import daemon_manager
@@ -465,6 +632,7 @@ def main(argv: list[str] | None = None):
         dashboard.open_dashboard(
             port=getattr(args, "port", None),
             no_browser=getattr(args, "no_browser", False),
+            ops=getattr(args, "ops", False),
         )
 
     elif args.command in {"onboard", "setup"}:
@@ -480,10 +648,10 @@ def main(argv: list[str] | None = None):
 
     elif args.command == "update":
         print("Güncelleme kontrolü yapılıyor...")
-        print("ℹ️  En güncel sürüm: v18.0.0 (mevcut)")
+        print(f"ℹ️  En güncel sürüm: v{APP_VERSION} (mevcut)")
 
     elif args.command == "version":
-        print("Elyan CLI v18.0.0")
+        print(f"Elyan CLI v{APP_VERSION}")
 
     elif args.command == "completion":
         from cli.commands.completion import handle_completion

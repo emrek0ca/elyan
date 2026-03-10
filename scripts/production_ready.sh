@@ -1,48 +1,33 @@
 #!/bin/bash
-# scripts/production_ready.sh
-# ─────────────────────────────────────────────────────────────────────────────
-# Elyan Production Readiness Check
-# ─────────────────────────────────────────────────────────────────────────────
+set -euo pipefail
 
-echo "🚀 Elyan Production Readiness Check starting..."
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+BENCH_ROOT="${ELYAN_BENCH_REPORTS_ROOT:-$ROOT_DIR/artifacts/production-benchmarks}"
+WORKFLOW_ROOT="${ELYAN_WORKFLOW_REPORTS_ROOT:-$ROOT_DIR/artifacts/emre-workflows}"
+MIN_PASS_COUNT="${ELYAN_MIN_PASS_COUNT:-20}"
 
-# 1. Environment Check
-echo "🔍 Checking Environment..."
+echo "Elyan production readiness check starting..."
+cd "$ROOT_DIR"
+
+echo "Checking environment..."
 if [ ! -f ".env" ]; then
-    echo "❌ Error: .env file missing!"
-    exit 1
+  echo "Error: .env file missing."
+  exit 1
 fi
 
-# 2. Dependency Check
-echo "🔍 Checking Dependencies..."
-python3 -c "import aiohttp, rich, click, httpx" 2>/dev/null
-if [ $? -ne 0 ]; then
-    echo "❌ Error: Missing core dependencies. Run: pip install -r requirements.txt"
-    exit 1
-fi
+echo "Checking core dependencies..."
+python3 -c "import aiohttp, click, httpx, rich" >/dev/null
 
-# 3. Model Provider Check
-echo "🔍 Checking API Keys..."
-grep -E "OPENAI_API_KEY|ANTHROPIC_API_KEY|GOOGLE_API_KEY" .env > /dev/null
-if [ $? -ne 0 ]; then
-    echo "⚠️  Warning: No major cloud provider API keys found in .env"
-fi
+echo "Running production benchmark gate..."
+python3 scripts/run_production_path_benchmarks.py \
+  --reports-root "$BENCH_ROOT" \
+  --min-pass-count "$MIN_PASS_COUNT" \
+  --require-perfect
 
-# 4. Local Service Check
-echo "🔍 Checking Ollama..."
-curl -s http://localhost:11434/api/tags > /dev/null
-if [ $? -ne 0 ]; then
-    echo "⚠️  Ollama is not running. Local-only tasks will fail."
-else
-    echo "✅ Ollama is ONLINE"
-fi
+echo "Running hero workflow pack..."
+python3 scripts/run_emre_workflow_pack.py \
+  --reports-root "$WORKFLOW_ROOT"
 
-# 5. Run Regression Suite
-echo "🔍 Running E2E Regression Checks..."
-python3 tests/regression_runner.py
-if [ $? -ne 0 ]; then
-    echo "❌ Error: Regression tests failed!"
-    exit 1
-fi
-
-echo "✅ Elyan is READY for production deployment."
+echo "Production readiness is GREEN."
+echo "Benchmark reports: $BENCH_ROOT"
+echo "Workflow reports: $WORKFLOW_ROOT"

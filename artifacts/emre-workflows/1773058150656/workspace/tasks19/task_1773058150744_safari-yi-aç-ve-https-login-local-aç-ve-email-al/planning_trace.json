@@ -1,0 +1,50 @@
+{
+  "request": "Safari'yi aç ve https://login.local aç ve email alanına \"user@example.com\" yaz, şifre alanına \"secret123\" yaz ve giriş yap sonra Continue butonuna tıkla sonra https://upload.local aç ve yükleme diyaloğunu onayla ve tamamlandığını doğrula",
+  "planning_request": "Safari'yi aç ve https://login.local aç ve email alanına \"user@example.com\" yaz, şifre alanına \"secret123\" yaz ve giriş yap sonra Continue butonuna tıkla sonra https://upload.local aç ve yükleme diyaloğunu onayla ve tamamlandığını doğrula",
+  "matched_rules": [
+    "login_continue_upload_flow"
+  ],
+  "assumptions": [],
+  "missing_inputs": [],
+  "extracted": {
+    "app_name": "Safari",
+    "app_sequence": [
+      "Safari"
+    ],
+    "browser_app": "Safari",
+    "url": "https://login.local",
+    "urls": [
+      "https://login.local",
+      "https://upload.local"
+    ],
+    "typed_text": "user@example.com",
+    "named_field_values": [
+      {
+        "selector": "#email",
+        "field_label": "Email field",
+        "text": "user@example.com"
+      },
+      {
+        "selector": "#password",
+        "field_label": "Password field",
+        "text": "secret123"
+      }
+    ],
+    "field_label": "Login field",
+    "selector": "#login",
+    "button_label": "Continue",
+    "button_sequence": [
+      {
+        "label": "Login",
+        "selector": "#login"
+      },
+      {
+        "label": "Continue",
+        "selector": "#continue"
+      }
+    ],
+    "research_topic": "user@example.com"
+  },
+  "bounded": true,
+  "safe_mode": "deterministic"
+}

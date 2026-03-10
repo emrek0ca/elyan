@@ -1,0 +1,43 @@
+[
+  {
+    "kind": "system",
+    "name": "open_safari",
+    "tool": "open_app",
+    "params": {
+      "app_name": "Safari"
+    },
+    "verify": {
+      "frontmost_app": "Safari"
+    }
+  },
+  {
+    "kind": "browser",
+    "name": "open_upload_page",
+    "action": "open",
+    "url": "https://upload.local",
+    "expected_url_contains": "upload.local",
+    "expected_title_contains": "Upload",
+    "verify": {
+      "url_contains": "upload.local",
+      "title_contains": "Upload"
+    },
+    "repair_policy": {
+      "max_retries": 1
+    }
+  },
+  {
+    "kind": "browser",
+    "name": "confirm_upload_dialog",
+    "action": "click",
+    "selector": "#upload",
+    "native_dialog_expected": true,
+    "screen_instruction": "Open butonuna tikla",
+    "verify": {
+      "fallback_used": true,
+      "window_title_contains": "Upload"
+    },
+    "repair_policy": {
+      "max_retries": 1
+    }
+  }
+]

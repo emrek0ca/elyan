@@ -9,11 +9,16 @@ import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from core.storage_paths import resolve_elyan_data_dir
 from utils.logger import get_logger
 
 logger = get_logger("report_engine")
 
-REPORT_DIR = Path.home() / ".elyan" / "reports"
+def _default_report_dir() -> Path:
+    return resolve_elyan_data_dir() / "reports"
+
+
+REPORT_DIR = _default_report_dir()
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 

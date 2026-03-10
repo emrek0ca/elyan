@@ -140,3 +140,20 @@ def test_restart_gateway_uses_launchd_when_loaded(monkeypatch, capsys):
     assert ("stop", 18789) not in calls
     assert ("start", 18789, True) not in calls
     assert "launchd servisi üzerinden yeniden başlatılıyor" in out
+
+
+def test_gateway_reload_posts_sync(monkeypatch, capsys):
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"ok": true, "message": "Senkronizasyon tamamlandi (2 adapter)."}'
+
+    monkeypatch.setattr(gateway.urllib.request, "urlopen", lambda req, timeout=5: _Resp())
+    gateway.gateway_reload(port=18789, as_json=False)
+    out = capsys.readouterr().out
+    assert "Senkronizasyon tamamlandi" in out

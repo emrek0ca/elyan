@@ -1,0 +1,16 @@
+[
+  {
+    "step": 1,
+    "action": "click",
+    "params": {
+      "url": "",
+      "selector": "#next",
+      "text": ""
+    },
+    "result": {
+      "success": true,
+      "selector": "#next",
+      "dom_available": true
+    }
+  }
+]

@@ -1,0 +1,44 @@
+{
+  "ok": true,
+  "status": "success",
+  "checks": [
+    {
+      "code": "dom_available",
+      "passed": true
+    },
+    {
+      "code": "screenshot_present",
+      "passed": true,
+      "details": {
+        "path": "/Users/emrekoca/Desktop/bot/.elyan/browser_runtime/1773155670569/page.png"
+      }
+    },
+    {
+      "code": "typed_value_persisted",
+      "passed": true,
+      "details": {
+        "typed_value": "kittens"
+      }
+    }
+  ],
+  "failed": [],
+  "failed_codes": [],
+  "repairable": true,
+  "summary": "browser verification for type",
+  "evidence_refs": [
+    {
+      "type": "browser_state",
+      "before_url": "https://search.local",
+      "after_url": "https://search.local"
+    },
+    {
+      "type": "screenshot",
+      "path": "/Users/emrekoca/Desktop/bot/.elyan/browser_runtime/1773155670569/page.png"
+    }
+  ],
+  "metrics": {
+    "dom_changed": 0,
+    "url_changed": 0,
+    "title_changed": 0
+  }
+}

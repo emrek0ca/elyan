@@ -1,0 +1,25 @@
+{
+  "request": "Safari'yi aç ve https://upload.local adresini aç ve yükleme diyaloğunu onayla",
+  "planning_request": "Safari'yi aç ve https://upload.local adresini aç ve yükleme diyaloğunu onayla",
+  "matched_rules": [
+    "upload_dialog_flow"
+  ],
+  "assumptions": [],
+  "missing_inputs": [],
+  "extracted": {
+    "app_name": "Safari",
+    "app_sequence": [
+      "Safari"
+    ],
+    "browser_app": "Safari",
+    "url": "https://upload.local",
+    "typed_text": "",
+    "named_field_values": [],
+    "field_label": "",
+    "selector": "#upload",
+    "button_label": "",
+    "button_sequence": []
+  },
+  "bounded": true,
+  "safe_mode": "deterministic"
+}

@@ -1,0 +1,194 @@
+[
+  {
+    "step_index": 1,
+    "name": "open_safari",
+    "kind": "system",
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        },
+        {
+          "code": "frontmost_app_matches",
+          "passed": true,
+          "details": {
+            "actual": "Safari",
+            "expected": "Safari"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for open_safari",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "Safari",
+          "window_title": "Upload Dialog"
+        },
+        {
+          "type": "browser_state",
+          "url": "",
+          "title": ""
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 0
+      }
+    }
+  },
+  {
+    "step_index": 2,
+    "name": "open_upload_page",
+    "kind": "browser",
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        },
+        {
+          "code": "url_contains",
+          "passed": true,
+          "details": {
+            "actual": "https://upload.local",
+            "expected": "upload.local"
+          }
+        },
+        {
+          "code": "title_contains",
+          "passed": true,
+          "details": {
+            "actual": "Upload",
+            "expected": "Upload"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for open_upload_page",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "",
+          "window_title": ""
+        },
+        {
+          "type": "browser_state",
+          "url": "https://upload.local",
+          "title": "Upload"
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 1
+      }
+    }
+  },
+  {
+    "step_index": 3,
+    "name": "confirm_upload_dialog",
+    "kind": "browser",
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        },
+        {
+          "code": "window_title_contains",
+          "passed": true,
+          "details": {
+            "actual": "Review Upload",
+            "expected": "Upload"
+          }
+        },
+        {
+          "code": "fallback_used_matches",
+          "passed": true,
+          "details": {
+            "actual": true,
+            "expected": true
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for confirm_upload_dialog",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "Safari",
+          "window_title": "Review Upload"
+        },
+        {
+          "type": "browser_state",
+          "url": "",
+          "title": ""
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 1
+      }
+    }
+  },
+  {
+    "step_index": 4,
+    "name": "click_save",
+    "kind": "browser",
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for click_save",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "",
+          "window_title": ""
+        },
+        {
+          "type": "browser_state",
+          "url": "https://upload.local/complete",
+          "title": "Upload Complete"
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 1
+      }
+    }
+  }
+]

@@ -1,0 +1,472 @@
+[
+  {
+    "step": 1,
+    "attempt": 1,
+    "planned_action": {
+      "kind": "type",
+      "text": "kittens",
+      "press_enter": false,
+      "attempts": 1,
+      "target": {
+        "label": "Search field",
+        "role": "text_field",
+        "x": 110,
+        "y": 90,
+        "width": 160,
+        "height": 30,
+        "frontmost_app": "Safari",
+        "window_title": "Search",
+        "source": "accessibility",
+        "confidence": 0.92
+      },
+      "decision_trace": {
+        "query": "search",
+        "action_kind": "type_focus",
+        "preferred_roles": [
+          "combo_box",
+          "editable_text",
+          "input",
+          "search_field",
+          "text_field"
+        ],
+        "role_hints": [
+          "combo_box",
+          "editable_text",
+          "input",
+          "search_field",
+          "text_field"
+        ],
+        "require_coords": true,
+        "current_context": {
+          "frontmost_app": "Safari",
+          "active_window": "Search"
+        },
+        "chosen": {
+          "label": "Search field",
+          "role": "text_field",
+          "source": "accessibility",
+          "score": 302.0,
+          "has_coords": true,
+          "frontmost_app": "safari",
+          "window_title": "search",
+          "reasons": [
+            {
+              "code": "confidence",
+              "points": 92.0,
+              "details": {
+                "confidence": 0.92
+              }
+            },
+            {
+              "code": "source_priority",
+              "points": 18.0,
+              "details": {
+                "source": "accessibility"
+              }
+            },
+            {
+              "code": "bounded_target",
+              "points": 18.0,
+              "details": {}
+            },
+            {
+              "code": "role_hint_match",
+              "points": 46.0,
+              "details": {
+                "role": "text_field"
+              }
+            },
+            {
+              "code": "text_field_role",
+              "points": 20.0,
+              "details": {
+                "role": "text_field"
+              }
+            },
+            {
+              "code": "label_contains_query",
+              "points": 74.0,
+              "details": {}
+            },
+            {
+              "code": "frontmost_app_context",
+              "points": 16.0,
+              "details": {
+                "item_app": "safari",
+                "current_app": "safari"
+              }
+            },
+            {
+              "code": "active_window_context",
+              "points": 18.0,
+              "details": {
+                "item_window": "search",
+                "current_window": "search"
+              }
+            }
+          ]
+        },
+        "candidates": [
+          {
+            "label": "Search field",
+            "role": "text_field",
+            "source": "accessibility",
+            "score": 302.0,
+            "has_coords": true,
+            "frontmost_app": "safari",
+            "window_title": "search",
+            "reasons": [
+              {
+                "code": "confidence",
+                "points": 92.0,
+                "details": {
+                  "confidence": 0.92
+                }
+              },
+              {
+                "code": "source_priority",
+                "points": 18.0,
+                "details": {
+                  "source": "accessibility"
+                }
+              },
+              {
+                "code": "bounded_target",
+                "points": 18.0,
+                "details": {}
+              },
+              {
+                "code": "role_hint_match",
+                "points": 46.0,
+                "details": {
+                  "role": "text_field"
+                }
+              },
+              {
+                "code": "text_field_role",
+                "points": 20.0,
+                "details": {
+                  "role": "text_field"
+                }
+              },
+              {
+                "code": "label_contains_query",
+                "points": 74.0,
+                "details": {}
+              },
+              {
+                "code": "frontmost_app_context",
+                "points": 16.0,
+                "details": {
+                  "item_app": "safari",
+                  "current_app": "safari"
+                }
+              },
+              {
+                "code": "active_window_context",
+                "points": 18.0,
+                "details": {
+                  "item_window": "search",
+                  "current_window": "search"
+                }
+              }
+            ]
+          }
+        ],
+        "rejected": []
+      }
+    },
+    "execution_result": {
+      "success": true,
+      "typed_chars": 7,
+      "press_enter": false,
+      "action": "type"
+    },
+    "verification": {
+      "ok": false,
+      "status": "failed",
+      "checks": [
+        {
+          "code": "after_screenshot_present",
+          "passed": true,
+          "details": {
+            "path": "/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/elyan_dbg_ch_yn7a4/screen2/screen_after_1_1_1773155708469.png"
+          }
+        },
+        {
+          "code": "ui_state_present",
+          "passed": true,
+          "details": {
+            "element_count": 3
+          }
+        },
+        {
+          "code": "typed_text_visible",
+          "passed": false,
+          "details": {
+            "typed_text": "kittens"
+          }
+        }
+      ],
+      "failed": [
+        "typed_text_visible"
+      ],
+      "failed_codes": [
+        "NO_VISUAL_CHANGE"
+      ],
+      "repairable": true,
+      "summary": "screen action verification for type",
+      "evidence_refs": [
+        {
+          "type": "screenshot",
+          "path": "/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/elyan_dbg_ch_yn7a4/screen2/screen_before_1773155708469.png"
+        },
+        {
+          "type": "screenshot",
+          "path": "/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/elyan_dbg_ch_yn7a4/screen2/screen_after_1_1_1773155708469.png"
+        }
+      ],
+      "metrics": {
+        "visual_change": 0,
+        "window_changed": 0,
+        "app_changed": 0
+      },
+      "target_visible_after": true
+    },
+    "after_summary": "Frontmost app: Safari. Window: Search. Search field hazir."
+  },
+  {
+    "step": 1,
+    "attempt": 2,
+    "planned_action": {
+      "kind": "type",
+      "text": "kittens",
+      "press_enter": false,
+      "attempts": 2,
+      "target": {
+        "label": "Search field",
+        "role": "text_field",
+        "x": 110,
+        "y": 90,
+        "width": 160,
+        "height": 30,
+        "frontmost_app": "Safari",
+        "window_title": "Search",
+        "source": "accessibility",
+        "confidence": 0.92
+      },
+      "decision_trace": {
+        "query": "search",
+        "action_kind": "type_focus",
+        "preferred_roles": [
+          "combo_box",
+          "editable_text",
+          "input",
+          "search_field",
+          "text_field"
+        ],
+        "role_hints": [
+          "combo_box",
+          "editable_text",
+          "input",
+          "search_field",
+          "text_field"
+        ],
+        "require_coords": true,
+        "current_context": {
+          "frontmost_app": "Safari",
+          "active_window": "Search"
+        },
+        "chosen": {
+          "label": "Search field",
+          "role": "text_field",
+          "source": "accessibility",
+          "score": 302.0,
+          "has_coords": true,
+          "frontmost_app": "safari",
+          "window_title": "search",
+          "reasons": [
+            {
+              "code": "confidence",
+              "points": 92.0,
+              "details": {
+                "confidence": 0.92
+              }
+            },
+            {
+              "code": "source_priority",
+              "points": 18.0,
+              "details": {
+                "source": "accessibility"
+              }
+            },
+            {
+              "code": "bounded_target",
+              "points": 18.0,
+              "details": {}
+            },
+            {
+              "code": "role_hint_match",
+              "points": 46.0,
+              "details": {
+                "role": "text_field"
+              }
+            },
+            {
+              "code": "text_field_role",
+              "points": 20.0,
+              "details": {
+                "role": "text_field"
+              }
+            },
+            {
+              "code": "label_contains_query",
+              "points": 74.0,
+              "details": {}
+            },
+            {
+              "code": "frontmost_app_context",
+              "points": 16.0,
+              "details": {
+                "item_app": "safari",
+                "current_app": "safari"
+              }
+            },
+            {
+              "code": "active_window_context",
+              "points": 18.0,
+              "details": {
+                "item_window": "search",
+                "current_window": "search"
+              }
+            }
+          ]
+        },
+        "candidates": [
+          {
+            "label": "Search field",
+            "role": "text_field",
+            "source": "accessibility",
+            "score": 302.0,
+            "has_coords": true,
+            "frontmost_app": "safari",
+            "window_title": "search",
+            "reasons": [
+              {
+                "code": "confidence",
+                "points": 92.0,
+                "details": {
+                  "confidence": 0.92
+                }
+              },
+              {
+                "code": "source_priority",
+                "points": 18.0,
+                "details": {
+                  "source": "accessibility"
+                }
+              },
+              {
+                "code": "bounded_target",
+                "points": 18.0,
+                "details": {}
+              },
+              {
+                "code": "role_hint_match",
+                "points": 46.0,
+                "details": {
+                  "role": "text_field"
+                }
+              },
+              {
+                "code": "text_field_role",
+                "points": 20.0,
+                "details": {
+                  "role": "text_field"
+                }
+              },
+              {
+                "code": "label_contains_query",
+                "points": 74.0,
+                "details": {}
+              },
+              {
+                "code": "frontmost_app_context",
+                "points": 16.0,
+                "details": {
+                  "item_app": "safari",
+                  "current_app": "safari"
+                }
+              },
+              {
+                "code": "active_window_context",
+                "points": 18.0,
+                "details": {
+                  "item_window": "search",
+                  "current_window": "search"
+                }
+              }
+            ]
+          }
+        ],
+        "rejected": []
+      },
+      "retry_after_focus": true,
+      "repair_reason": "TEXT_NOT_VERIFIED"
+    },
+    "execution_result": {
+      "success": true,
+      "typed_chars": 7,
+      "press_enter": false,
+      "action": "type"
+    },
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "after_screenshot_present",
+          "passed": true,
+          "details": {
+            "path": "/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/elyan_dbg_ch_yn7a4/screen2/screen_after_1_2_1773155708470.png"
+          }
+        },
+        {
+          "code": "ui_state_present",
+          "passed": true,
+          "details": {
+            "element_count": 4
+          }
+        },
+        {
+          "code": "typed_text_visible",
+          "passed": true,
+          "details": {
+            "typed_text": "kittens"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": true,
+      "summary": "screen action verification for type",
+      "evidence_refs": [
+        {
+          "type": "screenshot",
+          "path": "/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/elyan_dbg_ch_yn7a4/screen2/screen_after_1_1_1773155708469.png"
+        },
+        {
+          "type": "screenshot",
+          "path": "/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/elyan_dbg_ch_yn7a4/screen2/screen_after_1_2_1773155708470.png"
+        }
+      ],
+      "metrics": {
+        "visual_change": 1,
+        "window_changed": 0,
+        "app_changed": 0
+      },
+      "target_visible_after": true
+    },
+    "after_summary": "Frontmost app: Safari. Window: Search. Search field icinde kittens yaziyor. OCR: kittens"
+  }
+]

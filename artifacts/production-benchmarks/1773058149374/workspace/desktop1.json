@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "updated_at": 1773058149.386451,
+  "frontmost_app": "Safari",
+  "active_window": {
+    "title": "Start",
+    "bounds": {
+      "x": 0,
+      "y": 0,
+      "width": 1280,
+      "height": 800
+    }
+  },
+  "last_screenshot": "/Users/emrekoca/.elyan/screen_operator/1773058149385/after.png",
+  "last_ui_state": {
+    "frontmost_app": "Safari",
+    "active_window": {
+      "title": "Start",
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 800
+      }
+    },
+    "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen1/screen_before_1773058149385.png",
+    "elements": [
+      {
+        "label": "Safari",
+        "role": "frontmost_app",
+        "source": "window_metadata",
+        "confidence": 0.99
+      },
+      {
+        "label": "Start",
+        "role": "window_title",
+        "source": "window_metadata",
+        "confidence": 0.95
+      }
+    ],
+    "clickable_targets": [],
+    "text_fields": [],
+    "summary": "Frontmost app: Safari. Window: Start. Safari frontmost. OCR: Safari",
+    "fallback_order": [
+      "accessibility_and_window_metadata",
+      "vision_detection",
+      "ocr",
+      "last_known_ui_target_cache"
+    ],
+    "source_counts": {
+      "window_metadata": 2
+    },
+    "confidence": 0.97
+  },
+  "current_task_state": {
+    "last_ui_state": {
+      "frontmost_app": "Safari",
+      "active_window": {
+        "title": "Start",
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 800
+        }
+      },
+      "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen1/screen_before_1773058149385.png",
+      "elements": [
+        {
+          "label": "Safari",
+          "role": "frontmost_app",
+          "source": "window_metadata",
+          "confidence": 0.99
+        },
+        {
+          "label": "Start",
+          "role": "window_title",
+          "source": "window_metadata",
+          "confidence": 0.95
+        }
+      ],
+      "clickable_targets": [],
+      "text_fields": [],
+      "summary": "Frontmost app: Safari. Window: Start. Safari frontmost. OCR: Safari",
+      "fallback_order": [
+        "accessibility_and_window_metadata",
+        "vision_detection",
+        "ocr",
+        "last_known_ui_target_cache"
+      ],
+      "source_counts": {
+        "window_metadata": 2
+      },
+      "confidence": 0.97
+    },
+    "ui_state": {
+      "frontmost_app": "Safari",
+      "active_window": {
+        "title": "Start",
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 800
+        }
+      },
+      "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen1/screen_before_1773058149385.png",
+      "elements": [
+        {
+          "label": "Safari",
+          "role": "frontmost_app",
+          "source": "window_metadata",
+          "confidence": 0.99
+        },
+        {
+          "label": "Start",
+          "role": "window_title",
+          "source": "window_metadata",
+          "confidence": 0.95
+        }
+      ],
+      "clickable_targets": [],
+      "text_fields": [],
+      "summary": "Frontmost app: Safari. Window: Start. Safari frontmost. OCR: Safari",
+      "fallback_order": [
+        "accessibility_and_window_metadata",
+        "vision_detection",
+        "ocr",
+        "last_known_ui_target_cache"
+      ],
+      "source_counts": {
+        "window_metadata": 2
+      },
+      "confidence": 0.97
+    },
+    "last_target_cache": {},
+    "recent_action_logs": [],
+    "verifier_outcomes": []
+  },
+  "target_cache": {},
+  "recent_action_logs": [],
+  "verifier_outcomes": [],
+  "last_instruction": "ekrana bak",
+  "last_mode": "inspect",
+  "last_status": "success"
+}

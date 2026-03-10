@@ -1,0 +1,235 @@
+[
+  {
+    "step": 1,
+    "attempt": 1,
+    "planned_action": {
+      "kind": "click",
+      "target": {
+        "label": "Search",
+        "role": "button",
+        "x": 220,
+        "y": 180,
+        "width": 80,
+        "height": 26,
+        "frontmost_app": "Safari",
+        "window_title": "Start",
+        "source": "accessibility",
+        "confidence": 0.92
+      },
+      "alternates": [],
+      "attempts": 1,
+      "decision_trace": {
+        "query": "search",
+        "action_kind": "click",
+        "preferred_roles": [
+          "button",
+          "checkbox",
+          "link",
+          "menu_item",
+          "radio",
+          "tab"
+        ],
+        "role_hints": [
+          "button"
+        ],
+        "require_coords": true,
+        "current_context": {
+          "frontmost_app": "Safari",
+          "active_window": "Start"
+        },
+        "chosen": {
+          "label": "Search",
+          "role": "button",
+          "source": "accessibility",
+          "score": 316.0,
+          "has_coords": true,
+          "frontmost_app": "safari",
+          "window_title": "start",
+          "reasons": [
+            {
+              "code": "confidence",
+              "points": 92.0,
+              "details": {
+                "confidence": 0.92
+              }
+            },
+            {
+              "code": "source_priority",
+              "points": 18.0,
+              "details": {
+                "source": "accessibility"
+              }
+            },
+            {
+              "code": "bounded_target",
+              "points": 18.0,
+              "details": {}
+            },
+            {
+              "code": "role_hint_match",
+              "points": 46.0,
+              "details": {
+                "role": "button"
+              }
+            },
+            {
+              "code": "button_like_role",
+              "points": 12.0,
+              "details": {
+                "role": "button"
+              }
+            },
+            {
+              "code": "label_exact_match",
+              "points": 96.0,
+              "details": {}
+            },
+            {
+              "code": "frontmost_app_context",
+              "points": 16.0,
+              "details": {
+                "item_app": "safari",
+                "current_app": "safari"
+              }
+            },
+            {
+              "code": "active_window_context",
+              "points": 18.0,
+              "details": {
+                "item_window": "start",
+                "current_window": "start"
+              }
+            }
+          ]
+        },
+        "candidates": [
+          {
+            "label": "Search",
+            "role": "button",
+            "source": "accessibility",
+            "score": 316.0,
+            "has_coords": true,
+            "frontmost_app": "safari",
+            "window_title": "start",
+            "reasons": [
+              {
+                "code": "confidence",
+                "points": 92.0,
+                "details": {
+                  "confidence": 0.92
+                }
+              },
+              {
+                "code": "source_priority",
+                "points": 18.0,
+                "details": {
+                  "source": "accessibility"
+                }
+              },
+              {
+                "code": "bounded_target",
+                "points": 18.0,
+                "details": {}
+              },
+              {
+                "code": "role_hint_match",
+                "points": 46.0,
+                "details": {
+                  "role": "button"
+                }
+              },
+              {
+                "code": "button_like_role",
+                "points": 12.0,
+                "details": {
+                  "role": "button"
+                }
+              },
+              {
+                "code": "label_exact_match",
+                "points": 96.0,
+                "details": {}
+              },
+              {
+                "code": "frontmost_app_context",
+                "points": 16.0,
+                "details": {
+                  "item_app": "safari",
+                  "current_app": "safari"
+                }
+              },
+              {
+                "code": "active_window_context",
+                "points": 18.0,
+                "details": {
+                  "item_window": "start",
+                  "current_window": "start"
+                }
+              }
+            ]
+          }
+        ],
+        "rejected": []
+      },
+      "x": 260,
+      "y": 193
+    },
+    "execution_result": {
+      "success": true,
+      "x": 260,
+      "y": 193,
+      "action": "click"
+    },
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "after_screenshot_present",
+          "passed": true,
+          "details": {
+            "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-244/test_screen_operator_clicks_ta0/screen_after_1_1_1773157014927.png"
+          }
+        },
+        {
+          "code": "ui_state_present",
+          "passed": true,
+          "details": {
+            "element_count": 5
+          }
+        },
+        {
+          "code": "visual_change_observed",
+          "passed": true,
+          "details": {
+            "visual_change": true,
+            "window_changed": true,
+            "app_changed": false,
+            "target_visible_after": true
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": true,
+      "summary": "screen action verification for click",
+      "evidence_refs": [
+        {
+          "type": "screenshot",
+          "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-244/test_screen_operator_clicks_ta0/screen_before_1773157014927.png"
+        },
+        {
+          "type": "screenshot",
+          "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-244/test_screen_operator_clicks_ta0/screen_after_1_1_1773157014927.png"
+        }
+      ],
+      "metrics": {
+        "visual_change": 1,
+        "window_changed": 1,
+        "app_changed": 0
+      },
+      "target_visible_after": true
+    },
+    "after_summary": "Frontmost app: Safari. Window: Search. Search paneli acildi. OCR: Search field"
+  }
+]

@@ -1,0 +1,117 @@
+{
+  "frontmost_app": "Safari",
+  "active_window": {
+    "title": "Shipping",
+    "bounds": {
+      "x": 0,
+      "y": 0,
+      "width": 1280,
+      "height": 800
+    }
+  },
+  "screenshot_path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-242/test_screen_operator_prefers_r0/screen_after_1_1_1773156369602.png",
+  "elements": [
+    {
+      "label": "Safari",
+      "role": "frontmost_app",
+      "source": "window_metadata",
+      "confidence": 0.99
+    },
+    {
+      "label": "Shipping",
+      "role": "window_title",
+      "source": "window_metadata",
+      "confidence": 0.95
+    },
+    {
+      "label": "Continue",
+      "role": "button",
+      "x": 120,
+      "y": 96,
+      "width": 120,
+      "height": 28,
+      "source": "cache",
+      "frontmost_app": "Safari",
+      "window_title": "Checkout",
+      "confidence": 0.35,
+      "_cache_meta": {
+        "last_verified_success": true,
+        "verified_success_count": 2,
+        "last_action_kind": "click",
+        "last_seen_at": 4102444800.0,
+        "last_verified_success_at": 4102444800.0,
+        "frontmost_app": "Safari",
+        "window_title": "Checkout"
+      }
+    },
+    {
+      "label": "Checkout",
+      "role": "window_title",
+      "source": "prior_ui_state",
+      "confidence": 0.95,
+      "frontmost_app": "Safari",
+      "window_title": "Shipping"
+    },
+    {
+      "label": "Continue",
+      "role": "button",
+      "x": 400,
+      "y": 180,
+      "width": 120,
+      "height": 30,
+      "frontmost_app": "Safari",
+      "window_title": "Checkout",
+      "source": "prior_ui_state",
+      "confidence": 0.92
+    }
+  ],
+  "clickable_targets": [
+    {
+      "label": "Continue",
+      "role": "button",
+      "x": 120,
+      "y": 96,
+      "width": 120,
+      "height": 28,
+      "source": "cache",
+      "frontmost_app": "Safari",
+      "window_title": "Checkout",
+      "confidence": 0.35,
+      "_cache_meta": {
+        "last_verified_success": true,
+        "verified_success_count": 2,
+        "last_action_kind": "click",
+        "last_seen_at": 4102444800.0,
+        "last_verified_success_at": 4102444800.0,
+        "frontmost_app": "Safari",
+        "window_title": "Checkout"
+      }
+    },
+    {
+      "label": "Continue",
+      "role": "button",
+      "x": 400,
+      "y": 180,
+      "width": 120,
+      "height": 30,
+      "frontmost_app": "Safari",
+      "window_title": "Checkout",
+      "source": "prior_ui_state",
+      "confidence": 0.92
+    }
+  ],
+  "text_fields": [],
+  "summary": "Frontmost app: Safari. Window: Shipping. Dogru continue adimi acildi. OCR: Shipping",
+  "fallback_order": [
+    "accessibility_and_window_metadata",
+    "vision_detection",
+    "ocr",
+    "last_known_ui_target_cache"
+  ],
+  "source_counts": {
+    "window_metadata": 2,
+    "cache": 1,
+    "prior_ui_state": 2
+  },
+  "confidence": 0.832
+}

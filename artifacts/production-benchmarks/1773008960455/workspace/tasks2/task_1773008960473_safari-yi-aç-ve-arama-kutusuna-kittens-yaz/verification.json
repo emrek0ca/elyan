@@ -1,0 +1,101 @@
+[
+  {
+    "step_index": 1,
+    "name": "open_safari",
+    "kind": "system",
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        },
+        {
+          "code": "frontmost_app_matches",
+          "passed": true,
+          "details": {
+            "actual": "Safari",
+            "expected": "Safari"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for open_safari",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "Safari",
+          "window_title": "Search"
+        },
+        {
+          "type": "browser_state",
+          "url": "",
+          "title": ""
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 0
+      }
+    }
+  },
+  {
+    "step_index": 2,
+    "name": "fill_screen_field",
+    "kind": "screen",
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        },
+        {
+          "code": "frontmost_app_matches",
+          "passed": true,
+          "details": {
+            "actual": "Safari",
+            "expected": "Safari"
+          }
+        },
+        {
+          "code": "text_contains",
+          "passed": true,
+          "details": {
+            "expected": "kittens"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for fill_screen_field",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "Safari",
+          "window_title": "Search"
+        },
+        {
+          "type": "browser_state",
+          "url": "",
+          "title": ""
+        }
+      ],
+      "metrics": {
+        "action_log_count": 2,
+        "verifier_outcome_count": 2
+      }
+    }
+  }
+]

@@ -1,0 +1,102 @@
+{
+  "run_id": "run_b5e5edcdd967",
+  "user_input": "Projects klasörünü listele sonra not.txt oku ve ardından bunu sil",
+  "task_spec": {},
+  "metadata": {
+    "action": "multi_task",
+    "job_type": "file_operations",
+    "capability_domain": "file_ops",
+    "workflow_id": "file_operations_workflow",
+    "hybrid_model": {
+      "role": "inference",
+      "routing_role": "router",
+      "critic_role": "critic",
+      "tool_first": false,
+      "prefer_local": true,
+      "tier": "balanced"
+    },
+    "channel": "cli",
+    "user_id": "local",
+    "status": "partial"
+  },
+  "task_state": {
+    "task_id": "task_6c6757822b",
+    "objective": "Projects klasörünü listele sonra not.txt oku ve ardından bunu sil",
+    "context": {
+      "user_input": "Projects klasörünü listele sonra not.txt oku ve ardından bunu sil",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "multi_task",
+      "job_type": "file_operations",
+      "capability_domain": "file_ops",
+      "workflow_id": "file_operations_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "create_folder",
+        "description": "Projects klasörünü listele"
+      },
+      {
+        "id": "subtask_2",
+        "action": "read_file",
+        "description": "not.txt oku"
+      },
+      {
+        "id": "subtask_3",
+        "action": "delete_file",
+        "description": "ardından bunu sil"
+      }
+    ],
+    "artifacts": [],
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773155195.4595652,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773155195.4694378,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773155195.474306,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773155195.599604,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 3
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1773155195.6081789,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "multi_task",
+          "job_type": "file_operations"
+        }
+      }
+    ],
+    "created_at": 1773155195.459564,
+    "updated_at": 1773155195.6081789
+  },
+  "written_at": 1773155195.615183
+}

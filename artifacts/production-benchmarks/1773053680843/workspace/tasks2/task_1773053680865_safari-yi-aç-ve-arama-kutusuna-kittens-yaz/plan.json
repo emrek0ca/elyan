@@ -1,0 +1,25 @@
+[
+  {
+    "kind": "system",
+    "name": "open_safari",
+    "tool": "open_app",
+    "params": {
+      "app_name": "Safari"
+    },
+    "verify": {
+      "frontmost_app": "Safari"
+    }
+  },
+  {
+    "kind": "screen",
+    "name": "fill_screen_field",
+    "instruction": "Search field icine \"kittens\" yaz",
+    "verify": {
+      "text_contains": "kittens",
+      "frontmost_app": "Safari"
+    },
+    "repair_policy": {
+      "max_retries": 1
+    }
+  }
+]

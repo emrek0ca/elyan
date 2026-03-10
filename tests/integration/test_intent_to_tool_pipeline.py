@@ -91,7 +91,7 @@ class TestIntentToToolPipeline:
     def test_research_query(self):
         r = self.parser.parse("python programlama hakkında araştırma yap")
         assert r is not None
-        assert r["action"] in ("research", "web_search")
+        assert r["action"] in ("research", "web_search", "research_document_delivery")
 
     # ── Genel kontroller ────────────────────────────────────────────────────
 

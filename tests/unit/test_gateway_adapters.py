@@ -269,6 +269,36 @@ class TestTelegramAdapter:
         query.edit_message_text.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_callback_query_task_command_emits_unified_message(self):
+        adapter = self._make()
+        received = []
+
+        async def _on_message(msg):
+            received.append(msg)
+
+        adapter.on_message(_on_message)
+
+        query = SimpleNamespace(
+            id="cb-task-1",
+            data="task|cancel|away_123",
+            from_user=SimpleNamespace(id=42, first_name="Emre"),
+            message=SimpleNamespace(chat=SimpleNamespace(id=777)),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+        )
+        update = SimpleNamespace(
+            callback_query=query,
+            effective_user=query.from_user,
+            effective_chat=SimpleNamespace(id=777),
+        )
+
+        await adapter._handle_callback_query(update, None)
+
+        assert len(received) == 1
+        assert received[0].text == "away_123 iptal et"
+        assert received[0].metadata["source"] == "telegram_callback"
+
+    @pytest.mark.asyncio
     async def test_callback_query_intervention_rejects_other_user(self, monkeypatch):
         adapter = self._make()
 
@@ -1021,6 +1051,44 @@ class TestGoogleChatAdapter:
         mock_session.post.assert_called_once()
         payload = mock_session.post.call_args[1]["json"]
         assert payload["text"] == "Test"
+
+    @pytest.mark.asyncio
+    async def test_send_webhook_appends_fallback_attachment_text(self):
+        adapter = self._make()
+        mock_session = AsyncMock()
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_session.post.return_value.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_session.post.return_value.__aexit__ = AsyncMock(return_value=False)
+        adapter._session = mock_session
+
+        await adapter.send_message(
+            "spaces/abc123",
+            UnifiedResponse(text="Test", metadata={"fallback_text": "Dosyalar:\n- report.docx"}),
+        )
+        payload = mock_session.post.call_args[1]["json"]
+        assert "report.docx" in payload["text"]
+
+
+class TestSlackAdapter:
+    @pytest.mark.asyncio
+    async def test_send_message_uploads_attachments(self, tmp_path):
+        pytest.importorskip("slack_bolt")
+        from core.gateway.adapters.slack import SlackAdapter
+
+        adapter = SlackAdapter({"app_token": "xapp-1", "bot_token": "xoxb-1"})
+        fake_client = AsyncMock()
+        adapter.app = SimpleNamespace(client=fake_client)
+        doc = tmp_path / "report.docx"
+        doc.write_bytes(b"doc")
+
+        await adapter.send_message(
+            "C123",
+            UnifiedResponse(text="Rapor hazir", attachments=[{"path": str(doc), "name": "report.docx", "type": "file"}]),
+        )
+
+        fake_client.chat_postMessage.assert_awaited_once()
+        fake_client.files_upload_v2.assert_awaited_once()
 
 
 # ── iMessage Adapter ──────────────────────────────────────────────────────────

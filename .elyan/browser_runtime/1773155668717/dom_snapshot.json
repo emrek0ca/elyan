@@ -1,0 +1,15 @@
+{
+  "success": true,
+  "dom_available": true,
+  "url": "https://docs.local",
+  "title": "Docs",
+  "visible_text": "API Reference Install Usage",
+  "dom_hash": "a95e0e8e9bab7e7228b81dd7af0e0a0d751651d2c4efde4515155f042952895b",
+  "scroll": {
+    "x": 0,
+    "y": 0
+  },
+  "session_id": "fake-browser",
+  "headless": true,
+  "html": "<html><body>API Reference Install Usage</body></html>"
+}

@@ -2,6 +2,8 @@
 
 from typing import List, Dict, Any
 from core.skills.base import BaseSkill
+from core.compat.legacy_tool_wrappers import normalize_legacy_tool_payload
+from core.skills.tool_runtime import execute_registered_tool, wrap_skill_tool_result
 
 
 class OfficeSkill(BaseSkill):
@@ -29,17 +31,28 @@ class OfficeSkill(BaseSkill):
             params = context.get("params", {})
 
             if command == "excel":
-                from tools.office_tools.excel_tools import create_excel
                 data = params.get("data", {})
                 path = params.get("path", "")
-                result = await create_excel(data, path)
-                return {"success": True, "result": result}
+                result = await execute_registered_tool(
+                    "write_excel",
+                    {"path": path, "data": data},
+                    source="builtin_office_skill",
+                )
+                return wrap_skill_tool_result(result)
             elif command == "pdf":
-                from tools.office_tools.pdf_tools import create_pdf
-                content = params.get("content", "")
                 path = params.get("path", "")
-                result = await create_pdf(content, path)
-                return {"success": True, "result": result}
+                result = normalize_legacy_tool_payload(
+                    {
+                        "success": False,
+                        "status": "failed",
+                        "error": "Tool not found: create_pdf",
+                        "errors": ["UNKNOWN_TOOL"],
+                        "data": {"error_code": "UNKNOWN_TOOL", "requested_path": path},
+                    },
+                    tool="create_pdf",
+                    source="builtin_office_skill",
+                )
+                return wrap_skill_tool_result(result)
             else:
                 return {"success": False, "error": f"Unknown command: {command}"}
         except Exception as e:

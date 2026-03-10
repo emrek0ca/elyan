@@ -231,10 +231,16 @@ class GoogleChatAdapter(BaseChannelAdapter):
         if not self._session:
             raise RuntimeError("Google Chat session yok.")
         try:
+            text = str(response.text or "")
+            fallback_text = ""
+            if isinstance(getattr(response, "metadata", None), dict):
+                fallback_text = str(response.metadata.get("fallback_text") or "").strip()
+            if fallback_text:
+                text = f"{text}\n\n{fallback_text}".strip()
             if self.mode == "webhook":
-                await self._send_webhook(response.text)
+                await self._send_webhook(text)
             else:
-                await self._send_api(chat_id, response.text)
+                await self._send_api(chat_id, text)
         except Exception as exc:
             logger.error(f"Google Chat gönderme hatası: {exc}")
             raise
@@ -281,5 +287,7 @@ class GoogleChatAdapter(BaseChannelAdapter):
             "threads": True,
             "markdown": False,
             "buttons": self.mode == "bot",
+            "images": False,
+            "files": False,
             "groups": True,
         }

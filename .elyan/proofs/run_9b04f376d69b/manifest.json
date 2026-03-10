@@ -1,0 +1,15 @@
+{
+  "run_id": "run_9b04f376d69b",
+  "started_at": 1773151742.941349,
+  "completed_at": 1773151743.0682611,
+  "status": "partial",
+  "error": "chat_failed: 'NoneType' object has no attribute 'generate'",
+  "steps": [],
+  "artifacts": [],
+  "metadata": {
+    "action": "chat",
+    "job_type": "communication",
+    "channel": "cli",
+    "user_id": "local"
+  }
+}

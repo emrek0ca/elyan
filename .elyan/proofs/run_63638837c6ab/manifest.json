@@ -1,0 +1,87 @@
+{
+  "run_id": "run_63638837c6ab",
+  "started_at": 1772929400.1313322,
+  "completed_at": 1772929400.2755399,
+  "status": "partial",
+  "error": "contract_decl:missing:required_outputs; contract_decl:missing:guardrails; contract_decl:missing:verify",
+  "steps": [
+    {
+      "step": "~/Desktop/elyan-test/a klasörü oluştur",
+      "tool": "create_folder",
+      "status": "success",
+      "input_hash": "3600f87e86c6a16bd42c8cb3f6362049086192c5b42b4f0c312c66e7cc6b9f67",
+      "params_hash": "293f811564f64ae1eddde28a725de6969206f33047d63ef60d841d9ecdd64bda",
+      "result_hash": "39403f3c45bb20e867a5ce44b9dd9bb7d6e0ca97d3e31bc8d5140e5d701f9dd3",
+      "duration_ms": 2,
+      "ts": 1772929400.2588649
+    },
+    {
+      "step": "not.md yaz",
+      "tool": "write_file",
+      "status": "success",
+      "input_hash": "8a1e0b215422900be3786038226ef64e544374aa9de65f3aa3752b468492d698",
+      "params_hash": "dffb19606481edaea4343df1b03021790d0f34ce4ee572559368247078471524",
+      "result_hash": "a78ceacacaf438d75a319adf8a82982a25af8e60fb0483812f906459a0638c81",
+      "duration_ms": 2,
+      "ts": 1772929400.2630951
+    },
+    {
+      "step": "not.md yaz doğrula",
+      "tool": "read_file",
+      "status": "success",
+      "input_hash": "0d2ea6f1b5cc7f4c39e4571f22aab5c57e84e11b173fda6252f22e473bc26aa5",
+      "params_hash": "c45de472c4b86c5a4eeca78fdee1fc834a6b1c56d9e577f16a7ee5d49ea00df1",
+      "result_hash": "b85d772b54979c2275bf1bdbbfa5f00f8cd91ca525194414eff1bada72b12e63",
+      "duration_ms": 1,
+      "ts": 1772929400.266177
+    },
+    {
+      "step": "içeriği doğrula",
+      "tool": "read_file",
+      "status": "success",
+      "input_hash": "f19226d9b99c429bcff9ec6ad1e5c4402d9f9333ba689de8f37d0b7616eb185d",
+      "params_hash": "c45de472c4b86c5a4eeca78fdee1fc834a6b1c56d9e577f16a7ee5d49ea00df1",
+      "result_hash": "b85d772b54979c2275bf1bdbbfa5f00f8cd91ca525194414eff1bada72b12e63",
+      "duration_ms": 1,
+      "ts": 1772929400.269372
+    },
+    {
+      "step": "bana artifact yollarını ver.",
+      "tool": "list_files",
+      "status": "success",
+      "input_hash": "b08e32bd41eaae136d3cad81dea4e5afd701ee57c4c6ee18814d2e93e4b9510f",
+      "params_hash": "3046048aa8c40bea8a8abdb252aa2a18fbce52f5f053773bb7501bf3b259839d",
+      "result_hash": "5bc3cf3c4024da7dc6ee23f584cab55ea2dc4a683910e886931e3084e9546a4b",
+      "duration_ms": 1,
+      "ts": 1772929400.272179
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-113/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+      "name": "not.md",
+      "type": "text",
+      "mime": "",
+      "size_bytes": 176,
+      "sha256": "f47dcac1e4ba80234811b4df63c3bfc18f26826281d466b2341abcdd7861e5f0",
+      "tool": "write_file",
+      "source": "tool",
+      "source_result": {
+        "success": true,
+        "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-113/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+        "content": "# not.md\n\nBu dosya Elyan deterministic executor tarafindan uretildi.\nOlusturma zamani: 2026-03-08 03:23:20\nGorev ozeti: not.md\nDurum: olusturuldu ve dogrulama adimi icin hazir.",
+        "verified": true,
+        "size_bytes": 176,
+        "sha256": "f47dcac1e4ba80234811b4df63c3bfc18f26826281d466b2341abcdd7861e5f0",
+        "_content_preview": "# not.md\n\nBu dosya Elyan deterministic executor tarafindan uretildi.\nOlusturma zamani: 2026-03-08 03",
+        "_contract_verified": true
+      }
+    }
+  ],
+  "metadata": {
+    "action": "multi_task",
+    "job_type": "file_operations",
+    "channel": "cli",
+    "user_id": "local"
+  }
+}

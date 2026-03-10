@@ -16,6 +16,11 @@ from utils.logger import get_logger
 logger = get_logger("tools.browser_automation")
 
 
+def _is_tls_verify_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return "certificate verify failed" in text or "cert" in text and "verify" in text
+
+
 class SimpleBrowser:
     """
     Simple browser automation using HTTP requests
@@ -26,16 +31,20 @@ class SimpleBrowser:
     
     def __init__(self, timeout: int = 30):
         self.timeout = timeout
-        self.client = httpx.AsyncClient(
-            timeout=timeout,
-            follow_redirects=True,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-            }
-        )
+        self.client = self._build_client(verify=True)
         self.current_url: Optional[str] = None
         self.current_html: Optional[str] = None
         self.current_soup: Optional[BeautifulSoup] = None
+
+    def _build_client(self, *, verify: bool) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            timeout=self.timeout,
+            follow_redirects=True,
+            verify=verify,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+            },
+        )
     
     async def goto(self, url: str) -> Dict[str, Any]:
         """
@@ -69,6 +78,34 @@ class SimpleBrowser:
             }
         
         except httpx.HTTPError as e:
+            if _is_tls_verify_error(e):
+                logger.warning("TLS verification failed, retrying without certificate verification.")
+                try:
+                    await self.client.aclose()
+                except Exception:
+                    pass
+                self.client = self._build_client(verify=False)
+                try:
+                    response = await self.client.get(url)
+                    response.raise_for_status()
+                    self.current_url = str(response.url)
+                    self.current_html = response.text
+                    self.current_soup = BeautifulSoup(self.current_html, 'html.parser')
+                    title = self.current_soup.title.string if self.current_soup.title else ""
+                    return {
+                        "success": True,
+                        "url": self.current_url,
+                        "status_code": response.status_code,
+                        "title": title,
+                        "content_length": len(self.current_html),
+                        "tls_verify_bypassed": True,
+                    }
+                except Exception as retry_exc:
+                    return {
+                        "success": False,
+                        "error": f"HTTP error: {retry_exc}",
+                        "url": url,
+                    }
             return {
                 "success": False,
                 "error": f"HTTP error: {e}",

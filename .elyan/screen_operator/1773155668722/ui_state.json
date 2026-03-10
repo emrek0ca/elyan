@@ -1,0 +1,162 @@
+{
+  "frontmost_app": "Safari",
+  "active_window": {
+    "title": "Results",
+    "bounds": {
+      "x": 0,
+      "y": 0,
+      "width": 1280,
+      "height": 800
+    }
+  },
+  "screenshot_path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-235/test_browser_runtime_dom_loss_0/screen_after_1_1_1773155668721.png",
+  "elements": [
+    {
+      "label": "Safari",
+      "role": "frontmost_app",
+      "source": "window_metadata",
+      "confidence": 0.99
+    },
+    {
+      "label": "Results",
+      "role": "window_title",
+      "source": "window_metadata",
+      "confidence": 0.95
+    },
+    {
+      "label": "Search",
+      "role": "button",
+      "x": 320,
+      "y": 92,
+      "width": 80,
+      "height": 28,
+      "frontmost_app": "Safari",
+      "window_title": "Search",
+      "source": "cache",
+      "confidence": 0.92,
+      "_cache_meta": {
+        "seen_count": 2,
+        "last_seen_at": 1773155668.721906,
+        "last_action_kind": "",
+        "frontmost_app": "Safari",
+        "window_title": "Search",
+        "last_verified_success": false,
+        "verified_success_count": 0,
+        "last_verified_success_at": 0.0
+      }
+    },
+    {
+      "label": "Search",
+      "role": "text_field",
+      "x": 110,
+      "y": 90,
+      "width": 160,
+      "height": 30,
+      "frontmost_app": "Safari",
+      "window_title": "Search",
+      "source": "cache",
+      "confidence": 0.92,
+      "_cache_meta": {
+        "seen_count": 1,
+        "last_seen_at": 1773155668.721901,
+        "last_action_kind": "",
+        "frontmost_app": "Safari",
+        "window_title": "Search",
+        "last_verified_success": false,
+        "verified_success_count": 0,
+        "last_verified_success_at": 0.0
+      }
+    },
+    {
+      "label": "Search",
+      "role": "window_title",
+      "source": "prior_ui_state",
+      "confidence": 0.95,
+      "frontmost_app": "Safari",
+      "window_title": "Results"
+    }
+  ],
+  "clickable_targets": [
+    {
+      "label": "Search",
+      "role": "button",
+      "x": 320,
+      "y": 92,
+      "width": 80,
+      "height": 28,
+      "frontmost_app": "Safari",
+      "window_title": "Search",
+      "source": "cache",
+      "confidence": 0.92,
+      "_cache_meta": {
+        "seen_count": 2,
+        "last_seen_at": 1773155668.721906,
+        "last_action_kind": "",
+        "frontmost_app": "Safari",
+        "window_title": "Search",
+        "last_verified_success": false,
+        "verified_success_count": 0,
+        "last_verified_success_at": 0.0
+      }
+    },
+    {
+      "label": "Search",
+      "role": "text_field",
+      "x": 110,
+      "y": 90,
+      "width": 160,
+      "height": 30,
+      "frontmost_app": "Safari",
+      "window_title": "Search",
+      "source": "cache",
+      "confidence": 0.92,
+      "_cache_meta": {
+        "seen_count": 1,
+        "last_seen_at": 1773155668.721901,
+        "last_action_kind": "",
+        "frontmost_app": "Safari",
+        "window_title": "Search",
+        "last_verified_success": false,
+        "verified_success_count": 0,
+        "last_verified_success_at": 0.0
+      }
+    }
+  ],
+  "text_fields": [
+    {
+      "label": "Search",
+      "role": "text_field",
+      "x": 110,
+      "y": 90,
+      "width": 160,
+      "height": 30,
+      "frontmost_app": "Safari",
+      "window_title": "Search",
+      "source": "cache",
+      "confidence": 0.92,
+      "_cache_meta": {
+        "seen_count": 1,
+        "last_seen_at": 1773155668.721901,
+        "last_action_kind": "",
+        "frontmost_app": "Safari",
+        "window_title": "Search",
+        "last_verified_success": false,
+        "verified_success_count": 0,
+        "last_verified_success_at": 0.0
+      }
+    }
+  ],
+  "summary": "Frontmost app: Safari. Window: Results. Results sayfasi acildi. OCR: Results",
+  "fallback_order": [
+    "accessibility_and_window_metadata",
+    "vision_detection",
+    "ocr",
+    "last_known_ui_target_cache"
+  ],
+  "source_counts": {
+    "window_metadata": 2,
+    "cache": 2,
+    "prior_ui_state": 1
+  },
+  "confidence": 0.946
+}

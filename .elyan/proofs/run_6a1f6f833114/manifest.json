@@ -1,0 +1,36 @@
+{
+  "run_id": "run_6a1f6f833114",
+  "started_at": 1772928742.2872162,
+  "completed_at": 1772928742.413497,
+  "status": "success",
+  "error": "",
+  "steps": [
+    {
+      "step": "Listele",
+      "tool": "list_files",
+      "status": "success",
+      "input_hash": "7f93f8637d7f4682ea94ef2b081e6e438027bc5399e84ccb11461351c54199ce",
+      "params_hash": "8d30317f484e717862459eb2ce87f837d3f67a3421fa56e4cc223b88ad3c3c8b",
+      "result_hash": "2be05a12199e2813d7df90b9b3e31a25e983eea876e212a61af4449b213d00da",
+      "duration_ms": 1,
+      "ts": 1772928742.4059572
+    },
+    {
+      "step": "Ekran",
+      "tool": "take_screenshot",
+      "status": "success",
+      "input_hash": "f0442e414aa984f5f00565d182b7a0231d57d585fadc2f0be6ef2c892c704657",
+      "params_hash": "0b38d781b26aed9de1078b263fd0de7444c5e20fb0b9cd45ce0632815c248332",
+      "result_hash": "8184e90c9a3086b843bda94787f9c3ca93f252f5b14ad6f0f8ded460508aa0a3",
+      "duration_ms": 2,
+      "ts": 1772928742.409554
+    }
+  ],
+  "artifacts": [],
+  "metadata": {
+    "action": "multi_task",
+    "job_type": "browser_task",
+    "channel": "cli",
+    "user_id": "local"
+  }
+}

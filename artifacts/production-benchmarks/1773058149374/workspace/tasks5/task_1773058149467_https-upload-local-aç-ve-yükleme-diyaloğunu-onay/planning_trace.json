@@ -1,0 +1,29 @@
+{
+  "request": "https://upload.local aç ve yükleme diyaloğunu onayla",
+  "planning_request": "https://upload.local aç ve yükleme diyaloğunu onayla",
+  "matched_rules": [
+    "upload_dialog_flow"
+  ],
+  "assumptions": [
+    "Browser app defaulted to Safari for upload flow."
+  ],
+  "missing_inputs": [],
+  "extracted": {
+    "app_name": "",
+    "app_sequence": [],
+    "browser_app": "Safari",
+    "url": "https://upload.local",
+    "urls": [
+      "https://upload.local"
+    ],
+    "typed_text": "",
+    "named_field_values": [],
+    "field_label": "",
+    "selector": "#upload",
+    "button_label": "",
+    "button_sequence": [],
+    "research_topic": "https://upload.local aç ve yükleme diyaloğunu onayla"
+  },
+  "bounded": true,
+  "safe_mode": "deterministic"
+}

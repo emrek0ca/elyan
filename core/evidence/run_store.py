@@ -5,7 +5,10 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
-from config.settings import ELYAN_DIR
+from core.storage_paths import resolve_runs_root
+from core.telemetry.events import TelemetryEvent
+from core.telemetry.metrics import sample_runtime_metrics
+from core.telemetry.run_store import TelemetryRunStore
 
 
 class RunStore:
@@ -13,9 +16,22 @@ class RunStore:
 
     def __init__(self, run_id: str):
         self.run_id = str(run_id or "").strip() or f"run_{int(time.time())}"
-        self.base_dir = (ELYAN_DIR / "runs" / self.run_id).expanduser()
+        self.base_dir = (resolve_runs_root() / self.run_id).expanduser()
         self.base_dir.mkdir(parents=True, exist_ok=True)
         (self.base_dir / "artifacts").mkdir(parents=True, exist_ok=True)
+        self.telemetry_store = TelemetryRunStore(self.run_id, base_dir=self.base_dir)
+        self._capability_selected_emitted = False
+        self._plan_created_emitted = False
+        metrics = sample_runtime_metrics()
+        self.telemetry_store.record_event(
+            TelemetryEvent(
+                event="run.started",
+                request_id=self.run_id,
+                status="started",
+                memory_mb=float(metrics.get("memory_mb") or 0.0),
+                payload={"source": "legacy_run_store", "metrics": metrics},
+            )
+        )
 
     @staticmethod
     def _safe_json(value: Any) -> Any:
@@ -25,16 +41,64 @@ class RunStore:
         except Exception:
             return str(value)
 
-    def write_task(self, task_spec: Dict[str, Any] | None, *, user_input: str = "", metadata: Dict[str, Any] | None = None) -> str:
+    def write_task(
+        self,
+        task_spec: Dict[str, Any] | None,
+        *,
+        user_input: str = "",
+        metadata: Dict[str, Any] | None = None,
+        task_state: Dict[str, Any] | None = None,
+    ) -> str:
         payload = {
             "run_id": self.run_id,
             "user_input": str(user_input or ""),
             "task_spec": self._safe_json(task_spec or {}),
             "metadata": self._safe_json(metadata or {}),
+            "task_state": self._safe_json(task_state or {}),
             "written_at": time.time(),
         }
         out = self.base_dir / "task.json"
         out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        meta = payload["metadata"] if isinstance(payload["metadata"], dict) else {}
+        task_state_payload = payload["task_state"] if isinstance(payload["task_state"], dict) else {}
+        task_context = task_state_payload.get("context") if isinstance(task_state_payload.get("context"), dict) else {}
+        capability = str(meta.get("capability_domain") or task_context.get("capability_domain") or "").strip()
+        workflow_id = str(meta.get("workflow_id") or task_context.get("workflow_id") or "").strip()
+        action = str(meta.get("action") or task_context.get("action") or "").strip()
+        if capability and not self._capability_selected_emitted:
+            self.telemetry_store.record_event(
+                TelemetryEvent(
+                    event="capability.selected",
+                    request_id=self.run_id,
+                    selected_capability=capability,
+                    workflow_path=[workflow_id] if workflow_id else [],
+                    status=str(meta.get("phase") or "selected"),
+                    payload={"action": action, "job_type": str(meta.get("job_type") or task_context.get("job_type") or "")},
+                )
+            )
+            self._capability_selected_emitted = True
+        subtasks = task_state_payload.get("subtasks") if isinstance(task_state_payload.get("subtasks"), list) else []
+        if subtasks and not self._plan_created_emitted:
+            self.telemetry_store.record_event(
+                TelemetryEvent(
+                    event="plan.created",
+                    request_id=self.run_id,
+                    selected_capability=capability,
+                    workflow_path=[workflow_id] if workflow_id else [],
+                    status="created",
+                    payload={"step_count": len(subtasks), "action": action, "job_type": str(meta.get("job_type") or task_context.get("job_type") or "")},
+                )
+            )
+            self._plan_created_emitted = True
+        self.telemetry_store.write_summary(
+            {
+                "status": str((metadata or {}).get("status") or "task_recorded"),
+                "user_input": str(user_input or ""),
+                "task_spec": payload["task_spec"],
+                "task_state": payload["task_state"],
+                "metadata": payload["metadata"],
+            }
+        )
         return str(out)
 
     def write_evidence(
@@ -55,6 +119,28 @@ class RunStore:
         }
         out = self.base_dir / "evidence.json"
         out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.telemetry_store.write_artifact_manifest(list(payload["artifacts"]))
+        self.telemetry_store.write_verification(
+            {
+                "status": str((metadata or {}).get("status") or "evidence_recorded"),
+                "manifest_path": payload["manifest_path"],
+                "steps": payload["steps"],
+                "artifacts": payload["artifacts"],
+                "metadata": payload["metadata"],
+            }
+        )
+        self.telemetry_store.record_event(
+            TelemetryEvent(
+                event="verify.finished",
+                request_id=self.run_id,
+                status=str((metadata or {}).get("status") or "evidence_recorded"),
+                payload={
+                    "manifest_path": payload["manifest_path"],
+                    "artifact_count": len(payload["artifacts"]),
+                    "step_count": len(payload["steps"]),
+                },
+            )
+        )
         return str(out)
 
     def write_summary(
@@ -96,6 +182,31 @@ class RunStore:
 
         out = self.base_dir / "summary.md"
         out.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+        self.telemetry_store.write_delivery(
+            {
+                "status": str(status or ""),
+                "text_summary": str(response_text or "").strip(),
+                "errors": [str(error or "").strip()] if str(error or "").strip() else [],
+                "artifact_manifest": list(artifacts or []),
+                "metadata": meta,
+            }
+        )
+        self.telemetry_store.record_event(
+            TelemetryEvent(
+                event="deliver.finished",
+                request_id=self.run_id,
+                status=str(status or ""),
+                payload={"artifact_count": len(list(artifacts or [])), "error": str(error or "")},
+            )
+        )
+        self.telemetry_store.record_event(
+            TelemetryEvent(
+                event="run.completed",
+                request_id=self.run_id,
+                status=str(status or ""),
+                payload={"error": str(error or ""), "artifact_count": len(list(artifacts or []))},
+            )
+        )
         return str(out)
 
     def write_logs(self, lines: List[str] | None = None) -> str:
@@ -106,7 +217,7 @@ class RunStore:
 
     @staticmethod
     def list_recent_run_dirs(limit: int = 20) -> List[Path]:
-        root = (ELYAN_DIR / "runs").expanduser()
+        root = resolve_runs_root().expanduser()
         if not root.exists():
             return []
         candidates: list[tuple[float, Path]] = []

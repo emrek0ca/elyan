@@ -1,26 +1,40 @@
 """models.py — Model yönetimi CLI"""
 import json
 from config.elyan_config import elyan_config
+from core.model_catalog import QWEN_LIGHT_OLLAMA_MODEL, default_model_for_provider, normalize_model_name
 
 
 def _default_model_for_provider(provider: str) -> str:
-    p = (provider or "").lower()
-    defaults = {
-        "openai": "gpt-4o",
-        "anthropic": "claude-3-5-sonnet-latest",
-        "google": "gemini-2.0-flash",
-        "groq": "llama-3.3-70b-versatile",
-        "ollama": "llama3.1:8b",
-    }
-    return defaults.get(p, "gpt-4o")
+    return default_model_for_provider(provider)
 
 
 def _sync_roles_to_default(provider: str, model: str) -> None:
+    provider = str(provider or "").strip().lower()
+    model = normalize_model_name(provider, model)
+    router_provider = str(elyan_config.get("models.local.provider", "ollama"))
+    router_model = normalize_model_name(
+        router_provider,
+        str(elyan_config.get("models.local.model", _default_model_for_provider(router_provider))),
+    )
+    local_first = bool(elyan_config.get("agent.model.local_first", True))
+    if provider == "ollama":
+        router_provider = "ollama"
+        router_model = model
+        elyan_config.set("models.local.provider", "ollama")
+        elyan_config.set("models.local.model", model)
+    router_role = {"provider": router_provider, "model": router_model} if local_first else {"provider": provider, "model": model}
+    worker_role = {"provider": provider, "model": model}
     role_map = {
-        "reasoning": {"provider": provider, "model": model},
-        "inference": {"provider": provider, "model": model},
-        "creative": {"provider": provider, "model": model},
-        "code": {"provider": provider, "model": model},
+        "router": router_role,
+        "inference": router_role,
+        "reasoning": worker_role,
+        "planning": worker_role,
+        "creative": worker_role,
+        "code": worker_role,
+        "critic": worker_role,
+        "qa": worker_role,
+        "research_worker": worker_role,
+        "code_worker": worker_role,
     }
     elyan_config.set("models.roles", role_map)
 
@@ -153,7 +167,7 @@ def _use(name: str):
     if "/" in name:
         provider, model = name.split("/", 1)
         provider = provider.strip()
-        model = model.strip()
+        model = normalize_model_name(provider, model.strip())
     else:
         provider = name.strip()
         model = _default_model_for_provider(provider)
@@ -172,7 +186,7 @@ def _set_fallback(name: str):
     if "/" in name:
         provider, model = name.split("/", 1)
         provider = provider.strip()
-        model = model.strip()
+        model = normalize_model_name(provider, model.strip())
     else:
         provider = name.strip()
         model = _default_model_for_provider(provider)
@@ -219,12 +233,15 @@ def _ollama(action: str, name: str = None):
                 print("Yerel Ollama modelleri:")
                 for m in models:
                     print(f"  • {m}")
+                if QWEN_LIGHT_OLLAMA_MODEL not in models:
+                    print(f"  ℹ️ Hafif ücretsiz seçenek: {QWEN_LIGHT_OLLAMA_MODEL}")
             else:
                 print("Yüklü model yok. 'ollama pull llama3' ile indirin.")
         elif action == "pull" and name:
             import subprocess
-            print(f"Modeli indiriliyor: {name}...")
-            subprocess.run(["ollama", "pull", name])
+            model_name = normalize_model_name("ollama", name)
+            print(f"Modeli indiriliyor: {model_name}...")
+            subprocess.run(["ollama", "pull", model_name])
         elif action == "start":
             import subprocess
             subprocess.Popen(["ollama", "serve"])

@@ -11,6 +11,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from core.storage_paths import resolve_elyan_data_dir
 from utils.logger import get_logger
 
 logger = get_logger("unified_memory")
@@ -188,10 +189,10 @@ class UnifiedMemory:
         conv_count = self._safe_sqlite_count(conv_db, "SELECT COUNT(*) FROM conversations")
         conv_users = self._safe_sqlite_count(conv_db, "SELECT COUNT(DISTINCT user_id) FROM conversations")
 
-        episodic_db = Path.home() / ".elyan" / "memory" / "episodic.db"
+        episodic_db = resolve_elyan_data_dir() / "memory" / "episodic.db"
         episodic_count = self._safe_sqlite_count(episodic_db, "SELECT COUNT(*) FROM events")
 
-        semantic_patterns = Path.home() / ".elyan" / "memory" / "patterns.md"
+        semantic_patterns = resolve_elyan_data_dir() / "memory" / "patterns.md"
         semantic_count = 0
         try:
             if semantic_patterns.exists():

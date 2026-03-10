@@ -55,9 +55,13 @@ class StartupChecker:
             provider = str(self.settings.get("llm_provider", "")).strip().lower()
             if provider == "api":
                 provider = "gemini"
+            elif provider == "google":
+                provider = "gemini"
         if not provider:
             provider = str(os.getenv("LLM_TYPE", "")).strip().lower()
             if provider == "api":
+                provider = "gemini"
+            elif provider == "google":
                 provider = "gemini"
         return provider
 
@@ -68,7 +72,10 @@ class StartupChecker:
         if self.settings:
             settings_provider = str(self.settings.get("llm_provider", "")).strip().lower()
             settings_api = str(self.settings.get("api_key", "")).strip()
-            if settings_provider in {provider, "api"} and settings_api:
+            provider_aliases = {provider}
+            if provider == "gemini":
+                provider_aliases.update({"api", "google"})
+            if settings_provider in provider_aliases and settings_api:
                 settings_key = settings_api
         if settings_key:
             return settings_key
@@ -78,6 +85,8 @@ class StartupChecker:
             return os.getenv("GOOGLE_API_KEY", "")
         if provider == "openai":
             return os.getenv("OPENAI_API_KEY", "")
+        if provider == "anthropic":
+            return os.getenv("ANTHROPIC_API_KEY", "")
         return ""
 
     def run_all_checks(self) -> Tuple[bool, List[HealthCheckResult]]:
@@ -226,6 +235,22 @@ class StartupChecker:
                     message="OpenAI API key missing",
                     severity="error",
                     fix_suggestion="Get API key: https://platform.openai.com/api-keys"
+                ))
+
+        elif llm_type == "anthropic":
+            api_key = self._provider_key_from_settings_or_env("anthropic")
+            if api_key:
+                self.checks.append(HealthCheckResult(
+                    passed=True,
+                    message="Anthropic API configured",
+                    severity="info"
+                ))
+            else:
+                self.checks.append(HealthCheckResult(
+                    passed=False,
+                    message="Anthropic API key missing",
+                    severity="error",
+                    fix_suggestion="Get API key: https://console.anthropic.com/settings/keys"
                 ))
 
         elif llm_type == "ollama":

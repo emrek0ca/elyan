@@ -1,0 +1,121 @@
+{
+  "run_id": "run_fd7bc9548fe8",
+  "user_input": "Safari aç köpekler araştır masaüstüne kaydet",
+  "task_spec": {},
+  "metadata": {
+    "action": "multi_task",
+    "job_type": "research_report",
+    "capability_domain": "screen_operator",
+    "workflow_id": "screen_operator_workflow",
+    "hybrid_model": {
+      "role": "inference",
+      "routing_role": "router",
+      "critic_role": "critic",
+      "tool_first": false,
+      "prefer_local": true,
+      "tier": "balanced"
+    },
+    "channel": "cli",
+    "user_id": "local",
+    "status": "success"
+  },
+  "task_state": {
+    "task_id": "task_fe6e2f1d31",
+    "objective": "Safari aç köpekler araştır masaüstüne kaydet",
+    "context": {
+      "user_input": "Safari aç köpekler araştır masaüstüne kaydet",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "multi_task",
+      "job_type": "research_report",
+      "capability_domain": "screen_operator",
+      "workflow_id": "screen_operator_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "write_file",
+        "description": "Safari aç köpekler araştır masaüstüne kaydet"
+      }
+    ],
+    "artifacts": [
+      {
+        "path": "/Users/emrekoca/Desktop/not.txt",
+        "name": "not.txt",
+        "type": "text",
+        "mime": "",
+        "size_bytes": 17,
+        "sha256": "03127dbc9a31b4943e84d43915128174ecf32f0600e4e13c54fdea731ccb680a",
+        "tool": "write_file",
+        "source": "tool",
+        "source_result": {
+          "success": true,
+          "path": "/Users/emrekoca/Desktop/not.txt",
+          "verified": true,
+          "size_bytes": 17,
+          "sha256": "03127dbc9a31b4943e84d43915128174ecf32f0600e4e13c54fdea731ccb680a",
+          "_content_preview": "ahmete borcum var",
+          "_contract_verified": true
+        },
+        "evidence": {
+          "path": "/Users/emrekoca/Desktop/not.txt",
+          "exists": true,
+          "is_file": true,
+          "is_dir": false,
+          "size_bytes": 17,
+          "mtime": 1772927770.615493,
+          "sha256": "03127dbc9a31b4943e84d43915128174ecf32f0600e4e13c54fdea731ccb680a"
+        }
+      }
+    ],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1772928791.0297332,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1772928791.0332842,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1772928791.034581,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1772928791.2866502,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 1,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1772928791.288878,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "multi_task",
+          "job_type": "research_report"
+        }
+      }
+    ],
+    "created_at": 1772928791.029732,
+    "updated_at": 1772928791.288878
+  },
+  "written_at": 1772928791.290658
+}

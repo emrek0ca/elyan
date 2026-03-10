@@ -1,0 +1,15 @@
+{
+  "success": true,
+  "dom_available": true,
+  "url": "https://login.local/dashboard",
+  "title": "Dashboard",
+  "visible_text": "Welcome back",
+  "dom_hash": "b9882beb30e1028fdb25c2f926524d2424030bdcce25619a7f431e4b9376c7bd",
+  "scroll": {
+    "x": 0,
+    "y": 0
+  },
+  "session_id": "fake-browser",
+  "headless": true,
+  "html": "<html><body>Welcome back</body></html>"
+}

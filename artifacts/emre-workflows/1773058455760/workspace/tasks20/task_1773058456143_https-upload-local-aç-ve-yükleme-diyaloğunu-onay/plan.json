@@ -1,0 +1,138 @@
+[
+  {
+    "kind": "system",
+    "name": "open_safari",
+    "tool": "open_app",
+    "params": {
+      "app_name": "Safari"
+    },
+    "verify": {
+      "frontmost_app": "Safari"
+    }
+  },
+  {
+    "kind": "browser",
+    "name": "open_upload_page",
+    "action": "open",
+    "url": "https://upload.local",
+    "expected_url_contains": "upload.local",
+    "expected_title_contains": "Upload",
+    "verify": {
+      "url_contains": "upload.local",
+      "title_contains": "Upload"
+    },
+    "repair_policy": {
+      "max_retries": 1
+    }
+  },
+  {
+    "kind": "screen",
+    "name": "screen_fallback_confirm-upload-dialog",
+    "instruction": "Open butonuna tikla",
+    "verify": {
+      "window_title_contains": "Upload",
+      "goal_achieved": true
+    },
+    "repair_policy": {
+      "max_retries": 1
+    },
+    "task_state": {
+      "current_step": 0,
+      "attempts": 0,
+      "ui_state": {
+        "frontmost_app": "Safari",
+        "active_window": {
+          "title": "Upload Dialog",
+          "bounds": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 800
+          }
+        },
+        "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058455760/workspace/screen20_fail/screen_before_1773058457981.png",
+        "elements": [
+          {
+            "label": "Safari",
+            "role": "frontmost_app",
+            "source": "window_metadata",
+            "confidence": 0.99
+          },
+          {
+            "label": "Upload Dialog",
+            "role": "window_title",
+            "source": "window_metadata",
+            "confidence": 0.95
+          }
+        ],
+        "clickable_targets": [],
+        "text_fields": [],
+        "summary": "Frontmost app: Safari. Window: Upload Dialog. Native dialog acik ama Open hedefi yok.",
+        "fallback_order": [
+          "accessibility_and_window_metadata",
+          "vision_detection",
+          "ocr",
+          "last_known_ui_target_cache"
+        ],
+        "source_counts": {
+          "window_metadata": 2
+        },
+        "confidence": 0.97
+      },
+      "last_ui_state": {
+        "frontmost_app": "Safari",
+        "active_window": {
+          "title": "Upload Dialog",
+          "bounds": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 800
+          }
+        },
+        "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058455760/workspace/screen20_fail/screen_before_1773058457981.png",
+        "elements": [
+          {
+            "label": "Safari",
+            "role": "frontmost_app",
+            "source": "window_metadata",
+            "confidence": 0.99
+          },
+          {
+            "label": "Upload Dialog",
+            "role": "window_title",
+            "source": "window_metadata",
+            "confidence": 0.95
+          }
+        ],
+        "clickable_targets": [],
+        "text_fields": [],
+        "summary": "Frontmost app: Safari. Window: Upload Dialog. Native dialog acik ama Open hedefi yok.",
+        "fallback_order": [
+          "accessibility_and_window_metadata",
+          "vision_detection",
+          "ocr",
+          "last_known_ui_target_cache"
+        ],
+        "source_counts": {
+          "window_metadata": 2
+        },
+        "confidence": 0.97
+      },
+      "last_target_cache": {},
+      "verifier_outcomes": []
+    },
+    "source_step_kind": "browser",
+    "fallback_reason": "NATIVE_DIALOG_REQUIRED"
+  },
+  {
+    "kind": "browser",
+    "name": "click_save",
+    "action": "click",
+    "selector": "#save",
+    "verify": {},
+    "repair_policy": {
+      "max_retries": 1
+    }
+  }
+]

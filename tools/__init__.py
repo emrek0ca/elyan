@@ -2,6 +2,8 @@
 LAZY LOADING TOOL SYSTEM - Fast startup, load tools on demand
 """
 
+from core.compat.legacy_tool_wrappers import wrap_legacy_tool
+
 _loaded_tools = {}
 _tool_load_errors = {}
 
@@ -32,7 +34,7 @@ def _lazy_load_tool(tool_name: str):
     
     # System Tools
     if tool_name in ["get_system_info", "get_battery_status", "open_app", "open_url", "get_running_apps",
-                     "take_screenshot", "analyze_screen", "read_clipboard", "write_clipboard", "set_wallpaper",
+                     "take_screenshot", "analyze_screen", "screen_workflow", "vision_operator_loop", "operator_mission_control", "computer_use", "read_clipboard", "write_clipboard", "set_wallpaper",
                      "close_app", "shutdown_system", "restart_system", "sleep_system", "lock_screen",
                      "set_volume", "send_notification", "kill_process",
                      "get_process_info", "run_safe_command", "get_installed_apps", "get_display_info",
@@ -44,7 +46,7 @@ def _lazy_load_tool(tool_name: str):
 
         from .system_tools import (
             get_system_info, get_battery_status, open_app, open_url, get_running_apps, set_wallpaper,
-            take_screenshot, analyze_screen, capture_region, read_clipboard, write_clipboard,
+            take_screenshot, analyze_screen, screen_workflow, vision_operator_loop, operator_mission_control, computer_use, capture_region, read_clipboard, write_clipboard,
             close_app, shutdown_system, restart_system, sleep_system, lock_screen,
             set_volume, send_notification, kill_process, get_process_info,
             run_safe_command, get_installed_apps, get_display_info, open_project_in_ide,
@@ -53,7 +55,9 @@ def _lazy_load_tool(tool_name: str):
         tools = {
             "get_system_info": get_system_info, "get_battery_status": get_battery_status, "open_app": open_app, "open_url": open_url,
             "get_running_apps": get_running_apps, "take_screenshot": take_screenshot,
-            "analyze_screen": analyze_screen, "capture_region": capture_region,
+            "analyze_screen": analyze_screen, "screen_workflow": screen_workflow, "vision_operator_loop": vision_operator_loop,
+            "operator_mission_control": operator_mission_control,
+            "computer_use": computer_use, "capture_region": capture_region,
             "read_clipboard": read_clipboard, "write_clipboard": write_clipboard,
             "shutdown_system": shutdown_system, "restart_system": restart_system,
             "sleep_system": sleep_system, "lock_screen": lock_screen,
@@ -225,10 +229,13 @@ def _lazy_load_tool(tool_name: str):
         return _loaded_tools.get(tool_name)
 
     # Advanced Tools
-    if tool_name in ["smart_summarize", "create_smart_file", "analyze_document", "generate_report", "analyze_image", "verify_visual_quality"]:
+    if tool_name in ["smart_summarize", "create_smart_file", "analyze_document", "generate_report", "analyze_image", "process_image_file", "verify_visual_quality"]:
         if tool_name == "analyze_image":
             from .vision_tools import analyze_image
             _loaded_tools["analyze_image"] = analyze_image
+        elif tool_name == "process_image_file":
+            from .vision_tools import process_image_file
+            _loaded_tools["process_image_file"] = process_image_file
         elif tool_name == "verify_visual_quality":
             from .browser.visual_qa import verify_visual_quality
             _loaded_tools["verify_visual_quality"] = verify_visual_quality
@@ -490,7 +497,7 @@ class LazyToolDict(dict):
             "move_file", "copy_file", "rename_file", "create_folder",
             # System Tools
             "get_system_info", "get_battery_status", "run_command", "run_safe_command", "open_app", "open_url",
-            "get_running_apps", "take_screenshot", "analyze_screen", "capture_region", "read_clipboard", "write_clipboard",
+            "get_running_apps", "take_screenshot", "analyze_screen", "screen_workflow", "vision_operator_loop", "operator_mission_control", "computer_use", "capture_region", "read_clipboard", "write_clipboard",
             "close_app", "shutdown_system", "restart_system", "sleep_system", "lock_screen",
             "set_volume", "send_notification", "kill_process", "get_process_info",
             "get_installed_apps", "get_display_info", "open_project_in_ide", "record_screen",
@@ -509,7 +516,7 @@ class LazyToolDict(dict):
             # Web Tools
             "fetch_page", "extract_text", "web_search", "start_research", "get_research_status",
             # Advanced Tools
-            "smart_summarize", "create_smart_file", "analyze_document", "generate_report", "analyze_image", "verify_visual_quality",
+            "smart_summarize", "create_smart_file", "analyze_document", "generate_report", "analyze_image", "process_image_file", "verify_visual_quality",
             # Note Tools
             "create_note", "list_notes", "search_notes", "update_note", "delete_note", "get_note",
             # Planning Tools
@@ -575,7 +582,8 @@ class LazyToolDict(dict):
                     )
             except Exception as exc:
                 _tool_load_errors[key] = str(exc)
-        return _loaded_tools.get(key)
+        tool = _loaded_tools.get(key)
+        return wrap_legacy_tool(key, tool) if callable(tool) else tool
 
     def __contains__(self, key):
         return key in self._tool_names or key in _loaded_tools

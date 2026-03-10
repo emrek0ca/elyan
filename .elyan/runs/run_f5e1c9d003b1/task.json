@@ -1,0 +1,144 @@
+{
+  "run_id": "run_f5e1c9d003b1",
+  "user_input": "dosyaları bir kontrol eder misin",
+  "task_spec": {
+    "intent": "filesystem_batch",
+    "version": "1.1",
+    "source": "intent_normalizer",
+    "goal": "dosyaları bir kontrol eder misin",
+    "constraints": {
+      "deterministic_defaults": true,
+      "forbid_command_dump_content": true
+    },
+    "context_assumptions": [
+      "default_policy_filled"
+    ],
+    "artifacts_expected": [
+      {
+        "path": "~/Desktop",
+        "type": "directory",
+        "must_exist": false
+      }
+    ],
+    "checks": [
+      {
+        "step_id": "step_1",
+        "checks": [
+          {
+            "type": "tool_success"
+          }
+        ]
+      }
+    ],
+    "rollback": [],
+    "required_tools": [
+      "list_files"
+    ],
+    "risk_level": "low",
+    "timeouts": {
+      "step_timeout_s": 90,
+      "run_timeout_s": 600
+    },
+    "retries": {
+      "max_attempts": 1
+    },
+    "steps": [
+      {
+        "id": "step_1",
+        "action": "list_files",
+        "params": {
+          "path": "~/Desktop"
+        },
+        "depends_on": [],
+        "checks": [
+          {
+            "type": "tool_success"
+          }
+        ],
+        "description": "Akıllı araç yönlendirmesi uygulanıyor...",
+        "path": "~/Desktop"
+      }
+    ]
+  },
+  "metadata": {
+    "action": "list_files",
+    "job_type": "file_operations",
+    "capability_domain": "general",
+    "workflow_id": "general_assistance_workflow",
+    "hybrid_model": {
+      "role": "inference",
+      "routing_role": "router",
+      "critic_role": "critic",
+      "tool_first": false,
+      "prefer_local": true,
+      "tier": "balanced"
+    },
+    "channel": "cli",
+    "user_id": "local",
+    "status": "partial"
+  },
+  "task_state": {
+    "task_id": "task_0ee466b3c6",
+    "objective": "dosyaları bir kontrol eder misin",
+    "context": {
+      "user_input": "dosyaları bir kontrol eder misin",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "list_files",
+      "job_type": "file_operations",
+      "capability_domain": "general",
+      "workflow_id": "general_assistance_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1772928742.121036,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1772928742.123866,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1772928742.125131,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1772928742.2428522,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 3
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1772928742.2455502,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "list_files",
+          "job_type": "file_operations"
+        }
+      }
+    ],
+    "created_at": 1772928742.121035,
+    "updated_at": 1772928742.2455502
+  },
+  "written_at": 1772928742.2477598
+}

@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 from config.elyan_config import elyan_config
+from core.storage_paths import resolve_elyan_data_dir, resolve_proofs_root
 from utils.logger import get_logger
 
 logger = get_logger("maintenance")
@@ -19,11 +20,12 @@ class MaintenanceEngine:
     """Autonomous system maintenance tasks."""
 
     def __init__(self):
-        self.log_dir = Path.home() / ".elyan" / "logs"
-        self.cache_dir = Path.home() / ".elyan" / "cache"
-        self.inbox_dir = Path.home() / ".elyan" / "inbox"
-        self.proofs_dir = Path.home() / ".elyan" / "proofs"
-        self.archive_dir = Path.home() / ".elyan" / "archive"
+        base_dir = resolve_elyan_data_dir()
+        self.log_dir = base_dir / "logs"
+        self.cache_dir = base_dir / "cache"
+        self.inbox_dir = base_dir / "inbox"
+        self.proofs_dir = resolve_proofs_root()
+        self.archive_dir = base_dir / "archive"
         self.archive_dir.mkdir(parents=True, exist_ok=True)
 
     async def run_full_maintenance(self) -> Dict[str, Any]:

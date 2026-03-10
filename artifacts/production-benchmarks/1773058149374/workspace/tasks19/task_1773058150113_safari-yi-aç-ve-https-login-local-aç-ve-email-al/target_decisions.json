@@ -1,0 +1,145 @@
+[
+  {
+    "query": "",
+    "action_kind": "click",
+    "preferred_roles": [
+      "button",
+      "checkbox",
+      "link",
+      "menu_item",
+      "radio",
+      "tab"
+    ],
+    "role_hints": [
+      "button"
+    ],
+    "require_coords": true,
+    "current_context": {
+      "frontmost_app": "Safari",
+      "active_window": "Upload Dialog"
+    },
+    "chosen": {
+      "label": "Open",
+      "role": "button",
+      "source": "accessibility",
+      "score": 220.0,
+      "has_coords": true,
+      "frontmost_app": "safari",
+      "window_title": "upload dialog",
+      "reasons": [
+        {
+          "code": "confidence",
+          "points": 92.0,
+          "details": {
+            "confidence": 0.92
+          }
+        },
+        {
+          "code": "source_priority",
+          "points": 18.0,
+          "details": {
+            "source": "accessibility"
+          }
+        },
+        {
+          "code": "bounded_target",
+          "points": 18.0,
+          "details": {}
+        },
+        {
+          "code": "role_hint_match",
+          "points": 46.0,
+          "details": {
+            "role": "button"
+          }
+        },
+        {
+          "code": "button_like_role",
+          "points": 12.0,
+          "details": {
+            "role": "button"
+          }
+        },
+        {
+          "code": "frontmost_app_context",
+          "points": 16.0,
+          "details": {
+            "item_app": "safari",
+            "current_app": "safari"
+          }
+        },
+        {
+          "code": "active_window_context",
+          "points": 18.0,
+          "details": {
+            "item_window": "upload dialog",
+            "current_window": "upload dialog"
+          }
+        }
+      ]
+    },
+    "candidates": [
+      {
+        "label": "Open",
+        "role": "button",
+        "source": "accessibility",
+        "score": 220.0,
+        "has_coords": true,
+        "frontmost_app": "safari",
+        "window_title": "upload dialog",
+        "reasons": [
+          {
+            "code": "confidence",
+            "points": 92.0,
+            "details": {
+              "confidence": 0.92
+            }
+          },
+          {
+            "code": "source_priority",
+            "points": 18.0,
+            "details": {
+              "source": "accessibility"
+            }
+          },
+          {
+            "code": "bounded_target",
+            "points": 18.0,
+            "details": {}
+          },
+          {
+            "code": "role_hint_match",
+            "points": 46.0,
+            "details": {
+              "role": "button"
+            }
+          },
+          {
+            "code": "button_like_role",
+            "points": 12.0,
+            "details": {
+              "role": "button"
+            }
+          },
+          {
+            "code": "frontmost_app_context",
+            "points": 16.0,
+            "details": {
+              "item_app": "safari",
+              "current_app": "safari"
+            }
+          },
+          {
+            "code": "active_window_context",
+            "points": 18.0,
+            "details": {
+              "item_window": "upload dialog",
+              "current_window": "upload dialog"
+            }
+          }
+        ]
+      }
+    ],
+    "rejected": []
+  }
+]

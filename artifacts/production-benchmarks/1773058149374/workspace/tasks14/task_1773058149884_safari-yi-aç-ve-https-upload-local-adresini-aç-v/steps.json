@@ -1,0 +1,2271 @@
+[
+  {
+    "step_index": 1,
+    "name": "open_safari",
+    "kind": "system",
+    "status": "completed",
+    "attempts": 1,
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        },
+        {
+          "code": "frontmost_app_matches",
+          "passed": true,
+          "details": {
+            "actual": "Safari",
+            "expected": "Safari"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for open_safari",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "Safari",
+          "window_title": "Upload Dialog"
+        },
+        {
+          "type": "browser_state",
+          "url": "",
+          "title": ""
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 0
+      }
+    },
+    "message": "Frontmost app: Safari. Window: Upload Dialog. Native dialog acik. Open gorunuyor. OCR: Open",
+    "error": "",
+    "error_code": "",
+    "screenshots": [
+      "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/tasks14/task_1773058149884_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_01_01.png",
+      "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/tasks14/task_1773058149884_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_01_02.png"
+    ],
+    "artifacts": [
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773058149888/before.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773058149888/after.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773058149888/ui_state.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773058149888/screen_summary.md",
+        "type": "text"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773058149888/action_log.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773058149888/target_decisions.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/tasks14/task_1773058149884_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_01_01.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/tasks14/task_1773058149884_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_01_02.png",
+        "type": "image"
+      }
+    ],
+    "result": {
+      "success": true,
+      "status": "success",
+      "message": "Frontmost app: Safari. Window: Upload Dialog. Native dialog acik. Open gorunuyor. OCR: Open",
+      "summary": "Frontmost app: Safari. Window: Upload Dialog. Native dialog acik. Open gorunuyor. OCR: Open",
+      "tool_result": {
+        "success": true,
+        "status": "success",
+        "message": "Safari opened."
+      },
+      "post_observation": {
+        "success": true,
+        "status": "success",
+        "mode": "inspect",
+        "goal_achieved": true,
+        "message": "Frontmost app: Safari. Window: Upload Dialog. Native dialog acik. Open gorunuyor. OCR: Open",
+        "summary": "Frontmost app: Safari. Window: Upload Dialog. Native dialog acik. Open gorunuyor. OCR: Open",
+        "ui_state": {
+          "frontmost_app": "Safari",
+          "active_window": {
+            "title": "Upload Dialog",
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 1280,
+              "height": 800
+            }
+          },
+          "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_before_1773058149888.png",
+          "elements": [
+            {
+              "label": "Safari",
+              "role": "frontmost_app",
+              "source": "window_metadata",
+              "confidence": 0.99
+            },
+            {
+              "label": "Upload Dialog",
+              "role": "window_title",
+              "source": "window_metadata",
+              "confidence": 0.95
+            },
+            {
+              "label": "Open",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Upload Dialog",
+              "source": "accessibility",
+              "confidence": 0.92
+            }
+          ],
+          "clickable_targets": [
+            {
+              "label": "Open",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Upload Dialog",
+              "source": "accessibility",
+              "confidence": 0.92
+            }
+          ],
+          "text_fields": [],
+          "summary": "Frontmost app: Safari. Window: Upload Dialog. Native dialog acik. Open gorunuyor. OCR: Open",
+          "fallback_order": [
+            "accessibility_and_window_metadata",
+            "vision_detection",
+            "ocr",
+            "last_known_ui_target_cache"
+          ],
+          "source_counts": {
+            "window_metadata": 2,
+            "accessibility": 1
+          },
+          "confidence": 0.953
+        },
+        "plan": [
+          {
+            "kind": "noop",
+            "reason": "inspect_mode",
+            "attempts": 0
+          }
+        ],
+        "initial_observation": {
+          "success": true,
+          "screenshot": {
+            "success": true,
+            "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_before_1773058149888.png",
+            "size_bytes": 44
+          },
+          "window_metadata": {
+            "success": true,
+            "frontmost_app": "Safari",
+            "window_title": "Upload Dialog",
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 1280,
+              "height": 800
+            }
+          },
+          "accessibility": {
+            "success": true,
+            "frontmost_app": "Safari",
+            "window_title": "Upload Dialog",
+            "elements": [
+              {
+                "label": "Open",
+                "role": "button",
+                "x": 320,
+                "y": 92,
+                "width": 80,
+                "height": 28
+              }
+            ]
+          },
+          "ocr": {
+            "success": true,
+            "text": "Open",
+            "lines": []
+          },
+          "vision": {
+            "success": true,
+            "summary": "Native dialog acik. Open gorunuyor.",
+            "elements": [],
+            "provider": "fake"
+          },
+          "ui_state": {
+            "frontmost_app": "Safari",
+            "active_window": {
+              "title": "Upload Dialog",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1280,
+                "height": 800
+              }
+            },
+            "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_before_1773058149888.png",
+            "elements": [
+              {
+                "label": "Safari",
+                "role": "frontmost_app",
+                "source": "window_metadata",
+                "confidence": 0.99
+              },
+              {
+                "label": "Upload Dialog",
+                "role": "window_title",
+                "source": "window_metadata",
+                "confidence": 0.95
+              },
+              {
+                "label": "Open",
+                "role": "button",
+                "x": 320,
+                "y": 92,
+                "width": 80,
+                "height": 28,
+                "frontmost_app": "Safari",
+                "window_title": "Upload Dialog",
+                "source": "accessibility",
+                "confidence": 0.92
+              }
+            ],
+            "clickable_targets": [
+              {
+                "label": "Open",
+                "role": "button",
+                "x": 320,
+                "y": 92,
+                "width": 80,
+                "height": 28,
+                "frontmost_app": "Safari",
+                "window_title": "Upload Dialog",
+                "source": "accessibility",
+                "confidence": 0.92
+              }
+            ],
+            "text_fields": [],
+            "summary": "Frontmost app: Safari. Window: Upload Dialog. Native dialog acik. Open gorunuyor. OCR: Open",
+            "fallback_order": [
+              "accessibility_and_window_metadata",
+              "vision_detection",
+              "ocr",
+              "last_known_ui_target_cache"
+            ],
+            "source_counts": {
+              "window_metadata": 2,
+              "accessibility": 1
+            },
+            "confidence": 0.953
+          },
+          "summary": "Frontmost app: Safari. Window: Upload Dialog. Native dialog acik. Open gorunuyor. OCR: Open"
+        },
+        "final_observation": {
+          "success": true,
+          "screenshot": {
+            "success": true,
+            "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_before_1773058149888.png",
+            "size_bytes": 44
+          },
+          "window_metadata": {
+            "success": true,
+            "frontmost_app": "Safari",
+            "window_title": "Upload Dialog",
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 1280,
+              "height": 800
+            }
+          },
+          "accessibility": {
+            "success": true,
+            "frontmost_app": "Safari",
+            "window_title": "Upload Dialog",
+            "elements": [
+              {
+                "label": "Open",
+                "role": "button",
+                "x": 320,
+                "y": 92,
+                "width": 80,
+                "height": 28
+              }
+            ]
+          },
+          "ocr": {
+            "success": true,
+            "text": "Open",
+            "lines": []
+          },
+          "vision": {
+            "success": true,
+            "summary": "Native dialog acik. Open gorunuyor.",
+            "elements": [],
+            "provider": "fake"
+          },
+          "ui_state": {
+            "frontmost_app": "Safari",
+            "active_window": {
+              "title": "Upload Dialog",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1280,
+                "height": 800
+              }
+            },
+            "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_before_1773058149888.png",
+            "elements": [
+              {
+                "label": "Safari",
+                "role": "frontmost_app",
+                "source": "window_metadata",
+                "confidence": 0.99
+              },
+              {
+                "label": "Upload Dialog",
+                "role": "window_title",
+                "source": "window_metadata",
+                "confidence": 0.95
+              },
+              {
+                "label": "Open",
+                "role": "button",
+                "x": 320,
+                "y": 92,
+                "width": 80,
+                "height": 28,
+                "frontmost_app": "Safari",
+                "window_title": "Upload Dialog",
+                "source": "accessibility",
+                "confidence": 0.92
+              }
+            ],
+            "clickable_targets": [
+              {
+                "label": "Open",
+                "role": "button",
+                "x": 320,
+                "y": 92,
+                "width": 80,
+                "height": 28,
+                "frontmost_app": "Safari",
+                "window_title": "Upload Dialog",
+                "source": "accessibility",
+                "confidence": 0.92
+              }
+            ],
+            "text_fields": [],
+            "summary": "Frontmost app: Safari. Window: Upload Dialog. Native dialog acik. Open gorunuyor. OCR: Open",
+            "fallback_order": [
+              "accessibility_and_window_metadata",
+              "vision_detection",
+              "ocr",
+              "last_known_ui_target_cache"
+            ],
+            "source_counts": {
+              "window_metadata": 2,
+              "accessibility": 1
+            },
+            "confidence": 0.953
+          },
+          "summary": "Frontmost app: Safari. Window: Upload Dialog. Native dialog acik. Open gorunuyor. OCR: Open"
+        },
+        "operator_budget": {
+          "max_actions": 4,
+          "max_retries_per_action": 2,
+          "elapsed_s": 0.001
+        },
+        "screenshots": [
+          "/Users/emrekoca/.elyan/screen_operator/1773058149888/before.png",
+          "/Users/emrekoca/.elyan/screen_operator/1773058149888/after.png"
+        ],
+        "artifacts": [
+          {
+            "path": "/Users/emrekoca/.elyan/screen_operator/1773058149888/before.png",
+            "type": "image"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/screen_operator/1773058149888/after.png",
+            "type": "image"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/screen_operator/1773058149888/ui_state.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/screen_operator/1773058149888/screen_summary.md",
+            "type": "text"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/screen_operator/1773058149888/action_log.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/screen_operator/1773058149888/target_decisions.json",
+            "type": "json"
+          }
+        ],
+        "action_logs": [],
+        "verifier_outcomes": [],
+        "task_state": {
+          "current_step": 0,
+          "attempts": 0,
+          "ui_state": {
+            "frontmost_app": "Safari",
+            "active_window": {
+              "title": "Upload Dialog",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1280,
+                "height": 800
+              }
+            },
+            "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_before_1773058149888.png",
+            "elements": [
+              {
+                "label": "Safari",
+                "role": "frontmost_app",
+                "source": "window_metadata",
+                "confidence": 0.99
+              },
+              {
+                "label": "Upload Dialog",
+                "role": "window_title",
+                "source": "window_metadata",
+                "confidence": 0.95
+              },
+              {
+                "label": "Open",
+                "role": "button",
+                "x": 320,
+                "y": 92,
+                "width": 80,
+                "height": 28,
+                "frontmost_app": "Safari",
+                "window_title": "Upload Dialog",
+                "source": "accessibility",
+                "confidence": 0.92
+              }
+            ],
+            "clickable_targets": [
+              {
+                "label": "Open",
+                "role": "button",
+                "x": 320,
+                "y": 92,
+                "width": 80,
+                "height": 28,
+                "frontmost_app": "Safari",
+                "window_title": "Upload Dialog",
+                "source": "accessibility",
+                "confidence": 0.92
+              }
+            ],
+            "text_fields": [],
+            "summary": "Frontmost app: Safari. Window: Upload Dialog. Native dialog acik. Open gorunuyor. OCR: Open",
+            "fallback_order": [
+              "accessibility_and_window_metadata",
+              "vision_detection",
+              "ocr",
+              "last_known_ui_target_cache"
+            ],
+            "source_counts": {
+              "window_metadata": 2,
+              "accessibility": 1
+            },
+            "confidence": 0.953
+          },
+          "last_ui_state": {
+            "frontmost_app": "Safari",
+            "active_window": {
+              "title": "Upload Dialog",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1280,
+                "height": 800
+              }
+            },
+            "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_before_1773058149888.png",
+            "elements": [
+              {
+                "label": "Safari",
+                "role": "frontmost_app",
+                "source": "window_metadata",
+                "confidence": 0.99
+              },
+              {
+                "label": "Upload Dialog",
+                "role": "window_title",
+                "source": "window_metadata",
+                "confidence": 0.95
+              },
+              {
+                "label": "Open",
+                "role": "button",
+                "x": 320,
+                "y": 92,
+                "width": 80,
+                "height": 28,
+                "frontmost_app": "Safari",
+                "window_title": "Upload Dialog",
+                "source": "accessibility",
+                "confidence": 0.92
+              }
+            ],
+            "clickable_targets": [
+              {
+                "label": "Open",
+                "role": "button",
+                "x": 320,
+                "y": 92,
+                "width": 80,
+                "height": 28,
+                "frontmost_app": "Safari",
+                "window_title": "Upload Dialog",
+                "source": "accessibility",
+                "confidence": 0.92
+              }
+            ],
+            "text_fields": [],
+            "summary": "Frontmost app: Safari. Window: Upload Dialog. Native dialog acik. Open gorunuyor. OCR: Open",
+            "fallback_order": [
+              "accessibility_and_window_metadata",
+              "vision_detection",
+              "ocr",
+              "last_known_ui_target_cache"
+            ],
+            "source_counts": {
+              "window_metadata": 2,
+              "accessibility": 1
+            },
+            "confidence": 0.953
+          },
+          "last_target_cache": {
+            "open@@safari@@upload dialog": {
+              "label": "Open",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Upload Dialog",
+              "source": "cache",
+              "confidence": 0.92,
+              "_cache_meta": {
+                "seen_count": 1,
+                "last_seen_at": 1773058149.888405,
+                "last_action_kind": "",
+                "frontmost_app": "Safari",
+                "window_title": "Upload Dialog",
+                "last_verified_success": false,
+                "verified_success_count": 0,
+                "last_verified_success_at": 0.0
+              }
+            },
+            "open": {
+              "label": "Open",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Upload Dialog",
+              "source": "cache",
+              "confidence": 0.92,
+              "_cache_meta": {
+                "seen_count": 1,
+                "last_seen_at": 1773058149.888405,
+                "last_action_kind": "",
+                "frontmost_app": "Safari",
+                "window_title": "Upload Dialog",
+                "last_verified_success": false,
+                "verified_success_count": 0,
+                "last_verified_success_at": 0.0
+              }
+            }
+          },
+          "verifier_outcomes": []
+        },
+        "recovery_hints": {
+          "frontmost_app": "Safari",
+          "active_window": "Upload Dialog",
+          "chosen_target": {},
+          "alternate_targets": [],
+          "failed_codes": []
+        },
+        "desktop_host_state": {
+          "frontmost_app": "Safari",
+          "active_window": {
+            "title": "Upload Dialog",
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 1280,
+              "height": 800
+            }
+          },
+          "last_screenshot": "/Users/emrekoca/.elyan/screen_operator/1773058149888/after.png",
+          "target_cache_size": 2,
+          "recent_action_log_count": 0,
+          "verifier_outcome_count": 0,
+          "updated_at": 1773058149.886464,
+          "last_instruction": "ekrana bak",
+          "last_mode": "inspect",
+          "last_status": "success"
+        }
+      },
+      "ui_state": {
+        "frontmost_app": "Safari",
+        "active_window": {
+          "title": "Upload Dialog",
+          "bounds": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 800
+          }
+        },
+        "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_before_1773058149888.png",
+        "elements": [
+          {
+            "label": "Safari",
+            "role": "frontmost_app",
+            "source": "window_metadata",
+            "confidence": 0.99
+          },
+          {
+            "label": "Upload Dialog",
+            "role": "window_title",
+            "source": "window_metadata",
+            "confidence": 0.95
+          },
+          {
+            "label": "Open",
+            "role": "button",
+            "x": 320,
+            "y": 92,
+            "width": 80,
+            "height": 28,
+            "frontmost_app": "Safari",
+            "window_title": "Upload Dialog",
+            "source": "accessibility",
+            "confidence": 0.92
+          }
+        ],
+        "clickable_targets": [
+          {
+            "label": "Open",
+            "role": "button",
+            "x": 320,
+            "y": 92,
+            "width": 80,
+            "height": 28,
+            "frontmost_app": "Safari",
+            "window_title": "Upload Dialog",
+            "source": "accessibility",
+            "confidence": 0.92
+          }
+        ],
+        "text_fields": [],
+        "summary": "Frontmost app: Safari. Window: Upload Dialog. Native dialog acik. Open gorunuyor. OCR: Open",
+        "fallback_order": [
+          "accessibility_and_window_metadata",
+          "vision_detection",
+          "ocr",
+          "last_known_ui_target_cache"
+        ],
+        "source_counts": {
+          "window_metadata": 2,
+          "accessibility": 1
+        },
+        "confidence": 0.953
+      },
+      "screenshots": [
+        "/Users/emrekoca/.elyan/screen_operator/1773058149888/before.png",
+        "/Users/emrekoca/.elyan/screen_operator/1773058149888/after.png"
+      ],
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058149888/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058149888/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058149888/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058149888/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058149888/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058149888/target_decisions.json",
+          "type": "json"
+        }
+      ],
+      "action_logs": [
+        {
+          "step": 1,
+          "planned_action": {
+            "kind": "open_app",
+            "params": {
+              "app_name": "Safari"
+            }
+          },
+          "execution_result": {
+            "success": true,
+            "status": "success",
+            "message": "Safari opened."
+          }
+        }
+      ],
+      "verifier_outcomes": [],
+      "task_state": {
+        "current_step": 0,
+        "attempts": 0,
+        "ui_state": {
+          "frontmost_app": "Safari",
+          "active_window": {
+            "title": "Upload Dialog",
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 1280,
+              "height": 800
+            }
+          },
+          "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_before_1773058149888.png",
+          "elements": [
+            {
+              "label": "Safari",
+              "role": "frontmost_app",
+              "source": "window_metadata",
+              "confidence": 0.99
+            },
+            {
+              "label": "Upload Dialog",
+              "role": "window_title",
+              "source": "window_metadata",
+              "confidence": 0.95
+            },
+            {
+              "label": "Open",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Upload Dialog",
+              "source": "accessibility",
+              "confidence": 0.92
+            }
+          ],
+          "clickable_targets": [
+            {
+              "label": "Open",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Upload Dialog",
+              "source": "accessibility",
+              "confidence": 0.92
+            }
+          ],
+          "text_fields": [],
+          "summary": "Frontmost app: Safari. Window: Upload Dialog. Native dialog acik. Open gorunuyor. OCR: Open",
+          "fallback_order": [
+            "accessibility_and_window_metadata",
+            "vision_detection",
+            "ocr",
+            "last_known_ui_target_cache"
+          ],
+          "source_counts": {
+            "window_metadata": 2,
+            "accessibility": 1
+          },
+          "confidence": 0.953
+        },
+        "last_ui_state": {
+          "frontmost_app": "Safari",
+          "active_window": {
+            "title": "Upload Dialog",
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 1280,
+              "height": 800
+            }
+          },
+          "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_before_1773058149888.png",
+          "elements": [
+            {
+              "label": "Safari",
+              "role": "frontmost_app",
+              "source": "window_metadata",
+              "confidence": 0.99
+            },
+            {
+              "label": "Upload Dialog",
+              "role": "window_title",
+              "source": "window_metadata",
+              "confidence": 0.95
+            },
+            {
+              "label": "Open",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Upload Dialog",
+              "source": "accessibility",
+              "confidence": 0.92
+            }
+          ],
+          "clickable_targets": [
+            {
+              "label": "Open",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Upload Dialog",
+              "source": "accessibility",
+              "confidence": 0.92
+            }
+          ],
+          "text_fields": [],
+          "summary": "Frontmost app: Safari. Window: Upload Dialog. Native dialog acik. Open gorunuyor. OCR: Open",
+          "fallback_order": [
+            "accessibility_and_window_metadata",
+            "vision_detection",
+            "ocr",
+            "last_known_ui_target_cache"
+          ],
+          "source_counts": {
+            "window_metadata": 2,
+            "accessibility": 1
+          },
+          "confidence": 0.953
+        },
+        "last_target_cache": {
+          "open@@safari@@upload dialog": {
+            "label": "Open",
+            "role": "button",
+            "x": 320,
+            "y": 92,
+            "width": 80,
+            "height": 28,
+            "frontmost_app": "Safari",
+            "window_title": "Upload Dialog",
+            "source": "cache",
+            "confidence": 0.92,
+            "_cache_meta": {
+              "seen_count": 1,
+              "last_seen_at": 1773058149.888405,
+              "last_action_kind": "",
+              "frontmost_app": "Safari",
+              "window_title": "Upload Dialog",
+              "last_verified_success": false,
+              "verified_success_count": 0,
+              "last_verified_success_at": 0.0
+            }
+          },
+          "open": {
+            "label": "Open",
+            "role": "button",
+            "x": 320,
+            "y": 92,
+            "width": 80,
+            "height": 28,
+            "frontmost_app": "Safari",
+            "window_title": "Upload Dialog",
+            "source": "cache",
+            "confidence": 0.92,
+            "_cache_meta": {
+              "seen_count": 1,
+              "last_seen_at": 1773058149.888405,
+              "last_action_kind": "",
+              "frontmost_app": "Safari",
+              "window_title": "Upload Dialog",
+              "last_verified_success": false,
+              "verified_success_count": 0,
+              "last_verified_success_at": 0.0
+            }
+          }
+        },
+        "verifier_outcomes": []
+      }
+    }
+  },
+  {
+    "step_index": 2,
+    "name": "open_upload_page",
+    "kind": "browser",
+    "status": "completed",
+    "attempts": 1,
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        },
+        {
+          "code": "url_contains",
+          "passed": true,
+          "details": {
+            "actual": "https://upload.local",
+            "expected": "upload.local"
+          }
+        },
+        {
+          "code": "title_contains",
+          "passed": true,
+          "details": {
+            "actual": "Upload",
+            "expected": "Upload"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for open_upload_page",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "",
+          "window_title": ""
+        },
+        {
+          "type": "browser_state",
+          "url": "https://upload.local",
+          "title": "Upload"
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 1
+      }
+    },
+    "message": "Upload",
+    "error": "",
+    "error_code": "",
+    "screenshots": [
+      "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/tasks14/task_1773058149884_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_02_01.png"
+    ],
+    "artifacts": [
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149893/dom_snapshot.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149893/dom_snapshot.html",
+        "type": "text"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149893/navigation.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149893/action_log.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149893/verification.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149893/page.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/tasks14/task_1773058149884_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_02_01.png",
+        "type": "image"
+      }
+    ],
+    "result": {
+      "success": true,
+      "status": "success",
+      "message": "Upload",
+      "summary": "Upload",
+      "url": "https://upload.local",
+      "title": "Upload",
+      "browser_state": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://upload.local",
+        "title": "Upload",
+        "visible_text": "Upload",
+        "dom_hash": "399a2124f5accf8200d73bbe21bb12785e3e5378084b92d6a2d3099f9d93fe6a",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true
+      },
+      "dom_snapshot": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://upload.local",
+        "title": "Upload",
+        "visible_text": "Upload",
+        "dom_hash": "399a2124f5accf8200d73bbe21bb12785e3e5378084b92d6a2d3099f9d93fe6a",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true,
+        "html": "<html><body><button id='upload'>Upload</button></body></html>"
+      },
+      "extracted_text": "",
+      "links": [],
+      "table": {},
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149893/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149893/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149893/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149893/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149893/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149893/page.png",
+          "type": "image"
+        }
+      ],
+      "screenshots": [
+        "/Users/emrekoca/.elyan/browser_runtime/1773058149893/page.png"
+      ],
+      "action_logs": [
+        {
+          "step": 1,
+          "action": "open",
+          "params": {
+            "url": "https://upload.local",
+            "selector": "",
+            "text": ""
+          },
+          "result": {
+            "success": true,
+            "url": "https://upload.local",
+            "title": "Upload",
+            "status_code": 200,
+            "dom_available": true
+          }
+        }
+      ],
+      "action_result": {
+        "success": true,
+        "url": "https://upload.local",
+        "title": "Upload",
+        "status_code": 200,
+        "dom_available": true
+      },
+      "verifier_outcomes": [
+        {
+          "ok": true,
+          "status": "success",
+          "checks": [
+            {
+              "code": "dom_available",
+              "passed": true
+            },
+            {
+              "code": "screenshot_present",
+              "passed": true,
+              "details": {
+                "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149893/page.png"
+              }
+            },
+            {
+              "code": "navigation_changed",
+              "passed": true,
+              "details": {
+                "before_url": "https://upload.local",
+                "after_url": "https://upload.local"
+              }
+            },
+            {
+              "code": "title_matches",
+              "passed": true,
+              "details": {
+                "title": "Upload"
+              }
+            },
+            {
+              "code": "url_matches",
+              "passed": true,
+              "details": {
+                "url": "https://upload.local"
+              }
+            }
+          ],
+          "failed": [],
+          "failed_codes": [],
+          "repairable": true,
+          "summary": "browser verification for open",
+          "evidence_refs": [
+            {
+              "type": "browser_state",
+              "before_url": "https://upload.local",
+              "after_url": "https://upload.local"
+            },
+            {
+              "type": "screenshot",
+              "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149893/page.png"
+            }
+          ],
+          "metrics": {
+            "dom_changed": 0,
+            "url_changed": 0,
+            "title_changed": 0
+          }
+        }
+      ],
+      "fallback": {
+        "used": false
+      },
+      "playwright_available": false,
+      "recovery_hints": {
+        "action": "open",
+        "selector": "",
+        "dom_available": true,
+        "current_url": "https://upload.local",
+        "current_title": "Upload",
+        "visible_text": "Upload",
+        "fallback_used": false,
+        "fallback_reason": "",
+        "expected_text": "",
+        "failed_codes": []
+      }
+    }
+  },
+  {
+    "step_index": 3,
+    "name": "confirm_upload_dialog",
+    "kind": "browser",
+    "status": "completed",
+    "attempts": 1,
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        },
+        {
+          "code": "window_title_contains",
+          "passed": true,
+          "details": {
+            "actual": "Review Upload",
+            "expected": "Upload"
+          }
+        },
+        {
+          "code": "fallback_used_matches",
+          "passed": true,
+          "details": {
+            "actual": true,
+            "expected": true
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for confirm_upload_dialog",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "Safari",
+          "window_title": "Review Upload"
+        },
+        {
+          "type": "browser_state",
+          "url": "https://upload.local/review",
+          "title": "Review Upload"
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 1
+      }
+    },
+    "message": "Frontmost app: Safari. Window: Review Upload. Review upload ekrani acildi. OCR: Save",
+    "error": "",
+    "error_code": "",
+    "screenshots": [
+      "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/tasks14/task_1773058149884_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_03_01.png",
+      "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/tasks14/task_1773058149884_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_03_02.png"
+    ],
+    "artifacts": [
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773058149899/before.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773058149899/after.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773058149899/ui_state.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773058149899/screen_summary.md",
+        "type": "text"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773058149899/action_log.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773058149899/target_decisions.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/tasks14/task_1773058149884_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_03_01.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/tasks14/task_1773058149884_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_03_02.png",
+        "type": "image"
+      }
+    ],
+    "result": {
+      "success": true,
+      "status": "success",
+      "goal_achieved": true,
+      "message": "Frontmost app: Safari. Window: Review Upload. Review upload ekrani acildi. OCR: Save",
+      "summary": "Frontmost app: Safari. Window: Review Upload. Review upload ekrani acildi. OCR: Save",
+      "browser_state": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://upload.local/review",
+        "title": "Review Upload",
+        "visible_text": "Save",
+        "dom_hash": "d0f8785cc9ae64285f5aad605d8531874088f6770ed5a41c0fa0bfd892652fd0",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true
+      },
+      "fallback": {
+        "used": true,
+        "reason": "NATIVE_DIALOG_REQUIRED",
+        "mode": "screen_operator"
+      },
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058149899/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058149899/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058149899/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058149899/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058149899/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058149899/target_decisions.json",
+          "type": "json"
+        }
+      ],
+      "screenshots": [
+        "/Users/emrekoca/.elyan/screen_operator/1773058149899/before.png",
+        "/Users/emrekoca/.elyan/screen_operator/1773058149899/after.png"
+      ],
+      "action_logs": [
+        {
+          "step": 1,
+          "attempt": 1,
+          "planned_action": {
+            "kind": "click",
+            "target": {
+              "label": "Open",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Upload Dialog",
+              "source": "accessibility",
+              "confidence": 0.92
+            },
+            "alternates": [],
+            "attempts": 1,
+            "decision_trace": {
+              "query": "",
+              "action_kind": "click",
+              "preferred_roles": [
+                "button",
+                "checkbox",
+                "link",
+                "menu_item",
+                "radio",
+                "tab"
+              ],
+              "role_hints": [
+                "button"
+              ],
+              "require_coords": true,
+              "current_context": {
+                "frontmost_app": "Safari",
+                "active_window": "Upload Dialog"
+              },
+              "chosen": {
+                "label": "Open",
+                "role": "button",
+                "source": "accessibility",
+                "score": 220.0,
+                "has_coords": true,
+                "frontmost_app": "safari",
+                "window_title": "upload dialog",
+                "reasons": [
+                  {
+                    "code": "confidence",
+                    "points": 92.0,
+                    "details": {
+                      "confidence": 0.92
+                    }
+                  },
+                  {
+                    "code": "source_priority",
+                    "points": 18.0,
+                    "details": {
+                      "source": "accessibility"
+                    }
+                  },
+                  {
+                    "code": "bounded_target",
+                    "points": 18.0,
+                    "details": {}
+                  },
+                  {
+                    "code": "role_hint_match",
+                    "points": 46.0,
+                    "details": {
+                      "role": "button"
+                    }
+                  },
+                  {
+                    "code": "button_like_role",
+                    "points": 12.0,
+                    "details": {
+                      "role": "button"
+                    }
+                  },
+                  {
+                    "code": "frontmost_app_context",
+                    "points": 16.0,
+                    "details": {
+                      "item_app": "safari",
+                      "current_app": "safari"
+                    }
+                  },
+                  {
+                    "code": "active_window_context",
+                    "points": 18.0,
+                    "details": {
+                      "item_window": "upload dialog",
+                      "current_window": "upload dialog"
+                    }
+                  }
+                ]
+              },
+              "candidates": [
+                {
+                  "label": "Open",
+                  "role": "button",
+                  "source": "accessibility",
+                  "score": 220.0,
+                  "has_coords": true,
+                  "frontmost_app": "safari",
+                  "window_title": "upload dialog",
+                  "reasons": [
+                    {
+                      "code": "confidence",
+                      "points": 92.0,
+                      "details": {
+                        "confidence": 0.92
+                      }
+                    },
+                    {
+                      "code": "source_priority",
+                      "points": 18.0,
+                      "details": {
+                        "source": "accessibility"
+                      }
+                    },
+                    {
+                      "code": "bounded_target",
+                      "points": 18.0,
+                      "details": {}
+                    },
+                    {
+                      "code": "role_hint_match",
+                      "points": 46.0,
+                      "details": {
+                        "role": "button"
+                      }
+                    },
+                    {
+                      "code": "button_like_role",
+                      "points": 12.0,
+                      "details": {
+                        "role": "button"
+                      }
+                    },
+                    {
+                      "code": "frontmost_app_context",
+                      "points": 16.0,
+                      "details": {
+                        "item_app": "safari",
+                        "current_app": "safari"
+                      }
+                    },
+                    {
+                      "code": "active_window_context",
+                      "points": 18.0,
+                      "details": {
+                        "item_window": "upload dialog",
+                        "current_window": "upload dialog"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "rejected": []
+            },
+            "x": 360,
+            "y": 106
+          },
+          "execution_result": {
+            "success": true,
+            "x": 360,
+            "y": 106,
+            "action": "click"
+          },
+          "verification": {
+            "ok": true,
+            "status": "success",
+            "checks": [
+              {
+                "code": "after_screenshot_present",
+                "passed": true,
+                "details": {
+                  "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_after_1_1_1773058149899.png"
+                }
+              },
+              {
+                "code": "ui_state_present",
+                "passed": true,
+                "details": {
+                  "element_count": 4
+                }
+              },
+              {
+                "code": "visual_change_observed",
+                "passed": true,
+                "details": {
+                  "visual_change": true,
+                  "window_changed": true,
+                  "app_changed": false,
+                  "target_visible_after": true
+                }
+              }
+            ],
+            "failed": [],
+            "failed_codes": [],
+            "repairable": true,
+            "summary": "screen action verification for click",
+            "evidence_refs": [
+              {
+                "type": "screenshot",
+                "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_before_1773058149898.png"
+              },
+              {
+                "type": "screenshot",
+                "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_after_1_1_1773058149899.png"
+              }
+            ],
+            "metrics": {
+              "visual_change": 1,
+              "window_changed": 1,
+              "app_changed": 0
+            },
+            "target_visible_after": true
+          },
+          "after_summary": "Frontmost app: Safari. Window: Review Upload. Review upload ekrani acildi. OCR: Save"
+        }
+      ],
+      "verifier_outcomes": [
+        {
+          "ok": true,
+          "status": "success",
+          "checks": [
+            {
+              "code": "after_screenshot_present",
+              "passed": true,
+              "details": {
+                "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_after_1_1_1773058149899.png"
+              }
+            },
+            {
+              "code": "ui_state_present",
+              "passed": true,
+              "details": {
+                "element_count": 4
+              }
+            },
+            {
+              "code": "visual_change_observed",
+              "passed": true,
+              "details": {
+                "visual_change": true,
+                "window_changed": true,
+                "app_changed": false,
+                "target_visible_after": true
+              }
+            }
+          ],
+          "failed": [],
+          "failed_codes": [],
+          "repairable": true,
+          "summary": "screen action verification for click",
+          "evidence_refs": [
+            {
+              "type": "screenshot",
+              "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_before_1773058149898.png"
+            },
+            {
+              "type": "screenshot",
+              "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_after_1_1_1773058149899.png"
+            }
+          ],
+          "metrics": {
+            "visual_change": 1,
+            "window_changed": 1,
+            "app_changed": 0
+          },
+          "target_visible_after": true
+        }
+      ],
+      "task_state": {
+        "current_step": 2,
+        "attempts": 1,
+        "ui_state": {
+          "frontmost_app": "Safari",
+          "active_window": {
+            "title": "Review Upload",
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 1280,
+              "height": 800
+            }
+          },
+          "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_after_1_1_1773058149899.png",
+          "elements": [
+            {
+              "label": "Safari",
+              "role": "frontmost_app",
+              "source": "window_metadata",
+              "confidence": 0.99
+            },
+            {
+              "label": "Review Upload",
+              "role": "window_title",
+              "source": "window_metadata",
+              "confidence": 0.95
+            },
+            {
+              "label": "Open",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Upload Dialog",
+              "source": "cache",
+              "confidence": 0.92,
+              "_cache_meta": {
+                "seen_count": 2,
+                "last_seen_at": 1773058149.899053,
+                "last_action_kind": "",
+                "frontmost_app": "Safari",
+                "window_title": "Upload Dialog",
+                "last_verified_success": false,
+                "verified_success_count": 0,
+                "last_verified_success_at": 0.0
+              }
+            },
+            {
+              "label": "Upload Dialog",
+              "role": "window_title",
+              "source": "prior_ui_state",
+              "confidence": 0.95,
+              "frontmost_app": "Safari",
+              "window_title": "Review Upload"
+            }
+          ],
+          "clickable_targets": [
+            {
+              "label": "Open",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Upload Dialog",
+              "source": "cache",
+              "confidence": 0.92,
+              "_cache_meta": {
+                "seen_count": 2,
+                "last_seen_at": 1773058149.899053,
+                "last_action_kind": "",
+                "frontmost_app": "Safari",
+                "window_title": "Upload Dialog",
+                "last_verified_success": false,
+                "verified_success_count": 0,
+                "last_verified_success_at": 0.0
+              }
+            }
+          ],
+          "text_fields": [],
+          "summary": "Frontmost app: Safari. Window: Review Upload. Review upload ekrani acildi. OCR: Save",
+          "fallback_order": [
+            "accessibility_and_window_metadata",
+            "vision_detection",
+            "ocr",
+            "last_known_ui_target_cache"
+          ],
+          "source_counts": {
+            "window_metadata": 2,
+            "cache": 1,
+            "prior_ui_state": 1
+          },
+          "confidence": 0.952
+        },
+        "last_ui_state": {
+          "frontmost_app": "Safari",
+          "active_window": {
+            "title": "Review Upload",
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 1280,
+              "height": 800
+            }
+          },
+          "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_after_1_1_1773058149899.png",
+          "elements": [
+            {
+              "label": "Safari",
+              "role": "frontmost_app",
+              "source": "window_metadata",
+              "confidence": 0.99
+            },
+            {
+              "label": "Review Upload",
+              "role": "window_title",
+              "source": "window_metadata",
+              "confidence": 0.95
+            },
+            {
+              "label": "Open",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Upload Dialog",
+              "source": "cache",
+              "confidence": 0.92,
+              "_cache_meta": {
+                "seen_count": 2,
+                "last_seen_at": 1773058149.899053,
+                "last_action_kind": "",
+                "frontmost_app": "Safari",
+                "window_title": "Upload Dialog",
+                "last_verified_success": false,
+                "verified_success_count": 0,
+                "last_verified_success_at": 0.0
+              }
+            },
+            {
+              "label": "Upload Dialog",
+              "role": "window_title",
+              "source": "prior_ui_state",
+              "confidence": 0.95,
+              "frontmost_app": "Safari",
+              "window_title": "Review Upload"
+            }
+          ],
+          "clickable_targets": [
+            {
+              "label": "Open",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Upload Dialog",
+              "source": "cache",
+              "confidence": 0.92,
+              "_cache_meta": {
+                "seen_count": 2,
+                "last_seen_at": 1773058149.899053,
+                "last_action_kind": "",
+                "frontmost_app": "Safari",
+                "window_title": "Upload Dialog",
+                "last_verified_success": false,
+                "verified_success_count": 0,
+                "last_verified_success_at": 0.0
+              }
+            }
+          ],
+          "text_fields": [],
+          "summary": "Frontmost app: Safari. Window: Review Upload. Review upload ekrani acildi. OCR: Save",
+          "fallback_order": [
+            "accessibility_and_window_metadata",
+            "vision_detection",
+            "ocr",
+            "last_known_ui_target_cache"
+          ],
+          "source_counts": {
+            "window_metadata": 2,
+            "cache": 1,
+            "prior_ui_state": 1
+          },
+          "confidence": 0.952
+        },
+        "last_target_cache": {
+          "open@@safari@@upload dialog": {
+            "label": "Open",
+            "role": "button",
+            "x": 320,
+            "y": 92,
+            "width": 80,
+            "height": 28,
+            "frontmost_app": "Safari",
+            "window_title": "Upload Dialog",
+            "source": "cache",
+            "confidence": 0.92,
+            "_cache_meta": {
+              "seen_count": 2,
+              "last_seen_at": 1773058149.8994088,
+              "last_action_kind": "click",
+              "frontmost_app": "Safari",
+              "window_title": "Upload Dialog",
+              "last_verified_success": true,
+              "verified_success_count": 1,
+              "last_verified_success_at": 1773058149.8994088
+            }
+          },
+          "open": {
+            "label": "Open",
+            "role": "button",
+            "x": 320,
+            "y": 92,
+            "width": 80,
+            "height": 28,
+            "frontmost_app": "Safari",
+            "window_title": "Upload Dialog",
+            "source": "cache",
+            "confidence": 0.92,
+            "_cache_meta": {
+              "seen_count": 2,
+              "last_seen_at": 1773058149.8994088,
+              "last_action_kind": "click",
+              "frontmost_app": "Safari",
+              "window_title": "Upload Dialog",
+              "last_verified_success": true,
+              "verified_success_count": 1,
+              "last_verified_success_at": 1773058149.8994088
+            }
+          }
+        },
+        "verifier_outcomes": [
+          {
+            "ok": true,
+            "status": "success",
+            "checks": [
+              {
+                "code": "after_screenshot_present",
+                "passed": true,
+                "details": {
+                  "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_after_1_1_1773058149899.png"
+                }
+              },
+              {
+                "code": "ui_state_present",
+                "passed": true,
+                "details": {
+                  "element_count": 4
+                }
+              },
+              {
+                "code": "visual_change_observed",
+                "passed": true,
+                "details": {
+                  "visual_change": true,
+                  "window_changed": true,
+                  "app_changed": false,
+                  "target_visible_after": true
+                }
+              }
+            ],
+            "failed": [],
+            "failed_codes": [],
+            "repairable": true,
+            "summary": "screen action verification for click",
+            "evidence_refs": [
+              {
+                "type": "screenshot",
+                "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_before_1773058149898.png"
+              },
+              {
+                "type": "screenshot",
+                "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_after_1_1_1773058149899.png"
+              }
+            ],
+            "metrics": {
+              "visual_change": 1,
+              "window_changed": 1,
+              "app_changed": 0
+            },
+            "target_visible_after": true
+          }
+        ]
+      },
+      "ui_state": {
+        "frontmost_app": "Safari",
+        "active_window": {
+          "title": "Review Upload",
+          "bounds": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 800
+          }
+        },
+        "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen14/screen_after_1_1_1773058149899.png",
+        "elements": [
+          {
+            "label": "Safari",
+            "role": "frontmost_app",
+            "source": "window_metadata",
+            "confidence": 0.99
+          },
+          {
+            "label": "Review Upload",
+            "role": "window_title",
+            "source": "window_metadata",
+            "confidence": 0.95
+          },
+          {
+            "label": "Open",
+            "role": "button",
+            "x": 320,
+            "y": 92,
+            "width": 80,
+            "height": 28,
+            "frontmost_app": "Safari",
+            "window_title": "Upload Dialog",
+            "source": "cache",
+            "confidence": 0.92,
+            "_cache_meta": {
+              "seen_count": 2,
+              "last_seen_at": 1773058149.899053,
+              "last_action_kind": "",
+              "frontmost_app": "Safari",
+              "window_title": "Upload Dialog",
+              "last_verified_success": false,
+              "verified_success_count": 0,
+              "last_verified_success_at": 0.0
+            }
+          },
+          {
+            "label": "Upload Dialog",
+            "role": "window_title",
+            "source": "prior_ui_state",
+            "confidence": 0.95,
+            "frontmost_app": "Safari",
+            "window_title": "Review Upload"
+          }
+        ],
+        "clickable_targets": [
+          {
+            "label": "Open",
+            "role": "button",
+            "x": 320,
+            "y": 92,
+            "width": 80,
+            "height": 28,
+            "frontmost_app": "Safari",
+            "window_title": "Upload Dialog",
+            "source": "cache",
+            "confidence": 0.92,
+            "_cache_meta": {
+              "seen_count": 2,
+              "last_seen_at": 1773058149.899053,
+              "last_action_kind": "",
+              "frontmost_app": "Safari",
+              "window_title": "Upload Dialog",
+              "last_verified_success": false,
+              "verified_success_count": 0,
+              "last_verified_success_at": 0.0
+            }
+          }
+        ],
+        "text_fields": [],
+        "summary": "Frontmost app: Safari. Window: Review Upload. Review upload ekrani acildi. OCR: Save",
+        "fallback_order": [
+          "accessibility_and_window_metadata",
+          "vision_detection",
+          "ocr",
+          "last_known_ui_target_cache"
+        ],
+        "source_counts": {
+          "window_metadata": 2,
+          "cache": 1,
+          "prior_ui_state": 1
+        },
+        "confidence": 0.952
+      },
+      "recovery_hints": {
+        "action": "click",
+        "selector": "#upload",
+        "dom_available": true,
+        "current_url": "https://upload.local/review",
+        "current_title": "Review Upload",
+        "visible_text": "Save",
+        "fallback_used": true,
+        "fallback_reason": "NATIVE_DIALOG_REQUIRED",
+        "expected_text": "",
+        "failed_codes": []
+      }
+    }
+  },
+  {
+    "step_index": 4,
+    "name": "click_save",
+    "kind": "browser",
+    "status": "completed",
+    "attempts": 1,
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for click_save",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "",
+          "window_title": ""
+        },
+        {
+          "type": "browser_state",
+          "url": "https://upload.local/complete",
+          "title": "Upload Complete"
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 1
+      }
+    },
+    "message": "Upload Complete",
+    "error": "",
+    "error_code": "",
+    "screenshots": [
+      "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/tasks14/task_1773058149884_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_04_01.png"
+    ],
+    "artifacts": [
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149911/dom_snapshot.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149911/dom_snapshot.html",
+        "type": "text"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149911/navigation.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149911/action_log.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149911/verification.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149911/page.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/tasks14/task_1773058149884_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_04_01.png",
+        "type": "image"
+      }
+    ],
+    "result": {
+      "success": true,
+      "status": "success",
+      "message": "Upload Complete",
+      "summary": "Upload Complete",
+      "url": "https://upload.local/complete",
+      "title": "Upload Complete",
+      "browser_state": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://upload.local/complete",
+        "title": "Upload Complete",
+        "visible_text": "Upload Complete",
+        "dom_hash": "cf1bb538b7ec5cd353a86253409b043dc9606f7883ab2c92522640acae0b34b5",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true
+      },
+      "dom_snapshot": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://upload.local/complete",
+        "title": "Upload Complete",
+        "visible_text": "Upload Complete",
+        "dom_hash": "cf1bb538b7ec5cd353a86253409b043dc9606f7883ab2c92522640acae0b34b5",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true,
+        "html": "<html><body>Upload Complete</body></html>"
+      },
+      "extracted_text": "",
+      "links": [],
+      "table": {},
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149911/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149911/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149911/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149911/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149911/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149911/page.png",
+          "type": "image"
+        }
+      ],
+      "screenshots": [
+        "/Users/emrekoca/.elyan/browser_runtime/1773058149911/page.png"
+      ],
+      "action_logs": [
+        {
+          "step": 1,
+          "action": "click",
+          "params": {
+            "url": "",
+            "selector": "#save",
+            "text": ""
+          },
+          "result": {
+            "success": true,
+            "selector": "#save",
+            "dom_available": true
+          }
+        }
+      ],
+      "action_result": {
+        "success": true,
+        "selector": "#save",
+        "dom_available": true
+      },
+      "verifier_outcomes": [
+        {
+          "ok": true,
+          "status": "success",
+          "checks": [
+            {
+              "code": "dom_available",
+              "passed": true
+            },
+            {
+              "code": "screenshot_present",
+              "passed": true,
+              "details": {
+                "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149911/page.png"
+              }
+            },
+            {
+              "code": "dom_or_navigation_changed",
+              "passed": true,
+              "details": {
+                "before_hash": "d0f8785cc9ae64285f5aad605d8531874088f6770ed5a41c0fa0bfd892652fd0",
+                "after_hash": "cf1bb538b7ec5cd353a86253409b043dc9606f7883ab2c92522640acae0b34b5"
+              }
+            }
+          ],
+          "failed": [],
+          "failed_codes": [],
+          "repairable": true,
+          "summary": "browser verification for click",
+          "evidence_refs": [
+            {
+              "type": "browser_state",
+              "before_url": "https://upload.local/review",
+              "after_url": "https://upload.local/complete"
+            },
+            {
+              "type": "screenshot",
+              "path": "/Users/emrekoca/.elyan/browser_runtime/1773058149911/page.png"
+            }
+          ],
+          "metrics": {
+            "dom_changed": 1,
+            "url_changed": 1,
+            "title_changed": 1
+          }
+        }
+      ],
+      "fallback": {
+        "used": false
+      },
+      "playwright_available": false,
+      "recovery_hints": {
+        "action": "click",
+        "selector": "#save",
+        "dom_available": true,
+        "current_url": "https://upload.local/complete",
+        "current_title": "Upload Complete",
+        "visible_text": "Upload Complete",
+        "fallback_used": false,
+        "fallback_reason": "",
+        "expected_text": "",
+        "failed_codes": []
+      }
+    }
+  }
+]

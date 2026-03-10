@@ -1,0 +1,22 @@
+[
+  {
+    "step_index": 4,
+    "rationale": "skip_already_satisfied_steps",
+    "trace": {
+      "trigger": "success",
+      "step_index": 3,
+      "failed_codes": [],
+      "current_step_name": "confirm_upload_dialog",
+      "actions": [
+        {
+          "kind": "skip_already_satisfied_steps",
+          "skipped": [
+            "verify_upload_completion"
+          ]
+        }
+      ]
+    },
+    "new_step_names": [],
+    "timestamp": 1773058149.7941241
+  }
+]

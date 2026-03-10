@@ -1,0 +1,62 @@
+[
+  {
+    "step_index": 1,
+    "name": "research_document_delivery",
+    "kind": "system",
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        },
+        {
+          "code": "artifact_count_min",
+          "passed": true,
+          "details": {
+            "actual": 2,
+            "expected": 2
+          }
+        },
+        {
+          "code": "artifacts_exist",
+          "passed": true,
+          "details": {
+            "artifact_count": 2
+          }
+        },
+        {
+          "code": "artifacts_non_empty",
+          "passed": true,
+          "details": {
+            "artifact_count": 2
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for research_document_delivery",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "",
+          "window_title": ""
+        },
+        {
+          "type": "browser_state",
+          "url": "",
+          "title": ""
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 0
+      }
+    }
+  }
+]

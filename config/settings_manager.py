@@ -4,9 +4,39 @@ import logging
 import platform
 from pathlib import Path
 from typing import Any
+from config.elyan_config import elyan_config
+from core.model_catalog import default_model_for_provider
 from security.keychain import keychain
 
 logger = logging.getLogger("config.settings_manager")
+
+_SETTINGS_PROVIDER_ALIASES = {
+    "api": "gemini",
+    "google": "gemini",
+    "local": "ollama",
+}
+_RUNTIME_PROVIDER_ALIASES = {
+    "api": "google",
+    "gemini": "google",
+    "local": "ollama",
+}
+_SETTINGS_PROVIDER_ORDER = ["groq", "gemini", "openai", "anthropic", "ollama"]
+_API_ENV_KEYS = {
+    "google": "GOOGLE_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+}
+
+
+def _normalize_settings_provider(provider: Any) -> str:
+    raw = str(provider or "").strip().lower()
+    return _SETTINGS_PROVIDER_ALIASES.get(raw, raw)
+
+
+def _normalize_runtime_provider(provider: Any) -> str:
+    raw = str(provider or "").strip().lower()
+    return _RUNTIME_PROVIDER_ALIASES.get(raw, raw)
 
 # Default settings
 DEFAULT_SETTINGS = {
@@ -21,7 +51,7 @@ DEFAULT_SETTINGS = {
     "llm_temperature": 0.7,
     "llm_max_tokens": 2048,
     "llm_fallback_mode": "aggressive",
-    "llm_fallback_order": ["groq", "gemini", "openai", "ollama"],
+    "llm_fallback_order": _SETTINGS_PROVIDER_ORDER.copy(),
     "llm_sticky_selection": True,
     "assistant_style": "professional_friendly_short",
     "full_disk_access": True,
@@ -144,12 +174,10 @@ class SettingsPanel:
 
                 normalized = []
                 for provider in fallback_order:
-                    p = str(provider).strip().lower()
-                    if p == "api":
-                        p = "gemini"
-                    if p in {"groq", "gemini", "openai", "ollama"} and p not in normalized:
+                    p = _normalize_settings_provider(provider)
+                    if p in _SETTINGS_PROVIDER_ORDER and p not in normalized:
                         normalized.append(p)
-                for provider in ["groq", "gemini", "openai", "ollama"]:
+                for provider in _SETTINGS_PROVIDER_ORDER:
                     if provider not in normalized:
                         normalized.append(provider)
                 self._settings["llm_fallback_order"] = normalized
@@ -225,6 +253,7 @@ class SettingsPanel:
                     self._settings["photo_save_dir"] = DEFAULT_SETTINGS["photo_save_dir"]
                 if not str(self._settings.get("document_save_dir", "")).strip():
                     self._settings["document_save_dir"] = DEFAULT_SETTINGS["document_save_dir"]
+                self._overlay_runtime_llm_settings()
                 
                 logger.info(f"Settings loaded from {self.config_path}")
             else:
@@ -234,7 +263,8 @@ class SettingsPanel:
                 env_token = os.getenv("TELEGRAM_BOT_TOKEN")
                 if env_token and env_token != "test_token":
                     self._settings["telegram_token"] = env_token
-                
+
+                self._overlay_runtime_llm_settings()
                 self._save()
                 logger.info("Created default settings")
         except Exception as e:
@@ -246,12 +276,148 @@ class SettingsPanel:
         try:
             with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(self._settings, f, indent=2, ensure_ascii=False)
-            
+
+            self._sync_to_runtime_config()
             # Sync to .env for core logic (LLMClient, etc)
             self._sync_to_env()
             logger.info("Settings saved and synced to .env")
         except Exception as e:
             logger.error(f"Error saving settings: {e}")
+
+    def _provider_config_from_runtime(self, provider: str) -> dict[str, Any]:
+        runtime_provider = _normalize_runtime_provider(provider)
+        cfg = elyan_config.get(f"models.providers.{runtime_provider}", {}) or {}
+        if runtime_provider == "google" and not cfg:
+            cfg = elyan_config.get("models.providers.gemini", {}) or {}
+        return dict(cfg)
+
+    def _overlay_runtime_llm_settings(self):
+        """Mirror active runtime model selection from elyan.json into legacy settings."""
+        try:
+            default_cfg = elyan_config.get("models.default", {}) or {}
+            fallback_cfg = elyan_config.get("models.fallback", {}) or {}
+            local_cfg = elyan_config.get("models.local", {}) or {}
+
+            provider = _normalize_settings_provider(
+                default_cfg.get("provider") or self._settings.get("llm_provider", "groq")
+            )
+            if provider in _SETTINGS_PROVIDER_ORDER:
+                self._settings["llm_provider"] = provider
+
+            model = str(default_cfg.get("model") or "").strip()
+            if model:
+                self._settings["llm_model"] = model
+
+            host = str(local_cfg.get("baseUrl") or local_cfg.get("endpoint") or "").strip()
+            if host:
+                self._settings["ollama_host"] = host
+
+            provider_cfg = self._provider_config_from_runtime(provider)
+            api_key = str(provider_cfg.get("apiKey") or "").strip()
+            if provider != "ollama" and api_key and not api_key.startswith("$"):
+                self._settings["api_key"] = api_key
+
+            fallback_order: list[str] = []
+            for item in [provider, fallback_cfg.get("provider")]:
+                normalized = _normalize_settings_provider(item)
+                if normalized in _SETTINGS_PROVIDER_ORDER and normalized not in fallback_order:
+                    fallback_order.append(normalized)
+            for item in DEFAULT_SETTINGS["llm_fallback_order"]:
+                if item not in fallback_order:
+                    fallback_order.append(item)
+            self._settings["llm_fallback_order"] = fallback_order
+        except Exception as exc:
+            logger.debug(f"Runtime config overlay skipped: {exc}")
+
+    def _sync_to_runtime_config(self):
+        """Keep elyan.json aligned with the desktop settings panel."""
+        try:
+            provider = _normalize_settings_provider(self._settings.get("llm_provider", "groq"))
+            runtime_provider = _normalize_runtime_provider(provider)
+            model = str(self._settings.get("llm_model", "") or "").strip() or default_model_for_provider(runtime_provider)
+            host = str(
+                self._settings.get("ollama_host", "http://localhost:11434")
+                or "http://localhost:11434"
+            ).strip()
+            api_key = str(self._settings.get("api_key", "") or "").strip()
+
+            elyan_config.set("models.default", {"provider": runtime_provider, "model": model})
+
+            fallback_order = self._settings.get("llm_fallback_order", DEFAULT_SETTINGS["llm_fallback_order"])
+            normalized_order: list[str] = []
+            if isinstance(fallback_order, list):
+                for item in fallback_order:
+                    normalized = _normalize_settings_provider(item)
+                    if normalized in _SETTINGS_PROVIDER_ORDER and normalized not in normalized_order:
+                        normalized_order.append(normalized)
+            if provider not in normalized_order:
+                normalized_order.insert(0, provider)
+
+            fallback_provider = next((item for item in normalized_order if item != provider), "ollama")
+            runtime_fallback = _normalize_runtime_provider(fallback_provider)
+            existing_fallback = elyan_config.get("models.fallback", {}) or {}
+            fallback_provider_cfg = self._provider_config_from_runtime(fallback_provider)
+            fallback_model = (
+                model
+                if runtime_fallback == runtime_provider
+                else str(
+                    existing_fallback.get("model")
+                    or fallback_provider_cfg.get("model")
+                    or default_model_for_provider(runtime_fallback)
+                ).strip()
+            )
+            elyan_config.set("models.fallback", {"provider": runtime_fallback, "model": fallback_model})
+
+            elyan_config.set("models.local.provider", "ollama")
+            elyan_config.set("models.local.baseUrl", host)
+            if provider == "ollama":
+                elyan_config.set("models.local.model", model)
+            else:
+                elyan_config.set(f"models.providers.{runtime_provider}.model", model)
+                env_key = _API_ENV_KEYS.get(runtime_provider)
+                if env_key and api_key:
+                    elyan_config.set(f"models.providers.{runtime_provider}.apiKey", f"${env_key}")
+
+            current_registry = elyan_config.get("models.registry", []) or []
+            if not isinstance(current_registry, list):
+                current_registry = []
+            registry_id = f"desktop-primary:{runtime_provider}:{model}"
+            next_registry = []
+            matched = False
+            for item in current_registry:
+                if not isinstance(item, dict):
+                    continue
+                item_provider = _normalize_runtime_provider(item.get("provider") or item.get("type"))
+                item_model = str(item.get("model") or "").strip()
+                item_id = str(item.get("id") or "").strip()
+                if item_id.startswith("desktop-primary:") and item_id != registry_id:
+                    continue
+                if item_provider == runtime_provider and item_model == model:
+                    merged = dict(item)
+                    merged["enabled"] = True
+                    try:
+                        merged["priority"] = min(int(merged.get("priority", 12)), 12)
+                    except Exception:
+                        merged["priority"] = 12
+                    next_registry.append(merged)
+                    matched = True
+                    continue
+                next_registry.append(item)
+            if not matched:
+                next_registry.append(
+                    {
+                        "id": registry_id,
+                        "provider": runtime_provider,
+                        "model": model,
+                        "alias": "Desktop Primary",
+                        "enabled": True,
+                        "roles": ["inference", "reasoning", "planning", "code", "qa"],
+                        "priority": 12,
+                    }
+                )
+            elyan_config.set("models.registry", next_registry)
+        except Exception as exc:
+            logger.error(f"Error syncing settings to elyan.json: {exc}")
 
     def _sync_to_env(self):
         """Update .env file with current settings"""
@@ -263,7 +429,7 @@ class SettingsPanel:
                 lines = f.readlines()
 
             # Normalize provider name: "gemini" → "api" for .env compatibility
-            _provider = self._settings.get("llm_provider", "groq")
+            _provider = _normalize_settings_provider(self._settings.get("llm_provider", "groq"))
             _llm_type = "api" if _provider == "gemini" else _provider
 
             env_updates = {

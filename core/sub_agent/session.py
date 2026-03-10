@@ -22,6 +22,8 @@ class SubAgentTask:
     action: str = "chat"
     params: Dict[str, Any] = field(default_factory=dict)
     description: str = ""
+    objective: str = ""
+    success_criteria: List[str] = field(default_factory=list)
     task_id: str = field(default_factory=lambda: f"subtask_{uuid.uuid4().hex[:8]}")
     dependencies: List[str] = field(default_factory=list)
     domain: str = "general"
@@ -49,6 +51,9 @@ class SubAgentSession:
     result: Optional[SubAgentResult] = None
     pipeline_state: PipelineState = field(default_factory=PipelineState)
     allowed_tools: frozenset[str] = frozenset()
+    workspace_path: str = ""
+    memory_path: str = ""
+    auth_profile: str = "isolated"
     created_at: float = field(default_factory=time.time)
     completed_at: Optional[float] = None
     can_spawn: bool = False

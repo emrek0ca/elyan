@@ -8,11 +8,14 @@ import socket
 import platform
 import asyncio
 import os
+import subprocess
 from pathlib import Path
 from config.elyan_config import elyan_config
 from security.keychain import keychain
+from core.version import APP_VERSION
 
 GATEWAY_PORT = int(os.environ.get("ELYAN_PORT", 18789))
+VISION_MODEL_NAME = os.environ.get("ELYAN_VISION_MODEL", "llava:7b")
 
 
 def _channel_requirements(channel_type: str) -> list[str]:
@@ -54,7 +57,7 @@ def _check_port(port: int, host: str = "127.0.0.1") -> tuple[bool, str]:
 
 def run_doctor(fix=False):
     print("\n" + "="*55)
-    print("🩺  ELYAN SYSTEM DIAGNOSTICS (v18.0.0)")
+    print(f"🩺  ELYAN SYSTEM DIAGNOSTICS (v{APP_VERSION})")
     print("="*55 + "\n")
 
     issues = 0
@@ -123,7 +126,6 @@ def run_doctor(fix=False):
             print(f"  ❌  {dep:<15}: MISSING ({purpose})")
             issues += 1
             if fix:
-                import subprocess
                 subprocess.run([sys.executable, "-m", "pip", "install", dep], check=False, capture_output=True)
                 print(f"      → Fixed: pip install {dep}")
                 issues -= 1
@@ -140,6 +142,30 @@ def run_doctor(fix=False):
             print(f"  ✅  {t:<12}: FOUND ({purpose})")
         else:
             print(f"  ⚠️   {t:<12}: NOT FOUND (Optional — {purpose})")
+
+    print("\n👁️  Vision Check:")
+    if not shutil.which("ollama"):
+        print(f"  ⚠️   Vision model : Ollama missing (expected local model {VISION_MODEL_NAME})")
+        issues += 1
+    else:
+        try:
+            result = subprocess.run(
+                ["ollama", "list"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+            listing = f"{result.stdout}\n{result.stderr}"
+            if result.returncode == 0 and VISION_MODEL_NAME in listing:
+                print(f"  ✅  Vision model : {VISION_MODEL_NAME} installed")
+            else:
+                print(f"  ❌  Vision model : {VISION_MODEL_NAME} missing")
+                print(f"    → Run: elyan models ollama pull {VISION_MODEL_NAME}")
+                issues += 1
+        except Exception as e:
+            print(f"  ⚠️   Vision model : check failed ({e})")
+            issues += 1
 
     # 6.5 Secret storage health (BUG-SEC-005)
     print("\n🔐  Secret Storage Check:")

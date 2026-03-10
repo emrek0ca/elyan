@@ -1,0 +1,93 @@
+{
+  "run_id": "run_5f8d7dbeae10",
+  "written_at": 1773155195.7762308,
+  "status": "success",
+  "user_input": "Safari aç köpekler araştır masaüstüne kaydet",
+  "task_spec": {},
+  "task_state": {
+    "task_id": "task_404501440a",
+    "objective": "Safari aç köpekler araştır masaüstüne kaydet",
+    "context": {
+      "user_input": "Safari aç köpekler araştır masaüstüne kaydet",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "multi_task",
+      "job_type": "research_report",
+      "capability_domain": "screen_operator",
+      "workflow_id": "screen_operator_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "write_file",
+        "description": "Safari aç köpekler araştır masaüstüne kaydet"
+      }
+    ],
+    "artifacts": [],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773155195.619912,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773155195.6317818,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773155195.6372411,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773155195.761033,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1773155195.769372,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "multi_task",
+          "job_type": "research_report"
+        }
+      }
+    ],
+    "created_at": 1773155195.619911,
+    "updated_at": 1773155195.769372
+  },
+  "metadata": {
+    "action": "multi_task",
+    "job_type": "research_report",
+    "capability_domain": "screen_operator",
+    "workflow_id": "screen_operator_workflow",
+    "hybrid_model": {
+      "role": "inference",
+      "routing_role": "router",
+      "critic_role": "critic",
+      "tool_first": false,
+      "prefer_local": true,
+      "tier": "balanced"
+    },
+    "channel": "cli",
+    "user_id": "local",
+    "status": "success"
+  }
+}

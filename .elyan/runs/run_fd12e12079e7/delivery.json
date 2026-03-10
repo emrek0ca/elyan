@@ -1,0 +1,15 @@
+{
+  "run_id": "run_fd12e12079e7",
+  "written_at": 1773156372.371831,
+  "status": "partial",
+  "text_summary": "Klasör içeriği:\n- a.txt\n- b.txt",
+  "errors": [
+    "contract_decl:missing:required_outputs; contract_decl:missing:guardrails; contract_decl:missing:verify"
+  ],
+  "artifact_manifest": [],
+  "metadata": {
+    "manifest_path": "/Users/emrekoca/Desktop/bot/.elyan/proofs/run_fd12e12079e7/manifest.json",
+    "action": "list_files",
+    "job_type": "file_operations"
+  }
+}

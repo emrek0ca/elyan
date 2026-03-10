@@ -1,0 +1,37 @@
+{
+  "request": "https://wizard.local aç ve Continue butonuna tıkla sonra Next butonuna tıkla",
+  "planning_request": "https://wizard.local aç ve Continue butonuna tıkla sonra Next butonuna tıkla",
+  "matched_rules": [
+    "browser_navigation_flow",
+    "browser_click_steps"
+  ],
+  "assumptions": [],
+  "missing_inputs": [],
+  "extracted": {
+    "app_name": "",
+    "app_sequence": [],
+    "browser_app": "",
+    "url": "https://wizard.local",
+    "urls": [
+      "https://wizard.local"
+    ],
+    "typed_text": "",
+    "named_field_values": [],
+    "field_label": "",
+    "selector": "#continue",
+    "button_label": "Continue",
+    "button_sequence": [
+      {
+        "label": "Continue",
+        "selector": "#continue"
+      },
+      {
+        "label": "Next",
+        "selector": "#next"
+      }
+    ],
+    "research_topic": "https://wizard.local aç ve Continue butonuna tıkla sonra Next butonuna tıkla"
+  },
+  "bounded": true,
+  "safe_mode": "deterministic"
+}

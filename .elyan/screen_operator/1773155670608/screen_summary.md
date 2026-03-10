@@ -1,0 +1,1 @@
+Frontmost app: Cursor. Window: Cursor. Cursor acik. OCR: Cursor

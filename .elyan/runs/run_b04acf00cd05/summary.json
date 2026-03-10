@@ -1,0 +1,73 @@
+{
+  "run_id": "run_b04acf00cd05",
+  "written_at": 1773151743.604585,
+  "status": "success",
+  "user_input": "masaüstündeki dosyaları sil",
+  "task_spec": {},
+  "task_state": {
+    "task_id": "task_0987fccac5",
+    "objective": "masaüstündeki dosyaları sil",
+    "context": {
+      "user_input": "masaüstündeki dosyaları sil",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "",
+      "job_type": "communication",
+      "capability_domain": "general",
+      "workflow_id": "",
+      "hybrid_model": {}
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773151743.575372,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773151743.586199,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773151743.5910451,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773151743.595974,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1773151743.600415,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "",
+          "job_type": "communication"
+        }
+      }
+    ],
+    "created_at": 1773151743.57537,
+    "updated_at": 1773151743.600415
+  },
+  "metadata": {
+    "action": "",
+    "job_type": "communication",
+    "capability_domain": "general",
+    "workflow_id": "",
+    "hybrid_model": {},
+    "channel": "cli",
+    "user_id": "local",
+    "status": "success"
+  }
+}

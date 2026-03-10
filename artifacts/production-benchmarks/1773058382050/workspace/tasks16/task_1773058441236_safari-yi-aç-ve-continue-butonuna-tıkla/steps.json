@@ -1,0 +1,950 @@
+[
+  {
+    "step_index": 1,
+    "name": "open_safari",
+    "kind": "system",
+    "status": "completed",
+    "attempts": 1,
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        },
+        {
+          "code": "frontmost_app_matches",
+          "passed": true,
+          "details": {
+            "actual": "Safari",
+            "expected": "Safari"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for open_safari",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "Safari",
+          "window_title": "Checkout"
+        },
+        {
+          "type": "browser_state",
+          "url": "",
+          "title": ""
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 0
+      }
+    },
+    "message": "Frontmost app: Safari. Window: Checkout. Continue butonu gorunuyor. OCR: Continue",
+    "error": "",
+    "error_code": "",
+    "screenshots": [
+      "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/tasks16/task_1773058441236_safari-yi-aç-ve-continue-butonuna-tıkla/screenshots/step_01_01.png",
+      "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/tasks16/task_1773058441236_safari-yi-aç-ve-continue-butonuna-tıkla/screenshots/step_01_02.png"
+    ],
+    "artifacts": [
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773058441247/before.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773058441247/after.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773058441247/ui_state.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773058441247/screen_summary.md",
+        "type": "text"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773058441247/action_log.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773058441247/target_decisions.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/tasks16/task_1773058441236_safari-yi-aç-ve-continue-butonuna-tıkla/screenshots/step_01_01.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/tasks16/task_1773058441236_safari-yi-aç-ve-continue-butonuna-tıkla/screenshots/step_01_02.png",
+        "type": "image"
+      }
+    ],
+    "result": {
+      "success": true,
+      "status": "success",
+      "message": "Frontmost app: Safari. Window: Checkout. Continue butonu gorunuyor. OCR: Continue",
+      "summary": "Frontmost app: Safari. Window: Checkout. Continue butonu gorunuyor. OCR: Continue",
+      "tool_result": {
+        "success": true,
+        "status": "success",
+        "message": "Safari opened."
+      },
+      "post_observation": {
+        "success": true,
+        "status": "success",
+        "mode": "inspect",
+        "goal_achieved": true,
+        "message": "Frontmost app: Safari. Window: Checkout. Continue butonu gorunuyor. OCR: Continue",
+        "summary": "Frontmost app: Safari. Window: Checkout. Continue butonu gorunuyor. OCR: Continue",
+        "ui_state": {
+          "frontmost_app": "Safari",
+          "active_window": {
+            "title": "Checkout",
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 1280,
+              "height": 800
+            }
+          },
+          "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/screen16/screen_before_1773058441243.png",
+          "elements": [
+            {
+              "label": "Safari",
+              "role": "frontmost_app",
+              "source": "window_metadata",
+              "confidence": 0.99
+            },
+            {
+              "label": "Checkout",
+              "role": "window_title",
+              "source": "window_metadata",
+              "confidence": 0.95
+            },
+            {
+              "label": "Continue",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Checkout",
+              "source": "accessibility",
+              "confidence": 0.92
+            }
+          ],
+          "clickable_targets": [
+            {
+              "label": "Continue",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Checkout",
+              "source": "accessibility",
+              "confidence": 0.92
+            }
+          ],
+          "text_fields": [],
+          "summary": "Frontmost app: Safari. Window: Checkout. Continue butonu gorunuyor. OCR: Continue",
+          "fallback_order": [
+            "accessibility_and_window_metadata",
+            "vision_detection",
+            "ocr",
+            "last_known_ui_target_cache"
+          ],
+          "source_counts": {
+            "window_metadata": 2,
+            "accessibility": 1
+          },
+          "confidence": 0.953
+        },
+        "plan": [
+          {
+            "kind": "noop",
+            "reason": "inspect_mode",
+            "attempts": 0
+          }
+        ],
+        "initial_observation": {
+          "success": true,
+          "screenshot": {
+            "success": true,
+            "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/screen16/screen_before_1773058441243.png",
+            "size_bytes": 35
+          },
+          "window_metadata": {
+            "success": true,
+            "frontmost_app": "Safari",
+            "window_title": "Checkout",
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 1280,
+              "height": 800
+            }
+          },
+          "accessibility": {
+            "success": true,
+            "frontmost_app": "Safari",
+            "window_title": "Checkout",
+            "elements": [
+              {
+                "label": "Continue",
+                "role": "button",
+                "x": 320,
+                "y": 92,
+                "width": 80,
+                "height": 28
+              }
+            ]
+          },
+          "ocr": {
+            "success": true,
+            "text": "Continue",
+            "lines": []
+          },
+          "vision": {
+            "success": true,
+            "summary": "Continue butonu gorunuyor.",
+            "elements": [],
+            "provider": "fake"
+          },
+          "ui_state": {
+            "frontmost_app": "Safari",
+            "active_window": {
+              "title": "Checkout",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1280,
+                "height": 800
+              }
+            },
+            "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/screen16/screen_before_1773058441243.png",
+            "elements": [
+              {
+                "label": "Safari",
+                "role": "frontmost_app",
+                "source": "window_metadata",
+                "confidence": 0.99
+              },
+              {
+                "label": "Checkout",
+                "role": "window_title",
+                "source": "window_metadata",
+                "confidence": 0.95
+              },
+              {
+                "label": "Continue",
+                "role": "button",
+                "x": 320,
+                "y": 92,
+                "width": 80,
+                "height": 28,
+                "frontmost_app": "Safari",
+                "window_title": "Checkout",
+                "source": "accessibility",
+                "confidence": 0.92
+              }
+            ],
+            "clickable_targets": [
+              {
+                "label": "Continue",
+                "role": "button",
+                "x": 320,
+                "y": 92,
+                "width": 80,
+                "height": 28,
+                "frontmost_app": "Safari",
+                "window_title": "Checkout",
+                "source": "accessibility",
+                "confidence": 0.92
+              }
+            ],
+            "text_fields": [],
+            "summary": "Frontmost app: Safari. Window: Checkout. Continue butonu gorunuyor. OCR: Continue",
+            "fallback_order": [
+              "accessibility_and_window_metadata",
+              "vision_detection",
+              "ocr",
+              "last_known_ui_target_cache"
+            ],
+            "source_counts": {
+              "window_metadata": 2,
+              "accessibility": 1
+            },
+            "confidence": 0.953
+          },
+          "summary": "Frontmost app: Safari. Window: Checkout. Continue butonu gorunuyor. OCR: Continue"
+        },
+        "final_observation": {
+          "success": true,
+          "screenshot": {
+            "success": true,
+            "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/screen16/screen_before_1773058441243.png",
+            "size_bytes": 35
+          },
+          "window_metadata": {
+            "success": true,
+            "frontmost_app": "Safari",
+            "window_title": "Checkout",
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 1280,
+              "height": 800
+            }
+          },
+          "accessibility": {
+            "success": true,
+            "frontmost_app": "Safari",
+            "window_title": "Checkout",
+            "elements": [
+              {
+                "label": "Continue",
+                "role": "button",
+                "x": 320,
+                "y": 92,
+                "width": 80,
+                "height": 28
+              }
+            ]
+          },
+          "ocr": {
+            "success": true,
+            "text": "Continue",
+            "lines": []
+          },
+          "vision": {
+            "success": true,
+            "summary": "Continue butonu gorunuyor.",
+            "elements": [],
+            "provider": "fake"
+          },
+          "ui_state": {
+            "frontmost_app": "Safari",
+            "active_window": {
+              "title": "Checkout",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1280,
+                "height": 800
+              }
+            },
+            "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/screen16/screen_before_1773058441243.png",
+            "elements": [
+              {
+                "label": "Safari",
+                "role": "frontmost_app",
+                "source": "window_metadata",
+                "confidence": 0.99
+              },
+              {
+                "label": "Checkout",
+                "role": "window_title",
+                "source": "window_metadata",
+                "confidence": 0.95
+              },
+              {
+                "label": "Continue",
+                "role": "button",
+                "x": 320,
+                "y": 92,
+                "width": 80,
+                "height": 28,
+                "frontmost_app": "Safari",
+                "window_title": "Checkout",
+                "source": "accessibility",
+                "confidence": 0.92
+              }
+            ],
+            "clickable_targets": [
+              {
+                "label": "Continue",
+                "role": "button",
+                "x": 320,
+                "y": 92,
+                "width": 80,
+                "height": 28,
+                "frontmost_app": "Safari",
+                "window_title": "Checkout",
+                "source": "accessibility",
+                "confidence": 0.92
+              }
+            ],
+            "text_fields": [],
+            "summary": "Frontmost app: Safari. Window: Checkout. Continue butonu gorunuyor. OCR: Continue",
+            "fallback_order": [
+              "accessibility_and_window_metadata",
+              "vision_detection",
+              "ocr",
+              "last_known_ui_target_cache"
+            ],
+            "source_counts": {
+              "window_metadata": 2,
+              "accessibility": 1
+            },
+            "confidence": 0.953
+          },
+          "summary": "Frontmost app: Safari. Window: Checkout. Continue butonu gorunuyor. OCR: Continue"
+        },
+        "operator_budget": {
+          "max_actions": 4,
+          "max_retries_per_action": 2,
+          "elapsed_s": 0.008
+        },
+        "screenshots": [
+          "/Users/emrekoca/.elyan/screen_operator/1773058441247/before.png",
+          "/Users/emrekoca/.elyan/screen_operator/1773058441247/after.png"
+        ],
+        "artifacts": [
+          {
+            "path": "/Users/emrekoca/.elyan/screen_operator/1773058441247/before.png",
+            "type": "image"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/screen_operator/1773058441247/after.png",
+            "type": "image"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/screen_operator/1773058441247/ui_state.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/screen_operator/1773058441247/screen_summary.md",
+            "type": "text"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/screen_operator/1773058441247/action_log.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/screen_operator/1773058441247/target_decisions.json",
+            "type": "json"
+          }
+        ],
+        "action_logs": [],
+        "verifier_outcomes": [],
+        "task_state": {
+          "current_step": 0,
+          "attempts": 0,
+          "ui_state": {
+            "frontmost_app": "Safari",
+            "active_window": {
+              "title": "Checkout",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1280,
+                "height": 800
+              }
+            },
+            "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/screen16/screen_before_1773058441243.png",
+            "elements": [
+              {
+                "label": "Safari",
+                "role": "frontmost_app",
+                "source": "window_metadata",
+                "confidence": 0.99
+              },
+              {
+                "label": "Checkout",
+                "role": "window_title",
+                "source": "window_metadata",
+                "confidence": 0.95
+              },
+              {
+                "label": "Continue",
+                "role": "button",
+                "x": 320,
+                "y": 92,
+                "width": 80,
+                "height": 28,
+                "frontmost_app": "Safari",
+                "window_title": "Checkout",
+                "source": "accessibility",
+                "confidence": 0.92
+              }
+            ],
+            "clickable_targets": [
+              {
+                "label": "Continue",
+                "role": "button",
+                "x": 320,
+                "y": 92,
+                "width": 80,
+                "height": 28,
+                "frontmost_app": "Safari",
+                "window_title": "Checkout",
+                "source": "accessibility",
+                "confidence": 0.92
+              }
+            ],
+            "text_fields": [],
+            "summary": "Frontmost app: Safari. Window: Checkout. Continue butonu gorunuyor. OCR: Continue",
+            "fallback_order": [
+              "accessibility_and_window_metadata",
+              "vision_detection",
+              "ocr",
+              "last_known_ui_target_cache"
+            ],
+            "source_counts": {
+              "window_metadata": 2,
+              "accessibility": 1
+            },
+            "confidence": 0.953
+          },
+          "last_ui_state": {
+            "frontmost_app": "Safari",
+            "active_window": {
+              "title": "Checkout",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1280,
+                "height": 800
+              }
+            },
+            "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/screen16/screen_before_1773058441243.png",
+            "elements": [
+              {
+                "label": "Safari",
+                "role": "frontmost_app",
+                "source": "window_metadata",
+                "confidence": 0.99
+              },
+              {
+                "label": "Checkout",
+                "role": "window_title",
+                "source": "window_metadata",
+                "confidence": 0.95
+              },
+              {
+                "label": "Continue",
+                "role": "button",
+                "x": 320,
+                "y": 92,
+                "width": 80,
+                "height": 28,
+                "frontmost_app": "Safari",
+                "window_title": "Checkout",
+                "source": "accessibility",
+                "confidence": 0.92
+              }
+            ],
+            "clickable_targets": [
+              {
+                "label": "Continue",
+                "role": "button",
+                "x": 320,
+                "y": 92,
+                "width": 80,
+                "height": 28,
+                "frontmost_app": "Safari",
+                "window_title": "Checkout",
+                "source": "accessibility",
+                "confidence": 0.92
+              }
+            ],
+            "text_fields": [],
+            "summary": "Frontmost app: Safari. Window: Checkout. Continue butonu gorunuyor. OCR: Continue",
+            "fallback_order": [
+              "accessibility_and_window_metadata",
+              "vision_detection",
+              "ocr",
+              "last_known_ui_target_cache"
+            ],
+            "source_counts": {
+              "window_metadata": 2,
+              "accessibility": 1
+            },
+            "confidence": 0.953
+          },
+          "last_target_cache": {
+            "continue@@safari@@checkout": {
+              "label": "Continue",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Checkout",
+              "source": "cache",
+              "confidence": 0.92,
+              "_cache_meta": {
+                "seen_count": 1,
+                "last_seen_at": 1773058441.247097,
+                "last_action_kind": "",
+                "frontmost_app": "Safari",
+                "window_title": "Checkout",
+                "last_verified_success": false,
+                "verified_success_count": 0,
+                "last_verified_success_at": 0.0
+              }
+            },
+            "continue": {
+              "label": "Continue",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Checkout",
+              "source": "cache",
+              "confidence": 0.92,
+              "_cache_meta": {
+                "seen_count": 1,
+                "last_seen_at": 1773058441.247097,
+                "last_action_kind": "",
+                "frontmost_app": "Safari",
+                "window_title": "Checkout",
+                "last_verified_success": false,
+                "verified_success_count": 0,
+                "last_verified_success_at": 0.0
+              }
+            }
+          },
+          "verifier_outcomes": []
+        },
+        "recovery_hints": {
+          "frontmost_app": "Safari",
+          "active_window": "Checkout",
+          "chosen_target": {},
+          "alternate_targets": [],
+          "failed_codes": []
+        },
+        "desktop_host_state": {
+          "frontmost_app": "Safari",
+          "active_window": {
+            "title": "Checkout",
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 1280,
+              "height": 800
+            }
+          },
+          "last_screenshot": "/Users/emrekoca/.elyan/screen_operator/1773058441247/after.png",
+          "target_cache_size": 2,
+          "recent_action_log_count": 0,
+          "verifier_outcome_count": 0,
+          "updated_at": 1773058441.241889,
+          "last_instruction": "ekrana bak",
+          "last_mode": "inspect",
+          "last_status": "success"
+        }
+      },
+      "ui_state": {
+        "frontmost_app": "Safari",
+        "active_window": {
+          "title": "Checkout",
+          "bounds": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 800
+          }
+        },
+        "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/screen16/screen_before_1773058441243.png",
+        "elements": [
+          {
+            "label": "Safari",
+            "role": "frontmost_app",
+            "source": "window_metadata",
+            "confidence": 0.99
+          },
+          {
+            "label": "Checkout",
+            "role": "window_title",
+            "source": "window_metadata",
+            "confidence": 0.95
+          },
+          {
+            "label": "Continue",
+            "role": "button",
+            "x": 320,
+            "y": 92,
+            "width": 80,
+            "height": 28,
+            "frontmost_app": "Safari",
+            "window_title": "Checkout",
+            "source": "accessibility",
+            "confidence": 0.92
+          }
+        ],
+        "clickable_targets": [
+          {
+            "label": "Continue",
+            "role": "button",
+            "x": 320,
+            "y": 92,
+            "width": 80,
+            "height": 28,
+            "frontmost_app": "Safari",
+            "window_title": "Checkout",
+            "source": "accessibility",
+            "confidence": 0.92
+          }
+        ],
+        "text_fields": [],
+        "summary": "Frontmost app: Safari. Window: Checkout. Continue butonu gorunuyor. OCR: Continue",
+        "fallback_order": [
+          "accessibility_and_window_metadata",
+          "vision_detection",
+          "ocr",
+          "last_known_ui_target_cache"
+        ],
+        "source_counts": {
+          "window_metadata": 2,
+          "accessibility": 1
+        },
+        "confidence": 0.953
+      },
+      "screenshots": [
+        "/Users/emrekoca/.elyan/screen_operator/1773058441247/before.png",
+        "/Users/emrekoca/.elyan/screen_operator/1773058441247/after.png"
+      ],
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058441247/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058441247/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058441247/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058441247/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058441247/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058441247/target_decisions.json",
+          "type": "json"
+        }
+      ],
+      "action_logs": [
+        {
+          "step": 1,
+          "planned_action": {
+            "kind": "open_app",
+            "params": {
+              "app_name": "Safari"
+            }
+          },
+          "execution_result": {
+            "success": true,
+            "status": "success",
+            "message": "Safari opened."
+          }
+        }
+      ],
+      "verifier_outcomes": [],
+      "task_state": {
+        "current_step": 0,
+        "attempts": 0,
+        "ui_state": {
+          "frontmost_app": "Safari",
+          "active_window": {
+            "title": "Checkout",
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 1280,
+              "height": 800
+            }
+          },
+          "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/screen16/screen_before_1773058441243.png",
+          "elements": [
+            {
+              "label": "Safari",
+              "role": "frontmost_app",
+              "source": "window_metadata",
+              "confidence": 0.99
+            },
+            {
+              "label": "Checkout",
+              "role": "window_title",
+              "source": "window_metadata",
+              "confidence": 0.95
+            },
+            {
+              "label": "Continue",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Checkout",
+              "source": "accessibility",
+              "confidence": 0.92
+            }
+          ],
+          "clickable_targets": [
+            {
+              "label": "Continue",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Checkout",
+              "source": "accessibility",
+              "confidence": 0.92
+            }
+          ],
+          "text_fields": [],
+          "summary": "Frontmost app: Safari. Window: Checkout. Continue butonu gorunuyor. OCR: Continue",
+          "fallback_order": [
+            "accessibility_and_window_metadata",
+            "vision_detection",
+            "ocr",
+            "last_known_ui_target_cache"
+          ],
+          "source_counts": {
+            "window_metadata": 2,
+            "accessibility": 1
+          },
+          "confidence": 0.953
+        },
+        "last_ui_state": {
+          "frontmost_app": "Safari",
+          "active_window": {
+            "title": "Checkout",
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 1280,
+              "height": 800
+            }
+          },
+          "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/screen16/screen_before_1773058441243.png",
+          "elements": [
+            {
+              "label": "Safari",
+              "role": "frontmost_app",
+              "source": "window_metadata",
+              "confidence": 0.99
+            },
+            {
+              "label": "Checkout",
+              "role": "window_title",
+              "source": "window_metadata",
+              "confidence": 0.95
+            },
+            {
+              "label": "Continue",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Checkout",
+              "source": "accessibility",
+              "confidence": 0.92
+            }
+          ],
+          "clickable_targets": [
+            {
+              "label": "Continue",
+              "role": "button",
+              "x": 320,
+              "y": 92,
+              "width": 80,
+              "height": 28,
+              "frontmost_app": "Safari",
+              "window_title": "Checkout",
+              "source": "accessibility",
+              "confidence": 0.92
+            }
+          ],
+          "text_fields": [],
+          "summary": "Frontmost app: Safari. Window: Checkout. Continue butonu gorunuyor. OCR: Continue",
+          "fallback_order": [
+            "accessibility_and_window_metadata",
+            "vision_detection",
+            "ocr",
+            "last_known_ui_target_cache"
+          ],
+          "source_counts": {
+            "window_metadata": 2,
+            "accessibility": 1
+          },
+          "confidence": 0.953
+        },
+        "last_target_cache": {
+          "continue@@safari@@checkout": {
+            "label": "Continue",
+            "role": "button",
+            "x": 320,
+            "y": 92,
+            "width": 80,
+            "height": 28,
+            "frontmost_app": "Safari",
+            "window_title": "Checkout",
+            "source": "cache",
+            "confidence": 0.92,
+            "_cache_meta": {
+              "seen_count": 1,
+              "last_seen_at": 1773058441.247097,
+              "last_action_kind": "",
+              "frontmost_app": "Safari",
+              "window_title": "Checkout",
+              "last_verified_success": false,
+              "verified_success_count": 0,
+              "last_verified_success_at": 0.0
+            }
+          },
+          "continue": {
+            "label": "Continue",
+            "role": "button",
+            "x": 320,
+            "y": 92,
+            "width": 80,
+            "height": 28,
+            "frontmost_app": "Safari",
+            "window_title": "Checkout",
+            "source": "cache",
+            "confidence": 0.92,
+            "_cache_meta": {
+              "seen_count": 1,
+              "last_seen_at": 1773058441.247097,
+              "last_action_kind": "",
+              "frontmost_app": "Safari",
+              "window_title": "Checkout",
+              "last_verified_success": false,
+              "verified_success_count": 0,
+              "last_verified_success_at": 0.0
+            }
+          }
+        },
+        "verifier_outcomes": []
+      }
+    }
+  }
+]

@@ -1,0 +1,715 @@
+[
+  {
+    "step_index": 1,
+    "name": "open_page",
+    "kind": "browser",
+    "status": "completed",
+    "attempts": 1,
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        },
+        {
+          "code": "url_contains",
+          "passed": true,
+          "details": {
+            "actual": "https://wizard.local",
+            "expected": "wizard.local"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for open_page",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "",
+          "window_title": ""
+        },
+        {
+          "type": "browser_state",
+          "url": "https://wizard.local",
+          "title": "Wizard Start"
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 1
+      }
+    },
+    "message": "Wizard Start",
+    "error": "",
+    "error_code": "",
+    "screenshots": [
+      "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks8/task_1773053339953_https-wizard-local-aç-ve-continue-butonuna-tıkla/screenshots/step_01_01.png"
+    ],
+    "artifacts": [
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339956/dom_snapshot.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339956/dom_snapshot.html",
+        "type": "text"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339956/navigation.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339956/action_log.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339956/verification.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339956/page.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks8/task_1773053339953_https-wizard-local-aç-ve-continue-butonuna-tıkla/screenshots/step_01_01.png",
+        "type": "image"
+      }
+    ],
+    "result": {
+      "success": true,
+      "status": "success",
+      "message": "Wizard Start",
+      "summary": "Wizard Start",
+      "url": "https://wizard.local",
+      "title": "Wizard Start",
+      "browser_state": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://wizard.local",
+        "title": "Wizard Start",
+        "visible_text": "Continue",
+        "dom_hash": "92d87cfd7e0bdde18f2ae0c548af3130bda96df8a438859346225b11370c907c",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true
+      },
+      "dom_snapshot": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://wizard.local",
+        "title": "Wizard Start",
+        "visible_text": "Continue",
+        "dom_hash": "92d87cfd7e0bdde18f2ae0c548af3130bda96df8a438859346225b11370c907c",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true,
+        "html": "<html><body><button id='continue'>Continue</button></body></html>"
+      },
+      "extracted_text": "",
+      "links": [],
+      "table": {},
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339956/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339956/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339956/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339956/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339956/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339956/page.png",
+          "type": "image"
+        }
+      ],
+      "screenshots": [
+        "/Users/emrekoca/.elyan/browser_runtime/1773053339956/page.png"
+      ],
+      "action_logs": [
+        {
+          "step": 1,
+          "action": "open",
+          "params": {
+            "url": "https://wizard.local",
+            "selector": "",
+            "text": ""
+          },
+          "result": {
+            "success": true,
+            "url": "https://wizard.local",
+            "title": "Wizard Start",
+            "status_code": 200,
+            "dom_available": true
+          }
+        }
+      ],
+      "action_result": {
+        "success": true,
+        "url": "https://wizard.local",
+        "title": "Wizard Start",
+        "status_code": 200,
+        "dom_available": true
+      },
+      "verifier_outcomes": [
+        {
+          "ok": true,
+          "status": "success",
+          "checks": [
+            {
+              "code": "dom_available",
+              "passed": true
+            },
+            {
+              "code": "screenshot_present",
+              "passed": true,
+              "details": {
+                "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339956/page.png"
+              }
+            },
+            {
+              "code": "navigation_changed",
+              "passed": true,
+              "details": {
+                "before_url": "",
+                "after_url": "https://wizard.local"
+              }
+            },
+            {
+              "code": "title_matches",
+              "passed": true,
+              "details": {
+                "title": "Wizard Start"
+              }
+            },
+            {
+              "code": "url_matches",
+              "passed": true,
+              "details": {
+                "url": "https://wizard.local"
+              }
+            }
+          ],
+          "failed": [],
+          "failed_codes": [],
+          "repairable": true,
+          "summary": "browser verification for open",
+          "evidence_refs": [
+            {
+              "type": "browser_state",
+              "before_url": "",
+              "after_url": "https://wizard.local"
+            },
+            {
+              "type": "screenshot",
+              "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339956/page.png"
+            }
+          ],
+          "metrics": {
+            "dom_changed": 1,
+            "url_changed": 1,
+            "title_changed": 1
+          }
+        }
+      ],
+      "fallback": {
+        "used": false
+      },
+      "playwright_available": false,
+      "recovery_hints": {
+        "action": "open",
+        "selector": "",
+        "dom_available": true,
+        "current_url": "https://wizard.local",
+        "current_title": "Wizard Start",
+        "visible_text": "Continue",
+        "fallback_used": false,
+        "fallback_reason": "",
+        "expected_text": "",
+        "failed_codes": []
+      }
+    }
+  },
+  {
+    "step_index": 2,
+    "name": "click_continue",
+    "kind": "browser",
+    "status": "completed",
+    "attempts": 1,
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for click_continue",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "",
+          "window_title": ""
+        },
+        {
+          "type": "browser_state",
+          "url": "https://wizard.local/step-2",
+          "title": "Wizard Step 2"
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 1
+      }
+    },
+    "message": "Wizard Step 2",
+    "error": "",
+    "error_code": "",
+    "screenshots": [
+      "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks8/task_1773053339953_https-wizard-local-aç-ve-continue-butonuna-tıkla/screenshots/step_02_01.png"
+    ],
+    "artifacts": [
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339959/dom_snapshot.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339959/dom_snapshot.html",
+        "type": "text"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339959/navigation.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339959/action_log.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339959/verification.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339959/page.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks8/task_1773053339953_https-wizard-local-aç-ve-continue-butonuna-tıkla/screenshots/step_02_01.png",
+        "type": "image"
+      }
+    ],
+    "result": {
+      "success": true,
+      "status": "success",
+      "message": "Wizard Step 2",
+      "summary": "Wizard Step 2",
+      "url": "https://wizard.local/step-2",
+      "title": "Wizard Step 2",
+      "browser_state": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://wizard.local/step-2",
+        "title": "Wizard Step 2",
+        "visible_text": "Next",
+        "dom_hash": "5b3791da1b78322fa262e4b2a019dc9eee7e51d0ba75d01977c3a49381b247c4",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true
+      },
+      "dom_snapshot": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://wizard.local/step-2",
+        "title": "Wizard Step 2",
+        "visible_text": "Next",
+        "dom_hash": "5b3791da1b78322fa262e4b2a019dc9eee7e51d0ba75d01977c3a49381b247c4",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true,
+        "html": "<html><body><button id='next'>Next</button></body></html>"
+      },
+      "extracted_text": "",
+      "links": [],
+      "table": {},
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339959/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339959/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339959/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339959/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339959/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339959/page.png",
+          "type": "image"
+        }
+      ],
+      "screenshots": [
+        "/Users/emrekoca/.elyan/browser_runtime/1773053339959/page.png"
+      ],
+      "action_logs": [
+        {
+          "step": 1,
+          "action": "click",
+          "params": {
+            "url": "",
+            "selector": "#continue",
+            "text": ""
+          },
+          "result": {
+            "success": true,
+            "selector": "#continue",
+            "dom_available": true
+          }
+        }
+      ],
+      "action_result": {
+        "success": true,
+        "selector": "#continue",
+        "dom_available": true
+      },
+      "verifier_outcomes": [
+        {
+          "ok": true,
+          "status": "success",
+          "checks": [
+            {
+              "code": "dom_available",
+              "passed": true
+            },
+            {
+              "code": "screenshot_present",
+              "passed": true,
+              "details": {
+                "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339959/page.png"
+              }
+            },
+            {
+              "code": "dom_or_navigation_changed",
+              "passed": true,
+              "details": {
+                "before_hash": "92d87cfd7e0bdde18f2ae0c548af3130bda96df8a438859346225b11370c907c",
+                "after_hash": "5b3791da1b78322fa262e4b2a019dc9eee7e51d0ba75d01977c3a49381b247c4"
+              }
+            }
+          ],
+          "failed": [],
+          "failed_codes": [],
+          "repairable": true,
+          "summary": "browser verification for click",
+          "evidence_refs": [
+            {
+              "type": "browser_state",
+              "before_url": "https://wizard.local",
+              "after_url": "https://wizard.local/step-2"
+            },
+            {
+              "type": "screenshot",
+              "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339959/page.png"
+            }
+          ],
+          "metrics": {
+            "dom_changed": 1,
+            "url_changed": 1,
+            "title_changed": 1
+          }
+        }
+      ],
+      "fallback": {
+        "used": false
+      },
+      "playwright_available": false,
+      "recovery_hints": {
+        "action": "click",
+        "selector": "#continue",
+        "dom_available": true,
+        "current_url": "https://wizard.local/step-2",
+        "current_title": "Wizard Step 2",
+        "visible_text": "Next",
+        "fallback_used": false,
+        "fallback_reason": "",
+        "expected_text": "",
+        "failed_codes": []
+      }
+    }
+  },
+  {
+    "step_index": 3,
+    "name": "click_next",
+    "kind": "browser",
+    "status": "completed",
+    "attempts": 1,
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for click_next",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "",
+          "window_title": ""
+        },
+        {
+          "type": "browser_state",
+          "url": "https://wizard.local/complete",
+          "title": "Wizard Complete"
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 1
+      }
+    },
+    "message": "Wizard Complete",
+    "error": "",
+    "error_code": "",
+    "screenshots": [
+      "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks8/task_1773053339953_https-wizard-local-aç-ve-continue-butonuna-tıkla/screenshots/step_03_01.png"
+    ],
+    "artifacts": [
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339963/dom_snapshot.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339963/dom_snapshot.html",
+        "type": "text"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339963/navigation.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339963/action_log.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339963/verification.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339963/page.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks8/task_1773053339953_https-wizard-local-aç-ve-continue-butonuna-tıkla/screenshots/step_03_01.png",
+        "type": "image"
+      }
+    ],
+    "result": {
+      "success": true,
+      "status": "success",
+      "message": "Wizard Complete",
+      "summary": "Wizard Complete",
+      "url": "https://wizard.local/complete",
+      "title": "Wizard Complete",
+      "browser_state": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://wizard.local/complete",
+        "title": "Wizard Complete",
+        "visible_text": "All steps complete",
+        "dom_hash": "0e9c6652e82734db2b6c2eee3ed8741038f9f24b2b8c8c2b22207241af3e4c24",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true
+      },
+      "dom_snapshot": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://wizard.local/complete",
+        "title": "Wizard Complete",
+        "visible_text": "All steps complete",
+        "dom_hash": "0e9c6652e82734db2b6c2eee3ed8741038f9f24b2b8c8c2b22207241af3e4c24",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true,
+        "html": "<html><body>All steps complete</body></html>"
+      },
+      "extracted_text": "",
+      "links": [],
+      "table": {},
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339963/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339963/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339963/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339963/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339963/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339963/page.png",
+          "type": "image"
+        }
+      ],
+      "screenshots": [
+        "/Users/emrekoca/.elyan/browser_runtime/1773053339963/page.png"
+      ],
+      "action_logs": [
+        {
+          "step": 1,
+          "action": "click",
+          "params": {
+            "url": "",
+            "selector": "#next",
+            "text": ""
+          },
+          "result": {
+            "success": true,
+            "selector": "#next",
+            "dom_available": true
+          }
+        }
+      ],
+      "action_result": {
+        "success": true,
+        "selector": "#next",
+        "dom_available": true
+      },
+      "verifier_outcomes": [
+        {
+          "ok": true,
+          "status": "success",
+          "checks": [
+            {
+              "code": "dom_available",
+              "passed": true
+            },
+            {
+              "code": "screenshot_present",
+              "passed": true,
+              "details": {
+                "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339963/page.png"
+              }
+            },
+            {
+              "code": "dom_or_navigation_changed",
+              "passed": true,
+              "details": {
+                "before_hash": "5b3791da1b78322fa262e4b2a019dc9eee7e51d0ba75d01977c3a49381b247c4",
+                "after_hash": "0e9c6652e82734db2b6c2eee3ed8741038f9f24b2b8c8c2b22207241af3e4c24"
+              }
+            }
+          ],
+          "failed": [],
+          "failed_codes": [],
+          "repairable": true,
+          "summary": "browser verification for click",
+          "evidence_refs": [
+            {
+              "type": "browser_state",
+              "before_url": "https://wizard.local/step-2",
+              "after_url": "https://wizard.local/complete"
+            },
+            {
+              "type": "screenshot",
+              "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339963/page.png"
+            }
+          ],
+          "metrics": {
+            "dom_changed": 1,
+            "url_changed": 1,
+            "title_changed": 1
+          }
+        }
+      ],
+      "fallback": {
+        "used": false
+      },
+      "playwright_available": false,
+      "recovery_hints": {
+        "action": "click",
+        "selector": "#next",
+        "dom_available": true,
+        "current_url": "https://wizard.local/complete",
+        "current_title": "Wizard Complete",
+        "visible_text": "All steps complete",
+        "fallback_used": false,
+        "fallback_reason": "",
+        "expected_text": "",
+        "failed_codes": []
+      }
+    }
+  }
+]

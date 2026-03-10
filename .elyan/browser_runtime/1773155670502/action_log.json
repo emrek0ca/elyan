@@ -1,0 +1,17 @@
+[
+  {
+    "step": 1,
+    "action": "type",
+    "params": {
+      "url": "",
+      "selector": "#password",
+      "text": "secret123"
+    },
+    "result": {
+      "success": true,
+      "selector": "#password",
+      "text": "secret123",
+      "dom_available": true
+    }
+  }
+]

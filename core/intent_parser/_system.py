@@ -8,6 +8,34 @@ from ._base import BaseParser, _RE_SCREENSHOT_NAME
 
 class SystemParser(BaseParser):
 
+    def _parse_screen_workflow(self, text: str, text_norm: str, original: str) -> dict | None:
+        inspect_markers = [
+            "ekrana bak", "ekrani oku", "ekranı oku", "ekrandakini oku", "ekranda ne var",
+            "ekranı analiz et", "ekrani analiz et", "ekrani incele", "ekranı incele",
+            "ne goruyorsun", "ne görüyorsun", "ekrana bir bak",
+        ]
+        control_markers = [
+            "tıkla", "tikla", "bas", "yaz", "aç", "ac", "gir", "seç", "sec", "kapat",
+            "devam et", "ileri git", "arama yap", "search", "open", "click", "type",
+        ]
+        if not any(marker in text for marker in inspect_markers):
+            return None
+
+        wants_control = any(marker in text for marker in control_markers)
+        mode = "inspect_and_control" if wants_control else "inspect"
+        reply = "Ekranı okuyup özetliyorum..." if not wants_control else "Ekranı okuyup gerekli adımları uyguluyorum..."
+        return {
+            "action": "screen_workflow",
+            "params": {
+                "instruction": original,
+                "mode": mode,
+                "action_goal": original if wants_control else "",
+                "final_screenshot": True,
+                "include_analysis": True,
+            },
+            "reply": reply,
+        }
+
     # ── Screenshot ──────────────────────────────────────────────────────────
     def _parse_screenshot(self, text: str, text_norm: str, original: str) -> dict | None:
         triggers = [
@@ -44,8 +72,16 @@ class SystemParser(BaseParser):
                       "sistem durumu", "pil", "batarya", "status", "/status"]
         if any(e in text for e in exclusions):
             return None
-        return {"action": "take_screenshot", "params": {"filename": "elyan_durum"},
-                "reply": "Anlik durumu gostermek icin ekran goruntusu aliyorum..."}
+        return {
+            "action": "screen_workflow",
+            "params": {
+                "instruction": original or "Durum nedir",
+                "mode": "inspect",
+                "final_screenshot": True,
+                "include_analysis": True,
+            },
+            "reply": "Anlık durumu gostermek icin ekrani okuyup ozetliyorum...",
+        }
 
     # ── Volume ───────────────────────────────────────────────────────────────
     def _parse_volume(self, text: str, text_norm: str, original: str) -> dict | None:

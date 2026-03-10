@@ -1,0 +1,36 @@
+[
+  {
+    "kind": "browser",
+    "name": "open_page",
+    "action": "open",
+    "url": "https://wizard.local",
+    "expected_url_contains": "wizard.local",
+    "expected_title_contains": "",
+    "verify": {
+      "url_contains": "wizard.local"
+    },
+    "repair_policy": {
+      "max_retries": 1
+    }
+  },
+  {
+    "kind": "browser",
+    "name": "click_continue",
+    "action": "click",
+    "selector": "#continue",
+    "verify": {},
+    "repair_policy": {
+      "max_retries": 1
+    }
+  },
+  {
+    "kind": "browser",
+    "name": "click_next",
+    "action": "click",
+    "selector": "#next",
+    "verify": {},
+    "repair_policy": {
+      "max_retries": 1
+    }
+  }
+]

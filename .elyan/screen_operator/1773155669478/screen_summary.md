@@ -1,0 +1,1 @@
+Frontmost app: Safari. Window: Next. Next ekran acildi. OCR: Next

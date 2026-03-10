@@ -1,0 +1,15 @@
+[
+  {
+    "step_index": 4,
+    "name": "click_save",
+    "kind": "browser",
+    "attempt": 1,
+    "retry_count": 1,
+    "failed_codes": [
+      "NO_VISUAL_CHANGE"
+    ],
+    "strategy": "rerun_step",
+    "status": "retry_scheduled",
+    "timestamp": 1773053681.963271
+  }
+]

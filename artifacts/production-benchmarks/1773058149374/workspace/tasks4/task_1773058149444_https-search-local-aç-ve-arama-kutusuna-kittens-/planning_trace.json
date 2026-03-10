@@ -1,0 +1,35 @@
+{
+  "request": "https://search.local aç ve arama kutusuna \"kittens\" yaz ve submit et",
+  "planning_request": "https://search.local aç ve arama kutusuna \"kittens\" yaz ve submit et",
+  "matched_rules": [
+    "browser_navigation_flow",
+    "browser_named_fill_steps",
+    "browser_submit_step"
+  ],
+  "assumptions": [],
+  "missing_inputs": [],
+  "extracted": {
+    "app_name": "",
+    "app_sequence": [],
+    "browser_app": "",
+    "url": "https://search.local",
+    "urls": [
+      "https://search.local"
+    ],
+    "typed_text": "kittens",
+    "named_field_values": [
+      {
+        "selector": "#q",
+        "field_label": "Search field",
+        "text": "kittens"
+      }
+    ],
+    "field_label": "Search field",
+    "selector": "#q",
+    "button_label": "Submit",
+    "button_sequence": [],
+    "research_topic": "kittens"
+  },
+  "bounded": true,
+  "safe_mode": "deterministic"
+}

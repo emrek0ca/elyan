@@ -3,13 +3,14 @@ import shutil
 import asyncio
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+from core.storage_paths import resolve_elyan_data_dir
 from utils.logger import get_logger
 
 logger = get_logger("delivery_engine")
 
 class DeliveryEngine:
     def __init__(self):
-        self.workspace = Path.home() / ".elyan" / "projects" / "delivery"
+        self.workspace = resolve_elyan_data_dir() / "projects" / "delivery"
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.templates_dir = Path(__file__).parent / "templates"
         from core.delivery.state_machine import delivery_state_manager, DeliveryState

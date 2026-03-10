@@ -1,0 +1,1071 @@
+{
+  "pass_count": 5,
+  "total": 5,
+  "completion_rate": 1.0,
+  "average_retries": 0.2,
+  "average_replans": 0.8,
+  "failure_reasons": {},
+  "rows": [
+    {
+      "name": "telegram_desktop_task_completion",
+      "request": "@ElyanBot /run Safari'yi aç ve Continue butonuna tıkla",
+      "task_id": "task_1773058150660_safari-yi-aç-ve-continue-butonuna-tıkla",
+      "status": "completed",
+      "success": true,
+      "planned_steps": 1,
+      "completed_steps": 1,
+      "retry_count": 0,
+      "replan_count": 1,
+      "failure_code": "",
+      "elapsed_s": 0.015,
+      "plan_steps": [
+        {
+          "kind": "system",
+          "name": "open_safari",
+          "tool": "open_app",
+          "params": {
+            "app_name": "Safari"
+          },
+          "verify": {
+            "frontmost_app": "Safari"
+          }
+        },
+        {
+          "kind": "screen",
+          "name": "click_continue",
+          "instruction": "Continue butonuna tikla",
+          "verify": {
+            "frontmost_app": "Safari"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        }
+      ],
+      "completed_step_names": [
+        "open_safari"
+      ],
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150663/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150663/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150663/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150663/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150663/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150663/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks16/task_1773058150660_safari-yi-aç-ve-continue-butonuna-tıkla/screenshots/step_01_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks16/task_1773058150660_safari-yi-aç-ve-continue-butonuna-tıkla/screenshots/step_01_02.png",
+          "type": "image"
+        }
+      ]
+    },
+    {
+      "name": "research_document_creation_verification",
+      "request": "AI agents hakkında araştırma yap ve rapor oluştur",
+      "task_id": "task_1773058150673_ai-agents-hakkında-araştırma-yap-ve-rapor-oluştu",
+      "status": "completed",
+      "success": true,
+      "planned_steps": 1,
+      "completed_steps": 1,
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": "",
+      "elapsed_s": 0.014,
+      "plan_steps": [
+        {
+          "kind": "system",
+          "name": "research_document_delivery",
+          "tool": "research_document_delivery",
+          "params": {
+            "topic": "AI agents",
+            "language": "tr"
+          },
+          "verify": {
+            "artifact_count_min": 2,
+            "artifacts_exist": true,
+            "artifacts_non_empty": true
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        }
+      ],
+      "completed_step_names": [
+        "research_document_delivery"
+      ],
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/research17/research_report.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/research17/sources.json",
+          "type": "json"
+        }
+      ]
+    },
+    {
+      "name": "app_switch_finder_safari_cursor_terminal",
+      "request": "Finder'ı aç sonra Terminal'i aç sonra Cursor'u aç sonra Safari'ye geç ve arama kutusuna kittens yaz",
+      "task_id": "task_1773058150687_finder-ı-aç-sonra-terminal-i-aç-sonra-cursor-u-a",
+      "status": "completed",
+      "success": true,
+      "planned_steps": 5,
+      "completed_steps": 5,
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": "",
+      "elapsed_s": 0.057,
+      "plan_steps": [
+        {
+          "kind": "system",
+          "name": "open_finder",
+          "tool": "open_app",
+          "params": {
+            "app_name": "Finder"
+          },
+          "verify": {
+            "frontmost_app": "Finder"
+          }
+        },
+        {
+          "kind": "system",
+          "name": "open_terminal",
+          "tool": "open_app",
+          "params": {
+            "app_name": "Terminal"
+          },
+          "verify": {
+            "frontmost_app": "Terminal"
+          }
+        },
+        {
+          "kind": "system",
+          "name": "open_cursor",
+          "tool": "open_app",
+          "params": {
+            "app_name": "Cursor"
+          },
+          "verify": {
+            "frontmost_app": "Cursor"
+          }
+        },
+        {
+          "kind": "system",
+          "name": "open_safari",
+          "tool": "open_app",
+          "params": {
+            "app_name": "Safari"
+          },
+          "verify": {
+            "frontmost_app": "Safari"
+          }
+        },
+        {
+          "kind": "screen",
+          "name": "fill_screen_field",
+          "instruction": "Search field icine \"kittens\" yaz",
+          "verify": {
+            "text_contains": "kittens",
+            "frontmost_app": "Safari"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        }
+      ],
+      "completed_step_names": [
+        "open_finder",
+        "open_terminal",
+        "open_cursor",
+        "open_safari",
+        "fill_screen_field"
+      ],
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150690/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150690/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150690/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150690/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150690/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150690/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks18/task_1773058150687_finder-ı-aç-sonra-terminal-i-aç-sonra-cursor-u-a/screenshots/step_01_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks18/task_1773058150687_finder-ı-aç-sonra-terminal-i-aç-sonra-cursor-u-a/screenshots/step_01_02.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150695/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150695/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150695/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150695/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150695/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150695/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks18/task_1773058150687_finder-ı-aç-sonra-terminal-i-aç-sonra-cursor-u-a/screenshots/step_02_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks18/task_1773058150687_finder-ı-aç-sonra-terminal-i-aç-sonra-cursor-u-a/screenshots/step_02_02.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150701/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150701/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150701/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150701/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150701/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150701/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks18/task_1773058150687_finder-ı-aç-sonra-terminal-i-aç-sonra-cursor-u-a/screenshots/step_03_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks18/task_1773058150687_finder-ı-aç-sonra-terminal-i-aç-sonra-cursor-u-a/screenshots/step_03_02.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150709/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150709/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150709/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150709/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150709/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150709/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks18/task_1773058150687_finder-ı-aç-sonra-terminal-i-aç-sonra-cursor-u-a/screenshots/step_04_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks18/task_1773058150687_finder-ı-aç-sonra-terminal-i-aç-sonra-cursor-u-a/screenshots/step_04_02.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150719/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150719/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150719/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150719/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150719/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150719/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks18/task_1773058150687_finder-ı-aç-sonra-terminal-i-aç-sonra-cursor-u-a/screenshots/step_05_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks18/task_1773058150687_finder-ı-aç-sonra-terminal-i-aç-sonra-cursor-u-a/screenshots/step_05_02.png",
+          "type": "image"
+        }
+      ]
+    },
+    {
+      "name": "login_continue_upload_flow",
+      "request": "Safari'yi aç ve https://login.local aç ve email alanına \"user@example.com\" yaz, şifre alanına \"secret123\" yaz ve giriş yap sonra Continue butonuna tıkla sonra https://upload.local aç ve yükleme diyaloğunu onayla ve tamamlandığını doğrula",
+      "task_id": "task_1773058150744_safari-yi-aç-ve-https-login-local-aç-ve-email-al",
+      "status": "completed",
+      "success": true,
+      "planned_steps": 7,
+      "completed_steps": 7,
+      "retry_count": 0,
+      "replan_count": 2,
+      "failure_code": "",
+      "elapsed_s": 0.063,
+      "plan_steps": [
+        {
+          "kind": "system",
+          "name": "open_safari",
+          "tool": "open_app",
+          "params": {
+            "app_name": "Safari"
+          },
+          "verify": {
+            "frontmost_app": "Safari"
+          }
+        },
+        {
+          "kind": "browser",
+          "name": "open_login_page",
+          "action": "open",
+          "url": "https://login.local",
+          "expected_url_contains": "login.local",
+          "verify": {
+            "url_contains": "login.local"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        },
+        {
+          "kind": "browser",
+          "name": "fill_email",
+          "action": "type",
+          "selector": "#email",
+          "text": "user@example.com",
+          "verify": {
+            "text_contains": "user@example.com"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        },
+        {
+          "kind": "browser",
+          "name": "fill_password",
+          "action": "type",
+          "selector": "#password",
+          "text": "secret123",
+          "verify": {
+            "text_contains": "secret123"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        },
+        {
+          "kind": "browser",
+          "name": "click_login",
+          "action": "click",
+          "selector": "#login",
+          "verify": {},
+          "repair_policy": {
+            "max_retries": 1
+          }
+        },
+        {
+          "kind": "browser",
+          "name": "click_continue",
+          "action": "click",
+          "selector": "#continue",
+          "verify": {},
+          "repair_policy": {
+            "max_retries": 1
+          }
+        },
+        {
+          "kind": "browser",
+          "name": "open_upload_page",
+          "action": "open",
+          "url": "https://upload.local",
+          "expected_url_contains": "upload.local",
+          "expected_title_contains": "Upload",
+          "verify": {
+            "url_contains": "upload.local",
+            "title_contains": "Upload"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        },
+        {
+          "kind": "browser",
+          "name": "confirm_upload_dialog",
+          "action": "click",
+          "selector": "#upload",
+          "native_dialog_expected": true,
+          "screen_instruction": "Open butonuna tikla",
+          "verify": {
+            "fallback_used": true,
+            "window_title_contains": "Upload"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        },
+        {
+          "kind": "browser",
+          "name": "verify_upload_completion",
+          "action": "status",
+          "verify": {
+            "title_contains": "Upload Complete",
+            "text_contains": "Upload Complete"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        }
+      ],
+      "completed_step_names": [
+        "open_safari",
+        "open_login_page",
+        "fill_email",
+        "fill_password",
+        "click_login",
+        "click_continue",
+        "confirm_upload_dialog"
+      ],
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150747/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150747/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150747/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150747/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150747/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150747/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks19/task_1773058150744_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_01_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks19/task_1773058150744_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_01_02.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150753/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150753/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150753/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150753/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150753/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150753/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks19/task_1773058150744_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_02_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150758/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150758/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150758/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150758/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150758/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150758/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks19/task_1773058150744_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_03_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150764/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150764/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150764/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150764/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150764/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150764/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks19/task_1773058150744_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_04_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150770/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150770/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150770/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150770/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150770/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150770/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks19/task_1773058150744_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_05_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150776/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150776/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150776/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150776/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150776/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150776/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks19/task_1773058150744_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_06_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150783/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150783/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150783/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150783/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150783/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150783/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks19/task_1773058150744_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_07_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks19/task_1773058150744_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_07_02.png",
+          "type": "image"
+        }
+      ]
+    },
+    {
+      "name": "interrupted_resume_after_partial_completion",
+      "request": "https://upload.local aç ve yükleme diyaloğunu onayla sonra Save butonuna tıkla",
+      "task_id": "task_1773058150807_https-upload-local-aç-ve-yükleme-diyaloğunu-onay",
+      "status": "completed",
+      "success": true,
+      "planned_steps": 4,
+      "completed_steps": 4,
+      "retry_count": 1,
+      "replan_count": 1,
+      "failure_code": "",
+      "elapsed_s": 0.128,
+      "plan_steps": [
+        {
+          "kind": "system",
+          "name": "open_safari",
+          "tool": "open_app",
+          "params": {
+            "app_name": "Safari"
+          },
+          "verify": {
+            "frontmost_app": "Safari"
+          }
+        },
+        {
+          "kind": "browser",
+          "name": "open_upload_page",
+          "action": "open",
+          "url": "https://upload.local",
+          "expected_url_contains": "upload.local",
+          "expected_title_contains": "Upload",
+          "verify": {
+            "url_contains": "upload.local",
+            "title_contains": "Upload"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        },
+        {
+          "kind": "screen",
+          "name": "screen_fallback_confirm-upload-dialog",
+          "instruction": "Open butonuna tikla",
+          "verify": {
+            "window_title_contains": "Upload",
+            "goal_achieved": true
+          },
+          "repair_policy": {
+            "max_retries": 1
+          },
+          "task_state": {
+            "current_step": 0,
+            "attempts": 0,
+            "ui_state": {
+              "frontmost_app": "Safari",
+              "active_window": {
+                "title": "Upload Dialog",
+                "bounds": {
+                  "x": 0,
+                  "y": 0,
+                  "width": 1280,
+                  "height": 800
+                }
+              },
+              "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/screen20_fail/screen_before_1773058150878.png",
+              "elements": [
+                {
+                  "label": "Safari",
+                  "role": "frontmost_app",
+                  "source": "window_metadata",
+                  "confidence": 0.99
+                },
+                {
+                  "label": "Upload Dialog",
+                  "role": "window_title",
+                  "source": "window_metadata",
+                  "confidence": 0.95
+                }
+              ],
+              "clickable_targets": [],
+              "text_fields": [],
+              "summary": "Frontmost app: Safari. Window: Upload Dialog. Native dialog acik ama Open hedefi yok.",
+              "fallback_order": [
+                "accessibility_and_window_metadata",
+                "vision_detection",
+                "ocr",
+                "last_known_ui_target_cache"
+              ],
+              "source_counts": {
+                "window_metadata": 2
+              },
+              "confidence": 0.97
+            },
+            "last_ui_state": {
+              "frontmost_app": "Safari",
+              "active_window": {
+                "title": "Upload Dialog",
+                "bounds": {
+                  "x": 0,
+                  "y": 0,
+                  "width": 1280,
+                  "height": 800
+                }
+              },
+              "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/screen20_fail/screen_before_1773058150878.png",
+              "elements": [
+                {
+                  "label": "Safari",
+                  "role": "frontmost_app",
+                  "source": "window_metadata",
+                  "confidence": 0.99
+                },
+                {
+                  "label": "Upload Dialog",
+                  "role": "window_title",
+                  "source": "window_metadata",
+                  "confidence": 0.95
+                }
+              ],
+              "clickable_targets": [],
+              "text_fields": [],
+              "summary": "Frontmost app: Safari. Window: Upload Dialog. Native dialog acik ama Open hedefi yok.",
+              "fallback_order": [
+                "accessibility_and_window_metadata",
+                "vision_detection",
+                "ocr",
+                "last_known_ui_target_cache"
+              ],
+              "source_counts": {
+                "window_metadata": 2
+              },
+              "confidence": 0.97
+            },
+            "last_target_cache": {},
+            "verifier_outcomes": []
+          },
+          "source_step_kind": "browser",
+          "fallback_reason": "NATIVE_DIALOG_REQUIRED"
+        },
+        {
+          "kind": "browser",
+          "name": "click_save",
+          "action": "click",
+          "selector": "#save",
+          "verify": {},
+          "repair_policy": {
+            "max_retries": 1
+          }
+        }
+      ],
+      "completed_step_names": [
+        "open_safari",
+        "open_upload_page",
+        "screen_fallback_confirm-upload-dialog",
+        "click_save"
+      ],
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150859/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150859/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150859/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150859/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150859/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150859/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks20/task_1773058150807_https-upload-local-aç-ve-yükleme-diyaloğunu-onay/screenshots/step_01_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks20/task_1773058150807_https-upload-local-aç-ve-yükleme-diyaloğunu-onay/screenshots/step_01_02.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150864/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150864/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150864/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150864/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150864/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150864/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks20/task_1773058150807_https-upload-local-aç-ve-yükleme-diyaloğunu-onay/screenshots/step_02_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150868/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150868/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150868/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150868/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150868/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150868/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks20/task_1773058150807_https-upload-local-aç-ve-yükleme-diyaloğunu-onay/screenshots/step_03_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks20/task_1773058150807_https-upload-local-aç-ve-yükleme-diyaloğunu-onay/screenshots/step_03_02.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150879/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150879/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150879/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150879/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150879/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150879/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks20/task_1773058150807_https-upload-local-aç-ve-yükleme-diyaloğunu-onay/screenshots/step_03_03.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks20/task_1773058150807_https-upload-local-aç-ve-yükleme-diyaloğunu-onay/screenshots/step_03_04.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150885/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150885/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150885/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150885/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150885/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150885/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150905/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150905/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150905/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150905/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150905/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773058150905/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150915/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150915/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150915/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150915/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150915/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058150915/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058150656/workspace/tasks20/task_1773058150807_https-upload-local-aç-ve-yükleme-diyaloğunu-onay/screenshots/step_04_01.png",
+          "type": "image"
+        }
+      ]
+    }
+  ],
+  "elapsed_s": 0.277
+}

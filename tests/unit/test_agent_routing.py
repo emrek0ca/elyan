@@ -1,4 +1,5 @@
 import asyncio
+import time
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -279,6 +280,23 @@ def test_agent_extract_folder_hint_supports_klasorunu_form():
     agent = Agent()
     hint = agent._extract_folder_hint_from_text("Projects klasörünü listele")
     assert hint == "Projects"
+
+
+def test_agent_extract_folder_hint_supports_create_folder_form():
+    agent = Agent()
+    hint = agent._extract_folder_hint_from_text("masaüstünde elyan-test klasörü oluştur")
+    assert hint == "elyan-test"
+
+
+def test_agent_prepare_create_folder_preserves_requested_name():
+    agent = Agent()
+    params = agent._prepare_tool_params(
+        "create_folder",
+        {},
+        user_input="masaüstünde elyan-test klasörü oluştur",
+        step_name="",
+    )
+    assert str(params.get("path", "")).endswith("/Desktop/elyan-test")
 
 
 def test_agent_normalize_user_input_preserves_folder_case():
@@ -2039,6 +2057,18 @@ def test_agent_infer_save_intent_routes_to_write_file():
     assert str(intent.get("params", {}).get("path", "")).endswith("not.txt")
 
 
+def test_agent_prepare_write_file_preserves_short_note_content_for_note_request():
+    agent = Agent()
+    params = agent._prepare_tool_params(
+        "write_file",
+        {"path": "~/Desktop/not.txt", "content": "sen kimsin"},
+        user_input="masaüstüne not olarak sen kimsin yaz",
+        step_name="",
+    )
+    assert params.get("allow_short_content") is True
+    assert params.get("content") == "sen kimsin"
+
+
 def test_agent_infer_save_intent_skips_numbered_multi_step_request():
     agent = Agent()
     intent = agent._infer_save_intent(
@@ -2065,6 +2095,123 @@ def test_agent_prepare_write_word_prefers_last_research_cache(monkeypatch):
     content = str(params.get("content", ""))
     assert "Köpekler hakkında güncel araştırma özeti" in content
     assert "Beslenme düzeni önemli" in content
+
+
+def test_agent_infer_conversational_followup_word_save_uses_recent_context(monkeypatch):
+    agent = Agent()
+    agent.file_context["last_path"] = str(Path.home() / "Desktop" / "llm.txt")
+    monkeypatch.setattr(agent, "_get_recent_user_text", lambda *_args, **_kwargs: "LLM güvenliği hakkında bilgi ver")
+    monkeypatch.setattr(agent, "_get_recent_assistant_text", lambda *_args, **_kwargs: "LLM güvenliği için kısa özet")
+    monkeypatch.setattr(agent, "_get_recent_research_text", lambda *_args, **_kwargs: "")
+
+    intent = agent._infer_general_tool_intent("bunu word olarak kaydet")
+    assert intent is not None
+    assert intent.get("action") == "create_word_document"
+    params = intent.get("params", {})
+    assert str(params.get("path", "")).endswith("llm.docx")
+    assert params.get("content") == "LLM güvenliği için kısa özet"
+
+
+def test_agent_infer_conversational_followup_summary_uses_recent_text(monkeypatch):
+    agent = Agent()
+    monkeypatch.setattr(agent, "_get_recent_user_text", lambda *_args, **_kwargs: "LLM güvenliği hakkında bilgi ver")
+    monkeypatch.setattr(agent, "_get_recent_assistant_text", lambda *_args, **_kwargs: "Uzun bir açıklama metni")
+    monkeypatch.setattr(agent, "_get_recent_research_text", lambda *_args, **_kwargs: "")
+
+    intent = agent._infer_general_tool_intent("bunu daha kısa özetle")
+    assert intent is not None
+    assert intent.get("action") == "summarize_document"
+    params = intent.get("params", {})
+    assert params.get("content") == "Uzun bir açıklama metni"
+    assert params.get("style") == "brief"
+
+
+def test_agent_infer_conversational_followup_research_document_uses_recent_user_topic(monkeypatch):
+    agent = Agent()
+    monkeypatch.setattr(
+        agent,
+        "_get_recent_user_text",
+        lambda *_args, **_kwargs: "Avrupa Birliği yapay zeka yasasının şirketlere etkisi nedir",
+    )
+    monkeypatch.setattr(agent, "_get_recent_assistant_text", lambda *_args, **_kwargs: "Kısa cevap")
+    monkeypatch.setattr(agent, "_get_recent_research_text", lambda *_args, **_kwargs: "")
+
+    intent = agent._infer_general_tool_intent("bunu araştırıp profesyonel rapor yap")
+    assert intent is not None
+    assert intent.get("action") == "research_document_delivery"
+    params = intent.get("params", {})
+    assert "yapay zeka" in str(params.get("topic", "")).lower()
+    assert params.get("include_word") is True
+    assert params.get("include_excel") is False
+    assert params.get("audience") == "executive"
+
+
+def test_agent_infer_conversational_followup_professionalizes_previous_context(monkeypatch):
+    agent = Agent()
+    monkeypatch.setattr(
+        agent,
+        "_get_recent_user_text",
+        lambda *_args, **_kwargs: "müşteri onboarding sürecini anlat",
+    )
+    monkeypatch.setattr(
+        agent,
+        "_get_recent_assistant_text",
+        lambda *_args, **_kwargs: "Onboarding süreci üç adımdan oluşur.",
+    )
+    monkeypatch.setattr(agent, "_get_recent_research_text", lambda *_args, **_kwargs: "")
+
+    intent = agent._infer_general_tool_intent("bunu daha profesyonel yap")
+    assert intent is not None
+    assert intent.get("action") == "generate_document_pack"
+    params = intent.get("params", {})
+    assert "onboarding" in str(params.get("topic", "")).lower()
+    assert "üç adımdan oluşur" in str(params.get("brief", "")).lower()
+
+
+def test_agent_followup_does_not_treat_image_search_as_professional_doc(monkeypatch):
+    agent = Agent()
+    monkeypatch.setattr(agent, "_get_recent_user_text", lambda *_args, **_kwargs: "kedi resmi arat")
+    monkeypatch.setattr(
+        agent,
+        "_get_recent_assistant_text",
+        lambda *_args, **_kwargs: "İşlem tamamlandı: https://www.google.com/search?q=kedi+resmi",
+    )
+    monkeypatch.setattr(agent, "_get_recent_research_text", lambda *_args, **_kwargs: "")
+
+    intent = agent._infer_general_tool_intent("kedi resmi arat")
+    assert intent is None or intent.get("action") != "generate_document_pack"
+
+
+def test_agent_infer_conversational_followup_retry_failed_turn():
+    agent = Agent()
+    agent._last_turn_context = {
+        "user_input": "chrome dan yeni sekme aç",
+        "response_text": "Görev başarısız",
+        "action": "open_app",
+        "success": False,
+        "ts": 1.0,
+    }
+
+    intent = agent._infer_general_tool_intent("bunu düzelt ve tekrar dene")
+    assert intent is not None
+    assert intent.get("action") == "failure_replay"
+
+
+def test_agent_finalize_turn_stores_last_turn_context():
+    agent = Agent()
+    asyncio.run(
+        agent._finalize_turn(
+            user_input="not al",
+            response_text="tamam",
+            action="write_file",
+            success=True,
+            started_at=time.perf_counter(),
+            context={},
+        )
+    )
+    assert agent._last_turn_context.get("user_input") == "not al"
+    assert agent._last_turn_context.get("action") == "write_file"
+    assert agent._last_turn_context.get("success") is True
 
 
 def test_agent_information_question_bypasses_planner_when_parser_is_chat():
@@ -2817,6 +2964,12 @@ def test_agent_coerce_browser_search_to_computer_use():
     assert str(steps[0].get("params", {}).get("app_name", "")).lower() == "safari"
     open_step = next((s for s in steps if s.get("action") == "open_url"), {})
     url = str(open_step.get("params", {}).get("url", ""))
+    assert "google.com/search" in url
+    assert "tbm=isch" in url
+
+
+def test_agent_resolve_google_search_url_treats_singular_resmi_as_image_search():
+    url = Agent._resolve_google_search_url("kedi resmi", user_input="kedi resmi arat")
     assert "google.com/search" in url
     assert "tbm=isch" in url
 

@@ -1,0 +1,3 @@
+contract_decl:missing:required_outputs
+contract_decl:missing:guardrails
+contract_decl:missing:verify

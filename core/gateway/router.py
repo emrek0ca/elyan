@@ -7,11 +7,12 @@ import time
 from pathlib import Path
 from typing import Dict, Any, Optional
 from .message import UnifiedMessage
-from .response import UnifiedResponse
+from .response import ChannelEnvelope, UnifiedResponse
 from .adapters.base import BaseChannelAdapter
 from core.multi_agent.router import agent_router
 from core.proactive.intervention import get_intervention_manager
 from .channel_capabilities import resolve_channel_capabilities
+from core.channel_delivery import channel_delivery_bridge
 from config.settings import ELYAN_DIR
 from utils.logger import get_logger
 
@@ -44,6 +45,7 @@ class GatewayRouter:
             self._intervention_manager.register_listener(self._on_intervention_requested)
         except Exception as exc:
             logger.debug(f"Intervention listener registration failed: {exc}")
+        channel_delivery_bridge.register_sender(self.send_outgoing_response)
 
     @staticmethod
     def _channel_text_limit(channel_type: str) -> int:
@@ -66,6 +68,58 @@ class GatewayRouter:
         return raw[:keep].rstrip() + suffix
 
     @classmethod
+    def _build_task_inbox_buttons(cls, response: UnifiedResponse) -> list[dict[str, Any]]:
+        if list(getattr(response, "buttons", []) or []):
+            return list(getattr(response, "buttons", []) or [])
+        meta = dict(getattr(response, "metadata", {}) or {})
+        buttons: list[dict[str, Any]] = []
+        task = meta.get("task") if isinstance(meta.get("task"), dict) else None
+        task_list = meta.get("task_list") if isinstance(meta.get("task_list"), list) else []
+        recent_tasks = meta.get("recent_tasks") if isinstance(meta.get("recent_tasks"), list) else []
+        task_suggestion = meta.get("task_suggestion") if isinstance(meta.get("task_suggestion"), dict) else None
+
+        def _task_id(item: dict[str, Any]) -> str:
+            return str(item.get("task_id") or "").strip()
+
+        def _task_state(item: dict[str, Any]) -> str:
+            return str(item.get("state") or "").strip().lower()
+
+        if task:
+            task_id = _task_id(task)
+            state = _task_state(task)
+            if task_id:
+                buttons.append({"text": "Durum", "callback_data": f"task|status|{task_id}", "row": 0})
+                if state in {"queued", "running", "partial"}:
+                    buttons.append({"text": "Iptal", "callback_data": f"task|cancel|{task_id}", "row": 0})
+                if state in {"failed", "cancelled", "partial", "completed"}:
+                    buttons.append({"text": "Yeniden Baslat", "callback_data": f"task|retry|{task_id}", "row": 1})
+                return buttons
+
+        if task_suggestion:
+            task_id = _task_id(task_suggestion)
+            suggested_action = str(task_suggestion.get("suggested_action") or "status").strip().lower()
+            if task_id:
+                if suggested_action == "retry":
+                    buttons.append({"text": "Devam Et", "callback_data": f"task|retry|{task_id}", "row": 0})
+                else:
+                    buttons.append({"text": "Durum", "callback_data": f"task|status|{task_id}", "row": 0})
+                buttons.append({"text": "Detay", "callback_data": f"task|status|{task_id}", "row": 1})
+                return buttons
+
+        candidate_list = task_list or recent_tasks
+        if candidate_list:
+            first = candidate_list[0] if isinstance(candidate_list[0], dict) else None
+            if first:
+                task_id = _task_id(first)
+                state = _task_state(first)
+                if task_id:
+                    buttons.append({"text": "Ilk Gorev Durumu", "callback_data": f"task|status|{task_id}", "row": 0})
+                    if state in {"queued", "running", "partial"}:
+                        buttons.append({"text": "Ilk Gorevi Iptal", "callback_data": f"task|cancel|{task_id}", "row": 1})
+            buttons.append({"text": "Yenile", "callback_data": "task|list", "row": 2})
+        return buttons
+
+    @classmethod
     def _normalize_response_for_channel(
         cls,
         channel_type: str,
@@ -86,22 +140,47 @@ class GatewayRouter:
         supports_images = bool(resolved_caps.get("images"))
         supports_files = bool(resolved_caps.get("files"))
 
-        text = cls._truncate_text_for_channel(str(getattr(response, "text", "") or ""), channel_type)
+        envelope = response.to_channel_envelope() if hasattr(response, "to_channel_envelope") else ChannelEnvelope(text=str(getattr(response, "text", "") or ""))
+        text = cls._truncate_text_for_channel(str(envelope.text or ""), channel_type)
         if not text.strip():
             text = "İşlem tamamlandı."
 
-        attachments = list(getattr(response, "attachments", []) or [])
-        if not (supports_images or supports_files):
-            attachments = []
+        images = list(envelope.images or [])
+        files = list(envelope.files or [])
+        fallback_lines: list[str] = []
 
+        if images and not supports_images:
+            fallback_lines.append("Gorseller:")
+            fallback_lines.extend(f"- {str(item.get('name') or item.get('path') or 'gorsel')}" for item in images[:4])
+            images = []
+        if files and not supports_files:
+            fallback_lines.append("Dosyalar:")
+            fallback_lines.extend(f"- {str(item.get('name') or item.get('path') or 'dosya')}" for item in files[:4])
+            files = []
+
+        attachments = [*images[:4], *files[:4]]
+        fallback_text = str(envelope.fallback_text or "").strip()
+        if fallback_lines:
+            extra = "\n".join(fallback_lines)
+            fallback_text = f"{fallback_text}\n{extra}".strip() if fallback_text else extra
+
+        if attachments and len(text) > 700:
+            text = text[:660].rstrip() + "\n\n[Ekler gönderildi]"
+        elif fallback_text:
+            combined = f"{text}\n\n{fallback_text}".strip()
+            text = cls._truncate_text_for_channel(combined, channel_type)
+
+        task_buttons = cls._build_task_inbox_buttons(response) if supports_buttons else []
         normalized = UnifiedResponse(
             text=text,
             attachments=attachments,
-            buttons=list(getattr(response, "buttons", []) or []) if supports_buttons else [],
-            format=str(getattr(response, "format", "plain") or "plain"),
-            metadata=dict(getattr(response, "metadata", {}) or {}),
-            channel_hints=dict(getattr(response, "channel_hints", {}) or {}),
+            buttons=(list(envelope.buttons or []) if supports_buttons else []) or task_buttons,
+            format=str(envelope.format or "plain"),
+            metadata=dict(envelope.metadata or {}),
+            channel_hints=dict(envelope.channel_hints or {}),
         )
+        if fallback_text:
+            normalized.metadata["fallback_text"] = fallback_text
         if not supports_markdown and normalized.format != "plain":
             normalized.format = "plain"
         return normalized
@@ -236,10 +315,12 @@ class GatewayRouter:
             agent_meta.setdefault("channel_type", str(getattr(message, "channel_type", "") or ""))
             agent_meta.setdefault("channel_id", str(getattr(message, "channel_id", "") or ""))
             agent_meta.setdefault("user_id", str(getattr(message, "user_id", "") or ""))
-            # Default autonomy is non-interactive; Telegram gets text-code approval for critical actions.
+            # Secure-by-default metadata:
+            # - no implicit full autonomy
+            # - interactive approval must be explicitly available per channel
             channel_type_norm = str(getattr(message, "channel_type", "") or "").strip().lower()
             agent_meta.setdefault("interactive_approval", channel_type_norm == "telegram")
-            agent_meta.setdefault("autonomy_mode", "full")
+            agent_meta.setdefault("autonomy_mode", "balanced")
 
             response = None
             envelope_handler = None
@@ -280,7 +361,11 @@ class GatewayRouter:
                     text=text,
                     format="markdown",
                     attachments=[a for a in attachments if isinstance(a, dict)],
-                    metadata={"run_id": getattr(envelope, "run_id", ""), "status": getattr(envelope, "status", "success")},
+                    metadata={
+                        "run_id": getattr(envelope, "run_id", ""),
+                        "status": getattr(envelope, "status", "success"),
+                        **(dict(getattr(envelope, "metadata", {}) or {})),
+                    },
                 )
             else:
                 response_text = await agent.process(

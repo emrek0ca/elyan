@@ -1,0 +1,44 @@
+{
+  "pass_count": 5,
+  "total": 5,
+  "average_retries": 0.2,
+  "average_replans": 0.8,
+  "remaining_failure_codes": [],
+  "tasks": [
+    {
+      "name": "telegram_desktop_task_completion",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 1,
+      "failure_code": ""
+    },
+    {
+      "name": "research_document_creation_verification",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": ""
+    },
+    {
+      "name": "app_switch_finder_safari_cursor_terminal",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": ""
+    },
+    {
+      "name": "login_continue_upload_flow",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 2,
+      "failure_code": ""
+    },
+    {
+      "name": "interrupted_resume_after_partial_completion",
+      "final_status": "completed",
+      "retry_count": 1,
+      "replan_count": 1,
+      "failure_code": ""
+    }
+  ]
+}

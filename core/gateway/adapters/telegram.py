@@ -347,6 +347,20 @@ class TelegramAdapter(BaseChannelAdapter):
 
         return None
 
+    @staticmethod
+    def _parse_task_callback(data: str) -> tuple[str, str] | None:
+        raw = str(data or "").strip()
+        if not raw:
+            return None
+        match = re.match(r"(?i)^task[:|]([a-z_]+)(?:[:|](.+))?$", raw)
+        if not match:
+            return None
+        action = str(match.group(1) or "").strip().lower()
+        task_id = str(match.group(2) or "").strip()
+        if action not in {"list", "status", "cancel", "retry"}:
+            return None
+        return action, task_id
+
     async def connect(self):
         if not self.token:
             logger.error("No Telegram token provided.")
@@ -568,6 +582,33 @@ class TelegramAdapter(BaseChannelAdapter):
             return
 
         data = str(getattr(query, "data", "") or "")
+        task_callback = self._parse_task_callback(data)
+        if task_callback:
+            action, task_id = task_callback
+            command_map = {
+                "list": "aktif görevler",
+                "status": f"görev durumu {task_id}".strip(),
+                "cancel": f"{task_id} iptal et".strip(),
+                "retry": f"{task_id} yeniden başlat".strip(),
+            }
+            text = command_map.get(action, "").strip()
+            if text and self.on_message_callback:
+                try:
+                    await query.answer("Komut alındı.")
+                except Exception:
+                    pass
+                unified = UnifiedMessage(
+                    id=f"cb-{getattr(query, 'id', '')}",
+                    channel_type="telegram",
+                    channel_id=str(update.effective_chat.id),
+                    user_id=str(user.id),
+                    user_name=getattr(user, "first_name", "") or "Telegram",
+                    text=text,
+                    metadata={"source": "telegram_callback", "callback_data": data},
+                )
+                await self.on_message_callback(unified)
+                return
+
         parsed = self._parse_intervention_callback(data)
         if not parsed:
             try:
@@ -695,8 +736,7 @@ class TelegramAdapter(BaseChannelAdapter):
             raise RuntimeError("Telegram app başlatılmamış")
 
         text_payload = str(getattr(response, "text", "") or "")
-        # Disable Telegram inline buttons globally; keep interaction text-only.
-        reply_markup = None
+        reply_markup = self._build_reply_markup(list(getattr(response, "buttons", []) or []))
         paths = self._collect_local_files(response, text_payload)[: self._max_auto_files]
         image_paths = [p for p in paths if self._is_image_path(p)]
         doc_paths = [p for p in paths if self._is_document_path(p)]

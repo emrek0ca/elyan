@@ -1,0 +1,37 @@
+{
+  "run_id": "run_a5a597b6ab31",
+  "written_at": 1773156372.938401,
+  "status": "partial",
+  "manifest_path": "/Users/emrekoca/Desktop/bot/.elyan/proofs/run_a5a597b6ab31/manifest.json",
+  "steps": [
+    {
+      "step": "Köpekler hakkında araştır",
+      "tool": "advanced_research",
+      "status": "success",
+      "input_hash": "1df724fe5b91a92d93b65ba182a85ebe5e1c11613470ccff740394f8c6bcf47f",
+      "params_hash": "68b3702654a49f1d1cab4576d54ee5cc19906e14b2563a6c5a7c82105d87858b",
+      "result_hash": "ff1d9cad0f2ce5117b1d73e7f6db9076791449c7ae10dcc38dece9e9903582eb",
+      "duration_ms": 1,
+      "ts": 1773156372.9200158
+    },
+    {
+      "step": "Word dosyası oluştur",
+      "tool": "write_word",
+      "status": "success",
+      "input_hash": "2fc59607b2b8a2e5be3c716c7247b077319f074fc9c5dc1b75430f5b009f40c2",
+      "params_hash": "d3d94b3a17f6e30f263c8dfcf5322b93f1c1b9c42e768581793f08a253e8f605",
+      "result_hash": "251cc4e20c88d0b60fbf2f353c6ac21ce4d81c98dce7d4e0bbd29e2b37cdd61c",
+      "duration_ms": 1,
+      "ts": 1773156372.9235258
+    }
+  ],
+  "artifacts": [],
+  "metadata": {
+    "status": "partial",
+    "errors": [
+      "contract_decl:missing:required_outputs",
+      "contract_decl:missing:guardrails",
+      "contract_decl:missing:verify"
+    ]
+  }
+}

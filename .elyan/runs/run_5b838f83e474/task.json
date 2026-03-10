@@ -1,0 +1,97 @@
+{
+  "run_id": "run_5b838f83e474",
+  "user_input": "ss al",
+  "task_spec": {},
+  "metadata": {
+    "action": "take_screenshot",
+    "job_type": "system_automation",
+    "capability_domain": "screen_operator",
+    "workflow_id": "screen_operator_workflow",
+    "hybrid_model": {
+      "role": "inference",
+      "routing_role": "router",
+      "critic_role": "critic",
+      "tool_first": false,
+      "prefer_local": true,
+      "tier": "balanced"
+    },
+    "channel": "cli",
+    "user_id": "local",
+    "status": "partial"
+  },
+  "task_state": {
+    "task_id": "task_9a22d774ff",
+    "objective": "ss al",
+    "context": {
+      "user_input": "ss al",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "take_screenshot",
+      "job_type": "system_automation",
+      "capability_domain": "screen_operator",
+      "workflow_id": "screen_operator_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "chat",
+        "description": "ss al"
+      },
+      {
+        "id": "subtask_2",
+        "action": "take_screenshot",
+        "description": "Çalışma kanıtını ekran görüntüsüyle kaydet"
+      }
+    ],
+    "artifacts": [],
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773155196.9006941,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773155196.914068,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773155196.920358,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773155197.040735,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 2
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1773155197.0509691,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "take_screenshot",
+          "job_type": "system_automation"
+        }
+      }
+    ],
+    "created_at": 1773155196.900693,
+    "updated_at": 1773155197.0509691
+  },
+  "written_at": 1773155197.059335
+}

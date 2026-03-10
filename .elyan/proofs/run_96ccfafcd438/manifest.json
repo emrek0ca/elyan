@@ -1,0 +1,26 @@
+{
+  "run_id": "run_96ccfafcd438",
+  "started_at": 1772928742.7396538,
+  "completed_at": 1772928742.874323,
+  "status": "partial",
+  "error": "direct_intent_failed:screen_workflow; completion:missing_screen_summary; completion:no_successful_tool_result",
+  "steps": [
+    {
+      "step": "screen_workflow",
+      "tool": "screen_workflow",
+      "status": "failed",
+      "input_hash": "29dfcf6e8d52cf5695b1071d86669b839f1eadc73e1595f9410cfd6287d7224d",
+      "params_hash": "6c49aab3ac9adcf70343bd12308ee934cfe85d454e10c40df2219b1e8c2a11b6",
+      "result_hash": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "duration_ms": 2,
+      "ts": 1772928742.867907
+    }
+  ],
+  "artifacts": [],
+  "metadata": {
+    "action": "screen_workflow",
+    "job_type": "system_automation",
+    "channel": "cli",
+    "user_id": "local"
+  }
+}

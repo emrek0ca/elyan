@@ -1,6 +1,7 @@
 from typing import List, Dict, Any
 from .base import BaseSkill
-from tools.system_tools import get_system_info, take_screenshot
+from .tool_runtime import execute_registered_tool
+from core.compat.legacy_tool_wrappers import normalize_legacy_tool_payload
 
 class SystemSkill(BaseSkill):
     @property
@@ -31,10 +32,20 @@ class SystemSkill(BaseSkill):
 
     async def execute_tool(self, tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
         if tool_name == "get_system_info":
-            return await get_system_info()
+            return await execute_registered_tool("get_system_info", params, source="system_skill")
         elif tool_name == "take_screenshot":
-            return await take_screenshot()
-        return {"success": False, "error": f"Tool {tool_name} not found in system skill"}
+            return await execute_registered_tool("take_screenshot", params, source="system_skill")
+        return normalize_legacy_tool_payload(
+            {
+                "success": False,
+                "status": "failed",
+                "error": f"Tool {tool_name} not found in system skill",
+                "errors": ["UNKNOWN_TOOL"],
+                "data": {"error_code": "UNKNOWN_TOOL"},
+            },
+            tool=tool_name,
+            source="system_skill",
+        )
 
 def get_skill(config):
     return SystemSkill(config)

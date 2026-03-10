@@ -11,6 +11,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Callable
 from utils.logger import get_logger
+from core.compat.legacy_tool_wrappers import normalize_legacy_tool_payload
 
 logger = get_logger("task_planner")
 
@@ -363,13 +364,24 @@ class TaskPlanner:
             if self._tool_executor:
                 result = await self._tool_executor(task.action, resolved_params)
             else:
-                # Fallback - import and use tools directly (import here to avoid circular import)
+                # Fallback - route legacy tool execution through TaskExecutor normalization.
+                from core.task_executor import TaskExecutor
                 from tools import AVAILABLE_TOOLS
                 tool_func = AVAILABLE_TOOLS.get(task.action)
                 if tool_func:
-                    result = await tool_func(**resolved_params)
+                    result = await TaskExecutor().execute(tool_func, resolved_params)
                 else:
-                    result = {"success": False, "error": f"Bilinmeyen action: {task.action}"}
+                    result = normalize_legacy_tool_payload(
+                        {
+                            "success": False,
+                            "status": "failed",
+                            "error": f"Bilinmeyen action: {task.action}",
+                            "errors": ["UNKNOWN_TOOL"],
+                            "data": {"error_code": "UNKNOWN_TOOL"},
+                        },
+                        tool=task.action,
+                        source="task_planner",
+                    )
 
             task.result = result
             plan.results[task.id] = result

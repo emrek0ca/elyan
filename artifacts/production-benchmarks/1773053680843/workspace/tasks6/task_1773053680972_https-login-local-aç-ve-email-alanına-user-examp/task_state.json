@@ -1,0 +1,1639 @@
+{
+  "version": 1,
+  "task_id": "task_1773053680972_https-login-local-aç-ve-email-alanına-user-examp",
+  "name": "https-login-local-aç-ve-email-alanına-user-example-com-yaz-şifre",
+  "goal": "https://login.local aç ve email alanına \"user@example.com\" yaz, şifre alanına \"secret123\" yaz ve giriş yap",
+  "status": "completed",
+  "created_at": 1773053680.972672,
+  "updated_at": 1773053680.9908328,
+  "current_step": 4,
+  "completed_steps": [
+    1,
+    2,
+    3,
+    4
+  ],
+  "failed_steps": [],
+  "retry_counts": {
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0
+  },
+  "repair_history": [],
+  "replan_history": [],
+  "replan_count": 0,
+  "last_failure_reason": "",
+  "latest_observation": {
+    "step_index": 4,
+    "failed_codes": [],
+    "ui_state": {},
+    "browser_state": {
+      "success": true,
+      "dom_available": true,
+      "url": "https://login.local/dashboard",
+      "title": "Dashboard",
+      "visible_text": "Welcome back",
+      "dom_hash": "b9882beb30e1028fdb25c2f926524d2424030bdcce25619a7f431e4b9376c7bd",
+      "scroll": {
+        "x": 0,
+        "y": 0
+      },
+      "session_id": "fake-browser",
+      "headless": true
+    },
+    "desktop_host_state": {
+      "version": 1,
+      "updated_at": 1773053680.976867,
+      "frontmost_app": "",
+      "active_window": {},
+      "last_screenshot": "",
+      "last_ui_state": {},
+      "current_task_state": {},
+      "target_cache": {},
+      "recent_action_logs": [],
+      "verifier_outcomes": [],
+      "last_instruction": "",
+      "last_mode": "",
+      "last_status": ""
+    },
+    "recovery_hints": {
+      "action": "click",
+      "selector": "#login",
+      "dom_available": true,
+      "current_url": "https://login.local/dashboard",
+      "current_title": "Dashboard",
+      "visible_text": "Welcome back",
+      "fallback_used": false,
+      "fallback_reason": "",
+      "expected_text": "",
+      "failed_codes": []
+    },
+    "task_state": {}
+  },
+  "last_ui_state": {},
+  "browser_state": {
+    "success": true,
+    "dom_available": true,
+    "url": "https://login.local/dashboard",
+    "title": "Dashboard",
+    "visible_text": "Welcome back",
+    "dom_hash": "b9882beb30e1028fdb25c2f926524d2424030bdcce25619a7f431e4b9376c7bd",
+    "scroll": {
+      "x": 0,
+      "y": 0
+    },
+    "session_id": "fake-browser",
+    "headless": true
+  },
+  "desktop_host_state": {
+    "version": 1,
+    "updated_at": 1773053680.976867,
+    "frontmost_app": "",
+    "active_window": {},
+    "last_screenshot": "",
+    "last_ui_state": {},
+    "current_task_state": {},
+    "target_cache": {},
+    "recent_action_logs": [],
+    "verifier_outcomes": [],
+    "last_instruction": "",
+    "last_mode": "",
+    "last_status": ""
+  },
+  "artifacts": [
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680978/dom_snapshot.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680978/dom_snapshot.html",
+      "type": "text"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680978/navigation.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680978/action_log.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680978/verification.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680978/page.png",
+      "type": "image"
+    },
+    {
+      "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks6/task_1773053680972_https-login-local-aç-ve-email-alanına-user-examp/screenshots/step_01_01.png",
+      "type": "image"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680980/dom_snapshot.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680980/dom_snapshot.html",
+      "type": "text"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680980/navigation.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680980/action_log.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680980/verification.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680980/page.png",
+      "type": "image"
+    },
+    {
+      "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks6/task_1773053680972_https-login-local-aç-ve-email-alanına-user-examp/screenshots/step_02_01.png",
+      "type": "image"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680983/dom_snapshot.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680983/dom_snapshot.html",
+      "type": "text"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680983/navigation.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680983/action_log.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680983/verification.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680983/page.png",
+      "type": "image"
+    },
+    {
+      "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks6/task_1773053680972_https-login-local-aç-ve-email-alanına-user-examp/screenshots/step_03_01.png",
+      "type": "image"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680987/dom_snapshot.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680987/dom_snapshot.html",
+      "type": "text"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680987/navigation.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680987/action_log.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680987/verification.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680987/page.png",
+      "type": "image"
+    },
+    {
+      "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks6/task_1773053680972_https-login-local-aç-ve-email-alanına-user-examp/screenshots/step_04_01.png",
+      "type": "image"
+    }
+  ],
+  "verifier_outcomes": [
+    {
+      "step_index": 1,
+      "name": "open_page",
+      "kind": "browser",
+      "verification": {
+        "ok": true,
+        "status": "success",
+        "checks": [
+          {
+            "code": "step_result_success",
+            "passed": true,
+            "details": {
+              "status": "success"
+            }
+          },
+          {
+            "code": "url_contains",
+            "passed": true,
+            "details": {
+              "actual": "https://login.local",
+              "expected": "login.local"
+            }
+          }
+        ],
+        "failed": [],
+        "failed_codes": [],
+        "repairable": false,
+        "summary": "scenario verification for open_page",
+        "evidence_refs": [
+          {
+            "type": "ui_state",
+            "frontmost_app": "",
+            "window_title": ""
+          },
+          {
+            "type": "browser_state",
+            "url": "https://login.local",
+            "title": "Login"
+          }
+        ],
+        "metrics": {
+          "action_log_count": 1,
+          "verifier_outcome_count": 1
+        }
+      }
+    },
+    {
+      "step_index": 2,
+      "name": "fill_email",
+      "kind": "browser",
+      "verification": {
+        "ok": true,
+        "status": "success",
+        "checks": [
+          {
+            "code": "step_result_success",
+            "passed": true,
+            "details": {
+              "status": "success"
+            }
+          },
+          {
+            "code": "text_contains",
+            "passed": true,
+            "details": {
+              "expected": "user@example.com"
+            }
+          }
+        ],
+        "failed": [],
+        "failed_codes": [],
+        "repairable": false,
+        "summary": "scenario verification for fill_email",
+        "evidence_refs": [
+          {
+            "type": "ui_state",
+            "frontmost_app": "",
+            "window_title": ""
+          },
+          {
+            "type": "browser_state",
+            "url": "https://login.local",
+            "title": "Login"
+          }
+        ],
+        "metrics": {
+          "action_log_count": 1,
+          "verifier_outcome_count": 1
+        }
+      }
+    },
+    {
+      "step_index": 3,
+      "name": "fill_password",
+      "kind": "browser",
+      "verification": {
+        "ok": true,
+        "status": "success",
+        "checks": [
+          {
+            "code": "step_result_success",
+            "passed": true,
+            "details": {
+              "status": "success"
+            }
+          },
+          {
+            "code": "text_contains",
+            "passed": true,
+            "details": {
+              "expected": "secret123"
+            }
+          }
+        ],
+        "failed": [],
+        "failed_codes": [],
+        "repairable": false,
+        "summary": "scenario verification for fill_password",
+        "evidence_refs": [
+          {
+            "type": "ui_state",
+            "frontmost_app": "",
+            "window_title": ""
+          },
+          {
+            "type": "browser_state",
+            "url": "https://login.local",
+            "title": "Login"
+          }
+        ],
+        "metrics": {
+          "action_log_count": 1,
+          "verifier_outcome_count": 1
+        }
+      }
+    },
+    {
+      "step_index": 4,
+      "name": "click_login",
+      "kind": "browser",
+      "verification": {
+        "ok": true,
+        "status": "success",
+        "checks": [
+          {
+            "code": "step_result_success",
+            "passed": true,
+            "details": {
+              "status": "success"
+            }
+          }
+        ],
+        "failed": [],
+        "failed_codes": [],
+        "repairable": false,
+        "summary": "scenario verification for click_login",
+        "evidence_refs": [
+          {
+            "type": "ui_state",
+            "frontmost_app": "",
+            "window_title": ""
+          },
+          {
+            "type": "browser_state",
+            "url": "https://login.local/dashboard",
+            "title": "Dashboard"
+          }
+        ],
+        "metrics": {
+          "action_log_count": 1,
+          "verifier_outcome_count": 1
+        }
+      }
+    }
+  ],
+  "metadata": {
+    "request": "https://login.local aç ve email alanına \"user@example.com\" yaz, şifre alanına \"secret123\" yaz ve giriş yap",
+    "planner": "live_operator_task_planner_v1",
+    "plan": {
+      "name": "https-login-local-aç-ve-email-alanına-user-example-com-yaz-şifre",
+      "goal": "https://login.local aç ve email alanına \"user@example.com\" yaz, şifre alanına \"secret123\" yaz ve giriş yap",
+      "steps": [
+        {
+          "kind": "browser",
+          "name": "open_page",
+          "action": "open",
+          "url": "https://login.local",
+          "expected_url_contains": "login.local",
+          "expected_title_contains": "",
+          "verify": {
+            "url_contains": "login.local"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        },
+        {
+          "kind": "browser",
+          "name": "fill_email",
+          "action": "type",
+          "selector": "#email",
+          "text": "user@example.com",
+          "verify": {
+            "text_contains": "user@example.com"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        },
+        {
+          "kind": "browser",
+          "name": "fill_password",
+          "action": "type",
+          "selector": "#password",
+          "text": "secret123",
+          "verify": {
+            "text_contains": "secret123"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        },
+        {
+          "kind": "browser",
+          "name": "click_login",
+          "action": "click",
+          "selector": "#login",
+          "verify": {},
+          "repair_policy": {
+            "max_retries": 1
+          }
+        }
+      ]
+    },
+    "planning_trace": {
+      "request": "https://login.local aç ve email alanına \"user@example.com\" yaz, şifre alanına \"secret123\" yaz ve giriş yap",
+      "planning_request": "https://login.local aç ve email alanına \"user@example.com\" yaz, şifre alanına \"secret123\" yaz ve giriş yap",
+      "matched_rules": [
+        "browser_navigation_flow",
+        "browser_named_fill_steps",
+        "browser_click_steps"
+      ],
+      "assumptions": [],
+      "missing_inputs": [],
+      "extracted": {
+        "app_name": "",
+        "app_sequence": [],
+        "browser_app": "",
+        "url": "https://login.local",
+        "urls": [
+          "https://login.local",
+          "https://example.com"
+        ],
+        "typed_text": "user@example.com",
+        "named_field_values": [
+          {
+            "selector": "#email",
+            "field_label": "Email field",
+            "text": "user@example.com"
+          },
+          {
+            "selector": "#password",
+            "field_label": "Password field",
+            "text": "secret123"
+          }
+        ],
+        "field_label": "Login field",
+        "selector": "#login",
+        "button_label": "Login",
+        "button_sequence": [
+          {
+            "label": "Login",
+            "selector": "#login"
+          }
+        ],
+        "research_topic": "user@example.com"
+      },
+      "bounded": true,
+      "safe_mode": "deterministic"
+    },
+    "original_plan": {
+      "name": "https-login-local-aç-ve-email-alanına-user-example-com-yaz-şifre",
+      "goal": "https://login.local aç ve email alanına \"user@example.com\" yaz, şifre alanına \"secret123\" yaz ve giriş yap",
+      "steps": [
+        {
+          "kind": "browser",
+          "name": "open_page",
+          "action": "open",
+          "url": "https://login.local",
+          "expected_url_contains": "login.local",
+          "expected_title_contains": "",
+          "verify": {
+            "url_contains": "login.local"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        },
+        {
+          "kind": "browser",
+          "name": "fill_email",
+          "action": "type",
+          "selector": "#email",
+          "text": "user@example.com",
+          "verify": {
+            "text_contains": "user@example.com"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        },
+        {
+          "kind": "browser",
+          "name": "fill_password",
+          "action": "type",
+          "selector": "#password",
+          "text": "secret123",
+          "verify": {
+            "text_contains": "secret123"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        },
+        {
+          "kind": "browser",
+          "name": "click_login",
+          "action": "click",
+          "selector": "#login",
+          "verify": {},
+          "repair_policy": {
+            "max_retries": 1
+          }
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_index": 1,
+      "name": "open_page",
+      "kind": "browser",
+      "status": "completed",
+      "attempts": 1,
+      "verification": {
+        "ok": true,
+        "status": "success",
+        "checks": [
+          {
+            "code": "step_result_success",
+            "passed": true,
+            "details": {
+              "status": "success"
+            }
+          },
+          {
+            "code": "url_contains",
+            "passed": true,
+            "details": {
+              "actual": "https://login.local",
+              "expected": "login.local"
+            }
+          }
+        ],
+        "failed": [],
+        "failed_codes": [],
+        "repairable": false,
+        "summary": "scenario verification for open_page",
+        "evidence_refs": [
+          {
+            "type": "ui_state",
+            "frontmost_app": "",
+            "window_title": ""
+          },
+          {
+            "type": "browser_state",
+            "url": "https://login.local",
+            "title": "Login"
+          }
+        ],
+        "metrics": {
+          "action_log_count": 1,
+          "verifier_outcome_count": 1
+        }
+      },
+      "message": "Login",
+      "error": "",
+      "error_code": "",
+      "screenshots": [
+        "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks6/task_1773053680972_https-login-local-aç-ve-email-alanına-user-examp/screenshots/step_01_01.png"
+      ],
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680978/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680978/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680978/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680978/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680978/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680978/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks6/task_1773053680972_https-login-local-aç-ve-email-alanına-user-examp/screenshots/step_01_01.png",
+          "type": "image"
+        }
+      ],
+      "result": {
+        "success": true,
+        "status": "success",
+        "message": "Login",
+        "summary": "Login",
+        "url": "https://login.local",
+        "title": "Login",
+        "browser_state": {
+          "success": true,
+          "dom_available": true,
+          "url": "https://login.local",
+          "title": "Login",
+          "visible_text": "Email Password Login",
+          "dom_hash": "67a7b0917424a47c1a57250c980feddf7ea29abed167430775ffe086c12409e3",
+          "scroll": {
+            "x": 0,
+            "y": 0
+          },
+          "session_id": "fake-browser",
+          "headless": true
+        },
+        "dom_snapshot": {
+          "success": true,
+          "dom_available": true,
+          "url": "https://login.local",
+          "title": "Login",
+          "visible_text": "Email Password Login",
+          "dom_hash": "67a7b0917424a47c1a57250c980feddf7ea29abed167430775ffe086c12409e3",
+          "scroll": {
+            "x": 0,
+            "y": 0
+          },
+          "session_id": "fake-browser",
+          "headless": true,
+          "html": "<html><body><input id='email'/><input id='password'/><button id='login'>Login</button></body></html>"
+        },
+        "extracted_text": "",
+        "links": [],
+        "table": {},
+        "artifacts": [
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680978/dom_snapshot.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680978/dom_snapshot.html",
+            "type": "text"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680978/navigation.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680978/action_log.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680978/verification.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680978/page.png",
+            "type": "image"
+          }
+        ],
+        "screenshots": [
+          "/Users/emrekoca/.elyan/browser_runtime/1773053680978/page.png"
+        ],
+        "action_logs": [
+          {
+            "step": 1,
+            "action": "open",
+            "params": {
+              "url": "https://login.local",
+              "selector": "",
+              "text": ""
+            },
+            "result": {
+              "success": true,
+              "url": "https://login.local",
+              "title": "Login",
+              "status_code": 200,
+              "dom_available": true
+            }
+          }
+        ],
+        "action_result": {
+          "success": true,
+          "url": "https://login.local",
+          "title": "Login",
+          "status_code": 200,
+          "dom_available": true
+        },
+        "verifier_outcomes": [
+          {
+            "ok": true,
+            "status": "success",
+            "checks": [
+              {
+                "code": "dom_available",
+                "passed": true
+              },
+              {
+                "code": "screenshot_present",
+                "passed": true,
+                "details": {
+                  "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680978/page.png"
+                }
+              },
+              {
+                "code": "navigation_changed",
+                "passed": true,
+                "details": {
+                  "before_url": "",
+                  "after_url": "https://login.local"
+                }
+              },
+              {
+                "code": "title_matches",
+                "passed": true,
+                "details": {
+                  "title": "Login"
+                }
+              },
+              {
+                "code": "url_matches",
+                "passed": true,
+                "details": {
+                  "url": "https://login.local"
+                }
+              }
+            ],
+            "failed": [],
+            "failed_codes": [],
+            "repairable": true,
+            "summary": "browser verification for open",
+            "evidence_refs": [
+              {
+                "type": "browser_state",
+                "before_url": "",
+                "after_url": "https://login.local"
+              },
+              {
+                "type": "screenshot",
+                "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680978/page.png"
+              }
+            ],
+            "metrics": {
+              "dom_changed": 1,
+              "url_changed": 1,
+              "title_changed": 1
+            }
+          }
+        ],
+        "fallback": {
+          "used": false
+        },
+        "playwright_available": false,
+        "recovery_hints": {
+          "action": "open",
+          "selector": "",
+          "dom_available": true,
+          "current_url": "https://login.local",
+          "current_title": "Login",
+          "visible_text": "Email Password Login",
+          "fallback_used": false,
+          "fallback_reason": "",
+          "expected_text": "",
+          "failed_codes": []
+        }
+      }
+    },
+    {
+      "step_index": 2,
+      "name": "fill_email",
+      "kind": "browser",
+      "status": "completed",
+      "attempts": 1,
+      "verification": {
+        "ok": true,
+        "status": "success",
+        "checks": [
+          {
+            "code": "step_result_success",
+            "passed": true,
+            "details": {
+              "status": "success"
+            }
+          },
+          {
+            "code": "text_contains",
+            "passed": true,
+            "details": {
+              "expected": "user@example.com"
+            }
+          }
+        ],
+        "failed": [],
+        "failed_codes": [],
+        "repairable": false,
+        "summary": "scenario verification for fill_email",
+        "evidence_refs": [
+          {
+            "type": "ui_state",
+            "frontmost_app": "",
+            "window_title": ""
+          },
+          {
+            "type": "browser_state",
+            "url": "https://login.local",
+            "title": "Login"
+          }
+        ],
+        "metrics": {
+          "action_log_count": 1,
+          "verifier_outcome_count": 1
+        }
+      },
+      "message": "Login",
+      "error": "",
+      "error_code": "",
+      "screenshots": [
+        "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks6/task_1773053680972_https-login-local-aç-ve-email-alanına-user-examp/screenshots/step_02_01.png"
+      ],
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680980/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680980/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680980/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680980/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680980/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680980/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks6/task_1773053680972_https-login-local-aç-ve-email-alanına-user-examp/screenshots/step_02_01.png",
+          "type": "image"
+        }
+      ],
+      "result": {
+        "success": true,
+        "status": "success",
+        "message": "Login",
+        "summary": "Login",
+        "url": "https://login.local",
+        "title": "Login",
+        "browser_state": {
+          "success": true,
+          "dom_available": true,
+          "url": "https://login.local",
+          "title": "Login",
+          "visible_text": "Email Password Login",
+          "dom_hash": "67a7b0917424a47c1a57250c980feddf7ea29abed167430775ffe086c12409e3",
+          "scroll": {
+            "x": 0,
+            "y": 0
+          },
+          "session_id": "fake-browser",
+          "headless": true
+        },
+        "dom_snapshot": {
+          "success": true,
+          "dom_available": true,
+          "url": "https://login.local",
+          "title": "Login",
+          "visible_text": "Email Password Login",
+          "dom_hash": "67a7b0917424a47c1a57250c980feddf7ea29abed167430775ffe086c12409e3",
+          "scroll": {
+            "x": 0,
+            "y": 0
+          },
+          "session_id": "fake-browser",
+          "headless": true,
+          "html": "<html><body><input id='email'/><input id='password'/><button id='login'>Login</button></body></html>"
+        },
+        "extracted_text": "",
+        "links": [],
+        "table": {},
+        "artifacts": [
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680980/dom_snapshot.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680980/dom_snapshot.html",
+            "type": "text"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680980/navigation.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680980/action_log.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680980/verification.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680980/page.png",
+            "type": "image"
+          }
+        ],
+        "screenshots": [
+          "/Users/emrekoca/.elyan/browser_runtime/1773053680980/page.png"
+        ],
+        "action_logs": [
+          {
+            "step": 1,
+            "action": "type",
+            "params": {
+              "url": "",
+              "selector": "#email",
+              "text": "user@example.com"
+            },
+            "result": {
+              "success": true,
+              "selector": "#email",
+              "text": "user@example.com",
+              "dom_available": true
+            }
+          }
+        ],
+        "action_result": {
+          "success": true,
+          "selector": "#email",
+          "text": "user@example.com",
+          "dom_available": true
+        },
+        "verifier_outcomes": [
+          {
+            "ok": true,
+            "status": "success",
+            "checks": [
+              {
+                "code": "dom_available",
+                "passed": true
+              },
+              {
+                "code": "screenshot_present",
+                "passed": true,
+                "details": {
+                  "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680980/page.png"
+                }
+              },
+              {
+                "code": "typed_value_persisted",
+                "passed": true,
+                "details": {
+                  "typed_value": "user@example.com"
+                }
+              }
+            ],
+            "failed": [],
+            "failed_codes": [],
+            "repairable": true,
+            "summary": "browser verification for type",
+            "evidence_refs": [
+              {
+                "type": "browser_state",
+                "before_url": "https://login.local",
+                "after_url": "https://login.local"
+              },
+              {
+                "type": "screenshot",
+                "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680980/page.png"
+              }
+            ],
+            "metrics": {
+              "dom_changed": 0,
+              "url_changed": 0,
+              "title_changed": 0
+            }
+          }
+        ],
+        "fallback": {
+          "used": false
+        },
+        "playwright_available": false,
+        "recovery_hints": {
+          "action": "type",
+          "selector": "#email",
+          "dom_available": true,
+          "current_url": "https://login.local",
+          "current_title": "Login",
+          "visible_text": "Email Password Login",
+          "fallback_used": false,
+          "fallback_reason": "",
+          "expected_text": "",
+          "failed_codes": []
+        }
+      }
+    },
+    {
+      "step_index": 3,
+      "name": "fill_password",
+      "kind": "browser",
+      "status": "completed",
+      "attempts": 1,
+      "verification": {
+        "ok": true,
+        "status": "success",
+        "checks": [
+          {
+            "code": "step_result_success",
+            "passed": true,
+            "details": {
+              "status": "success"
+            }
+          },
+          {
+            "code": "text_contains",
+            "passed": true,
+            "details": {
+              "expected": "secret123"
+            }
+          }
+        ],
+        "failed": [],
+        "failed_codes": [],
+        "repairable": false,
+        "summary": "scenario verification for fill_password",
+        "evidence_refs": [
+          {
+            "type": "ui_state",
+            "frontmost_app": "",
+            "window_title": ""
+          },
+          {
+            "type": "browser_state",
+            "url": "https://login.local",
+            "title": "Login"
+          }
+        ],
+        "metrics": {
+          "action_log_count": 1,
+          "verifier_outcome_count": 1
+        }
+      },
+      "message": "Login",
+      "error": "",
+      "error_code": "",
+      "screenshots": [
+        "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks6/task_1773053680972_https-login-local-aç-ve-email-alanına-user-examp/screenshots/step_03_01.png"
+      ],
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680983/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680983/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680983/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680983/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680983/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680983/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks6/task_1773053680972_https-login-local-aç-ve-email-alanına-user-examp/screenshots/step_03_01.png",
+          "type": "image"
+        }
+      ],
+      "result": {
+        "success": true,
+        "status": "success",
+        "message": "Login",
+        "summary": "Login",
+        "url": "https://login.local",
+        "title": "Login",
+        "browser_state": {
+          "success": true,
+          "dom_available": true,
+          "url": "https://login.local",
+          "title": "Login",
+          "visible_text": "Email Password Login",
+          "dom_hash": "67a7b0917424a47c1a57250c980feddf7ea29abed167430775ffe086c12409e3",
+          "scroll": {
+            "x": 0,
+            "y": 0
+          },
+          "session_id": "fake-browser",
+          "headless": true
+        },
+        "dom_snapshot": {
+          "success": true,
+          "dom_available": true,
+          "url": "https://login.local",
+          "title": "Login",
+          "visible_text": "Email Password Login",
+          "dom_hash": "67a7b0917424a47c1a57250c980feddf7ea29abed167430775ffe086c12409e3",
+          "scroll": {
+            "x": 0,
+            "y": 0
+          },
+          "session_id": "fake-browser",
+          "headless": true,
+          "html": "<html><body><input id='email'/><input id='password'/><button id='login'>Login</button></body></html>"
+        },
+        "extracted_text": "",
+        "links": [],
+        "table": {},
+        "artifacts": [
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680983/dom_snapshot.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680983/dom_snapshot.html",
+            "type": "text"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680983/navigation.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680983/action_log.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680983/verification.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680983/page.png",
+            "type": "image"
+          }
+        ],
+        "screenshots": [
+          "/Users/emrekoca/.elyan/browser_runtime/1773053680983/page.png"
+        ],
+        "action_logs": [
+          {
+            "step": 1,
+            "action": "type",
+            "params": {
+              "url": "",
+              "selector": "#password",
+              "text": "secret123"
+            },
+            "result": {
+              "success": true,
+              "selector": "#password",
+              "text": "secret123",
+              "dom_available": true
+            }
+          }
+        ],
+        "action_result": {
+          "success": true,
+          "selector": "#password",
+          "text": "secret123",
+          "dom_available": true
+        },
+        "verifier_outcomes": [
+          {
+            "ok": true,
+            "status": "success",
+            "checks": [
+              {
+                "code": "dom_available",
+                "passed": true
+              },
+              {
+                "code": "screenshot_present",
+                "passed": true,
+                "details": {
+                  "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680983/page.png"
+                }
+              },
+              {
+                "code": "typed_value_persisted",
+                "passed": true,
+                "details": {
+                  "typed_value": "secret123"
+                }
+              }
+            ],
+            "failed": [],
+            "failed_codes": [],
+            "repairable": true,
+            "summary": "browser verification for type",
+            "evidence_refs": [
+              {
+                "type": "browser_state",
+                "before_url": "https://login.local",
+                "after_url": "https://login.local"
+              },
+              {
+                "type": "screenshot",
+                "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680983/page.png"
+              }
+            ],
+            "metrics": {
+              "dom_changed": 0,
+              "url_changed": 0,
+              "title_changed": 0
+            }
+          }
+        ],
+        "fallback": {
+          "used": false
+        },
+        "playwright_available": false,
+        "recovery_hints": {
+          "action": "type",
+          "selector": "#password",
+          "dom_available": true,
+          "current_url": "https://login.local",
+          "current_title": "Login",
+          "visible_text": "Email Password Login",
+          "fallback_used": false,
+          "fallback_reason": "",
+          "expected_text": "",
+          "failed_codes": []
+        }
+      }
+    },
+    {
+      "step_index": 4,
+      "name": "click_login",
+      "kind": "browser",
+      "status": "completed",
+      "attempts": 1,
+      "verification": {
+        "ok": true,
+        "status": "success",
+        "checks": [
+          {
+            "code": "step_result_success",
+            "passed": true,
+            "details": {
+              "status": "success"
+            }
+          }
+        ],
+        "failed": [],
+        "failed_codes": [],
+        "repairable": false,
+        "summary": "scenario verification for click_login",
+        "evidence_refs": [
+          {
+            "type": "ui_state",
+            "frontmost_app": "",
+            "window_title": ""
+          },
+          {
+            "type": "browser_state",
+            "url": "https://login.local/dashboard",
+            "title": "Dashboard"
+          }
+        ],
+        "metrics": {
+          "action_log_count": 1,
+          "verifier_outcome_count": 1
+        }
+      },
+      "message": "Dashboard",
+      "error": "",
+      "error_code": "",
+      "screenshots": [
+        "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks6/task_1773053680972_https-login-local-aç-ve-email-alanına-user-examp/screenshots/step_04_01.png"
+      ],
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680987/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680987/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680987/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680987/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680987/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680987/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks6/task_1773053680972_https-login-local-aç-ve-email-alanına-user-examp/screenshots/step_04_01.png",
+          "type": "image"
+        }
+      ],
+      "result": {
+        "success": true,
+        "status": "success",
+        "message": "Dashboard",
+        "summary": "Dashboard",
+        "url": "https://login.local/dashboard",
+        "title": "Dashboard",
+        "browser_state": {
+          "success": true,
+          "dom_available": true,
+          "url": "https://login.local/dashboard",
+          "title": "Dashboard",
+          "visible_text": "Welcome back",
+          "dom_hash": "b9882beb30e1028fdb25c2f926524d2424030bdcce25619a7f431e4b9376c7bd",
+          "scroll": {
+            "x": 0,
+            "y": 0
+          },
+          "session_id": "fake-browser",
+          "headless": true
+        },
+        "dom_snapshot": {
+          "success": true,
+          "dom_available": true,
+          "url": "https://login.local/dashboard",
+          "title": "Dashboard",
+          "visible_text": "Welcome back",
+          "dom_hash": "b9882beb30e1028fdb25c2f926524d2424030bdcce25619a7f431e4b9376c7bd",
+          "scroll": {
+            "x": 0,
+            "y": 0
+          },
+          "session_id": "fake-browser",
+          "headless": true,
+          "html": "<html><body>Welcome back</body></html>"
+        },
+        "extracted_text": "",
+        "links": [],
+        "table": {},
+        "artifacts": [
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680987/dom_snapshot.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680987/dom_snapshot.html",
+            "type": "text"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680987/navigation.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680987/action_log.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680987/verification.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680987/page.png",
+            "type": "image"
+          }
+        ],
+        "screenshots": [
+          "/Users/emrekoca/.elyan/browser_runtime/1773053680987/page.png"
+        ],
+        "action_logs": [
+          {
+            "step": 1,
+            "action": "click",
+            "params": {
+              "url": "",
+              "selector": "#login",
+              "text": ""
+            },
+            "result": {
+              "success": true,
+              "selector": "#login",
+              "dom_available": true
+            }
+          }
+        ],
+        "action_result": {
+          "success": true,
+          "selector": "#login",
+          "dom_available": true
+        },
+        "verifier_outcomes": [
+          {
+            "ok": true,
+            "status": "success",
+            "checks": [
+              {
+                "code": "dom_available",
+                "passed": true
+              },
+              {
+                "code": "screenshot_present",
+                "passed": true,
+                "details": {
+                  "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680987/page.png"
+                }
+              },
+              {
+                "code": "dom_or_navigation_changed",
+                "passed": true,
+                "details": {
+                  "before_hash": "67a7b0917424a47c1a57250c980feddf7ea29abed167430775ffe086c12409e3",
+                  "after_hash": "b9882beb30e1028fdb25c2f926524d2424030bdcce25619a7f431e4b9376c7bd"
+                }
+              }
+            ],
+            "failed": [],
+            "failed_codes": [],
+            "repairable": true,
+            "summary": "browser verification for click",
+            "evidence_refs": [
+              {
+                "type": "browser_state",
+                "before_url": "https://login.local",
+                "after_url": "https://login.local/dashboard"
+              },
+              {
+                "type": "screenshot",
+                "path": "/Users/emrekoca/.elyan/browser_runtime/1773053680987/page.png"
+              }
+            ],
+            "metrics": {
+              "dom_changed": 1,
+              "url_changed": 1,
+              "title_changed": 1
+            }
+          }
+        ],
+        "fallback": {
+          "used": false
+        },
+        "playwright_available": false,
+        "recovery_hints": {
+          "action": "click",
+          "selector": "#login",
+          "dom_available": true,
+          "current_url": "https://login.local/dashboard",
+          "current_title": "Dashboard",
+          "visible_text": "Welcome back",
+          "fallback_used": false,
+          "fallback_reason": "",
+          "expected_text": "",
+          "failed_codes": []
+        }
+      }
+    }
+  ],
+  "step_definitions": [
+    {
+      "kind": "browser",
+      "name": "open_page",
+      "action": "open",
+      "url": "https://login.local",
+      "expected_url_contains": "login.local",
+      "expected_title_contains": "",
+      "verify": {
+        "url_contains": "login.local"
+      },
+      "repair_policy": {
+        "max_retries": 1
+      }
+    },
+    {
+      "kind": "browser",
+      "name": "fill_email",
+      "action": "type",
+      "selector": "#email",
+      "text": "user@example.com",
+      "verify": {
+        "text_contains": "user@example.com"
+      },
+      "repair_policy": {
+        "max_retries": 1
+      }
+    },
+    {
+      "kind": "browser",
+      "name": "fill_password",
+      "action": "type",
+      "selector": "#password",
+      "text": "secret123",
+      "verify": {
+        "text_contains": "secret123"
+      },
+      "repair_policy": {
+        "max_retries": 1
+      }
+    },
+    {
+      "kind": "browser",
+      "name": "click_login",
+      "action": "click",
+      "selector": "#login",
+      "verify": {},
+      "repair_policy": {
+        "max_retries": 1
+      }
+    }
+  ],
+  "action_logs": [
+    {
+      "task_step": 1,
+      "task_step_name": "open_page",
+      "step": 1,
+      "action": "open",
+      "params": {
+        "url": "https://login.local",
+        "selector": "",
+        "text": ""
+      },
+      "result": {
+        "success": true,
+        "url": "https://login.local",
+        "title": "Login",
+        "status_code": 200,
+        "dom_available": true
+      }
+    },
+    {
+      "task_step": 2,
+      "task_step_name": "fill_email",
+      "step": 1,
+      "action": "type",
+      "params": {
+        "url": "",
+        "selector": "#email",
+        "text": "user@example.com"
+      },
+      "result": {
+        "success": true,
+        "selector": "#email",
+        "text": "user@example.com",
+        "dom_available": true
+      }
+    },
+    {
+      "task_step": 3,
+      "task_step_name": "fill_password",
+      "step": 1,
+      "action": "type",
+      "params": {
+        "url": "",
+        "selector": "#password",
+        "text": "secret123"
+      },
+      "result": {
+        "success": true,
+        "selector": "#password",
+        "text": "secret123",
+        "dom_available": true
+      }
+    },
+    {
+      "task_step": 4,
+      "task_step_name": "click_login",
+      "step": 1,
+      "action": "click",
+      "params": {
+        "url": "",
+        "selector": "#login",
+        "text": ""
+      },
+      "result": {
+        "success": true,
+        "selector": "#login",
+        "dom_available": true
+      }
+    }
+  ],
+  "target_decisions": []
+}

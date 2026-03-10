@@ -31,7 +31,7 @@ class FreeApiParser(BaseParser):
     def _parse_dictionary(self, text: str, text_norm: str, original: str) -> dict | None:
         triggers = ["kelime anlamı", "kelime anlami", "sözlük", "sozluk", "tanımı",
                      "tanimi", "definition", "meaning", "anlam", "anlamı ne",
-                     "ne anlama gelir", "ne demektir", "ne demek", "nedir"]
+                     "ne anlama gelir", "ne demektir", "ne demek"]
         if not any(t in text for t in triggers):
             return None
         m = re.search(r'["\'](.+?)["\']', text)
@@ -41,7 +41,7 @@ class FreeApiParser(BaseParser):
             word = text
             for t in triggers:
                 word = word.replace(t, "")
-            word = re.sub(r'\b(nedir|ne|bu|kelime|şu|kelimenin|sözcüğün|sozcugun)\b', '', word).strip()
+            word = re.sub(r'\b(ne|bu|kelime|şu|kelimenin|sözcüğün|sozcugun)\b', '', word).strip()
         if not word or len(word) < 2:
             return None
         lang = "tr" if any(k in text for k in ["türkçe", "turkce"]) else "en"

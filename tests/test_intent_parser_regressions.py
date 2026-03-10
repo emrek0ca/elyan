@@ -1,17 +1,51 @@
 from core.intent_parser import IntentParser
+from urllib.parse import parse_qs, unquote_plus, urlparse
 
 
 def test_status_prompt_routes_to_screenshot():
     parser = IntentParser()
     result = parser.parse("durum nedir")
     assert result is not None
-    assert result.get("action") == "take_screenshot"
+    assert result.get("action") == "screen_workflow"
+    assert result.get("params", {}).get("mode") == "inspect"
+
+
+def test_screen_read_prompt_routes_to_screen_workflow():
+    parser = IntentParser()
+    result = parser.parse("ekrana bak ve ne görüyorsun söyle")
+    assert result is not None
+    assert result.get("action") == "screen_workflow"
+    assert result.get("params", {}).get("mode") == "inspect"
+
+
+def test_screen_control_prompt_routes_to_inspect_and_control():
+    parser = IntentParser()
+    result = parser.parse("ekrana bak ve safariyi aç")
+    assert result is not None
+    assert result.get("action") == "screen_workflow"
+    assert result.get("params", {}).get("mode") == "inspect_and_control"
+
+
+def test_research_prompt_defaults_to_document_delivery():
+    parser = IntentParser()
+    result = parser.parse("Fourier serileri hakkında araştırma yap")
+    assert result is not None
+    assert result.get("action") == "research_document_delivery"
+    params = result.get("params", {})
+    assert params.get("include_word") is True
+    assert params.get("include_report") is True
 
 
 def test_system_status_does_not_route_to_screenshot():
     parser = IntentParser()
     result = parser.parse("sistem durumu nedir")
     assert result is None or result.get("action") != "take_screenshot"
+
+
+def test_general_nedir_question_does_not_route_to_dictionary():
+    parser = IntentParser()
+    result = parser.parse("başarının sırrı nedir")
+    assert result is None or result.get("action") != "get_word_definition"
 
 
 def test_website_builder_routes_to_multi_task_with_html_css_js():
@@ -40,6 +74,25 @@ def test_create_folder_on_desktop():
     path = result.get("params", {}).get("path", "")
     assert "Desktop" in path
     assert path.endswith("test")
+
+
+def test_create_folder_keeps_exact_requested_name():
+    parser = IntentParser()
+    result = parser.parse("masaüstünde elyan-test klasörü oluştur")
+    assert result is not None
+    assert result.get("action") == "create_folder"
+    path = str(result.get("params", {}).get("path", ""))
+    assert path.endswith("elyan-test")
+
+
+def test_desktop_note_phrase_routes_to_write_file_instead_of_chat():
+    parser = IntentParser()
+    result = parser.parse("masaüstüne not olarak ahmete borcum var yaz")
+    assert result is not None
+    assert result.get("action") == "write_file"
+    params = result.get("params", {})
+    assert "Desktop" in str(params.get("path", ""))
+    assert "ahmete borcum var" in str(params.get("content", "")).lower()
 
 
 def test_force_planning_on_complex_query():
@@ -75,6 +128,48 @@ def test_browser_search_cleans_safariden_prefix_and_uses_image_mode():
     assert "google.com/search" in url
     assert "tbm=isch" in url
     assert "safariden" not in url.lower()
+
+
+def test_browser_search_singular_resmi_uses_image_mode():
+    parser = IntentParser()
+    result = parser.parse("kedi resmi arat")
+    assert result is not None
+    assert result.get("action") == "open_url"
+    url = str(result.get("params", {}).get("url", ""))
+    assert "google.com/search" in url
+    assert "tbm=isch" in url
+
+
+def test_browser_image_request_without_search_verb_routes_as_search_intent():
+    parser = IntentParser()
+    result = parser.parse("Pi günü için resim aç safariden")
+    assert result is not None
+    assert result.get("action") == "multi_task"
+    tasks = result.get("tasks", [])
+    open_step = next((t for t in tasks if t.get("action") == "open_url"), {})
+    url = str(open_step.get("params", {}).get("url", ""))
+    assert "google.com/search" in url
+    assert "tbm=isch" in url
+    parsed_q = parse_qs(urlparse(url).query).get("q", [""])[0]
+    query = unquote_plus(parsed_q).lower()
+    assert "pi" in query
+    assert ("günü" in query) or ("gunu" in query)
+    assert "safariden" not in query
+
+
+def test_browser_news_request_with_topic_does_not_collapse_to_news_home():
+    parser = IntentParser()
+    result = parser.parse("safariden mars hakkında haber aç")
+    assert result is not None
+    assert result.get("action") == "multi_task"
+    tasks = result.get("tasks", [])
+    open_step = next((t for t in tasks if t.get("action") == "open_url"), {})
+    url = str(open_step.get("params", {}).get("url", ""))
+    assert "google.com/search" in url
+    parsed_q = parse_qs(urlparse(url).query).get("q", [""])[0]
+    query = unquote_plus(parsed_q).lower()
+    assert "mars" in query
+    assert "news.google.com" not in url
 
 
 def test_youtube_query_cleanup_removes_connector_words():
@@ -118,6 +213,19 @@ def test_input_control_click_parses_coordinates():
     params = result.get("params", {})
     assert int(params.get("x", 0)) == 500
     assert int(params.get("y", 0)) == 300
+
+
+def test_browser_new_tab_command_routes_to_multi_task():
+    parser = IntentParser()
+    result = parser.parse("chrome dan yeni sekme aç")
+    assert result is not None
+    assert result.get("action") == "multi_task"
+    tasks = result.get("tasks", [])
+    assert len(tasks) == 2
+    assert tasks[0].get("action") == "open_app"
+    assert tasks[0].get("params", {}).get("app_name") == "Google Chrome"
+    assert tasks[1].get("action") == "key_combo"
+    assert tasks[1].get("params", {}).get("combo") == "cmd+t"
 
 
 def test_power_off_command_routes_to_shutdown_system():

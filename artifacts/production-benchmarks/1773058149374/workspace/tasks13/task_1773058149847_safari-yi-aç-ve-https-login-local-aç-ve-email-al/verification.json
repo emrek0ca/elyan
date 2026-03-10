@@ -1,0 +1,260 @@
+[
+  {
+    "step_index": 1,
+    "name": "open_safari",
+    "kind": "system",
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        },
+        {
+          "code": "frontmost_app_matches",
+          "passed": true,
+          "details": {
+            "actual": "Safari",
+            "expected": "Safari"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for open_safari",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "Safari",
+          "window_title": "Login"
+        },
+        {
+          "type": "browser_state",
+          "url": "",
+          "title": ""
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 0
+      }
+    }
+  },
+  {
+    "step_index": 2,
+    "name": "open_page",
+    "kind": "browser",
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        },
+        {
+          "code": "url_contains",
+          "passed": true,
+          "details": {
+            "actual": "https://login.local",
+            "expected": "login.local"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for open_page",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "",
+          "window_title": ""
+        },
+        {
+          "type": "browser_state",
+          "url": "https://login.local",
+          "title": "Login"
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 1
+      }
+    }
+  },
+  {
+    "step_index": 3,
+    "name": "fill_email",
+    "kind": "browser",
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        },
+        {
+          "code": "text_contains",
+          "passed": true,
+          "details": {
+            "expected": "user@example.com"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for fill_email",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "",
+          "window_title": ""
+        },
+        {
+          "type": "browser_state",
+          "url": "https://login.local",
+          "title": "Login"
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 1
+      }
+    }
+  },
+  {
+    "step_index": 4,
+    "name": "fill_password",
+    "kind": "browser",
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        },
+        {
+          "code": "text_contains",
+          "passed": true,
+          "details": {
+            "expected": "secret123"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for fill_password",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "",
+          "window_title": ""
+        },
+        {
+          "type": "browser_state",
+          "url": "https://login.local",
+          "title": "Login"
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 1
+      }
+    }
+  },
+  {
+    "step_index": 5,
+    "name": "click_login",
+    "kind": "browser",
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for click_login",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "",
+          "window_title": ""
+        },
+        {
+          "type": "browser_state",
+          "url": "https://login.local/review",
+          "title": "Review"
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 1
+      }
+    }
+  },
+  {
+    "step_index": 6,
+    "name": "click_continue",
+    "kind": "browser",
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for click_continue",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "",
+          "window_title": ""
+        },
+        {
+          "type": "browser_state",
+          "url": "https://login.local/dashboard",
+          "title": "Dashboard"
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 1
+      }
+    }
+  }
+]

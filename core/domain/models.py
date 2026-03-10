@@ -2,6 +2,7 @@ from enum import Enum
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
+from core.version import APP_VERSION
 
 class Environment(str, Enum):
     PRODUCTION = "production"
@@ -66,7 +67,7 @@ class SubscriptionConfig(BaseModel):
 
 class AppConfig(BaseModel):
     """Master configuration model with safe defaults."""
-    version: str = "18.0.0"
+    version: str = APP_VERSION
     app_name: str = "Elyan"
     environment: Environment = Environment.PRODUCTION
     agent: AgentConfig = Field(default_factory=lambda: AgentConfig())

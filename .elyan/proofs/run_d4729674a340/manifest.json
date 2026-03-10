@@ -1,0 +1,13 @@
+{
+  "run_id": "run_d4729674a340",
+  "started_at": 1773155195.255371,
+  "completed_at": 1773155195.2562401,
+  "status": "partial",
+  "error": "",
+  "steps": [],
+  "artifacts": [],
+  "metadata": {
+    "reason": "short_ambiguous_input",
+    "channel": "cli"
+  }
+}

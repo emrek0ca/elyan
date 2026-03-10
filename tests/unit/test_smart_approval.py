@@ -8,6 +8,9 @@ async def test_smart_approval_bypass():
     agent = Agent()
     agent.kernel = MagicMock()
     agent.kernel.tools.execute = AsyncMock(return_value={"success": True})
+    agent._current_runtime_policy = lambda: {
+        "metadata": {"interactive_approval": True, "channel": "telegram", "user_id": "42"}
+    }
     
     # Mock policy to require approval
     with patch("core.agent.tool_policy") as mock_policy:
@@ -31,8 +34,10 @@ async def test_smart_approval_bypass():
             # Assert intervention was NOT requested
             mock_mgr.ask_human.assert_not_called()
             
-            # Assert tool WAS executed
-            agent.kernel.tools.execute.assert_called_once()
+            # Assert primary tool was executed (auxiliary proof tools may also run)
+            assert agent.kernel.tools.execute.call_count >= 1
+            first_call = agent.kernel.tools.execute.call_args_list[0]
+            assert first_call.args[0] == "delete_file"
 
 @pytest.mark.asyncio
 async def test_smart_approval_fallback():
@@ -40,6 +45,9 @@ async def test_smart_approval_fallback():
     agent = Agent()
     agent.kernel = MagicMock()
     agent.kernel.tools.execute = AsyncMock(return_value={"success": True})
+    agent._current_runtime_policy = lambda: {
+        "metadata": {"interactive_approval": True, "channel": "telegram", "user_id": "42"}
+    }
     
     with patch("core.agent.tool_policy") as mock_policy:
         mock_policy.check_access.return_value = {"allowed": True, "requires_approval": True}

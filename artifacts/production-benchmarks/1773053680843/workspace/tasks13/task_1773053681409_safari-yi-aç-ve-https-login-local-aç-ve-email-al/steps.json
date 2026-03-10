@@ -1,0 +1,1821 @@
+[
+  {
+    "step_index": 1,
+    "name": "open_safari",
+    "kind": "system",
+    "status": "completed",
+    "attempts": 1,
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        },
+        {
+          "code": "frontmost_app_matches",
+          "passed": true,
+          "details": {
+            "actual": "Safari",
+            "expected": "Safari"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for open_safari",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "Safari",
+          "window_title": "Login"
+        },
+        {
+          "type": "browser_state",
+          "url": "",
+          "title": ""
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 0
+      }
+    },
+    "message": "Frontmost app: Safari. Window: Login. Safari frontmost. OCR: Safari",
+    "error": "",
+    "error_code": "",
+    "screenshots": [
+      "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks13/task_1773053681409_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_01_01.png",
+      "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks13/task_1773053681409_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_01_02.png"
+    ],
+    "artifacts": [
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773053681413/before.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773053681413/after.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773053681413/ui_state.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773053681413/screen_summary.md",
+        "type": "text"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773053681413/action_log.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/screen_operator/1773053681413/target_decisions.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks13/task_1773053681409_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_01_01.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks13/task_1773053681409_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_01_02.png",
+        "type": "image"
+      }
+    ],
+    "result": {
+      "success": true,
+      "status": "success",
+      "message": "Frontmost app: Safari. Window: Login. Safari frontmost. OCR: Safari",
+      "summary": "Frontmost app: Safari. Window: Login. Safari frontmost. OCR: Safari",
+      "tool_result": {
+        "success": true,
+        "status": "success",
+        "message": "Safari opened."
+      },
+      "post_observation": {
+        "success": true,
+        "status": "success",
+        "mode": "inspect",
+        "goal_achieved": true,
+        "message": "Frontmost app: Safari. Window: Login. Safari frontmost. OCR: Safari",
+        "summary": "Frontmost app: Safari. Window: Login. Safari frontmost. OCR: Safari",
+        "ui_state": {
+          "frontmost_app": "Safari",
+          "active_window": {
+            "title": "Login",
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 1280,
+              "height": 800
+            }
+          },
+          "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/screen13/screen_before_1773053681412.png",
+          "elements": [
+            {
+              "label": "Safari",
+              "role": "frontmost_app",
+              "source": "window_metadata",
+              "confidence": 0.99
+            },
+            {
+              "label": "Login",
+              "role": "window_title",
+              "source": "window_metadata",
+              "confidence": 0.95
+            }
+          ],
+          "clickable_targets": [],
+          "text_fields": [],
+          "summary": "Frontmost app: Safari. Window: Login. Safari frontmost. OCR: Safari",
+          "fallback_order": [
+            "accessibility_and_window_metadata",
+            "vision_detection",
+            "ocr",
+            "last_known_ui_target_cache"
+          ],
+          "source_counts": {
+            "window_metadata": 2
+          },
+          "confidence": 0.97
+        },
+        "plan": [
+          {
+            "kind": "noop",
+            "reason": "inspect_mode",
+            "attempts": 0
+          }
+        ],
+        "initial_observation": {
+          "success": true,
+          "screenshot": {
+            "success": true,
+            "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/screen13/screen_before_1773053681412.png",
+            "size_bytes": 26
+          },
+          "window_metadata": {
+            "success": true,
+            "frontmost_app": "Safari",
+            "window_title": "Login",
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 1280,
+              "height": 800
+            }
+          },
+          "accessibility": {
+            "success": true,
+            "frontmost_app": "Safari",
+            "window_title": "Login",
+            "elements": []
+          },
+          "ocr": {
+            "success": true,
+            "text": "Safari",
+            "lines": []
+          },
+          "vision": {
+            "success": true,
+            "summary": "Safari frontmost.",
+            "elements": [],
+            "provider": "fake"
+          },
+          "ui_state": {
+            "frontmost_app": "Safari",
+            "active_window": {
+              "title": "Login",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1280,
+                "height": 800
+              }
+            },
+            "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/screen13/screen_before_1773053681412.png",
+            "elements": [
+              {
+                "label": "Safari",
+                "role": "frontmost_app",
+                "source": "window_metadata",
+                "confidence": 0.99
+              },
+              {
+                "label": "Login",
+                "role": "window_title",
+                "source": "window_metadata",
+                "confidence": 0.95
+              }
+            ],
+            "clickable_targets": [],
+            "text_fields": [],
+            "summary": "Frontmost app: Safari. Window: Login. Safari frontmost. OCR: Safari",
+            "fallback_order": [
+              "accessibility_and_window_metadata",
+              "vision_detection",
+              "ocr",
+              "last_known_ui_target_cache"
+            ],
+            "source_counts": {
+              "window_metadata": 2
+            },
+            "confidence": 0.97
+          },
+          "summary": "Frontmost app: Safari. Window: Login. Safari frontmost. OCR: Safari"
+        },
+        "final_observation": {
+          "success": true,
+          "screenshot": {
+            "success": true,
+            "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/screen13/screen_before_1773053681412.png",
+            "size_bytes": 26
+          },
+          "window_metadata": {
+            "success": true,
+            "frontmost_app": "Safari",
+            "window_title": "Login",
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 1280,
+              "height": 800
+            }
+          },
+          "accessibility": {
+            "success": true,
+            "frontmost_app": "Safari",
+            "window_title": "Login",
+            "elements": []
+          },
+          "ocr": {
+            "success": true,
+            "text": "Safari",
+            "lines": []
+          },
+          "vision": {
+            "success": true,
+            "summary": "Safari frontmost.",
+            "elements": [],
+            "provider": "fake"
+          },
+          "ui_state": {
+            "frontmost_app": "Safari",
+            "active_window": {
+              "title": "Login",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1280,
+                "height": 800
+              }
+            },
+            "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/screen13/screen_before_1773053681412.png",
+            "elements": [
+              {
+                "label": "Safari",
+                "role": "frontmost_app",
+                "source": "window_metadata",
+                "confidence": 0.99
+              },
+              {
+                "label": "Login",
+                "role": "window_title",
+                "source": "window_metadata",
+                "confidence": 0.95
+              }
+            ],
+            "clickable_targets": [],
+            "text_fields": [],
+            "summary": "Frontmost app: Safari. Window: Login. Safari frontmost. OCR: Safari",
+            "fallback_order": [
+              "accessibility_and_window_metadata",
+              "vision_detection",
+              "ocr",
+              "last_known_ui_target_cache"
+            ],
+            "source_counts": {
+              "window_metadata": 2
+            },
+            "confidence": 0.97
+          },
+          "summary": "Frontmost app: Safari. Window: Login. Safari frontmost. OCR: Safari"
+        },
+        "operator_budget": {
+          "max_actions": 4,
+          "max_retries_per_action": 2,
+          "elapsed_s": 0.001
+        },
+        "screenshots": [
+          "/Users/emrekoca/.elyan/screen_operator/1773053681413/before.png",
+          "/Users/emrekoca/.elyan/screen_operator/1773053681413/after.png"
+        ],
+        "artifacts": [
+          {
+            "path": "/Users/emrekoca/.elyan/screen_operator/1773053681413/before.png",
+            "type": "image"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/screen_operator/1773053681413/after.png",
+            "type": "image"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/screen_operator/1773053681413/ui_state.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/screen_operator/1773053681413/screen_summary.md",
+            "type": "text"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/screen_operator/1773053681413/action_log.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/screen_operator/1773053681413/target_decisions.json",
+            "type": "json"
+          }
+        ],
+        "action_logs": [],
+        "verifier_outcomes": [],
+        "task_state": {
+          "current_step": 0,
+          "attempts": 0,
+          "ui_state": {
+            "frontmost_app": "Safari",
+            "active_window": {
+              "title": "Login",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1280,
+                "height": 800
+              }
+            },
+            "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/screen13/screen_before_1773053681412.png",
+            "elements": [
+              {
+                "label": "Safari",
+                "role": "frontmost_app",
+                "source": "window_metadata",
+                "confidence": 0.99
+              },
+              {
+                "label": "Login",
+                "role": "window_title",
+                "source": "window_metadata",
+                "confidence": 0.95
+              }
+            ],
+            "clickable_targets": [],
+            "text_fields": [],
+            "summary": "Frontmost app: Safari. Window: Login. Safari frontmost. OCR: Safari",
+            "fallback_order": [
+              "accessibility_and_window_metadata",
+              "vision_detection",
+              "ocr",
+              "last_known_ui_target_cache"
+            ],
+            "source_counts": {
+              "window_metadata": 2
+            },
+            "confidence": 0.97
+          },
+          "last_ui_state": {
+            "frontmost_app": "Safari",
+            "active_window": {
+              "title": "Login",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1280,
+                "height": 800
+              }
+            },
+            "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/screen13/screen_before_1773053681412.png",
+            "elements": [
+              {
+                "label": "Safari",
+                "role": "frontmost_app",
+                "source": "window_metadata",
+                "confidence": 0.99
+              },
+              {
+                "label": "Login",
+                "role": "window_title",
+                "source": "window_metadata",
+                "confidence": 0.95
+              }
+            ],
+            "clickable_targets": [],
+            "text_fields": [],
+            "summary": "Frontmost app: Safari. Window: Login. Safari frontmost. OCR: Safari",
+            "fallback_order": [
+              "accessibility_and_window_metadata",
+              "vision_detection",
+              "ocr",
+              "last_known_ui_target_cache"
+            ],
+            "source_counts": {
+              "window_metadata": 2
+            },
+            "confidence": 0.97
+          },
+          "last_target_cache": {},
+          "verifier_outcomes": []
+        },
+        "recovery_hints": {
+          "frontmost_app": "Safari",
+          "active_window": "Login",
+          "chosen_target": {},
+          "alternate_targets": [],
+          "failed_codes": []
+        },
+        "desktop_host_state": {
+          "frontmost_app": "Safari",
+          "active_window": {
+            "title": "Login",
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 1280,
+              "height": 800
+            }
+          },
+          "last_screenshot": "/Users/emrekoca/.elyan/screen_operator/1773053681413/after.png",
+          "target_cache_size": 0,
+          "recent_action_log_count": 0,
+          "verifier_outcome_count": 0,
+          "updated_at": 1773053681.411391,
+          "last_instruction": "ekrana bak",
+          "last_mode": "inspect",
+          "last_status": "success"
+        }
+      },
+      "ui_state": {
+        "frontmost_app": "Safari",
+        "active_window": {
+          "title": "Login",
+          "bounds": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 800
+          }
+        },
+        "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/screen13/screen_before_1773053681412.png",
+        "elements": [
+          {
+            "label": "Safari",
+            "role": "frontmost_app",
+            "source": "window_metadata",
+            "confidence": 0.99
+          },
+          {
+            "label": "Login",
+            "role": "window_title",
+            "source": "window_metadata",
+            "confidence": 0.95
+          }
+        ],
+        "clickable_targets": [],
+        "text_fields": [],
+        "summary": "Frontmost app: Safari. Window: Login. Safari frontmost. OCR: Safari",
+        "fallback_order": [
+          "accessibility_and_window_metadata",
+          "vision_detection",
+          "ocr",
+          "last_known_ui_target_cache"
+        ],
+        "source_counts": {
+          "window_metadata": 2
+        },
+        "confidence": 0.97
+      },
+      "screenshots": [
+        "/Users/emrekoca/.elyan/screen_operator/1773053681413/before.png",
+        "/Users/emrekoca/.elyan/screen_operator/1773053681413/after.png"
+      ],
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053681413/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053681413/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053681413/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053681413/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053681413/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053681413/target_decisions.json",
+          "type": "json"
+        }
+      ],
+      "action_logs": [
+        {
+          "step": 1,
+          "planned_action": {
+            "kind": "open_app",
+            "params": {
+              "app_name": "Safari"
+            }
+          },
+          "execution_result": {
+            "success": true,
+            "status": "success",
+            "message": "Safari opened."
+          }
+        }
+      ],
+      "verifier_outcomes": [],
+      "task_state": {
+        "current_step": 0,
+        "attempts": 0,
+        "ui_state": {
+          "frontmost_app": "Safari",
+          "active_window": {
+            "title": "Login",
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 1280,
+              "height": 800
+            }
+          },
+          "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/screen13/screen_before_1773053681412.png",
+          "elements": [
+            {
+              "label": "Safari",
+              "role": "frontmost_app",
+              "source": "window_metadata",
+              "confidence": 0.99
+            },
+            {
+              "label": "Login",
+              "role": "window_title",
+              "source": "window_metadata",
+              "confidence": 0.95
+            }
+          ],
+          "clickable_targets": [],
+          "text_fields": [],
+          "summary": "Frontmost app: Safari. Window: Login. Safari frontmost. OCR: Safari",
+          "fallback_order": [
+            "accessibility_and_window_metadata",
+            "vision_detection",
+            "ocr",
+            "last_known_ui_target_cache"
+          ],
+          "source_counts": {
+            "window_metadata": 2
+          },
+          "confidence": 0.97
+        },
+        "last_ui_state": {
+          "frontmost_app": "Safari",
+          "active_window": {
+            "title": "Login",
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 1280,
+              "height": 800
+            }
+          },
+          "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/screen13/screen_before_1773053681412.png",
+          "elements": [
+            {
+              "label": "Safari",
+              "role": "frontmost_app",
+              "source": "window_metadata",
+              "confidence": 0.99
+            },
+            {
+              "label": "Login",
+              "role": "window_title",
+              "source": "window_metadata",
+              "confidence": 0.95
+            }
+          ],
+          "clickable_targets": [],
+          "text_fields": [],
+          "summary": "Frontmost app: Safari. Window: Login. Safari frontmost. OCR: Safari",
+          "fallback_order": [
+            "accessibility_and_window_metadata",
+            "vision_detection",
+            "ocr",
+            "last_known_ui_target_cache"
+          ],
+          "source_counts": {
+            "window_metadata": 2
+          },
+          "confidence": 0.97
+        },
+        "last_target_cache": {},
+        "verifier_outcomes": []
+      }
+    }
+  },
+  {
+    "step_index": 2,
+    "name": "open_page",
+    "kind": "browser",
+    "status": "completed",
+    "attempts": 1,
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        },
+        {
+          "code": "url_contains",
+          "passed": true,
+          "details": {
+            "actual": "https://login.local",
+            "expected": "login.local"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for open_page",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "",
+          "window_title": ""
+        },
+        {
+          "type": "browser_state",
+          "url": "https://login.local",
+          "title": "Login"
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 1
+      }
+    },
+    "message": "Login",
+    "error": "",
+    "error_code": "",
+    "screenshots": [
+      "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks13/task_1773053681409_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_02_01.png"
+    ],
+    "artifacts": [
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681418/dom_snapshot.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681418/dom_snapshot.html",
+        "type": "text"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681418/navigation.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681418/action_log.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681418/verification.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681418/page.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks13/task_1773053681409_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_02_01.png",
+        "type": "image"
+      }
+    ],
+    "result": {
+      "success": true,
+      "status": "success",
+      "message": "Login",
+      "summary": "Login",
+      "url": "https://login.local",
+      "title": "Login",
+      "browser_state": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://login.local",
+        "title": "Login",
+        "visible_text": "Email Password Login",
+        "dom_hash": "67a7b0917424a47c1a57250c980feddf7ea29abed167430775ffe086c12409e3",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true
+      },
+      "dom_snapshot": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://login.local",
+        "title": "Login",
+        "visible_text": "Email Password Login",
+        "dom_hash": "67a7b0917424a47c1a57250c980feddf7ea29abed167430775ffe086c12409e3",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true,
+        "html": "<html><body><input id='email'/><input id='password'/><button id='login'>Login</button></body></html>"
+      },
+      "extracted_text": "",
+      "links": [],
+      "table": {},
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681418/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681418/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681418/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681418/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681418/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681418/page.png",
+          "type": "image"
+        }
+      ],
+      "screenshots": [
+        "/Users/emrekoca/.elyan/browser_runtime/1773053681418/page.png"
+      ],
+      "action_logs": [
+        {
+          "step": 1,
+          "action": "open",
+          "params": {
+            "url": "https://login.local",
+            "selector": "",
+            "text": ""
+          },
+          "result": {
+            "success": true,
+            "url": "https://login.local",
+            "title": "Login",
+            "status_code": 200,
+            "dom_available": true
+          }
+        }
+      ],
+      "action_result": {
+        "success": true,
+        "url": "https://login.local",
+        "title": "Login",
+        "status_code": 200,
+        "dom_available": true
+      },
+      "verifier_outcomes": [
+        {
+          "ok": true,
+          "status": "success",
+          "checks": [
+            {
+              "code": "dom_available",
+              "passed": true
+            },
+            {
+              "code": "screenshot_present",
+              "passed": true,
+              "details": {
+                "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681418/page.png"
+              }
+            },
+            {
+              "code": "navigation_changed",
+              "passed": true,
+              "details": {
+                "before_url": "",
+                "after_url": "https://login.local"
+              }
+            },
+            {
+              "code": "title_matches",
+              "passed": true,
+              "details": {
+                "title": "Login"
+              }
+            },
+            {
+              "code": "url_matches",
+              "passed": true,
+              "details": {
+                "url": "https://login.local"
+              }
+            }
+          ],
+          "failed": [],
+          "failed_codes": [],
+          "repairable": true,
+          "summary": "browser verification for open",
+          "evidence_refs": [
+            {
+              "type": "browser_state",
+              "before_url": "",
+              "after_url": "https://login.local"
+            },
+            {
+              "type": "screenshot",
+              "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681418/page.png"
+            }
+          ],
+          "metrics": {
+            "dom_changed": 1,
+            "url_changed": 1,
+            "title_changed": 1
+          }
+        }
+      ],
+      "fallback": {
+        "used": false
+      },
+      "playwright_available": false,
+      "recovery_hints": {
+        "action": "open",
+        "selector": "",
+        "dom_available": true,
+        "current_url": "https://login.local",
+        "current_title": "Login",
+        "visible_text": "Email Password Login",
+        "fallback_used": false,
+        "fallback_reason": "",
+        "expected_text": "",
+        "failed_codes": []
+      }
+    }
+  },
+  {
+    "step_index": 3,
+    "name": "fill_email",
+    "kind": "browser",
+    "status": "completed",
+    "attempts": 1,
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        },
+        {
+          "code": "text_contains",
+          "passed": true,
+          "details": {
+            "expected": "user@example.com"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for fill_email",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "",
+          "window_title": ""
+        },
+        {
+          "type": "browser_state",
+          "url": "https://login.local",
+          "title": "Login"
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 1
+      }
+    },
+    "message": "Login",
+    "error": "",
+    "error_code": "",
+    "screenshots": [
+      "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks13/task_1773053681409_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_03_01.png"
+    ],
+    "artifacts": [
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681422/dom_snapshot.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681422/dom_snapshot.html",
+        "type": "text"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681422/navigation.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681422/action_log.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681422/verification.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681422/page.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks13/task_1773053681409_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_03_01.png",
+        "type": "image"
+      }
+    ],
+    "result": {
+      "success": true,
+      "status": "success",
+      "message": "Login",
+      "summary": "Login",
+      "url": "https://login.local",
+      "title": "Login",
+      "browser_state": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://login.local",
+        "title": "Login",
+        "visible_text": "Email Password Login",
+        "dom_hash": "67a7b0917424a47c1a57250c980feddf7ea29abed167430775ffe086c12409e3",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true
+      },
+      "dom_snapshot": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://login.local",
+        "title": "Login",
+        "visible_text": "Email Password Login",
+        "dom_hash": "67a7b0917424a47c1a57250c980feddf7ea29abed167430775ffe086c12409e3",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true,
+        "html": "<html><body><input id='email'/><input id='password'/><button id='login'>Login</button></body></html>"
+      },
+      "extracted_text": "",
+      "links": [],
+      "table": {},
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681422/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681422/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681422/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681422/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681422/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681422/page.png",
+          "type": "image"
+        }
+      ],
+      "screenshots": [
+        "/Users/emrekoca/.elyan/browser_runtime/1773053681422/page.png"
+      ],
+      "action_logs": [
+        {
+          "step": 1,
+          "action": "type",
+          "params": {
+            "url": "",
+            "selector": "#email",
+            "text": "user@example.com"
+          },
+          "result": {
+            "success": true,
+            "selector": "#email",
+            "text": "user@example.com",
+            "dom_available": true
+          }
+        }
+      ],
+      "action_result": {
+        "success": true,
+        "selector": "#email",
+        "text": "user@example.com",
+        "dom_available": true
+      },
+      "verifier_outcomes": [
+        {
+          "ok": true,
+          "status": "success",
+          "checks": [
+            {
+              "code": "dom_available",
+              "passed": true
+            },
+            {
+              "code": "screenshot_present",
+              "passed": true,
+              "details": {
+                "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681422/page.png"
+              }
+            },
+            {
+              "code": "typed_value_persisted",
+              "passed": true,
+              "details": {
+                "typed_value": "user@example.com"
+              }
+            }
+          ],
+          "failed": [],
+          "failed_codes": [],
+          "repairable": true,
+          "summary": "browser verification for type",
+          "evidence_refs": [
+            {
+              "type": "browser_state",
+              "before_url": "https://login.local",
+              "after_url": "https://login.local"
+            },
+            {
+              "type": "screenshot",
+              "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681422/page.png"
+            }
+          ],
+          "metrics": {
+            "dom_changed": 0,
+            "url_changed": 0,
+            "title_changed": 0
+          }
+        }
+      ],
+      "fallback": {
+        "used": false
+      },
+      "playwright_available": false,
+      "recovery_hints": {
+        "action": "type",
+        "selector": "#email",
+        "dom_available": true,
+        "current_url": "https://login.local",
+        "current_title": "Login",
+        "visible_text": "Email Password Login",
+        "fallback_used": false,
+        "fallback_reason": "",
+        "expected_text": "",
+        "failed_codes": []
+      }
+    }
+  },
+  {
+    "step_index": 4,
+    "name": "fill_password",
+    "kind": "browser",
+    "status": "completed",
+    "attempts": 1,
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        },
+        {
+          "code": "text_contains",
+          "passed": true,
+          "details": {
+            "expected": "secret123"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for fill_password",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "",
+          "window_title": ""
+        },
+        {
+          "type": "browser_state",
+          "url": "https://login.local",
+          "title": "Login"
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 1
+      }
+    },
+    "message": "Login",
+    "error": "",
+    "error_code": "",
+    "screenshots": [
+      "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks13/task_1773053681409_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_04_01.png"
+    ],
+    "artifacts": [
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681428/dom_snapshot.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681428/dom_snapshot.html",
+        "type": "text"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681428/navigation.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681428/action_log.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681428/verification.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681428/page.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks13/task_1773053681409_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_04_01.png",
+        "type": "image"
+      }
+    ],
+    "result": {
+      "success": true,
+      "status": "success",
+      "message": "Login",
+      "summary": "Login",
+      "url": "https://login.local",
+      "title": "Login",
+      "browser_state": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://login.local",
+        "title": "Login",
+        "visible_text": "Email Password Login",
+        "dom_hash": "67a7b0917424a47c1a57250c980feddf7ea29abed167430775ffe086c12409e3",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true
+      },
+      "dom_snapshot": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://login.local",
+        "title": "Login",
+        "visible_text": "Email Password Login",
+        "dom_hash": "67a7b0917424a47c1a57250c980feddf7ea29abed167430775ffe086c12409e3",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true,
+        "html": "<html><body><input id='email'/><input id='password'/><button id='login'>Login</button></body></html>"
+      },
+      "extracted_text": "",
+      "links": [],
+      "table": {},
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681428/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681428/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681428/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681428/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681428/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681428/page.png",
+          "type": "image"
+        }
+      ],
+      "screenshots": [
+        "/Users/emrekoca/.elyan/browser_runtime/1773053681428/page.png"
+      ],
+      "action_logs": [
+        {
+          "step": 1,
+          "action": "type",
+          "params": {
+            "url": "",
+            "selector": "#password",
+            "text": "secret123"
+          },
+          "result": {
+            "success": true,
+            "selector": "#password",
+            "text": "secret123",
+            "dom_available": true
+          }
+        }
+      ],
+      "action_result": {
+        "success": true,
+        "selector": "#password",
+        "text": "secret123",
+        "dom_available": true
+      },
+      "verifier_outcomes": [
+        {
+          "ok": true,
+          "status": "success",
+          "checks": [
+            {
+              "code": "dom_available",
+              "passed": true
+            },
+            {
+              "code": "screenshot_present",
+              "passed": true,
+              "details": {
+                "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681428/page.png"
+              }
+            },
+            {
+              "code": "typed_value_persisted",
+              "passed": true,
+              "details": {
+                "typed_value": "secret123"
+              }
+            }
+          ],
+          "failed": [],
+          "failed_codes": [],
+          "repairable": true,
+          "summary": "browser verification for type",
+          "evidence_refs": [
+            {
+              "type": "browser_state",
+              "before_url": "https://login.local",
+              "after_url": "https://login.local"
+            },
+            {
+              "type": "screenshot",
+              "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681428/page.png"
+            }
+          ],
+          "metrics": {
+            "dom_changed": 0,
+            "url_changed": 0,
+            "title_changed": 0
+          }
+        }
+      ],
+      "fallback": {
+        "used": false
+      },
+      "playwright_available": false,
+      "recovery_hints": {
+        "action": "type",
+        "selector": "#password",
+        "dom_available": true,
+        "current_url": "https://login.local",
+        "current_title": "Login",
+        "visible_text": "Email Password Login",
+        "fallback_used": false,
+        "fallback_reason": "",
+        "expected_text": "",
+        "failed_codes": []
+      }
+    }
+  },
+  {
+    "step_index": 5,
+    "name": "click_login",
+    "kind": "browser",
+    "status": "completed",
+    "attempts": 1,
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for click_login",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "",
+          "window_title": ""
+        },
+        {
+          "type": "browser_state",
+          "url": "https://login.local/review",
+          "title": "Review"
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 1
+      }
+    },
+    "message": "Review",
+    "error": "",
+    "error_code": "",
+    "screenshots": [
+      "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks13/task_1773053681409_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_05_01.png"
+    ],
+    "artifacts": [
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681434/dom_snapshot.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681434/dom_snapshot.html",
+        "type": "text"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681434/navigation.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681434/action_log.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681434/verification.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681434/page.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks13/task_1773053681409_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_05_01.png",
+        "type": "image"
+      }
+    ],
+    "result": {
+      "success": true,
+      "status": "success",
+      "message": "Review",
+      "summary": "Review",
+      "url": "https://login.local/review",
+      "title": "Review",
+      "browser_state": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://login.local/review",
+        "title": "Review",
+        "visible_text": "Continue",
+        "dom_hash": "92d87cfd7e0bdde18f2ae0c548af3130bda96df8a438859346225b11370c907c",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true
+      },
+      "dom_snapshot": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://login.local/review",
+        "title": "Review",
+        "visible_text": "Continue",
+        "dom_hash": "92d87cfd7e0bdde18f2ae0c548af3130bda96df8a438859346225b11370c907c",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true,
+        "html": "<html><body><button id='continue'>Continue</button></body></html>"
+      },
+      "extracted_text": "",
+      "links": [],
+      "table": {},
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681434/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681434/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681434/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681434/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681434/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681434/page.png",
+          "type": "image"
+        }
+      ],
+      "screenshots": [
+        "/Users/emrekoca/.elyan/browser_runtime/1773053681434/page.png"
+      ],
+      "action_logs": [
+        {
+          "step": 1,
+          "action": "click",
+          "params": {
+            "url": "",
+            "selector": "#login",
+            "text": ""
+          },
+          "result": {
+            "success": true,
+            "selector": "#login",
+            "dom_available": true
+          }
+        }
+      ],
+      "action_result": {
+        "success": true,
+        "selector": "#login",
+        "dom_available": true
+      },
+      "verifier_outcomes": [
+        {
+          "ok": true,
+          "status": "success",
+          "checks": [
+            {
+              "code": "dom_available",
+              "passed": true
+            },
+            {
+              "code": "screenshot_present",
+              "passed": true,
+              "details": {
+                "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681434/page.png"
+              }
+            },
+            {
+              "code": "dom_or_navigation_changed",
+              "passed": true,
+              "details": {
+                "before_hash": "67a7b0917424a47c1a57250c980feddf7ea29abed167430775ffe086c12409e3",
+                "after_hash": "92d87cfd7e0bdde18f2ae0c548af3130bda96df8a438859346225b11370c907c"
+              }
+            }
+          ],
+          "failed": [],
+          "failed_codes": [],
+          "repairable": true,
+          "summary": "browser verification for click",
+          "evidence_refs": [
+            {
+              "type": "browser_state",
+              "before_url": "https://login.local",
+              "after_url": "https://login.local/review"
+            },
+            {
+              "type": "screenshot",
+              "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681434/page.png"
+            }
+          ],
+          "metrics": {
+            "dom_changed": 1,
+            "url_changed": 1,
+            "title_changed": 1
+          }
+        }
+      ],
+      "fallback": {
+        "used": false
+      },
+      "playwright_available": false,
+      "recovery_hints": {
+        "action": "click",
+        "selector": "#login",
+        "dom_available": true,
+        "current_url": "https://login.local/review",
+        "current_title": "Review",
+        "visible_text": "Continue",
+        "fallback_used": false,
+        "fallback_reason": "",
+        "expected_text": "",
+        "failed_codes": []
+      }
+    }
+  },
+  {
+    "step_index": 6,
+    "name": "click_continue",
+    "kind": "browser",
+    "status": "completed",
+    "attempts": 1,
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "step_result_success",
+          "passed": true,
+          "details": {
+            "status": "success"
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": false,
+      "summary": "scenario verification for click_continue",
+      "evidence_refs": [
+        {
+          "type": "ui_state",
+          "frontmost_app": "",
+          "window_title": ""
+        },
+        {
+          "type": "browser_state",
+          "url": "https://login.local/dashboard",
+          "title": "Dashboard"
+        }
+      ],
+      "metrics": {
+        "action_log_count": 1,
+        "verifier_outcome_count": 1
+      }
+    },
+    "message": "Dashboard",
+    "error": "",
+    "error_code": "",
+    "screenshots": [
+      "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks13/task_1773053681409_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_06_01.png"
+    ],
+    "artifacts": [
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681439/dom_snapshot.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681439/dom_snapshot.html",
+        "type": "text"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681439/navigation.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681439/action_log.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681439/verification.json",
+        "type": "json"
+      },
+      {
+        "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681439/page.png",
+        "type": "image"
+      },
+      {
+        "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/tasks13/task_1773053681409_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_06_01.png",
+        "type": "image"
+      }
+    ],
+    "result": {
+      "success": true,
+      "status": "success",
+      "message": "Dashboard",
+      "summary": "Dashboard",
+      "url": "https://login.local/dashboard",
+      "title": "Dashboard",
+      "browser_state": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://login.local/dashboard",
+        "title": "Dashboard",
+        "visible_text": "Welcome back",
+        "dom_hash": "b9882beb30e1028fdb25c2f926524d2424030bdcce25619a7f431e4b9376c7bd",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true
+      },
+      "dom_snapshot": {
+        "success": true,
+        "dom_available": true,
+        "url": "https://login.local/dashboard",
+        "title": "Dashboard",
+        "visible_text": "Welcome back",
+        "dom_hash": "b9882beb30e1028fdb25c2f926524d2424030bdcce25619a7f431e4b9376c7bd",
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "session_id": "fake-browser",
+        "headless": true,
+        "html": "<html><body>Welcome back</body></html>"
+      },
+      "extracted_text": "",
+      "links": [],
+      "table": {},
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681439/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681439/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681439/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681439/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681439/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681439/page.png",
+          "type": "image"
+        }
+      ],
+      "screenshots": [
+        "/Users/emrekoca/.elyan/browser_runtime/1773053681439/page.png"
+      ],
+      "action_logs": [
+        {
+          "step": 1,
+          "action": "click",
+          "params": {
+            "url": "",
+            "selector": "#continue",
+            "text": ""
+          },
+          "result": {
+            "success": true,
+            "selector": "#continue",
+            "dom_available": true
+          }
+        }
+      ],
+      "action_result": {
+        "success": true,
+        "selector": "#continue",
+        "dom_available": true
+      },
+      "verifier_outcomes": [
+        {
+          "ok": true,
+          "status": "success",
+          "checks": [
+            {
+              "code": "dom_available",
+              "passed": true
+            },
+            {
+              "code": "screenshot_present",
+              "passed": true,
+              "details": {
+                "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681439/page.png"
+              }
+            },
+            {
+              "code": "dom_or_navigation_changed",
+              "passed": true,
+              "details": {
+                "before_hash": "92d87cfd7e0bdde18f2ae0c548af3130bda96df8a438859346225b11370c907c",
+                "after_hash": "b9882beb30e1028fdb25c2f926524d2424030bdcce25619a7f431e4b9376c7bd"
+              }
+            }
+          ],
+          "failed": [],
+          "failed_codes": [],
+          "repairable": true,
+          "summary": "browser verification for click",
+          "evidence_refs": [
+            {
+              "type": "browser_state",
+              "before_url": "https://login.local/review",
+              "after_url": "https://login.local/dashboard"
+            },
+            {
+              "type": "screenshot",
+              "path": "/Users/emrekoca/.elyan/browser_runtime/1773053681439/page.png"
+            }
+          ],
+          "metrics": {
+            "dom_changed": 1,
+            "url_changed": 1,
+            "title_changed": 1
+          }
+        }
+      ],
+      "fallback": {
+        "used": false
+      },
+      "playwright_available": false,
+      "recovery_hints": {
+        "action": "click",
+        "selector": "#continue",
+        "dom_available": true,
+        "current_url": "https://login.local/dashboard",
+        "current_title": "Dashboard",
+        "visible_text": "Welcome back",
+        "fallback_used": false,
+        "fallback_reason": "",
+        "expected_text": "",
+        "failed_codes": []
+      }
+    }
+  }
+]

@@ -1,0 +1,40 @@
+{
+  "frontmost_app": "Safari",
+  "active_window": {
+    "title": "Search",
+    "bounds": {
+      "x": 0,
+      "y": 0,
+      "width": 1280,
+      "height": 800
+    }
+  },
+  "screenshot_path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-241/test_runtime_rewrites_dom_unav0/screen_before_1773156230145.png",
+  "elements": [
+    {
+      "label": "Safari",
+      "role": "frontmost_app",
+      "source": "window_metadata",
+      "confidence": 0.99
+    },
+    {
+      "label": "Search",
+      "role": "window_title",
+      "source": "window_metadata",
+      "confidence": 0.95
+    }
+  ],
+  "clickable_targets": [],
+  "text_fields": [],
+  "summary": "Frontmost app: Safari. Window: Search. Search penceresi acik. OCR: Search",
+  "fallback_order": [
+    "accessibility_and_window_metadata",
+    "vision_detection",
+    "ocr",
+    "last_known_ui_target_cache"
+  ],
+  "source_counts": {
+    "window_metadata": 2
+  },
+  "confidence": 0.97
+}

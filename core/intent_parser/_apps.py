@@ -8,12 +8,116 @@ from ._base import BaseParser, _RE_BROWSER_SEARCH_VERB, _RE_SEARCH_BEFORE, _RE_S
 from ._base import _RE_YOUTUBE_QUERY, _RE_YOUTUBE_FALLBACK, _RE_YOUTUBE_CLEANUP1, _RE_YOUTUBE_CLEANUP2
 
 
+def _looks_like_image_search_request(text: str) -> bool:
+    low = str(text or "").lower()
+    if not low:
+        return False
+    explicit_image_markers = (
+        "resim",
+        "resimleri",
+        "görsel",
+        "gorsel",
+        "foto",
+        "fotoğraf",
+        "fotograf",
+        "image",
+        "images",
+        "wallpaper",
+    )
+    if any(marker in low for marker in explicit_image_markers):
+        return True
+    if any(
+        marker in low
+        for marker in (
+            "resmi kaynak",
+            "resmi site",
+            "resmi kurum",
+            "resmi gazete",
+            "resmi belge",
+            "resmi rapor",
+            "official",
+            ".gov",
+        )
+    ):
+        return False
+    return bool(re.search(r"\b[\wçğıöşü]+\s+resmi\b", low, re.IGNORECASE))
+
+
 class AppParser(BaseParser):
+
+    def _parse_browser_tab_control(self, text: str, text_norm: str, original: str) -> dict | None:
+        low = str(text or "").lower()
+        norm = text_norm or self._normalize(low)
+        if not any(token in low for token in ("sekme", "tab")):
+            return None
+        if not any(token in low for token in ("aç", "ac", "open", "yenı", "yeni", "new")):
+            return None
+
+        browser_aliases = {
+            "safari": "Safari",
+            "chrome": "Google Chrome",
+            "google chrome": "Google Chrome",
+            "krom": "Google Chrome",
+            "firefox": "Firefox",
+            "arc": "Arc",
+            "tarayıcı": "Safari",
+            "tarayici": "Safari",
+            "browser": "Safari",
+        }
+
+        def _alias_match(raw_alias: str) -> bool:
+            alias = str(raw_alias or "").strip()
+            if not alias:
+                return False
+            alias_norm = self._normalize(alias)
+            suffixes_raw = r"(?:[' ]?(?:yi|yı|yu|yü|i|ı|u|ü|ya|ye|a|e|da|de|dan|den))?"
+            suffixes_norm = r"(?:[' ]?(?:yi|yu|i|u|ya|ye|a|e|da|de|dan|den))?"
+            pat_raw = rf"(?<!\w){re.escape(alias)}{suffixes_raw}(?!\w)"
+            pat_norm = rf"(?<!\w){re.escape(alias_norm)}{suffixes_norm}(?!\w)"
+            return bool(re.search(pat_raw, low, re.IGNORECASE) or re.search(pat_norm, norm, re.IGNORECASE))
+
+        target_browser = ""
+        for alias, app in browser_aliases.items():
+            if _alias_match(alias):
+                target_browser = app
+                break
+
+        if not target_browser:
+            return None
+
+        return {
+            "action": "multi_task",
+            "tasks": [
+                {
+                    "id": "task_1",
+                    "action": "open_app",
+                    "params": {"app_name": target_browser},
+                    "description": f"{target_browser} odaga aliniyor...",
+                },
+                {
+                    "id": "task_2",
+                    "action": "key_combo",
+                    "params": {"combo": "cmd+t"},
+                    "description": "Yeni sekme aciliyor...",
+                    "depends_on": ["task_1"],
+                },
+            ],
+            "reply": f"{target_browser} icinde yeni sekme aciliyor...",
+        }
 
     # ── Open App ──────────────────────────────────────────────────────────────
     def _parse_open_app(self, text: str, text_norm: str, original: str) -> dict | None:
         open_t = ["aç", "ac", "başlat", "çalıştır", "open", "run", "start", "launch"]
         if any(w in text for w in ["dosya", "klasör", "http", ".com", ".org"]):
+            return None
+        # Intent disambiguation: browser content/query requests should not degrade to plain open_app.
+        browser_aliases = ("safari", "chrome", "krom", "tarayıcı", "tarayici", "browser")
+        content_hints = (
+            "resim", "resimleri", "resmi", "görsel", "gorsel", "foto", "fotograf", "fotoğraf",
+            "image", "images", "video", "haber", "makale",
+        )
+        query_hints = ("ara", "arat", "search", "için", "icin", "hakkında", "hakkinda")
+        if any(k in text for k in browser_aliases) and any(k in text for k in content_hints) and any(k in text for k in query_hints):
             return None
         wants_research = any(k in text for k in ["araştır", "arastir", "araştırma", "arastirma", "research", "incele", "inceleme"])
 
@@ -128,21 +232,57 @@ class AppParser(BaseParser):
         if any(t in text for t in goto_t):
             for alias, url in self.url_aliases.items():
                 if alias in text_norm or alias in text:
+                    alias_norm = self._normalize(alias)
+                    stripped = re.sub(rf"\b{re.escape(alias_norm)}\b", " ", text_norm, flags=re.IGNORECASE)
+                    stripped = re.sub(r"\b(aç|ac|git|gir|gitmek|gotur|götür|open|go|to|ve|sonra|lütfen|lutfen)\b", " ", stripped, flags=re.IGNORECASE)
+                    stripped = " ".join(stripped.split())
+                    has_topic_marker = ("icin" in text_norm) or ("hakkinda" in text_norm)
+                    has_content_intent = any(k in text_norm for k in ("resim", "gorsel", "foto", "image", "video", "haber", "news", "makale"))
+                    # If command carries extra topic/query words, let browser_search handle it.
+                    if has_topic_marker and (len(stripped.split()) >= 1 or has_content_intent):
+                        continue
                     return {"action": "open_url", "params": {"url": url},
                             "reply": f"{alias.capitalize()} açılıyor..."}
         return None
 
     # ── Browser Search ────────────────────────────────────────────────────────
     def _parse_browser_search(self, text: str, text_norm: str, original: str) -> dict | None:
-        if not _RE_BROWSER_SEARCH_VERB.search(text):
-            return None
-        if any(k in text.lower() for k in ["website", "web sitesi", "web sayfas", "portfolyo", "portfolio"]) and \
-           any(v in text.lower() for v in ["yap", "oluştur", "olustur", "hazırla", "hazirla"]):
-            return None
         lower = text.lower()
+        has_search_verb = bool(_RE_BROWSER_SEARCH_VERB.search(text))
+        browser_context_tokens = (
+            "safari", "safariyi", "safariden", "safaride", "safariye", "safariya",
+            "chrome", "chromedan", "chromede", "krom", "kromdan", "kromda",
+            "tarayici", "tarayıcı", "tarayicida", "tarayıcıda", "tarayicidan", "tarayıcıdan",
+            "browser", "browsers", "webde", "internette",
+        )
+        browser_context = any(k in lower for k in browser_context_tokens)
+        images_mode = _looks_like_image_search_request(lower)
+        info_mode = any(k in lower for k in ("video", "haber", "makale", "article", "news"))
+        research_mode = any(k in lower for k in ("araştır", "arastir", "araştırma", "arastirma", "research", "incele", "inceleme"))
+        has_open_verb = bool(re.search(r"\b(aç|ac)\b", lower))
+        has_topic_marker = ("için" in lower) or ("icin" in lower) or ("hakkında" in lower) or ("hakkinda" in lower)
+        implicit_browser_search = browser_context and has_open_verb and (images_mode or info_mode or has_topic_marker)
+
+        if not has_search_verb and not implicit_browser_search:
+            return None
+        if any(k in lower for k in ["website", "web sitesi", "web sayfas", "portfolyo", "portfolio"]) and \
+           any(v in lower for v in ["yap", "oluştur", "olustur", "hazırla", "hazirla"]):
+            return None
+
         query = None
+        if implicit_browser_search:
+            for pattern in (
+                r"(.+?)\s+için\s+(?:resim|resimleri|resmi|görsel|gorsel|foto|image|images)\s+(?:aç|ac)\b",
+                r"(.+?)\s+icin\s+(?:resim|resimleri|resmi|gorsel|foto|image|images)\s+(?:aç|ac)\b",
+                r"(.+?)\s+hakkında\s+(?:resim|resimleri|resmi|görsel|gorsel|foto|image|images)\s+(?:aç|ac)\b",
+                r"(.+?)\s+hakkinda\s+(?:resim|resimleri|resmi|gorsel|foto|image|images)\s+(?:aç|ac)\b",
+            ):
+                m_implicit = re.search(pattern, lower, re.IGNORECASE)
+                if m_implicit:
+                    query = m_implicit.group(1).strip()
+                    break
         m = _RE_SEARCH_BEFORE.search(lower)
-        if m:
+        if m and not query:
             query = m.group(1).strip()
         if not query:
             m2 = _RE_SEARCH_AFTER.search(lower)
@@ -162,13 +302,47 @@ class AppParser(BaseParser):
             "tarayici", "tarayıcı", "tarayicida", "tarayıcıda", "tarayicidan", "tarayıcıdan",
             "browser", "browsers", "webde", "internette",
             "aç", "ac", "git", "gir", "ve", "sonra", "ardından", "ardindan",
-            "lütfen", "lutfen", "ara", "arat", "search", "den", "dan", "de", "da",
+            "lütfen", "lutfen", "ara", "arat", "search", "den", "dan", "de", "da", "için", "icin",
         }
+        if images_mode:
+            cleanup_tokens.update({"resim", "resimleri", "resmi", "görsel", "gorsel", "foto", "image", "images", "wallpaper"})
         query = " ".join(p for p in (query or "").replace(".", " ").split() if p not in cleanup_tokens).strip(" ,.;:-")
         if len(query) < 2:
             return None
 
-        images_mode = any(k in lower for k in ("resim", "resimleri", "görsel", "gorsel", "foto", "image", "images", "wallpaper"))
+        if research_mode and implicit_browser_search:
+            topic = re.sub(
+                r"\b(araştır|arastir|araştırma|arastirma|research|incele|inceleme|yap|yapin|yapın)\b",
+                " ",
+                query,
+                flags=re.IGNORECASE,
+            )
+            topic = " ".join(topic.split()).strip() or query
+
+            wants_safari = "safari" in text or "safari" in text_norm
+            tasks = []
+            if wants_safari:
+                tasks.append(
+                    {
+                        "id": "task_1",
+                        "action": "open_app",
+                        "params": {"app_name": "Safari"},
+                        "description": "Safari'yi aç",
+                    }
+                )
+            tasks.append(
+                {
+                    "id": "task_2",
+                    "action": "research",
+                    "params": {"topic": topic, "depth": "standard"},
+                    "description": f"Arastirma: {topic}",
+                    "depends_on": ["task_1"] if wants_safari else [],
+                }
+            )
+            if wants_safari:
+                return {"action": "multi_task", "tasks": tasks, "reply": f"Safari aciliyor ve '{topic}' arastiriliyor..."}
+            return {"action": "research", "params": {"topic": topic, "depth": "standard"}, "reply": f"'{topic}' arastiriliyor..."}
+
         if images_mode:
             url = f"https://www.google.com/search?tbm=isch&q={quote_plus(query)}"
         else:

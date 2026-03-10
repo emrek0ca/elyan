@@ -1,0 +1,13 @@
+{
+  "run_id": "run_b154aa717a62",
+  "manifest_path": "/Users/emrekoca/Desktop/bot/.elyan/proofs/run_b154aa717a62/manifest.json",
+  "steps": [],
+  "artifacts": [],
+  "metadata": {
+    "status": "partial",
+    "errors": [
+      "chat_failed: 'NoneType' object has no attribute 'generate'"
+    ]
+  },
+  "written_at": 1772929424.584987
+}

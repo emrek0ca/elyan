@@ -7,9 +7,11 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 from utils.logger import get_logger
+from core.compat.legacy_tool_wrappers import normalize_legacy_tool_payload
 from core.llm_client import LLMClient
 from core.advanced_features import get_anomaly_detector
-from tools.system_tools import get_system_info
+from core.task_executor import TaskExecutor
+from tools import AVAILABLE_TOOLS
 
 logger = get_logger("briefing_manager")
 
@@ -20,11 +22,27 @@ class BriefingManager:
         self.llm = llm_client or LLMClient()
         self.anomaly_detector = get_anomaly_detector()
 
+    async def _execute_registry_tool(self, tool_name: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        tool = AVAILABLE_TOOLS.get(str(tool_name or "").strip())
+        if not callable(tool):
+            return normalize_legacy_tool_payload(
+                {
+                    "success": False,
+                    "status": "failed",
+                    "error": f"Tool not found: {tool_name}",
+                    "errors": ["UNKNOWN_TOOL"],
+                    "data": {"error_code": "UNKNOWN_TOOL"},
+                },
+                tool=str(tool_name or ""),
+                source="briefing_manager",
+            )
+        return await TaskExecutor().execute(tool, dict(params or {}))
+
     async def get_proactive_briefing(self, include_weather=True, include_calendar=True, include_news=True) -> Dict[str, Any]:
         """Generate a comprehensive morning briefing with all data sources"""
         try:
             # 1. Gather system data
-            system_info = await get_system_info()
+            system_info = await self._execute_registry_tool("get_system_info")
             anomalies = self.anomaly_detector.get_anomalies(limit=5)
             
             # 2. Gather external data sources (Phase 12.2)

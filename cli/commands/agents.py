@@ -1,141 +1,164 @@
-"""
-CLI: agents commands — Full implementation
-"""
+"""agents.py - CLI-compatible multi-agent management."""
+
+from __future__ import annotations
+
 import asyncio
 import json
-import click
+from typing import Any
+
+from config.elyan_config import elyan_config
+from core.multi_agent.pool import agent_pool
 
 
-@click.group("agents")
-def agents_group():
-    """Multi-agent yönetimi."""
-    pass
+def _load_agents() -> list[dict[str, Any]]:
+    agents = elyan_config.get("agents", [])
+    if not isinstance(agents, list):
+        return []
+    return [dict(item) for item in agents if isinstance(item, dict)]
 
 
-@agents_group.command("list")
-@click.option("--json", "as_json", is_flag=True, help="JSON formatında çıktı")
-def agents_list(as_json):
-    """Tüm agent'ları listele."""
-    try:
-        from core.multi_agent.manager import MultiAgentManager
-        mgr = MultiAgentManager()
-        agents = mgr.list_agents()
-        if as_json:
-            click.echo(json.dumps(agents, indent=2, ensure_ascii=False))
-            return
-        if not agents:
-            click.echo("Kayıtlı agent yok.")
-            return
-        click.echo(f"{'ID':<15} {'Durum':<10} {'Kanallar':<25} {'Model'}")
-        click.echo("-" * 65)
-        for a in agents:
-            status = "✓ Çalışıyor" if a.get("running") else "✗ Durdu"
-            channels = ", ".join(a.get("routes", []))
-            click.echo(f"{a['id']:<15} {status:<10} {channels:<25} {a.get('model', '-')}")
-    except Exception as e:
-        click.echo(f"✗ {e}", err=True)
+def _save_agents(agents: list[dict[str, Any]]) -> None:
+    elyan_config.set("agents", agents)
+    elyan_config.save()
 
 
-@agents_group.command("status")
-@click.argument("agent_id", required=False)
-def agents_status(agent_id):
-    """Agent durumunu göster."""
-    try:
-        from core.multi_agent.manager import MultiAgentManager
-        mgr = MultiAgentManager()
-        if agent_id:
-            info = mgr.get_agent(agent_id)
-            if not info:
-                click.echo(f"✗ Agent bulunamadı: {agent_id}", err=True)
-                return
-            click.echo(json.dumps(info, indent=2, ensure_ascii=False))
-        else:
-            agents = mgr.list_agents()
-            for a in agents:
-                status = "✓" if a.get("running") else "✗"
-                click.echo(f"{status} {a['id']} — {a.get('model', '-')}")
-    except Exception as e:
-        click.echo(f"✗ {e}", err=True)
+def _find_agent(agent_id: str) -> dict[str, Any] | None:
+    target = str(agent_id or "").strip()
+    for row in _load_agents():
+        if str(row.get("id") or "").strip() == target:
+            return row
+    return None
 
 
-@agents_group.command("add")
-@click.option("--id", "agent_id", required=True, help="Agent ID")
-@click.option("--workspace", required=True, help="Workspace dizini")
-@click.option("--model", default="claude-opus-4-5-20251101", help="AI modeli")
-@click.option("--channel", "channels", multiple=True, help="Kanal yönlendirme (birden fazla)")
-def agents_add(agent_id, workspace, model, channels):
-    """Yeni agent ekle."""
-    try:
-        from core.multi_agent.manager import MultiAgentManager
-        mgr = MultiAgentManager()
-        mgr.add_agent({
-            "id": agent_id,
-            "workspace": workspace,
-            "model": model,
-            "routes": list(channels)
-        })
-        click.echo(f"✓ Agent eklendi: {agent_id}")
-    except Exception as e:
-        click.echo(f"✗ {e}", err=True)
+def _running_ids() -> set[str]:
+    return set(getattr(agent_pool, "agents", {}).keys())
 
 
-@agents_group.command("remove")
-@click.argument("agent_id")
-@click.confirmation_option(prompt="Agent'ı silmek istediğinizden emin misiniz?")
-def agents_remove(agent_id):
-    """Agent sil."""
-    try:
-        from core.multi_agent.manager import MultiAgentManager
-        mgr = MultiAgentManager()
-        mgr.remove_agent(agent_id)
-        click.echo(f"✓ Agent silindi: {agent_id}")
-    except Exception as e:
-        click.echo(f"✗ {e}", err=True)
+def _build_status_row(agent_row: dict[str, Any]) -> dict[str, Any]:
+    aid = str(agent_row.get("id") or "")
+    return {
+        "id": aid,
+        "workspace": str(agent_row.get("workspace") or ""),
+        "model": str(agent_row.get("model") or ""),
+        "routes": list(agent_row.get("routes") or []),
+        "user_routes": list(agent_row.get("user_routes") or []),
+        "running": aid in _running_ids(),
+    }
 
 
-@agents_group.command("start")
-@click.argument("agent_id")
-def agents_start(agent_id):
-    """Agent başlat."""
-    try:
-        from core.multi_agent.manager import MultiAgentManager
-        mgr = MultiAgentManager()
-        asyncio.run(mgr.start_agent(agent_id))
-        click.echo(f"✓ Agent başlatıldı: {agent_id}")
-    except Exception as e:
-        click.echo(f"✗ {e}", err=True)
+def _print_agent_list(as_json: bool = False) -> None:
+    rows = [_build_status_row(item) for item in _load_agents()]
+    if as_json:
+        print(json.dumps(rows, indent=2, ensure_ascii=False))
+        return
+    if not rows:
+        print("Kayitli agent yok.")
+        return
+    print(f"{'ID':<18} {'DURUM':<10} {'KANALLAR':<24} {'MODEL'}")
+    print("-" * 80)
+    for row in rows:
+        status = "active" if row["running"] else "idle"
+        routes = ", ".join(row["routes"]) or "-"
+        print(f"{row['id']:<18} {status:<10} {routes:<24} {row['model'] or '-'}")
 
 
-@agents_group.command("stop")
-@click.argument("agent_id")
-def agents_stop(agent_id):
-    """Agent durdur."""
-    try:
-        from core.multi_agent.manager import MultiAgentManager
-        mgr = MultiAgentManager()
-        asyncio.run(mgr.stop_agent(agent_id))
-        click.echo(f"✓ Agent durduruldu: {agent_id}")
-    except Exception as e:
-        click.echo(f"✗ {e}", err=True)
+def _status(agent_id: str | None = None) -> int:
+    if agent_id:
+        found = _find_agent(agent_id)
+        if not found:
+            print(f"Agent bulunamadi: {agent_id}")
+            return 1
+        print(json.dumps(_build_status_row(found), indent=2, ensure_ascii=False))
+        return 0
+    _print_agent_list(False)
+    return 0
 
 
-@agents_group.command("logs")
-@click.argument("agent_id")
-@click.option("--tail", default=50, help="Son N satır")
-def agents_logs(agent_id, tail):
-    """Agent loglarını göster."""
-    import subprocess
-    from pathlib import Path
-    log_file = Path.home() / ".elyan" / "logs" / f"agent_{agent_id}.log"
-    if not log_file.exists():
-        # Try project logs dir
-        log_file = Path("logs") / f"agent_{agent_id}.log"
-    if log_file.exists():
-        result = subprocess.run(["tail", f"-{tail}", str(log_file)], capture_output=True, text=True)
-        click.echo(result.stdout)
-    else:
-        click.echo(f"Log dosyası bulunamadı: {log_file}", err=True)
+def _add(agent_id: str, channel: str | None = None) -> int:
+    target = str(agent_id or "").strip()
+    if not target:
+        print("Agent ID gerekli.")
+        return 1
+    rows = _load_agents()
+    if any(str(row.get("id") or "").strip() == target for row in rows):
+        print(f"Agent zaten var: {target}")
+        return 1
+    routes = [str(channel).strip()] if channel else []
+    rows.append(
+        {
+            "id": target,
+            "workspace": "",
+            "model": str(elyan_config.get("models.default.model", "") or ""),
+            "routes": routes,
+            "user_routes": [],
+        }
+    )
+    _save_agents(rows)
+    print(f"Agent eklendi: {target}")
+    return 0
 
 
-def register(cli):
-    cli.add_command(agents_group, name="agents")
+def _remove(agent_id: str) -> int:
+    target = str(agent_id or "").strip()
+    rows = _load_agents()
+    filtered = [row for row in rows if str(row.get("id") or "").strip() != target]
+    if len(filtered) == len(rows):
+        print(f"Agent bulunamadi: {target}")
+        return 1
+    _save_agents(filtered)
+    print(f"Agent silindi: {target}")
+    return 0
+
+
+def _start(agent_id: str) -> int:
+    target = str(agent_id or "").strip()
+    if not _find_agent(target):
+        print(f"Agent bulunamadi: {target}")
+        return 1
+    asyncio.run(agent_pool.get_agent(target))
+    print(f"Agent baslatildi: {target}")
+    return 0
+
+
+def _stop(agent_id: str) -> int:
+    target = str(agent_id or "").strip()
+    running = getattr(agent_pool, "agents", {})
+    agent = running.get(target)
+    if agent is None:
+        print(f"Agent calismiyor: {target}")
+        return 0
+    asyncio.run(agent.shutdown())
+    running.pop(target, None)
+    print(f"Agent durduruldu: {target}")
+    return 0
+
+
+def _logs(agent_id: str) -> int:
+    print(f"Agent loglari icin ortak log akisina bak: ~/.elyan/logs (agent={agent_id})")
+    return 0
+
+
+def handle_agents(args) -> int:
+    action = str(getattr(args, "action", "") or "list").strip().lower() or "list"
+    agent_id = getattr(args, "id", None)
+    channel = getattr(args, "channel", None)
+
+    if action == "list":
+        _print_agent_list(False)
+        return 0
+    if action == "status":
+        return _status(agent_id)
+    if action in {"add", "create"}:
+        return _add(str(agent_id or ""), channel)
+    if action == "remove":
+        return _remove(str(agent_id or ""))
+    if action == "start":
+        return _start(str(agent_id or ""))
+    if action == "stop":
+        return _stop(str(agent_id or ""))
+    if action == "logs":
+        return _logs(str(agent_id or ""))
+    if action == "info":
+        return _status(agent_id)
+    print(f"Bilinmeyen agents komutu: {action}")
+    return 1

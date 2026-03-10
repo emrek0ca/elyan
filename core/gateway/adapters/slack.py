@@ -1,6 +1,7 @@
 from slack_bolt.app.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from typing import Dict, Any
+from pathlib import Path
 from .base import BaseChannelAdapter
 from ..message import UnifiedMessage
 from ..response import UnifiedResponse
@@ -59,6 +60,19 @@ class SlackAdapter(BaseChannelAdapter):
                 channel=chat_id,
                 text=response.text
             )
+            for attachment in list(getattr(response, "attachments", []) or []):
+                if not isinstance(attachment, dict):
+                    continue
+                path = str(attachment.get("path") or "").strip()
+                if not path or not Path(path).exists():
+                    continue
+                title = str(attachment.get("name") or Path(path).name)
+                try:
+                    upload = getattr(self.app.client, "files_upload_v2", None)
+                    if callable(upload):
+                        await upload(channel=chat_id, file=path, title=title)
+                except Exception as upload_exc:
+                    logger.warning(f"Slack attachment upload failed ({path}): {upload_exc}")
         except Exception as e:
             self._is_connected = False
             logger.error(f"Failed to send Slack message: {e}")
@@ -68,4 +82,4 @@ class SlackAdapter(BaseChannelAdapter):
         return "connected" if self._is_connected else "disconnected"
 
     def get_capabilities(self) -> Dict[str, bool]:
-        return {"buttons": True, "threads": True, "markdown": True}
+        return {"buttons": True, "threads": True, "markdown": True, "images": True, "files": True}

@@ -1,0 +1,1 @@
+Frontmost app: Cursor. Window: main.py. Cursor acik. OCR: main.py

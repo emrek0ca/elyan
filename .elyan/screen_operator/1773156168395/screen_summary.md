@@ -1,0 +1,1 @@
+Frontmost app: Safari. Window: Upload Complete. Yukleme tamamlandi. OCR: Upload Complete

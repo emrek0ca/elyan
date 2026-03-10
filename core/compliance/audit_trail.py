@@ -10,11 +10,16 @@ import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
+from core.storage_paths import resolve_elyan_data_dir
 from utils.logger import get_logger
 
 logger = get_logger("audit_trail")
 
-AUDIT_DB = Path.home() / ".elyan" / "compliance" / "audit.db"
+def _default_audit_db_path() -> Path:
+    return resolve_elyan_data_dir() / "compliance" / "audit.db"
+
+
+AUDIT_DB = _default_audit_db_path()
 AUDIT_DB.parent.mkdir(parents=True, exist_ok=True)
 
 

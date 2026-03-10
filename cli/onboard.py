@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from config.elyan_config import elyan_config
+from core.model_catalog import QWEN_LIGHT_OLLAMA_MODEL, default_model_for_provider, normalize_model_name
 from core.runtime_policy import get_runtime_policy_resolver
 from security.keychain import KeychainManager, keychain
 
@@ -123,13 +124,49 @@ def mark_setup_complete(extra: dict[str, Any] | None = None) -> None:
 
 
 def _set_provider_and_model(provider: str, model: str) -> None:
+    provider = str(provider or "").strip().lower()
+    model = normalize_model_name(provider, model)
     elyan_config.set("models.default.provider", provider)
     elyan_config.set("models.default.model", model)
     elyan_config.set("agent.model.local_first", True)
-    if provider != "ollama":
+    if provider == "ollama":
+        elyan_config.set("models.local.provider", "ollama")
+        elyan_config.set("models.local.model", model)
+    else:
         # Keep local fallback hot even when cloud is selected.
         elyan_config.set("models.local.provider", "ollama")
-        elyan_config.set("models.local.model", str(elyan_config.get("models.local.model", "llama3.1:8b")))
+        elyan_config.set(
+            "models.local.model",
+            normalize_model_name(
+                "ollama",
+                str(elyan_config.get("models.local.model", default_model_for_provider("ollama"))),
+            ),
+        )
+
+
+def _build_role_map(provider: str, model: str, *, has_ollama: bool) -> dict[str, dict[str, str]]:
+    provider = str(provider or "").strip().lower()
+    model = normalize_model_name(provider, model)
+    router_provider = "ollama" if has_ollama else provider
+    router_model = (
+        normalize_model_name("ollama", str(elyan_config.get("models.local.model", default_model_for_provider("ollama"))))
+        if has_ollama
+        else model
+    )
+    worker_role = {"provider": provider, "model": model}
+    router_role = {"provider": router_provider, "model": router_model}
+    return {
+        "router": router_role,
+        "inference": router_role,
+        "reasoning": worker_role,
+        "planning": worker_role,
+        "creative": worker_role,
+        "code": worker_role,
+        "critic": worker_role,
+        "qa": worker_role,
+        "research_worker": worker_role,
+        "code_worker": worker_role,
+    }
 
 
 def _set_provider_key(provider: str, api_key: str) -> None:
@@ -229,6 +266,7 @@ class OnboardingWizard:
             "2": ("openai", "gpt-4o"),
             "3": ("google", "gemini-2.0-flash"),
             "4": ("groq", "llama-3.3-70b-versatile"),
+            "5": ("ollama", QWEN_LIGHT_OLLAMA_MODEL),
         }
         default_choice = "1" if has_ollama else "2"
 
@@ -240,7 +278,8 @@ class OnboardingWizard:
             print("  2. OpenAI")
             print("  3. Google Gemini")
             print("  4. Groq")
-            choice = _safe_input(f"Seçim (1-4) [{default_choice}]: ", default_choice)
+            print(f"  5. Ollama Qwen Light ({QWEN_LIGHT_OLLAMA_MODEL})")
+            choice = _safe_input(f"Seçim (1-5) [{default_choice}]: ", default_choice)
 
         provider, selected_model = provider_map.get(choice, provider_map[default_choice])
         _set_provider_and_model(provider, selected_model)
@@ -253,17 +292,9 @@ class OnboardingWizard:
         elif has_ollama:
             print("📦 Yerel model kontrolü: `ollama list` ile modelleri doğrula.")
 
-        # Keep router roles aligned with selected provider/model.
+        # Keep hybrid router/worker/critic roles aligned with onboarding choice.
         elyan_config.set("router.enabled", True)
-        elyan_config.set(
-            "models.roles",
-            {
-                "reasoning": {"provider": provider, "model": selected_model},
-                "inference": {"provider": provider, "model": selected_model},
-                "creative": {"provider": provider, "model": selected_model},
-                "code": {"provider": provider, "model": selected_model},
-            },
-        )
+        elyan_config.set("models.roles", _build_role_map(provider, selected_model, has_ollama=has_ollama))
 
         normalized_channel = str(channel or "").strip().lower()
         if not normalized_channel:
@@ -348,9 +379,13 @@ class OnboardingWizard:
         cli_mod = f"{sys.executable} -m cli.main"
         if elyan_bin.exists():
             print(f"Sonraki adım: `{elyan_bin} gateway start --daemon`")
+            print(f"Sağlık kontrolü: `{elyan_bin} doctor`")
+            print(f"Hızlı durum: `{elyan_bin} status`")
             print(f"Dashboard: `{elyan_bin} dashboard`")
         else:
             print(f"Sonraki adım: `{cli_mod} gateway start --daemon`")
+            print(f"Sağlık kontrolü: `{cli_mod} doctor`")
+            print(f"Hızlı durum: `{cli_mod} status`")
             print(f"Dashboard: `{cli_mod} dashboard`")
         print(f"Config yolu: {self.config_path}")
         print(f"Aktif HOME: {Path.home()}")

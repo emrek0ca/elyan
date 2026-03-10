@@ -1,0 +1,1 @@
+Frontmost app: Safari. Window: Start. Safari frontmost. OCR: Safari

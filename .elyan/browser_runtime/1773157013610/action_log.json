@@ -1,0 +1,18 @@
+[
+  {
+    "step": 1,
+    "action": "open",
+    "params": {
+      "url": "https://upload.local",
+      "selector": "",
+      "text": ""
+    },
+    "result": {
+      "success": true,
+      "url": "https://upload.local",
+      "title": "Upload",
+      "status_code": 200,
+      "dom_available": true
+    }
+  }
+]

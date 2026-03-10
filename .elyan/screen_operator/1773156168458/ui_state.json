@@ -1,0 +1,116 @@
+{
+  "frontmost_app": "Safari",
+  "active_window": {
+    "title": "Search",
+    "bounds": {
+      "x": 0,
+      "y": 0,
+      "width": 1280,
+      "height": 800
+    }
+  },
+  "screenshot_path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-239/test_operator_task_runtime_res0/screen_after_1_1_1773156168457.png",
+  "elements": [
+    {
+      "label": "Safari",
+      "role": "frontmost_app",
+      "source": "window_metadata",
+      "confidence": 0.99
+    },
+    {
+      "label": "Search",
+      "role": "window_title",
+      "source": "window_metadata",
+      "confidence": 0.95
+    },
+    {
+      "label": "Search field",
+      "role": "text_field",
+      "x": 110,
+      "y": 90,
+      "width": 160,
+      "height": 30,
+      "frontmost_app": "Safari",
+      "window_title": "Search",
+      "source": "accessibility",
+      "confidence": 0.92
+    },
+    {
+      "label": "Search",
+      "role": "button",
+      "x": 320,
+      "y": 92,
+      "width": 80,
+      "height": 28,
+      "frontmost_app": "Safari",
+      "window_title": "Search",
+      "source": "accessibility",
+      "confidence": 0.92
+    },
+    {
+      "label": "kittens",
+      "role": "ocr_text",
+      "source": "ocr",
+      "confidence": 0.95,
+      "frontmost_app": "Safari",
+      "window_title": "Search",
+      "x": 120,
+      "y": 98,
+      "width": 70,
+      "height": 18
+    }
+  ],
+  "clickable_targets": [
+    {
+      "label": "Search field",
+      "role": "text_field",
+      "x": 110,
+      "y": 90,
+      "width": 160,
+      "height": 30,
+      "frontmost_app": "Safari",
+      "window_title": "Search",
+      "source": "accessibility",
+      "confidence": 0.92
+    },
+    {
+      "label": "Search",
+      "role": "button",
+      "x": 320,
+      "y": 92,
+      "width": 80,
+      "height": 28,
+      "frontmost_app": "Safari",
+      "window_title": "Search",
+      "source": "accessibility",
+      "confidence": 0.92
+    }
+  ],
+  "text_fields": [
+    {
+      "label": "Search field",
+      "role": "text_field",
+      "x": 110,
+      "y": 90,
+      "width": 160,
+      "height": 30,
+      "frontmost_app": "Safari",
+      "window_title": "Search",
+      "source": "accessibility",
+      "confidence": 0.92
+    }
+  ],
+  "summary": "Frontmost app: Safari. Window: Search. Search field icinde kittens yaziyor. OCR: kittens",
+  "fallback_order": [
+    "accessibility_and_window_metadata",
+    "vision_detection",
+    "ocr",
+    "last_known_ui_target_cache"
+  ],
+  "source_counts": {
+    "window_metadata": 2,
+    "accessibility": 2,
+    "ocr": 1
+  },
+  "confidence": 0.946
+}

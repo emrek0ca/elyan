@@ -1,0 +1,1 @@
+Frontmost app: Terminal. Window: Terminal. Terminal acik. OCR: Terminal

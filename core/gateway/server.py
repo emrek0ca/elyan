@@ -1,12 +1,17 @@
 import asyncio
+import importlib.util
 import inspect
 import time
 import json
 import os
+import secrets
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 from aiohttp import web, WSMsgType
+from types import SimpleNamespace
 from typing import Any, Optional, Set
+from cli.onboard import _check_macos_permissions, is_setup_complete
 from .router import GatewayRouter
 from .response import UnifiedResponse
 from core.scheduler.cron_engine import CronEngine
@@ -15,12 +20,22 @@ from core.scheduler.routine_engine import routine_engine
 from core.skills.manager import skill_manager
 from core.subscription import subscription_manager
 from core.quota import quota_manager
+from core.task_brain import task_brain
+from core.away_mode import away_task_registry
 from core.proactive.intervention import get_intervention_manager
+from core.model_catalog import default_model_for_provider
 from core.tool_usage import get_tool_usage_snapshot
 from core.runtime_policy import get_runtime_policy_resolver
+from core.runtime import (
+    EMRE_WORKFLOW_PRESETS,
+    list_emre_workflow_reports,
+    load_latest_benchmark_summary,
+    run_emre_workflow_preset,
+)
+from core.storage_paths import resolve_elyan_data_dir, resolve_runs_root
+from core.version import APP_VERSION
 from core.compliance.audit_trail import audit_trail
 from config.elyan_config import elyan_config
-from config.settings import ELYAN_DIR
 from security.tool_policy import tool_policy
 from security.keychain import KeychainManager
 from tools import AVAILABLE_TOOLS
@@ -31,6 +46,7 @@ logger = get_logger("gateway_server")
 # Global WebSocket client registry for dashboard push
 _dashboard_ws_clients: Set[web.WebSocketResponse] = set()
 _activity_log: list = []  # Rolling buffer of last 50 events
+_tool_event_log: list = []  # Rolling buffer of last 200 tool events
 _start_time: float = time.time()
 _tool_health_cache: dict = {
     "ts": 0.0,
@@ -38,6 +54,34 @@ _tool_health_cache: dict = {
     "items": {},
     "summary": {},
 }
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "::ffff:127.0.0.1", "localhost"}
+_ADMIN_READ_PATHS = {
+    "/api/config",
+    "/api/logs",
+    "/api/security/events",
+    "/api/security/pending",
+    "/api/privacy/export",
+    "/api/interventions",
+    "/api/tool-requests",
+    "/api/tool-requests/stats",
+    "/api/tool-events",
+}
+
+
+def _ensure_admin_access_token() -> str:
+    configured = str(
+        os.getenv("ELYAN_ADMIN_TOKEN", "")
+        or elyan_config.get("gateway.admin.token", "")
+        or ""
+    ).strip()
+    if configured:
+        return configured
+    generated = secrets.token_urlsafe(24)
+    try:
+        elyan_config.set("gateway.admin.token", generated)
+    except Exception:
+        pass
+    return generated
 
 
 def push_activity(event_type: str, channel: str, detail: str, success: bool = True):
@@ -52,8 +96,64 @@ def push_activity(event_type: str, channel: str, detail: str, success: bool = Tr
     _activity_log.append(entry)
     if len(_activity_log) > 50:
         _activity_log.pop(0)
-    # Fire-and-forget broadcast
-    asyncio.ensure_future(_broadcast_activity(entry))
+    _schedule_background(_broadcast_activity, entry)
+
+
+def _sanitize_stream_payload(value: Any, *, _depth: int = 0) -> Any:
+    """Keep dashboard stream payload compact/safe (truncate + strip binary blobs)."""
+    if _depth > 3:
+        return "<truncated>"
+    if isinstance(value, bytes):
+        return f"<bytes:{len(value)}>"
+    if isinstance(value, str):
+        text = value
+        if len(text) > 500:
+            text = text[:500] + f"...(+{len(value)-500})"
+        # Hide probable base64-like image payloads in stream.
+        if text.startswith("data:image/") or ("base64" in text[:80] and len(text) > 120):
+            return "<image_payload>"
+        return text
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for k, v in value.items():
+            key = str(k)
+            low = key.lower()
+            if low in {"image", "image_data", "screenshot_data", "binary", "blob"}:
+                out[key] = "<omitted>"
+                continue
+            out[key] = _sanitize_stream_payload(v, _depth=_depth + 1)
+        return out
+    if isinstance(value, (list, tuple, set)):
+        items = list(value)[:20]
+        return [_sanitize_stream_payload(v, _depth=_depth + 1) for v in items]
+    return value
+
+
+def push_tool_event(
+    stage: str,
+    tool: str,
+    *,
+    step: str = "",
+    request_id: str = "",
+    success: Optional[bool] = None,
+    latency_ms: Optional[int] = None,
+    payload: Optional[dict] = None,
+):
+    """Push structured tool start/update/end event for dashboard stream."""
+    entry = {
+        "ts": time.strftime("%H:%M:%S"),
+        "stage": str(stage or "").strip().lower(),
+        "tool": str(tool or "").strip(),
+        "step": str(step or "").strip(),
+        "request_id": str(request_id or "").strip(),
+        "success": success if isinstance(success, bool) else None,
+        "latency_ms": int(latency_ms or 0) if latency_ms is not None else None,
+        "payload": _sanitize_stream_payload(payload or {}),
+    }
+    _tool_event_log.append(entry)
+    if len(_tool_event_log) > 200:
+        _tool_event_log.pop(0)
+    _schedule_background(_broadcast_event, "tool_event", entry)
 
 
 def push_suggestion(title: str, description: str, action: str, params: dict, confidence: str = "MEDIUM"):
@@ -67,8 +167,7 @@ def push_suggestion(title: str, description: str, action: str, params: dict, con
         "confidence": confidence,
         "ts": time.strftime("%H:%M:%S")
     }
-    # Fire-and-forget broadcast
-    asyncio.ensure_future(_broadcast_event("suggestion", payload))
+    _schedule_background(_broadcast_event, "suggestion", payload)
 
 
 def push_hint(text: str, icon: str = "lightbulb", color: str = "yellow"):
@@ -80,7 +179,19 @@ def push_hint(text: str, icon: str = "lightbulb", color: str = "yellow"):
         "color": color,
         "ts": time.strftime("%H:%M:%S")
     }
-    asyncio.ensure_future(_broadcast_event("hint", payload))
+    _schedule_background(_broadcast_event, "hint", payload)
+
+
+def _schedule_background(coro_func, *args):
+    """Schedule best-effort dashboard events only when an event loop is active."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    try:
+        loop.create_task(coro_func(*args))
+    except Exception:
+        return
 
 
 async def _broadcast_event(event_type: str, data: dict):
@@ -148,15 +259,7 @@ def _get_runtime_model_info() -> dict:
 
 
 def _default_model_for_provider(provider: str) -> str:
-    p = str(provider or "").strip().lower()
-    defaults = {
-        "openai": "gpt-4o",
-        "anthropic": "claude-3-5-sonnet-latest",
-        "google": "gemini-2.0-flash",
-        "groq": "llama-3.3-70b-versatile",
-        "ollama": "llama3.1:8b",
-    }
-    return defaults.get(p, "gpt-4o")
+    return default_model_for_provider(provider)
 
 
 def _unique_clean(items, default):
@@ -173,7 +276,29 @@ def _unique_clean(items, default):
     return out
 
 
+def _to_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in {"1", "true", "yes", "on"}:
+            return True
+        if token in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
+def _policy_default_deny_enabled() -> bool:
+    default_deny = elyan_config.get("tools.default_deny", None)
+    if default_deny is None:
+        default_deny = elyan_config.get("security.toolPolicy.defaultDeny", True)
+    return _to_bool(default_deny, True)
+
+
 def _get_policy_lists() -> tuple[list[str], list[str], list[str]]:
+
     default_allow = [
         "group:fs",
         "group:web",
@@ -184,13 +309,55 @@ def _get_policy_lists() -> tuple[list[str], list[str], list[str]]:
         "group:memory",
         "browser",
     ]
-    allow = _unique_clean(elyan_config.get("tools.allow", default_allow), default_allow)
+    allow_fallback = [] if _policy_default_deny_enabled() else default_allow
+    allow = _unique_clean(elyan_config.get("tools.allow", None), allow_fallback)
     deny = _unique_clean(elyan_config.get("tools.deny", []), [])
     require = elyan_config.get("tools.requireApproval", None)
     if require is None:
         require = elyan_config.get("tools.require_approval", ["exec", "delete_file"])
     require = _unique_clean(require, ["exec", "delete_file"])
     return allow, deny, require
+
+
+def _policy_state(tool_name: str) -> tuple[str, bool, bool, bool]:
+    """Resolve group + policy state using the same engine as runtime execution."""
+    group = tool_policy.infer_group(tool_name) or "other"
+    denied = bool(tool_policy.is_denied(tool_name, group))
+    allowed = bool(tool_policy.is_allowed(tool_name, group))
+    needs_approval = bool(allowed and tool_policy.needs_approval(tool_name, group))
+    return group, allowed, denied, needs_approval
+
+
+def _request_remote_host(request) -> str:
+    remote = str(getattr(request, "remote", "") or "").strip()
+    if remote:
+        return remote
+    transport = getattr(request, "transport", None)
+    if transport:
+        try:
+            peer = transport.get_extra_info("peername")
+            if isinstance(peer, tuple) and peer:
+                return str(peer[0] or "").strip()
+        except Exception:
+            pass
+    forwarded = ""
+    try:
+        forwarded = str(request.headers.get("X-Forwarded-For", "") or "").split(",")[0].strip()
+    except Exception:
+        forwarded = ""
+    return forwarded
+
+
+def _is_loopback_host(host: str) -> bool:
+    normalized = str(host or "").strip().lower()
+    return normalized in _LOOPBACK_HOSTS
+
+
+def _is_loopback_request(request) -> bool:
+    host = _request_remote_host(request)
+    if not host:
+        return False
+    return _is_loopback_host(host)
 
 
 def _iter_memory_candidates(memory_obj: Any) -> list[Any]:
@@ -325,7 +492,19 @@ def _sanitize_roles_map(raw_roles: dict, default_provider: str, default_model: s
     if not isinstance(raw_roles, dict):
         return {}
     out: dict = {}
-    allowed_roles = {"reasoning", "inference", "creative", "code"}
+    allowed_roles = {
+        "router",
+        "reasoning",
+        "inference",
+        "creative",
+        "code",
+        "critic",
+        "worker",
+        "research_worker",
+        "code_worker",
+        "planning",
+        "qa",
+    }
     for role, cfg in raw_roles.items():
         role_name = str(role or "").strip().lower()
         if role_name not in allowed_roles or not isinstance(cfg, dict):
@@ -337,6 +516,80 @@ def _sanitize_roles_map(raw_roles: dict, default_provider: str, default_model: s
             model = _default_model_for_provider(provider)
         out[role_name] = {"provider": provider, "model": model}
     return out
+
+
+def _sanitize_model_registry(raw_registry: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_registry, list):
+        return []
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw_registry:
+        if not isinstance(item, dict):
+            continue
+        provider = str(item.get("provider") or item.get("type") or "").strip().lower()
+        if provider == "gemini":
+            provider = "google"
+        if provider not in {"openai", "anthropic", "google", "groq", "ollama"}:
+            continue
+        model = str(item.get("model") or "").strip()
+        if not model:
+            model = _default_model_for_provider(provider)
+        alias = str(item.get("alias") or item.get("name") or "").strip()
+        entry_id = str(item.get("id") or f"{provider}:{model}").strip()
+        if not entry_id or entry_id in seen:
+            continue
+        seen.add(entry_id)
+        roles = item.get("roles", [])
+        if isinstance(roles, str):
+            roles = [chunk.strip().lower() for chunk in roles.split(",")]
+        if not isinstance(roles, list):
+            roles = []
+        normalized_roles = []
+        for role in roles:
+            role_name = str(role or "").strip().lower()
+            if role_name and role_name not in normalized_roles:
+                normalized_roles.append(role_name)
+        try:
+            priority = max(0, min(999, int(item.get("priority", 50) or 50)))
+        except Exception:
+            priority = 50
+        out.append(
+            {
+                "id": entry_id,
+                "provider": provider,
+                "model": model,
+                "alias": alias,
+                "enabled": bool(item.get("enabled", True)),
+                "roles": normalized_roles,
+                "priority": priority,
+            }
+        )
+    return out
+
+
+def _sanitize_collaboration_payload(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raw = {}
+    try:
+        max_models = int(raw.get("max_models", 3) or 3)
+    except Exception:
+        max_models = 3
+    roles = raw.get("roles", [])
+    if isinstance(roles, str):
+        roles = [chunk.strip().lower() for chunk in roles.split(",")]
+    if not isinstance(roles, list):
+        roles = []
+    normalized_roles = []
+    for role in roles:
+        role_name = str(role or "").strip().lower()
+        if role_name and role_name not in normalized_roles:
+            normalized_roles.append(role_name)
+    return {
+        "enabled": bool(raw.get("enabled", True)),
+        "strategy": str(raw.get("strategy", "synthesize") or "synthesize").strip().lower(),
+        "max_models": max(1, min(5, max_models)),
+        "roles": normalized_roles,
+    }
 
 
 def _channel_id(ch: dict) -> str:
@@ -363,7 +616,7 @@ class ElyanGatewayServer:
     def __init__(self, agent):
         self.agent = agent
         self.router = GatewayRouter(agent)
-        self.app = web.Application(middlewares=[self._cors_middleware])
+        self.app = web.Application(middlewares=[self._cors_middleware, self._api_security_middleware])
         self.webchat_adapter: Optional[object] = None
         self.cron = CronEngine(agent)
         self.heartbeat = HeartbeatManager(agent)
@@ -372,17 +625,111 @@ class ElyanGatewayServer:
         self.runner: Optional[web.AppRunner] = None
         self._telemetry_task: Optional[asyncio.Task] = None
 
+    def _configured_cors_origins(self) -> set[str]:
+        configured = elyan_config.get("gateway.cors.origins", []) or []
+        if isinstance(configured, str):
+            configured = [item.strip() for item in configured.split(",") if item.strip()]
+        normalized: set[str] = set()
+        for raw in configured:
+            value = str(raw or "").strip()
+            if not value:
+                continue
+            try:
+                parsed = urlparse(value)
+                if parsed.scheme and parsed.netloc:
+                    normalized.add(f"{parsed.scheme.lower()}://{parsed.netloc.lower()}")
+            except Exception:
+                continue
+        env_origins = str(os.getenv("ELYAN_CORS_ORIGINS", "") or "").strip()
+        if env_origins:
+            for part in env_origins.split(","):
+                value = str(part or "").strip()
+                if not value:
+                    continue
+                try:
+                    parsed = urlparse(value)
+                    if parsed.scheme and parsed.netloc:
+                        normalized.add(f"{parsed.scheme.lower()}://{parsed.netloc.lower()}")
+                except Exception:
+                    continue
+        return normalized
+
+    def _is_allowed_cors_origin(self, origin: str) -> bool:
+        raw_origin = str(origin or "").strip()
+        if not raw_origin:
+            return False
+        try:
+            parsed = urlparse(raw_origin)
+        except Exception:
+            return False
+        hostname = str(parsed.hostname or "").strip().lower()
+        if _is_loopback_host(hostname):
+            return True
+        normalized = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}" if parsed.scheme and parsed.netloc else ""
+        if not normalized:
+            return False
+        return normalized in self._configured_cors_origins()
+
+    def _request_requires_admin(self, request) -> bool:
+        path = str(getattr(request, "path", "") or "")
+        method = str(getattr(request, "method", "GET") or "GET").upper()
+        if not path.startswith("/api"):
+            return False
+        if path == "/api/message":
+            return True
+        if method in {"POST", "PUT", "PATCH", "DELETE"}:
+            return True
+        if method == "GET" and path in _ADMIN_READ_PATHS:
+            return True
+        return False
+
     @web.middleware
     async def _cors_middleware(self, request, handler):
+        origin = str(request.headers.get("Origin", "") or "").strip()
+        allowed_origin = origin if origin and self._is_allowed_cors_origin(origin) else ""
+        if origin and not allowed_origin:
+            return web.json_response({"ok": False, "error": "CORS origin forbidden"}, status=403)
         if request.method == "OPTIONS":
-            return web.Response(headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type",
-            })
+            resp = web.Response(status=204)
+            if allowed_origin:
+                resp.headers["Access-Control-Allow-Origin"] = allowed_origin
+                resp.headers["Access-Control-Allow-Credentials"] = "true"
+            resp.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+            resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Elyan-Admin-Token"
+            resp.headers["Vary"] = "Origin"
+            return resp
         resp = await handler(request)
-        resp.headers["Access-Control-Allow-Origin"] = "*"
+        if allowed_origin:
+            resp.headers["Access-Control-Allow-Origin"] = allowed_origin
+            resp.headers["Access-Control-Allow-Credentials"] = "true"
+            resp.headers["Vary"] = "Origin"
         return resp
+
+    @web.middleware
+    async def _api_security_middleware(self, request, handler):
+        if self._request_requires_admin(request):
+            allowed, error = self._require_admin_access(request, allow_cookie=True)
+            if not allowed:
+                return web.json_response({"ok": False, "error": error}, status=403)
+        return await handler(request)
+
+    def _require_admin_access(self, request, *, allow_cookie: bool = True) -> tuple[bool, str]:
+        if not _is_loopback_request(request):
+            return False, "admin access is restricted to localhost"
+        expected = _ensure_admin_access_token()
+        query = getattr(request, "query", None)
+        if query is None:
+            query = getattr(getattr(request, "rel_url", None), "query", {}) or {}
+        candidate = str(
+            request.headers.get("X-Elyan-Admin-Token", "")
+            or query.get("token", "")
+            or query.get("admin_token", "")
+            or (request.cookies.get("elyan_admin_session", "") if allow_cookie else "")
+            or ""
+        ).strip()
+        if not candidate or candidate != expected:
+            return False, "admin token required"
+        return True, ""
 
     def _setup_routes(self):
         # ── API V1 ────────────────────────────────────────────────────────────
@@ -413,6 +760,11 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/analytics', self.handle_analytics)
         self.app.router.add_get('/api/subscription', self.handle_subscription_get)
         self.app.router.add_get('/api/quota', self.handle_quota_get)
+        self.app.router.add_get('/api/admin/overview', self.handle_admin_overview)
+        self.app.router.add_get('/api/admin/users', self.handle_admin_users)
+        self.app.router.add_get('/api/admin/plans', self.handle_admin_plans)
+        self.app.router.add_post('/api/admin/users/{user_id}/subscription', self.handle_admin_user_subscription)
+        self.app.router.add_post('/api/admin/away-tasks/{task_id}/action', self.handle_admin_away_task_action)
         self.app.router.add_get('/api/tasks', self.handle_tasks)
         self.app.router.add_post('/api/tasks/suggest', self.handle_task_suggest)
         self.app.router.add_post('/api/tasks', self.handle_create_task)
@@ -420,6 +772,10 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/memory/profile', self.handle_get_profile)
         self.app.router.add_get('/api/activity', self.handle_activity_log)
         self.app.router.add_get('/api/runs/recent', self.handle_recent_runs)
+        self.app.router.add_get('/api/product/home', self.handle_product_home)
+        self.app.router.add_get('/api/product/workflows', self.handle_product_workflows)
+        self.app.router.add_get('/api/product/workflows/reports', self.handle_product_workflow_reports)
+        self.app.router.add_post('/api/product/workflows/run', self.handle_product_workflow_run)
         self.app.router.add_get('/api/routines', self.handle_routines)
         self.app.router.add_get('/api/routines/templates', self.handle_routine_templates)
         self.app.router.add_post('/api/routines/suggest', self.handle_routine_suggest)
@@ -432,6 +788,7 @@ class ElyanGatewayServer:
         self.app.router.add_delete('/api/routines/{id}', self.handle_routine_remove)
         self.app.router.add_get('/api/tool-requests', self.handle_tool_requests)
         self.app.router.add_get('/api/tool-requests/stats', self.handle_tool_requests_stats)
+        self.app.router.add_get('/api/tool-events', self.handle_tool_events)
         self.app.router.add_get('/api/tools', self.handle_tools)
         self.app.router.add_get('/api/tools/policy', self.handle_tools_policy_get)
         self.app.router.add_get('/api/tools/detail', self.handle_tool_detail)
@@ -450,7 +807,11 @@ class ElyanGatewayServer:
 
         # ── Dashboard & Web UI ────────────────────────────────────────────────
         self.app.router.add_get('/', self.handle_dashboard_page)
+        self.app.router.add_get('/product', self.handle_dashboard_page)
         self.app.router.add_get('/dashboard', self.handle_dashboard_page)
+        self.app.router.add_get('/healthz', self.handle_product_health)
+        self.app.router.add_get('/ops', self.handle_ops_console_page)
+        self.app.router.add_get('/ui/web/{filename}', self.handle_web_asset)
         self.app.router.add_get('/canvas', self.handle_canvas_page)
         self.app.router.add_get('/ws/chat', self.handle_webchat_ws)
         self.app.router.add_get('/ws/dashboard', self.handle_dashboard_ws)
@@ -476,7 +837,36 @@ class ElyanGatewayServer:
         p = base / 'ui' / 'web' / 'dashboard.html'
         if not p.exists():
             return web.Response(text="Dashboard file not found", status=404)
-        return web.FileResponse(p)
+        response = web.FileResponse(p)
+        if _is_loopback_request(request):
+            response.set_cookie(
+                "elyan_admin_session",
+                _ensure_admin_access_token(),
+                httponly=True,
+                samesite="Strict",
+                secure=False,
+                path="/",
+            )
+        return response
+
+    async def handle_ops_console_page(self, request):
+        allowed, error = self._require_admin_access(request, allow_cookie=True)
+        if not allowed:
+            return web.Response(text=error, status=403)
+        base = Path(__file__).resolve().parent.parent.parent
+        p = base / 'ui' / 'web' / 'ops_console.html'
+        if not p.exists():
+            return web.Response(text="Ops console file not found", status=404)
+        response = web.FileResponse(p)
+        response.set_cookie(
+            "elyan_admin_session",
+            _ensure_admin_access_token(),
+            httponly=True,
+            samesite="Strict",
+            secure=False,
+            path="/",
+        )
+        return response
 
     async def handle_canvas_page(self, request):
         base = Path(__file__).resolve().parent.parent.parent
@@ -484,6 +874,16 @@ class ElyanGatewayServer:
         if not p.exists():
             return web.Response(text="Canvas file not found", status=404)
         return web.FileResponse(p)
+
+    async def handle_web_asset(self, request):
+        filename = str(request.match_info.get("filename", "")).strip()
+        if not filename or "/" in filename or "\\" in filename or ".." in filename:
+            return web.Response(text="Invalid asset path", status=400)
+        base = (Path(__file__).resolve().parent.parent.parent / "ui" / "web").resolve()
+        asset_path = (base / filename).resolve()
+        if asset_path.parent != base or not asset_path.exists() or not asset_path.is_file():
+            return web.Response(text="Asset file not found", status=404)
+        return web.FileResponse(asset_path)
 
     # ── Config ────────────────────────────────────────────────────────────────
     async def handle_get_config(self, request):
@@ -528,6 +928,18 @@ class ElyanGatewayServer:
                 "agentic_v2": bool(elyan_config.get("agent.flags.agentic_v2", False)),
                 "dag_exec": bool(elyan_config.get("agent.flags.dag_exec", False)),
                 "strict_taskspec": bool(elyan_config.get("agent.flags.strict_taskspec", False)),
+                "upgrade_intent_hardening": bool(elyan_config.get("agent.flags.upgrade_intent_hardening", False)),
+                "upgrade_intent_json_envelope": bool(elyan_config.get("agent.flags.upgrade_intent_json_envelope", False)),
+                "upgrade_attachment_indexer": bool(elyan_config.get("agent.flags.upgrade_attachment_indexer", False)),
+                "upgrade_planning_split_cache": bool(elyan_config.get("agent.flags.upgrade_planning_split_cache", False)),
+                "upgrade_orchestration_policy": bool(elyan_config.get("agent.flags.upgrade_orchestration_policy", False)),
+                "upgrade_typed_tool_io": bool(elyan_config.get("agent.flags.upgrade_typed_tool_io", False)),
+                "typed_tools_strict": bool(elyan_config.get("agent.flags.typed_tools_strict", False)),
+                "upgrade_fallback_ladder": bool(elyan_config.get("agent.flags.upgrade_fallback_ladder", False)),
+                "upgrade_verify_mandatory_gates": bool(elyan_config.get("agent.flags.upgrade_verify_mandatory_gates", False)),
+                "upgrade_performance_routing": bool(elyan_config.get("agent.flags.upgrade_performance_routing", False)),
+                "upgrade_telemetry_autotune": bool(elyan_config.get("agent.flags.upgrade_telemetry_autotune", False)),
+                "upgrade_workspace_isolation": bool(elyan_config.get("agent.flags.upgrade_workspace_isolation", False)),
             },
             "orchestration": {
                 "multi_agent_enabled": bool(elyan_config.get("agent.multi_agent.enabled", True)),
@@ -644,6 +1056,28 @@ class ElyanGatewayServer:
                 data.get("flag_strict_taskspec", elyan_config.get("agent.flags.strict_taskspec", False)),
             )
         )
+        upgrade_flag_names = [
+            "upgrade_intent_hardening",
+            "upgrade_intent_json_envelope",
+            "upgrade_attachment_indexer",
+            "upgrade_planning_split_cache",
+            "upgrade_orchestration_policy",
+            "upgrade_typed_tool_io",
+            "typed_tools_strict",
+            "upgrade_fallback_ladder",
+            "upgrade_verify_mandatory_gates",
+            "upgrade_performance_routing",
+            "upgrade_telemetry_autotune",
+            "upgrade_workspace_isolation",
+        ]
+        upgrade_flags: dict[str, bool] = {}
+        for fname in upgrade_flag_names:
+            upgrade_flags[fname] = bool(
+                flags_data.get(
+                    fname,
+                    data.get(fname, elyan_config.get(f"agent.flags.{fname}", False)),
+                )
+            )
 
         multi_agent_enabled = bool(
             orchestration_data.get(
@@ -874,6 +1308,8 @@ class ElyanGatewayServer:
         elyan_config.set("agent.flags.agentic_v2", flag_agentic_v2)
         elyan_config.set("agent.flags.dag_exec", flag_dag_exec)
         elyan_config.set("agent.flags.strict_taskspec", flag_strict_taskspec)
+        for fname, fval in upgrade_flags.items():
+            elyan_config.set(f"agent.flags.{fname}", bool(fval))
         elyan_config.set("agent.multi_agent.enabled", multi_agent_enabled)
         elyan_config.set("agent.multi_agent.complexity_threshold", multi_agent_complexity_threshold)
         elyan_config.set("agent.multi_agent.capability_confidence_threshold", multi_agent_capability_threshold)
@@ -922,11 +1358,20 @@ class ElyanGatewayServer:
         default = elyan_config.get("models.default", {}) or {}
         fallback = elyan_config.get("models.fallback", {}) or {}
         roles = elyan_config.get("models.roles", {}) or {}
+        registry = _sanitize_model_registry(elyan_config.get("models.registry", []) or [])
+        collaboration = _sanitize_collaboration_payload(elyan_config.get("models.collaboration", {}) or {})
         router_enabled = bool(elyan_config.get("router.enabled", True))
         providers_cfg = elyan_config.get("models.providers", {}) or {}
         known = {"openai", "anthropic", "google", "groq", "ollama"}
         known.update({str(k).strip().lower() for k in providers_cfg.keys() if str(k).strip()})
+        known.update({str(item.get("provider") or "").strip().lower() for item in registry if isinstance(item, dict)})
         provider_keys = {p: _provider_key_status(p) for p in sorted(known)}
+        collaboration_pool = []
+        try:
+            from core.model_orchestrator import model_orchestrator
+            collaboration_pool = model_orchestrator.list_registered_models()
+        except Exception:
+            collaboration_pool = registry
         state = {
             "ok": True,
             "default": {
@@ -938,6 +1383,9 @@ class ElyanGatewayServer:
                 "model": fallback.get("model", "gpt-4o"),
             },
             "roles": roles if isinstance(roles, dict) else {},
+            "registry": registry,
+            "collaboration": collaboration,
+            "registered_models": collaboration_pool,
             "router_enabled": router_enabled,
             "provider_keys": provider_keys,
             **_get_runtime_model_info(),
@@ -980,6 +1428,8 @@ class ElyanGatewayServer:
         router_enabled = data.get("router_enabled", None)
         sync_roles = bool(data.get("sync_roles", True))
         requested_roles = data.get("roles", {})
+        requested_registry = _sanitize_model_registry(data.get("registry", []))
+        requested_collaboration = _sanitize_collaboration_payload(data.get("collaboration", {}))
 
         # Optional API key updates (write-only)
         api_keys = data.get("api_keys", {})
@@ -1041,12 +1491,26 @@ class ElyanGatewayServer:
         if router_enabled is not None:
             elyan_config.set("router.enabled", bool(router_enabled))
 
+        if requested_registry:
+            elyan_config.set("models.registry", requested_registry)
+        elif "registry" in data:
+            elyan_config.set("models.registry", [])
+
+        if requested_collaboration or "collaboration" in data:
+            elyan_config.set("models.collaboration", requested_collaboration)
+
         if sync_roles:
             role_map = {
+                "router": {"provider": "ollama", "model": str(elyan_config.get("models.local.model", _default_model_for_provider("ollama")))},
                 "reasoning": {"provider": provider, "model": model},
                 "inference": {"provider": provider, "model": model},
                 "creative": {"provider": provider, "model": model},
+                "planning": {"provider": provider, "model": model},
                 "code": {"provider": provider, "model": model},
+                "critic": {"provider": provider, "model": model},
+                "qa": {"provider": provider, "model": model},
+                "research_worker": {"provider": provider, "model": model},
+                "code_worker": {"provider": provider, "model": model},
             }
             elyan_config.set("models.roles", role_map)
         else:
@@ -1058,17 +1522,21 @@ class ElyanGatewayServer:
         try:
             from core.model_orchestrator import model_orchestrator
             model_orchestrator._load_providers()
+            registered_models = model_orchestrator.list_registered_models()
         except Exception:
-            pass
+            registered_models = registry
 
         push_activity("models", "dashboard", f"default={provider}/{model}", True)
         default = elyan_config.get("models.default", {}) or {}
         fallback = elyan_config.get("models.fallback", {}) or {}
         roles = elyan_config.get("models.roles", {}) or {}
+        registry = _sanitize_model_registry(elyan_config.get("models.registry", []) or [])
+        collaboration = _sanitize_collaboration_payload(elyan_config.get("models.collaboration", {}) or {})
         router_enabled = bool(elyan_config.get("router.enabled", True))
         providers_cfg = elyan_config.get("models.providers", {}) or {}
         known = {"openai", "anthropic", "google", "groq", "ollama"}
         known.update({str(k).strip().lower() for k in providers_cfg.keys() if str(k).strip()})
+        known.update({str(item.get("provider") or "").strip().lower() for item in registry if isinstance(item, dict)})
         return web.json_response({
             "ok": True,
             "default": {
@@ -1080,8 +1548,11 @@ class ElyanGatewayServer:
                 "model": fallback.get("model", "gpt-4o"),
             },
             "roles": roles if isinstance(roles, dict) else {},
+            "registry": registry,
+            "collaboration": collaboration,
             "router_enabled": router_enabled,
             "provider_keys": {p: _provider_key_status(p) for p in sorted(known)},
+            "registered_models": registered_models,
             "key_updates": key_updates,
             "key_errors": key_errors,
             **_get_runtime_model_info(),
@@ -1119,9 +1590,12 @@ class ElyanGatewayServer:
 
     # ── Status ────────────────────────────────────────────────────────────────
     async def handle_status(self, request):
-        from core.monitoring import get_resource_monitor
+        from core.monitoring import get_resource_monitor, get_monitoring
         monitor = get_resource_monitor()
         health = monitor.get_health_snapshot()
+        mon = get_monitoring()
+        orchestration_summary = mon.get_orchestration_summary()
+        pipeline_jobs_summary = mon.get_pipeline_job_summary()
         
         import psutil
         uptime_s = int(time.time() - _start_time)
@@ -1140,6 +1614,37 @@ class ElyanGatewayServer:
             k: a.get_status() for k, a in self.router.adapters.items()
         }
         adapter_health = self.router.get_adapter_health() if hasattr(self.router, "get_adapter_health") else {}
+        adapter_total = len(adapter_status) if isinstance(adapter_status, dict) else 0
+        adapter_healthy = 0
+        for _name, st in (adapter_status.items() if isinstance(adapter_status, dict) else []):
+            low = str(st or "").lower()
+            if low in {"connected", "online", "ok", "active", "healthy"}:
+                adapter_healthy += 1
+            elif isinstance(st, dict):
+                inner = str(st.get("status", "")).lower()
+                if inner in {"connected", "online", "ok", "active", "healthy"}:
+                    adapter_healthy += 1
+        adapter_degraded = max(0, adapter_total - adapter_healthy)
+
+        tool_names = AVAILABLE_TOOLS.names() if hasattr(AVAILABLE_TOOLS, "names") else list(AVAILABLE_TOOLS.keys())
+        tools_total = len(tool_names)
+        from tools import get_tool_load_errors
+
+        tool_load_errors = get_tool_load_errors()
+        load_error_count = len(tool_load_errors)
+
+        runtime_health = {
+            "status": "degraded" if (load_error_count > 0 or adapter_degraded > 0) else "healthy",
+            "tooling": {
+                "tools_total": tools_total,
+                "load_errors": load_error_count,
+            },
+            "channels": {
+                "total": adapter_total,
+                "healthy": adapter_healthy,
+                "degraded": adapter_degraded,
+            },
+        }
 
         from core.action_lock import action_lock
         return web.json_response({
@@ -1153,10 +1658,30 @@ class ElyanGatewayServer:
             "is_on_ac": health.is_on_ac,
             "uptime": uptime,
             "uptime_s": uptime_s,
-            "version": elyan_config.get("version", "18.0.0"),
+            "uptime_seconds": uptime_s,
+            "version": elyan_config.get("version", APP_VERSION),
             "adapters": adapter_status,
             "adapter_health": adapter_health,
             "cron_jobs": len(self.cron.scheduler.get_jobs()),
+            "tool_count": tools_total,
+            "tools_total": tools_total,
+            "runtime_health": runtime_health,
+            "runtime": {
+                "uptime_seconds": uptime_s,
+                "cpu_pct": health.cpu_percent,
+                "ram_pct": health.ram_percent,
+                "disk_pct": health.disk_percent,
+                "tools_total": tools_total,
+                "tool_load_errors": load_error_count,
+                "channels_total": adapter_total,
+                "channels_healthy": adapter_healthy,
+                "channels_degraded": adapter_degraded,
+                "health_status": runtime_health["status"],
+                "orchestration": orchestration_summary,
+                "pipeline_jobs": pipeline_jobs_summary,
+            },
+            "orchestration_telemetry": orchestration_summary,
+            "pipeline_jobs_telemetry": pipeline_jobs_summary,
             "action_lock": {
                 "is_locked": action_lock.is_locked,
                 "progress": action_lock.progress,
@@ -1165,6 +1690,189 @@ class ElyanGatewayServer:
             },
             **_get_runtime_model_info(),
         })
+
+    def _product_workflow_catalog(self) -> list[dict[str, Any]]:
+        reports = list_emre_workflow_reports(limit=20)
+        latest_by_name = {str(item.get("name") or "").strip(): dict(item) for item in reports if isinstance(item, dict)}
+        catalog: list[dict[str, Any]] = []
+        for preset in EMRE_WORKFLOW_PRESETS:
+            row = dict(preset)
+            latest = latest_by_name.get(str(row.get("name") or "").strip(), {})
+            catalog.append(
+                {
+                    "name": str(row.get("name") or "").strip(),
+                    "workflow_name": str(row.get("workflow_name") or row.get("name") or "").strip(),
+                    "description": str(row.get("description") or "").strip(),
+                    "request": str(row.get("request") or "").strip(),
+                    "last_status": str(latest.get("status") or "").strip(),
+                    "last_failure_code": str(latest.get("failure_code") or "").strip(),
+                    "last_retry_count": int(latest.get("retry_count") or 0),
+                    "last_replan_count": int(latest.get("replan_count") or 0),
+                    "last_updated_at": float(latest.get("updated_at") or 0.0),
+                }
+            )
+        return catalog
+
+    async def _build_product_home_payload(self) -> dict[str, Any]:
+        status_req = SimpleNamespace(rel_url=SimpleNamespace(query={}))
+        tasks_req = SimpleNamespace(rel_url=SimpleNamespace(query={}))
+        runs_req = SimpleNamespace(rel_url=SimpleNamespace(query={"limit": "6"}))
+        status_payload = json.loads((await self.handle_status(status_req)).text)
+        tasks_payload = json.loads((await self.handle_tasks(tasks_req)).text)
+        runs_payload = json.loads((await self.handle_recent_runs(runs_req)).text)
+        adapter_status = dict(status_payload.get("adapters") or {}) if isinstance(status_payload.get("adapters"), dict) else {}
+        model_info = _get_runtime_model_info()
+        benchmark = load_latest_benchmark_summary()
+        recent_reports = list_emre_workflow_reports(limit=5)
+        permissions = _check_macos_permissions()
+        desktop_state_path = resolve_elyan_data_dir() / "desktop_host" / "state.json"
+        playwright_ready = importlib.util.find_spec("playwright") is not None
+        telegram_status = str(adapter_status.get("telegram") or "").strip().lower()
+        telegram_ready = telegram_status in {"connected", "online", "ok", "active", "healthy"}
+        desktop_ready = bool(permissions.get("osascript_available")) and bool(permissions.get("screencapture_available"))
+        browser_ready = bool(playwright_ready or desktop_ready)
+        provider = str(model_info.get("active_provider") or "—").strip()
+        model = str(model_info.get("active_model") or "—").strip()
+        provider_ready = provider not in {"", "—"} and model not in {"", "—"}
+        benchmark_green = int(benchmark.get("pass_count") or 0) == int(benchmark.get("total") or 0) and int(benchmark.get("total") or 0) > 0
+        first_demo = str((EMRE_WORKFLOW_PRESETS[0] if EMRE_WORKFLOW_PRESETS else {}).get("name") or "").strip()
+        cli_mod = f"{Path(os.sys.executable)} -m cli.main"
+        setup = [
+            {
+                "key": "provider_model",
+                "label": "Provider / model",
+                "ready": provider_ready,
+                "detail": f"{provider}/{model}",
+            },
+            {
+                "key": "desktop_permissions",
+                "label": "Desktop operator readiness",
+                "ready": desktop_ready,
+                "detail": f"osascript={bool(permissions.get('osascript_available'))} screencapture={bool(permissions.get('screencapture_available'))}",
+            },
+            {
+                "key": "telegram",
+                "label": "Telegram connection readiness",
+                "ready": telegram_ready,
+                "detail": telegram_status or "not_connected",
+            },
+            {
+                "key": "browser",
+                "label": "Browser readiness",
+                "ready": browser_ready,
+                "detail": "playwright" if playwright_ready else "screen-operator fallback",
+            },
+            {
+                "key": "demo_workflow",
+                "label": "First demo workflow execution",
+                "ready": bool(recent_reports),
+                "detail": str(recent_reports[0].get("workflow_name") or first_demo or "not_run") if recent_reports else (first_demo or "not_run"),
+            },
+        ]
+        return {
+            "ok": True,
+            "readiness": {
+                "elyan_ready": bool(status_payload.get("status") == "online" and benchmark_green and provider_ready),
+                "desktop_operator_ready": desktop_ready,
+                "browser_ready": browser_ready,
+                "telegram_ready": telegram_ready,
+                "connected_provider": provider,
+                "connected_model": model,
+                "runtime_health": str(((status_payload.get("runtime_health") if isinstance(status_payload.get("runtime_health"), dict) else {}) or {}).get("status") or ""),
+                "desktop_state_available": desktop_state_path.exists(),
+                "setup_complete": bool(is_setup_complete()),
+            },
+            "recent_tasks": {
+                "active": list(tasks_payload.get("active") or [])[:5],
+                "history": list(tasks_payload.get("history") or [])[:5],
+            },
+            "recent_runs": list(runs_payload.get("runs") or [])[:6],
+            "preset_workflows": self._product_workflow_catalog(),
+            "recent_workflow_reports": recent_reports,
+            "benchmark": benchmark,
+            "setup": setup,
+            "onboarding": {
+                "first_demo_workflow": first_demo,
+                "recommended_steps": [
+                    {"label": "Provider / model sec", "ready": provider_ready},
+                    {"label": "Desktop izinlerini dogrula", "ready": desktop_ready},
+                    {"label": "Telegram baglantisini kontrol et", "ready": telegram_ready},
+                    {"label": "Browser hazirligini kontrol et", "ready": browser_ready},
+                    {"label": "Ilk demo workflow'u calistir", "ready": bool(recent_reports)},
+                ],
+            },
+            "release": {
+                "version": str(status_payload.get("version") or ""),
+                "entrypoint": "/product",
+                "entrypoint_aliases": ["/", "/dashboard", "/product"],
+                "health_endpoint": "/healthz",
+                "health_status": str(status_payload.get("health_status") or ""),
+                "benchmark_green": benchmark_green,
+                "last_sync": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "quickstart_checks": [
+                    {"label": "Gateway status", "value": str(status_payload.get("status") or "unknown")},
+                    {"label": "Dashboard entrypoint", "value": "/product"},
+                    {"label": "Health page", "value": "/healthz"},
+                    {"label": "CLI quickstart", "value": f"{cli_mod} dashboard"},
+                    {"label": "Product start script", "value": "bash scripts/start_product.sh"},
+                    {
+                        "label": "Production benchmark gate",
+                        "value": "python scripts/run_production_path_benchmarks.py --min-pass-count 20 --require-perfect",
+                    },
+                    {
+                        "label": "Hero workflow pack",
+                        "value": "python scripts/run_emre_workflow_pack.py",
+                    },
+                ],
+            },
+        }
+
+    async def handle_product_home(self, request):
+        return web.json_response(await self._build_product_home_payload())
+
+    async def handle_product_health(self, request):
+        home = await self._build_product_home_payload()
+        readiness = dict(home.get("readiness") or {})
+        benchmark = dict(home.get("benchmark") or {})
+        release = dict(home.get("release") or {})
+        return web.json_response(
+            {
+                "ok": bool(readiness.get("elyan_ready")),
+                "status": "ready" if readiness.get("elyan_ready") else "degraded",
+                "version": str(release.get("version") or ""),
+                "health_status": str(release.get("health_status") or ""),
+                "entrypoint": str(release.get("entrypoint") or "/product"),
+                "benchmark": benchmark,
+                "readiness": readiness,
+            }
+        )
+
+    async def handle_product_workflows(self, request):
+        return web.json_response({"ok": True, "workflows": self._product_workflow_catalog()})
+
+    async def handle_product_workflow_reports(self, request):
+        try:
+            limit = int(request.rel_url.query.get("limit", 8))
+        except Exception:
+            limit = 8
+        return web.json_response({"ok": True, "reports": list_emre_workflow_reports(limit=limit)})
+
+    async def handle_product_workflow_run(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        name = str(data.get("name") or "").strip()
+        if not name:
+            return web.json_response({"ok": False, "error": "workflow name required"}, status=400)
+        try:
+            report = await run_emre_workflow_preset(name, clear_live_state=bool(data.get("clear_live_state", True)))
+        except ValueError as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+        push_activity("workflow_run", "dashboard", f"{name} -> {report.get('status')}", bool(report.get("success")))
+        return web.json_response({"ok": True, **report})
 
     # ── Analytics (new) ───────────────────────────────────────────────────────
     async def handle_analytics(self, request):
@@ -1249,6 +1957,264 @@ class ElyanGatewayServer:
             **stats
         })
 
+    @staticmethod
+    def _normalize_foreground_task(record: Any) -> dict[str, Any]:
+        payload = record.to_dict() if hasattr(record, "to_dict") else dict(record or {})
+        context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+        history = payload.get("history") if isinstance(payload.get("history"), list) else []
+        artifacts = payload.get("artifacts") if isinstance(payload.get("artifacts"), list) else []
+        subtasks = payload.get("subtasks") if isinstance(payload.get("subtasks"), list) else []
+        return {
+            "task_id": str(payload.get("task_id") or ""),
+            "kind": "foreground",
+            "objective": str(payload.get("objective") or ""),
+            "summary": str(payload.get("objective") or context.get("user_input") or ""),
+            "user_id": str(context.get("user_id") or "local"),
+            "channel": str(context.get("channel") or ""),
+            "state": str(payload.get("state") or "pending"),
+            "created_at": float(payload.get("created_at") or 0.0),
+            "updated_at": float(payload.get("updated_at") or 0.0),
+            "history": history,
+            "subtasks": subtasks,
+            "artifacts": artifacts,
+            "artifacts_count": len(artifacts),
+            "mode": "foreground",
+            "workflow_id": str(context.get("workflow_id") or ""),
+            "capability_domain": str(context.get("capability_domain") or ""),
+            "result_summary": "",
+            "error": "",
+            "retry_count": 0,
+            "max_retries": 0,
+            "next_retry_at": 0.0,
+        }
+
+    @staticmethod
+    def _normalize_background_task(record: Any) -> dict[str, Any]:
+        payload = record.to_dict() if hasattr(record, "to_dict") else dict(record or {})
+        return {
+            "task_id": str(payload.get("task_id") or ""),
+            "kind": "background",
+            "objective": str(payload.get("user_input") or ""),
+            "summary": str(payload.get("result_summary") or payload.get("user_input") or ""),
+            "user_id": str(payload.get("user_id") or "local"),
+            "channel": str(payload.get("channel") or ""),
+            "state": str(payload.get("state") or "queued"),
+            "created_at": float(payload.get("created_at") or 0.0),
+            "updated_at": float(payload.get("updated_at") or 0.0),
+            "history": [],
+            "subtasks": [],
+            "artifacts": list(payload.get("attachments") or []),
+            "artifacts_count": len(list(payload.get("attachments") or [])),
+            "mode": str(payload.get("mode") or "background"),
+            "workflow_id": str(payload.get("workflow_id") or ""),
+            "capability_domain": str(payload.get("capability_domain") or ""),
+            "result_summary": str(payload.get("result_summary") or ""),
+            "error": str(payload.get("error") or ""),
+            "retry_count": int(payload.get("retry_count") or 0),
+            "max_retries": int(payload.get("max_retries") or 0),
+            "next_retry_at": float(payload.get("next_retry_at") or 0.0),
+        }
+
+    def _ops_tasks_snapshot(self) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        try:
+            for record in task_brain.list_all():
+                items.append(self._normalize_foreground_task(record))
+        except Exception:
+            pass
+        try:
+            for record in away_task_registry.list_all():
+                items.append(self._normalize_background_task(record))
+        except Exception:
+            pass
+        items.sort(key=lambda row: float(row.get("updated_at") or 0.0), reverse=True)
+        return items
+
+    def _ops_users_snapshot(self, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        user_ids = {
+            str(row.get("user_id") or "local")
+            for row in tasks
+            if str(row.get("user_id") or "").strip()
+        }
+        user_ids.update(str(user_id or "local") for user_id in getattr(subscription_manager, "_users", {}).keys())
+        user_ids.update(str(user_id or "local") for user_id in getattr(quota_manager, "_usage", {}).keys())
+
+        users: list[dict[str, Any]] = []
+        for user_id in sorted(user_ids):
+            user_tasks = [row for row in tasks if str(row.get("user_id") or "local") == user_id]
+            active_tasks = [
+                row for row in user_tasks
+                if str(row.get("state") or "").lower() not in {"completed", "failed", "cancelled"}
+            ]
+            background_tasks = [row for row in user_tasks if row.get("kind") == "background"]
+            failed_tasks = [row for row in user_tasks if str(row.get("state") or "").lower() in {"failed", "partial"}]
+            stats = quota_manager.get_user_stats(user_id)
+            quota = quota_manager.check_quota(user_id)
+            sub = subscription_manager.get_subscription_summary(user_id)
+            raw_usage = getattr(quota_manager, "_usage", {}).get(user_id, {}) if hasattr(quota_manager, "_usage") else {}
+            last_active_at = max(
+                [float(row.get("updated_at") or 0.0) for row in user_tasks] + [float(raw_usage.get("last_active") or 0.0)]
+            )
+            users.append({
+                "user_id": user_id,
+                "tier": str(sub.get("tier") or stats.get("tier") or "free"),
+                "subscription_status": str(sub.get("status") or "none"),
+                "expiry_at": int(sub.get("expiry_at") or 0),
+                "quota": {
+                    "allowed": bool(quota.get("allowed", True)),
+                    "reason": str(quota.get("reason") or "within_limits"),
+                    "daily_messages": int(stats.get("daily_messages") or 0),
+                    "daily_limit": int(stats.get("daily_limit") or 0),
+                    "monthly_tokens": int(stats.get("monthly_tokens") or 0),
+                    "monthly_limit": int(stats.get("monthly_limit") or 0),
+                    "lifetime_messages": int(stats.get("lifetime_messages") or 0),
+                    "lifetime_tokens": int(stats.get("lifetime_tokens") or 0),
+                },
+                "tasks_total": len(user_tasks),
+                "active_tasks": len(active_tasks),
+                "background_tasks": len(background_tasks),
+                "failed_tasks": len(failed_tasks),
+                "last_active_at": last_active_at,
+                "channels": sorted({str(row.get("channel") or "") for row in user_tasks if str(row.get("channel") or "").strip()}),
+                "top_states": sorted({str(row.get("state") or "") for row in user_tasks if str(row.get("state") or "").strip()}),
+            })
+        users.sort(
+            key=lambda row: (
+                int(row.get("active_tasks") or 0),
+                float(row.get("last_active_at") or 0.0),
+                str(row.get("user_id") or ""),
+            ),
+            reverse=True,
+        )
+        return users
+
+    def _ops_overview_snapshot(self) -> dict[str, Any]:
+        tasks = self._ops_tasks_snapshot()
+        users = self._ops_users_snapshot(tasks)
+        foreground_active = sum(
+            1 for row in tasks
+            if row.get("kind") == "foreground" and str(row.get("state") or "").lower() not in {"completed", "failed", "cancelled"}
+        )
+        background_active = sum(
+            1 for row in tasks
+            if row.get("kind") == "background" and str(row.get("state") or "").lower() not in {"completed", "failed", "cancelled"}
+        )
+        by_tier: dict[str, int] = {}
+        for user in users:
+            tier = str(user.get("tier") or "free")
+            by_tier[tier] = int(by_tier.get(tier, 0)) + 1
+        try:
+            from core.intelligent_planner import get_intelligent_planner
+
+            planner_summary = get_intelligent_planner().get_plan_summary()
+        except Exception:
+            planner_summary = {}
+        return {
+            "ok": True,
+            "generated_at": time.time(),
+            "users_total": len(users),
+            "active_users": sum(1 for row in users if int(row.get("active_tasks") or 0) > 0),
+            "quota_blocked_users": sum(1 for row in users if not bool((row.get("quota") or {}).get("allowed", True))),
+            "tasks_total": len(tasks),
+            "foreground_active": foreground_active,
+            "background_active": background_active,
+            "failed_or_partial": sum(
+                1 for row in tasks if str(row.get("state") or "").lower() in {"failed", "partial"}
+            ),
+            "tiers": by_tier,
+            "planner": planner_summary,
+        }
+
+    async def handle_admin_overview(self, request):
+        allowed, error = self._require_admin_access(request)
+        if not allowed:
+            return web.json_response({"ok": False, "error": error}, status=403)
+        return web.json_response(self._ops_overview_snapshot())
+
+    async def handle_admin_users(self, request):
+        allowed, error = self._require_admin_access(request)
+        if not allowed:
+            return web.json_response({"ok": False, "error": error}, status=403)
+        tasks = self._ops_tasks_snapshot()
+        users = self._ops_users_snapshot(tasks)
+        return web.json_response({"ok": True, "users": users, "count": len(users)})
+
+    async def handle_admin_plans(self, request):
+        allowed, error = self._require_admin_access(request)
+        if not allowed:
+            return web.json_response({"ok": False, "error": error}, status=403)
+        user_id = str(request.query.get("user_id", "") or "").strip()
+        state = str(request.query.get("state", "") or "").strip().lower()
+        try:
+            limit = int(request.query.get("limit", 120))
+        except Exception:
+            limit = 120
+        limit = max(1, min(500, limit))
+        rows = self._ops_tasks_snapshot()
+        if user_id:
+            rows = [row for row in rows if str(row.get("user_id") or "") == user_id]
+        if state:
+            rows = [row for row in rows if str(row.get("state") or "").strip().lower() == state]
+        return web.json_response({"ok": True, "plans": rows[:limit], "count": len(rows[:limit])})
+
+    async def handle_admin_user_subscription(self, request):
+        allowed, error = self._require_admin_access(request)
+        if not allowed:
+            return web.json_response({"ok": False, "error": error}, status=403)
+        user_id = str(request.match_info.get("user_id", "") or "").strip()
+        if not user_id:
+            return web.json_response({"ok": False, "error": "user_id required"}, status=400)
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        tier_raw = str(data.get("tier") or "").strip().lower()
+        if not tier_raw:
+            return web.json_response({"ok": False, "error": "tier required"}, status=400)
+        try:
+            from core.domain.models import SubscriptionTier
+
+            tier = SubscriptionTier(tier_raw)
+        except Exception:
+            return web.json_response({"ok": False, "error": f"invalid tier: {tier_raw}"}, status=400)
+        expiry_days = data.get("expiry_days")
+        try:
+            expiry_days = int(expiry_days) if expiry_days is not None else None
+        except Exception:
+            return web.json_response({"ok": False, "error": "expiry_days must be integer"}, status=400)
+        subscription_manager.set_user_tier(user_id, tier, expiry_days=expiry_days)
+        return web.json_response({
+            "ok": True,
+            "user": {
+                "user_id": user_id,
+                **subscription_manager.get_subscription_summary(user_id),
+                "quota": quota_manager.get_user_stats(user_id),
+            },
+        })
+
+    async def handle_admin_away_task_action(self, request):
+        allowed, error = self._require_admin_access(request)
+        if not allowed:
+            return web.json_response({"ok": False, "error": error}, status=403)
+        task_id = str(request.match_info.get("task_id", "") or "").strip()
+        if not task_id:
+            return web.json_response({"ok": False, "error": "task_id required"}, status=400)
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        action = str(data.get("action") or "").strip().lower()
+        if action not in {"cancel", "requeue"}:
+            return web.json_response({"ok": False, "error": "action must be cancel or requeue"}, status=400)
+        if action == "cancel":
+            record = away_task_registry.cancel(task_id)
+        else:
+            record = away_task_registry.requeue(task_id)
+        if record is None:
+            return web.json_response({"ok": False, "error": "task not found"}, status=404)
+        push_activity("admin_task_action", "ops", f"{action}:{task_id}", True)
+        return web.json_response({"ok": True, "task": self._normalize_background_task(record)})
+
     # ── Tasks (new) ───────────────────────────────────────────────────────────
     async def handle_tasks(self, request):
         """Return active + recent task history."""
@@ -1282,7 +2248,7 @@ class ElyanGatewayServer:
                 return web.json_response({"ok": False, "error": "file field required"}, status=400)
             
             filename = str(field.filename or f"upload_{int(time.time())}")
-            upload_dir = Path.home() / ".elyan" / "uploads"
+            upload_dir = resolve_elyan_data_dir() / "uploads"
             upload_dir.mkdir(parents=True, exist_ok=True)
             filepath = upload_dir / filename
             
@@ -1321,7 +2287,7 @@ class ElyanGatewayServer:
                 return web.json_response({"ok": False, "error": "file field required"}, status=400)
             
             filename = f"voice_{int(time.time())}.webm"
-            temp_dir = Path.home() / ".elyan" / "tmp" / "voice"
+            temp_dir = resolve_elyan_data_dir() / "tmp" / "voice"
             temp_dir.mkdir(parents=True, exist_ok=True)
             filepath = temp_dir / filename
             
@@ -1357,7 +2323,7 @@ class ElyanGatewayServer:
             return web.Response(status=400, text="path required")
         
         # Security: only allow files from voice tmp dir
-        voice_dir = Path.home() / ".elyan" / "tmp" / "voice"
+        voice_dir = resolve_elyan_data_dir() / "tmp" / "voice"
         safe_path = (voice_dir / filename).resolve()
         
         if not str(safe_path).startswith(str(voice_dir.resolve())):
@@ -1462,10 +2428,13 @@ class ElyanGatewayServer:
             from core.resilience.circuit_breaker import resilience_manager
             from core.llm.token_budget import token_budget
             from core.automation_registry import automation_registry
-            from core.monitoring import get_resource_monitor
+            from core.monitoring import get_resource_monitor, get_monitoring
             
             monitor = get_resource_monitor()
+            mon = get_monitoring()
             hw = monitor.get_health_snapshot()
+            orchestration = mon.get_orchestration_summary()
+            pipeline_jobs = mon.get_pipeline_job_summary()
             
             return web.json_response({
                 "ok": True,
@@ -1485,6 +2454,8 @@ class ElyanGatewayServer:
                     "active_count": len(automation_registry.get_active()),
                     "tasks": automation_registry.get_active()[:10]
                 },
+                "orchestration": orchestration,
+                "pipeline_jobs": pipeline_jobs,
                 "uptime_s": int(time.time() - _start_time)
             })
         except Exception as e:
@@ -1495,14 +2466,14 @@ class ElyanGatewayServer:
         return web.json_response({"events": list(reversed(_activity_log))})
 
     async def handle_recent_runs(self, request):
-        """Return recent run summaries from ~/.elyan/runs."""
+        """Return recent run summaries from the resolved runs root."""
         try:
             limit = int(request.rel_url.query.get("limit", 10))
         except Exception:
             limit = 10
         limit = max(1, min(50, limit))
 
-        runs_root = (ELYAN_DIR / "runs").expanduser()
+        runs_root = resolve_runs_root().expanduser()
         if not runs_root.exists():
             return web.json_response({"runs": [], "count": 0})
 
@@ -1526,18 +2497,41 @@ class ElyanGatewayServer:
                     meta = ev.get("metadata", {}) if isinstance(ev, dict) else {}
                     if isinstance(meta, dict):
                         status = str(meta.get("status", status) or status)
-                        errors = meta.get("errors", [])
-                        if isinstance(errors, list):
-                            for e in errors:
-                                e_s = str(e or "")
-                                if "error_code" in e_s.lower():
-                                    error_code = e_s
-                                    break
+                        error_code = str(meta.get("error_code", "") or "")
+                        if not error_code:
+                            errors = meta.get("errors", [])
+                            if isinstance(errors, list):
+                                for err in errors:
+                                    if isinstance(err, dict):
+                                        code = str(err.get("error_code", "") or err.get("code", "")).strip()
+                                        if code:
+                                            error_code = code
+                                            break
+                                        text = str(err.get("error", "") or err.get("message", "")).strip()
+                                        if text and "error_code" in text.lower():
+                                            error_code = text
+                                            break
+                                    else:
+                                        err_s = str(err or "").strip()
+                                        if "error_code" in err_s.lower():
+                                            error_code = err_s
+                                            break
+                        if "duration_ms" in meta:
+                            try:
+                                duration_ms = int(meta.get("duration_ms", 0) or 0)
+                            except Exception:
+                                duration_ms = 0
                     steps = ev.get("steps", []) if isinstance(ev, dict) else []
                     if isinstance(steps, list):
+                        total_step_duration = 0
                         for step in steps:
                             if isinstance(step, dict):
-                                duration_ms += int(step.get("duration_ms", 0) or 0)
+                                try:
+                                    total_step_duration += int(step.get("duration_ms", 0) or 0)
+                                except Exception:
+                                    continue
+                        if not duration_ms:
+                            duration_ms = total_step_duration
                     arts = ev.get("artifacts", []) if isinstance(ev, dict) else []
                     artifacts = len(arts) if isinstance(arts, list) else 0
                 except Exception:
@@ -2009,7 +3003,7 @@ class ElyanGatewayServer:
     @staticmethod
     def _tool_probe_params(tool_name: str) -> dict | None:
         """Return safe probe parameters for selected tools."""
-        probe_dir = Path.home() / ".elyan" / "tmp"
+        probe_dir = resolve_elyan_data_dir() / "tmp"
         probe_dir.mkdir(parents=True, exist_ok=True)
         probe_file = probe_dir / "tool_probe.txt"
         if not probe_file.exists():
@@ -2183,6 +3177,20 @@ class ElyanGatewayServer:
         except Exception as exc:
             return web.json_response({"ok": False, "error": str(exc)}, status=500)
 
+    async def handle_tool_events(self, request):
+        """GET /api/tool-events — Recent tool start/update/end stream events."""
+        try:
+            limit = int(request.rel_url.query.get("limit", 120) or 120)
+        except Exception:
+            limit = 120
+        limit = max(1, min(500, limit))
+        stage = str(request.rel_url.query.get("stage", "") or "").strip().lower()
+        rows = list(_tool_event_log)
+        if stage:
+            rows = [r for r in rows if str(r.get("stage", "")).strip().lower() == stage]
+        rows = rows[-limit:]
+        return web.json_response({"ok": True, "events": list(reversed(rows)), "count": len(rows)})
+
     async def handle_tools(self, request):
         query = (request.rel_url.query.get("q", "") or "").strip().lower()
         group_filter = (request.rel_url.query.get("group", "") or "").strip().lower()
@@ -2228,10 +3236,7 @@ class ElyanGatewayServer:
         with_workflow_links = 0
 
         for name in tool_names:
-            group = tool_policy.infer_group(name) or "other"
-            denied = ("*" in deny) or (name in deny) or (f"group:{group}" in deny)
-            allowed = (not denied) and (("*" in allow) or (name in allow) or (f"group:{group}" in allow))
-            needs_approval = (name in require_approval) or (f"group:{group}" in require_approval)
+            group, allowed, denied, needs_approval = _policy_state(name)
 
             if query and query not in name.lower():
                 continue
@@ -2304,6 +3309,7 @@ class ElyanGatewayServer:
                 "allow": allow,
                 "deny": deny,
                 "requireApproval": require_approval,
+                "defaultDeny": _policy_default_deny_enabled(),
             },
         })
 
@@ -2322,10 +3328,7 @@ class ElyanGatewayServer:
             reg_desc = {}
         usage = get_tool_usage_snapshot().get("stats", {}).get(tool_name, {})
         allow, deny, require_approval = _get_policy_lists()
-        group = tool_policy.infer_group(tool_name) or "other"
-        denied = ("*" in deny) or (tool_name in deny) or (f"group:{group}" in deny)
-        allowed = (not denied) and (("*" in allow) or (tool_name in allow) or (f"group:{group}" in allow))
-        needs_approval = (tool_name in require_approval) or (f"group:{group}" in require_approval)
+        group, allowed, denied, needs_approval = _policy_state(tool_name)
         health_map, _ = await self._compute_tool_health([tool_name], probe=False)
         health = health_map.get(tool_name, {})
 
@@ -2371,6 +3374,7 @@ class ElyanGatewayServer:
                 "allow": allow,
                 "deny": deny,
                 "requireApproval": require_approval,
+                "defaultDeny": _policy_default_deny_enabled(),
             },
         })
 
@@ -2418,6 +3422,7 @@ class ElyanGatewayServer:
                     "allow": allow,
                     "deny": deny,
                     "requireApproval": require_approval,
+                    "defaultDeny": _policy_default_deny_enabled(),
                 },
                 "defaults": {
                     "allow": [
@@ -2432,6 +3437,7 @@ class ElyanGatewayServer:
                     ],
                     "deny": ["exec"],
                     "requireApproval": ["delete_file", "write_file"],
+                    "defaultDeny": True,
                 },
             }
         )
@@ -2453,6 +3459,10 @@ class ElyanGatewayServer:
             require_approval = _unique_clean(data.get("requireApproval"), [])
         if isinstance(data.get("require_approval"), list):
             require_approval = _unique_clean(data.get("require_approval"), [])
+        default_deny = _policy_default_deny_enabled()
+        default_deny_raw = data.get("defaultDeny", data.get("default_deny"))
+        if default_deny_raw is not None:
+            default_deny = _to_bool(default_deny_raw, default_deny)
 
         # Per-tool / per-group toggle
         target = None
@@ -2498,6 +3508,8 @@ class ElyanGatewayServer:
         # Store both keys for compatibility.
         elyan_config.set("tools.requireApproval", require_approval)
         elyan_config.set("tools.require_approval", require_approval)
+        elyan_config.set("tools.default_deny", default_deny)
+        elyan_config.set("security.toolPolicy.defaultDeny", default_deny)
         tool_policy.reload()
         push_activity("tools_policy", "dashboard", "Tool policy updated", True)
 
@@ -2507,6 +3519,7 @@ class ElyanGatewayServer:
                 "allow": allow,
                 "deny": deny,
                 "requireApproval": require_approval,
+                "defaultDeny": default_deny,
             },
         })
 
@@ -2724,6 +3737,7 @@ class ElyanGatewayServer:
         logger.info(f"Dashboard WS connected ({len(_dashboard_ws_clients)} clients)")
         # Send recent activity on connect
         await ws.send_json({"event": "history", "data": list(reversed(_activity_log[-10:]))})
+        await ws.send_json({"event": "tool_history", "data": list(reversed(_tool_event_log[-40:]))})
         try:
             async for msg in ws:
                 if msg.type == WSMsgType.ERROR:
@@ -2742,7 +3756,7 @@ class ElyanGatewayServer:
         try:
             import sqlite3
             from pathlib import Path
-            audit_path = Path.home() / ".elyan" / "audit.db"
+            audit_path = resolve_elyan_data_dir() / "audit.db"
             if not audit_path.exists():
                 audit_path = Path(".wiqo_audit/audit.db")
             if audit_path.exists():
@@ -3384,10 +4398,13 @@ class ElyanGatewayServer:
         from core.resilience.circuit_breaker import resilience_manager
         from core.llm.token_budget import token_budget
         from core.automation_registry import automation_registry
-        from core.monitoring import get_resource_monitor
+        from core.monitoring import get_resource_monitor, get_monitoring
         
         monitor = get_resource_monitor()
+        mon = get_monitoring()
         hw = monitor.get_health_snapshot()
+        orchestration = mon.get_orchestration_summary()
+        pipeline_jobs = mon.get_pipeline_job_summary()
         
         return {
             "timestamp": time.time(),
@@ -3405,6 +4422,8 @@ class ElyanGatewayServer:
             "automations": {
                 "active_count": len(automation_registry.get_active())
             },
+            "orchestration": orchestration,
+            "pipeline_jobs": pipeline_jobs,
             "uptime_s": int(time.time() - _start_time)
         }
 
@@ -3413,7 +4432,7 @@ class ElyanGatewayServer:
         if not _dashboard_ws_clients:
             return
         
-        payload = json.dumps({"type": event_type, "data": data})
+        payload = json.dumps({"type": event_type, "event": event_type, "data": data})
         for ws in list(_dashboard_ws_clients):
             try:
                 await ws.send_str(payload)

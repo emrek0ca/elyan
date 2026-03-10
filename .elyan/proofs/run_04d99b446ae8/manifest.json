@@ -1,0 +1,36 @@
+{
+  "run_id": "run_04d99b446ae8",
+  "started_at": 1772928696.2693892,
+  "completed_at": 1772928696.403609,
+  "status": "partial",
+  "error": "direct_intent_failed:vision_operator_loop; [Errno 2] No such file or directory: PosixPath('/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-108/test_agent_process_executes_de0/Desktop/safari-a-k-pekler-ara-t-r-masa-st-ne-kayde-928696'); completion:no_successful_tool_result",
+  "steps": [
+    {
+      "step": "vision_operator_loop",
+      "tool": "vision_operator_loop",
+      "status": "failed",
+      "input_hash": "f7c8e29f958fbeaa55edfa68200d26a4e348c6304782ae11d27237d1034e04b5",
+      "params_hash": "e820ba4ae75d50a209463b423fcb9728d087e8033873b732e437d2309341c213",
+      "result_hash": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "duration_ms": 2,
+      "ts": 1772928696.3859289
+    },
+    {
+      "step": "create_folder",
+      "tool": "create_folder",
+      "status": "failed",
+      "input_hash": "df1c232591b619754dc063929c0f4f0b0f7447b3aaa33b227178f33c9c3c503e",
+      "params_hash": "f75afd45c2228fa05dc64d6e0de6cf28059aa91c22bc697e4aef3d3cc359f3b8",
+      "result_hash": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "duration_ms": 2,
+      "ts": 1772928696.394824
+    }
+  ],
+  "artifacts": [],
+  "metadata": {
+    "action": "vision_operator_loop",
+    "job_type": "research_report",
+    "channel": "cli",
+    "user_id": "local"
+  }
+}

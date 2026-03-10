@@ -1,0 +1,70 @@
+[
+  {
+    "task_step": 1,
+    "task_step_name": "open_page",
+    "step": 1,
+    "action": "open",
+    "params": {
+      "url": "https://login.local",
+      "selector": "",
+      "text": ""
+    },
+    "result": {
+      "success": true,
+      "url": "https://login.local",
+      "title": "Login",
+      "status_code": 200,
+      "dom_available": true
+    }
+  },
+  {
+    "task_step": 2,
+    "task_step_name": "fill_email",
+    "step": 1,
+    "action": "type",
+    "params": {
+      "url": "",
+      "selector": "#email",
+      "text": "user@example.com"
+    },
+    "result": {
+      "success": true,
+      "selector": "#email",
+      "text": "user@example.com",
+      "dom_available": true
+    }
+  },
+  {
+    "task_step": 3,
+    "task_step_name": "fill_password",
+    "step": 1,
+    "action": "type",
+    "params": {
+      "url": "",
+      "selector": "#password",
+      "text": "secret123"
+    },
+    "result": {
+      "success": true,
+      "selector": "#password",
+      "text": "secret123",
+      "dom_available": true
+    }
+  },
+  {
+    "task_step": 4,
+    "task_step_name": "click_login",
+    "step": 1,
+    "action": "click",
+    "params": {
+      "url": "",
+      "selector": "#login",
+      "text": ""
+    },
+    "result": {
+      "success": true,
+      "selector": "#login",
+      "dom_available": true
+    }
+  }
+]

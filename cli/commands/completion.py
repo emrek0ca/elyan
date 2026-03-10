@@ -15,7 +15,7 @@ _elyan_completion() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    local commands="doctor health logs status routines config gateway channels skills security models cron memory webhooks agents browser voice message service dashboard onboard setup update version completion"
+    local commands="chat doctor health logs status routines config gateway channels skills security models cron memory webhooks agents browser voice message service dashboard onboard setup update version completion subscription quota"
 
     case "$prev" in
         elyan)
@@ -58,10 +58,16 @@ _elyan_completion() {
             COMPREPLY=($(compgen -W "--tail --level --filter" -- "$cur"))
             return ;;
         voice)
-            COMPREPLY=($(compgen -W "start stop status test transcribe speak" -- "$cur"))
+            COMPREPLY=($(compgen -W "start stop status test transcribe speak set-wake-word set-tts set-stt listen" -- "$cur"))
             return ;;
         browser)
-            COMPREPLY=($(compgen -W "snapshot screenshot navigate click type extract scroll close" -- "$cur"))
+            COMPREPLY=($(compgen -W "snapshot screenshot navigate click type extract scroll back forward refresh close profiles list-profiles clear-profile" -- "$cur"))
+            return ;;
+        subscription)
+            COMPREPLY=($(compgen -W "status set list-tiers" -- "$cur"))
+            return ;;
+        quota)
+            COMPREPLY=($(compgen -W "status check" -- "$cur"))
             return ;;
     esac
 }
@@ -82,6 +88,7 @@ _elyan() {
   local -a commands
 
   commands=(
+    'chat:Dogal dil ile interaktif oturum'
     'doctor:Sistem tanılaması'
     'health:Hızlı sağlık özeti'
     'logs:Gateway logları'
@@ -107,6 +114,8 @@ _elyan() {
     'update:Güncelle'
     'version:Sürüm bilgisi'
     'completion:Shell completion kur'
+    'subscription:Abonelik yönetimi'
+    'quota:Kota ve kullanım'
   )
 
   _arguments -C \
@@ -127,6 +136,11 @@ _elyan() {
         config) _values 'eylem' show get set unset validate reset export import edit ;;
         memory) _values 'eylem' status index search export import clear stats ;;
         webhooks) _values 'eylem' list add remove test logs ;;
+        agents) _values 'eylem' list status add remove start stop logs info create ;;
+        browser) _values 'eylem' snapshot screenshot navigate click type extract scroll back forward refresh close profiles list-profiles clear-profile ;;
+        voice) _values 'eylem' start stop status test transcribe speak set-wake-word set-tts set-stt listen ;;
+        subscription) _values 'eylem' status set list-tiers ;;
+        quota) _values 'eylem' status check ;;
         logs) _arguments '*:log filtreleri: ' ;;
       esac
       ;;
@@ -141,7 +155,7 @@ fi
 _FISH_SCRIPT = '''# Elyan CLI — Fish completion
 # Kopyala: ~/.config/fish/completions/elyan.fish
 
-set -l elyan_commands doctor health logs status routines config gateway channels skills security models cron memory webhooks agents browser voice message service dashboard onboard setup update version completion
+set -l elyan_commands chat doctor health logs status routines config gateway channels skills security models cron memory webhooks agents browser voice message service dashboard onboard setup update version completion subscription quota
 
 complete -c elyan -f -n __fish_use_subcommand -a "$elyan_commands"
 complete -c elyan -n "__fish_seen_subcommand_from gateway" -a "start stop status restart logs reload health"

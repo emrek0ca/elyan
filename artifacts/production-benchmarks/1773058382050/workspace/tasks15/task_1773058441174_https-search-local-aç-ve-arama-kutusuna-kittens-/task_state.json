@@ -1,0 +1,1286 @@
+{
+  "version": 1,
+  "task_id": "task_1773058441174_https-search-local-aç-ve-arama-kutusuna-kittens-",
+  "name": "https-search-local-aç-ve-arama-kutusuna-kittens-yaz-ve-submit-et",
+  "goal": "https://search.local aç ve arama kutusuna \"kittens\" yaz ve submit et",
+  "status": "completed",
+  "created_at": 1773058441.174558,
+  "updated_at": 1773058441.219875,
+  "current_step": 3,
+  "completed_steps": [
+    1,
+    2,
+    3
+  ],
+  "failed_steps": [],
+  "retry_counts": {
+    "1": 0,
+    "2": 0,
+    "3": 0
+  },
+  "repair_history": [],
+  "replan_history": [],
+  "replan_count": 0,
+  "last_failure_reason": "",
+  "latest_observation": {
+    "step_index": 3,
+    "failed_codes": [],
+    "ui_state": {},
+    "browser_state": {
+      "success": true,
+      "dom_available": true,
+      "url": "https://search.local?q=kittens",
+      "title": "Results",
+      "visible_text": "Results for kittens",
+      "dom_hash": "264e76efd09b7f5b7b9c9027034d4b4f837656823f881e743714ea0a367e593e",
+      "scroll": {
+        "x": 0,
+        "y": 0
+      },
+      "session_id": "fake-browser",
+      "headless": true
+    },
+    "desktop_host_state": {
+      "version": 1,
+      "updated_at": 1773058441.179818,
+      "frontmost_app": "",
+      "active_window": {},
+      "last_screenshot": "",
+      "last_ui_state": {},
+      "current_task_state": {},
+      "target_cache": {},
+      "recent_action_logs": [],
+      "verifier_outcomes": [],
+      "last_instruction": "",
+      "last_mode": "",
+      "last_status": ""
+    },
+    "recovery_hints": {
+      "action": "submit",
+      "selector": "#q",
+      "dom_available": true,
+      "current_url": "https://search.local?q=kittens",
+      "current_title": "Results",
+      "visible_text": "Results for kittens",
+      "fallback_used": false,
+      "fallback_reason": "",
+      "expected_text": "kittens",
+      "failed_codes": []
+    },
+    "task_state": {}
+  },
+  "last_ui_state": {},
+  "browser_state": {
+    "success": true,
+    "dom_available": true,
+    "url": "https://search.local?q=kittens",
+    "title": "Results",
+    "visible_text": "Results for kittens",
+    "dom_hash": "264e76efd09b7f5b7b9c9027034d4b4f837656823f881e743714ea0a367e593e",
+    "scroll": {
+      "x": 0,
+      "y": 0
+    },
+    "session_id": "fake-browser",
+    "headless": true
+  },
+  "desktop_host_state": {
+    "version": 1,
+    "updated_at": 1773058441.179818,
+    "frontmost_app": "",
+    "active_window": {},
+    "last_screenshot": "",
+    "last_ui_state": {},
+    "current_task_state": {},
+    "target_cache": {},
+    "recent_action_logs": [],
+    "verifier_outcomes": [],
+    "last_instruction": "",
+    "last_mode": "",
+    "last_status": ""
+  },
+  "artifacts": [
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441186/dom_snapshot.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441186/dom_snapshot.html",
+      "type": "text"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441186/navigation.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441186/action_log.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441186/verification.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441186/page.png",
+      "type": "image"
+    },
+    {
+      "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/tasks15/task_1773058441174_https-search-local-aç-ve-arama-kutusuna-kittens-/screenshots/step_01_01.png",
+      "type": "image"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441193/dom_snapshot.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441193/dom_snapshot.html",
+      "type": "text"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441193/navigation.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441193/action_log.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441193/verification.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441193/page.png",
+      "type": "image"
+    },
+    {
+      "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/tasks15/task_1773058441174_https-search-local-aç-ve-arama-kutusuna-kittens-/screenshots/step_02_01.png",
+      "type": "image"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441202/dom_snapshot.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441202/dom_snapshot.html",
+      "type": "text"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441202/navigation.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441202/action_log.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441202/verification.json",
+      "type": "json"
+    },
+    {
+      "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441202/page.png",
+      "type": "image"
+    },
+    {
+      "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/tasks15/task_1773058441174_https-search-local-aç-ve-arama-kutusuna-kittens-/screenshots/step_03_01.png",
+      "type": "image"
+    }
+  ],
+  "verifier_outcomes": [
+    {
+      "step_index": 1,
+      "name": "open_page",
+      "kind": "browser",
+      "verification": {
+        "ok": true,
+        "status": "success",
+        "checks": [
+          {
+            "code": "step_result_success",
+            "passed": true,
+            "details": {
+              "status": "success"
+            }
+          },
+          {
+            "code": "url_contains",
+            "passed": true,
+            "details": {
+              "actual": "https://search.local",
+              "expected": "search.local"
+            }
+          }
+        ],
+        "failed": [],
+        "failed_codes": [],
+        "repairable": false,
+        "summary": "scenario verification for open_page",
+        "evidence_refs": [
+          {
+            "type": "ui_state",
+            "frontmost_app": "",
+            "window_title": ""
+          },
+          {
+            "type": "browser_state",
+            "url": "https://search.local",
+            "title": "Search"
+          }
+        ],
+        "metrics": {
+          "action_log_count": 1,
+          "verifier_outcome_count": 1
+        }
+      }
+    },
+    {
+      "step_index": 2,
+      "name": "fill_q",
+      "kind": "browser",
+      "verification": {
+        "ok": true,
+        "status": "success",
+        "checks": [
+          {
+            "code": "step_result_success",
+            "passed": true,
+            "details": {
+              "status": "success"
+            }
+          },
+          {
+            "code": "text_contains",
+            "passed": true,
+            "details": {
+              "expected": "kittens"
+            }
+          }
+        ],
+        "failed": [],
+        "failed_codes": [],
+        "repairable": false,
+        "summary": "scenario verification for fill_q",
+        "evidence_refs": [
+          {
+            "type": "ui_state",
+            "frontmost_app": "",
+            "window_title": ""
+          },
+          {
+            "type": "browser_state",
+            "url": "https://search.local",
+            "title": "Search"
+          }
+        ],
+        "metrics": {
+          "action_log_count": 1,
+          "verifier_outcome_count": 1
+        }
+      }
+    },
+    {
+      "step_index": 3,
+      "name": "submit_form",
+      "kind": "browser",
+      "verification": {
+        "ok": true,
+        "status": "success",
+        "checks": [
+          {
+            "code": "step_result_success",
+            "passed": true,
+            "details": {
+              "status": "success"
+            }
+          },
+          {
+            "code": "text_contains",
+            "passed": true,
+            "details": {
+              "expected": "kittens"
+            }
+          }
+        ],
+        "failed": [],
+        "failed_codes": [],
+        "repairable": false,
+        "summary": "scenario verification for submit_form",
+        "evidence_refs": [
+          {
+            "type": "ui_state",
+            "frontmost_app": "",
+            "window_title": ""
+          },
+          {
+            "type": "browser_state",
+            "url": "https://search.local?q=kittens",
+            "title": "Results"
+          }
+        ],
+        "metrics": {
+          "action_log_count": 1,
+          "verifier_outcome_count": 1
+        }
+      }
+    }
+  ],
+  "metadata": {
+    "request": "@ElyanBot /run https://search.local aç ve arama kutusuna \"kittens\" yaz ve submit et",
+    "planner": "live_operator_task_planner_v1",
+    "plan": {
+      "name": "https-search-local-aç-ve-arama-kutusuna-kittens-yaz-ve-submit-et",
+      "goal": "https://search.local aç ve arama kutusuna \"kittens\" yaz ve submit et",
+      "steps": [
+        {
+          "kind": "browser",
+          "name": "open_page",
+          "action": "open",
+          "url": "https://search.local",
+          "expected_url_contains": "search.local",
+          "expected_title_contains": "Search",
+          "verify": {
+            "url_contains": "search.local"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        },
+        {
+          "kind": "browser",
+          "name": "fill_q",
+          "action": "type",
+          "selector": "#q",
+          "text": "kittens",
+          "verify": {
+            "text_contains": "kittens"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        },
+        {
+          "kind": "browser",
+          "name": "submit_form",
+          "action": "submit",
+          "selector": "#q",
+          "expected_text": "kittens",
+          "verify": {
+            "text_contains": "kittens"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        }
+      ]
+    },
+    "planning_trace": {
+      "request": "@ElyanBot /run https://search.local aç ve arama kutusuna \"kittens\" yaz ve submit et",
+      "planning_request": "https://search.local aç ve arama kutusuna \"kittens\" yaz ve submit et",
+      "matched_rules": [
+        "browser_navigation_flow",
+        "browser_named_fill_steps",
+        "browser_submit_step"
+      ],
+      "assumptions": [],
+      "missing_inputs": [],
+      "extracted": {
+        "app_name": "",
+        "app_sequence": [],
+        "browser_app": "",
+        "url": "https://search.local",
+        "urls": [
+          "https://search.local"
+        ],
+        "typed_text": "kittens",
+        "named_field_values": [
+          {
+            "selector": "#q",
+            "field_label": "Search field",
+            "text": "kittens"
+          }
+        ],
+        "field_label": "Search field",
+        "selector": "#q",
+        "button_label": "Submit",
+        "button_sequence": [],
+        "research_topic": "kittens"
+      },
+      "bounded": true,
+      "safe_mode": "deterministic"
+    },
+    "original_plan": {
+      "name": "https-search-local-aç-ve-arama-kutusuna-kittens-yaz-ve-submit-et",
+      "goal": "https://search.local aç ve arama kutusuna \"kittens\" yaz ve submit et",
+      "steps": [
+        {
+          "kind": "browser",
+          "name": "open_page",
+          "action": "open",
+          "url": "https://search.local",
+          "expected_url_contains": "search.local",
+          "expected_title_contains": "Search",
+          "verify": {
+            "url_contains": "search.local"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        },
+        {
+          "kind": "browser",
+          "name": "fill_q",
+          "action": "type",
+          "selector": "#q",
+          "text": "kittens",
+          "verify": {
+            "text_contains": "kittens"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        },
+        {
+          "kind": "browser",
+          "name": "submit_form",
+          "action": "submit",
+          "selector": "#q",
+          "expected_text": "kittens",
+          "verify": {
+            "text_contains": "kittens"
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_index": 1,
+      "name": "open_page",
+      "kind": "browser",
+      "status": "completed",
+      "attempts": 1,
+      "verification": {
+        "ok": true,
+        "status": "success",
+        "checks": [
+          {
+            "code": "step_result_success",
+            "passed": true,
+            "details": {
+              "status": "success"
+            }
+          },
+          {
+            "code": "url_contains",
+            "passed": true,
+            "details": {
+              "actual": "https://search.local",
+              "expected": "search.local"
+            }
+          }
+        ],
+        "failed": [],
+        "failed_codes": [],
+        "repairable": false,
+        "summary": "scenario verification for open_page",
+        "evidence_refs": [
+          {
+            "type": "ui_state",
+            "frontmost_app": "",
+            "window_title": ""
+          },
+          {
+            "type": "browser_state",
+            "url": "https://search.local",
+            "title": "Search"
+          }
+        ],
+        "metrics": {
+          "action_log_count": 1,
+          "verifier_outcome_count": 1
+        }
+      },
+      "message": "Search",
+      "error": "",
+      "error_code": "",
+      "screenshots": [
+        "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/tasks15/task_1773058441174_https-search-local-aç-ve-arama-kutusuna-kittens-/screenshots/step_01_01.png"
+      ],
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441186/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441186/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441186/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441186/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441186/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441186/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/tasks15/task_1773058441174_https-search-local-aç-ve-arama-kutusuna-kittens-/screenshots/step_01_01.png",
+          "type": "image"
+        }
+      ],
+      "result": {
+        "success": true,
+        "status": "success",
+        "message": "Search",
+        "summary": "Search",
+        "url": "https://search.local",
+        "title": "Search",
+        "browser_state": {
+          "success": true,
+          "dom_available": true,
+          "url": "https://search.local",
+          "title": "Search",
+          "visible_text": "Search",
+          "dom_hash": "a7aa7767ab803ffe9e0ede32ecf31ffe0cc198c75239006970a064181a8eba2b",
+          "scroll": {
+            "x": 0,
+            "y": 0
+          },
+          "session_id": "fake-browser",
+          "headless": true
+        },
+        "dom_snapshot": {
+          "success": true,
+          "dom_available": true,
+          "url": "https://search.local",
+          "title": "Search",
+          "visible_text": "Search",
+          "dom_hash": "a7aa7767ab803ffe9e0ede32ecf31ffe0cc198c75239006970a064181a8eba2b",
+          "scroll": {
+            "x": 0,
+            "y": 0
+          },
+          "session_id": "fake-browser",
+          "headless": true,
+          "html": "<html><body><input id='q'/></body></html>"
+        },
+        "extracted_text": "",
+        "links": [],
+        "table": {},
+        "artifacts": [
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441186/dom_snapshot.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441186/dom_snapshot.html",
+            "type": "text"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441186/navigation.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441186/action_log.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441186/verification.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441186/page.png",
+            "type": "image"
+          }
+        ],
+        "screenshots": [
+          "/Users/emrekoca/.elyan/browser_runtime/1773058441186/page.png"
+        ],
+        "action_logs": [
+          {
+            "step": 1,
+            "action": "open",
+            "params": {
+              "url": "https://search.local",
+              "selector": "",
+              "text": ""
+            },
+            "result": {
+              "success": true,
+              "url": "https://search.local",
+              "title": "Search",
+              "status_code": 200,
+              "dom_available": true
+            }
+          }
+        ],
+        "action_result": {
+          "success": true,
+          "url": "https://search.local",
+          "title": "Search",
+          "status_code": 200,
+          "dom_available": true
+        },
+        "verifier_outcomes": [
+          {
+            "ok": true,
+            "status": "success",
+            "checks": [
+              {
+                "code": "dom_available",
+                "passed": true
+              },
+              {
+                "code": "screenshot_present",
+                "passed": true,
+                "details": {
+                  "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441186/page.png"
+                }
+              },
+              {
+                "code": "navigation_changed",
+                "passed": true,
+                "details": {
+                  "before_url": "",
+                  "after_url": "https://search.local"
+                }
+              },
+              {
+                "code": "title_matches",
+                "passed": true,
+                "details": {
+                  "title": "Search"
+                }
+              },
+              {
+                "code": "url_matches",
+                "passed": true,
+                "details": {
+                  "url": "https://search.local"
+                }
+              }
+            ],
+            "failed": [],
+            "failed_codes": [],
+            "repairable": true,
+            "summary": "browser verification for open",
+            "evidence_refs": [
+              {
+                "type": "browser_state",
+                "before_url": "",
+                "after_url": "https://search.local"
+              },
+              {
+                "type": "screenshot",
+                "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441186/page.png"
+              }
+            ],
+            "metrics": {
+              "dom_changed": 1,
+              "url_changed": 1,
+              "title_changed": 1
+            }
+          }
+        ],
+        "fallback": {
+          "used": false
+        },
+        "playwright_available": false,
+        "recovery_hints": {
+          "action": "open",
+          "selector": "",
+          "dom_available": true,
+          "current_url": "https://search.local",
+          "current_title": "Search",
+          "visible_text": "Search",
+          "fallback_used": false,
+          "fallback_reason": "",
+          "expected_text": "",
+          "failed_codes": []
+        }
+      }
+    },
+    {
+      "step_index": 2,
+      "name": "fill_q",
+      "kind": "browser",
+      "status": "completed",
+      "attempts": 1,
+      "verification": {
+        "ok": true,
+        "status": "success",
+        "checks": [
+          {
+            "code": "step_result_success",
+            "passed": true,
+            "details": {
+              "status": "success"
+            }
+          },
+          {
+            "code": "text_contains",
+            "passed": true,
+            "details": {
+              "expected": "kittens"
+            }
+          }
+        ],
+        "failed": [],
+        "failed_codes": [],
+        "repairable": false,
+        "summary": "scenario verification for fill_q",
+        "evidence_refs": [
+          {
+            "type": "ui_state",
+            "frontmost_app": "",
+            "window_title": ""
+          },
+          {
+            "type": "browser_state",
+            "url": "https://search.local",
+            "title": "Search"
+          }
+        ],
+        "metrics": {
+          "action_log_count": 1,
+          "verifier_outcome_count": 1
+        }
+      },
+      "message": "Search",
+      "error": "",
+      "error_code": "",
+      "screenshots": [
+        "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/tasks15/task_1773058441174_https-search-local-aç-ve-arama-kutusuna-kittens-/screenshots/step_02_01.png"
+      ],
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441193/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441193/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441193/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441193/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441193/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441193/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/tasks15/task_1773058441174_https-search-local-aç-ve-arama-kutusuna-kittens-/screenshots/step_02_01.png",
+          "type": "image"
+        }
+      ],
+      "result": {
+        "success": true,
+        "status": "success",
+        "message": "Search",
+        "summary": "Search",
+        "url": "https://search.local",
+        "title": "Search",
+        "browser_state": {
+          "success": true,
+          "dom_available": true,
+          "url": "https://search.local",
+          "title": "Search",
+          "visible_text": "Search",
+          "dom_hash": "a7aa7767ab803ffe9e0ede32ecf31ffe0cc198c75239006970a064181a8eba2b",
+          "scroll": {
+            "x": 0,
+            "y": 0
+          },
+          "session_id": "fake-browser",
+          "headless": true
+        },
+        "dom_snapshot": {
+          "success": true,
+          "dom_available": true,
+          "url": "https://search.local",
+          "title": "Search",
+          "visible_text": "Search",
+          "dom_hash": "a7aa7767ab803ffe9e0ede32ecf31ffe0cc198c75239006970a064181a8eba2b",
+          "scroll": {
+            "x": 0,
+            "y": 0
+          },
+          "session_id": "fake-browser",
+          "headless": true,
+          "html": "<html><body><input id='q'/></body></html>"
+        },
+        "extracted_text": "",
+        "links": [],
+        "table": {},
+        "artifacts": [
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441193/dom_snapshot.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441193/dom_snapshot.html",
+            "type": "text"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441193/navigation.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441193/action_log.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441193/verification.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441193/page.png",
+            "type": "image"
+          }
+        ],
+        "screenshots": [
+          "/Users/emrekoca/.elyan/browser_runtime/1773058441193/page.png"
+        ],
+        "action_logs": [
+          {
+            "step": 1,
+            "action": "type",
+            "params": {
+              "url": "",
+              "selector": "#q",
+              "text": "kittens"
+            },
+            "result": {
+              "success": true,
+              "selector": "#q",
+              "text": "kittens",
+              "dom_available": true
+            }
+          }
+        ],
+        "action_result": {
+          "success": true,
+          "selector": "#q",
+          "text": "kittens",
+          "dom_available": true
+        },
+        "verifier_outcomes": [
+          {
+            "ok": true,
+            "status": "success",
+            "checks": [
+              {
+                "code": "dom_available",
+                "passed": true
+              },
+              {
+                "code": "screenshot_present",
+                "passed": true,
+                "details": {
+                  "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441193/page.png"
+                }
+              },
+              {
+                "code": "typed_value_persisted",
+                "passed": true,
+                "details": {
+                  "typed_value": "kittens"
+                }
+              }
+            ],
+            "failed": [],
+            "failed_codes": [],
+            "repairable": true,
+            "summary": "browser verification for type",
+            "evidence_refs": [
+              {
+                "type": "browser_state",
+                "before_url": "https://search.local",
+                "after_url": "https://search.local"
+              },
+              {
+                "type": "screenshot",
+                "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441193/page.png"
+              }
+            ],
+            "metrics": {
+              "dom_changed": 0,
+              "url_changed": 0,
+              "title_changed": 0
+            }
+          }
+        ],
+        "fallback": {
+          "used": false
+        },
+        "playwright_available": false,
+        "recovery_hints": {
+          "action": "type",
+          "selector": "#q",
+          "dom_available": true,
+          "current_url": "https://search.local",
+          "current_title": "Search",
+          "visible_text": "Search",
+          "fallback_used": false,
+          "fallback_reason": "",
+          "expected_text": "",
+          "failed_codes": []
+        }
+      }
+    },
+    {
+      "step_index": 3,
+      "name": "submit_form",
+      "kind": "browser",
+      "status": "completed",
+      "attempts": 1,
+      "verification": {
+        "ok": true,
+        "status": "success",
+        "checks": [
+          {
+            "code": "step_result_success",
+            "passed": true,
+            "details": {
+              "status": "success"
+            }
+          },
+          {
+            "code": "text_contains",
+            "passed": true,
+            "details": {
+              "expected": "kittens"
+            }
+          }
+        ],
+        "failed": [],
+        "failed_codes": [],
+        "repairable": false,
+        "summary": "scenario verification for submit_form",
+        "evidence_refs": [
+          {
+            "type": "ui_state",
+            "frontmost_app": "",
+            "window_title": ""
+          },
+          {
+            "type": "browser_state",
+            "url": "https://search.local?q=kittens",
+            "title": "Results"
+          }
+        ],
+        "metrics": {
+          "action_log_count": 1,
+          "verifier_outcome_count": 1
+        }
+      },
+      "message": "Results",
+      "error": "",
+      "error_code": "",
+      "screenshots": [
+        "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/tasks15/task_1773058441174_https-search-local-aç-ve-arama-kutusuna-kittens-/screenshots/step_03_01.png"
+      ],
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441202/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441202/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441202/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441202/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441202/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441202/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058382050/workspace/tasks15/task_1773058441174_https-search-local-aç-ve-arama-kutusuna-kittens-/screenshots/step_03_01.png",
+          "type": "image"
+        }
+      ],
+      "result": {
+        "success": true,
+        "status": "success",
+        "message": "Results",
+        "summary": "Results",
+        "url": "https://search.local?q=kittens",
+        "title": "Results",
+        "browser_state": {
+          "success": true,
+          "dom_available": true,
+          "url": "https://search.local?q=kittens",
+          "title": "Results",
+          "visible_text": "Results for kittens",
+          "dom_hash": "264e76efd09b7f5b7b9c9027034d4b4f837656823f881e743714ea0a367e593e",
+          "scroll": {
+            "x": 0,
+            "y": 0
+          },
+          "session_id": "fake-browser",
+          "headless": true
+        },
+        "dom_snapshot": {
+          "success": true,
+          "dom_available": true,
+          "url": "https://search.local?q=kittens",
+          "title": "Results",
+          "visible_text": "Results for kittens",
+          "dom_hash": "264e76efd09b7f5b7b9c9027034d4b4f837656823f881e743714ea0a367e593e",
+          "scroll": {
+            "x": 0,
+            "y": 0
+          },
+          "session_id": "fake-browser",
+          "headless": true,
+          "html": "<html><body>Results for kittens</body></html>"
+        },
+        "extracted_text": "",
+        "links": [],
+        "table": {},
+        "artifacts": [
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441202/dom_snapshot.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441202/dom_snapshot.html",
+            "type": "text"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441202/navigation.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441202/action_log.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441202/verification.json",
+            "type": "json"
+          },
+          {
+            "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441202/page.png",
+            "type": "image"
+          }
+        ],
+        "screenshots": [
+          "/Users/emrekoca/.elyan/browser_runtime/1773058441202/page.png"
+        ],
+        "action_logs": [
+          {
+            "step": 1,
+            "action": "submit",
+            "params": {
+              "url": "",
+              "selector": "#q",
+              "text": ""
+            },
+            "result": {
+              "success": true,
+              "selector": "#q",
+              "key": "Enter",
+              "dom_available": true
+            }
+          }
+        ],
+        "action_result": {
+          "success": true,
+          "selector": "#q",
+          "key": "Enter",
+          "dom_available": true
+        },
+        "verifier_outcomes": [
+          {
+            "ok": true,
+            "status": "success",
+            "checks": [
+              {
+                "code": "dom_available",
+                "passed": true
+              },
+              {
+                "code": "screenshot_present",
+                "passed": true,
+                "details": {
+                  "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441202/page.png"
+                }
+              },
+              {
+                "code": "submit_state_transition",
+                "passed": true,
+                "details": {
+                  "before_url": "https://search.local",
+                  "after_url": "https://search.local?q=kittens"
+                }
+              }
+            ],
+            "failed": [],
+            "failed_codes": [],
+            "repairable": true,
+            "summary": "browser verification for submit",
+            "evidence_refs": [
+              {
+                "type": "browser_state",
+                "before_url": "https://search.local",
+                "after_url": "https://search.local?q=kittens"
+              },
+              {
+                "type": "screenshot",
+                "path": "/Users/emrekoca/.elyan/browser_runtime/1773058441202/page.png"
+              }
+            ],
+            "metrics": {
+              "dom_changed": 1,
+              "url_changed": 1,
+              "title_changed": 1
+            }
+          }
+        ],
+        "fallback": {
+          "used": false
+        },
+        "playwright_available": false,
+        "recovery_hints": {
+          "action": "submit",
+          "selector": "#q",
+          "dom_available": true,
+          "current_url": "https://search.local?q=kittens",
+          "current_title": "Results",
+          "visible_text": "Results for kittens",
+          "fallback_used": false,
+          "fallback_reason": "",
+          "expected_text": "kittens",
+          "failed_codes": []
+        }
+      }
+    }
+  ],
+  "step_definitions": [
+    {
+      "kind": "browser",
+      "name": "open_page",
+      "action": "open",
+      "url": "https://search.local",
+      "expected_url_contains": "search.local",
+      "expected_title_contains": "Search",
+      "verify": {
+        "url_contains": "search.local"
+      },
+      "repair_policy": {
+        "max_retries": 1
+      }
+    },
+    {
+      "kind": "browser",
+      "name": "fill_q",
+      "action": "type",
+      "selector": "#q",
+      "text": "kittens",
+      "verify": {
+        "text_contains": "kittens"
+      },
+      "repair_policy": {
+        "max_retries": 1
+      }
+    },
+    {
+      "kind": "browser",
+      "name": "submit_form",
+      "action": "submit",
+      "selector": "#q",
+      "expected_text": "kittens",
+      "verify": {
+        "text_contains": "kittens"
+      },
+      "repair_policy": {
+        "max_retries": 1
+      }
+    }
+  ],
+  "action_logs": [
+    {
+      "task_step": 1,
+      "task_step_name": "open_page",
+      "step": 1,
+      "action": "open",
+      "params": {
+        "url": "https://search.local",
+        "selector": "",
+        "text": ""
+      },
+      "result": {
+        "success": true,
+        "url": "https://search.local",
+        "title": "Search",
+        "status_code": 200,
+        "dom_available": true
+      }
+    },
+    {
+      "task_step": 2,
+      "task_step_name": "fill_q",
+      "step": 1,
+      "action": "type",
+      "params": {
+        "url": "",
+        "selector": "#q",
+        "text": "kittens"
+      },
+      "result": {
+        "success": true,
+        "selector": "#q",
+        "text": "kittens",
+        "dom_available": true
+      }
+    },
+    {
+      "task_step": 3,
+      "task_step_name": "submit_form",
+      "step": 1,
+      "action": "submit",
+      "params": {
+        "url": "",
+        "selector": "#q",
+        "text": ""
+      },
+      "result": {
+        "success": true,
+        "selector": "#q",
+        "key": "Enter",
+        "dom_available": true
+      }
+    }
+  ],
+  "target_decisions": []
+}

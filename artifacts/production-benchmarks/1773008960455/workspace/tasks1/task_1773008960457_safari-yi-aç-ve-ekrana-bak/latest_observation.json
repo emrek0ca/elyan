@@ -1,0 +1,158 @@
+{
+  "step_index": 2,
+  "failed_codes": [],
+  "ui_state": {
+    "frontmost_app": "Safari",
+    "active_window": {
+      "title": "Start",
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 800
+      }
+    },
+    "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773008960455/workspace/screen1/screen_before_1773008960465.png",
+    "elements": [
+      {
+        "label": "Safari",
+        "role": "frontmost_app",
+        "source": "window_metadata",
+        "confidence": 0.99
+      },
+      {
+        "label": "Start",
+        "role": "window_title",
+        "source": "window_metadata",
+        "confidence": 0.95
+      }
+    ],
+    "clickable_targets": [],
+    "text_fields": [],
+    "summary": "Frontmost app: Safari. Window: Start. Safari frontmost. OCR: Safari",
+    "fallback_order": [
+      "accessibility_and_window_metadata",
+      "vision_detection",
+      "ocr",
+      "last_known_ui_target_cache"
+    ],
+    "source_counts": {
+      "window_metadata": 2
+    },
+    "confidence": 0.97
+  },
+  "browser_state": {},
+  "desktop_host_state": {
+    "frontmost_app": "Safari",
+    "active_window": {
+      "title": "Start",
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 800
+      }
+    },
+    "last_screenshot": "/Users/emrekoca/.elyan/screen_operator/1773008960465/after.png",
+    "target_cache_size": 0,
+    "recent_action_log_count": 0,
+    "verifier_outcome_count": 0,
+    "updated_at": 1773008960.4621599,
+    "last_instruction": "ekrana bak",
+    "last_mode": "inspect",
+    "last_status": "success"
+  },
+  "recovery_hints": {
+    "frontmost_app": "Safari",
+    "active_window": "Start",
+    "chosen_target": {},
+    "alternate_targets": [],
+    "failed_codes": []
+  },
+  "task_state": {
+    "current_step": 0,
+    "attempts": 0,
+    "ui_state": {
+      "frontmost_app": "Safari",
+      "active_window": {
+        "title": "Start",
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 800
+        }
+      },
+      "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773008960455/workspace/screen1/screen_before_1773008960465.png",
+      "elements": [
+        {
+          "label": "Safari",
+          "role": "frontmost_app",
+          "source": "window_metadata",
+          "confidence": 0.99
+        },
+        {
+          "label": "Start",
+          "role": "window_title",
+          "source": "window_metadata",
+          "confidence": 0.95
+        }
+      ],
+      "clickable_targets": [],
+      "text_fields": [],
+      "summary": "Frontmost app: Safari. Window: Start. Safari frontmost. OCR: Safari",
+      "fallback_order": [
+        "accessibility_and_window_metadata",
+        "vision_detection",
+        "ocr",
+        "last_known_ui_target_cache"
+      ],
+      "source_counts": {
+        "window_metadata": 2
+      },
+      "confidence": 0.97
+    },
+    "last_ui_state": {
+      "frontmost_app": "Safari",
+      "active_window": {
+        "title": "Start",
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 800
+        }
+      },
+      "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773008960455/workspace/screen1/screen_before_1773008960465.png",
+      "elements": [
+        {
+          "label": "Safari",
+          "role": "frontmost_app",
+          "source": "window_metadata",
+          "confidence": 0.99
+        },
+        {
+          "label": "Start",
+          "role": "window_title",
+          "source": "window_metadata",
+          "confidence": 0.95
+        }
+      ],
+      "clickable_targets": [],
+      "text_fields": [],
+      "summary": "Frontmost app: Safari. Window: Start. Safari frontmost. OCR: Safari",
+      "fallback_order": [
+        "accessibility_and_window_metadata",
+        "vision_detection",
+        "ocr",
+        "last_known_ui_target_cache"
+      ],
+      "source_counts": {
+        "window_metadata": 2
+      },
+      "confidence": 0.97
+    },
+    "last_target_cache": {},
+    "verifier_outcomes": []
+  }
+}

@@ -398,23 +398,79 @@ class CDGEngine:
 
 # ── Plan Builders (HTN Templates) ────────────────────────────
 
+def _normalize_ascii_text(text: str) -> str:
+    import unicodedata
+
+    return unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode("ascii")
+
+
+def _extract_web_project_name(text: str) -> str:
+    import re
+
+    raw = str(text or "").strip()
+    normalized = _normalize_ascii_text(raw)
+    low = normalized.lower()
+
+    quoted = re.search(r"[\"'`“”](.{2,60}?)[\"'`“”]", raw)
+    if quoted:
+        candidate = str(quoted.group(1) or "").strip()
+        if candidate:
+            return candidate[:60]
+
+    if any(token in low for token in ("portfolio", "portfoy", "portfolyo")):
+        if ("sari" in low or "yellow" in low) and ("turuncu" in low or "orange" in low):
+            return "Sunset Portfolio"
+        if ("siyah" in low or "black" in low) and ("beyaz" in low or "white" in low):
+            return "Mono Portfolio"
+        return "Portfolio Atelier"
+    if any(token in low for token in ("dashboard", "panel")):
+        return "Operations Dashboard"
+    if any(token in low for token in ("landing page", "landing")):
+        return "Landing Experience"
+    if any(token in low for token in ("blog", "editorial")):
+        return "Editorial Journal"
+
+    before_target = re.search(
+        r"([a-zA-Z0-9 _-]{2,80})\s+(?:website|web sitesi|web sayfasi|site|uygulama|app)\b",
+        normalized,
+        re.IGNORECASE,
+    )
+    if before_target:
+        candidate = str(before_target.group(1) or "").strip().lower()
+        stop_words = {
+            "bir", "ve", "for", "with", "yap", "olustur", "hazirla", "create", "build",
+            "renklerde", "renkte", "colors", "color", "portfolio", "portfoy", "portfolyo",
+            "web", "website", "site", "uygulama", "app",
+        }
+        words = [word for word in re.split(r"[^a-z0-9]+", candidate) if word and word not in stop_words]
+        if 1 <= len(words) <= 4:
+            return " ".join(part.capitalize() for part in words)[:60]
+
+    return "Web Studio"
+
+
+def _infer_web_theme(text: str) -> str:
+    low = _normalize_ascii_text(text).lower()
+    if any(token in low for token in ("minimal", "clean", "sade")):
+        return "minimal"
+    if any(token in low for token in ("neon", "cyber", "futuristic", "futuristik")):
+        return "futuristic"
+    if any(token in low for token in ("enterprise", "kurumsal", "corporate", "b2b")):
+        return "corporate"
+    return "professional"
+
+
 def _build_web_project_plan(plan: CDGPlan, user_input: str, template: dict):
     """Web projesi DAG planı."""
     import re
-    import unicodedata
     from pathlib import Path
+    from tools.pro_workflows import _build_vanilla_assets, _safe_project_slug
 
     text = str(user_input or "").strip()
-    normalized = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
-    low_text = normalized.lower()
-    quoted_name = re.search(r"[\"'`“”](.{2,60}?)[\"'`“”]", text)
-    project_seed = quoted_name.group(1) if quoted_name else normalized
-    slug = re.sub(r"[^a-z0-9]+", "-", project_seed.lower()).strip("-")
-    if not slug:
-        slug = "web-projesi"
-    slug = slug[:48].strip("-") or "web-projesi"
+    project_name = _extract_web_project_name(text)
+    slug = _safe_project_slug(project_name).strip("_") or "web_studio"
+    theme = _infer_web_theme(text)
 
-    project_name = " ".join(part.capitalize() for part in slug.split("-")) or "Web Projesi"
     output_dir = Path.home() / "Desktop"
     out_match = re.search(
         r"(?:output[_ ]?dir|cikti|çıktı|dizin|klasor|klasör|folder)\s*[:=]?\s*([~\/][^\s,;]+)",
@@ -427,18 +483,17 @@ def _build_web_project_plan(plan: CDGPlan, user_input: str, template: dict):
         except Exception:
             output_dir = Path.home() / "Desktop"
 
-    bg_color = "#f8fafc"
-    accent_color = "#0ea5e9"
-    accent2_color = "#2563eb"
-    if ("sari" in low_text or "yellow" in low_text) and ("turuncu" in text.lower() or "orange" in low_text):
-        bg_color = "#fff7db"
-        accent_color = "#f59e0b"
-        accent2_color = "#f97316"
-
     project_dir = output_dir / slug
     html_path = project_dir / "index.html"
     css_path = project_dir / "styles" / "main.css"
     js_path = project_dir / "scripts" / "main.js"
+    html_content, css_content, js_content, profile = _build_vanilla_assets(
+        project_name=project_name,
+        brief=text or "Web projesi olustur",
+        theme=theme,
+    )
+    layout = str(profile.get("layout") or "landing")
+    html_marker = "portfolio-hero" if layout == "portfolio" else "grid-sections"
 
     plan.nodes = [
         DAGNode(id="spec", name="Spec oluştur", action="plan",
@@ -448,7 +503,7 @@ def _build_web_project_plan(plan: CDGPlan, user_input: str, template: dict):
                 params={
                     "project_name": project_name,
                     "stack": "vanilla",
-                    "theme": "professional",
+                    "theme": theme,
                     "output_dir": str(output_dir),
                     "brief": text or "Web projesi olustur",
                 },
@@ -457,71 +512,41 @@ def _build_web_project_plan(plan: CDGPlan, user_input: str, template: dict):
                 depends_on=["scaffold"],
                 params={
                     "path": str(html_path),
-                    "content": (
-                        "<!doctype html>\n"
-                        "<html lang=\"tr\">\n"
-                        "<head>\n"
-                        "  <meta charset=\"UTF-8\" />\n"
-                        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n"
-                        f"  <title>{project_name}</title>\n"
-                        "  <link rel=\"stylesheet\" href=\"./styles/main.css\" />\n"
-                        "</head>\n"
-                        "<body>\n"
-                        f"  <h1>{project_name}</h1>\n"
-                        "  <p>Proje dosyalari Elyan CDG ile olusturuldu.</p>\n"
-                        "  <script src=\"./scripts/main.js\"></script>\n"
-                        "</body>\n"
-                        "</html>\n"
-                    ),
+                    "content": html_content,
                 },
                 allowed_tools=["write_file"]),
         DAGNode(id="css", name="CSS yaz", action="write_file",
                 depends_on=["scaffold"],
                 params={
                     "path": str(css_path),
-                    "content": (
-                        ":root {\n"
-                        f"  --bg: {bg_color};\n"
-                        f"  --accent: {accent_color};\n"
-                        f"  --accent-2: {accent2_color};\n"
-                        "  --text: #1f2937;\n"
-                        "}\n"
-                        "body {\n"
-                        "  margin: 0;\n"
-                        "  padding: 40px;\n"
-                        "  font-family: 'Avenir Next', 'Segoe UI', sans-serif;\n"
-                        "  color: var(--text);\n"
-                        "  background: linear-gradient(180deg, var(--bg), #ffffff);\n"
-                        "}\n"
-                        "h1 { color: var(--accent-2); }\n"
-                    ),
+                    "content": css_content,
                 },
                 allowed_tools=["write_file"]),
         DAGNode(id="js", name="JS yaz", action="write_file",
                 depends_on=["html"],
                 params={
                     "path": str(js_path),
-                    "content": (
-                        "document.addEventListener('DOMContentLoaded', () => {\n"
-                        "  console.log('CDG web project ready');\n"
-                        "});\n"
-                    ),
+                    "content": js_content,
                 },
                 allowed_tools=["write_file"]),
         DAGNode(id="qa", name="QA kontrol", action="verify",
                 depends_on=["html", "css", "js"],
                 allowed_tools=["take_screenshot", "read_file"]),
     ]
-    # Node QA gates
     plan.node_qa_gates["html"] = [
         QAGate(name="HTML var", check_type="file_exists", params={"path": str(html_path)}),
         QAGate(name="HTML geçerli", check_type="html_valid", params={"path": str(html_path)}),
+        QAGate(name="HTML yeterli boyutta", check_type="min_file_size", params={"path": str(html_path), "min_bytes": 1400}),
+        QAGate(name="HTML layout marker", check_type="content_check", params={"path": str(html_path), "contains": html_marker}),
     ]
     plan.node_qa_gates["css"] = [
         QAGate(name="CSS var", check_type="file_exists", params={"path": str(css_path)}),
+        QAGate(name="CSS yeterli boyutta", check_type="min_file_size", params={"path": str(css_path), "min_bytes": 1200}),
     ]
     plan.node_qa_gates["js"] = [
         QAGate(name="JS var", check_type="file_exists", params={"path": str(js_path)}),
+        QAGate(name="JS event hook", check_type="content_check", params={"path": str(js_path), "contains": "DOMContentLoaded"}),
+        QAGate(name="JS yeterli boyutta", check_type="min_file_size", params={"path": str(js_path), "min_bytes": 120}),
     ]
 
 
@@ -791,8 +816,21 @@ async def _build_dynamic_plan(plan: CDGPlan, user_input: str, template: dict, ll
             ).strip()
             placeholder_hints = {"", "~/Desktop/not.txt", "~/Desktop"}
             if not path_hint or path_hint in placeholder_hints:
-                logger.debug(f"Skipping QA gate for node '{node.id}' due to missing/placeholder path hint.")
-                continue
+                if plan.job_type == "code_project":
+                    expected_exts = [str(item).strip() for item in list(template.get("expected_extensions") or []) if str(item).strip()]
+                    default_ext = expected_exts[0] if expected_exts else ".txt"
+                    if not default_ext.startswith("."):
+                        default_ext = ".txt"
+                    default_path = f"/tmp/{plan.job_id}_{node.id}{default_ext}"
+                    if isinstance(node.params, dict):
+                        node.params.setdefault("path", default_path)
+                        if node.action == "write_file" and not str(node.params.get("content") or "").strip():
+                            node.params["content"] = f"# generated artifact for {node.id}\n"
+                    path_hint = str(node.params.get("path") or default_path).strip()
+                    logger.info(f"Dynamic QA fallback path injected for node '{node.id}': {path_hint}")
+                else:
+                    logger.debug(f"Skipping QA gate for node '{node.id}' due to missing/placeholder path hint.")
+                    continue
 
             gates = [QAGate(name=f"Persistence: {node.id}", check_type="file_exists", 
                           params={"path": path_hint})]

@@ -1,0 +1,28 @@
+{
+  "request": "Safari'yi aç ve arama kutusuna kittens yaz",
+  "planning_request": "Safari'yi aç ve arama kutusuna kittens yaz",
+  "matched_rules": [
+    "desktop_operator_flow",
+    "screen_fill_step"
+  ],
+  "assumptions": [],
+  "missing_inputs": [],
+  "extracted": {
+    "app_name": "Safari",
+    "app_sequence": [
+      "Safari"
+    ],
+    "browser_app": "Safari",
+    "url": "",
+    "urls": [],
+    "typed_text": "kittens",
+    "named_field_values": [],
+    "field_label": "Search field",
+    "selector": "#q",
+    "button_label": "",
+    "button_sequence": [],
+    "research_topic": "Safari'yi aç ve arama kutusuna kittens yaz"
+  },
+  "bounded": true,
+  "safe_mode": "deterministic"
+}

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import inspect
 import re
 from dataclasses import dataclass, asdict
 from datetime import datetime, UTC
@@ -10,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from config.elyan_config import elyan_config
 from core.skills.catalog import get_builtin_skill_catalog, get_builtin_workflow_catalog
+from core.task_executor import TaskExecutor
 from tools import AVAILABLE_TOOLS
 from utils.logger import get_logger
 
@@ -547,10 +547,7 @@ class SkillManager:
                 if tool is None:
                     return {"success": False, "error": f"Tool not found: {tool_name}"}
                 if callable(tool):
-                    if inspect.iscoroutinefunction(tool):
-                        result = await tool(**(params or {}))
-                    else:
-                        result = tool(**(params or {}))
+                    result = await TaskExecutor().execute(tool, params or {})
                     return {"success": True, "result": result}
             except Exception as e:
                 return {"success": False, "error": str(e)}

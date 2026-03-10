@@ -2,6 +2,7 @@ import httpx
 import json
 import asyncio
 import time
+import importlib.util
 from typing import Any, Optional
 from config.elyan_config import elyan_config
 from core.model_orchestrator import model_orchestrator
@@ -31,11 +32,12 @@ class LLMClient:
         self.fallback_mode: str = "standard"
         self.fallback_order: list = ["openai", "groq", "gemini", "ollama"]
         self._router_trace: list = []
+        self._collaboration_trace: list = []
 
         self.assistant_style = "professional_friendly_short"
         self._default_chat_prompt = (
             "Sen Elyan, son derece zeki, yetenekli ve yardımsever bir dijital asistansın. "
-            "Kullanıcıya profesyonel, nazik ve çözüm odaklı yanıtlar ver. "
+            "Kullanıcıya profesyonel, samimi, sıcak ve çözüm odaklı yanıtlar ver. "
             "Gereksiz laf kalabalığından kaçın, doğrudan konuya gir.\n\n"
             "STRİKT KURALLAR:\n"
             "1. Her görev için önce bir 'Deliverable Spec' ve 'Done Criteria' üret. Bunları doğrulamadan 'tamamlandı' deme.\n"
@@ -64,7 +66,7 @@ class LLMClient:
         language = str(elyan_config.get("agent.language", "tr") or "tr").strip().lower()
 
         personality_map = {
-            "professional": "Tonun profesyonel, güvenilir ve operasyon odaklı olsun.",
+            "professional": "Tonun profesyonel, güvenilir, insan gibi ve operasyon odaklı olsun.",
             "technical": "Tonun teknik, net ve uygulanabilir adımlara odaklı olsun.",
             "friendly": "Tonun sıcak, kısa ve yardımcı olsun.",
             "concise": "Yanıtlarını mümkün olduğunca kısa ve net tut.",
@@ -88,7 +90,192 @@ class LLMClient:
         """Hızlı kontrol: En az bir sağlayıcı var mı?"""
         return len(self.orchestrator.providers) > 0
 
-    async def generate(self, prompt: str, system_prompt: str = None, model_config: dict = None, role: str = "inference", history: list = None, user_id: str = "local", temperature: float = None) -> str:
+    def _collaboration_enabled_for_role(self, prompt: str, role: str) -> bool:
+        defaults = {
+            "enabled": True,
+            "roles": [
+                "reasoning",
+                "planning",
+                "code",
+                "critic",
+                "qa",
+                "research_worker",
+                "code_worker",
+            ],
+        }
+        get_settings = getattr(self.orchestrator, "get_collaboration_settings", None)
+        if callable(get_settings):
+            try:
+                cfg = get_settings() or {}
+            except Exception:
+                cfg = {}
+        else:
+            cfg = {}
+        if not isinstance(cfg, dict):
+            cfg = {}
+        cfg = {**defaults, **cfg}
+        role_name = str(role or "inference").strip().lower() or "inference"
+        if not cfg.get("enabled"):
+            return False
+        if role_name not in set(cfg.get("roles") or []):
+            return False
+        words = len(str(prompt or "").split())
+        return words >= 10 or role_name in {"reasoning", "planning", "code", "critic", "qa", "research_worker", "code_worker"}
+
+    def _resolve_explicit_model_config(self, model_config: dict | None, role: str) -> dict:
+        cfg = dict(model_config or {})
+        provider = str(cfg.get("type") or cfg.get("provider") or "").strip().lower()
+        model = str(cfg.get("model") or "").strip()
+        if model and "/" in model and not provider:
+            provider, model = model.split("/", 1)
+        if not provider and model:
+            provider = str(self.orchestrator.find_provider_for_model(model) or "").strip().lower()
+        if not provider:
+            provider = str(self.orchestrator.get_best_available(role).get("type") or "openai").strip().lower()
+        provider = self.orchestrator._normalize_provider(provider)
+        resolved = self.orchestrator.get_provider_config(provider, role=role, model=model or None)
+        for key, value in cfg.items():
+            if value is not None and key not in {"type", "provider", "model"}:
+                resolved[key] = value
+        resolved["type"] = provider
+        resolved["provider"] = provider
+        if model:
+            resolved["model"] = self.orchestrator._normalize_model_for_provider(provider, model)
+        return resolved
+
+    async def generate_collaborative(
+        self,
+        prompt: str,
+        system_prompt: str = None,
+        role: str = "reasoning",
+        history: list = None,
+        user_id: str = "local",
+        temperature: float = None,
+        max_models: int | None = None,
+    ) -> str:
+        collab = self.orchestrator.get_collaboration_settings()
+        pool = self.orchestrator.get_collaboration_pool(role=role, max_models=max_models or collab.get("max_models", 3))
+        if len(pool) <= 1:
+            cfg = pool[0] if pool else None
+            return await self.generate(
+                prompt,
+                system_prompt=system_prompt,
+                model_config=cfg,
+                role=role,
+                history=history,
+                user_id=user_id,
+                temperature=temperature,
+                strict_model_config=bool(cfg),
+                disable_collaboration=True,
+            )
+
+        self._collaboration_trace = []
+        system = system_prompt or self._resolve_system_prompt()
+        lenses = [
+            ("planner", "Kullanıcının gerçek niyetini, teslim kriterlerini ve eksik anlaşılma risklerini çıkar."),
+            ("builder", "Bu isteği en profesyonel şekilde gerçekleştirmek için net çözüm yaklaşımı ve somut üretim yönü ver."),
+            ("critic", "Yanlış anlama, boş çıktı, placeholder, teknik risk ve kalite açıklarını agresif şekilde tespit et."),
+        ]
+        if len(pool) > len(lenses):
+            for idx in range(len(lenses), len(pool)):
+                lenses.append((f"specialist_{idx+1}", "Önceki görüşleri tekrar etmeyen, fark yaratan iyileştirme önerileri ver."))
+
+        async def _run_lens(cfg: dict, lens_name: str, lens_instruction: str) -> dict:
+            augmented_prompt = (
+                f"{prompt}\n\n"
+                f"COLLABORATION LENS: {lens_name}\n"
+                f"Görev: {lens_instruction}\n"
+                "Yanıtı kısa ama yüksek sinyalli ver. Kullanıcının asıl isteğini bozma."
+            )
+            try:
+                response = await self.generate(
+                    augmented_prompt,
+                    system_prompt=system,
+                    model_config=cfg,
+                    role=role,
+                    history=history,
+                    user_id=user_id,
+                    temperature=temperature,
+                    strict_model_config=True,
+                    disable_collaboration=True,
+                )
+                item = {
+                    "provider": cfg.get("type") or cfg.get("provider"),
+                    "model": cfg.get("model"),
+                    "lens": lens_name,
+                    "status": "success",
+                    "response": str(response or "").strip(),
+                }
+                self._collaboration_trace.append(item)
+                return item
+            except Exception as exc:
+                item = {
+                    "provider": cfg.get("type") or cfg.get("provider"),
+                    "model": cfg.get("model"),
+                    "lens": lens_name,
+                    "status": "failed",
+                    "error": str(exc),
+                    "response": "",
+                }
+                self._collaboration_trace.append(item)
+                return item
+
+        drafts = await asyncio.gather(
+            *[
+                _run_lens(cfg, lens_name, lens_instruction)
+                for cfg, (lens_name, lens_instruction) in zip(pool, lenses)
+            ]
+        )
+        usable = [item for item in drafts if item.get("status") == "success" and item.get("response")]
+        if not usable:
+            return await self.generate(
+                prompt,
+                system_prompt=system,
+                model_config=pool[0],
+                role=role,
+                history=history,
+                user_id=user_id,
+                temperature=temperature,
+                strict_model_config=True,
+                disable_collaboration=True,
+            )
+
+        synthesis_blocks = []
+        for idx, item in enumerate(usable, start=1):
+            synthesis_blocks.append(
+                f"[{idx}] {item.get('lens')} | {item.get('provider')}/{item.get('model')}\n{item.get('response')}"
+            )
+        json_guard = "Orijinal istem JSON/structured format istiyorsa aynı formatı koru." if "json" in str(prompt or "").lower() else ""
+        synthesis_prompt = (
+            f"Kullanıcı isteği:\n{prompt}\n\n"
+            "Aşağıda farklı modellerin paralel görüşleri var. Çelişkileri çöz, kullanıcı niyetini keskinleştir "
+            "ve tek bir güçlü nihai yanıt üret.\n\n"
+            f"{chr(10).join(synthesis_blocks)}\n\n"
+            f"{json_guard}\n"
+            "Boş, genel geçer veya placeholder cevap verme. Nihai yanıt tek parça olsun."
+        )
+        final = await self.generate(
+            synthesis_prompt,
+            system_prompt=system,
+            model_config=pool[0],
+            role=role,
+            history=None,
+            user_id=user_id,
+            temperature=temperature,
+            strict_model_config=True,
+            disable_collaboration=True,
+        )
+        self._collaboration_trace.append(
+            {
+                "provider": pool[0].get("type") or pool[0].get("provider"),
+                "model": pool[0].get("model"),
+                "lens": "synthesizer",
+                "status": "success",
+            }
+        )
+        return final
+
+    async def generate(self, prompt: str, system_prompt: str = None, model_config: dict = None, role: str = "inference", history: list = None, user_id: str = "local", temperature: float = None, strict_model_config: bool = False, disable_collaboration: bool = False) -> str:
         from core.llm.token_budget import token_budget
         from core.resilience.circuit_breaker import resilience_manager
         from core.llm.quality_gate import quality_gate
@@ -121,6 +308,16 @@ class LLMClient:
         if not system_prompt:
             system_prompt = self._resolve_system_prompt()
 
+        if not disable_collaboration and not model_config and self._collaboration_enabled_for_role(prompt, role):
+            return await self.generate_collaborative(
+                prompt,
+                system_prompt=system_prompt,
+                role=role,
+                history=history,
+                user_id=user_id,
+                temperature=temperature,
+            )
+
         # Runtime privacy/model policy
         local_first = bool(elyan_config.get("agent.model.local_first", True))
         kvkk_strict = bool(elyan_config.get("security.kvkk.strict", True))
@@ -133,8 +330,8 @@ class LLMClient:
         backoff = 1.0
         
         # Get providers to try
-        cfg_seed = model_config or self.orchestrator.get_best_available(role)
-        if local_first:
+        cfg_seed = self._resolve_explicit_model_config(model_config, role) if (model_config and strict_model_config) else (model_config or self.orchestrator.get_best_available(role))
+        if local_first and not (model_config and strict_model_config):
             try:
                 local_cfg = self.orchestrator.get_best_available(role, exclude=external_providers)
             except Exception:
@@ -143,6 +340,8 @@ class LLMClient:
                 cfg_seed = local_cfg
             elif not allow_cloud_fallback:
                 return "KVKK/güvenlik politikası gereği bulut modele fallback kapalı ve yerel model bulunamadı."
+        if model_config and strict_model_config:
+            retry_attempts = 1
         visited_providers = set()
         
         last_error = ""
@@ -155,11 +354,17 @@ class LLMClient:
                 # Exclude failed providers for this attempt
                 cfg = self.orchestrator.get_best_available(role, exclude=visited_providers)
             
-            provider = cfg.get("type", "openai")
+            provider = str(cfg.get("type") or cfg.get("provider") or "openai").strip().lower()
             visited_providers.add(provider)
 
             if provider == "none":
                 break
+
+            ready, reason = self._provider_runtime_ready(provider, cfg)
+            if not ready:
+                last_error = reason
+                logger.warning(f"Skipping provider {provider}: {reason}")
+                continue
 
             if local_first and not allow_cloud_fallback and provider in external_providers:
                 last_error = f"cloud provider blocked by policy: {provider}"
@@ -212,6 +417,8 @@ class LLMClient:
                     response = await self._call_openai(provider_prompt, system_prompt, cfg, provider_history, user_id=user_id)
                 elif provider == "groq":
                     response = await self._call_groq(provider_prompt, system_prompt, cfg, provider_history, user_id=user_id)
+                elif provider == "anthropic":
+                    response = await self._call_anthropic(provider_prompt, system_prompt, cfg, provider_history, user_id=user_id)
                 elif provider == "gemini" or provider == "google":
                     response = await self._call_gemini(provider_prompt, system_prompt, cfg, provider_history, user_id=user_id)
 
@@ -416,6 +623,53 @@ class LLMClient:
             resp = await client.post(url, json=data)
             return resp.json()['candidates'][0]['content']['parts'][0]['text']
 
+    async def _call_anthropic(self, prompt: str, system_prompt: str, cfg: dict, history: list = None, user_id: str = "local") -> str:
+        model = cfg.get("model", "claude-3-5-sonnet-latest")
+        messages = []
+        if history:
+            for h in history[-5:]:
+                messages.append({"role": "user", "content": h.get("user_message", "")})
+                b = h.get("bot_response", "")
+                if isinstance(b, str) and b.startswith('{'):
+                    try:
+                        b = json.loads(b).get("message", "")
+                    except Exception:
+                        pass
+                elif isinstance(b, dict):
+                    b = b.get("message", "")
+                messages.append({"role": "assistant", "content": b})
+        messages.append({"role": "user", "content": prompt})
+        headers = {
+            "x-api-key": str(cfg.get("apiKey") or ""),
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        body = {
+            "model": model,
+            "max_tokens": 2048,
+            "messages": messages,
+        }
+        if system_prompt:
+            body["system"] = system_prompt
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            resp = await client.post("https://api.anthropic.com/v1/messages", headers=headers, json=body)
+            data = resp.json()
+            parts = data.get("content") or []
+            content = ""
+            for part in parts:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    content += str(part.get("text") or "")
+            usage = data.get("usage") or {}
+            if usage:
+                self.pricing_tracker.record_usage(
+                    provider="anthropic",
+                    model=model,
+                    prompt_tokens=usage.get("input_tokens", 0),
+                    completion_tokens=usage.get("output_tokens", 0),
+                    user_id=user_id,
+                )
+            return content
+
     async def process(self, user_message: str, user_id: Optional[int] = None) -> dict[str, Any]:
         """Ana işleme fonksiyonu - önce cache, sonra intent parser, sonra LLM"""
         cached = self.cache.get(user_message)
@@ -440,24 +694,64 @@ class LLMClient:
 
     # ── Router & Fallback API ─────────────────────────────────────────────────
 
+    def _get_provider_config(self, provider: str, role: str = "inference") -> dict:
+        provider_name = self.orchestrator._normalize_provider(provider)
+        direct = self.orchestrator.providers.get(provider_name)
+        if isinstance(direct, dict):
+            cfg = dict(direct)
+            cfg["type"] = provider_name
+            cfg["provider"] = provider_name
+            return cfg
+        cfg = dict(self.orchestrator.get_provider_config(provider_name, role=role))
+        cfg["type"] = provider_name
+        cfg["provider"] = provider_name
+        return cfg
+
+    def _provider_runtime_ready(self, provider: str, cfg: Optional[dict] = None) -> tuple[bool, str]:
+        provider_name = self.orchestrator._normalize_provider(provider)
+        provider_cfg = dict(cfg or self._get_provider_config(provider_name))
+
+        if provider_name == "openai":
+            if importlib.util.find_spec("openai") is None:
+                return False, "openai_sdk_missing"
+            if not provider_cfg.get("apiKey"):
+                return False, "openai_api_key_missing"
+            return True, "ok"
+        if provider_name == "groq":
+            return (bool(provider_cfg.get("apiKey")), "groq_api_key_missing" if not provider_cfg.get("apiKey") else "ok")
+        if provider_name in {"gemini", "google"}:
+            return (bool(provider_cfg.get("apiKey")), "google_api_key_missing" if not provider_cfg.get("apiKey") else "ok")
+        if provider_name == "anthropic":
+            return (bool(provider_cfg.get("apiKey")), "anthropic_api_key_missing" if not provider_cfg.get("apiKey") else "ok")
+        if provider_name == "ollama":
+            return True, "ok"
+        return False, "unknown_provider"
+
     def _is_provider_available(self, provider: str) -> bool:
         """Bir sağlayıcının kullanılabilir olup olmadığını kontrol eder."""
-        cfg = self.orchestrator.get_best_available("inference")
-        return cfg.get("type") not in (None, "none")
+        cfg = self._get_provider_config(provider, role="inference")
+        if cfg.get("type") in (None, "none"):
+            return False
+        ready, _ = self._provider_runtime_ready(provider, cfg)
+        return ready
 
     async def _call_provider(self, provider: str, prompt: str, user_message: str = "",
                               temp: float = 0.3, max_tokens: int = None) -> str:
         """Tek bir sağlayıcıya çağrı yapar."""
-        cfg = self.orchestrator.get_best_available("inference")
-        cfg = dict(cfg)
-        cfg["type"] = provider
-        if provider == "ollama":
+        provider_name = self.orchestrator._normalize_provider(provider)
+        cfg = self._get_provider_config(provider_name, role="inference")
+        ready, reason = self._provider_runtime_ready(provider, cfg)
+        if not ready:
+            raise RuntimeError(f"provider_unavailable:{reason}")
+        if provider_name == "ollama":
             return await self._call_ollama(prompt, self._resolve_system_prompt(), cfg)
-        elif provider == "openai":
+        elif provider_name == "openai":
             return await self._call_openai(prompt, self._resolve_system_prompt(), cfg)
-        elif provider == "groq":
+        elif provider_name == "groq":
             return await self._call_groq(prompt, self._resolve_system_prompt(), cfg)
-        elif provider in ("gemini", "google"):
+        elif provider_name == "anthropic":
+            return await self._call_anthropic(prompt, self._resolve_system_prompt(), cfg)
+        elif provider_name in ("gemini", "google"):
             return await self._call_gemini(prompt, self._resolve_system_prompt(), cfg)
         raise ValueError(f"Unknown provider: {provider}")
 
@@ -483,6 +777,9 @@ class LLMClient:
     def get_last_router_trace(self) -> list:
         """Son router denemesinin izini döner."""
         return list(self._router_trace)
+
+    def get_last_collaboration_trace(self) -> list:
+        return list(self._collaboration_trace)
 
     async def chat(self, text: str, history: list = None, user_id: str = "local") -> str:
         """Kısa sohbet yanıtı üretir. cost_guard açıksa token bütçesini kısıtlar."""

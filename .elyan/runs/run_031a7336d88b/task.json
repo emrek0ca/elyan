@@ -1,0 +1,86 @@
+{
+  "run_id": "run_031a7336d88b",
+  "user_input": "fatih sultan kimdir",
+  "task_spec": {},
+  "metadata": {
+    "action": "chat",
+    "job_type": "communication",
+    "capability_domain": "general",
+    "workflow_id": "general_assistance_workflow",
+    "hybrid_model": {
+      "role": "inference",
+      "routing_role": "router",
+      "critic_role": "critic",
+      "tool_first": false,
+      "prefer_local": true,
+      "tier": "balanced"
+    },
+    "channel": "cli",
+    "user_id": "local",
+    "status": "success"
+  },
+  "task_state": {
+    "task_id": "task_84801a6058",
+    "objective": "fatih sultan kimdir",
+    "context": {
+      "user_input": "fatih sultan kimdir",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "chat",
+      "job_type": "communication",
+      "capability_domain": "general",
+      "workflow_id": "general_assistance_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773157077.233001,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773157077.2771652,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773157077.2867131,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773157077.407754,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1773157077.424684,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "chat",
+          "job_type": "communication"
+        }
+      }
+    ],
+    "created_at": 1773157077.233,
+    "updated_at": 1773157077.424684
+  },
+  "written_at": 1773157077.437717
+}

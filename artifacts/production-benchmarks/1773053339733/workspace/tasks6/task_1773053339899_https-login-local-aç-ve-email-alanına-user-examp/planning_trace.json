@@ -1,0 +1,41 @@
+{
+  "request": "https://login.local aç ve email alanına \"user@example.com\" yaz, şifre alanına \"secret123\" yaz ve giriş yap",
+  "planning_request": "https://login.local aç ve email alanına \"user@example.com\" yaz, şifre alanına \"secret123\" yaz ve giriş yap",
+  "matched_rules": [
+    "browser_navigation_flow",
+    "browser_named_fill_steps",
+    "browser_click_steps"
+  ],
+  "assumptions": [],
+  "missing_inputs": [],
+  "extracted": {
+    "app_name": "",
+    "app_sequence": [],
+    "browser_app": "",
+    "url": "https://login.local",
+    "typed_text": "user@example.com",
+    "named_field_values": [
+      {
+        "selector": "#email",
+        "field_label": "Email field",
+        "text": "user@example.com"
+      },
+      {
+        "selector": "#password",
+        "field_label": "Password field",
+        "text": "secret123"
+      }
+    ],
+    "field_label": "Login field",
+    "selector": "#login",
+    "button_label": "Login",
+    "button_sequence": [
+      {
+        "label": "Login",
+        "selector": "#login"
+      }
+    ]
+  },
+  "bounded": true,
+  "safe_mode": "deterministic"
+}

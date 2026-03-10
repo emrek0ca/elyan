@@ -1,0 +1,41 @@
+[
+  {
+    "step_index": 7,
+    "name": "open_upload_page",
+    "kind": "browser",
+    "attempt": 1,
+    "retry_count": 1,
+    "failed_codes": [
+      "NAVIGATION_NOT_VERIFIED"
+    ],
+    "strategy": "rerun_step",
+    "status": "retry_scheduled",
+    "timestamp": 1773053681.67809
+  },
+  {
+    "step_index": 8,
+    "name": "open_upload_page",
+    "kind": "browser",
+    "attempt": 1,
+    "retry_count": 1,
+    "failed_codes": [
+      "NAVIGATION_NOT_VERIFIED"
+    ],
+    "strategy": "rerun_step",
+    "status": "retry_scheduled",
+    "timestamp": 1773053681.703594
+  },
+  {
+    "step_index": 9,
+    "name": "open_upload_page",
+    "kind": "browser",
+    "attempt": 1,
+    "retry_count": 1,
+    "failed_codes": [
+      "NAVIGATION_NOT_VERIFIED"
+    ],
+    "strategy": "rerun_step",
+    "status": "retry_scheduled",
+    "timestamp": 1773053681.7298958
+  }
+]

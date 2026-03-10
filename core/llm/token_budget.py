@@ -9,11 +9,16 @@ import sqlite3
 import time
 from pathlib import Path
 from typing import Dict, Any, Optional
+from core.storage_paths import resolve_elyan_data_dir
 from utils.logger import get_logger
 
 logger = get_logger("token_budget")
 
-DB_PATH = Path.home() / ".elyan" / "compliance" / "usage.db"
+def _default_usage_db_path() -> Path:
+    return resolve_elyan_data_dir() / "compliance" / "usage.db"
+
+
+DB_PATH = _default_usage_db_path()
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 class TokenBudgetManager:

@@ -22,6 +22,17 @@ async def test_file_docx_fallback_guard():
     assert result["success"] is False
     assert result["error_code"] == "DOCX_UNAVAILABLE"
 
+
+@pytest.mark.asyncio
+async def test_write_file_allows_short_content_for_explicit_notes():
+    result = await write_file(
+        path="test_note.txt",
+        content="sen kimsin",
+        allow_short_content=True,
+    )
+    assert result["success"] is True
+    assert result["size"] == len("sen kimsin")
+
 @pytest.mark.asyncio
 async def test_output_contract_web_project():
     """Test that web project spec requires semantic elements."""

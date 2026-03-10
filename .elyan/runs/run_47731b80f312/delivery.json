@@ -1,0 +1,13 @@
+{
+  "run_id": "run_47731b80f312",
+  "written_at": 1773156209.335078,
+  "status": "success",
+  "text_summary": "a.txt",
+  "errors": [],
+  "artifact_manifest": [],
+  "metadata": {
+    "manifest_path": "/Users/emrekoca/Desktop/bot/.elyan/proofs/run_47731b80f312/manifest.json",
+    "action": "",
+    "job_type": "communication"
+  }
+}

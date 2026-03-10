@@ -1,0 +1,30 @@
+[
+  {
+    "task_step": 1,
+    "task_step_name": "research_document_delivery",
+    "step": 1,
+    "planned_action": {
+      "kind": "research_document_delivery",
+      "params": {
+        "topic": "AI agents",
+        "language": "tr"
+      }
+    },
+    "execution_result": {
+      "success": true,
+      "status": "success",
+      "message": "AI agents report ready.",
+      "summary": "AI agents report ready.",
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058455760/workspace/research17/research_report.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/emre-workflows/1773058455760/workspace/research17/sources.json",
+          "type": "json"
+        }
+      ]
+    }
+  }
+]

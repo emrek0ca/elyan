@@ -1,11 +1,12 @@
 from setuptools import setup, find_packages
 import sys
+from core.version import APP_VERSION
 
 _darwin = sys.platform == "darwin"
 
 setup(
     name="elyan",
-    version="18.0.0",
+    version=APP_VERSION,
     description="Elyan — Özerk AI Operatör / Dijital Çalışan",
     author="Elyan Team",
     python_requires=">=3.11",
@@ -69,7 +70,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "elyan=cli.main:main",
+            "elyan=elyan_entrypoint:main",
         ],
     },
     classifiers=[

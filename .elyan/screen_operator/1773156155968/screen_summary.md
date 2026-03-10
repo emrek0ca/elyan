@@ -1,0 +1,1 @@
+Frontmost app: Safari. Window: Review Upload. Review upload ekrani acildi. OCR: Save

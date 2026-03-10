@@ -1,0 +1,72 @@
+{
+  "run_id": "run_18ce7eb9ce34",
+  "user_input": "dosyaları kontrol et",
+  "task_spec": {},
+  "metadata": {
+    "action": "",
+    "job_type": "communication",
+    "capability_domain": "general",
+    "workflow_id": "",
+    "hybrid_model": {},
+    "channel": "cli",
+    "user_id": "local",
+    "status": "success"
+  },
+  "task_state": {
+    "task_id": "task_d8f6282fde",
+    "objective": "dosyaları kontrol et",
+    "context": {
+      "user_input": "dosyaları kontrol et",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "",
+      "job_type": "communication",
+      "capability_domain": "general",
+      "workflow_id": "",
+      "hybrid_model": {}
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773154853.793702,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773154853.802372,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773154853.806834,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773154853.8116531,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1773154853.816184,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "",
+          "job_type": "communication"
+        }
+      }
+    ],
+    "created_at": 1773154853.7937012,
+    "updated_at": 1773154853.816184
+  },
+  "written_at": 1773154853.8203928
+}

@@ -1,0 +1,15 @@
+{
+  "success": true,
+  "dom_available": true,
+  "url": "https://wizard.local/complete",
+  "title": "Wizard Complete",
+  "visible_text": "All steps complete",
+  "dom_hash": "0e9c6652e82734db2b6c2eee3ed8741038f9f24b2b8c8c2b22207241af3e4c24",
+  "scroll": {
+    "x": 0,
+    "y": 0
+  },
+  "session_id": "fake-browser",
+  "headless": true,
+  "html": "<html><body>All steps complete</body></html>"
+}

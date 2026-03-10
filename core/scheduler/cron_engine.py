@@ -20,12 +20,17 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from config.elyan_config import elyan_config
+from core.storage_paths import resolve_elyan_data_dir
 from core.scheduler.routine_engine import routine_engine
 from utils.logger import get_logger
 
 logger = get_logger("cron_engine")
 
-CRON_PERSIST_PATH = Path.home() / ".elyan" / "cron_jobs.json"
+def _default_cron_persist_path() -> Path:
+    return resolve_elyan_data_dir() / "cron_jobs.json"
+
+
+CRON_PERSIST_PATH = _default_cron_persist_path()
 
 JobReportCallback = Callable[[Dict[str, Any], bool, str], Awaitable[None]]
 
@@ -314,4 +319,3 @@ class CronEngine:
         except Exception as e:
             logger.error(f"Failed to load persisted cron jobs: {e}")
             return {}
-

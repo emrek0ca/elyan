@@ -1,32 +1,23 @@
-from core.capability_router import CapabilityRouter
+from core.capability_router import get_capability_router
 
 
-def test_capability_router_detects_api_integration_domain():
-    router = CapabilityRouter()
-    plan = router.route("REST API endpoint health check yap ve sonucu raporla")
-
-    assert plan.domain == "api_integration"
-    assert plan.suggested_job_type == "api_integration"
-    assert "http_request" in plan.preferred_tools
-    assert 0.0 <= plan.confidence <= 1.0
+def test_capability_router_research_defaults_to_document_workflow():
+    plan = get_capability_router().route("Fourier serileri hakkında kapsamlı araştırma yap")
+    assert plan.domain == "research"
+    assert plan.workflow_id == "research_workflow"
+    assert plan.primary_action == "research_document_delivery"
+    assert "research_document_delivery" in plan.preferred_tools
 
 
-def test_capability_router_detects_full_stack_delivery_and_multi_agent_hint():
-    router = CapabilityRouter()
-    plan = router.route(
-        "Uctan uca full stack dashboard website ve backend api entegrasyonu kur, deployment plani cikart"
-    )
-
-    assert plan.domain == "full_stack_delivery"
-    assert plan.complexity_tier in {"high", "extreme"}
-    assert plan.multi_agent_recommended is True
-    assert plan.orchestration_mode == "multi_agent"
+def test_capability_router_screen_routes_to_screen_workflow():
+    plan = get_capability_router().route("ekrana bak ve ne olduğunu söyle")
+    assert plan.domain == "screen_operator"
+    assert plan.workflow_id == "screen_operator_workflow"
+    assert plan.primary_action == "screen_workflow"
 
 
-def test_capability_router_general_fallback_for_simple_chat():
-    router = CapabilityRouter()
-    plan = router.route("Merhaba nasilsin")
-
-    assert plan.domain == "general"
-    assert plan.suggested_job_type == "communication"
-    assert plan.multi_agent_recommended is False
+def test_capability_router_code_routes_to_coding_workflow():
+    plan = get_capability_router().route("python ile script yaz ve test et")
+    assert plan.domain == "code"
+    assert plan.workflow_id == "coding_workflow"
+    assert plan.primary_action == "create_coding_project"

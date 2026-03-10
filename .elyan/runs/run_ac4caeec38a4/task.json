@@ -1,0 +1,72 @@
+{
+  "run_id": "run_ac4caeec38a4",
+  "user_input": "fatih sultan kimdir",
+  "task_spec": {},
+  "metadata": {
+    "action": "",
+    "job_type": "communication",
+    "capability_domain": "general",
+    "workflow_id": "",
+    "hybrid_model": {},
+    "channel": "cli",
+    "user_id": "local",
+    "status": "success"
+  },
+  "task_state": {
+    "task_id": "task_714cdf0e75",
+    "objective": "fatih sultan kimdir",
+    "context": {
+      "user_input": "fatih sultan kimdir",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "",
+      "job_type": "communication",
+      "capability_domain": "general",
+      "workflow_id": "",
+      "hybrid_model": {}
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1772928696.4966269,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1772928696.498095,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1772928696.498654,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1772928696.5004642,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1772928696.501015,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "",
+          "job_type": "communication"
+        }
+      }
+    ],
+    "created_at": 1772928696.496626,
+    "updated_at": 1772928696.501015
+  },
+  "written_at": 1772928696.501492
+}

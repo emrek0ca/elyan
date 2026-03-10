@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elyan/contracts/file_task.schema.json",
+  "contract_id": "file_task_v1",
+  "job_type": "file_operations",
+  "title": "File Task Contract",
+  "type": "object",
+  "required": [
+    "contract_id",
+    "job_type",
+    "objective",
+    "required_outputs",
+    "guardrails",
+    "verify"
+  ],
+  "properties": {
+    "contract_id": {
+      "const": "file_task_v1"
+    },
+    "job_type": {
+      "const": "file_operations"
+    },
+    "objective": {
+      "type": "string",
+      "minLength": 10
+    },
+    "required_outputs": {
+      "type": "object",
+      "required": [
+        "path",
+        "format",
+        "content_required"
+      ],
+      "properties": {
+        "path": {
+          "type": "boolean"
+        },
+        "format": {
+          "type": "boolean"
+        },
+        "content_required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "guardrails": {
+      "type": "object",
+      "required": [
+        "fail_on_empty_content",
+        "return_sha256",
+        "return_preview"
+      ],
+      "properties": {
+        "fail_on_empty_content": {
+          "type": "boolean"
+        },
+        "return_sha256": {
+          "type": "boolean"
+        },
+        "return_preview": {
+          "type": "boolean"
+        }
+      }
+    },
+    "verify": {
+      "type": "object",
+      "required": [
+        "file_exists",
+        "non_empty",
+        "path_matches_request"
+      ],
+      "properties": {
+        "file_exists": {
+          "type": "boolean"
+        },
+        "non_empty": {
+          "type": "boolean"
+        },
+        "path_matches_request": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

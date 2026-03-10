@@ -1,0 +1,15 @@
+{
+  "run_id": "run_0b5092375fc3",
+  "written_at": 1773156210.2758882,
+  "status": "partial",
+  "text_summary": "İşlem tamamlandı: /tmp/learned.png\nNot: görsel çıktı doğrulanamadı: /tmp/learned.png",
+  "errors": [
+    "capability:ui_state_present; capability:active_window_identified"
+  ],
+  "artifact_manifest": [],
+  "metadata": {
+    "manifest_path": "/Users/emrekoca/Desktop/bot/.elyan/proofs/run_0b5092375fc3/manifest.json",
+    "action": "take_screenshot",
+    "job_type": "system_automation"
+  }
+}

@@ -1,0 +1,3 @@
+capability:screenshot_created
+capability:active_window_identified
+capability:vision_or_ocr_result_present

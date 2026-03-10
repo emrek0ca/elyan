@@ -1,0 +1,31 @@
+{
+  "request": "Safari'yi aç ve Continue butonuna tıkla",
+  "planning_request": "Safari'yi aç ve Continue butonuna tıkla",
+  "matched_rules": [
+    "desktop_operator_flow",
+    "screen_click_step"
+  ],
+  "assumptions": [],
+  "missing_inputs": [],
+  "extracted": {
+    "app_name": "Safari",
+    "app_sequence": [
+      "Safari"
+    ],
+    "browser_app": "Safari",
+    "url": "",
+    "typed_text": "",
+    "named_field_values": [],
+    "field_label": "",
+    "selector": "#continue",
+    "button_label": "Continue",
+    "button_sequence": [
+      {
+        "label": "Continue",
+        "selector": "#continue"
+      }
+    ]
+  },
+  "bounded": true,
+  "safe_mode": "deterministic"
+}

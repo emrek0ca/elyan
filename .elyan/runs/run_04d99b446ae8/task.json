@@ -1,0 +1,92 @@
+{
+  "run_id": "run_04d99b446ae8",
+  "user_input": "Safari aç köpekler araştır masaüstüne kaydet",
+  "task_spec": {},
+  "metadata": {
+    "action": "vision_operator_loop",
+    "job_type": "research_report",
+    "capability_domain": "screen_operator",
+    "workflow_id": "screen_operator_workflow",
+    "hybrid_model": {
+      "role": "inference",
+      "routing_role": "router",
+      "critic_role": "critic",
+      "tool_first": false,
+      "prefer_local": true,
+      "tier": "balanced"
+    },
+    "channel": "cli",
+    "user_id": "local",
+    "status": "partial"
+  },
+  "task_state": {
+    "task_id": "task_f490a4bd3a",
+    "objective": "Safari aç köpekler araştır masaüstüne kaydet",
+    "context": {
+      "user_input": "Safari aç köpekler araştır masaüstüne kaydet",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "vision_operator_loop",
+      "job_type": "research_report",
+      "capability_domain": "screen_operator",
+      "workflow_id": "screen_operator_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "write_file",
+        "description": "Safari aç köpekler araştır masaüstüne kaydet"
+      }
+    ],
+    "artifacts": [],
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1772928696.2699158,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1772928696.271976,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1772928696.272841,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1772928696.4042912,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 3
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1772928696.405587,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "vision_operator_loop",
+          "job_type": "research_report"
+        }
+      }
+    ],
+    "created_at": 1772928696.2699142,
+    "updated_at": 1772928696.405587
+  },
+  "written_at": 1772928696.406262
+}

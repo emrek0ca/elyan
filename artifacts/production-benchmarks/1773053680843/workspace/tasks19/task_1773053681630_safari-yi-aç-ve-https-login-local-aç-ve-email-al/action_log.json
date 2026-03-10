@@ -1,0 +1,210 @@
+[
+  {
+    "task_step": 1,
+    "task_step_name": "open_safari",
+    "step": 1,
+    "planned_action": {
+      "kind": "open_app",
+      "params": {
+        "app_name": "Safari"
+      }
+    },
+    "execution_result": {
+      "success": true,
+      "status": "success",
+      "message": "Safari opened."
+    }
+  },
+  {
+    "task_step": 2,
+    "task_step_name": "open_login_page",
+    "step": 1,
+    "action": "open",
+    "params": {
+      "url": "https://login.local",
+      "selector": "",
+      "text": ""
+    },
+    "result": {
+      "success": true,
+      "url": "https://login.local",
+      "title": "Login",
+      "status_code": 200,
+      "dom_available": true
+    }
+  },
+  {
+    "task_step": 3,
+    "task_step_name": "fill_email",
+    "step": 1,
+    "action": "type",
+    "params": {
+      "url": "",
+      "selector": "#email",
+      "text": "user@example.com"
+    },
+    "result": {
+      "success": true,
+      "selector": "#email",
+      "text": "user@example.com",
+      "dom_available": true
+    }
+  },
+  {
+    "task_step": 4,
+    "task_step_name": "fill_password",
+    "step": 1,
+    "action": "type",
+    "params": {
+      "url": "",
+      "selector": "#password",
+      "text": "secret123"
+    },
+    "result": {
+      "success": true,
+      "selector": "#password",
+      "text": "secret123",
+      "dom_available": true
+    }
+  },
+  {
+    "task_step": 5,
+    "task_step_name": "click_login",
+    "step": 1,
+    "action": "click",
+    "params": {
+      "url": "",
+      "selector": "#login",
+      "text": ""
+    },
+    "result": {
+      "success": true,
+      "selector": "#login",
+      "dom_available": true
+    }
+  },
+  {
+    "task_step": 6,
+    "task_step_name": "click_continue",
+    "step": 1,
+    "action": "click",
+    "params": {
+      "url": "",
+      "selector": "#continue",
+      "text": ""
+    },
+    "result": {
+      "success": true,
+      "selector": "#continue",
+      "dom_available": true
+    }
+  },
+  {
+    "task_step": 7,
+    "task_step_name": "open_upload_page",
+    "step": 1,
+    "action": "open",
+    "params": {
+      "url": "https://example.com",
+      "selector": "",
+      "text": ""
+    },
+    "result": {
+      "success": true,
+      "url": "https://upload.local",
+      "title": "Upload",
+      "status_code": 200,
+      "dom_available": true
+    }
+  },
+  {
+    "task_step": 7,
+    "task_step_name": "open_upload_page",
+    "step": 1,
+    "action": "open",
+    "params": {
+      "url": "https://example.com",
+      "selector": "",
+      "text": ""
+    },
+    "result": {
+      "success": true,
+      "url": "https://upload.local",
+      "title": "Upload",
+      "status_code": 200,
+      "dom_available": true
+    }
+  },
+  {
+    "task_step": 8,
+    "task_step_name": "open_upload_page",
+    "step": 1,
+    "action": "open",
+    "params": {
+      "url": "https://example.com",
+      "selector": "",
+      "text": ""
+    },
+    "result": {
+      "success": true,
+      "url": "https://upload.local",
+      "title": "Upload",
+      "status_code": 200,
+      "dom_available": true
+    }
+  },
+  {
+    "task_step": 8,
+    "task_step_name": "open_upload_page",
+    "step": 1,
+    "action": "open",
+    "params": {
+      "url": "https://example.com",
+      "selector": "",
+      "text": ""
+    },
+    "result": {
+      "success": true,
+      "url": "https://upload.local",
+      "title": "Upload",
+      "status_code": 200,
+      "dom_available": true
+    }
+  },
+  {
+    "task_step": 9,
+    "task_step_name": "open_upload_page",
+    "step": 1,
+    "action": "open",
+    "params": {
+      "url": "https://example.com",
+      "selector": "",
+      "text": ""
+    },
+    "result": {
+      "success": true,
+      "url": "https://upload.local",
+      "title": "Upload",
+      "status_code": 200,
+      "dom_available": true
+    }
+  },
+  {
+    "task_step": 9,
+    "task_step_name": "open_upload_page",
+    "step": 1,
+    "action": "open",
+    "params": {
+      "url": "https://example.com",
+      "selector": "",
+      "text": ""
+    },
+    "result": {
+      "success": true,
+      "url": "https://upload.local",
+      "title": "Upload",
+      "status_code": 200,
+      "dom_available": true
+    }
+  }
+]

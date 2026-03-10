@@ -5,6 +5,9 @@ import time
 import uuid
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from core.storage_paths import resolve_elyan_data_dir
+from core.workspace_contract import ensure_workspace_contract
+
 from .executor import SubAgentExecutor
 from .session import SessionState, SubAgentResult, SubAgentSession, SubAgentTask
 from .validator import SubAgentValidator
@@ -34,19 +37,40 @@ class SubAgentManager:
         self._sessions: Dict[str, SubAgentSession] = {}
         self._tasks: Dict[str, asyncio.Task] = {}
         self._events: Dict[str, asyncio.Event] = {}
+        self._workspace_root = (resolve_elyan_data_dir() / "subagents").resolve()
 
     def _new_session_id(self) -> str:
         return f"agent:{self.parent_session_id}:subagent:{uuid.uuid4().hex[:10]}"
 
+    def _build_workspace(self, run_id: str, specialist_key: str, allowed_tools: frozenset[str]) -> tuple[str, str]:
+        safe_id = str(run_id).replace(":", "_")
+        base = (self._workspace_root / safe_id).resolve()
+        contract_files = ensure_workspace_contract(
+            base,
+            role=f"sub-agent:{specialist_key}",
+            allowed_tools=list(allowed_tools),
+            metadata={"parent_session": self.parent_session_id, "specialist": specialist_key, "run_id": run_id},
+        )
+        memory_path = contract_files.get("MEMORY.md", str((base / "MEMORY.md").resolve()))
+        return str(base), str(memory_path)
+
     async def spawn(self, specialist_key: str, task: SubAgentTask, tools=None) -> str:
         run_id = self._new_session_id()
         allowed_tools = frozenset(str(x) for x in (tools or self.tool_scopes.get(specialist_key, [])))
+        if not task.objective:
+            task.objective = str(task.description or task.name or "").strip()
+        if not task.success_criteria:
+            task.success_criteria = ["izinli tool ile somut çıktı üret", "boş sonuç döndürme", "başarısızsa nedenini yaz"]
+        workspace_path, memory_path = self._build_workspace(run_id, str(specialist_key or "general"), allowed_tools)
         session = SubAgentSession(
             session_id=run_id,
             parent_session_id=self.parent_session_id,
             specialist_key=str(specialist_key or "general"),
             task=task,
             allowed_tools=allowed_tools,
+            workspace_path=workspace_path,
+            memory_path=memory_path,
+            auth_profile="isolated",
             can_spawn=False,
         )
         self._sessions[run_id] = session

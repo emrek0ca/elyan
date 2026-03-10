@@ -46,3 +46,54 @@ def test_infer_group_covers_messaging_and_automation():
     engine = ToolPolicyEngine()
     assert engine.infer_group("send_email") == "messaging"
     assert engine.infer_group("create_event") == "automation"
+
+
+def test_prefix_rule_matches_real_tool_names_for_deny():
+    engine = ToolPolicyEngine()
+    engine.allowed_tools = ["*"]
+    engine.denied_tools = ["exec"]
+    assert engine.is_allowed("execute_shell_command") is False
+
+
+def test_prefix_rule_matches_real_tool_names_for_require_approval():
+    engine = ToolPolicyEngine()
+    engine.allowed_tools = ["group:runtime"]
+    engine.denied_tools = []
+    engine.require_approval = ["exec"]
+    access = engine.check_access("execute_shell_command")
+    assert access["allowed"] is True
+    assert access["requires_approval"] is True
+
+
+def test_default_deny_mode_blocks_when_allow_missing(monkeypatch):
+    values = {
+        "tools.default_deny": True,
+        "security.toolPolicy.defaultDeny": True,
+        "tools.allow": None,
+        "tools.deny": [],
+        "tools.require_approval": [],
+        "tools.requireApproval": [],
+    }
+    monkeypatch.setattr(
+        "security.tool_policy.elyan_config.get",
+        lambda key, default=None: values.get(key, default),
+    )
+    engine = ToolPolicyEngine()
+    assert engine.is_allowed("read_file") is False
+
+
+def test_legacy_mode_keeps_default_allow_when_disabled(monkeypatch):
+    values = {
+        "tools.default_deny": False,
+        "security.toolPolicy.defaultDeny": False,
+        "tools.allow": None,
+        "tools.deny": [],
+        "tools.require_approval": [],
+        "tools.requireApproval": [],
+    }
+    monkeypatch.setattr(
+        "security.tool_policy.elyan_config.get",
+        lambda key, default=None: values.get(key, default),
+    )
+    engine = ToolPolicyEngine()
+    assert engine.is_allowed("read_file") is True

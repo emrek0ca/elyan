@@ -44,3 +44,12 @@ async def test_validator_tool_success_gate_checks_error_payload():
 
     assert verdict.passed is False
     assert "tool_success" in verdict.failed_gates
+
+
+@pytest.mark.asyncio
+async def test_validator_artifact_or_content_gate_accepts_artifact():
+    validator = SubAgentValidator()
+    result = SubAgentResult(status="success", result={"success": True}, artifacts=["/tmp/example.txt"])
+    verdict = await validator.validate(result, ["artifact_or_content"])
+
+    assert verdict.passed is True

@@ -50,6 +50,7 @@ class IntentParser(
             # Dashboard drop (yüksek öncelik)
             self._parse_dropped_file,
             # Sistem kontrolleri (yüksek öncelik)
+            self._parse_screen_workflow,
             self._parse_screenshot,
             self._parse_status_snapshot,
             self._parse_volume,
@@ -67,6 +68,7 @@ class IntentParser(
             self._parse_greeting,
             self._parse_media_play,          # YouTube (URL'den önce)
             self._parse_random_image,
+            self._parse_browser_tab_control,
             self._parse_open_url,
             self._parse_browser_search,
             self._parse_open_app,
@@ -141,6 +143,14 @@ class IntentParser(
         coding_intent = self._parse_create_coding_project(text, text_norm, original)
         if coding_intent:
             return coding_intent
+
+        screen_intent = self._parse_screen_workflow(text, text_norm, original)
+        if screen_intent:
+            return screen_intent
+
+        status_intent = self._parse_status_snapshot(text, text_norm, original)
+        if status_intent:
+            return status_intent
 
         multi = self._parse_multi_task(original)
         if multi:

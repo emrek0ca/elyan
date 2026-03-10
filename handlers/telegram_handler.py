@@ -128,6 +128,17 @@ def _get_allowed_user_ids() -> list[int]:
     return _parse_allowed_ids(os.getenv("ALLOWED_USER_IDS", ""))
 
 
+def _allow_public_telegram() -> bool:
+    """Emergency compatibility switch. Secure default remains deny-by-default."""
+    raw = str(os.getenv("ELYAN_TELEGRAM_ALLOW_PUBLIC", "") or "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    try:
+        return bool(SettingsPanel().get("telegram_allow_public", False))
+    except Exception:
+        return False
+
+
 def _get_save_dir(setting_key: str, default_relative: str) -> Path:
     """Resolve Telegram save directories from settings with safe fallback."""
     try:
@@ -191,14 +202,41 @@ def init_handlers(agent_instance: Agent):
     notif_system.register_delivery_callback(telegram_notification_callback)
 
 async def check_user(update: Update) -> bool:
+    async def _deny(message: str, *, show_alert: bool = True) -> None:
+        try:
+            query = getattr(update, "callback_query", None)
+            if query is not None:
+                await query.answer(message, show_alert=show_alert)
+                return
+        except Exception:
+            pass
+        try:
+            target = getattr(update, "effective_message", None)
+            if target is not None:
+                await target.reply_text(message)
+                return
+        except Exception:
+            pass
+
     allowed_user_ids = _get_allowed_user_ids()
     if not allowed_user_ids:
-        return True
+        if _allow_public_telegram():
+            return True
+        logger.warning("Telegram erisimi reddedildi: allowed_user_ids bos")
+        deny_msg = "Bot erisimi kisitli. Lutfen allowed_user_ids ayarini yapilandirin."
+        await _deny(deny_msg)
+        return False
 
-    user_id = update.effective_user.id
+    user = getattr(update, "effective_user", None)
+    user_id = int(getattr(user, "id", 0) or 0)
+    if user_id <= 0:
+        logger.warning("Telegram erisimi reddedildi: kullanici kimligi yok")
+        await _deny("Kullanici kimligi dogrulanamadi.")
+        return False
+
     if user_id not in allowed_user_ids:
         logger.warning(f"Yetkisiz erisim: {user_id}")
-        await update.message.reply_text("Bu botu kullanma yetkiniz yok.")
+        await _deny("Bu botu kullanma yetkiniz yok.")
         return False
 
     return True
@@ -1733,44 +1771,82 @@ def setup_handlers(app: Application, agent_instance: Agent):
 
     approval_manager.set_approval_callback(routed_approval_callback)
 
+    async def _enforce_command_access(update: Update) -> bool:
+        if not await check_user(update):
+            return False
+        try:
+            user_id = int(getattr(getattr(update, "effective_user", None), "id", 0) or 0)
+        except Exception:
+            user_id = 0
+        if user_id <= 0:
+            return True
+        try:
+            allowed, rate_msg = await rate_limiter.is_allowed(user_id)
+        except Exception:
+            return True
+        if allowed:
+            return True
+        warn = f"Lutfen bekleyin: {rate_msg}"
+        try:
+            query = getattr(update, "callback_query", None)
+            if query is not None:
+                await query.answer(warn, show_alert=True)
+            else:
+                target = getattr(update, "effective_message", None)
+                if target is not None:
+                    await target.reply_text(warn)
+        except Exception:
+            pass
+        return False
+
+    def _secure_handler(handler_func):
+        async def _wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            if not await _enforce_command_access(update):
+                return
+            return await handler_func(update, context)
+        return _wrapped
+
     # Core commands
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("myid", cmd_myid))
-    app.add_handler(CommandHandler("status", cmd_status))
-    app.add_handler(CommandHandler("stats", cmd_stats))
-    app.add_handler(CommandHandler("dashboard", cmd_dashboard))
-    app.add_handler(CommandHandler("health", cmd_health))
-    app.add_handler(CommandHandler("info", cmd_info))
-    app.add_handler(CommandHandler("research_status", cmd_research_status))
-    app.add_handler(CommandHandler("reset", cmd_reset))
-    app.add_handler(CommandHandler("cancel", cmd_cancel))
-    app.add_handler(CommandHandler("screenshot", cmd_screenshot))
-    app.add_handler(CommandHandler("tools", cmd_tools))
-    app.add_handler(CommandHandler("config", cmd_config))
-    app.add_handler(CommandHandler("logs", cmd_logs))
-    app.add_handler(CommandHandler("briefing", cmd_briefing))
+    core_commands = [
+        ("start", cmd_start),
+        ("help", cmd_help),
+        ("myid", cmd_myid),
+        ("status", cmd_status),
+        ("stats", cmd_stats),
+        ("dashboard", cmd_dashboard),
+        ("health", cmd_health),
+        ("info", cmd_info),
+        ("research_status", cmd_research_status),
+        ("reset", cmd_reset),
+        ("cancel", cmd_cancel),
+        ("screenshot", cmd_screenshot),
+        ("tools", cmd_tools),
+        ("config", cmd_config),
+        ("logs", cmd_logs),
+        ("briefing", cmd_briefing),
+    ]
+    for command, handler in core_commands:
+        app.add_handler(CommandHandler(command, _secure_handler(handler)))
 
     # Context Intelligence & Proactive AI commands
-    app.add_handler(CommandHandler("smart_insights", cmd_smart_insights))
-    app.add_handler(CommandHandler("proactive", cmd_proactive))
-    app.add_handler(CommandHandler("auto_check", cmd_auto_check))
+    app.add_handler(CommandHandler("smart_insights", _secure_handler(cmd_smart_insights)))
+    app.add_handler(CommandHandler("proactive", _secure_handler(cmd_proactive)))
+    app.add_handler(CommandHandler("auto_check", _secure_handler(cmd_auto_check)))
 
     # Automation & Self-Healing commands
-    app.add_handler(CommandHandler("automate", cmd_automate))
-    app.add_handler(CommandHandler("health", cmd_health))
+    app.add_handler(CommandHandler("automate", _secure_handler(cmd_automate)))
 
     # Analytics & Notifications commands
-    app.add_handler(CommandHandler("analytics", cmd_analytics))
-    app.add_handler(CommandHandler("insights", cmd_insights))
-    app.add_handler(CommandHandler("notifications", cmd_notifications))
+    app.add_handler(CommandHandler("analytics", _secure_handler(cmd_analytics)))
+    app.add_handler(CommandHandler("insights", _secure_handler(cmd_insights)))
+    app.add_handler(CommandHandler("notifications", _secure_handler(cmd_notifications)))
 
     # Advanced System commands
-    app.add_handler(CommandHandler("plan", cmd_plan))
-    app.add_handler(CommandHandler("predict", cmd_predict))
-    app.add_handler(CommandHandler("security", cmd_security))
-    app.add_handler(CommandHandler("feedback", cmd_feedback))
-    app.add_handler(CommandHandler("improve", cmd_improve))
+    app.add_handler(CommandHandler("plan", _secure_handler(cmd_plan)))
+    app.add_handler(CommandHandler("predict", _secure_handler(cmd_predict)))
+    app.add_handler(CommandHandler("security", _secure_handler(cmd_security)))
+    app.add_handler(CommandHandler("feedback", _secure_handler(cmd_feedback)))
+    app.add_handler(CommandHandler("improve", _secure_handler(cmd_improve)))
     
     # Phase 12: Proactive Intelligence Commands
     try:
@@ -1779,11 +1855,11 @@ def setup_handlers(app: Application, agent_instance: Agent):
             cmd_alerts, cmd_check_disk
         )
         
-        app.add_handler(CommandHandler("schedule", cmd_schedule))
-        app.add_handler(CommandHandler("schedule_briefing", cmd_schedule_briefing))
-        app.add_handler(CommandHandler("trigger_briefing", cmd_trigger_briefing))
-        app.add_handler(CommandHandler("alerts", cmd_alerts))
-        app.add_handler(CommandHandler("check_disk", cmd_check_disk))
+        app.add_handler(CommandHandler("schedule", _secure_handler(cmd_schedule)))
+        app.add_handler(CommandHandler("schedule_briefing", _secure_handler(cmd_schedule_briefing)))
+        app.add_handler(CommandHandler("trigger_briefing", _secure_handler(cmd_trigger_briefing)))
+        app.add_handler(CommandHandler("alerts", _secure_handler(cmd_alerts)))
+        app.add_handler(CommandHandler("check_disk", _secure_handler(cmd_check_disk)))
         
         logger.info("Proactive commands registered (schedule, briefing, alerts)")
     except ImportError as e:
@@ -1801,14 +1877,14 @@ def setup_handlers(app: Application, agent_instance: Agent):
             cmd_routine_templates,
             cmd_routine_from,
         )
-        app.add_handler(CommandHandler("routine", cmd_routine))
-        app.add_handler(CommandHandler("routine_add", cmd_routine_add))
-        app.add_handler(CommandHandler("routine_run", cmd_routine_run))
-        app.add_handler(CommandHandler("routine_rm", cmd_routine_rm))
-        app.add_handler(CommandHandler("routine_on", cmd_routine_on))
-        app.add_handler(CommandHandler("routine_off", cmd_routine_off))
-        app.add_handler(CommandHandler("routine_templates", cmd_routine_templates))
-        app.add_handler(CommandHandler("routine_from", cmd_routine_from))
+        app.add_handler(CommandHandler("routine", _secure_handler(cmd_routine)))
+        app.add_handler(CommandHandler("routine_add", _secure_handler(cmd_routine_add)))
+        app.add_handler(CommandHandler("routine_run", _secure_handler(cmd_routine_run)))
+        app.add_handler(CommandHandler("routine_rm", _secure_handler(cmd_routine_rm)))
+        app.add_handler(CommandHandler("routine_on", _secure_handler(cmd_routine_on)))
+        app.add_handler(CommandHandler("routine_off", _secure_handler(cmd_routine_off)))
+        app.add_handler(CommandHandler("routine_templates", _secure_handler(cmd_routine_templates)))
+        app.add_handler(CommandHandler("routine_from", _secure_handler(cmd_routine_from)))
         logger.info("Routine commands registered (routine, routine_add, routine_run...)")
     except ImportError as e:
         logger.warning(f"Routine commands not available: {e}")
@@ -1822,15 +1898,15 @@ def setup_handlers(app: Application, agent_instance: Agent):
             cmd_performance_analysis
         )
 
-        app.add_handler(CommandHandler("code", cmd_execute_code))
-        app.add_handler(CommandHandler("email", cmd_send_email))
-        app.add_handler(CommandHandler("emails", cmd_check_emails))
-        app.add_handler(CommandHandler("parallel", cmd_parallel_operations))
-        app.add_handler(CommandHandler("streaming", cmd_streaming_operations))
-        app.add_handler(CommandHandler("suggestions", cmd_suggestions))
-        app.add_handler(CommandHandler("anomalies", cmd_anomalies))
-        app.add_handler(CommandHandler("context", cmd_context_info))
-        app.add_handler(CommandHandler("perf", cmd_performance_analysis))
+        app.add_handler(CommandHandler("code", _secure_handler(cmd_execute_code)))
+        app.add_handler(CommandHandler("email", _secure_handler(cmd_send_email)))
+        app.add_handler(CommandHandler("emails", _secure_handler(cmd_check_emails)))
+        app.add_handler(CommandHandler("parallel", _secure_handler(cmd_parallel_operations)))
+        app.add_handler(CommandHandler("streaming", _secure_handler(cmd_streaming_operations)))
+        app.add_handler(CommandHandler("suggestions", _secure_handler(cmd_suggestions)))
+        app.add_handler(CommandHandler("anomalies", _secure_handler(cmd_anomalies)))
+        app.add_handler(CommandHandler("context", _secure_handler(cmd_context_info)))
+        app.add_handler(CommandHandler("perf", _secure_handler(cmd_performance_analysis)))
 
         logger.info("Extended commands registered (code, email, parallel, etc.)")
     except ImportError as e:
@@ -1838,18 +1914,18 @@ def setup_handlers(app: Application, agent_instance: Agent):
 
     # Message handlers
     app.add_handler(CallbackQueryHandler(approval_query_callback, pattern="^approval:"))
-    app.add_handler(CallbackQueryHandler(vision_callback, pattern="^vision:"))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    app.add_handler(CallbackQueryHandler(_secure_handler(vision_callback), pattern="^vision:"))
+    app.add_handler(MessageHandler(filters.PHOTO, _secure_handler(handle_photo)))
+    app.add_handler(MessageHandler(filters.Document.ALL, _secure_handler(handle_document)))
     
     # Phase 13: Voice message handler
     try:
         from .telegram_voice_handler import handle_voice_message, cmd_voice_status
         from .telegram_voice_commands import cmd_voice_toggle
         
-        app.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
-        app.add_handler(CommandHandler("voice_status", cmd_voice_status))
-        app.add_handler(CommandHandler("voice", cmd_voice_toggle))
+        app.add_handler(MessageHandler(filters.VOICE, _secure_handler(handle_voice_message)))
+        app.add_handler(CommandHandler("voice_status", _secure_handler(cmd_voice_status)))
+        app.add_handler(CommandHandler("voice", _secure_handler(cmd_voice_toggle)))
         
         logger.info("Voice handler registered (Phase 13.1 + 13.2)")
     except ImportError as e:
@@ -1863,14 +1939,14 @@ def setup_handlers(app: Application, agent_instance: Agent):
             cmd_browser_close, cmd_scrape
         )
         
-        app.add_handler(CommandHandler("browser_open", cmd_browser_open))
-        app.add_handler(CommandHandler("browser_screenshot", cmd_browser_screenshot))
-        app.add_handler(CommandHandler("browser_click", cmd_browser_click))
-        app.add_handler(CommandHandler("browser_type", cmd_browser_type))
-        app.add_handler(CommandHandler("browser_extract", cmd_browser_extract))
-        app.add_handler(CommandHandler("browser_status", cmd_browser_status))
-        app.add_handler(CommandHandler("browser_close", cmd_browser_close))
-        app.add_handler(CommandHandler("scrape", cmd_scrape))
+        app.add_handler(CommandHandler("browser_open", _secure_handler(cmd_browser_open)))
+        app.add_handler(CommandHandler("browser_screenshot", _secure_handler(cmd_browser_screenshot)))
+        app.add_handler(CommandHandler("browser_click", _secure_handler(cmd_browser_click)))
+        app.add_handler(CommandHandler("browser_type", _secure_handler(cmd_browser_type)))
+        app.add_handler(CommandHandler("browser_extract", _secure_handler(cmd_browser_extract)))
+        app.add_handler(CommandHandler("browser_status", _secure_handler(cmd_browser_status)))
+        app.add_handler(CommandHandler("browser_close", _secure_handler(cmd_browser_close)))
+        app.add_handler(CommandHandler("scrape", _secure_handler(cmd_scrape)))
         
         logger.info("Browser commands registered (Phase 14)")
     except ImportError as e:

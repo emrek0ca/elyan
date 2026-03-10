@@ -8,6 +8,7 @@ from tools.pro_workflows import (
     create_coding_delivery_plan,
     create_coding_verification_report,
     create_software_project_pack,
+    generate_document_pack,
     research_document_delivery,
 )
 
@@ -87,6 +88,32 @@ async def test_create_web_project_scaffold_includes_modern_ui_stack(monkeypatch,
     assert "window.gsap" in js
     assert "tailwind" in readme.lower()
     assert "motion" in readme.lower()
+
+
+@pytest.mark.asyncio
+async def test_create_web_project_scaffold_builds_warm_portfolio_layout(monkeypatch, tmp_path):
+    monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
+
+    result = await create_web_project_scaffold(
+        project_name="Sunset Portfolio",
+        stack="vanilla",
+        output_dir=str(tmp_path),
+        brief="sari ve turuncu renklerde bir portfolyo sitesi yap",
+    )
+    assert result.get("success") is True
+
+    project_dir = Path(str(result.get("project_dir", "")))
+    html = (project_dir / "index.html").read_text(encoding="utf-8")
+    css = (project_dir / "styles" / "main.css").read_text(encoding="utf-8")
+    js = (project_dir / "scripts" / "main.js").read_text(encoding="utf-8")
+
+    assert "portfolio-hero" in html
+    assert "project-showcase" in html
+    assert "#f59e0b" in css
+    assert "#f97316" in css
+    assert "Space Grotesk" in css
+    assert "data-scroll" in html
+    assert "scrollIntoView" in js
 
 
 @pytest.mark.asyncio
@@ -227,7 +254,7 @@ async def test_research_document_delivery_generates_pack(monkeypatch, tmp_path):
     assert any(str(x).endswith(".txt") for x in outputs)
     assert any(str(x).endswith(".docx") for x in outputs)
     assert any(str(x).endswith(".xlsx") for x in outputs)
-    assert any("DELIVERY_NOTE.txt" in str(x) for x in outputs)
+    assert not any("DELIVERY_NOTE.txt" in str(x) for x in outputs)
     assert isinstance(result.get("quality_summary"), dict)
     assert "avg_reliability" in result.get("quality_summary", {})
 
@@ -237,3 +264,17 @@ async def test_research_document_delivery_generates_pack(monkeypatch, tmp_path):
     assert "## Methodology" in md_text
     assert "## Risk & Limitations" in md_text
     assert "## Next Actions" in md_text
+
+
+@pytest.mark.asyncio
+async def test_generate_document_pack_rejects_browser_image_prompt(monkeypatch, tmp_path):
+    monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
+
+    result = await generate_document_pack(
+        topic="kedi resmi arat",
+        brief="kedi resmi arat",
+        output_dir=str(tmp_path),
+    )
+
+    assert result.get("success") is False
+    assert result.get("error_code") == "INVALID_DOCUMENT_BRIEF"

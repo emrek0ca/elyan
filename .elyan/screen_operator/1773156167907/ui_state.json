@@ -1,0 +1,66 @@
+{
+  "frontmost_app": "Cursor",
+  "active_window": {
+    "title": "main.py",
+    "bounds": {
+      "x": 0,
+      "y": 0,
+      "width": 1280,
+      "height": 800
+    }
+  },
+  "screenshot_path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-239/test_desktop_host_state_can_be0/screen_before_1773156167907.png",
+  "elements": [
+    {
+      "label": "Cursor",
+      "role": "frontmost_app",
+      "source": "window_metadata",
+      "confidence": 0.99
+    },
+    {
+      "label": "main.py",
+      "role": "window_title",
+      "source": "window_metadata",
+      "confidence": 0.95
+    },
+    {
+      "label": "Run",
+      "role": "button",
+      "x": 100,
+      "y": 100,
+      "width": 50,
+      "height": 20,
+      "frontmost_app": "Cursor",
+      "window_title": "main.py",
+      "source": "accessibility",
+      "confidence": 0.92
+    }
+  ],
+  "clickable_targets": [
+    {
+      "label": "Run",
+      "role": "button",
+      "x": 100,
+      "y": 100,
+      "width": 50,
+      "height": 20,
+      "frontmost_app": "Cursor",
+      "window_title": "main.py",
+      "source": "accessibility",
+      "confidence": 0.92
+    }
+  ],
+  "text_fields": [],
+  "summary": "Frontmost app: Cursor. Window: main.py. Cursor acik. OCR: main.py",
+  "fallback_order": [
+    "accessibility_and_window_metadata",
+    "vision_detection",
+    "ocr",
+    "last_known_ui_target_cache"
+  ],
+  "source_counts": {
+    "window_metadata": 2,
+    "accessibility": 1
+  },
+  "confidence": 0.953
+}

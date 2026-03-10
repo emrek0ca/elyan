@@ -1,0 +1,86 @@
+{
+  "run_id": "run_b154aa717a62",
+  "user_input": "Merhaba",
+  "task_spec": {},
+  "metadata": {
+    "action": "chat",
+    "job_type": "communication",
+    "capability_domain": "general",
+    "workflow_id": "general_assistance_workflow",
+    "hybrid_model": {
+      "role": "inference",
+      "routing_role": "router",
+      "critic_role": "critic",
+      "tool_first": false,
+      "prefer_local": true,
+      "tier": "balanced"
+    },
+    "channel": "cli",
+    "user_id": "local",
+    "status": "partial"
+  },
+  "task_state": {
+    "task_id": "task_9bedbe00d1",
+    "objective": "Merhaba",
+    "context": {
+      "user_input": "Merhaba",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "chat",
+      "job_type": "communication",
+      "capability_domain": "general",
+      "workflow_id": "general_assistance_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1772929424.457053,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1772929424.463226,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1772929424.4661388,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1772929424.582033,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 1
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1772929424.585095,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "chat",
+          "job_type": "communication"
+        }
+      }
+    ],
+    "created_at": 1772929424.457052,
+    "updated_at": 1772929424.585095
+  },
+  "written_at": 1772929424.588363
+}

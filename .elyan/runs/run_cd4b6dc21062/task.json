@@ -1,0 +1,72 @@
+{
+  "run_id": "run_cd4b6dc21062",
+  "user_input": "masaüstündeki dosyaları sil",
+  "task_spec": {},
+  "metadata": {
+    "action": "",
+    "job_type": "communication",
+    "capability_domain": "general",
+    "workflow_id": "",
+    "hybrid_model": {},
+    "channel": "cli",
+    "user_id": "local",
+    "status": "success"
+  },
+  "task_state": {
+    "task_id": "task_c93df5add1",
+    "objective": "masaüstündeki dosyaları sil",
+    "context": {
+      "user_input": "masaüstündeki dosyaları sil",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "",
+      "job_type": "communication",
+      "capability_domain": "general",
+      "workflow_id": "",
+      "hybrid_model": {}
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1772929399.596928,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1772929399.605477,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1772929399.60908,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1772929399.6129391,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1772929399.6161962,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "",
+          "job_type": "communication"
+        }
+      }
+    ],
+    "created_at": 1772929399.596926,
+    "updated_at": 1772929399.6161962
+  },
+  "written_at": 1772929399.619176
+}

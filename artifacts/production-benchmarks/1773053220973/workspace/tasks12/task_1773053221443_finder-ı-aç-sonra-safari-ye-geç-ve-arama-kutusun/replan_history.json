@@ -1,0 +1,25 @@
+[
+  {
+    "step_index": 3,
+    "rationale": "rerun_screen_step_with_latest_observation",
+    "trace": {
+      "trigger": "failure",
+      "step_index": 3,
+      "failed_codes": [
+        "TEXT_NOT_VERIFIED",
+        "NO_VISUAL_CHANGE"
+      ],
+      "current_step_name": "fill_screen_field",
+      "actions": [
+        {
+          "kind": "rerun_screen_step_with_latest_observation",
+          "step": "fill_screen_field"
+        }
+      ]
+    },
+    "new_step_names": [
+      "fill_screen_field"
+    ],
+    "timestamp": 1773053221.543019
+  }
+]

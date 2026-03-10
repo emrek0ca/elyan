@@ -2,6 +2,7 @@
 
 from typing import List, Dict, Any
 from core.skills.base import BaseSkill
+from core.skills.tool_runtime import execute_registered_tool, wrap_skill_tool_result
 
 
 class BrowserSkill(BaseSkill):
@@ -29,14 +30,12 @@ class BrowserSkill(BaseSkill):
             params = context.get("params", {})
 
             if command == "navigate":
-                from tools.browser.browser_automation import open_url
                 url = params.get("url", "")
-                result = await open_url(url)
-                return {"success": True, "result": result}
+                result = await execute_registered_tool("open_url", {"url": url}, source="builtin_browser_skill")
+                return wrap_skill_tool_result(result)
             elif command == "screenshot":
-                from tools.browser.browser_automation import take_browser_screenshot
-                result = await take_browser_screenshot()
-                return {"success": True, "result": result}
+                result = await execute_registered_tool("browser_screenshot", {}, source="builtin_browser_skill")
+                return wrap_skill_tool_result(result)
             else:
                 return {"success": False, "error": f"Unknown command: {command}"}
         except Exception as e:

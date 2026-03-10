@@ -1,0 +1,15 @@
+{
+  "success": true,
+  "dom_available": true,
+  "url": "https://search.local?q=kittens",
+  "title": "Results",
+  "visible_text": "Results for kittens",
+  "dom_hash": "264e76efd09b7f5b7b9c9027034d4b4f837656823f881e743714ea0a367e593e",
+  "scroll": {
+    "x": 0,
+    "y": 0
+  },
+  "session_id": "fake-browser",
+  "headless": true,
+  "html": "<html><body>Results for kittens</body></html>"
+}

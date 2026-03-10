@@ -2,6 +2,7 @@
 
 from typing import List, Dict, Any
 from core.skills.base import BaseSkill
+from core.skills.tool_runtime import execute_registered_tool, wrap_skill_tool_result
 
 
 class FilesSkill(BaseSkill):
@@ -26,38 +27,34 @@ class FilesSkill(BaseSkill):
 
     async def execute(self, command: str, context: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            from tools.file_tools import (
-                read_file, write_file, list_files, search_files,
-                create_directory, delete_file,
-            )
             params = context.get("params", {})
 
             if command == "read":
                 path = params.get("path", "")
-                result = await read_file(path)
-                return {"success": True, "result": result}
+                result = await execute_registered_tool("read_file", {"path": path}, source="builtin_files_skill")
+                return wrap_skill_tool_result(result)
             elif command == "write":
                 path = params.get("path", "")
                 content = params.get("content", "")
-                result = await write_file(path, content)
-                return {"success": True, "result": result}
+                result = await execute_registered_tool("write_file", {"path": path, "content": content}, source="builtin_files_skill")
+                return wrap_skill_tool_result(result)
             elif command == "list":
                 path = params.get("path", "~/Desktop")
-                result = await list_files(path)
-                return {"success": True, "result": result}
+                result = await execute_registered_tool("list_files", {"path": path}, source="builtin_files_skill")
+                return wrap_skill_tool_result(result)
             elif command == "search":
                 query = params.get("query", "")
                 path = params.get("path", "~")
-                result = await search_files(query, path)
-                return {"success": True, "result": result}
+                result = await execute_registered_tool("search_files", {"pattern": query, "directory": path}, source="builtin_files_skill")
+                return wrap_skill_tool_result(result)
             elif command == "mkdir":
                 path = params.get("path", "")
-                result = await create_directory(path)
-                return {"success": True, "result": result}
+                result = await execute_registered_tool("create_folder", {"path": path}, source="builtin_files_skill")
+                return wrap_skill_tool_result(result)
             elif command == "delete":
                 path = params.get("path", "")
-                result = await delete_file(path)
-                return {"success": True, "result": result}
+                result = await execute_registered_tool("delete_file", {"path": path}, source="builtin_files_skill")
+                return wrap_skill_tool_result(result)
             else:
                 return {"success": False, "error": f"Unknown command: {command}"}
         except Exception as e:

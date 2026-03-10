@@ -5,15 +5,16 @@
   "ui_language": "Türkçe",
   "minimize_to_tray": true,
   "notifications_enabled": true,
-  "llm_provider": "groq",
-  "llm_model": "llama-3.3-70b-versatile",
+  "llm_provider": "openai",
+  "llm_model": "gpt-4o",
   "llm_temperature": 0.7,
   "llm_max_tokens": 2048,
   "llm_fallback_mode": "aggressive",
   "llm_fallback_order": [
+    "openai",
     "groq",
     "gemini",
-    "openai",
+    "anthropic",
     "ollama"
   ],
   "llm_sticky_selection": true,
@@ -29,7 +30,7 @@
     "en"
   ],
   "task_planning_depth": "adaptive",
-  "planner_max_steps": 10,
+  "planner_max_steps": 5,
   "auto_replan_enabled": true,
   "auto_replan_max_attempts": 1,
   "require_plan_confirmation": true,

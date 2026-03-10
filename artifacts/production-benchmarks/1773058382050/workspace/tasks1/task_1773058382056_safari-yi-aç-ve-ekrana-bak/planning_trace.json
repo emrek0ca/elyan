@@ -1,0 +1,27 @@
+{
+  "request": "Safari'yi aç ve ekrana bak",
+  "planning_request": "Safari'yi aç ve ekrana bak",
+  "matched_rules": [
+    "desktop_operator_flow"
+  ],
+  "assumptions": [],
+  "missing_inputs": [],
+  "extracted": {
+    "app_name": "Safari",
+    "app_sequence": [
+      "Safari"
+    ],
+    "browser_app": "Safari",
+    "url": "",
+    "urls": [],
+    "typed_text": "",
+    "named_field_values": [],
+    "field_label": "",
+    "selector": "",
+    "button_label": "",
+    "button_sequence": [],
+    "research_topic": "Safari'yi aç ve ekrana bak"
+  },
+  "bounded": true,
+  "safe_mode": "deterministic"
+}

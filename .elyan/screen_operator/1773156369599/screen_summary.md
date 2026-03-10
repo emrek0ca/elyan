@@ -1,0 +1,1 @@
+Frontmost app: Safari. Window: Done. Form gonderildi. OCR: Done

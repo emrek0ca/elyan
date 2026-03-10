@@ -1,4 +1,5 @@
 import os
+import hashlib
 from pathlib import Path
 from typing import Any
 import fnmatch
@@ -95,7 +96,7 @@ async def read_file(path: str) -> dict[str, Any]:
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-async def write_file(path: str, content: str) -> dict[str, Any]:
+async def write_file(path: str, content: str, allow_short_content: bool = False) -> dict[str, Any]:
     valid, msg, resolved_path = validate_path(path)
     if not valid:
         return {"success": False, "error": msg}
@@ -110,7 +111,7 @@ async def write_file(path: str, content: str) -> dict[str, Any]:
 
     # Rule-1: No empty or skeleton files
     content_text = str(content or "").strip()
-    if len(content_text) < 50:
+    if len(content_text) < 50 and not bool(allow_short_content):
         return {
             "success": False, 
             "error": f"CONTENT_TOO_SHORT: Dosya içeriği çok kısa ({len(content_text)} karakter). En az 50 karakter olmalı.",
@@ -126,17 +127,23 @@ async def write_file(path: str, content: str) -> dict[str, Any]:
             return {"success": False, "error": "WRITE_FAILED: Dosya diskte bulunamadı.", "error_code": "FILE_NOT_FOUND"}
         
         file_size = resolved_path.stat().st_size
-        if file_size < 50:
+        if file_size < 50 and not bool(allow_short_content):
             return {
                 "success": False, 
                 "error": f"WRITE_POSTCHECK_FAILED: Dosya boyutu çok küçük ({file_size} bytes).",
                 "error_code": "WRITE_POSTCHECK_FAILED"
             }
 
+        sha256 = hashlib.sha256(content_text.encode("utf-8")).hexdigest()
+
         return {
             "success": True,
+            "ok": True,
             "path": str(resolved_path),
-            "size": file_size
+            "size": file_size,
+            "bytes_written": file_size,
+            "sha256": sha256,
+            "preview_200_chars": content_text[:200],
         }
 
     except PermissionError:

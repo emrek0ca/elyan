@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elyan/contracts/research_report.schema.json",
+  "contract_id": "research_report_v1",
+  "job_type": "research",
+  "title": "Research Report Contract",
+  "type": "object",
+  "required": [
+    "contract_id",
+    "job_type",
+    "objective",
+    "required_sections",
+    "evidence",
+    "format",
+    "research_workflow"
+  ],
+  "properties": {
+    "contract_id": {
+      "const": "research_report_v1"
+    },
+    "job_type": {
+      "const": "research"
+    },
+    "objective": {
+      "type": "string",
+      "minLength": 10
+    },
+    "required_sections": {
+      "type": "array",
+      "minItems": 6,
+      "items": {
+        "type": "string"
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": [
+        "claim_source_min",
+        "critical_claim_source_min",
+        "require_confidence_score",
+        "require_quote_vs_summary",
+        "require_cross_check"
+      ],
+      "properties": {
+        "claim_source_min": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "critical_claim_source_min": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "require_confidence_score": {
+          "type": "boolean"
+        },
+        "require_quote_vs_summary": {
+          "type": "boolean"
+        },
+        "require_cross_check": {
+          "type": "boolean"
+        }
+      }
+    },
+    "format": {
+      "type": "object",
+      "required": [
+        "json",
+        "markdown"
+      ],
+      "properties": {
+        "json": {
+          "type": "boolean"
+        },
+        "markdown": {
+          "type": "boolean"
+        }
+      }
+    },
+    "research_workflow": {
+      "type": "object",
+      "required": [
+        "require_query_decomposition",
+        "require_claim_list",
+        "require_citation_map",
+        "require_conflict_flags",
+        "require_uncertainty_log"
+      ],
+      "properties": {
+        "require_query_decomposition": {
+          "type": "boolean"
+        },
+        "require_claim_list": {
+          "type": "boolean"
+        },
+        "require_citation_map": {
+          "type": "boolean"
+        },
+        "require_conflict_flags": {
+          "type": "boolean"
+        },
+        "require_uncertainty_log": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

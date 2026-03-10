@@ -1,0 +1,45 @@
+{
+  "ok": true,
+  "status": "success",
+  "checks": [
+    {
+      "code": "dom_available",
+      "passed": true
+    },
+    {
+      "code": "screenshot_present",
+      "passed": true,
+      "details": {
+        "path": "/Users/emrekoca/Desktop/bot/.elyan/browser_runtime/1773156230873/page.png"
+      }
+    },
+    {
+      "code": "dom_or_navigation_changed",
+      "passed": true,
+      "details": {
+        "before_hash": "67a7b0917424a47c1a57250c980feddf7ea29abed167430775ffe086c12409e3",
+        "after_hash": "92d87cfd7e0bdde18f2ae0c548af3130bda96df8a438859346225b11370c907c"
+      }
+    }
+  ],
+  "failed": [],
+  "failed_codes": [],
+  "repairable": true,
+  "summary": "browser verification for click",
+  "evidence_refs": [
+    {
+      "type": "browser_state",
+      "before_url": "https://login.local",
+      "after_url": "https://login.local/review"
+    },
+    {
+      "type": "screenshot",
+      "path": "/Users/emrekoca/Desktop/bot/.elyan/browser_runtime/1773156230873/page.png"
+    }
+  ],
+  "metrics": {
+    "dom_changed": 1,
+    "url_changed": 1,
+    "title_changed": 1
+  }
+}

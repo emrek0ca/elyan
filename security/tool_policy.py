@@ -7,6 +7,7 @@ FIX BUG-SEC-002:
 - requires_approval is enforced at check_access level
 """
 import logging
+from fnmatch import fnmatch
 from typing import Dict, List, Any, Optional
 from config.elyan_config import elyan_config
 from utils.logger import get_logger
@@ -26,6 +27,7 @@ _DEFAULT_ALLOW = [
 ]
 _DEFAULT_DENY: list[str] = []
 _DEFAULT_REQUIRE_APPROVAL = ["exec", "delete_file"]
+_DEFAULT_DENY_BY_DEFAULT = True
 
 # Coarse tool-group hints to avoid `tool_group=None` bypass.
 _TOOL_GROUP_HINTS: Dict[str, str] = {
@@ -99,6 +101,7 @@ class ToolPolicyEngine:
         self.allowed_tools: List[str] = []
         self.denied_tools: List[str] = []
         self.require_approval: List[str] = []
+        self.default_deny_enabled: bool = _DEFAULT_DENY_BY_DEFAULT
         self.reload()
 
     @staticmethod
@@ -116,7 +119,25 @@ class ToolPolicyEngine:
         return cleaned
 
     def _load_policy_from_config(self) -> None:
-        allow_raw = elyan_config.get("tools.allow", _DEFAULT_ALLOW)
+        def _as_bool(value: Any, default: bool) -> bool:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return bool(value)
+            if isinstance(value, str):
+                token = value.strip().lower()
+                if token in {"1", "true", "yes", "on"}:
+                    return True
+                if token in {"0", "false", "no", "off"}:
+                    return False
+            return default
+
+        default_deny_raw = elyan_config.get("tools.default_deny", None)
+        if default_deny_raw is None:
+            default_deny_raw = elyan_config.get("security.toolPolicy.defaultDeny", _DEFAULT_DENY_BY_DEFAULT)
+        self.default_deny_enabled = _as_bool(default_deny_raw, _DEFAULT_DENY_BY_DEFAULT)
+
+        allow_raw = elyan_config.get("tools.allow", None)
         deny_raw = elyan_config.get("tools.deny", _DEFAULT_DENY)
 
         # Backward + roadmap compatibility
@@ -124,28 +145,47 @@ class ToolPolicyEngine:
         if require_raw is None:
             require_raw = elyan_config.get("tools.requireApproval", _DEFAULT_REQUIRE_APPROVAL)
 
-        self.allowed_tools = self._dedupe_clean(allow_raw, _DEFAULT_ALLOW)
+        allow_default = [] if self.default_deny_enabled else _DEFAULT_ALLOW
+        self.allowed_tools = self._dedupe_clean(allow_raw, allow_default)
         self.denied_tools = self._dedupe_clean(deny_raw, _DEFAULT_DENY)
         self.require_approval = self._dedupe_clean(require_raw, _DEFAULT_REQUIRE_APPROVAL)
 
     def _is_denied(self, tool_name: str, tool_group: Optional[str] = None) -> bool:
         """Check if a tool is explicitly denied. Deny always wins."""
-        if tool_name in self.denied_tools:
-            return True
-        if tool_group and f"group:{tool_group}" in self.denied_tools:
-            return True
-        # Wildcard deny
-        if "*" in self.denied_tools:
-            return True
-        return False
+        return any(self._matches_policy_entry(entry, tool_name, tool_group) for entry in self.denied_tools)
+
+    def is_denied(self, tool_name: str, tool_group: Optional[str] = None) -> bool:
+        """Public explicit deny check."""
+        if tool_group is None:
+            tool_group = self._infer_group(tool_name)
+        return self._is_denied(tool_name, tool_group)
 
     def _is_allowed(self, tool_name: str, tool_group: Optional[str] = None) -> bool:
         """Check if a tool is in the allow list."""
-        if "*" in self.allowed_tools:
+        return any(self._matches_policy_entry(entry, tool_name, tool_group) for entry in self.allowed_tools)
+
+    @staticmethod
+    def _matches_policy_entry(entry: str, tool_name: str, tool_group: Optional[str] = None) -> bool:
+        token = str(entry or "").strip().lower()
+        name = str(tool_name or "").strip().lower()
+        group = str(tool_group or "").strip().lower()
+        if not token or not name:
+            return False
+        if token == "*":
             return True
-        if tool_name in self.allowed_tools:
+        if token.startswith("group:"):
+            return bool(group) and token == f"group:{group}"
+        if token.startswith("tool:"):
+            token = token[5:].strip()
+            if not token:
+                return False
+        if any(ch in token for ch in "*?[]"):
+            return fnmatch(name, token)
+        if name == token:
             return True
-        if tool_group and f"group:{tool_group}" in self.allowed_tools:
+        if name.startswith(token):
+            return True
+        if len(token) >= 4 and token in name:
             return True
         return False
 
@@ -190,8 +230,8 @@ class ToolPolicyEngine:
         logger.debug(f"Tool '{tool_name}' not in allow list")
         return False
 
-    def needs_approval(self, tool_name: str) -> bool:
-        return tool_name in self.require_approval
+    def needs_approval(self, tool_name: str, tool_group: Optional[str] = None) -> bool:
+        return any(self._matches_policy_entry(entry, tool_name, tool_group) for entry in self.require_approval)
 
     def check_access(self, tool_name: str, tool_group: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -205,7 +245,7 @@ class ToolPolicyEngine:
         if not self.is_allowed(tool_name, tool_group):
             return {"allowed": False, "requires_approval": False, "reason": "Policy restriction"}
 
-        if self.needs_approval(tool_name) or (tool_group and f"group:{tool_group}" in self.require_approval):
+        if self.needs_approval(tool_name, tool_group):
             return {"allowed": True, "requires_approval": True, "reason": "Approval required by policy"}
 
         return {"allowed": True, "requires_approval": False, "reason": "OK"}
@@ -213,7 +253,7 @@ class ToolPolicyEngine:
     def reload(self):
         """Reload policy from config (hot reload support)."""
         self._load_policy_from_config()
-        logger.info("Tool policy reloaded")
+        logger.info("Tool policy reloaded (default_deny=%s)", self.default_deny_enabled)
 
 
 # Global instance

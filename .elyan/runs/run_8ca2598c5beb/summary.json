@@ -1,0 +1,98 @@
+{
+  "run_id": "run_8ca2598c5beb",
+  "written_at": 1773157017.998718,
+  "status": "success",
+  "user_input": "google aç ve sonra ekran görüntüsü al",
+  "task_spec": {},
+  "task_state": {
+    "task_id": "task_1aa6b42b84",
+    "objective": "google aç ve sonra ekran görüntüsü al",
+    "context": {
+      "user_input": "google aç ve sonra ekran görüntüsü al",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "multi_task",
+      "job_type": "browser_task",
+      "capability_domain": "general",
+      "workflow_id": "general_assistance_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "open_app",
+        "description": "google aç"
+      },
+      {
+        "id": "subtask_2",
+        "action": "take_screenshot",
+        "description": "ve ekran görüntüsü al"
+      }
+    ],
+    "artifacts": [],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773157017.815695,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773157017.834558,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773157017.8440819,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773157017.977962,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1773157017.988965,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "multi_task",
+          "job_type": "browser_task"
+        }
+      }
+    ],
+    "created_at": 1773157017.815694,
+    "updated_at": 1773157017.988965
+  },
+  "metadata": {
+    "action": "multi_task",
+    "job_type": "browser_task",
+    "capability_domain": "general",
+    "workflow_id": "general_assistance_workflow",
+    "hybrid_model": {
+      "role": "inference",
+      "routing_role": "router",
+      "critic_role": "critic",
+      "tool_first": false,
+      "prefer_local": true,
+      "tier": "balanced"
+    },
+    "channel": "cli",
+    "user_id": "local",
+    "status": "success"
+  }
+}

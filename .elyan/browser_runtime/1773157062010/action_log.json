@@ -1,0 +1,18 @@
+[
+  {
+    "step": 1,
+    "action": "open",
+    "params": {
+      "url": "https://login.local",
+      "selector": "",
+      "text": ""
+    },
+    "result": {
+      "success": true,
+      "url": "https://login.local",
+      "title": "Login",
+      "status_code": 200,
+      "dom_available": true
+    }
+  }
+]

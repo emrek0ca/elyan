@@ -1,0 +1,18 @@
+[
+  {
+    "step": 1,
+    "action": "open",
+    "params": {
+      "url": "https://wizard.local",
+      "selector": "",
+      "text": ""
+    },
+    "result": {
+      "success": true,
+      "url": "https://wizard.local",
+      "title": "Wizard Start",
+      "status_code": 200,
+      "dom_available": true
+    }
+  }
+]

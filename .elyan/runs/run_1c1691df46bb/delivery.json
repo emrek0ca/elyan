@@ -1,0 +1,13 @@
+{
+  "run_id": "run_1c1691df46bb",
+  "written_at": 1773156371.886476,
+  "status": "success",
+  "text_summary": "Bu işlemi güvenli şekilde çalıştırmak için plan güvenli değil.",
+  "errors": [],
+  "artifact_manifest": [],
+  "metadata": {
+    "manifest_path": "/Users/emrekoca/Desktop/bot/.elyan/proofs/run_1c1691df46bb/manifest.json",
+    "action": "",
+    "job_type": "communication"
+  }
+}

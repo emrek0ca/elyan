@@ -9,18 +9,167 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 import time
 import re
+import asyncio
+from pathlib import Path
 from utils.logger import get_logger
 from core.reasoning.stage_profiler import stage_profiler
+from core.monitoring import record_orchestration_decision, record_pipeline_job
 from tools import AVAILABLE_TOOLS
+from core.pipeline_upgrade import (
+    flag_enabled,
+    deterministic_intent_score,
+    parse_llm_intent_envelope,
+    index_attachments,
+    context_fingerprint,
+    build_context_working_set,
+    route_model_tier,
+    build_skeleton_plan,
+    build_step_specs_from_plan,
+    get_plan_cache,
+    make_plan_cache_key,
+    load_output_contract,
+    validate_output_contract,
+    assign_model_roles,
+    build_success_criteria,
+    validate_research_payload,
+    validate_tool_io,
+    detect_artifact_mismatch,
+    collect_paths_from_tool_results,
+    decide_orchestration_policy,
+    fallback_ladder,
+    diff_only_failed_steps,
+    enforce_output_contract,
+    verify_code_gates,
+    verify_research_gates,
+    verify_asset_gates,
+    build_critic_review_prompt,
+    JobTelemetryAccumulator,
+    estimate_token_cost,
+)
+from core.workspace_contract import ensure_workspace_contract
+from core.hybrid_model_policy import build_hybrid_model_plan
+from core.verifier import evaluate_runtime_capability
+from core.telemetry.runtime_trace import ensure_runtime_trace, update_runtime_trace
 
 logger = get_logger("pipeline")
 
 
 _NON_ACTIONABLE_INTENTS = {"", "chat", "unknown", "communication", "answer", "respond", "direct", "show_help"}
+_SHALLOW_ACTION_INTENTS = {"", "chat", "unknown", "communication", "answer", "respond", "direct", "show_help", "open_app", "open_url", "get_word_definition"}
 
 
 def _normalize_action(action: Any) -> str:
     return str(action or "").strip().lower()
+
+
+def _build_capability_fallback_params(action: str, user_input: str) -> Dict[str, Any]:
+    fallback_action = _normalize_action(action)
+    low_input = str(user_input or "").lower()
+    if fallback_action == "research_document_delivery":
+        return {
+            "topic": user_input,
+            "depth": "standard",
+            "include_word": True,
+            "include_report": True,
+        }
+    if fallback_action == "screen_workflow":
+        return {
+            "instruction": user_input,
+            "mode": "inspect_and_control" if any(tok in low_input for tok in ("tıkla", "tikla", "aç", "ac", "yaz", "bas")) else "inspect",
+            "action_goal": user_input,
+            "final_screenshot": True,
+            "include_analysis": True,
+        }
+    if fallback_action == "vision_operator_loop":
+        return {
+            "objective": user_input,
+            "max_iterations": 2,
+            "pause_ms": 250,
+            "include_ui_map": True,
+        }
+    if fallback_action == "operator_mission_control":
+        return {
+            "objective": user_input,
+            "max_subtasks": 4,
+            "pause_ms": 250,
+        }
+    if fallback_action == "create_coding_project":
+        return {"project_name": "elyan-project", "brief": user_input}
+    if fallback_action == "create_web_project_scaffold":
+        return {"project_name": "elyan-web", "brief": user_input}
+    if fallback_action == "generate_document_pack":
+        return {"topic": user_input, "brief": user_input}
+    if fallback_action == "summarize_text":
+        return {"text": user_input}
+    return {}
+
+
+def _should_realign_to_capability(
+    *,
+    user_input: str,
+    action: str,
+    capability_domain: str,
+    capability_confidence: float,
+    capability_primary_action: str,
+    intent_confidence: float,
+    override_threshold: float,
+) -> bool:
+    fallback_action = _normalize_action(capability_primary_action)
+    current_action = _normalize_action(action)
+    domain = str(capability_domain or "").strip().lower()
+    low_input = str(user_input or "").lower()
+
+    if not fallback_action or fallback_action == current_action:
+        return False
+    if domain in {"", "general"}:
+        return False
+    if float(capability_confidence or 0.0) < max(0.62, float(override_threshold or 0.0)):
+        return False
+    if current_action not in _SHALLOW_ACTION_INTENTS and float(intent_confidence or 0.0) >= 0.72:
+        return False
+
+    if domain == "screen_operator":
+        explicit_screen_markers = (
+            "durum nedir", "ekrana bak", "ekranı oku", "ekrani oku", "ekranda ne var",
+            "screen", "screenshot", "bilgisayari kullan", "bilgisayarı kullan",
+            "tikla", "tıkla", "click", "type", "mouse", "klavye", "tuş", "tus",
+        )
+        if not any(k in low_input for k in explicit_screen_markers) and any(
+            k in low_input for k in ("araştır", "arastir", "research", "kaydet", "rapor", "belge", "word", "excel")
+        ):
+            return False
+        simple_app_control = current_action in {"open_app", "close_app"} and not any(
+            k in low_input
+            for k in (
+                "durum nedir", "ekrana bak", "ekranı oku", "ekrani oku", "ekranda ne var",
+                "ardindan", "ardından", "ve sonra", "ayni anda", "aynı anda",
+                "tikla", "tıkla", "yaz", "click", "type",
+            )
+        )
+        if simple_app_control and float(intent_confidence or 0.0) >= 0.9:
+            return False
+        return any(
+            k in low_input
+            for k in (
+                "durum nedir", "ekrana bak", "ekranı oku", "ekrani oku", "ekranda ne var",
+                "screen", "screenshot", "bilgisayari kullan", "bilgisayarı kullan",
+                "tikla", "tıkla", "yaz", "ac", "aç", "kapat", "click", "type",
+                "ardindan", "ardından", "ve sonra", "ayni anda", "aynı anda",
+            )
+        )
+    if domain == "research":
+        return any(k in low_input for k in ("araştır", "arastir", "research", "kaynak", "rapor", "literatür", "literatur", "incele", "karşılaştır", "karsilastir"))
+    if domain in {"document", "summarization"}:
+        return any(k in low_input for k in ("belge", "doküman", "dokuman", "pdf", "docx", "sunum", "özet", "ozet", "rapor"))
+    if domain in {"code", "website", "full_stack_delivery"}:
+        return any(k in low_input for k in ("kod", "code", "script", "python", "react", "website", "web sitesi", "landing page", "hata", "debug", "refactor"))
+    if domain == "automation":
+        return any(k in low_input for k in ("otomasyon", "automation", "schedule", "cron", "arka planda", "workflow"))
+    if domain == "api_integration":
+        return any(k in low_input for k in ("api", "endpoint", "http", "graphql", "webhook", "request"))
+    if domain == "file_ops":
+        return any(k in low_input for k in ("dosya", "klasör", "klasor", "kaydet", "yaz", "oku", "listele"))
+    return False
 
 
 def _is_likely_information_query(text: str) -> bool:
@@ -81,11 +230,215 @@ def _looks_actionable_input(text: str, attachments: Optional[List[str]] = None) 
     return False
 
 
+def _looks_execution_failure_text(text: str) -> bool:
+    low = str(text or "").strip().lower()
+    if not low:
+        return True
+    failure_markers = (
+        "hata:",
+        "error:",
+        "failed",
+        "başarısız",
+        "basarisiz",
+        "zaman aşımı",
+        "zaman asimi",
+        "timeout",
+        "erişilemiyor",
+        "erisilemiyor",
+        "unavailable",
+    )
+    return any(m in low for m in failure_markers)
+
+
+def _has_successful_tool_result(tool_results: List[Dict[str, Any]]) -> bool:
+    for row in tool_results or []:
+        for payload in _iter_result_payloads(row):
+            if payload.get("success") is True:
+                return True
+            status = str(payload.get("status") or "").strip().lower()
+            if status in {"success", "completed", "ok"}:
+                return True
+    return False
+
+
+def _iter_result_payloads(payload: Any, *, _depth: int = 0):
+    if _depth > 3 or not isinstance(payload, dict):
+        return
+    yield payload
+    for key in ("result", "raw"):
+        nested = payload.get(key)
+        if isinstance(nested, dict) and nested is not payload:
+            yield from _iter_result_payloads(nested, _depth=_depth + 1)
+
+
+def _extract_screen_summary_signals(tool_results: List[Dict[str, Any]], final_response: str) -> bool:
+    for row in tool_results or []:
+        text_fields: list[str] = []
+        for payload in _iter_result_payloads(row):
+            text_fields.extend(
+                [
+                    str(payload.get("summary") or ""),
+                    str(payload.get("message") or ""),
+                    str(payload.get("analysis") or ""),
+                    str(payload.get("status_report") or ""),
+                ]
+            )
+            obs = payload.get("observations")
+            if isinstance(obs, list):
+                for item in obs:
+                    if isinstance(item, dict):
+                        text_fields.append(str(item.get("summary") or ""))
+                        ui_map = item.get("ui_map") if isinstance(item.get("ui_map"), dict) else {}
+                        text_fields.extend(
+                            [
+                                str(ui_map.get("frontmost_app") or ""),
+                                " ".join(str(app or "") for app in list(ui_map.get("running_apps") or []) if str(app or "").strip()),
+                            ]
+                        )
+            ui_map = payload.get("ui_map") if isinstance(payload.get("ui_map"), dict) else {}
+            text_fields.extend(
+                [
+                    str(ui_map.get("frontmost_app") or ""),
+                    " ".join(str(app or "") for app in list(ui_map.get("running_apps") or []) if str(app or "").strip()),
+                ]
+            )
+        if any(t.strip() for t in text_fields):
+            return True
+    final_low = str(final_response or "").lower()
+    return any(k in final_low for k in ("analiz:", "ekranda", "on planda", "çalışan uygulamalar", "calisan uygulamalar"))
+
+
+def _synthesize_screen_summary(tool_results: List[Dict[str, Any]]) -> str:
+    frontmost_app = ""
+    running_apps: list[str] = []
+    summary_candidates: list[str] = []
+    warning_text = ""
+
+    for row in tool_results or []:
+        for payload in _iter_result_payloads(row):
+            for key in ("summary", "analysis", "message", "status_report"):
+                value = str(payload.get(key) or "").strip()
+                if value and value not in summary_candidates:
+                    summary_candidates.append(value)
+            ui_map = payload.get("ui_map") if isinstance(payload.get("ui_map"), dict) else {}
+            if not frontmost_app:
+                frontmost_app = str(ui_map.get("frontmost_app") or "").strip()
+            if isinstance(ui_map.get("running_apps"), list):
+                for item in list(ui_map.get("running_apps") or []):
+                    app_name = str(item or "").strip()
+                    if app_name and app_name not in running_apps:
+                        running_apps.append(app_name)
+            if not warning_text:
+                warning_text = str(payload.get("warning") or payload.get("error") or "").strip()
+            observations = payload.get("observations")
+            if isinstance(observations, list):
+                for item in observations:
+                    if not isinstance(item, dict):
+                        continue
+                    value = str(item.get("summary") or "").strip()
+                    if value and value not in summary_candidates:
+                        summary_candidates.append(value)
+                    obs_ui_map = item.get("ui_map") if isinstance(item.get("ui_map"), dict) else {}
+                    if not frontmost_app:
+                        frontmost_app = str(obs_ui_map.get("frontmost_app") or "").strip()
+                    if isinstance(obs_ui_map.get("running_apps"), list):
+                        for app in list(obs_ui_map.get("running_apps") or []):
+                            app_name = str(app or "").strip()
+                            if app_name and app_name not in running_apps:
+                                running_apps.append(app_name)
+
+    if summary_candidates:
+        return summary_candidates[0]
+    parts: list[str] = []
+    if frontmost_app:
+        parts.append(f"On planda {frontmost_app} acik gorunuyor.")
+    if running_apps:
+        parts.append("Calisan uygulamalar: " + ", ".join(running_apps[:5]) + ".")
+    if warning_text and not parts:
+        parts.append(f"Not: {warning_text[:180]}")
+    return " ".join(parts).strip()
+
+
+def _repair_screen_completion(ctx) -> Dict[str, Any]:
+    tool_results = [r for r in list(getattr(ctx, "tool_results", []) or []) if isinstance(r, dict)]
+    summary = _synthesize_screen_summary(tool_results)
+    if summary:
+        ctx.final_response = summary
+        synthetic_result = {
+            "status": "success",
+            "message": summary,
+            "summary": summary,
+            "data": {"repair_strategy": "screen_summary_synthesized"},
+        }
+        ctx.tool_results.append(synthetic_result)
+        return {"repaired": True, "summary": summary, "strategy": "screen_summary_synthesized"}
+
+    screenshot_paths = collect_paths_from_tool_results(tool_results)
+    controlled = "Ekran ozeti alinamadi. Screenshot/artifact uretildi ancak dogrulanabilir screen summary cikmadi."
+    if screenshot_paths:
+        controlled += f" Artifact sayisi: {len(screenshot_paths)}."
+    ctx.final_response = controlled
+    return {"repaired": False, "summary": "", "strategy": "screen_controlled_failure", "artifacts": screenshot_paths}
+
+
+def _evaluate_completion_gate(ctx) -> Dict[str, Any]:
+    action = _normalize_action(getattr(ctx, "action", ""))
+    final_response = str(getattr(ctx, "final_response", "") or "")
+    errors = [str(e) for e in list(getattr(ctx, "errors", []) or [])]
+    tool_results = [r for r in list(getattr(ctx, "tool_results", []) or []) if isinstance(r, dict)]
+
+    non_actionable = {"", "chat", "unknown", "communication", "answer", "respond", "show_help"}
+    if action in non_actionable:
+        return {"ok": True, "failed": [], "signals": {"actionable": False}}
+
+    failed: list[str] = []
+    low_err = " ".join(errors).lower()
+    if "timeout" in low_err or "zaman asimi" in low_err or "zaman aşımı" in low_err:
+        failed.append("timeout")
+
+    if _looks_execution_failure_text(final_response):
+        failed.append("error_text")
+
+    has_tool_success = _has_successful_tool_result(tool_results)
+    if action in AVAILABLE_TOOLS and not has_tool_success:
+        failed.append("no_successful_tool_result")
+
+    if action in {"screen_workflow", "analyze_screen"}:
+        if not _extract_screen_summary_signals(tool_results, final_response):
+            failed.append("missing_screen_summary")
+
+    write_like_actions = {
+        "write_file",
+        "write_word",
+        "write_excel",
+        "create_web_project_scaffold",
+        "create_software_project_pack",
+        "research_document_delivery",
+    }
+    if action in write_like_actions:
+        produced_paths = collect_paths_from_tool_results(tool_results)
+        if not produced_paths:
+            failed.append("missing_artifacts")
+
+    failed = sorted(set(failed))
+    return {
+        "ok": len(failed) == 0,
+        "failed": failed,
+        "signals": {
+            "actionable": True,
+            "has_tool_success": bool(has_tool_success),
+            "tool_result_count": len(tool_results),
+        },
+    }
+
+
 def _job_type_from_action(action: str, current: str) -> str:
     cur = str(current or "communication").strip().lower() or "communication"
+    act = _normalize_action(action)
+    if act in {"screen_workflow", "analyze_screen", "take_screenshot", "vision_operator_loop", "operator_mission_control", "computer_use"}:
+        return "system_automation"
     if cur != "communication":
         return cur
-    act = _normalize_action(action)
     if act in {
         "set_wallpaper",
         "take_screenshot",
@@ -225,6 +578,18 @@ def _format_research_contract_addendum(ctx) -> Dict[str, Any]:
     }
 
 
+def _extract_research_payload(tool_results: List[Dict[str, Any]]) -> Dict[str, Any] | None:
+    for row in reversed(tool_results or []):
+        if not isinstance(row, dict):
+            continue
+        if isinstance(row.get("research_contract"), dict):
+            return dict(row.get("research_contract") or {})
+        result = row.get("result")
+        if isinstance(result, dict) and isinstance(result.get("research_contract"), dict):
+            return dict(result.get("research_contract") or {})
+    return None
+
+
 async def _try_llm_intent_rescue(ctx, agent, *, min_confidence: float = 0.62) -> bool:
     if _normalize_action(getattr(ctx, "action", "")) not in _NON_ACTIONABLE_INTENTS:
         return False
@@ -244,8 +609,23 @@ async def _try_llm_intent_rescue(ctx, agent, *, min_confidence: float = 0.62) ->
         inferred = await infer(ctx.user_input, history=history, user_id=ctx.user_id)
     except Exception:
         return False
-    if not isinstance(inferred, dict):
+
+    strict_json_envelope = flag_enabled(ctx, "upgrade_intent_json_envelope", default=False)
+    envelope = parse_llm_intent_envelope(inferred) if strict_json_envelope else None
+    if strict_json_envelope:
+        if envelope is None:
+            return False
+        inferred = dict(envelope.intent or {})
+        if not isinstance(inferred, dict):
+            return False
+        inferred["confidence"] = float(envelope.confidence)
+        inferred["required_artifacts"] = list(envelope.required_artifacts)
+        inferred["tools_needed"] = list(envelope.tools_needed)
+        inferred["safety_flags"] = list(envelope.safety_flags)
+        inferred["assumptions"] = list(envelope.assumptions)
+    elif not isinstance(inferred, dict):
         return False
+
     action = _normalize_action(inferred.get("action"))
     if action in _NON_ACTIONABLE_INTENTS:
         return False
@@ -255,6 +635,11 @@ async def _try_llm_intent_rescue(ctx, agent, *, min_confidence: float = 0.62) ->
     ctx.intent = inferred
     ctx.action = action
     ctx.job_type = _job_type_from_action(ctx.action, getattr(ctx, "job_type", "communication"))
+    if strict_json_envelope:
+        ctx.required_artifacts = list(inferred.get("required_artifacts") or [])
+        ctx.tools_needed = list(inferred.get("tools_needed") or [])
+        ctx.safety_flags = list(inferred.get("safety_flags") or [])
+        ctx.assumptions = list(inferred.get("assumptions") or [])
     logger.info("Route rescue via LLM intent: action=%s c=%.2f", ctx.action, confidence)
     return True
 
@@ -288,6 +673,8 @@ class PipelineContext:
     capability_domain: str = "general"
     capability_confidence: float = 0.0
     capability_plan: Dict[str, Any] = field(default_factory=dict)
+    workflow_id: str = ""
+    capability_primary_action: str = ""
     preferred_tools: List[str] = field(default_factory=list)
     multi_agent_recommended: bool = False
     goal_graph: Dict[str, Any] = field(default_factory=dict)
@@ -296,9 +683,28 @@ class PipelineContext:
     goal_constraints: Dict[str, Any] = field(default_factory=dict)
     workflow_chain: List[str] = field(default_factory=list)
     requires_evidence: bool = False
+    intent_score: float = 0.0
+    intent_reasons: List[str] = field(default_factory=list)
+    required_artifacts: List[str] = field(default_factory=list)
+    tools_needed: List[str] = field(default_factory=list)
+    safety_flags: List[str] = field(default_factory=list)
+    assumptions: List[str] = field(default_factory=list)
+    context_fingerprint: str = ""
+    context_working_set: str = ""
+    attachment_index: List[Dict[str, Any]] = field(default_factory=list)
+    model_route: Dict[str, Any] = field(default_factory=dict)
+    model_roles: Dict[str, Any] = field(default_factory=dict)
+    workspace_path: str = ""
+    workspace_files: Dict[str, str] = field(default_factory=dict)
+    understand_phase: Dict[str, Any] = field(default_factory=dict)
+    phase_records: Dict[str, Any] = field(default_factory=dict)
+    output_contract_spec: Dict[str, Any] = field(default_factory=dict)
 
     # Stage 3: Plan
     plan: List[Dict] = field(default_factory=list)
+    skeleton_plan: List[Dict[str, Any]] = field(default_factory=list)
+    step_specs: List[Dict[str, Any]] = field(default_factory=list)
+    plan_cache_hit: bool = False
     needs_planning: bool = False
     needs_reasoning: bool = False
     is_code_job: bool = False
@@ -332,6 +738,7 @@ class PipelineContext:
 
     # Metadata
     started_at: float = field(default_factory=time.time)
+    telemetry: Dict[str, Any] = field(default_factory=dict)
     stage_timings: Dict[str, float] = field(default_factory=dict)
     errors: List[str] = field(default_factory=list)
 
@@ -351,15 +758,19 @@ class StageValidate(PipelineStage):
     async def run(self, ctx: PipelineContext, agent) -> PipelineContext:
         t0 = time.time()
         user_input = ctx.user_input.strip()
+        ensure_runtime_trace(ctx)
+        update_runtime_trace(ctx, delivery_mode=str(ctx.channel or "cli"))
 
         if not user_input:
             ctx.is_valid = False
             ctx.validation_error = "Boş girdi"
             ctx.final_response = "Bir şey yazmalısın."
+            update_runtime_trace(ctx, final_status="rejected")
         elif len(user_input) > 50000:
             ctx.is_valid = False
             ctx.validation_error = "Çok uzun girdi"
             ctx.final_response = "Mesaj çok uzun (max 50K karakter)."
+            update_runtime_trace(ctx, final_status="rejected")
             
         # 0. Quota Check
         from core.quota import quota_manager
@@ -371,6 +782,7 @@ class StageValidate(PipelineStage):
             if quota.get("reason") == "monthly_token_limit_reached":
                 limit_msg = f"\n\nAylık token sınırına ulaştın ({quota.get('limit')} token). Devam etmek için Pro plana geçebilirsin."
             ctx.final_response = f"Üzgünüm, {limit_msg}"
+            update_runtime_trace(ctx, final_status="quota_blocked")
             return ctx
             
         # 1. Action-Lock Check
@@ -381,9 +793,11 @@ class StageValidate(PipelineStage):
                 action_lock.unlock()
                 ctx.is_valid = False
                 ctx.final_response = "Üretim modu durduruldu ve kilit açıldı."
+                update_runtime_trace(ctx, final_status="cancelled")
                 return ctx
             ctx.is_valid = False
             ctx.final_response = f"{ctx.status_prefix}Şu an bir göreve odaklanmış durumdayım. İptal etmek için 'iptal' yazabilirsin."
+            update_runtime_trace(ctx, final_status="action_locked")
             return ctx
 
         # Security validation
@@ -429,6 +843,13 @@ class StageRoute(PipelineStage):
             if deduped:
                 ctx.attachments = list(dict.fromkeys([*ctx.attachments, *deduped]))
                 ctx.is_multimodal = True
+
+                # Upgrade path: attachment indexer runs before multimodal inference.
+                if flag_enabled(ctx, "upgrade_attachment_indexer", default=False):
+                    try:
+                        ctx.attachment_index = index_attachments(ctx.attachments)
+                    except Exception as idx_exc:
+                        logger.debug(f"Attachment index skipped: {idx_exc}")
 
                 from core.multimodal_processor import get_multimodal_processor
 
@@ -483,6 +904,19 @@ class StageRoute(PipelineStage):
             logger.info(f"Memory context retrieved ({len(ctx.memory_context)} chars)")
         except Exception as e:
             logger.debug(f"Memory retrieval skip: {e}")
+
+        # Upgrade path: deterministic intent score + compact working context.
+        if flag_enabled(ctx, "upgrade_intent_hardening", default=False):
+            try:
+                score = deterministic_intent_score(
+                    ctx.user_input,
+                    memory_context=ctx.memory_context,
+                    attachments=ctx.attachments,
+                )
+                ctx.intent_score = float(score.score)
+                ctx.intent_reasons = list(score.reasons)
+            except Exception:
+                pass
 
         # Context7 Injection Check
         if "use context7" in ctx.user_input.lower():
@@ -544,6 +978,26 @@ class StageRoute(PipelineStage):
         except Exception:
             ctx.job_type = "communication"
 
+        # Hybrid AI routing: cheap/local router, strong workers for research/coding, tool-first operator.
+        try:
+            hybrid_plan = build_hybrid_model_plan(
+                getattr(ctx, "capability_domain", ""),
+                getattr(ctx, "workflow_id", ""),
+                current_role=getattr(ctx, "role", "inference"),
+            )
+            ctx.hybrid_model = hybrid_plan.to_dict()
+            ctx.role = str(hybrid_plan.role or ctx.role or "inference")
+            if getattr(hybrid_plan, "tool_first", False):
+                ctx.reasoning_budget = "low"
+            from core.neural_router import neural_router
+
+            model_cfg = neural_router.get_model_for_role(ctx.role)
+            if isinstance(model_cfg, dict):
+                ctx.provider = str(model_cfg.get("provider") or getattr(ctx, "provider", "") or "")
+                ctx.model = str(model_cfg.get("model") or getattr(ctx, "model", "") or "")
+        except Exception as e:
+            logger.debug(f"Hybrid model routing skipped: {e}")
+
         # Cognitive graph can upgrade legacy "communication" routes into execution routes.
         try:
             if ctx.job_type == "communication" and ctx.goal_stage_count >= 2:
@@ -603,11 +1057,15 @@ class StageRoute(PipelineStage):
                         "domain": ctx.capability_domain,
                         "confidence": ctx.capability_confidence,
                         "objective": str(getattr(cap_plan, "objective", "") or ""),
+                        "workflow_id": str(getattr(cap_plan, "workflow_id", "") or ""),
+                        "primary_action": str(getattr(cap_plan, "primary_action", "") or ""),
                         "complexity_tier": str(getattr(cap_plan, "complexity_tier", "low") or "low"),
                         "suggested_job_type": str(getattr(cap_plan, "suggested_job_type", "communication") or "communication"),
                         "orchestration_mode": str(getattr(cap_plan, "orchestration_mode", "single_agent") or "single_agent"),
                         "preferred_tools": list(ctx.preferred_tools),
                     }
+                    ctx.workflow_id = str(getattr(cap_plan, "workflow_id", "") or "")
+                    ctx.capability_primary_action = str(getattr(cap_plan, "primary_action", "") or "")
 
                     suggested_job = str(getattr(cap_plan, "suggested_job_type", "") or "").strip().lower()
                     if (
@@ -631,8 +1089,79 @@ class StageRoute(PipelineStage):
                 ctx.intent = agent.intent_parser.parse(ctx.user_input)
                 if isinstance(ctx.intent, dict):
                     ctx.action = str(ctx.intent.get("action", "")).lower()
+                    ctx.job_type = _job_type_from_action(ctx.action, ctx.job_type)
             except Exception:
                 pass
+
+        # Capability realignment: fix shallow/misaligned parser actions using high-confidence capability plan.
+        try:
+            parsed_conf = 0.0
+            if isinstance(ctx.intent, dict):
+                parsed_conf = float(ctx.intent.get("confidence", 0.0) or 0.0)
+            if _should_realign_to_capability(
+                user_input=ctx.user_input,
+                action=ctx.action,
+                capability_domain=ctx.capability_domain,
+                capability_confidence=ctx.capability_confidence,
+                capability_primary_action=ctx.capability_primary_action,
+                intent_confidence=parsed_conf,
+                override_threshold=capability_override_threshold,
+            ):
+                fallback_action = str(ctx.capability_primary_action or "").strip().lower()
+                if fallback_action and fallback_action in AVAILABLE_TOOLS:
+                    params = _build_capability_fallback_params(fallback_action, ctx.user_input)
+                    ctx.intent = {
+                        "action": fallback_action,
+                        "params": params,
+                        "_workflow_id": str(ctx.workflow_id or ""),
+                        "_capability_domain": str(ctx.capability_domain or ""),
+                        "_fallback_source": "capability_realign",
+                    }
+                    ctx.action = fallback_action
+                    ctx.job_type = _job_type_from_action(ctx.action, ctx.job_type)
+                    logger.info("Capability realignment activated: action=%s domain=%s c=%.2f", ctx.action, ctx.capability_domain, ctx.capability_confidence)
+        except Exception:
+            pass
+
+        # Capability workflow fallback: promote deterministic workflow entrypoints
+        # when parser leaves the request in a non-actionable state.
+        try:
+            if ctx.action in {"", "chat", "unknown", None} and ctx.capability_confidence >= capability_override_threshold:
+                learned_quick = ""
+                try:
+                    if hasattr(agent, "learning") and agent.learning:
+                        learned_quick = str(agent.learning.quick_match(ctx.user_input) or "").strip().lower()
+                except Exception:
+                    learned_quick = ""
+                if learned_quick:
+                    raise ValueError("capability_router_skip_due_to_learned_quick_match")
+                fallback_action = str(ctx.capability_primary_action or "").strip().lower()
+                if fallback_action and fallback_action in AVAILABLE_TOOLS:
+                    low_input = str(ctx.user_input or "").lower()
+                    if fallback_action in {"screen_workflow", "vision_operator_loop", "operator_mission_control"}:
+                        explicit_screen_markers = (
+                            "durum nedir", "ekrana bak", "ekranı oku", "ekrani oku", "ekranda ne var",
+                            "screen", "screenshot", "bilgisayari kullan", "bilgisayarı kullan",
+                            "tikla", "tıkla", "click", "type", "mouse", "klavye", "tuş", "tus",
+                        )
+                        if not any(k in low_input for k in explicit_screen_markers) and any(
+                            k in low_input for k in ("araştır", "arastir", "research", "kaydet", "rapor", "belge", "word", "excel")
+                        ):
+                            fallback_action = ""
+                    if not fallback_action:
+                        raise ValueError("capability_router_skip_screen_fallback")
+                    params = _build_capability_fallback_params(fallback_action, ctx.user_input)
+                    ctx.intent = {
+                        "action": fallback_action,
+                        "params": params,
+                        "_workflow_id": str(ctx.workflow_id or ""),
+                        "_capability_domain": str(ctx.capability_domain or ""),
+                        "_fallback_source": "capability_router",
+                    }
+                    ctx.action = fallback_action
+                    ctx.job_type = _job_type_from_action(ctx.action, ctx.job_type)
+        except Exception:
+            pass
 
         # Parser tekil FS aksiyonuna düşse bile "klasör + kaydet + doğrula" gibi komutları multi_task'a yükselt.
         try:
@@ -683,7 +1212,7 @@ class StageRoute(PipelineStage):
         # Structured multi-step override: if numbered/sequence command detected,
         # prefer deterministic multi-task inference even when parser guessed single action.
         try:
-            if looks_multi_step and hasattr(agent, "_infer_multi_task_intent"):
+            if looks_multi_step and ctx.action not in {"multi_task", "filesystem_batch"} and hasattr(agent, "_infer_multi_task_intent"):
                 multi_intent = agent._infer_multi_task_intent(ctx.user_input)
                 if isinstance(multi_intent, dict) and str(multi_intent.get("action") or "").strip().lower() == "multi_task":
                     tasks = multi_intent.get("tasks", [])
@@ -799,6 +1328,9 @@ class StageRoute(PipelineStage):
             llm_threshold = max(0.5, float(capability_override_threshold or 0.5))
         except Exception:
             llm_threshold = 0.5
+        if flag_enabled(ctx, "upgrade_intent_hardening", default=False):
+            # Deterministic scorer confidence boosts rescue threshold for safety.
+            llm_threshold = max(llm_threshold, 0.62 if ctx.intent_score < 0.42 else 0.7)
         try:
             if _looks_actionable_input(ctx.user_input, ctx.attachments):
                 llm_threshold = min(llm_threshold, 0.42)
@@ -910,6 +1442,64 @@ class StageRoute(PipelineStage):
         ):
             ctx.is_code_job = True
 
+        try:
+            if flag_enabled(ctx, "upgrade_performance_routing", default=False):
+                ctx.context_working_set = build_context_working_set(ctx, max_chars=1600)
+                ctx.context_fingerprint = context_fingerprint(
+                    ctx.user_input,
+                    memory_context=ctx.memory_context,
+                    attachment_index=ctx.attachment_index,
+                )
+            ctx.model_route = route_model_tier(
+                complexity_score=ctx.complexity,
+                is_code_job=ctx.is_code_job,
+                needs_reasoning=ctx.needs_reasoning,
+            )
+            ctx.model_roles = assign_model_roles(ctx.model_route)
+        except Exception as route_exc:
+            logger.debug(f"Performance route skipped: {route_exc}")
+
+        try:
+            ctx.output_contract_spec = load_output_contract(ctx.job_type)
+            ctx.understand_phase = {
+                "phase": "Understand",
+                "intent": dict(ctx.intent or {}) if isinstance(ctx.intent, dict) else {},
+                "job_type": ctx.job_type,
+                "constraints": {
+                    "language": "tr" if any(ch in ctx.user_input.lower() for ch in ("ş", "ğ", "ı", "ö", "ü", "ç")) else "auto",
+                    "attachments": len(ctx.attachments or []),
+                    "required_artifacts": list(ctx.required_artifacts or []),
+                    "safety_flags": list(ctx.safety_flags or []),
+                    "assumptions": list(ctx.assumptions or []),
+                },
+                "success_criteria": build_success_criteria(
+                    ctx.job_type,
+                    required_artifacts=list(ctx.required_artifacts or []),
+                ),
+                "output_contract_id": ctx.output_contract_spec.get("contract_id"),
+                "model_roles": dict(ctx.model_roles or {}),
+            }
+            ctx.phase_records["understand"] = dict(ctx.understand_phase)
+            params = ctx.intent.get("params", {}) if isinstance(ctx.intent, dict) and isinstance(ctx.intent.get("params"), dict) else {}
+            ctx.phase_records["route"] = {
+                "phase": "Route",
+                "action": str(ctx.action or ""),
+                "job_type": str(ctx.job_type or ""),
+                "capability_domain": str(ctx.capability_domain or "general"),
+                "workflow_id": str(ctx.workflow_id or ""),
+                "intent_score": float(ctx.intent_score or 0.0),
+                "capability_confidence": float(ctx.capability_confidence or 0.0),
+                "extracted_params": dict(params),
+            }
+            update_runtime_trace(
+                ctx,
+                capability=str(ctx.capability_domain or "general"),
+                selected_workflow=str(ctx.workflow_id or ctx.action or ""),
+                extracted_params=dict(params),
+            )
+        except Exception as understand_exc:
+            logger.debug(f"Understand phase record skipped: {understand_exc}")
+
         logger.info(
             "Route: %s/%s c=%.2f plan=%s reason=%s cap=%s(%.2f) goal_stages=%d wf=%d proof=%s",
             ctx.role,
@@ -958,12 +1548,40 @@ class StagePlan(PipelineStage):
             ctx.stage_timings["plan"] = 0
             return ctx
 
+        if flag_enabled(ctx, "upgrade_planning_split_cache", default=False):
+            try:
+                skeleton = build_skeleton_plan(ctx.job_type, ctx.user_input)
+                cache = get_plan_cache()
+                key = make_plan_cache_key(
+                    intent=ctx.intent if isinstance(ctx.intent, dict) else {},
+                    job_type=ctx.job_type,
+                    context_fingerprint=ctx.context_fingerprint or "",
+                )
+                cached = cache.get(key)
+                if cached:
+                    ctx.plan_cache_hit = True
+                    ctx.skeleton_plan = cached
+                    ctx.plan = list(cached)
+                else:
+                    ctx.plan_cache_hit = False
+                    ctx.skeleton_plan = list(skeleton)
+                    ctx.plan = list(skeleton)
+                    cache.set(key, skeleton, ttl_s=300)
+                ctx.step_specs = build_step_specs_from_plan(ctx.plan)
+            except Exception as split_exc:
+                logger.debug(f"Planning split/cache skipped: {split_exc}")
+
         try:
             from core.intelligent_planner import IntelligentPlanner
             from core.job_templates import get_template
             from config.elyan_config import elyan_config
             planner = IntelligentPlanner()
             logger.info("IntelligentPlanner activated for context decomposition.")
+
+            if flag_enabled(ctx, "upgrade_planning_split_cache", default=False) and ctx.plan:
+                # Skeleton plan already generated deterministically; avoid extra LLM planning calls.
+                ctx.stage_timings["plan"] = time.time() - t0
+                return ctx
 
             preferred_tools = list(ctx.preferred_tools or [])
             if not preferred_tools and ctx.job_type != "communication":
@@ -1046,6 +1664,18 @@ class StagePlan(PipelineStage):
             ctx.errors.append(f"plan: {e}")
             ctx.needs_planning = False # Fallback to direct execution
 
+        try:
+            ctx.phase_records["plan"] = {
+                "phase": "Plan",
+                "job_type": ctx.job_type,
+                "plan_step_count": len(ctx.plan or []),
+                "step_specs": list(ctx.step_specs or []),
+                "skeleton_used": bool(ctx.skeleton_plan),
+                "cache_hit": bool(ctx.plan_cache_hit),
+            }
+        except Exception as phase_exc:
+            logger.debug(f"Plan phase record skipped: {phase_exc}")
+
         ctx.stage_timings["plan"] = time.time() - t0
         return ctx
 
@@ -1056,10 +1686,33 @@ class StageExecute(PipelineStage):
 
     async def run(self, ctx: PipelineContext, agent) -> PipelineContext:
         t0 = time.time()
+        telemetry_acc = JobTelemetryAccumulator()
         try:
             if ctx.delivery_blocked and ctx.final_response:
                 ctx.stage_timings["execute"] = time.time() - t0
                 return ctx
+
+            if flag_enabled(ctx, "upgrade_workspace_isolation", default=False):
+                try:
+                    if not ctx.workspace_path:
+                        run_id = f"job_{int(time.time() * 1000)}_{str(ctx.user_id or 'local')[:12]}"
+                        base = (Path.home() / ".elyan" / "jobs" / run_id).resolve()
+                        files = ensure_workspace_contract(
+                            base,
+                            role=f"job:{ctx.job_type or 'general'}",
+                            allowed_tools=list(ctx.preferred_tools or []),
+                            metadata={
+                                "user_id": str(ctx.user_id or ""),
+                                "channel": str(ctx.channel or ""),
+                                "job_type": str(ctx.job_type or ""),
+                                "input_preview": str(ctx.user_input or "")[:220],
+                            },
+                        )
+                        ctx.workspace_path = str(base)
+                        ctx.workspace_files = dict(files or {})
+                        ctx.telemetry["workspace"] = {"path": ctx.workspace_path, "files": ctx.workspace_files}
+                except Exception as ws_exc:
+                    logger.debug(f"Workspace isolation skipped: {ws_exc}")
 
             # 1. Health Checks & Locks
             from core.monitoring import get_resource_monitor
@@ -1126,10 +1779,30 @@ class StageExecute(PipelineStage):
             # 2. Direct Intent Execution (Deterministic Tools)
             if hasattr(agent, '_should_run_direct_intent') and agent._should_run_direct_intent(ctx.intent, ctx.user_input):
                 logger.info(f"Direct intent path for action: {ctx.action}")
+                try:
+                    agent._last_direct_intent_payload = None
+                except Exception:
+                    pass
                 direct_text = await agent._run_direct_intent(
                     ctx.intent, ctx.user_input, ctx.role, [], user_id=ctx.user_id
                 )
                 if direct_text is not None:
+                    direct_failed = _looks_execution_failure_text(direct_text)
+                    direct_payload = getattr(agent, "_last_direct_intent_payload", None)
+                    direct_row = {
+                        "action": str(ctx.action or ""),
+                        "success": not direct_failed,
+                        "message": str(direct_text or ""),
+                        "source": "direct_intent",
+                    }
+                    if isinstance(direct_payload, dict):
+                        direct_row["raw"] = dict(direct_payload)
+                        if "success" in direct_payload:
+                            direct_row["success"] = bool(direct_payload.get("success"))
+                        for key in ("status", "summary", "artifacts", "screenshots", "observations", "ui_map", "ocr", "objects", "error"):
+                            if key in direct_payload:
+                                direct_row[key] = direct_payload.get(key)
+                    ctx.tool_results.append(direct_row)
                     # Post-proof: set_wallpaper sonrası ekran görüntüsü
                     if ctx.action == "set_wallpaper":
                         try:
@@ -1140,10 +1813,23 @@ class StageExecute(PipelineStage):
                                     direct_text += f"\nKanıt: {proof_txt}"
                         except Exception:
                             pass
-                    ctx.final_response += direct_text
-                    if action_lock.is_locked: action_lock.unlock()
-                    ctx.stage_timings["execute"] = time.time() - t0
-                    return ctx
+                    if direct_failed:
+                        screen_actions = {"screen_workflow", "analyze_screen", "take_screenshot", "vision_operator_loop", "operator_mission_control", "computer_use"}
+                        if _normalize_action(ctx.action) in screen_actions:
+                            logger.warning("Direct intent screen/operator result failed; preserving workflow boundary.")
+                            ctx.errors.append(f"direct_intent_failed:{ctx.action}")
+                            ctx.final_response += str(direct_text or "")
+                            if action_lock.is_locked:
+                                action_lock.unlock()
+                            ctx.stage_timings["execute"] = time.time() - t0
+                            return ctx
+                        logger.warning("Direct intent returned failure text; falling back to standard execution path.")
+                        ctx.errors.append(f"direct_intent_failed:{ctx.action}")
+                    else:
+                        ctx.final_response += direct_text
+                        if action_lock.is_locked: action_lock.unlock()
+                        ctx.stage_timings["execute"] = time.time() - t0
+                        return ctx
                 logger.info("Direct intent returned None, falling back to standard LLM path.")
 
             # Research skill fast-path when parser returned chat but research intent is obvious
@@ -1235,6 +1921,19 @@ class StageExecute(PipelineStage):
                     team_max_retries_per_task = max(0, min(4, team_max_retries_per_task))
                 except Exception:
                     pass
+                if flag_enabled(ctx, "upgrade_telemetry_autotune", default=False):
+                    try:
+                        from core.monitoring import get_monitoring
+
+                        summary = get_monitoring().get_pipeline_job_summary()
+                        avg_verify = float(summary.get("avg_verify_pass_rate", 0.0) or 0.0)
+                        if avg_verify < 0.75:
+                            team_mode_threshold = min(0.95, team_mode_threshold + 0.04)
+                            team_max_retries_per_task = min(4, team_max_retries_per_task + 1)
+                        elif avg_verify > 0.92:
+                            team_mode_threshold = max(0.75, team_mode_threshold - 0.02)
+                    except Exception:
+                        pass
 
                 team_complexity_signal = (
                     ctx.goal_stage_count >= 4
@@ -1265,11 +1964,79 @@ class StageExecute(PipelineStage):
                     or " ardindan " in low_in
                 )
                 team_complexity_signal = bool(team_complexity_signal or explicit_autonomy_signal or multi_step_signal)
+                should_use_multi_agent = (
+                    ctx.complexity >= multi_agent_complexity_threshold
+                    or (ctx.multi_agent_recommended and ctx.capability_confidence >= multi_agent_capability_threshold)
+                    or (
+                        str(ctx.capability_plan.get("orchestration_mode", "single_agent")) == "multi_agent"
+                        and ctx.capability_confidence >= multi_agent_capability_threshold
+                    )
+                )
                 should_use_team = team_mode_enabled and (
                     ctx.team_mode_forced
                     or ctx.complexity >= team_mode_threshold
                     or team_complexity_signal
                 )
+                selected_mode = (
+                    "team_mode"
+                    if should_use_team
+                    else ("multi_agent" if (multi_agent_enabled and should_use_multi_agent) else "single_agent_cdg")
+                )
+                if flag_enabled(ctx, "upgrade_orchestration_policy", default=False):
+                    parallelizable = bool(team_complexity_signal or len(ctx.plan or []) >= 3)
+                    op = decide_orchestration_policy(
+                        complexity_score=ctx.complexity,
+                        parallelizable=parallelizable,
+                        default_threshold=multi_agent_complexity_threshold,
+                        team_threshold=team_mode_threshold,
+                    )
+                    selected_mode = str(op.get("mode") or selected_mode)
+                    team_max_parallel = min(team_max_parallel, int(op.get("max_agents", team_max_parallel) or team_max_parallel))
+                    ctx.telemetry["orchestration_budget"] = {
+                        "max_agents": int(op.get("max_agents", 1) or 1),
+                        "token_budget": int(op.get("token_budget", 0) or 0),
+                        "time_budget_s": int(op.get("time_budget_s", 0) or 0),
+                    }
+                    should_use_team = selected_mode == "team_mode"
+                    should_use_multi_agent = selected_mode == "multi_agent"
+                decision_reason = "default"
+                if ctx.team_mode_forced:
+                    decision_reason = "forced"
+                elif should_use_team and ctx.complexity >= team_mode_threshold:
+                    decision_reason = "complexity_threshold"
+                elif should_use_team and team_complexity_signal:
+                    decision_reason = "complexity_signal"
+                elif selected_mode == "multi_agent":
+                    if ctx.complexity >= multi_agent_complexity_threshold:
+                        decision_reason = "multi_agent_complexity_threshold"
+                    elif ctx.multi_agent_recommended and ctx.capability_confidence >= multi_agent_capability_threshold:
+                        decision_reason = "capability_recommendation"
+                    else:
+                        decision_reason = "capability_orchestration_hint"
+                telemetry_meta = {
+                    "complexity": round(float(ctx.complexity or 0.0), 3),
+                    "goal_complexity": round(float(ctx.goal_complexity or 0.0), 3),
+                    "capability_confidence": round(float(ctx.capability_confidence or 0.0), 3),
+                    "team_threshold": float(team_mode_threshold),
+                    "multi_agent_threshold": float(multi_agent_complexity_threshold),
+                    "multi_agent_capability_threshold": float(multi_agent_capability_threshold),
+                    "team_mode_enabled": bool(team_mode_enabled),
+                    "multi_agent_enabled": bool(multi_agent_enabled),
+                    "team_forced": bool(ctx.team_mode_forced),
+                    "team_complexity_signal": bool(team_complexity_signal),
+                }
+                record_orchestration_decision(
+                    mode=selected_mode,
+                    selected=True,
+                    reason=decision_reason,
+                    metadata=telemetry_meta,
+                )
+                if isinstance(ctx.capability_plan, dict):
+                    ctx.capability_plan["orchestration_telemetry"] = {
+                        "selected_mode": selected_mode,
+                        "reason": decision_reason,
+                        **telemetry_meta,
+                    }
                 if should_use_team:
                     try:
                         from core.sub_agent.team import AgentTeam, TeamConfig
@@ -1306,19 +2073,28 @@ class StageExecute(PipelineStage):
                             "Team mode incomplete (status=%s). Falling back to orchestrator/CDG.",
                             team_status,
                         )
+                        record_orchestration_decision(
+                            mode="team_mode",
+                            selected=False,
+                            reason=f"team_incomplete:{team_status}",
+                            metadata={"fallback": "multi_agent_or_cdg", **telemetry_meta},
+                        )
+                        if flag_enabled(ctx, "upgrade_fallback_ladder", default=False):
+                            ctx.telemetry["fallback_ladder"] = fallback_ladder()
+                            ctx.telemetry["fallback_step"] = "same_plan_different_model"
                         ctx.errors.append(f"team_mode_incomplete:{team_status}")
                         ctx.final_response += "\nStandart orkestrasyon ile devam ediyorum...\n"
                     except Exception as team_exc:
                         logger.warning(f"Team mode failed, falling back to standard orchestration: {team_exc}")
-
-                should_use_multi_agent = (
-                    ctx.complexity >= multi_agent_complexity_threshold
-                    or (ctx.multi_agent_recommended and ctx.capability_confidence >= multi_agent_capability_threshold)
-                    or (
-                        str(ctx.capability_plan.get("orchestration_mode", "single_agent")) == "multi_agent"
-                        and ctx.capability_confidence >= multi_agent_capability_threshold
-                    )
-                )
+                        record_orchestration_decision(
+                            mode="team_mode",
+                            selected=False,
+                            reason="team_exception",
+                            metadata={"fallback": "multi_agent_or_cdg", "error": str(team_exc), **telemetry_meta},
+                        )
+                        if flag_enabled(ctx, "upgrade_fallback_ladder", default=False):
+                            ctx.telemetry["fallback_ladder"] = fallback_ladder()
+                            ctx.telemetry["fallback_step"] = "reduced_minimal_plan"
                 if multi_agent_enabled and should_use_multi_agent:
                     from core.multi_agent.orchestrator import AgentOrchestrator
                     orch = AgentOrchestrator(agent)
@@ -1353,6 +2129,10 @@ class StageExecute(PipelineStage):
                     else:
                         patched_input = ctx.user_input + patch_inst if patch_inst else ctx.user_input
                         res = await agent._execute_tool(node.action, node.params, user_input=patched_input, step_name=node.name)
+                        if flag_enabled(ctx, "upgrade_typed_tool_io", default=False):
+                            io_res = validate_tool_io(node.action, node.params if isinstance(node.params, dict) else {}, res)
+                            if not io_res.ok:
+                                raise ValueError(f"tool_schema_mismatch:{';'.join(io_res.errors)}")
                         return res if isinstance(res, dict) else {"output": str(res)}
                 
                 cdg_plan = await cdg_engine.execute(cdg_plan, cdg_executor)
@@ -1360,24 +2140,158 @@ class StageExecute(PipelineStage):
                 
                 overall_success = cdg_plan.status == "passed"
                 ctx.tool_results = [n.result for n in cdg_plan.nodes]
+                if collect_paths_from_tool_results([r for r in ctx.tool_results if isinstance(r, dict)]):
+                    telemetry_acc.mark_first_artifact()
+
+                rendered_tool_msg = ""
+                for node in reversed(list(getattr(cdg_plan, "nodes", []) or [])):
+                    action_name = str(getattr(node, "action", "") or "").strip()
+                    if action_name in {"plan", "refine", "chat", "respond", "answer", "verify"}:
+                        continue
+                    node_result = getattr(node, "result", None)
+                    if not isinstance(node_result, dict) or node_result.get("success") is False:
+                        continue
+                    candidate = str(agent._format_result_text(node_result) or "").strip()
+                    if candidate and candidate not in {"İşlem başarıyla tamamlandı.", "Islem basariyla tamamlandi."}:
+                        rendered_tool_msg = candidate
+                        break
                 
                 if overall_success:
-                    base_msg = "✅ İşlem tamamlandı."
+                    base_msg = rendered_tool_msg or "✅ İşlem tamamlandı."
                     if manifest["artifacts"]:
                         paths = [a.get("path") for a in manifest["artifacts"] if a.get("path")]
-                        base_msg += f"\nÜretilen dosyalar: {', '.join(paths)}"
+                        if paths and not any(str(path) in base_msg for path in paths[:3]):
+                            base_msg += f"\nÜretilen dosyalar: {', '.join(paths)}"
                 else:
-                    logger.warning("CDG failed, generating fallback assistant response.")
-                    fallback_prompt = (
-                        f"{style_profile.to_prompt_lines()}\n\n"
-                        f"Kullanıcı isteği: {ctx.user_input}\n"
-                        "Plan yürütmesi başarısız oldu. Kullanıcıya kısa, yardımcı ve uygulanabilir bir yanıt ver."
-                    )
-                    try:
-                        base_msg = await agent.llm.generate(fallback_prompt, role=ctx.role, user_id=ctx.user_id)
-                    except Exception as fallback_exc:
-                        ctx.errors.append(f"cdg_fallback_chat_failed: {fallback_exc}")
-                        base_msg = "❌ İşlem sırasında hatalar oluştu."
+                    logger.warning("CDG failed, applying fallback ladder.")
+                    failed_nodes = [
+                        n for n in cdg_plan.nodes
+                        if str(getattr(getattr(n, "state", None), "value", "")) == "failed"
+                    ]
+                    failed_ids = [str(getattr(n, "id", "")) for n in failed_nodes]
+                    fallback_step = ""
+                    recovered = False
+                    ladder_enabled = flag_enabled(ctx, "upgrade_fallback_ladder", default=False)
+                    if ladder_enabled:
+                        ctx.telemetry["fallback_ladder"] = fallback_ladder()
+                        ctx.telemetry["diff_repair_plan"] = diff_only_failed_steps(ctx.plan, failed_ids)
+
+                    def _result_ok(res: Any) -> bool:
+                        if isinstance(res, dict):
+                            if "success" in res:
+                                return bool(res.get("success"))
+                            if isinstance(res.get("result"), dict) and "success" in res["result"]:
+                                return bool(res["result"].get("success"))
+                        return bool(res)
+
+                    # Diff-based repair: retry only failed tool steps.
+                    if failed_nodes:
+                        repaired = 0
+                        retryable = 0
+                        for node in failed_nodes:
+                            action = str(getattr(node, "action", "") or "").strip()
+                            if not action or action in {"plan", "refine", "chat", "respond", "answer", "verify"}:
+                                continue
+                            retryable += 1
+                            params = getattr(node, "params", {}) if isinstance(getattr(node, "params", {}), dict) else {}
+                            params = dict(params)
+                            patch_inst = params.pop("_auto_patch_instruction", "")
+                            try:
+                                patched_input = ctx.user_input + patch_inst if patch_inst else ctx.user_input
+                                retry_res = await agent._execute_tool(
+                                    action,
+                                    params,
+                                    user_input=patched_input,
+                                    step_name=str(getattr(node, "name", "") or "retry_step"),
+                                )
+                                if flag_enabled(ctx, "upgrade_typed_tool_io", default=False):
+                                    io_res = validate_tool_io(action, params, retry_res)
+                                    if not io_res.ok:
+                                        raise ValueError(f"tool_schema_mismatch:{';'.join(io_res.errors)}")
+                                if isinstance(retry_res, dict):
+                                    ctx.tool_results.append(retry_res)
+                                    if collect_paths_from_tool_results([retry_res]):
+                                        telemetry_acc.mark_first_artifact()
+                                if _result_ok(retry_res):
+                                    repaired += 1
+                            except Exception as repair_exc:
+                                ctx.errors.append(f"repair_step:{action}:{repair_exc}")
+                        if retryable > 0 and repaired >= retryable:
+                            recovered = True
+                            overall_success = True
+                            base_msg = "✅ İşlem diff-repair ile tamamlandı."
+                            ctx.telemetry["repair_loops"] = int(ctx.telemetry.get("repair_loops", 0) or 0) + 1
+
+                    # Fallback ladder
+                    if not recovered:
+                        fallback_prompt = (
+                            f"{style_profile.to_prompt_lines()}\n\n"
+                            f"Kullanıcı isteği: {ctx.user_input}\n"
+                            "Plan yürütmesi başarısız oldu. Kısa ve uygulanabilir bir kurtarma yanıtı ver."
+                        )
+                        try:
+                            # (a) same plan different model profile
+                            base_msg = await agent.llm.generate(fallback_prompt, role="reasoning", user_id=ctx.user_id)
+                            fallback_step = "same_plan_different_model"
+                            recovered = bool(str(base_msg or "").strip())
+                        except Exception as fallback_exc:
+                            ctx.errors.append(f"cdg_fallback_chat_failed: {fallback_exc}")
+
+                    if not recovered and failed_nodes:
+                        # (b) reduced minimal plan: retry first failing tool step only.
+                        first = failed_nodes[0]
+                        action = str(getattr(first, "action", "") or "").strip()
+                        if action and action not in {"plan", "refine", "chat", "respond", "answer", "verify"}:
+                            params = getattr(first, "params", {}) if isinstance(getattr(first, "params", {}), dict) else {}
+                            params = dict(params)
+                            params.pop("_auto_patch_instruction", None)
+                            try:
+                                min_res = await agent._execute_tool(
+                                    action, params, user_input=ctx.user_input, step_name="minimal_recovery_step"
+                                )
+                                if isinstance(min_res, dict):
+                                    ctx.tool_results.append(min_res)
+                                    txt = agent._format_result_text(min_res)
+                                    if txt:
+                                        base_msg = f"⚠️ Kısmi kurtarma uygulandı:\n{txt}"
+                                        recovered = True
+                                        fallback_step = "reduced_minimal_plan"
+                                        if collect_paths_from_tool_results([min_res]):
+                                            telemetry_acc.mark_first_artifact()
+                            except Exception as minimal_exc:
+                                ctx.errors.append(f"fallback_minimal:{minimal_exc}")
+
+                    if not recovered:
+                        # (c) deterministic tool-only macro: directly execute routed intent once.
+                        action = _normalize_action(ctx.action)
+                        params = ctx.intent.get("params", {}) if isinstance(ctx.intent, dict) and isinstance(ctx.intent.get("params"), dict) else {}
+                        if action and action in AVAILABLE_TOOLS:
+                            try:
+                                macro_res = await agent._execute_tool(
+                                    action, dict(params), user_input=ctx.user_input, step_name="deterministic_macro"
+                                )
+                                if isinstance(macro_res, dict):
+                                    ctx.tool_results.append(macro_res)
+                                    txt = agent._format_result_text(macro_res)
+                                    if txt:
+                                        base_msg = txt
+                                        recovered = True
+                                        fallback_step = "deterministic_tool_macro"
+                                        if collect_paths_from_tool_results([macro_res]):
+                                            telemetry_acc.mark_first_artifact()
+                            except Exception as macro_exc:
+                                ctx.errors.append(f"fallback_macro:{macro_exc}")
+
+                    if not recovered:
+                        # (d) ask user last.
+                        fallback_step = "ask_user"
+                        base_msg = (
+                            "❌ Görevi güvenli şekilde tamamlayamadım. "
+                            "Lütfen hedef path/çıktı formatı/beklenen sonucu netleştir, yalnızca hatalı adımları tekrar deneyeceğim."
+                        )
+
+                    if ladder_enabled:
+                        ctx.telemetry["fallback_step"] = fallback_step or "deterministic_tool_macro"
                 
                 # Apply hard constraints
                 from core.constraint_engine import constraint_engine
@@ -1390,6 +2304,12 @@ class StageExecute(PipelineStage):
                 
                 # Apply Auto-Patch telemetry log for unrecoverable errors
                 if not overall_success:
+                    if flag_enabled(ctx, "upgrade_fallback_ladder", default=False):
+                        if "fallback_ladder" not in ctx.telemetry:
+                            failed_ids = [str(getattr(n, "id", "")) for n in cdg_plan.nodes if str(getattr(getattr(n, "state", None), "value", "")) == "failed"]
+                            ctx.telemetry["diff_repair_plan"] = diff_only_failed_steps(ctx.plan, failed_ids)
+                            ctx.telemetry["fallback_ladder"] = fallback_ladder()
+                            ctx.telemetry["fallback_step"] = "deterministic_tool_macro"
                     from core.failure_clustering import failure_clustering
                     for node in cdg_plan.nodes:
                         if node.state.value == "failed":
@@ -1424,9 +2344,19 @@ class StageExecute(PipelineStage):
                     # Unified prompt with Memory + Multimodal + Knowledge + User Input
                     prompt_parts = []
                     if context_prefix: prompt_parts.append(context_prefix)
-                    if ctx.memory_context: prompt_parts.append(f"Memory:\n{ctx.memory_context}")
-                    if ctx.multimodal_context: prompt_parts.append(f"Multimodal Context:\n{ctx.multimodal_context}")
-                    if ctx.context_docs: prompt_parts.append(f"Knowledge:\n{ctx.context_docs}")
+                    if flag_enabled(ctx, "upgrade_performance_routing", default=False):
+                        if ctx.context_working_set:
+                            prompt_parts.append(f"Working Set:\n{ctx.context_working_set}")
+                        elif ctx.memory_context:
+                            prompt_parts.append(f"Memory:\n{ctx.memory_context[:800]}")
+                        if ctx.multimodal_context:
+                            prompt_parts.append(f"Multimodal Context:\n{ctx.multimodal_context[:500]}")
+                        if ctx.context_docs:
+                            prompt_parts.append(f"Knowledge:\n{ctx.context_docs[:600]}")
+                    else:
+                        if ctx.memory_context: prompt_parts.append(f"Memory:\n{ctx.memory_context}")
+                        if ctx.multimodal_context: prompt_parts.append(f"Multimodal Context:\n{ctx.multimodal_context}")
+                        if ctx.context_docs: prompt_parts.append(f"Knowledge:\n{ctx.context_docs}")
                     prompt_parts.append(f"User: {ctx.user_input}")
                     
                     full_prompt = "\n\n".join(prompt_parts)
@@ -1456,6 +2386,14 @@ class StageExecute(PipelineStage):
                                             user_input=ctx.user_input,
                                             step_name=parsed.get("step_name", ""),
                                         )
+                                        if flag_enabled(ctx, "upgrade_typed_tool_io", default=False):
+                                            io_res = validate_tool_io(action, params, res)
+                                            if not io_res.ok:
+                                                raise ValueError(f"tool_schema_mismatch:{';'.join(io_res.errors)}")
+                                        if isinstance(res, dict):
+                                            maybe_path = res.get("path") or (res.get("result", {}).get("path") if isinstance(res.get("result"), dict) else "")
+                                            if isinstance(maybe_path, str) and maybe_path.strip():
+                                                telemetry_acc.mark_first_artifact()
                                         ctx.final_response += agent._format_result_text(res)
                                         executed_tool = True
                             except Exception:
@@ -1470,6 +2408,35 @@ class StageExecute(PipelineStage):
             logger.error(f"StageExecute failed: {exc}")
             ctx.errors.append(str(exc))
             ctx.final_response = f"Çalıştırma sırasında kritik bir hata oluştu: {exc}"
+
+        try:
+            token_est = estimate_token_cost(
+                user_input=ctx.user_input,
+                memory_context=ctx.memory_context,
+                plan=ctx.plan,
+            )
+            ctx.telemetry.update(
+                telemetry_acc.snapshot(
+                    complexity_score=ctx.complexity,
+                    token_cost_estimate=token_est,
+                    tool_results=ctx.tool_results,
+                    verified=ctx.verified,
+                    repair_loops=int(ctx.telemetry.get("repair_loops", 0) or 0),
+                )
+            )
+        except Exception:
+            pass
+
+        try:
+            ctx.phase_records["execute"] = {
+                "phase": "Execute",
+                "tool_call_count": len(ctx.tool_calls or []),
+                "tool_result_count": len(ctx.tool_results or []),
+                "delivery_blocked": bool(ctx.delivery_blocked),
+                "worker_model": dict((ctx.model_roles or {}).get("worker") or {}),
+            }
+        except Exception:
+            pass
 
         ctx.stage_timings["execute"] = time.time() - t0
         return ctx
@@ -1546,6 +2513,198 @@ class StageVerify(PipelineStage):
         except Exception as e:
             logger.debug(f"Output quality contract skipped: {e}")
 
+        try:
+            contract_payload = {
+                "contract_id": ctx.output_contract_spec.get("contract_id") if isinstance(ctx.output_contract_spec, dict) else "",
+                "job_type": ctx.job_type,
+                "objective": str(ctx.user_input or "").strip(),
+            }
+            contract_ok, contract_errors = validate_output_contract(ctx.job_type, contract_payload)
+            ctx.qa_results["declared_output_contract"] = {
+                "ok": contract_ok,
+                "errors": contract_errors,
+                "contract_id": contract_payload.get("contract_id"),
+            }
+            if not contract_ok:
+                ctx.errors.extend([f"contract_decl:{err}" for err in contract_errors])
+        except Exception as contract_exc:
+            ctx.errors.append(f"contract_decl:{contract_exc}")
+
+        # Upgrade mandatory verify gates + output contract enforcement.
+        if flag_enabled(ctx, "upgrade_verify_mandatory_gates", default=False):
+            try:
+                produced_paths = collect_paths_from_tool_results(ctx.tool_results)
+                expected_ext = []
+                if isinstance(ctx.intent, dict):
+                    exp = ctx.intent.get("expected_extensions")
+                    if isinstance(exp, list):
+                        expected_ext = [str(x) for x in exp]
+                evidence_checks = []
+                if isinstance(ctx.qa_results, dict):
+                    evidence_checks = [k for k, v in (ctx.qa_results.get("output_contract", {}).get("signals", {}) or {}).items() if isinstance(v, bool) and v]
+                contract_res = enforce_output_contract(
+                    job_type=ctx.job_type,
+                    expected_extensions=expected_ext,
+                    produced_paths=produced_paths,
+                    evidence_checks=evidence_checks,
+                )
+                ctx.qa_results["upgrade_output_contract"] = contract_res
+
+                mismatch = detect_artifact_mismatch(expected_extensions=expected_ext, produced_paths=produced_paths)
+                if mismatch:
+                    ctx.qa_results["tool_mismatch"] = {"failed": mismatch}
+                    ctx.errors.append("tool_mismatch_detector")
+                    ctx.telemetry["fallback_step"] = "reduced_minimal_plan"
+
+                gate_failed: list[str] = []
+                if ctx.is_code_job:
+                    code_gate = verify_code_gates(
+                        final_response=ctx.final_response,
+                        produced_paths=produced_paths,
+                        tool_results=[r for r in ctx.tool_results if isinstance(r, dict)],
+                    )
+                    ctx.qa_results["code_gate"] = code_gate
+                    if not code_gate.get("ok", False):
+                        gate_failed.extend([f"code:{x}" for x in code_gate.get("failed", [])])
+                elif _is_research_task(ctx):
+                    research_urls = _collect_urls(ctx.final_response, ctx.tool_results)
+                    research_payload = _extract_research_payload(ctx.tool_results)
+                    research_gate = verify_research_gates(
+                        final_response=ctx.final_response,
+                        source_urls=research_urls,
+                        research_payload=research_payload,
+                    )
+                    ctx.qa_results["research_gate"] = research_gate
+                    if not research_gate.get("ok", False):
+                        gate_failed.extend([f"research:{x}" for x in research_gate.get("failed", [])])
+                    payload_ok, payload_errors = validate_research_payload(research_payload)
+                    ctx.qa_results["research_payload"] = {
+                        "ok": payload_ok,
+                        "errors": payload_errors,
+                    }
+                    if not payload_ok:
+                        gate_failed.extend([f"research_payload:{err}" for err in payload_errors])
+                elif ctx.attachment_index:
+                    asset_gate = verify_asset_gates(attachment_index=ctx.attachment_index)
+                    ctx.qa_results["asset_gate"] = asset_gate
+                    if not asset_gate.get("ok", False):
+                        gate_failed.extend([f"asset:{x}" for x in asset_gate.get("failed", [])])
+
+                if not contract_res.get("ok", True):
+                    gate_failed.extend([f"contract:{x}" for x in contract_res.get("errors", [])])
+                if mismatch:
+                    gate_failed.append("artifact_mismatch")
+
+                if gate_failed:
+                    ctx.verified = False
+                    ctx.delivery_blocked = True
+                    ctx.errors.extend(gate_failed)
+                    ctx.final_response = f"{str(ctx.final_response or '').rstrip()}\n\n❌ Verify gate failed: {', '.join(gate_failed)}"
+            except Exception as verify_exc:
+                ctx.errors.append(f"upgrade_verify_gate:{verify_exc}")
+
+        # Deterministic completion gate: actionable tasks must have a verifiable success signal.
+        try:
+            capability_runtime = evaluate_runtime_capability(
+                ctx,
+                synthesize_screen_summary=_repair_screen_completion,
+            )
+            repair_info = capability_runtime.get("repair", {}) if isinstance(capability_runtime.get("repair"), dict) else {}
+            if repair_info.get("repaired"):
+                capability_runtime = evaluate_runtime_capability(
+                    ctx,
+                    synthesize_screen_summary=_repair_screen_completion,
+                )
+                capability_runtime["repair"] = repair_info
+            verify_info = capability_runtime.get("verify", {}) if isinstance(capability_runtime.get("verify"), dict) else {}
+            ctx.qa_results["capability_runtime"] = capability_runtime
+
+            repair_strategy = str(repair_info.get("strategy") or "").strip()
+            trace_repairs = list(ctx.telemetry.get("repair_steps", []) or []) if isinstance(ctx.telemetry, dict) else []
+            if repair_strategy and repair_strategy not in {"", "noop"} and repair_strategy not in trace_repairs:
+                trace_repairs.append(repair_strategy)
+
+            verifier_results = {}
+            if isinstance(ctx.telemetry, dict) and isinstance(ctx.telemetry.get("verifier_results"), dict):
+                verifier_results = dict(ctx.telemetry.get("verifier_results") or {})
+            verifier_results["capability_runtime"] = verify_info
+            update_runtime_trace(
+                ctx,
+                tool_calls=list(ctx.tool_calls or []),
+                verifier_results=verifier_results,
+                repair_steps=trace_repairs,
+            )
+
+            if not verify_info.get("ok", True):
+                gate_failed = [f"capability:{x}" for x in list(verify_info.get("failed") or [])]
+                if gate_failed:
+                    ctx.verified = False
+                    ctx.delivery_blocked = True
+                    ctx.errors.extend(gate_failed)
+        except Exception as runtime_exc:
+            ctx.errors.append(f"capability_runtime:{runtime_exc}")
+
+        try:
+            completion_gate = _evaluate_completion_gate(ctx)
+            if not completion_gate.get("ok", True) and _normalize_action(getattr(ctx, "action", "")) in {"screen_workflow", "analyze_screen"}:
+                repair_info = _repair_screen_completion(ctx)
+                ctx.qa_results["screen_completion_repair"] = repair_info
+                if repair_info.get("repaired"):
+                    completion_gate = _evaluate_completion_gate(ctx)
+            ctx.qa_results["completion_gate"] = completion_gate
+            verifier_results = {}
+            if isinstance(ctx.telemetry, dict) and isinstance(ctx.telemetry.get("verifier_results"), dict):
+                verifier_results = dict(ctx.telemetry.get("verifier_results") or {})
+            verifier_results["completion_gate"] = completion_gate
+            update_runtime_trace(ctx, verifier_results=verifier_results)
+            if not completion_gate.get("ok", True):
+                gate_failed = [f"completion:{x}" for x in completion_gate.get("failed", [])]
+                ctx.verified = False
+                ctx.delivery_blocked = True
+                ctx.errors.extend(gate_failed)
+                marker = "❌ Completion gate failed:"
+                if marker not in str(ctx.final_response or ""):
+                    suffix = ", ".join(gate_failed) if gate_failed else "unknown"
+                    ctx.final_response = f"{str(ctx.final_response or '').rstrip()}\n\n{marker} {suffix}"
+        except Exception as completion_exc:
+            ctx.errors.append(f"completion_gate:{completion_exc}")
+
+        try:
+            critic_prompt = build_critic_review_prompt(
+                job_type=ctx.job_type,
+                final_response=ctx.final_response,
+                qa_results=ctx.qa_results,
+                errors=ctx.errors,
+            )
+            if critic_prompt and getattr(agent, "llm", None) is not None:
+                critic_role = str((getattr(ctx, "hybrid_model", {}) or {}).get("critic_role") or "critic")
+                critic_text = await agent.llm.generate(
+                    critic_prompt,
+                    role=critic_role,
+                    user_id=ctx.user_id,
+                )
+                critic_text = str(critic_text or "").strip()
+                if critic_text:
+                    ctx.qa_results["critic_review"] = {
+                        "role": critic_role,
+                        "text": critic_text,
+                    }
+                    if not ctx.verified and "Critic review:" not in str(ctx.final_response or ""):
+                        ctx.final_response = f"{str(ctx.final_response or '').rstrip()}\n\nCritic review:\n{critic_text}"
+        except Exception as critic_exc:
+            ctx.errors.append(f"critic_review:{critic_exc}")
+
+        try:
+            ctx.phase_records["verify"] = {
+                "phase": "Verify",
+                "critic_model": dict((ctx.model_roles or {}).get("critic") or {}),
+                "verified": bool(ctx.verified),
+                "qa_results": dict(ctx.qa_results or {}),
+                "errors": list(ctx.errors or []),
+            }
+        except Exception:
+            pass
+
         if ctx.contract:
             try:
                 # Artifact verification
@@ -1565,7 +2724,8 @@ class StageVerify(PipelineStage):
                 ctx.verified = False
         else:
             # No contract → inline delivery, skip verification
-            ctx.verified = True
+            if not (flag_enabled(ctx, "upgrade_verify_mandatory_gates", default=False) and ctx.delivery_blocked):
+                ctx.verified = True
 
         ctx.stage_timings["verify"] = time.time() - t0
         return ctx
@@ -1588,6 +2748,9 @@ class StageDeliver(PipelineStage):
             ctx.evidence_valid = not evidence_gate.has_delivery_claims(ctx.final_response) or \
                                  evidence_gate.has_real_evidence(ctx.tool_results)
             ctx.delivery_blocked = not ctx.evidence_valid
+            if flag_enabled(ctx, "upgrade_verify_mandatory_gates", default=False) and not ctx.verified:
+                ctx.evidence_valid = False
+                ctx.delivery_blocked = True
         except Exception as e:
             ctx.errors.append(f"deliver: {e}")
 
@@ -1623,11 +2786,54 @@ class StageDeliver(PipelineStage):
 
         # Phase 22: Best Effort Delivery if blocked but informative
         if ctx.delivery_blocked and ctx.llm_response:
-            logger.warning("Pipeline: Evidence gate blocked delivery, but Best Effort mode is enabled.")
-            # Allow delivery with a disclaimer
-            ctx.final_response = ctx.llm_response + "\n\n> ⚠️ **Not:** İşlem gerçekleşti ancak sistem tarafından tam olarak doğrulanamadı."
-            ctx.delivery_blocked = False
-            ctx.evidence_valid = True 
+            strict_verify = flag_enabled(ctx, "upgrade_verify_mandatory_gates", default=False)
+            if strict_verify:
+                logger.warning("Pipeline: Evidence/verify gate blocked delivery (strict mode).")
+            else:
+                logger.warning("Pipeline: Evidence gate blocked delivery, but Best Effort mode is enabled.")
+                # Allow delivery with a disclaimer
+                ctx.final_response = ctx.llm_response + "\n\n> ⚠️ **Not:** İşlem gerçekleşti ancak sistem tarafından tam olarak doğrulanamadı."
+                ctx.delivery_blocked = False
+                ctx.evidence_valid = True
+
+        # Job telemetry envelope (non-breaking, additive).
+        try:
+            if isinstance(ctx.telemetry, dict):
+                if "verify_pass_rate" not in ctx.telemetry:
+                    ctx.telemetry["verify_pass_rate"] = 1.0 if ctx.verified else 0.0
+                record_pipeline_job(
+                    {
+                        "complexity_score": float(ctx.telemetry.get("complexity_score", ctx.complexity) or 0.0),
+                        "token_cost_estimate": int(ctx.telemetry.get("token_cost_estimate", 0) or 0),
+                        "tool_success_rate": float(ctx.telemetry.get("tool_success_rate", 0.0) or 0.0),
+                        "verify_pass_rate": float(ctx.telemetry.get("verify_pass_rate", 0.0) or 0.0),
+                        "repair_loops": int(ctx.telemetry.get("repair_loops", 0) or 0),
+                        "ttfa_ms": int(ctx.telemetry.get("ttfa_ms", 0) or 0),
+                        "orchestration_mode": str(ctx.capability_plan.get("orchestration_telemetry", {}).get("selected_mode", "single_agent"))
+                        if isinstance(ctx.capability_plan, dict)
+                        else "single_agent",
+                    }
+                )
+        except Exception:
+            pass
+
+        try:
+            final_status = "success" if ctx.verified and not ctx.delivery_blocked else "blocked" if ctx.delivery_blocked else "partial"
+            update_runtime_trace(
+                ctx,
+                tool_calls=list(ctx.tool_calls or []),
+                delivery_mode=str(ctx.channel or "cli"),
+                final_status=final_status,
+            )
+            ctx.phase_records["deliver"] = {
+                "phase": "Deliver",
+                "delivery_mode": str(ctx.channel or "cli"),
+                "delivery_blocked": bool(ctx.delivery_blocked),
+                "evidence_valid": bool(ctx.evidence_valid),
+                "final_status": final_status,
+            }
+        except Exception:
+            pass
 
         ctx.stage_timings["deliver"] = time.time() - t0
         return ctx

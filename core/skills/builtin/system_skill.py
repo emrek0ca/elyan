@@ -2,6 +2,7 @@
 
 from typing import List, Dict, Any
 from core.skills.base import BaseSkill
+from core.skills.tool_runtime import execute_registered_tool, wrap_skill_tool_result
 
 
 class SystemSkill(BaseSkill):
@@ -26,29 +27,25 @@ class SystemSkill(BaseSkill):
 
     async def execute(self, command: str, context: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            from tools.system_tools import (
-                set_volume, set_brightness, take_screenshot,
-                get_system_info, get_battery_status,
-            )
             params = context.get("params", {})
 
             if command == "volume":
                 level = params.get("level", 50)
-                result = await set_volume(level)
-                return {"success": True, "result": result}
+                result = await execute_registered_tool("set_volume", {"level": level}, source="builtin_system_skill")
+                return wrap_skill_tool_result(result)
             elif command == "brightness":
                 level = params.get("level", 50)
-                result = await set_brightness(level)
-                return {"success": True, "result": result}
+                result = await execute_registered_tool("set_brightness", {"level": level}, source="builtin_system_skill")
+                return wrap_skill_tool_result(result)
             elif command == "screenshot":
-                result = await take_screenshot()
-                return {"success": True, "result": result}
+                result = await execute_registered_tool("take_screenshot", {}, source="builtin_system_skill")
+                return wrap_skill_tool_result(result)
             elif command == "sysinfo":
-                result = await get_system_info()
-                return {"success": True, "result": result}
+                result = await execute_registered_tool("get_system_info", {}, source="builtin_system_skill")
+                return wrap_skill_tool_result(result)
             elif command == "battery":
-                result = await get_battery_status()
-                return {"success": True, "result": result}
+                result = await execute_registered_tool("get_battery_status", {}, source="builtin_system_skill")
+                return wrap_skill_tool_result(result)
             else:
                 return {"success": False, "error": f"Unknown command: {command}"}
         except Exception as e:

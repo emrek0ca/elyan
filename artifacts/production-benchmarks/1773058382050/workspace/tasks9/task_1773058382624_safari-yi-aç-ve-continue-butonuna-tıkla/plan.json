@@ -1,0 +1,13 @@
+[
+  {
+    "kind": "system",
+    "name": "recover_focus_safari",
+    "tool": "open_app",
+    "params": {
+      "app_name": "Safari"
+    },
+    "verify": {
+      "frontmost_app": "Safari"
+    }
+  }
+]

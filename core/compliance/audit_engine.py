@@ -13,6 +13,7 @@ from pathlib import Path
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+from core.storage_paths import resolve_elyan_data_dir
 from utils.logger import get_logger
 
 logger = get_logger("compliance")
@@ -26,9 +27,14 @@ class AuditEntry:
     result: str         # "success", "denied", "error"
     metadata: Dict = field(default_factory=dict)
 
+
+def _default_audit_dir() -> Path:
+    return resolve_elyan_data_dir() / "audit"
+
+
 class AuditEngine:
     def __init__(self, audit_dir: str = None):
-        self.audit_dir = Path(audit_dir or Path.home() / ".elyan" / "audit")
+        self.audit_dir = Path(audit_dir) if audit_dir else _default_audit_dir()
         self.audit_dir.mkdir(parents=True, exist_ok=True)
         self._buffer: List[AuditEntry] = []
         self._flush_interval = 30  # seconds

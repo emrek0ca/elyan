@@ -1,0 +1,15 @@
+{
+  "run_id": "run_9b04f376d69b",
+  "written_at": 1773151743.081749,
+  "status": "partial",
+  "text_summary": "LLM sağlayıcısına şu an erişemiyorum. Lütfen tekrar dener misin?",
+  "errors": [
+    "chat_failed: 'NoneType' object has no attribute 'generate'"
+  ],
+  "artifact_manifest": [],
+  "metadata": {
+    "manifest_path": "/Users/emrekoca/Desktop/bot/.elyan/proofs/run_9b04f376d69b/manifest.json",
+    "action": "chat",
+    "job_type": "communication"
+  }
+}

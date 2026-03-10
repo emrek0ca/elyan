@@ -1,0 +1,16 @@
+[
+  {
+    "step_index": 1,
+    "name": "research_document_delivery",
+    "kind": "system",
+    "attempt": 1,
+    "retry_count": 1,
+    "failed_codes": [
+      "ARTIFACT_MISSING",
+      "EMPTY_FILE_OUTPUT"
+    ],
+    "strategy": "rerun_step",
+    "status": "retry_scheduled",
+    "timestamp": 1773053681.550055
+  }
+]

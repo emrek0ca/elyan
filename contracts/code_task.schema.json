@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elyan/contracts/code_task.schema.json",
+  "contract_id": "code_task_v1",
+  "job_type": "code_project",
+  "title": "Code Task Contract",
+  "type": "object",
+  "required": [
+    "contract_id",
+    "job_type",
+    "objective",
+    "required_outputs",
+    "quality_gates",
+    "verify"
+  ],
+  "properties": {
+    "contract_id": {
+      "const": "code_task_v1"
+    },
+    "job_type": {
+      "const": "code_project"
+    },
+    "objective": {
+      "type": "string",
+      "minLength": 10
+    },
+    "required_outputs": {
+      "type": "object",
+      "required": [
+        "files_created",
+        "entrypoint_required"
+      ],
+      "properties": {
+        "files_created": {
+          "type": "boolean"
+        },
+        "entrypoint_required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "quality_gates": {
+      "type": "object",
+      "required": [
+        "lint",
+        "typecheck",
+        "smoke_test"
+      ],
+      "properties": {
+        "lint": {
+          "type": "boolean"
+        },
+        "typecheck": {
+          "type": "boolean"
+        },
+        "smoke_test": {
+          "type": "boolean"
+        }
+      }
+    },
+    "verify": {
+      "type": "object",
+      "required": [
+        "entrypoint_exists",
+        "output_not_empty",
+        "report_missing_gates"
+      ],
+      "properties": {
+        "entrypoint_exists": {
+          "type": "boolean"
+        },
+        "output_not_empty": {
+          "type": "boolean"
+        },
+        "report_missing_gates": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

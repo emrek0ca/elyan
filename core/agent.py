@@ -60,9 +60,16 @@ from core.evidence.execution_ledger import ExecutionLedger
 from core.evidence.adapters import adapt_evidence
 from core.evidence.run_store import RunStore
 from core.contracts.agent_response import AgentResponse, AttachmentRef
+from core.contracts.execution_result import coerce_execution_result
+from core.task_brain import task_brain
+from core.away_mode import away_task_registry, background_task_runner, away_completion_notifier
+from core.channel_delivery import channel_delivery_bridge
+from core.smart_notifications import get_smart_notifications, NotificationCategory, NotificationPriority
+from core.gateway.response import UnifiedResponse
 from core.runtime_policy import get_runtime_policy_resolver
 from core.repair.state_machine import classify_error, RepairStateMachine
 from core.repair.error_codes import PLAN_ERROR, TOOL_ERROR, ENV_ERROR, VALIDATION_ERROR
+from core.compat.legacy_tool_wrappers import normalize_legacy_tool_payload
 from core.security.runtime_guard import runtime_security_guard
 from core.compliance.audit_trail import audit_trail
 from core.spec.task_spec import validate_task_spec, TASK_SPEC_SCHEMA_VERSION
@@ -93,6 +100,8 @@ ACTION_TO_TOOL = {
     "execute_python_code": "run_code",
     "show_help": "chat",
     "status_snapshot": "take_screenshot",
+    "screen_status": "screen_workflow",
+    "screen_read": "screen_workflow",
     "random_image": "create_visual_asset_pack",
     "create_calendar_event": "create_event",
     "create_calendar": "create_event",
@@ -227,6 +236,32 @@ def _push_hint(text: str, icon: str = "lightbulb", color: str = "yellow"):
     except Exception:
         pass
 
+
+def _push_tool_event(
+    stage: str,
+    tool: str,
+    *,
+    step: str = "",
+    request_id: str = "",
+    success: bool | None = None,
+    latency_ms: int | None = None,
+    payload: dict | None = None,
+):
+    try:
+        from core.gateway.server import push_tool_event
+
+        push_tool_event(
+            stage,
+            tool,
+            step=step,
+            request_id=request_id,
+            success=success,
+            latency_ms=latency_ms,
+            payload=payload or {},
+        )
+    except Exception:
+        pass
+
 class Agent:
     def __init__(self):
         self.kernel = kernel
@@ -246,6 +281,60 @@ class Agent:
         }
         # Son başarılı aksiyon — feedback/correction sistemi için
         self._last_action: str = ""
+        self._last_turn_context: dict[str, Any] = {
+            "user_input": "",
+            "response_text": "",
+            "action": "",
+            "success": True,
+            "ts": 0.0,
+        }
+        self._last_tool_confirmation: dict[str, Any] = {"key": "", "ts": 0.0}
+        self._away_notifier_registered = False
+        self._task_suggestion_cache: dict[str, float] = {}
+        self._register_away_notifier()
+
+    def _register_away_notifier(self) -> None:
+        if self._away_notifier_registered:
+            return
+
+        async def _deliver_completion(record) -> None:
+            try:
+                meta = dict(getattr(record, "metadata", {}) or {})
+                channel_type = str(meta.get("channel_type") or getattr(record, "channel", "") or "").strip()
+                channel_id = str(meta.get("channel_id") or meta.get("chat_id") or "").strip()
+                text = str(getattr(record, "result_summary", "") or "").strip()
+                state = str(getattr(record, "state", "") or "")
+                if not text:
+                    text = "Arka plan gorevi tamamlandi." if state in {"completed", "partial"} else "Arka plan gorevi basarisiz oldu."
+                sent = False
+                if channel_type and channel_id:
+                    response = UnifiedResponse(
+                        text=text,
+                        attachments=list(getattr(record, "attachments", []) or []),
+                        format="plain",
+                        metadata={
+                            "away_task_id": getattr(record, "task_id", ""),
+                            "run_id": getattr(record, "run_id", ""),
+                            "state": state,
+                        },
+                    )
+                    sent = await channel_delivery_bridge.deliver(channel_type, channel_id, response)
+
+                notifier = get_smart_notifications()
+                priority = NotificationPriority.HIGH if state == "failed" else NotificationPriority.MEDIUM
+                await notifier.send_notification(
+                    title="Away task tamamlandi" if state in {"completed", "partial"} else "Away task hata verdi",
+                    message=f"{record.user_input[:120]} ({record.task_id})",
+                    priority=priority,
+                    category=NotificationCategory.TASK,
+                    metadata={"task_id": record.task_id, "run_id": record.run_id, "state": state, "channel_delivery": sent},
+                    force=True,
+                )
+            except Exception:
+                pass
+
+        away_completion_notifier.register(_deliver_completion)
+        self._away_notifier_registered = True
 
     def _ensure_llm(self) -> bool:
         if self.llm is not None:
@@ -282,9 +371,359 @@ class Agent:
             )
         return None
 
+    @staticmethod
+    def _should_schedule_away_task(user_input: str, metadata: dict | None = None) -> bool:
+        meta = metadata if isinstance(metadata, dict) else {}
+        if bool(meta.get("background_dispatch")):
+            return False
+        mode = str(meta.get("autonomy_mode") or meta.get("mode") or "").strip().lower()
+        if mode in {"background", "away", "daemon", "arka_planda", "async"}:
+            return True
+        low = str(user_input or "").lower()
+        markers = (
+            "arka planda",
+            "arkaplanda",
+            "ben yokken",
+            "ben yokken calis",
+            "hazir olunca gonder",
+            "hazır olunca gönder",
+            "sen hallet",
+            "ben dönünce hazır olsun",
+            "away mode",
+        )
+        return any(marker in low for marker in markers)
+
+    @staticmethod
+    def _extract_away_task_id(user_input: str) -> str:
+        match = _re.search(r"\b(away_[a-z0-9]{6,})\b", str(user_input or "").lower())
+        return str(match.group(1) if match else "")
+
+    @classmethod
+    def _parse_away_task_command(cls, user_input: str) -> dict[str, Any] | None:
+        low = str(user_input or "").strip().lower()
+        if not low:
+            return None
+        task_id = cls._extract_away_task_id(low)
+
+        list_markers = (
+            "aktif görevler",
+            "aktif gorevler",
+            "arka plan görevleri",
+            "arka plan gorevleri",
+            "görev listesi",
+            "gorev listesi",
+            "bekleyen görevler",
+            "bekleyen gorevler",
+            "görevleri göster",
+            "gorevleri goster",
+        )
+        status_markers = (
+            "görev durumu",
+            "gorev durumu",
+            "task status",
+            "away task status",
+            "arka plan durumu",
+            "arka plan gorev durumu",
+        )
+        cancel_markers = (
+            "iptal et",
+            "iptal",
+            "cancel",
+            "durdur",
+        )
+        retry_markers = (
+            "yeniden başlat",
+            "yeniden baslat",
+            "tekrar çalıştır",
+            "tekrar calistir",
+            "retry",
+            "yeniden dene",
+        )
+
+        mentions_task = any(token in low for token in ("görev", "gorev", "task", "arka plan"))
+
+        if any(marker in low for marker in list_markers):
+            return {"action": "away_task_list", "task_id": task_id}
+        if task_id and any(marker in low for marker in cancel_markers):
+            return {"action": "away_task_cancel", "task_id": task_id}
+        if task_id and any(marker in low for marker in retry_markers):
+            return {"action": "away_task_retry", "task_id": task_id}
+        if task_id and any(marker in low for marker in status_markers):
+            return {"action": "away_task_status", "task_id": task_id}
+        if mentions_task and any(marker in low for marker in cancel_markers):
+            return {"action": "away_task_cancel", "task_id": ""}
+        if mentions_task and any(marker in low for marker in retry_markers):
+            return {"action": "away_task_retry", "task_id": ""}
+        if mentions_task and any(marker in low for marker in status_markers):
+            return {"action": "away_task_status", "task_id": ""}
+        if task_id and "durum" in low:
+            return {"action": "away_task_status", "task_id": task_id}
+        if task_id and "görev" in low:
+            return {"action": "away_task_status", "task_id": task_id}
+        return None
+
+    @staticmethod
+    def _format_away_task_line(record: Any) -> str:
+        title = str(getattr(record, "user_input", "") or "").strip().replace("\n", " ")
+        title = title[:80] + ("..." if len(title) > 80 else "")
+        return f"- {record.task_id} [{record.state}] {title}".rstrip()
+
+    @staticmethod
+    def _format_foreground_task_line(record: Any) -> str:
+        title = str(getattr(record, "objective", "") or "").strip().replace("\n", " ")
+        title = title[:80] + ("..." if len(title) > 80 else "")
+        return f"- {record.task_id} [{record.state}] {title}".rstrip()
+
+    @staticmethod
+    def _away_task_metadata(record: Any) -> dict[str, Any]:
+        return {
+            "task_id": str(getattr(record, "task_id", "") or ""),
+            "state": str(getattr(record, "state", "") or ""),
+            "workflow_id": str(getattr(record, "workflow_id", "") or ""),
+            "capability_domain": str(getattr(record, "capability_domain", "") or ""),
+            "run_id": str(getattr(record, "run_id", "") or ""),
+            "summary": str(getattr(record, "result_summary", "") or "")[:200],
+        }
+
+    @staticmethod
+    def _foreground_task_metadata(record: Any) -> dict[str, Any]:
+        history = list(getattr(record, "history", []) or [])
+        last_note = ""
+        if history:
+            last = history[-1]
+            last_note = str(getattr(last, "note", "") or "")
+        return {
+            "task_id": str(getattr(record, "task_id", "") or ""),
+            "state": str(getattr(record, "state", "") or ""),
+            "objective": str(getattr(record, "objective", "") or "")[:200],
+            "artifact_count": len(list(getattr(record, "artifacts", []) or [])),
+            "last_note": last_note,
+            "type": "foreground",
+        }
+
+    @staticmethod
+    def _is_task_control_request(user_input: str) -> bool:
+        low = str(user_input or "").strip().lower()
+        if not low:
+            return False
+        markers = (
+            "görev",
+            "gorev",
+            "task",
+            "arka plan",
+            "away_",
+            "iptal et",
+            "yeniden başlat",
+            "yeniden baslat",
+            "retry",
+        )
+        return any(marker in low for marker in markers)
+
+    def _build_resume_task_suggestion(self, user_id: str, user_input: str) -> dict[str, Any] | None:
+        if self._is_task_control_request(user_input):
+            return None
+        resumable = away_task_registry.latest_for_user(
+            user_id,
+            states=["failed", "partial", "cancelled", "queued", "running"],
+        )
+        if resumable is None:
+            return None
+        task_id = str(getattr(resumable, "task_id", "") or "")
+        if not task_id:
+            return None
+        cache = getattr(self, "_task_suggestion_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._task_suggestion_cache = cache
+        now = time.time()
+        last_ts = float(cache.get(task_id) or 0.0)
+        if (now - last_ts) < 300.0:
+            return None
+        cache[task_id] = now
+        state = str(getattr(resumable, "state", "") or "").strip().lower()
+        prompt = str(getattr(resumable, "user_input", "") or "").strip()
+        action = "retry" if state in {"failed", "partial", "cancelled"} else "status"
+        text = f"İstersen yarım kalan '{prompt[:60]}' görevine devam edebilirim."
+        return {
+            "task_id": task_id,
+            "state": state,
+            "suggested_action": action,
+            "text": text,
+        }
+
+    @staticmethod
+    def _away_retry_policy(capability_domain: str, workflow_id: str, metadata: dict | None = None) -> dict[str, Any]:
+        meta = dict(metadata or {})
+        mode = str(meta.get("autonomy_mode") or meta.get("mode") or "").strip().lower()
+        cap = str(capability_domain or "").strip().lower()
+        workflow = str(workflow_id or "").strip().lower()
+
+        if cap == "research" or workflow == "research_workflow":
+            base = {"auto_retry": True, "max_retries": 2, "retry_on_partial": True, "retry_on_failure": True}
+        elif cap in {"coding", "website"} or workflow in {"coding_workflow", "website_delivery_workflow"}:
+            base = {"auto_retry": True, "max_retries": 2, "retry_on_partial": True, "retry_on_failure": True}
+        elif cap in {"screen_operator", "desktop_control"} or workflow == "screen_operator_workflow":
+            base = {"auto_retry": True, "max_retries": 1, "retry_on_partial": False, "retry_on_failure": True}
+        else:
+            base = {"auto_retry": True, "max_retries": 1, "retry_on_partial": False, "retry_on_failure": True}
+
+        if mode not in {"full", "background", "away", "async", "arka_planda"}:
+            base["max_retries"] = min(int(base["max_retries"]), 1)
+
+        if "auto_retry" in meta:
+            base["auto_retry"] = bool(meta.get("auto_retry"))
+        if "max_retries" in meta:
+            try:
+                base["max_retries"] = max(0, int(meta.get("max_retries") or 0))
+            except Exception:
+                pass
+        if "retry_on_partial" in meta:
+            base["retry_on_partial"] = bool(meta.get("retry_on_partial"))
+        if "retry_on_failure" in meta:
+            base["retry_on_failure"] = bool(meta.get("retry_on_failure"))
+        return base
+
+    async def _handle_away_task_command(self, user_input: str, *, user_id: str) -> AgentResponse | None:
+        command = self._parse_away_task_command(user_input)
+        if not isinstance(command, dict):
+            return None
+
+        action = str(command.get("action") or "").strip().lower()
+        task_id = str(command.get("task_id") or "").strip()
+        run_id = f"taskctl_{uuid.uuid4().hex[:10]}"
+
+        if action == "away_task_list":
+            active = away_task_registry.list_for_user(
+                user_id,
+                limit=8,
+                states=["queued", "running", "partial"],
+            )
+            foreground = task_brain.list_for_user(
+                user_id,
+                limit=5,
+                states=["pending", "planning", "executing", "verifying", "partial", "completed"],
+            )
+            lines = []
+            if active:
+                lines.append("Arka plan gorevleri:")
+                lines.extend(self._format_away_task_line(item) for item in active[:5])
+            if foreground:
+                if lines:
+                    lines.append("")
+                lines.append("Son gorevler:")
+                lines.extend(self._format_foreground_task_line(item) for item in foreground[:5])
+            text = "\n".join(lines) if lines else "Aktif veya son gorev bulunmuyor."
+            return AgentResponse(
+                run_id=run_id,
+                text=text,
+                status="success",
+                error="",
+                metadata={
+                    "task_list": [self._away_task_metadata(item) for item in active],
+                    "recent_tasks": [self._foreground_task_metadata(item) for item in foreground],
+                },
+            )
+
+        target = away_task_registry.get(task_id) if task_id else None
+        if target is None and action == "away_task_status":
+            target = away_task_registry.latest_for_user(user_id, states=["queued", "running", "partial"])
+            if target is None:
+                target = away_task_registry.latest_for_user(user_id)
+        if target is None and action == "away_task_cancel":
+            target = away_task_registry.latest_for_user(user_id, states=["queued", "running", "partial"])
+        if target is None and action == "away_task_retry":
+            target = away_task_registry.latest_for_user(user_id, states=["failed", "cancelled", "partial"])
+        if target is None or str(getattr(target, "user_id", "")) != str(user_id or ""):
+            fg_target = None
+            if action == "away_task_status":
+                fg_target = task_brain.latest_for_user(user_id)
+            if fg_target is None:
+                return AgentResponse(
+                    run_id=run_id,
+                    text="Gorev bulunamadi.",
+                    status="partial",
+                    error="task_not_found",
+                )
+            lines = [
+                f"Gorev: {fg_target.task_id}",
+                f"Durum: {fg_target.state}",
+                f"Hedef: {fg_target.objective[:200]}",
+            ]
+            if getattr(fg_target, "artifacts", None):
+                lines.append(f"Artifact: {len(list(fg_target.artifacts or []))}")
+            return AgentResponse(
+                run_id=run_id,
+                text="\n".join(lines),
+                status="success",
+                error="",
+                metadata={"task": self._foreground_task_metadata(fg_target)},
+            )
+
+        if action == "away_task_status":
+            lines = [
+                f"Gorev: {target.task_id}",
+                f"Durum: {target.state}",
+                f"Workflow: {target.workflow_id or 'general'}",
+            ]
+            summary = str(getattr(target, "result_summary", "") or "").strip()
+            if summary:
+                lines.append(f"Ozet: {summary[:200]}")
+            err = str(getattr(target, "error", "") or "").strip()
+            if err:
+                lines.append(f"Hata: {err[:200]}")
+            return AgentResponse(
+                run_id=run_id,
+                text="\n".join(lines),
+                status="success",
+                error="",
+                metadata={"task": self._away_task_metadata(target)},
+            )
+
+        if action == "away_task_cancel":
+            updated = await background_task_runner.cancel(target.task_id)
+            state = str(getattr(updated, "state", "") or target.state)
+            return AgentResponse(
+                run_id=run_id,
+                text=f"Gorev durduruldu: {target.task_id} [{state}]",
+                status="success",
+                error="",
+                metadata={"task": self._away_task_metadata(updated or target)},
+            )
+        updated = await background_task_runner.retry(target.task_id)
+        state = str(getattr(updated, "state", "") or "queued")
+        return AgentResponse(
+            run_id=run_id,
+            text=f"Gorev yeniden siraya alindi: {target.task_id} [{state}]",
+            status="success",
+            error="",
+            metadata={"task": self._away_task_metadata(updated or target)},
+        )
+
+    def _build_away_task_handler(self):
+        async def _handler(record):
+            resp = await self.process_envelope(
+                record.user_input,
+                attachments=list(getattr(record, "attachments", []) or []),
+                channel=record.channel,
+                metadata={**dict(getattr(record, "metadata", {}) or {}), "background_dispatch": True},
+            )
+            return {
+                "status": str(getattr(resp, "status", "success") or "success"),
+                "run_id": str(getattr(resp, "run_id", "") or ""),
+                "summary": str(getattr(resp, "text", "") or "")[:300],
+                "text": str(getattr(resp, "text", "") or ""),
+                "error": str(getattr(resp, "error", "") or ""),
+                "attachments": list(resp.to_unified_attachments()) if hasattr(resp, "to_unified_attachments") else [],
+            }
+
+        return _handler
+
     async def initialize(self) -> bool:
         await self.kernel.initialize()
         self.llm = self.kernel.llm
+        handler = self._build_away_task_handler()
+        background_task_runner.set_resume_handler(handler)
+        await background_task_runner.start_resume_loop(handler, interval_s=15.0)
         logger.info("Agent Initialized.")
         return True
 
@@ -387,17 +826,6 @@ class Agent:
         if env_value is not None:
             return self._bool_from_env(env_value, default)
 
-        key_map = {
-            "ELYAN_AGENTIC_V2": "agent.flags.agentic_v2",
-            "ELYAN_DAG_EXEC": "agent.flags.dag_exec",
-            "ELYAN_STRICT_TASKSPEC": "agent.flags.strict_taskspec",
-        }
-        cfg_key = key_map.get(str(flag_name or "").strip(), "")
-        if cfg_key:
-            cfg_val = elyan_config.get(cfg_key, None)
-            if cfg_val is not None:
-                return self._bool_from_env(cfg_val, default)
-
         policy = self._current_runtime_policy()
         if isinstance(policy, dict):
             flags = policy.get("flags", {}) if isinstance(policy.get("flags"), dict) else {}
@@ -417,6 +845,17 @@ class Agent:
                 policy_key = token.replace("elyan_", "").lower()
                 if policy_key in meta:
                     return self._bool_from_env(meta.get(policy_key), default)
+
+        key_map = {
+            "ELYAN_AGENTIC_V2": "agent.flags.agentic_v2",
+            "ELYAN_DAG_EXEC": "agent.flags.dag_exec",
+            "ELYAN_STRICT_TASKSPEC": "agent.flags.strict_taskspec",
+        }
+        cfg_key = key_map.get(str(flag_name or "").strip(), "")
+        if cfg_key:
+            cfg_val = elyan_config.get(cfg_key, None)
+            if cfg_val is not None:
+                return self._bool_from_env(cfg_val, default)
 
         return bool(default)
 
@@ -515,6 +954,70 @@ class Agent:
 
         uid = str(self.current_user_id or "local")
         raw_attachments, resolved_paths = self._normalize_inbound_attachments(attachments)
+        away_task_command = await self._handle_away_task_command(user_input, user_id=uid)
+        if away_task_command is not None:
+            return away_task_command
+        if self._should_schedule_away_task(user_input, metadata):
+            cap_plan = self.capability_router.route(user_input) if getattr(self, "capability_router", None) else None
+            cap_domain = str(getattr(cap_plan, "domain", "general") or "general")
+            workflow_id = str(getattr(cap_plan, "workflow_id", "") or "")
+            retry_policy = self._away_retry_policy(cap_domain, workflow_id, metadata)
+            task_metadata = dict(metadata or {})
+            task_metadata["background_dispatch"] = True
+
+            async def _background_handler(record):
+                resp = await self.process_envelope(
+                    record.user_input,
+                    attachments=list(raw_attachments),
+                    channel=record.channel,
+                    metadata=task_metadata,
+                )
+                return {
+                    "status": str(getattr(resp, "status", "success") or "success"),
+                    "run_id": str(getattr(resp, "run_id", "") or ""),
+                    "summary": str(getattr(resp, "text", "") or "")[:300],
+                    "text": str(getattr(resp, "text", "") or ""),
+                    "error": str(getattr(resp, "error", "") or ""),
+                    "attachments": list(resp.to_unified_attachments()) if hasattr(resp, "to_unified_attachments") else [],
+                }
+
+            away_record = await background_task_runner.submit(
+                user_input=user_input,
+                user_id=uid,
+                channel=str(channel or "cli"),
+                capability_domain=cap_domain,
+                workflow_id=workflow_id,
+                handler=_background_handler,
+                metadata={
+                    "attachments": list(resolved_paths),
+                    "requested_via": "agent",
+                    "channel_type": str(channel or "cli"),
+                    "channel_id": str((metadata or {}).get("channel_id") or (metadata or {}).get("chat_id") or ""),
+                    **retry_policy,
+                },
+            )
+            return AgentResponse(
+                run_id=f"queued_{away_record.task_id}",
+                text=f"Gorev arka planda siraya alindi: {away_record.task_id}",
+                attachments=[],
+                evidence_manifest_path="",
+                status="partial",
+                error="",
+                metadata={
+                    "away_task_id": away_record.task_id,
+                    "capability_domain": cap_domain,
+                    "workflow_id": workflow_id,
+                    "mode": "background",
+                },
+            )
+        task = task_brain.create_task(
+            objective=user_input,
+            user_input=user_input,
+            channel=str(channel or "cli"),
+            user_id=uid,
+            attachments=resolved_paths,
+        )
+        task_brain.save_task(task)
         runtime_policy = get_runtime_policy_resolver().resolve()
         autonomy_mode = ""
         if isinstance(metadata, dict):
@@ -553,6 +1056,17 @@ class Agent:
             "security": dict(runtime_policy.security),
             "metadata": {"channel": str(channel or "cli"), "user_id": uid},
         }
+        try:
+            profile = self.user_profile.profile_summary(uid)
+        except Exception:
+            profile = {}
+        response_cfg = ctx.runtime_policy.get("response", {}) if isinstance(ctx.runtime_policy.get("response"), dict) else {}
+        response_bias = str(profile.get("response_length_bias") or "short").strip().lower()
+        if response_bias in {"short", "medium", "detailed"}:
+            response_cfg.setdefault("mode", "concise" if response_bias == "short" else ("formal" if response_bias == "medium" else "friendly"))
+        response_cfg.setdefault("friendly", False if response_bias == "short" else bool(response_cfg.get("friendly", True)))
+        response_cfg.setdefault("share_attachments_default", True)
+        ctx.runtime_policy["response"] = response_cfg
         if autonomy_mode in {"full", "full-autonomy", "tam_otonom", "tam-otonom"}:
             ctx.runtime_policy["name"] = "full-autonomy"
             sec_cfg = ctx.runtime_policy.get("security", {}) if isinstance(ctx.runtime_policy.get("security"), dict) else {}
@@ -573,7 +1087,17 @@ class Agent:
         runtime_policy_token = _active_runtime_policy.set(dict(ctx.runtime_policy or {}))
         state_token = set_current_pipeline_state(create_pipeline_state())
         try:
+            task.transition("planning", note="pipeline_context_ready")
+            task_brain.save_task(task)
+            run_store.write_task(
+                {},
+                user_input=user_input,
+                metadata={"channel": channel, "user_id": uid, "phase": "planning"},
+                task_state=task.to_dict(),
+            )
             from core import pipeline as _pipeline_mod
+            task.transition("executing", note="pipeline_started")
+            task_brain.save_task(task)
             ctx = await _pipeline_mod.pipeline_runner.run(ctx, agent=self)
 
             if ctx.action:
@@ -613,16 +1137,49 @@ class Agent:
                 candidate = ctx.intent.get("task_spec")
                 if isinstance(candidate, dict):
                     task_spec = candidate
+            task.context.update(
+                {
+                    "action": str(ctx.action or ""),
+                    "job_type": str(ctx.job_type or ""),
+                    "capability_domain": str(ctx.capability_domain or ""),
+                    "workflow_id": str(getattr(ctx, "workflow_id", "") or ""),
+                    "hybrid_model": dict(getattr(ctx, "hybrid_model", {}) or {}),
+                    "channel": str(ctx.channel or channel or ""),
+                    "user_id": str(ctx.user_id or uid),
+                }
+            )
+            if isinstance(getattr(ctx, "plan", None), list):
+                task.subtasks = [
+                    {
+                        "id": str(step.get("id") or f"step_{idx+1}"),
+                        "action": str(step.get("action") or ""),
+                        "description": str(step.get("description") or step.get("title") or ""),
+                    }
+                    for idx, step in enumerate(ctx.plan)
+                    if isinstance(step, dict)
+                ]
             run_store.write_task(
                 task_spec,
                 user_input=user_input,
                 metadata={
                     "action": ctx.action,
                     "job_type": ctx.job_type,
+                    "capability_domain": str(ctx.capability_domain or ""),
+                    "workflow_id": str(getattr(ctx, "workflow_id", "") or ""),
+                    "hybrid_model": dict(getattr(ctx, "hybrid_model", {}) or {}),
                     "channel": ctx.channel,
                     "user_id": ctx.user_id,
                 },
+                task_state=task.to_dict(),
             )
+            for item in list(getattr(ctx, "tool_results", []) or []):
+                try:
+                    tool_name = ""
+                    if isinstance(item, dict):
+                        tool_name = str(item.get("tool") or item.get("action") or item.get("specialist") or "")
+                    ledger.register_result(tool=tool_name, result=item, source="pipeline")
+                except Exception:
+                    pass
             if ctx.action not in {"", "chat", None} and ledger.artifacts:
                 adapted = []
                 for a in ledger.artifacts:
@@ -637,15 +1194,48 @@ class Agent:
                         if tool == "set_wallpaper":
                             source_result["_proof"] = {"screenshot": item.get("path", "")}
                     evidence = adapt_evidence(tool, source_result)
+                    if not evidence and isinstance(source_result, dict):
+                        normalized = coerce_execution_result(source_result, tool=tool or str(ctx.action or ""), source="pipeline")
+                        if normalized.evidence:
+                            evidence = normalized.evidence[0]
                     if evidence:
                         item["evidence"] = evidence
                     adapted.append(item)
                 ledger.artifacts = adapted
+            task.register_artifacts(list(ledger.artifacts))
+            task.transition(
+                "verifying",
+                note="evidence_registered",
+                metadata={"artifact_count": len(list(ledger.artifacts or [])), "error_count": len(list(ctx.errors or []))},
+            )
+            task_brain.save_task(task)
             run_store.write_evidence(
                 manifest_path=manifest,
                 steps=[s.to_dict() for s in ledger.steps],
                 artifacts=list(ledger.artifacts),
                 metadata={"status": status, "errors": list(ctx.errors or [])},
+            )
+            final_state = "completed" if status == "success" else ("partial" if status == "partial" else "failed")
+            task.transition(
+                final_state,
+                note="response_ready",
+                metadata={"status": status, "action": str(ctx.action or ""), "job_type": str(ctx.job_type or "")},
+            )
+            task_brain.save_task(task)
+            run_store.write_task(
+                task_spec,
+                user_input=user_input,
+                metadata={
+                    "action": ctx.action,
+                    "job_type": ctx.job_type,
+                    "capability_domain": str(ctx.capability_domain or ""),
+                    "workflow_id": str(getattr(ctx, "workflow_id", "") or ""),
+                    "hybrid_model": dict(getattr(ctx, "hybrid_model", {}) or {}),
+                    "channel": ctx.channel,
+                    "user_id": ctx.user_id,
+                    "status": status,
+                },
+                task_state=task.to_dict(),
             )
             summary_path = run_store.write_summary(
                 status=status,
@@ -670,6 +1260,16 @@ class Agent:
                 paths = [a.get("path") for a in ledger.artifacts if a.get("path")]
                 if paths and "Artifact" not in final_text and "artifact" not in final_text.lower():
                     final_text = f"{final_text}\n\nArtifacts:\n" + "\n".join(f"- {p}" for p in paths)
+            resume_suggestion = None
+            if status == "success":
+                try:
+                    resume_suggestion = self._build_resume_task_suggestion(uid, user_input)
+                except Exception:
+                    resume_suggestion = None
+            if isinstance(resume_suggestion, dict):
+                suggestion_text = str(resume_suggestion.get("text") or "").strip()
+                if suggestion_text:
+                    final_text = f"{final_text}\n\n{suggestion_text}".strip()
             final_text = self._apply_conversational_tone(final_text, ctx)
             return AgentResponse(
                 run_id=run_id,
@@ -686,12 +1286,19 @@ class Agent:
                     "evidence_path": str(run_store.base_dir / "evidence.json"),
                     "summary_path": summary_path,
                     "logs_path": logs_path,
+                    "task_suggestion": resume_suggestion or {},
+                    "model_role": str(getattr(ctx, "role", "") or ""),
+                    "model_provider": str(getattr(ctx, "provider", "") or ""),
+                    "model_name": str(getattr(ctx, "model", "") or ""),
+                    "hybrid_model": dict(getattr(ctx, "hybrid_model", {}) or {}),
                 },
             )
         except Exception as exc:
             err = str(exc)
+            task.transition("failed", note="critical_exception", metadata={"error": err})
+            task_brain.save_task(task)
             manifest = ledger.write_manifest(status="failed", error=err, metadata={"channel": channel, "user_id": uid})
-            run_store.write_task({}, user_input=user_input, metadata={"channel": channel, "user_id": uid})
+            run_store.write_task({}, user_input=user_input, metadata={"channel": channel, "user_id": uid}, task_state=task.to_dict())
             run_store.write_evidence(manifest_path=manifest, steps=[s.to_dict() for s in ledger.steps], artifacts=list(ledger.artifacts), metadata={"status": "failed", "error": err})
             run_store.write_summary(status="failed", response_text=f"Çalıştırma sırasında kritik bir hata oluştu: {err}", error=err, artifacts=list(ledger.artifacts), metadata={"manifest_path": manifest})
             run_store.write_logs(lines=[err])
@@ -720,11 +1327,20 @@ class Agent:
         low = str(user_input or "").lower()
         if any(k in low for k in ("kısa", "kisaca", "öz", "özet")):
             return "concise"
+        try:
+            profile = self.user_profile.profile_summary(str(getattr(ctx, "user_id", "") or "local"))
+            bias = str(profile.get("response_length_bias") or "").strip().lower()
+            if bias == "short":
+                return "concise"
+            if bias == "medium":
+                return "formal"
+        except Exception:
+            pass
         if any(k in low for k in ("resmi", "düz", "duz")):
             return "formal"
         if any(k in low for k in ("samimi", "sohbet", "sıcak", "sicak")):
             return "friendly"
-        return "friendly"
+        return "concise"
 
     def _apply_conversational_tone(self, text: str, ctx) -> str:
         """Gerektiğinde yanıtı daha sohbet tonu ile sunar."""
@@ -755,10 +1371,6 @@ class Agent:
                 return text.strip()
             if mode == "formal":
                 return text.strip()
-            # friendly/default
-            suffix = "\n\nBaşka bir isteğin olursa söylersin, hallederim."
-            if len(text.strip()) >= 5 and suffix.strip() not in text:
-                text = f"{text.rstrip()}{suffix}"
         return text
 
     @staticmethod
@@ -797,7 +1409,7 @@ class Agent:
             return True
         try:
             action = str(getattr(ctx, "action", "") or "").strip().lower()
-            if action in {"set_wallpaper", "take_screenshot", "analyze_screen"}:
+            if action in {"set_wallpaper", "take_screenshot", "analyze_screen", "screen_workflow", "research_document_delivery"}:
                 return True
         except Exception:
             pass
@@ -846,7 +1458,7 @@ class Agent:
             if bool(response_cfg.get("share_attachments_default", False)):
                 action = str(getattr(ctx, "action", "") or "").strip().lower()
                 # Varsayılan paylaşım açık olsa bile sadece doğal kanıt odaklı aksiyonlarda otomatik gönder.
-                if action in {"set_wallpaper", "take_screenshot", "analyze_screen"}:
+                if action in {"set_wallpaper", "take_screenshot", "analyze_screen", "screen_workflow", "research_document_delivery"}:
                     return True
             if bool(response_cfg.get("share_manifest_default", False)) and self._user_requested_artifact_details(user_input):
                 return True
@@ -860,6 +1472,76 @@ class Agent:
             err = str(result.get("error") or "tool_error")
             result["error_code"] = classify_error(RuntimeError(err))
         return result
+
+    @staticmethod
+    def _normalize_tool_execution_result(
+        tool_name: str,
+        result: Any,
+        *,
+        source: str = "agent_execute_tool",
+        error_code: str = "",
+    ) -> dict:
+        payload = normalize_legacy_tool_payload(result, tool=str(tool_name or ""), source=source)
+        legacy_success_compat = (
+            isinstance(result, dict)
+            and result.get("success") is True
+            and str(payload.get("status") or "").strip().lower() == "failed"
+            and str(payload.get("error_code") or "").strip() == "TOOL_CONTRACT_VIOLATION"
+        )
+        if legacy_success_compat:
+            compat_message = str(
+                result.get("message")
+                or result.get("summary")
+                or result.get("output")
+                or ""
+            ).strip()
+            payload["success"] = True
+            payload["status"] = "success"
+            payload["message"] = compat_message
+            payload.pop("error", None)
+            payload.pop("error_code", None)
+            payload["errors"] = []
+            payload["evidence"] = []
+            data = dict(payload.get("data") or {})
+            data.pop("error_code", None)
+            data["compat_ambiguous_success"] = True
+            payload["data"] = data
+            contract_payload = dict(payload.get("_tool_result") or {})
+            contract_payload["status"] = "success"
+            contract_payload["message"] = compat_message
+            contract_payload["errors"] = []
+            contract_payload["evidence"] = []
+            contract_data = dict(contract_payload.get("data") or {})
+            contract_data.pop("error_code", None)
+            contract_data["compat_ambiguous_success"] = True
+            contract_payload["data"] = contract_data
+            payload["_tool_result"] = contract_payload
+        metrics = dict(payload.get("metrics") or {})
+        metrics.setdefault("tool_name", str(tool_name or ""))
+        metrics.setdefault("agent_source", str(source or "agent_execute_tool"))
+        if legacy_success_compat:
+            metrics["compat_ambiguous_success"] = True
+        payload["metrics"] = metrics
+        if error_code:
+            if not str(payload.get("error_code") or "").strip():
+                payload["error_code"] = str(error_code)
+            errors = [str(item or "").strip() for item in list(payload.get("errors") or []) if str(item or "").strip()]
+            if error_code not in errors:
+                errors.append(str(error_code))
+            payload["errors"] = errors
+            data = dict(payload.get("data") or {})
+            data.setdefault("error_code", str(error_code))
+            payload["data"] = data
+            contract_payload = dict(payload.get("_tool_result") or {})
+            contract_data = dict(contract_payload.get("data") or {})
+            contract_data.setdefault("error_code", str(error_code))
+            contract_payload["data"] = contract_data
+            contract_errors = [str(item or "").strip() for item in list(contract_payload.get("errors") or []) if str(item or "").strip()]
+            if error_code not in contract_errors:
+                contract_errors.append(str(error_code))
+            contract_payload["errors"] = contract_errors
+            payload["_tool_result"] = contract_payload
+        return payload
 
     @staticmethod
     def _result_text_is_error(text: str) -> bool:
@@ -998,6 +1680,48 @@ class Agent:
 
         return f"Hata: {step_name} — {last_error}", False
 
+    def _tool_event_preview(self, result: Any) -> dict[str, Any]:
+        preview: dict[str, Any] = {}
+        if isinstance(result, dict):
+            for key in ("success", "error", "error_code", "path", "file_path", "output_path", "verified"):
+                if key in result:
+                    preview[key] = result.get(key)
+            txt = self._format_result_text(result)
+            if isinstance(txt, str) and txt.strip():
+                preview["text"] = txt[:240]
+            artifacts = []
+            for key in ("artifacts", "files_created", "report_paths"):
+                val = result.get(key)
+                if isinstance(val, list):
+                    artifacts.extend([str(x).strip() for x in val if str(x).strip()])
+            if artifacts:
+                preview["artifacts"] = list(dict.fromkeys(artifacts))[:8]
+        else:
+            text = str(result or "").strip()
+            if text:
+                preview["text"] = text[:240]
+        return preview
+
+    def _suppress_duplicate_confirmation(self, tool_name: str, result: Any, success: bool) -> bool:
+        if not success:
+            return False
+        try:
+            text = ""
+            if isinstance(result, dict):
+                text = str(result.get("message") or result.get("summary") or result.get("output") or "").strip().lower()
+            if not text:
+                text = str(self._format_result_text(result) or "").strip().lower()
+            if not text:
+                return False
+            key = f"{str(tool_name or '').strip().lower()}::{text[:120]}"
+            now = time.time()
+            last_key = str(self._last_tool_confirmation.get("key") or "")
+            last_ts = float(self._last_tool_confirmation.get("ts") or 0.0)
+            self._last_tool_confirmation = {"key": key, "ts": now}
+            return key == last_key and (now - last_ts) <= 8.0
+        except Exception:
+            return False
+
     async def _execute_tool(
         self,
         tool_name: str,
@@ -1034,6 +1758,13 @@ class Agent:
             user_input=user_input,
             step_name=step_name,
         )
+        _push_tool_event(
+            "start",
+            mapped_tool,
+            step=step_name,
+            request_id=str(getattr(_tr_req, "request_id", "") or ""),
+            payload={"params": clean_params, "user_input": str(user_input or "")[:140]},
+        )
 
         # Special case: Chat action fallback
         uid = str(self.current_user_id or "").strip()
@@ -1043,6 +1774,39 @@ class Agent:
         if not uid or uid.lower() in {"local", "none", "null", "0"}:
             uid = runtime_uid or uid or "local"
         channel = str(runtime_meta.get("channel", "") or runtime_meta.get("channel_type", "") or "").strip()
+
+        # Optional strict typed-tool gate (non-breaking by default).
+        typed_tools_strict = False
+        try:
+            from config.elyan_config import elyan_config
+
+            typed_tools_strict = bool(elyan_config.get("agent.flags.typed_tools_strict", False))
+        except Exception:
+            pass
+        try:
+            ff = runtime_policy.get("feature_flags", {}) if isinstance(runtime_policy.get("feature_flags"), dict) else {}
+            if "typed_tools_strict" in ff:
+                typed_tools_strict = bool(ff.get("typed_tools_strict"))
+        except Exception:
+            pass
+        if typed_tools_strict:
+            try:
+                from core.pipeline_upgrade.executor import validate_tool_io
+
+                in_gate = validate_tool_io(mapped_tool, clean_params if isinstance(clean_params, dict) else {}, {})
+                if not in_gate.ok:
+                    err_text = f"typed_tool_input_rejected:{';'.join(in_gate.errors)}"
+                    _push_tool_event(
+                        "end",
+                        mapped_tool,
+                        step=step_name,
+                        request_id=str(getattr(_tr_req, "request_id", "") or ""),
+                        success=False,
+                        payload={"error": err_text},
+                    )
+                    return {"success": False, "error": err_text, "error_code": "TOOL_INPUT_SCHEMA"}
+            except Exception:
+                pass
 
         # --- Runtime Guard (RBAC + operator policy + path/command checks) ---
         guard = runtime_security_guard.evaluate(
@@ -1129,20 +1893,23 @@ class Agent:
         if requires_approval:
             # Smart Approval Check
             should_ask = True
-            # Default to non-interactive autonomy unless explicitly enabled.
-            interactive_approval = False
+            sec_cfg = runtime_policy.get("security", {}) if isinstance(runtime_policy.get("security"), dict) else {}
+            # Secure default: do not auto-approve in non-interactive channels.
+            interactive_approval = bool(sec_cfg.get("interactive_approval_default", False))
             if "interactive_approval" in runtime_meta:
                 interactive_approval = bool(runtime_meta.get("interactive_approval"))
 
             if not interactive_approval:
                 should_ask = False
+                err_text = "Bu islem icin interaktif onay gerekiyor."
                 self._audit_security_event(
                     uid,
-                    f"approval_auto:{mapped_tool}",
-                    "non_interactive_channel_auto_approved",
+                    f"approval_required_noninteractive:{mapped_tool}",
+                    "approval_required_noninteractive",
                     params={"tool": mapped_tool, "risk": guard.get("risk")},
                     channel=channel,
                 )
+                return {"success": False, "error": err_text, "error_code": "APPROVAL_REQUIRED"}
 
             if self.learning and hasattr(self.learning, "check_approval_confidence"):
                 confidence = self.learning.check_approval_confidence(mapped_tool, clean_params)
@@ -1243,10 +2010,18 @@ class Agent:
                 fallback=None,
                 context=f"tool:{mapped_tool}",
             )
+            result = self._normalize_tool_execution_result(mapped_tool, result, source="agent_kernel_execute")
             if isinstance(result, dict) and result.get("success") is False:
                 err_text = str(result.get("error", "") or "")
                 if not result.get("error_code"):
                     result["error_code"] = classify_error(RuntimeError(err_text or "tool_error"))
+                _push_tool_event(
+                    "update",
+                    mapped_tool,
+                    step=step_name,
+                    request_id=str(getattr(_tr_req, "request_id", "") or ""),
+                    payload={"status": "initial_failure", "error": err_text[:220]},
+                )
                 
                 # ── Self-Healing Attempt ──────────────────────────────────────
                 healing_engine = get_healing_engine()
@@ -1258,7 +2033,18 @@ class Agent:
                 
                 if known_solution and "params" in known_solution:
                     logger.info(f"Proven solution found in Knowledge Base for '{mapped_tool}'. Retrying with proven params.")
-                    retry_result = await self.kernel.tools.execute(mapped_tool, known_solution["params"])
+                    _push_tool_event(
+                        "update",
+                        mapped_tool,
+                        step=step_name,
+                        request_id=str(getattr(_tr_req, "request_id", "") or ""),
+                        payload={"status": "kb_retry"},
+                    )
+                    retry_result = self._normalize_tool_execution_result(
+                        mapped_tool,
+                        await self.kernel.tools.execute(mapped_tool, known_solution["params"]),
+                        source="agent_kernel_execute",
+                    )
                     if isinstance(retry_result, dict) and retry_result.get("success"):
                         result = retry_result
                         result["_healed"] = True
@@ -1269,6 +2055,13 @@ class Agent:
                     ctx = {"tool_name": mapped_tool, "params": clean_params}
                     plan = await healing_engine.get_healing_plan(diagnosis, err_text, ctx)
                     logger.info(f"Self-Healing: {plan['description']} (Can fix: {plan['can_auto_fix']})")
+                    _push_tool_event(
+                        "update",
+                        mapped_tool,
+                        step=step_name,
+                        request_id=str(getattr(_tr_req, "request_id", "") or ""),
+                        payload={"status": "self_healing_plan", "description": str(plan.get("description") or "")[:180]},
+                    )
                     
                     if plan["can_auto_fix"]:
                         # If we can auto-fix (e.g. change path or install module), do it and retry.
@@ -1286,7 +2079,11 @@ class Agent:
                             # If planning to switch provider, pass it as internal param
                             retry_params["_provider_override"] = plan["suggested_provider"]
 
-                        retry_result = await self.kernel.tools.execute(mapped_tool, retry_params)
+                        retry_result = self._normalize_tool_execution_result(
+                            mapped_tool,
+                            await self.kernel.tools.execute(mapped_tool, retry_params),
+                            source="agent_kernel_execute",
+                        )
                         result = retry_result
                         clean_params = retry_params
                         if isinstance(result, dict) and result.get("success") is False:
@@ -1317,7 +2114,18 @@ class Agent:
                         step_name=step_name,
                     )
                     if repaired_params:
-                        retry_result = await self.kernel.tools.execute(mapped_tool, repaired_params)
+                        _push_tool_event(
+                            "update",
+                            mapped_tool,
+                            step=step_name,
+                            request_id=str(getattr(_tr_req, "request_id", "") or ""),
+                            payload={"status": "deterministic_repair_retry"},
+                        )
+                        retry_result = self._normalize_tool_execution_result(
+                            mapped_tool,
+                            await self.kernel.tools.execute(mapped_tool, repaired_params),
+                            source="agent_kernel_execute",
+                        )
                         result = retry_result
                         clean_params = repaired_params
                         if isinstance(result, dict) and result.get("success") is False:
@@ -1329,7 +2137,11 @@ class Agent:
             if mapped_tool == "set_wallpaper" and isinstance(result, dict) and result.get("success"):
                 try:
                     if "take_screenshot" in AVAILABLE_TOOLS:
-                        proof = await self.kernel.tools.execute("take_screenshot", {"filename": "wallpaper_proof.png"})
+                        proof = self._normalize_tool_execution_result(
+                            "take_screenshot",
+                            await self.kernel.tools.execute("take_screenshot", {"filename": "wallpaper_proof.png"}),
+                            source="agent_kernel_execute",
+                        )
                         if isinstance(proof, dict) and proof.get("success"):
                             result.setdefault("_proof", {})["screenshot"] = proof.get("path") or proof.get("file_path")
                 except Exception:
@@ -1347,7 +2159,11 @@ class Agent:
                 ):
                     proof_map = result.get("_proof", {}) if isinstance(result.get("_proof"), dict) else {}
                     if not proof_map.get("screenshot"):
-                        shot = await self.kernel.tools.execute("take_screenshot", {"filename": f"proof_{mapped_tool}.png"})
+                        shot = self._normalize_tool_execution_result(
+                            "take_screenshot",
+                            await self.kernel.tools.execute("take_screenshot", {"filename": f"proof_{mapped_tool}.png"}),
+                            source="agent_kernel_execute",
+                        )
                         if isinstance(shot, dict) and shot.get("success"):
                             result.setdefault("_proof", {})["screenshot"] = shot.get("path") or shot.get("file_path")
             except Exception:
@@ -1367,7 +2183,11 @@ class Agent:
                     try:
                         # Strip internal keys before passing to tool
                         exec_params = {k: v for k, v in clean_params.items() if not k.startswith("_")}
-                        retry_res = await self.kernel.tools.execute(mapped_tool, exec_params)
+                        retry_res = self._normalize_tool_execution_result(
+                            mapped_tool,
+                            await self.kernel.tools.execute(mapped_tool, exec_params),
+                            source="agent_kernel_execute",
+                        )
                         result = self._postprocess_tool_result(mapped_tool, clean_params, retry_res, user_input=user_input)
                         if result.get("verified"):
                             result["_healed"] = True
@@ -1431,6 +2251,22 @@ class Agent:
                 pass
             # ----------------------
 
+            if typed_tools_strict:
+                try:
+                    from core.pipeline_upgrade.executor import validate_tool_io
+
+                    out_gate = validate_tool_io(mapped_tool, clean_params if isinstance(clean_params, dict) else {}, result)
+                    if not out_gate.ok:
+                        err_text = f"typed_tool_output_rejected:{';'.join(out_gate.errors)}"
+                        result = self._normalize_tool_execution_result(
+                            mapped_tool,
+                            {"success": False, "status": "failed", "error": err_text},
+                            source="agent_kernel_execute",
+                            error_code="TOOL_OUTPUT_SCHEMA",
+                        )
+                except Exception:
+                    pass
+
             success = not (isinstance(result, dict) and result.get("success") is False)
             if success:
                 self._update_file_context_after_tool(mapped_tool, clean_params, result)
@@ -1466,12 +2302,29 @@ class Agent:
                     clean_params = self._prepare_tool_params(resolved, clean_params, user_input=user_input, step_name=step_name)
                 if not tool_func:
                     err_text = f"Tool '{mapped_tool}' not found or unavailable."
-                    return {"success": False, "error": err_text}
+                    return self._attach_error_code(
+                        self._normalize_tool_execution_result(
+                            mapped_tool,
+                            {
+                                "success": False,
+                                "status": "failed",
+                                "error": err_text,
+                                "errors": ["UNKNOWN_TOOL"],
+                                "data": {"error_code": "UNKNOWN_TOOL"},
+                            },
+                            source="agent_fallback_lookup",
+                            error_code="UNKNOWN_TOOL",
+                        )
+                    )
             try:
                 invoke_params = self._adapt_params_for_tool_signature(
                     tool_func, mapped_tool, clean_params, user_input=user_input, step_name=step_name
                 )
-                result = await self._invoke_tool_callable(tool_func, invoke_params)
+                result = self._normalize_tool_execution_result(
+                    used_tool,
+                    await self._invoke_tool_callable(tool_func, invoke_params),
+                    source="agent_fallback_callable",
+                )
                 if isinstance(result, dict) and result.get("success") is False:
                     err_text = str(result.get("error", "") or "")
                     repaired_params = self._repair_tool_params_from_error(
@@ -1482,7 +2335,11 @@ class Agent:
                         step_name=step_name,
                     )
                     if repaired_params:
-                        result = await self._invoke_tool_callable(tool_func, repaired_params)
+                        result = self._normalize_tool_execution_result(
+                            used_tool,
+                            await self._invoke_tool_callable(tool_func, repaired_params),
+                            source="agent_fallback_callable",
+                        )
                         invoke_params = repaired_params
                         if isinstance(result, dict) and result.get("success") is False:
                             err_text = str(result.get("error", "") or err_text)
@@ -1490,6 +2347,21 @@ class Agent:
                 if isinstance(result, dict) and result.get("success") is False:
                     err_text = str(result.get("error", ""))
                 result = self._postprocess_tool_result(used_tool, invoke_params, result, user_input=user_input)
+                if typed_tools_strict:
+                    try:
+                        from core.pipeline_upgrade.executor import validate_tool_io
+
+                        out_gate = validate_tool_io(used_tool, invoke_params if isinstance(invoke_params, dict) else {}, result)
+                        if not out_gate.ok:
+                            err_text = f"typed_tool_output_rejected:{';'.join(out_gate.errors)}"
+                            result = self._normalize_tool_execution_result(
+                                used_tool,
+                                {"success": False, "status": "failed", "error": err_text},
+                                source="agent_fallback_callable",
+                                error_code="TOOL_OUTPUT_SCHEMA",
+                            )
+                    except Exception:
+                        pass
                 success = not (isinstance(result, dict) and result.get("success") is False)
                 if success:
                     self._update_file_context_after_tool(used_tool, invoke_params, result)
@@ -1504,11 +2376,30 @@ class Agent:
                 )
                 if repaired_params:
                     try:
-                        result = await self._invoke_tool_callable(tool_func, repaired_params)
+                        result = self._normalize_tool_execution_result(
+                            used_tool,
+                            await self._invoke_tool_callable(tool_func, repaired_params),
+                            source="agent_fallback_callable",
+                        )
                         success = not (isinstance(result, dict) and result.get("success") is False)
                         if isinstance(result, dict) and result.get("success") is False:
                             err_text = str(result.get("error", ""))
                         result = self._postprocess_tool_result(used_tool, repaired_params, result, user_input=user_input)
+                        if typed_tools_strict:
+                            try:
+                                from core.pipeline_upgrade.executor import validate_tool_io
+
+                                out_gate = validate_tool_io(used_tool, repaired_params if isinstance(repaired_params, dict) else {}, result)
+                                if not out_gate.ok:
+                                    err_text = f"typed_tool_output_rejected:{';'.join(out_gate.errors)}"
+                                    result = self._normalize_tool_execution_result(
+                                        used_tool,
+                                        {"success": False, "status": "failed", "error": err_text},
+                                        source="agent_fallback_callable",
+                                        error_code="TOOL_OUTPUT_SCHEMA",
+                                    )
+                            except Exception:
+                                pass
                         success = not (isinstance(result, dict) and result.get("success") is False)
                         if success:
                             self._update_file_context_after_tool(used_tool, repaired_params, result)
@@ -1516,22 +2407,69 @@ class Agent:
                     except Exception as retry_exc:
                         logger.error(f"Fallback tool retry failed ({mapped_tool}): {retry_exc}")
                         err_text = str(retry_exc)
-                        return self._attach_error_code({"success": False, "error": str(retry_exc)})
+                        return self._attach_error_code(
+                            self._normalize_tool_execution_result(
+                                used_tool,
+                                {"success": False, "status": "failed", "error": str(retry_exc)},
+                                source="agent_fallback_callable",
+                                error_code="EXECUTION_EXCEPTION",
+                            )
+                        )
                 friendly_error = self._friendly_missing_argument_error(str(e), tool_name=used_tool)
                 if friendly_error:
                     logger.warning(f"Tool invocation missing param ({used_tool}): {friendly_error}")
                     err_text = friendly_error
-                    return self._attach_error_code({"success": False, "error": friendly_error})
+                    return self._attach_error_code(
+                        self._normalize_tool_execution_result(
+                            used_tool,
+                            {"success": False, "status": "needs_input", "error": friendly_error, "message": friendly_error},
+                            source="agent_fallback_callable",
+                        )
+                    )
                 logger.error(f"Fallback tool execution error ({mapped_tool}): {e}")
                 err_text = str(e)
-                return self._attach_error_code({"success": False, "error": str(e)})
+                return self._attach_error_code(
+                    self._normalize_tool_execution_result(
+                        used_tool,
+                        {"success": False, "status": "failed", "error": str(e)},
+                        source="agent_fallback_callable",
+                        error_code="EXECUTION_EXCEPTION",
+                    )
+                )
         except asyncio.TimeoutError:
             err_text = f"Tool '{mapped_tool}' timed out"
             logger.warning(f"[timeout_guard] {err_text}")
-            return {"success": False, "error": friendly_timeout_message(mapped_tool)}
+            return self._attach_error_code(
+                self._normalize_tool_execution_result(
+                    mapped_tool,
+                    {
+                        "success": False,
+                        "status": "failed",
+                        "error": friendly_timeout_message(mapped_tool),
+                        "errors": ["TIMEOUT"],
+                        "data": {"error_code": "TIMEOUT"},
+                    },
+                    source="agent_execute_tool",
+                    error_code="TIMEOUT",
+                )
+            )
         except Exception as exc:
             err_text = str(exc)
-            raise
+            logger.error(f"Tool execution error ({mapped_tool}): {exc}")
+            return self._attach_error_code(
+                self._normalize_tool_execution_result(
+                    mapped_tool,
+                    {
+                        "success": False,
+                        "status": "failed",
+                        "error": str(exc),
+                        "errors": ["EXECUTION_EXCEPTION"],
+                        "data": {"error_code": "EXECUTION_EXCEPTION", "exception_type": type(exc).__name__},
+                    },
+                    source="agent_execute_tool",
+                    error_code="EXECUTION_EXCEPTION",
+                )
+            )
         finally:
             latency = int((time.perf_counter() - start) * 1000)
             _final_result = locals().get("result", {})
@@ -1545,6 +2483,29 @@ class Agent:
                     success=success,
                     error=err_text,
                 )
+            except Exception:
+                pass
+            # Dashboard tool stream event (start/update/end lifecycle).
+            try:
+                suppress = self._suppress_duplicate_confirmation(used_tool, _final_result, success)
+                if not suppress:
+                    _push_tool_event(
+                        "end",
+                        str(used_tool or mapped_tool or tool_name),
+                        step=step_name,
+                        request_id=str(getattr(_tr_req, "request_id", "") or ""),
+                        success=bool(success),
+                        latency_ms=latency,
+                        payload=self._tool_event_preview(_final_result),
+                    )
+                else:
+                    _push_tool_event(
+                        "update",
+                        str(used_tool or mapped_tool or tool_name),
+                        step=step_name,
+                        request_id=str(getattr(_tr_req, "request_id", "") or ""),
+                        payload={"status": "duplicate_confirmation_suppressed"},
+                    )
             except Exception:
                 pass
             # Structured execution ledger (best-effort)
@@ -1703,7 +2664,15 @@ class Agent:
                 except Exception as e:  # noqa: PERF203
                     return {"success": False, "error": str(e)}
 
-            outcome = await sm.run(err_code, _retry)
+            ledger = _active_ledger.get()
+            outcome = await sm.run(
+                err_code,
+                _retry,
+                context={
+                    "request_id": getattr(ledger, "run_id", ""),
+                    "tool": str(getattr(tool_func, "__name__", "") or ""),
+                },
+            )
             if outcome.success:
                 return {"success": True, "_repair_actions": outcome.history}
             return {
@@ -2363,6 +3332,395 @@ class Agent:
                 if isinstance(value, str) and value.strip():
                     return value.strip()
         return ""
+
+    def _get_recent_user_text(self, current_user_input: str = "") -> str:
+        uid = int(self.current_user_id or 0)
+        if uid <= 0:
+            return ""
+        try:
+            rows = self.kernel.memory.get_recent_conversations(uid, limit=8)
+        except Exception:
+            return ""
+
+        normalized_input = (current_user_input or "").strip().lower()
+        for row in rows:
+            user_msg = str(row.get("user_message", "") or "").strip()
+            if not user_msg:
+                continue
+            if normalized_input and user_msg.lower() == normalized_input:
+                continue
+            return user_msg
+        return ""
+
+    def _get_last_turn_context(self) -> dict[str, Any]:
+        data = getattr(self, "_last_turn_context", {}) or {}
+        return dict(data) if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _references_prior_context(user_input: str) -> bool:
+        low = str(user_input or "").lower()
+        if not low:
+            return False
+        markers = (
+            "bunu",
+            "şunu",
+            "sunu",
+            "onu",
+            "bunun",
+            "şunun",
+            "bundan",
+            "şundan",
+            "buna",
+            "ondan",
+            "aynısını",
+            "aynisini",
+            "aynı şeyi",
+            "ayni seyi",
+            "bundaki",
+            "şundaki",
+            "önceki",
+            "az önceki",
+        )
+        return any(marker in low for marker in markers)
+
+    @staticmethod
+    def _build_followup_output_path(last_path: str, default_name: str) -> str:
+        default = Path(str(default_name or "not.txt"))
+        suffix = default.suffix or ".txt"
+        stem = default.stem or "not"
+
+        raw_last = str(last_path or "").strip()
+        if raw_last:
+            base = Path(raw_last).expanduser()
+            if base.suffix:
+                directory = base.parent
+                stem = base.stem or stem
+            else:
+                directory = base
+            return str(directory / f"{stem}{suffix}")
+        return f"~/Desktop/{stem}{suffix}"
+
+    @staticmethod
+    def _has_revision_markers(user_input: str) -> bool:
+        low = str(user_input or "").lower()
+        if not low:
+            return False
+        markers = (
+            "daha profesyonel",
+            "profesyonel yap",
+            "kurumsal yap",
+            "yonetici ozeti",
+            "yönetici özeti",
+            "daha kısa",
+            "daha kisa",
+            "kısa yap",
+            "kisa yap",
+            "aynısını ama",
+            "aynisini ama",
+            "bunu düzelt",
+            "bunu duzelt",
+            "düzelt",
+            "duzelt",
+            "tekrar dene",
+            "yeniden dene",
+            "retry",
+            "pdf yap",
+            "pdf'e",
+            "pdf olarak",
+        )
+        return any(marker in low for marker in markers)
+
+    @staticmethod
+    def _looks_like_image_search_request(text: str) -> bool:
+        low = str(text or "").lower()
+        if not low:
+            return False
+        explicit_image_markers = (
+            "resim",
+            "resimleri",
+            "görsel",
+            "gorsel",
+            "foto",
+            "fotoğraf",
+            "fotograf",
+            "image",
+            "images",
+            "wallpaper",
+        )
+        if any(marker in low for marker in explicit_image_markers):
+            return True
+        if any(
+            marker in low
+            for marker in (
+                "resmi kaynak",
+                "resmi site",
+                "resmi kurum",
+                "resmi gazete",
+                "resmi belge",
+                "resmi rapor",
+                "resmi yazi",
+                "resmi yazı",
+                "official",
+                ".gov",
+            )
+        ):
+            return False
+        return bool(_re.search(r"\b[\wçğıöşü]+\s+resmi\b", low, _re.IGNORECASE))
+
+    @staticmethod
+    def _has_professional_document_marker(text: str) -> bool:
+        low = str(text or "").lower()
+        if not low:
+            return False
+        direct_markers = (
+            "profesyonel",
+            "kurumsal",
+            "yönetici özeti",
+            "yonetici ozeti",
+            "official tone",
+        )
+        if any(marker in low for marker in direct_markers):
+            return True
+        return bool(
+            _re.search(
+                r"\bresmi\s+(?:belge|rapor|yazı|yazi|dil|format|ton|sunum)\b",
+                low,
+                _re.IGNORECASE,
+            )
+        )
+
+    def _infer_conversational_followup_intent(self, user_input: str) -> Optional[dict[str, Any]]:
+        text = str(user_input or "").strip()
+        low = text.lower()
+        if not text:
+            return None
+
+        recent_user_text = self._get_recent_user_text(text)
+        recent_assistant_text = self._get_recent_assistant_text(text)
+        recent_research_text = self._get_recent_research_text()
+        last_path = self._get_last_path()
+        last_turn = self._get_last_turn_context()
+        last_action = str(last_turn.get("action") or getattr(self, "_last_action", "") or "").strip().lower()
+        last_success = bool(last_turn.get("success", True))
+
+        has_context = bool(last_path or recent_user_text or recent_assistant_text or recent_research_text or last_action)
+        if not has_context:
+            return None
+
+        references_context = self._references_prior_context(text)
+        short_followup = len(text.split()) <= 9
+        revision_marked = self._has_revision_markers(text)
+        if not references_context and not short_followup and not revision_marked:
+            return None
+
+        explicit_tokens = self._extract_path_like_tokens(text)
+        explicit_file_ref = any(Path(str(tok).strip()).suffix for tok in explicit_tokens if str(tok).strip())
+        if explicit_file_ref:
+            return None
+
+        summary_markers = (
+            "özetle",
+            "ozetle",
+            "özet",
+            "ozet",
+            "kısalt",
+            "kisalt",
+            "sadeleştir",
+            "sadelestir",
+        )
+        research_markers = (
+            "araştır",
+            "arastir",
+            "araştırma",
+            "arastirma",
+            "research",
+            "incele",
+        )
+        doc_markers = (
+            "belge",
+            "doküman",
+            "dokuman",
+            "rapor",
+            "word",
+            "docx",
+            "kaydet",
+            "dosya",
+        )
+        professional_marked = self._has_professional_document_marker(low)
+        academic_markers = (
+            "akademik",
+            "literatür",
+            "literatur",
+            "atıf",
+            "atif",
+            "citation",
+            "kaynakça",
+            "kaynakca",
+        )
+
+        content_seed = recent_research_text or recent_assistant_text
+        topic_seed = recent_user_text or recent_assistant_text or text
+
+        retry_markers = (
+            "tekrar dene",
+            "yeniden dene",
+            "retry",
+            "tekrar yap",
+            "bir daha dene",
+        )
+        repair_markers = (
+            "düzelt",
+            "duzelt",
+            "fixle",
+            "daha düzgün",
+            "daha duzgun",
+            "hatasız yap",
+            "hatasiz yap",
+        )
+        if (
+            not last_success
+            and (any(marker in low for marker in retry_markers) or any(marker in low for marker in repair_markers))
+        ):
+            return {
+                "action": "failure_replay",
+                "params": {"limit": 30},
+                "reply": "Son başarısız görev daha sıkı ayarlarla tekrar deneniyor...",
+            }
+
+        if any(marker in low for marker in research_markers) and (
+            references_context
+            or any(marker in low for marker in doc_markers)
+            or professional_marked
+            or short_followup
+        ):
+            topic = self._sanitize_research_topic(
+                self._extract_topic(topic_seed, topic_seed),
+                user_input=topic_seed,
+                step_name=text,
+            )
+            if not topic or topic == "genel konu":
+                return None
+            combined_low = f"{low} {str(topic_seed).lower()}"
+            is_academic = any(marker in combined_low for marker in academic_markers)
+            return {
+                "action": "research_document_delivery",
+                "params": {
+                    "topic": topic,
+                    "brief": recent_user_text or text,
+                    "depth": "expert" if professional_marked else "comprehensive",
+                    "audience": "academic" if is_academic else "executive",
+                    "language": "tr",
+                    "output_dir": "~/Desktop",
+                    "include_word": True,
+                    "include_excel": False,
+                    "include_report": True,
+                    "source_policy": "academic" if is_academic else "trusted",
+                    "min_reliability": 0.78 if is_academic else 0.65,
+                    "citation_style": "apa7" if is_academic else "none",
+                    "include_bibliography": bool(is_academic),
+                },
+                "reply": "Önceki bağlamdan araştırma belgesi hazırlanıyor...",
+            }
+
+        if any(marker in low for marker in summary_markers) or (
+            any(marker in low for marker in ("aynısını ama", "aynisini ama"))
+            and any(marker in low for marker in ("kısa", "kisa", "özet", "ozet"))
+        ):
+            params: dict[str, Any] = {"style": self._infer_summary_style(text)}
+            if last_path and Path(last_path).suffix:
+                params["path"] = last_path
+            elif content_seed:
+                params["content"] = content_seed
+            else:
+                return None
+            return {
+                "action": "summarize_document",
+                "params": params,
+                "reply": "Önceki bağlam özetleniyor...",
+            }
+
+        professional_marked = professional_marked or any(
+            marker in low for marker in ("daha iyi yaz", "daha iyi hazırla", "kurumsal")
+        )
+        if professional_marked:
+            topic = self._sanitize_research_topic(
+                self._extract_topic(topic_seed, topic_seed),
+                user_input=topic_seed,
+                step_name=text,
+            )
+            if topic and topic != "genel konu":
+                return {
+                    "action": "generate_document_pack",
+                    "params": {
+                        "topic": topic,
+                        "brief": content_seed or recent_user_text or text,
+                        "audience": "executive",
+                        "language": "tr",
+                        "output_dir": "~/Desktop",
+                    },
+                    "reply": "Önceki bağlam profesyonel belge paketine dönüştürülüyor...",
+                }
+
+        if any(marker in low for marker in ("pdf yap", "pdf'e", "pdf olarak")):
+            topic = self._sanitize_research_topic(
+                self._extract_topic(topic_seed, topic_seed),
+                user_input=topic_seed,
+                step_name=text,
+            )
+            if topic and topic != "genel konu":
+                return {
+                    "action": "generate_document_pack",
+                    "params": {
+                        "topic": topic,
+                        "brief": content_seed or recent_user_text or text,
+                        "audience": "executive",
+                        "language": "tr",
+                        "output_dir": "~/Desktop",
+                    },
+                    "reply": "Önceki bağlam doküman paketine çevriliyor...",
+                }
+
+        if any(marker in low for marker in ("word", "docx", "belge", "rapor")) and any(
+            marker in low for marker in ("kaydet", "oluştur", "olustur", "hazırla", "hazirla")
+        ):
+            if not content_seed:
+                return None
+            return {
+                "action": "create_word_document",
+                "params": {
+                    "path": self._build_followup_output_path(last_path, "belge.docx"),
+                    "content": content_seed,
+                },
+                "reply": "Önceki bağlam Word belgesine kaydediliyor...",
+            }
+
+        if any(marker in low for marker in ("excel", "xlsx", "tablo", "sheet")) and any(
+            marker in low for marker in ("kaydet", "oluştur", "olustur", "hazırla", "hazirla")
+        ):
+            if not content_seed:
+                return None
+            return {
+                "action": "create_excel",
+                "params": {
+                    "path": self._build_followup_output_path(last_path, "tablo.xlsx"),
+                    "content": content_seed,
+                },
+                "reply": "Önceki bağlam tabloya kaydediliyor...",
+            }
+
+        if any(marker in low for marker in ("kaydet", "dosya olarak", "not olarak", "masaüstüne", "masaustune")):
+            if not content_seed:
+                return None
+            default_name = "not.md" if any(marker in low for marker in ("markdown", ".md")) else "not.txt"
+            return {
+                "action": "write_file",
+                "params": {
+                    "path": self._build_followup_output_path(last_path, default_name),
+                    "content": content_seed,
+                },
+                "reply": "Önceki bağlam dosyaya kaydediliyor...",
+            }
+        return None
 
     def _infer_app_name(self, *texts: str) -> str:
         haystack = " ".join(t for t in texts if isinstance(t, str) and t).lower()
@@ -3206,6 +4564,8 @@ class Agent:
             r"\b([a-z0-9][\w .\-]{1,80})\s*(?:klasöründe|klasorunde)\s*(?:ne var|neler var|listele|göster|goster)\b",
             r"\b([a-z0-9][\w .\-]{1,80})\s*(?:klasörünü|klasorunu)\s*(?:listele|göster|goster|aç|ac)\b",
             r"\b([a-z0-9][\w .\-]{1,80})\s*(?:klasörü|klasoru)\s*(?:aç|ac|listele|göster|goster)\b",
+            r"(?:masaüst(?:üne|ünde)?|masaust(?:une|unde)?|desktop(?:a|e|ta|te)?|belgeler(?:de)?|documents(?:ta|te)?|indirilenler(?:de)?|downloads(?:ta|te)?)\s+([a-z0-9][\w .\-]{1,80})\s+klas(?:ör|or)(?:ü|u)?\s*(?:oluştur|olustur|kur|aç|ac|yap|ekle)\b",
+            r"\b([a-z0-9][\w .\-]{1,80})\s+klas(?:ör|or)(?:ü|u)?\s*(?:oluştur|olustur|kur|aç|ac|yap|ekle)\b",
         )
         stop_words = {
             "masaüstü", "masaustu", "desktop", "klasör", "klasor", "dizin",
@@ -4181,8 +5541,7 @@ class Agent:
         q = str(query or "").strip()
         if not q:
             return "https://www.google.com"
-        low = str(user_input or "").lower()
-        images = any(k in low for k in ("resim", "resimleri", "görsel", "gorsel", "foto", "image", "images", "wallpaper"))
+        images = Agent._looks_like_image_search_request(user_input)
         if images:
             return f"https://www.google.com/search?tbm=isch&q={quote_plus(q)}"
         return f"https://www.google.com/search?q={quote_plus(q)}"
@@ -4880,10 +6239,15 @@ class Agent:
             path = self._resolve_path_with_desktop_fallback(path, user_input=user_input)
             normalized_params["path"] = path
             if mapped == "write_file":
+                allow_short_content = bool(normalized_params.get("allow_short_content"))
+                if not allow_short_content and self._is_short_note_request(user_input, path):
+                    allow_short_content = True
+                normalized_params["allow_short_content"] = allow_short_content
                 normalized_params["content"] = self._normalize_task_write_content(
                     normalized_params.get("content"),
                     user_input,
                     path,
+                    allow_short_content=allow_short_content,
                 )
             if mapped == "batch_edit_text":
                 normalized_params["directory"] = str(normalized_params.get("directory") or path)
@@ -5609,14 +6973,21 @@ class Agent:
                 continue
 
             if step_action == "write_file":
+                allow_short_content = bool(
+                    step.get("allow_short_content")
+                    or (step.get("params", {}) or {}).get("allow_short_content")
+                )
+                if not allow_short_content and self._is_short_note_request(user_input, step_path):
+                    allow_short_content = True
                 normalized_content = self._normalize_task_write_content(
                     step.get("content"),
                     user_input,
                     step_path,
+                    allow_short_content=allow_short_content,
                 )
                 write_res = await self._execute_tool(
                     "write_file",
-                    {"path": step_path, "content": normalized_content},
+                    {"path": step_path, "content": normalized_content, "allow_short_content": allow_short_content},
                     user_input=user_input,
                     step_name=step_desc,
                 )
@@ -5636,7 +7007,7 @@ class Agent:
                 if not verified:
                     repair_res = await self._execute_tool(
                         "write_file",
-                        {"path": step_path, "content": normalized_content},
+                        {"path": step_path, "content": normalized_content, "allow_short_content": allow_short_content},
                         user_input=user_input,
                         step_name=f"{step_desc} onarım",
                     )
@@ -5817,6 +7188,10 @@ class Agent:
                 "params": {"limit": 30},
                 "reply": "Son başarısız görev tekrar çalıştırılıyor...",
             }
+
+        followup_intent = self._infer_conversational_followup_intent(text)
+        if followup_intent:
+            return followup_intent
 
         # Wallpaper change
         wallpaper_markers = ("duvar kağıdı", "duvar kagidi", "arka plan", "background", "wallpaper")
@@ -6517,6 +7892,7 @@ class Agent:
             "last_path": str(self.file_context.get("last_path") or ""),
             "last_dir": str(self.file_context.get("last_dir") or ""),
             "last_attachment": str(self.file_context.get("last_attachment") or ""),
+            "recent_user_text": str(self._get_recent_user_text(user_input) or "")[:240],
             "recent_assistant_text": str(self._get_recent_assistant_text(user_input) or "")[:350],
         }
         fewshot = {
@@ -6843,6 +8219,13 @@ class Agent:
         # Son başarılı aksiyonu sakla (feedback/correction learning için)
         if action and action not in {"chat", "chat_fallback_unsafe_plan", "clarify", ""}:
             self._last_action = action
+        self._last_turn_context = {
+            "user_input": str(user_input or ""),
+            "response_text": str(response_text or ""),
+            "action": str(action or ""),
+            "success": bool(success),
+            "ts": time.time(),
+        }
 
         # Genesis Adaptive Learning
         try:
@@ -7331,6 +8714,7 @@ class Agent:
         params = intent.get("params", {}) if isinstance(intent.get("params"), dict) else {}
         low_action = action.lower()
         runtime_task_spec = intent.get("task_spec") if isinstance(intent.get("task_spec"), dict) else None
+        self._last_direct_intent_payload = None
 
         if (
             runtime_task_spec is None
@@ -7704,6 +9088,7 @@ class Agent:
             return self._format_result_text(result)
 
         result = await self._execute_tool(action, params, user_input=user_input, step_name=intent.get("reply", ""))
+        self._last_direct_intent_payload = result
         return self._format_result_text(result)
 
     def _task_needs_previous_output(self, task: dict) -> bool:
@@ -7828,10 +9213,32 @@ class Agent:
             content += "\nBu satir minimum icerik uzunlugunu garanti etmek icin eklendi.\n"
         return content
 
-    def _normalize_task_write_content(self, content: Any, user_input: str, path: str = "") -> str:
+    @staticmethod
+    def _is_short_note_request(user_input: str, path: str = "") -> bool:
+        low = str(user_input or "").strip().lower()
+        if not low:
+            return False
+        if any(tok in low for tok in ("araştır", "arastir", "research", "rapor", "belge", "word", "excel")):
+            return False
+        note_markers = ("not olarak", "not yaz", "notu yaz", "masaüstüne not", "masaustune not", "desktop note")
+        if not any(tok in low for tok in note_markers):
+            return False
+        suffix = Path(str(path or "not.txt")).suffix.lower()
+        return suffix in {"", ".txt", ".md"}
+
+    def _normalize_task_write_content(
+        self,
+        content: Any,
+        user_input: str,
+        path: str = "",
+        *,
+        allow_short_content: bool = False,
+    ) -> str:
         raw = str(content or "").strip()
         if not raw or self._is_placeholder_text(raw) or self._is_command_dump_content(raw, user_input):
             return self._deterministic_task_file_content(path, user_input=user_input)
+        if allow_short_content:
+            return raw
         if len(raw) < 50:
             suffix = (
                 f"\n\nNot: Bu metin Elyan tarafindan {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
@@ -8176,7 +9583,15 @@ class Agent:
                 query = topic if topic and topic != "genel konu" else "wallpaper"
             clean["search_query"] = query
         elif tool_name == "create_folder":
-            clean["path"] = clean.get("path") or "~/Desktop/yeni_klasor"
+            path = str(clean.get("path") or "").strip()
+            if not path:
+                folder_hint = self._extract_folder_hint_from_text(user_input)
+                base_dir = str(Path.home() / "Desktop")
+                if folder_hint:
+                    path = str(Path(base_dir) / folder_hint)
+                else:
+                    path = "~/Desktop/yeni_klasor"
+            clean["path"] = path
         elif tool_name == "write_clipboard":
             text_value = str(clean.get("text") or clean.get("content") or "").strip()
             if not text_value and self._references_last_object(user_input):
@@ -8306,10 +9721,15 @@ class Agent:
                 topic_guess = self._extract_topic(user_input, step_name)
                 if topic_guess and topic_guess != "genel konu":
                     content = topic_guess
+            allow_short_content = bool(clean.get("allow_short_content"))
+            if not allow_short_content and self._is_short_note_request(user_input, str(clean.get("path") or "")):
+                allow_short_content = True
+            clean["allow_short_content"] = allow_short_content
             clean["content"] = self._normalize_task_write_content(
                 content,
                 user_input,
                 str(clean.get("path") or ""),
+                allow_short_content=allow_short_content,
             )
         elif tool_name == "write_word":
             path = str(clean.get("path") or "").strip()
@@ -9120,11 +10540,51 @@ class Agent:
         return "\n".join(lines).strip()
 
     def _format_result_text(self, result: Any) -> str:
+        def _iter_payloads(payload: Any, *, _depth: int = 0):
+            if _depth > 3 or not isinstance(payload, dict):
+                return
+            yield payload
+            for key in ("result", "raw"):
+                nested = payload.get(key)
+                if isinstance(nested, dict) and nested is not payload:
+                    yield from _iter_payloads(nested, _depth=_depth + 1)
+
         if isinstance(result, dict):
             if result.get("success") is False:
                 if result.get("not_found"):
                     return None  # Signal for LLM fallback
                 return f"Hata: {result.get('error', 'İşlem başarısız.')}"
+
+            for payload in _iter_payloads(result):
+                observations = payload.get("observations")
+                if isinstance(observations, list) and observations:
+                    latest = observations[-1] if isinstance(observations[-1], dict) else {}
+                    summary = str(
+                        latest.get("summary")
+                        or payload.get("summary")
+                        or payload.get("analysis")
+                        or payload.get("message")
+                        or ""
+                    ).strip()
+                    lines = [summary] if summary else []
+                    provider = str(latest.get("provider") or payload.get("provider") or "").strip()
+                    if provider:
+                        lines.append(f"Analiz: {provider}")
+                    control = payload.get("control")
+                    if isinstance(control, dict) and str(control.get("message") or "").strip():
+                        lines.append(f"Aksiyon: {str(control.get('message')).strip()}")
+                    warning = str(
+                        latest.get("warning")
+                        or payload.get("warning")
+                        or payload.get("verification_warning")
+                        or ""
+                    ).strip()
+                    if warning.startswith("vision_quality_gate:"):
+                        warning = "Gorsel analiz tutarsiz oldugu icin guvenli durum ozeti kullanildi."
+                    if warning:
+                        lines.append(f"Not: {warning}")
+                    if lines:
+                        return "\n".join(lines)
 
             # --- Ücretsiz API Özel Renderer'ları (Yüksek Öncelik) ---
 
@@ -9221,6 +10681,20 @@ class Agent:
             research_rendered = self._render_research_result(result)
             if research_rendered:
                 return research_rendered
+
+            if any(k in result for k in ("ocr", "objects", "provider", "analysis_mode")):
+                summary = str(result.get("summary") or result.get("message") or "").strip()
+                lines = [summary] if summary else []
+                provider = str(result.get("provider") or "").strip()
+                if provider:
+                    lines.append(f"Analiz: {provider}")
+                warning = str(result.get("warning") or result.get("verification_warning") or "").strip()
+                if warning.startswith("vision_quality_gate:"):
+                    warning = "Gorsel analiz tutarsiz oldugu icin guvenli durum ozeti kullanildi."
+                if warning:
+                    lines.append(f"Not: {warning}")
+                if lines:
+                    return "\n".join(lines)
 
             if isinstance(result.get("summary"), str) and result.get("summary"):
                 return result["summary"]

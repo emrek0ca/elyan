@@ -1,0 +1,15 @@
+{
+  "run_id": "run_1a0938059a0d",
+  "written_at": 1773156208.76394,
+  "status": "partial",
+  "text_summary": "[1] Projects klasörünü listele\nKlasör içeriği:\n- not.txt\n\n[2] not.txt oku ve\nmerhaba\n\n[3] bunu sil\nsilindi: not.txt\n- /private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-240/test_agent_process_executes_fr0/Desktop/Projects/not.txt",
+  "errors": [
+    "contract_decl:missing:required_outputs; contract_decl:missing:guardrails; contract_decl:missing:verify"
+  ],
+  "artifact_manifest": [],
+  "metadata": {
+    "manifest_path": "/Users/emrekoca/Desktop/bot/.elyan/proofs/run_1a0938059a0d/manifest.json",
+    "action": "multi_task",
+    "job_type": "file_operations"
+  }
+}

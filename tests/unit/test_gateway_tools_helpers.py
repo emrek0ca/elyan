@@ -5,6 +5,7 @@ from core.gateway import server
 
 def test_get_policy_lists_reads_camel_case_require_approval(monkeypatch):
     values = {
+        "tools.default_deny": False,
         "tools.allow": ["group:fs"],
         "tools.deny": ["delete_file"],
         "tools.requireApproval": ["write_file"],
@@ -15,6 +16,42 @@ def test_get_policy_lists_reads_camel_case_require_approval(monkeypatch):
     assert allow == ["group:fs"]
     assert deny == ["delete_file"]
     assert require == ["write_file"]
+
+
+def test_get_policy_lists_uses_empty_allow_in_default_deny_mode(monkeypatch):
+    values = {
+        "tools.default_deny": True,
+        "security.toolPolicy.defaultDeny": True,
+        "tools.allow": None,
+        "tools.deny": [],
+        "tools.requireApproval": None,
+        "tools.require_approval": ["exec"],
+    }
+    monkeypatch.setattr(server.elyan_config, "get", lambda key, default=None: values.get(key, default))
+    allow, deny, require = server._get_policy_lists()
+    assert allow == []
+    assert deny == []
+    assert require == ["exec"]
+
+
+def test_policy_state_uses_tool_policy_matching():
+    engine = server.tool_policy
+    old_allowed = list(engine.allowed_tools)
+    old_denied = list(engine.denied_tools)
+    old_require = list(engine.require_approval)
+    try:
+        engine.allowed_tools = ["*"]
+        engine.denied_tools = ["exec"]
+        engine.require_approval = ["exec"]
+        group, allowed, denied, needs_approval = server._policy_state("execute_shell_command")
+    finally:
+        engine.allowed_tools = old_allowed
+        engine.denied_tools = old_denied
+        engine.require_approval = old_require
+    assert group == "runtime"
+    assert denied is True
+    assert allowed is False
+    assert needs_approval is False
 
 
 def test_unique_clean_dedupes_and_strips():

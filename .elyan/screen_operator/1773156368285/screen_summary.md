@@ -1,0 +1,1 @@
+Frontmost app: Safari. Window: Results. Results for kittens gorunuyor. OCR: Results for kittens

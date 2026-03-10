@@ -1,0 +1,52 @@
+[
+  {
+    "step_index": 7,
+    "rationale": "rerun_browser_step_after_state_check",
+    "trace": {
+      "trigger": "failure",
+      "step_index": 7,
+      "failed_codes": [
+        "NAVIGATION_NOT_VERIFIED"
+      ],
+      "current_step_name": "open_upload_page",
+      "actions": [
+        {
+          "kind": "rerun_browser_step_after_state_check",
+          "url": "https://upload.local"
+        }
+      ]
+    },
+    "new_step_names": [
+      "status_check_open-upload-page",
+      "open_upload_page",
+      "confirm_upload_dialog",
+      "verify_upload_completion"
+    ],
+    "timestamp": 1773053681.6864588
+  },
+  {
+    "step_index": 8,
+    "rationale": "rerun_browser_step_after_state_check",
+    "trace": {
+      "trigger": "failure",
+      "step_index": 8,
+      "failed_codes": [
+        "NAVIGATION_NOT_VERIFIED"
+      ],
+      "current_step_name": "open_upload_page",
+      "actions": [
+        {
+          "kind": "rerun_browser_step_after_state_check",
+          "url": "https://upload.local"
+        }
+      ]
+    },
+    "new_step_names": [
+      "status_check_open-upload-page",
+      "open_upload_page",
+      "confirm_upload_dialog",
+      "verify_upload_completion"
+    ],
+    "timestamp": 1773053681.712375
+  }
+]

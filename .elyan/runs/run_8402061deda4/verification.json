@@ -1,0 +1,23 @@
+{
+  "run_id": "run_8402061deda4",
+  "written_at": 1773157075.8790028,
+  "status": "success",
+  "manifest_path": "/Users/emrekoca/Desktop/bot/.elyan/proofs/run_8402061deda4/manifest.json",
+  "steps": [
+    {
+      "step": "Pil durumu kontrol ediliyor...",
+      "tool": "get_battery_status",
+      "status": "success",
+      "input_hash": "b5c8af23168c36ea76f71efe50856e31ecfee30d3827d8450471719cc7dd9e06",
+      "params_hash": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "result_hash": "3acc59fadde10e7e9ee7e4abfbf49ed8de544fbb37b09c2fb79b1a173b3ce452",
+      "duration_ms": 1,
+      "ts": 1773157075.862253
+    }
+  ],
+  "artifacts": [],
+  "metadata": {
+    "status": "success",
+    "errors": []
+  }
+}

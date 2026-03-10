@@ -3,242 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Elyan Dashboard</title>
-  <style>
-    :root {
-      --bg: #f4f6f8;
-      --panel: #ffffff;
-      --line: #d9e1e8;
-      --text: #14202b;
-      --muted: #5f7487;
-      --brand: #0f6adf;
-      --brand-soft: #e9f2ff;
-      --ok: #1a8f4a;
-      --warn: #b67a09;
-      --err: #b42318;
-      --radius: 14px;
-      --shadow: 0 8px 24px rgba(12, 24, 38, 0.08);
-    }
-
-    * { box-sizing: border-box; }
-
-    body {
-      margin: 0;
-      background: linear-gradient(180deg, #f8fafc 0%, #edf2f7 100%);
-      color: var(--text);
-      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
-    }
-
-    .layout {
-      max-width: 1180px;
-      margin: 0 auto;
-      padding: 18px;
-      display: grid;
-      gap: 14px;
-    }
-
-    .topbar {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow);
-      padding: 14px 16px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
-
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-
-    .logo {
-      width: 32px;
-      height: 32px;
-      border-radius: 10px;
-      display: grid;
-      place-items: center;
-      background: var(--brand);
-      color: #fff;
-      font-weight: 700;
-    }
-
-    .title {
-      margin: 0;
-      font-size: 18px;
-      font-weight: 700;
-      line-height: 1.1;
-    }
-
-    .sub {
-      margin: 2px 0 0;
-      font-size: 12px;
-      color: var(--muted);
-    }
-
-    .pill {
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 6px 10px;
-      font-size: 12px;
-      color: var(--muted);
-      background: #fff;
-    }
-
-    .pill.ok { color: var(--ok); border-color: #b6e2c8; background: #effcf4; }
-    .pill.err { color: var(--err); border-color: #f3c7c1; background: #fff4f2; }
-
-    .btn {
-      border: 1px solid var(--line);
-      background: #fff;
-      color: var(--text);
-      border-radius: 10px;
-      padding: 8px 12px;
-      font-size: 13px;
-      cursor: pointer;
-    }
-
-    .btn.primary {
-      border-color: var(--brand);
-      background: var(--brand);
-      color: #fff;
-    }
-
-    .grid {
-      display: grid;
-      gap: 14px;
-      grid-template-columns: repeat(12, minmax(0, 1fr));
-    }
-
-    .card {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow);
-      padding: 14px;
-    }
-
-    .card h2 {
-      margin: 0 0 10px;
-      font-size: 15px;
-    }
-
-    .stats {
-      grid-column: span 12;
-      display: grid;
-      gap: 10px;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-    }
-
-    .metric {
-      background: var(--bg);
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 10px;
-    }
-
-    .metric .k {
-      font-size: 11px;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-
-    .metric .v {
-      margin-top: 6px;
-      font-size: 18px;
-      font-weight: 700;
-    }
-
-    .channels { grid-column: span 4; }
-    .runs { grid-column: span 8; }
-    .chat { grid-column: span 7; }
-    .activity { grid-column: span 5; }
-
-    .list {
-      margin: 0;
-      padding: 0;
-      list-style: none;
-      display: grid;
-      gap: 8px;
-      max-height: 240px;
-      overflow: auto;
-    }
-
-    .list li {
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 8px 10px;
-      background: #fff;
-      font-size: 13px;
-    }
-
-    .list .meta {
-      color: var(--muted);
-      font-size: 11px;
-    }
-
-    .chat-log {
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: #fcfdff;
-      min-height: 240px;
-      max-height: 320px;
-      overflow: auto;
-      padding: 10px;
-      display: grid;
-      gap: 8px;
-    }
-
-    .bubble {
-      max-width: 92%;
-      border-radius: 12px;
-      padding: 8px 10px;
-      font-size: 13px;
-      white-space: pre-wrap;
-      line-height: 1.35;
-    }
-
-    .bubble.user {
-      justify-self: end;
-      background: var(--brand-soft);
-      border: 1px solid #bfdbfe;
-    }
-
-    .bubble.bot {
-      justify-self: start;
-      background: #fff;
-      border: 1px solid var(--line);
-    }
-
-    .chat-row {
-      margin-top: 10px;
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 8px;
-    }
-
-    input, textarea, select {
-      width: 100%;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 9px 10px;
-      font-size: 14px;
-      background: #fff;
-    }
-
-    .muted { color: var(--muted); font-size: 12px; }
-
-    @media (max-width: 980px) {
-      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .channels, .runs, .chat, .activity { grid-column: span 12; }
-      .chat-log { max-height: 260px; }
-    }
-  </style>
+  <title>Elyan Operator V1</title>
+  <link rel="stylesheet" href="/ui/web/dashboard.css" />
 </head>
 <body>
   <div class="layout">
@@ -246,8 +12,8 @@
       <div class="brand">
         <div class="logo">E</div>
         <div>
-          <h1 class="title">ELYAN Dashboard</h1>
-          <p class="sub">Sade operasyon paneli</p>
+          <h1 class="title">ELYAN Operator V1</h1>
+          <p class="sub">Hazirlik, hero workflow'ler ve gorev sonuclari tek ekranda.</p>
         </div>
       </div>
       <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -255,6 +21,14 @@
         <button class="btn" id="refresh-btn" type="button">Yenile</button>
       </div>
     </header>
+
+    <section class="banner">
+      <div>
+        <strong id="status-note">Urun paneli hazirlaniyor...</strong>
+        <div id="status-detail" class="banner-meta">Uretim yolu ve hazirlik bilgileri yukleniyor.</div>
+      </div>
+      <div id="last-sync">Son senkron: -</div>
+    </section>
 
     <section class="grid">
       <div class="stats">
@@ -276,6 +50,79 @@
         </div>
       </div>
 
+      <article class="card readiness">
+        <h2>Operator Readiness</h2>
+        <ul class="list" id="readiness-list"></ul>
+      </article>
+
+      <article class="card benchmark">
+        <h2>Benchmark Health</h2>
+        <ul class="list" id="benchmark-summary"></ul>
+      </article>
+
+      <article class="card workflows">
+        <h2>Preset Workflows</h2>
+        <p class="muted">Hero workflow'ler tek tikla ayni uretim yolu uzerinden calisir.</p>
+        <div class="preset-list" id="workflow-preset-list"></div>
+      </article>
+
+      <article class="card workflow-report-card">
+        <h2>Task Report</h2>
+        <div id="workflow-report" class="report-panel">Henuz preset workflow calistirilmadi.</div>
+      </article>
+
+      <article class="card setup">
+        <h2>Setup / Release Readiness</h2>
+        <ul class="list" id="setup-list"></ul>
+      </article>
+
+      <article class="card onboarding">
+        <h2>Onboarding / Quickstart</h2>
+        <ul class="list" id="onboarding-list"></ul>
+      </article>
+
+      <article class="card release">
+        <h2>Release / Health</h2>
+        <ul class="list" id="release-list"></ul>
+      </article>
+
+      <article class="card model-hub">
+        <h2>Model Hub</h2>
+        <p class="muted" id="model-pool-summary">Model havuzu yukleniyor.</p>
+        <div class="model-grid">
+          <div class="model-stack">
+            <div class="model-form">
+              <select id="model-provider-input">
+                <option value="openai">openai</option>
+                <option value="anthropic">anthropic</option>
+                <option value="google">google</option>
+                <option value="groq">groq</option>
+                <option value="ollama">ollama</option>
+              </select>
+              <input id="model-name-input" type="text" placeholder="Model adi (orn: gpt-4o, claude-3-5-sonnet-latest)" />
+              <input id="model-alias-input" type="text" placeholder="Kisa etiket (opsiyonel)" />
+              <input id="model-roles-input" type="text" placeholder="Roller (orn: reasoning,code,qa)" />
+              <input id="model-key-input" type="password" placeholder="API key (cloud provider icin opsiyonel update)" />
+            </div>
+            <div class="preset-actions">
+              <button class="btn primary" id="model-add-btn" type="button">Modeli Ekle / Guncelle</button>
+            </div>
+            <div class="model-collab">
+              <label><input id="collab-enabled-input" type="checkbox" /> Multi-LLM collaboration acik</label>
+              <select id="collab-strategy-input">
+                <option value="synthesize">synthesize</option>
+                <option value="round_robin">round_robin</option>
+                <option value="planner_critic">planner_critic</option>
+              </select>
+              <input id="collab-max-models-input" type="number" min="1" max="5" value="3" />
+              <input id="collab-roles-input" type="text" placeholder="Collab roller (orn: reasoning,planning,code,qa)" />
+              <button class="btn" id="collab-save-btn" type="button">Collab Ayarlarini Kaydet</button>
+            </div>
+          </div>
+          <ul class="list model-registry" id="model-registry-list"></ul>
+        </div>
+      </article>
+
       <article class="card channels">
         <h2>Kanallar</h2>
         <ul class="list" id="channel-list"></ul>
@@ -293,219 +140,37 @@
           <input id="chat-input" type="text" placeholder="Komut yaz..." />
           <button class="btn primary" id="send-btn" type="button">Gonder</button>
         </div>
+        <div class="quick-actions">
+          <button class="btn" type="button" data-quick-prompt="durum nedir">Durum</button>
+          <button class="btn" type="button" data-quick-prompt="ekrana bak ve ne oldugunu soyle">Ekran Oku</button>
+          <button class="btn" type="button" data-quick-prompt="aktif gorevler">Gorevler</button>
+          <button class="btn" type="button" data-quick-prompt="bitcoin hakkinda profesyonel belge hazirla">Research</button>
+        </div>
         <p class="muted">Mesajlar `POST /api/message` uzerinden gonderilir.</p>
+      </article>
+
+      <article class="card tasks">
+        <h2>Task Center</h2>
+        <ul class="list" id="task-list"></ul>
       </article>
 
       <article class="card activity">
         <h2>Canli Aktivite</h2>
         <ul class="list" id="activity-list"></ul>
       </article>
+
+      <article class="card tool-stream">
+        <h2>Tool Event Stream</h2>
+        <ul class="list" id="tool-event-list"></ul>
+      </article>
+
+      <article class="card evidence">
+        <h2>Kanit Paneli</h2>
+        <ul class="list" id="evidence-list"></ul>
+      </article>
     </section>
   </div>
 
-  <script>
-    const qs = (s) => document.querySelector(s);
-    const els = {
-      gateway: qs("#gateway-pill"),
-      refresh: qs("#refresh-btn"),
-      model: qs("#model-value"),
-      uptime: qs("#uptime-value"),
-      tools: qs("#tools-value"),
-      channelsCount: qs("#channels-value"),
-      channels: qs("#channel-list"),
-      runs: qs("#run-list"),
-      chatLog: qs("#chat-log"),
-      chatInput: qs("#chat-input"),
-      send: qs("#send-btn"),
-      activity: qs("#activity-list"),
-    };
-
-    function h(text) {
-      return String(text == null ? "" : text)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;");
-    }
-
-    async function api(path, options = {}) {
-      const res = await fetch(path, {
-        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-        ...options,
-      });
-      if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        throw new Error(`HTTP ${res.status} ${body}`.trim());
-      }
-      return res.json();
-    }
-
-    function addChat(text, who = "bot") {
-      const row = document.createElement("div");
-      row.className = `bubble ${who}`;
-      row.textContent = text;
-      els.chatLog.appendChild(row);
-      els.chatLog.scrollTop = els.chatLog.scrollHeight;
-    }
-
-    function renderChannels(payload) {
-      const rows = Array.isArray(payload?.channels) ? payload.channels : [];
-      const active = rows.filter((c) => c && c.enabled).length;
-      els.channelsCount.textContent = String(active);
-      els.channels.innerHTML = rows.length
-        ? rows
-            .map((c) => {
-              const name = h(c?.name || c?.id || "kanal");
-              const state = c?.enabled ? "aktif" : "pasif";
-              const cls = c?.enabled ? "ok" : "";
-              return `<li><strong>${name}</strong><div class="meta"><span class="pill ${cls}">${state}</span></div></li>`;
-            })
-            .join("")
-        : "<li>Kanal bilgisi bulunamadi.</li>";
-    }
-
-    function renderRuns(payload) {
-      const rows = Array.isArray(payload?.runs) ? payload.runs : [];
-      els.runs.innerHTML = rows.length
-        ? rows
-            .slice(0, 12)
-            .map((r) => {
-              const id = h(r?.run_id || r?.id || "-");
-              const status = h(r?.status || "unknown");
-              const err = r?.error ? ` | ${h(r.error)}` : "";
-              const ev = r?.evidence_path || r?.manifest_path || "";
-              const evLine = ev ? `<div class="meta">evidence: ${h(ev)}</div>` : "";
-              return `<li><strong>${id}</strong><div class="meta">status: ${status}${err}</div>${evLine}</li>`;
-            })
-            .join("")
-        : "<li>Run verisi yok.</li>";
-    }
-
-    function renderActivity(payload) {
-      const rows = Array.isArray(payload?.events)
-        ? payload.events
-        : Array.isArray(payload?.activity)
-          ? payload.activity
-          : (Array.isArray(payload) ? payload : []);
-      els.activity.innerHTML = rows.length
-        ? rows
-            .slice(0, 30)
-            .map((a) => `<li><strong>${h(a?.type || "event")}</strong><div class="meta">${h(a?.ts || "-")} | ${h(a?.detail || "")}</div></li>`)
-            .join("")
-        : "<li>Aktivite kaydi yok.</li>";
-    }
-
-    function formatUptime(v) {
-      if (typeof v === "string" && v.trim()) return v;
-      const sec = Number(v || 0);
-      if (!Number.isFinite(sec) || sec <= 0) return "-";
-      const h = Math.floor(sec / 3600);
-      const m = Math.floor((sec % 3600) / 60);
-      return `${h}s ${m}dk`;
-    }
-
-    function renderStatus(payload) {
-      const status = String(payload?.status || "").toLowerCase();
-      const ok = status === "online" || Boolean(payload?.gateway_running ?? payload?.ok ?? true);
-      els.gateway.textContent = `Gateway: ${ok ? "calisiyor" : "kapali"}`;
-      els.gateway.className = `pill ${ok ? "ok" : "err"}`;
-
-      const runtime = payload?.runtime || {};
-      const model = payload?.models?.active_model || runtime?.active_model || payload?.active_model || "-";
-      const provider = payload?.models?.active_provider || runtime?.active_provider || payload?.active_provider || "-";
-      els.model.textContent = `${provider}/${model}`;
-
-      const uptime = payload?.uptime_s ?? payload?.uptime_seconds ?? runtime?.uptime_seconds ?? payload?.uptime ?? 0;
-      els.uptime.textContent = formatUptime(uptime);
-
-      const totalTools = payload?.tools_total ?? runtime?.tools_total ?? payload?.tool_count;
-      els.tools.textContent = totalTools == null ? "-" : String(totalTools);
-    }
-
-    async function loadAll() {
-      try {
-        const [status, channels, runs, activity] = await Promise.all([
-          api("/api/status"),
-          api("/api/channels"),
-          api("/api/runs/recent"),
-          api("/api/activity"),
-        ]);
-        renderStatus(status || {});
-        renderChannels(channels || {});
-        renderRuns(runs || {});
-        renderActivity(activity || {});
-      } catch (err) {
-        console.error(err);
-        els.gateway.textContent = "Gateway: baglanti hatasi";
-        els.gateway.className = "pill err";
-      }
-    }
-
-    async function sendMessage() {
-      const text = els.chatInput.value.trim();
-      if (!text) return;
-      els.chatInput.value = "";
-      addChat(text, "user");
-      try {
-        const out = await api("/api/message", {
-          method: "POST",
-          body: JSON.stringify({ text, channel: "dashboard", wait: true, timeout_s: 120 }),
-        });
-        const response = out?.response || out?.text || out?.message || JSON.stringify(out);
-        addChat(String(response || "Bos yanit"), "bot");
-        loadAll();
-      } catch (err) {
-        addChat(`Hata: ${err.message || err}`, "bot");
-      }
-    }
-
-    function pushActivityRow(item) {
-      if (!item) return;
-      const li = document.createElement("li");
-      const type = h(item.type || item.event || "event");
-      const ts = h(item.ts || "-");
-      const detail = h(item.detail || item.text || "");
-      li.innerHTML = `<strong>${type}</strong><div class="meta">${ts} | ${detail}</div>`;
-      els.activity.prepend(li);
-      while (els.activity.children.length > 30) {
-        els.activity.removeChild(els.activity.lastChild);
-      }
-    }
-
-    function connectWs() {
-      const protocol = location.protocol === "https:" ? "wss" : "ws";
-      const ws = new WebSocket(`${protocol}://${location.host}/ws/dashboard`);
-
-      ws.onmessage = (event) => {
-        try {
-          const payload = JSON.parse(event.data);
-          if (!payload || !payload.event) return;
-          if (payload.event === "history" && Array.isArray(payload.data)) {
-            payload.data.slice().reverse().forEach(pushActivityRow);
-            return;
-          }
-          if (payload.event === "activity") {
-            pushActivityRow(payload.data || {});
-          }
-        } catch (err) {
-          console.warn("WS parse error", err);
-        }
-      };
-
-      ws.onclose = () => setTimeout(connectWs, 1500);
-      ws.onerror = () => ws.close();
-    }
-
-    els.refresh.addEventListener("click", loadAll);
-    els.send.addEventListener("click", sendMessage);
-    els.chatInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") sendMessage();
-    });
-
-    addChat("Elyan hazir. Komut verebilirsin.", "bot");
-    loadAll();
-    connectWs();
-    setInterval(loadAll, 30000);
-  </script>
+  <script src="/ui/web/dashboard.js"></script>
 </body>
 </html>

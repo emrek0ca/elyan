@@ -435,6 +435,111 @@ def _quality_snapshot(sources: list["ResearchSource"], findings: list[str]) -> d
     }
 
 
+def _build_query_decomposition(topic: str) -> dict[str, Any]:
+    clean = _normalize_text(topic)
+    facets = ["definition", "history", "applications", "examples", "key claims"]
+    base_terms = [token for token in _tokenize_topic(clean)[:6]]
+    queries = [clean]
+    for facet in facets:
+        queries.append(f"{clean} {facet}")
+    if base_terms:
+        queries.extend([f"{clean} {' '.join(base_terms[:2])}", f"{clean} source pdf"])
+    deduped = list(dict.fromkeys([item for item in queries if item]))
+    return {
+        "topic": clean,
+        "facets": facets,
+        "queries": deduped[:8],
+        "topic_terms": base_terms,
+    }
+
+
+def _keyword_overlap_score(text: str, url: str, title: str, topic_terms: list[str]) -> float:
+    hay = f"{_normalize_text(text)} {_normalize_text(title)} {url}".lower()
+    if not hay:
+        return 0.0
+    hits = sum(1 for term in topic_terms if term in hay)
+    return hits / max(len(topic_terms), 1)
+
+
+def _build_research_contract_payload(topic: str, findings: list[str], sources: list["ResearchSource"]) -> dict[str, Any]:
+    decomposition = _build_query_decomposition(topic)
+    topic_terms = list(decomposition.get("topic_terms", []))
+    claim_list: list[dict[str, Any]] = []
+    citation_map: dict[str, list[dict[str, Any]]] = {}
+    uncertainty_log: list[str] = []
+    conflicts: list[dict[str, Any]] = []
+
+    for idx, finding in enumerate(findings or [], start=1):
+        claim_id = f"claim_{idx}"
+        ranked_sources = sorted(
+            sources or [],
+            key=lambda source: (
+                _keyword_overlap_score(finding, source.url, source.title, topic_terms),
+                float(source.reliability_score or 0.0),
+            ),
+            reverse=True,
+        )
+        selected = []
+        for source in ranked_sources[:3]:
+            if not source.url:
+                continue
+            selected.append(
+                {
+                    "url": source.url,
+                    "title": source.title,
+                    "reliability_score": round(float(source.reliability_score or 0.0), 3),
+                    "evidence_type": "summary",
+                }
+            )
+        critical = idx <= 2
+        source_urls = [item["url"] for item in selected]
+        if critical and len(set(source_urls)) < 2:
+            uncertainty_log.append(f"{claim_id}: kritik iddia icin ikinci bagimsiz kaynak eksik.")
+        claim_list.append(
+            {
+                "claim_id": claim_id,
+                "text": _compact_finding_text(finding, max_len=240),
+                "source_urls": source_urls,
+                "critical": critical,
+                "confidence": round(
+                    min(
+                        1.0,
+                        (sum(float(item["reliability_score"]) for item in selected) / max(len(selected), 1)) * (1.0 if not critical else 0.95),
+                    ),
+                    2,
+                ),
+            }
+        )
+        citation_map[claim_id] = selected
+
+    numeric_claims: dict[str, set[str]] = {}
+    for claim in claim_list:
+        nums = set(re.findall(r"\b\d+(?:[.,]\d+)?\b", claim.get("text", "")))
+        if nums:
+            numeric_claims[claim["claim_id"]] = nums
+    if len(numeric_claims) >= 2:
+        all_nums = set()
+        for nums in numeric_claims.values():
+            all_nums.update(nums)
+        if len(all_nums) > 1:
+            conflicts.append(
+                {
+                    "type": "numeric_variation",
+                    "claim_ids": list(numeric_claims.keys()),
+                    "detail": "Sayisal ifadeler arasinda fark bulundu; manuel capraz kontrol onerilir.",
+                }
+            )
+
+    return {
+        "query_decomposition": decomposition,
+        "claim_list": claim_list,
+        "citation_map": citation_map,
+        "critical_claim_ids": [claim["claim_id"] for claim in claim_list if claim.get("critical")],
+        "conflicts": conflicts,
+        "uncertainty_log": uncertainty_log,
+    }
+
+
 class ResearchDepth(Enum):
     QUICK = "quick"           # 2-3 kaynak, hızlı sonuç
     STANDARD = "standard"     # 5-7 kaynak, temel analiz
@@ -738,6 +843,7 @@ async def advanced_research(
                 source_policy_stats=policy_stats,
             )
             quality = _quality_snapshot(result.sources, result.findings)
+            research_contract = _build_research_contract_payload(topic, result.findings, result.sources)
 
             # Step 5: Generate professional report with visualizations
             result.progress = 95
@@ -747,6 +853,7 @@ async def advanced_research(
                 "sources": sources_dict,
                 "findings": result.findings,
                 "summary": result.summary,
+                "research_contract": research_contract,
                 "depth": research_depth.value,
                 "source_policy": source_policy,
                 "min_reliability": min_reliability,
@@ -823,6 +930,7 @@ async def advanced_research(
                     "summary": result.summary,
                     "sources": sources_dict,
                     "quality": quality,
+                    "research_contract": research_contract,
                     "source_policy": source_policy,
                     "min_reliability": min_reliability,
                     "source_policy_stats": policy_stats,
@@ -850,6 +958,7 @@ async def advanced_research(
                 "findings": result.findings,
                 "summary": result.summary,
                 "quality": quality,
+                "research_contract": research_contract,
                 "report_paths": report_paths,
                 "message": message
             }

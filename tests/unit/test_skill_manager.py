@@ -1,5 +1,8 @@
 from pathlib import Path
 
+import pytest
+
+import tools
 from core.skills.manager import SkillManager
 
 
@@ -73,3 +76,72 @@ def test_search_returns_catalog_match(tmp_path: Path, monkeypatch):
 
     results = mgr.search("araştır")
     assert any(r["name"] == "research" for r in results)
+
+
+@pytest.mark.asyncio
+async def test_execute_routes_tool_through_task_executor(monkeypatch):
+    mgr = SkillManager()
+    monkeypatch.setattr(mgr, "get_skill", lambda _name: {"enabled": True})
+    seen = {}
+
+    async def write_file(path: str = "", content: str = ""):
+        return {"success": True, "path": path, "content": content}
+
+    async def fake_execute(self, tool_func, params):
+        seen["tool_name"] = getattr(tool_func, "__name__", "")
+        seen["params"] = dict(params)
+        return {"success": True, "status": "success", "message": "ok"}
+
+    original = tools._loaded_tools.get("write_file")
+    tools._loaded_tools["write_file"] = write_file
+    monkeypatch.setattr("core.skills.manager.TaskExecutor.execute", fake_execute)
+
+    try:
+        result = await mgr.execute("files", "write_file", {"path": "/tmp/x.txt", "content": "hi"})
+    finally:
+        if original is None:
+            tools._loaded_tools.pop("write_file", None)
+        else:
+            tools._loaded_tools["write_file"] = original
+
+    assert seen["tool_name"] == "write_file"
+    assert seen["params"] == {"path": "/tmp/x.txt", "content": "hi"}
+    assert result["success"] is True
+    assert result["result"]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_execute_preserves_outer_shape_for_malformed_normalized_result(monkeypatch):
+    mgr = SkillManager()
+    monkeypatch.setattr(mgr, "get_skill", lambda _name: {"enabled": True})
+
+    async def read_file(path: str = ""):
+        return None
+
+    original = tools._loaded_tools.get("read_file")
+    tools._loaded_tools["read_file"] = read_file
+
+    try:
+        result = await mgr.execute("files", "read_file", {"path": "/tmp/missing.txt"})
+    finally:
+        if original is None:
+            tools._loaded_tools.pop("read_file", None)
+        else:
+            tools._loaded_tools["read_file"] = original
+
+    assert result["success"] is True
+    assert result["result"]["status"] == "failed"
+    assert result["result"]["error_code"] == "TOOL_CONTRACT_VIOLATION"
+
+
+@pytest.mark.asyncio
+async def test_execute_returns_tool_not_found_when_registry_entry_missing(monkeypatch):
+    mgr = SkillManager()
+    monkeypatch.setattr(mgr, "get_skill", lambda _name: {"enabled": True})
+    monkeypatch.setattr(type(tools.AVAILABLE_TOOLS), "__contains__", lambda self, key: True)
+    monkeypatch.setattr(type(tools.AVAILABLE_TOOLS), "get", lambda self, key, default=None: None)
+
+    result = await mgr.execute("files", "ghost_tool", {})
+
+    assert result["success"] is False
+    assert result["error"] == "Tool not found: ghost_tool"

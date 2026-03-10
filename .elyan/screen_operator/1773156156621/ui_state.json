@@ -1,0 +1,128 @@
+{
+  "frontmost_app": "Safari",
+  "active_window": {
+    "title": "Search",
+    "bounds": {
+      "x": 0,
+      "y": 0,
+      "width": 1280,
+      "height": 800
+    }
+  },
+  "screenshot_path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-238/test_production_benchmark_runn0/screen18/screen_before_1773156156621.png",
+  "elements": [
+    {
+      "label": "Safari",
+      "role": "frontmost_app",
+      "source": "window_metadata",
+      "confidence": 0.99
+    },
+    {
+      "label": "Search",
+      "role": "window_title",
+      "source": "window_metadata",
+      "confidence": 0.95
+    },
+    {
+      "label": "Search field",
+      "role": "text_field",
+      "x": 110,
+      "y": 90,
+      "width": 160,
+      "height": 30,
+      "frontmost_app": "Safari",
+      "window_title": "Search",
+      "source": "accessibility",
+      "confidence": 0.92
+    },
+    {
+      "label": "Cursor",
+      "role": "frontmost_app",
+      "source": "prior_ui_state",
+      "confidence": 0.99,
+      "frontmost_app": "Safari",
+      "window_title": "Search"
+    },
+    {
+      "label": "Cursor",
+      "role": "window_title",
+      "source": "prior_ui_state",
+      "confidence": 0.95,
+      "frontmost_app": "Safari",
+      "window_title": "Search"
+    },
+    {
+      "label": "Terminal",
+      "role": "frontmost_app",
+      "source": "prior_ui_state",
+      "confidence": 0.99,
+      "frontmost_app": "Cursor",
+      "window_title": "Cursor"
+    },
+    {
+      "label": "Terminal",
+      "role": "window_title",
+      "source": "prior_ui_state",
+      "confidence": 0.95,
+      "frontmost_app": "Cursor",
+      "window_title": "Cursor"
+    },
+    {
+      "label": "Finder",
+      "role": "frontmost_app",
+      "source": "prior_ui_state",
+      "confidence": 0.99,
+      "frontmost_app": "Terminal",
+      "window_title": "Terminal"
+    },
+    {
+      "label": "Finder",
+      "role": "window_title",
+      "source": "prior_ui_state",
+      "confidence": 0.95,
+      "frontmost_app": "Terminal",
+      "window_title": "Terminal"
+    }
+  ],
+  "clickable_targets": [
+    {
+      "label": "Search field",
+      "role": "text_field",
+      "x": 110,
+      "y": 90,
+      "width": 160,
+      "height": 30,
+      "frontmost_app": "Safari",
+      "window_title": "Search",
+      "source": "accessibility",
+      "confidence": 0.92
+    }
+  ],
+  "text_fields": [
+    {
+      "label": "Search field",
+      "role": "text_field",
+      "x": 110,
+      "y": 90,
+      "width": 160,
+      "height": 30,
+      "frontmost_app": "Safari",
+      "window_title": "Search",
+      "source": "accessibility",
+      "confidence": 0.92
+    }
+  ],
+  "summary": "Frontmost app: Safari. Window: Search. Search field hazir.",
+  "fallback_order": [
+    "accessibility_and_window_metadata",
+    "vision_detection",
+    "ocr",
+    "last_known_ui_target_cache"
+  ],
+  "source_counts": {
+    "window_metadata": 2,
+    "accessibility": 1,
+    "prior_ui_state": 6
+  },
+  "confidence": 0.964
+}

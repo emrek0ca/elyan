@@ -1,0 +1,1 @@
+Frontmost app: Safari. Window: Search. Search field hazir.

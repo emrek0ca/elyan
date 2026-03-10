@@ -1,0 +1,1 @@
+Frontmost app: Safari. Window: Start. Safari acik. Search butonu gorunuyor. OCR: Search

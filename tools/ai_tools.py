@@ -1,5 +1,6 @@
 import asyncio
 from typing import Any, Dict, List
+from core.model_catalog import normalize_model_name
 from utils.logger import get_logger
 
 logger = get_logger("ai_tools")
@@ -45,6 +46,7 @@ async def ollama_list_models() -> Dict[str, Any]:
 async def ollama_pull_model(model_name: str) -> Dict[str, Any]:
     """Pull (download) a specific Ollama model"""
     try:
+        model_name = normalize_model_name("ollama", model_name)
         logger.info(f"Pulling Ollama model: {model_name}")
         process = await asyncio.create_subprocess_exec(
             "ollama", "pull", model_name,
@@ -68,6 +70,7 @@ async def ollama_pull_model(model_name: str) -> Dict[str, Any]:
 async def ollama_remove_model(model_name: str) -> Dict[str, Any]:
     """Remove a specific Ollama model"""
     try:
+        model_name = normalize_model_name("ollama", model_name)
         process = await asyncio.create_subprocess_exec(
             "ollama", "rm", model_name,
             stdout=asyncio.subprocess.PIPE,

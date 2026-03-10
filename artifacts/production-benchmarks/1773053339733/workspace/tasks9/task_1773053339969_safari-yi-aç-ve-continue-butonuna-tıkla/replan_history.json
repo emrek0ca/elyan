@@ -1,0 +1,45 @@
+[
+  {
+    "step_index": 1,
+    "rationale": "restore_frontmost_app",
+    "trace": {
+      "trigger": "failure",
+      "step_index": 1,
+      "failed_codes": [
+        "WRONG_APP_CONTEXT"
+      ],
+      "current_step_name": "open_safari",
+      "actions": [
+        {
+          "kind": "restore_frontmost_app",
+          "app_name": "Safari"
+        }
+      ]
+    },
+    "new_step_names": [
+      "recover_focus_safari",
+      "click_continue"
+    ],
+    "timestamp": 1773053339.974464
+  },
+  {
+    "step_index": 2,
+    "rationale": "skip_already_satisfied_steps",
+    "trace": {
+      "trigger": "success",
+      "step_index": 1,
+      "failed_codes": [],
+      "current_step_name": "recover_focus_safari",
+      "actions": [
+        {
+          "kind": "skip_already_satisfied_steps",
+          "skipped": [
+            "click_continue"
+          ]
+        }
+      ]
+    },
+    "new_step_names": [],
+    "timestamp": 1773053339.978135
+  }
+]

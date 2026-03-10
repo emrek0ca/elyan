@@ -1,0 +1,1 @@
+Frontmost app: Safari. Window: Next. Continue sonrasi ekran acildi. OCR: Welcome

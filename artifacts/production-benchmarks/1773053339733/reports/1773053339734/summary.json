@@ -1,0 +1,1628 @@
+{
+  "pass_count": 15,
+  "total": 15,
+  "completion_rate": 1.0,
+  "average_retries": 0.067,
+  "average_replans": 0.267,
+  "failure_reasons": {},
+  "rows": [
+    {
+      "name": "open_app_frontmost",
+      "request": "Safari'yi aç ve ekrana bak",
+      "task_id": "task_1773053339737_safari-yi-aç-ve-ekrana-bak",
+      "status": "completed",
+      "success": true,
+      "planned_steps": 2,
+      "completed_steps": 2,
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": "",
+      "elapsed_s": 0.041,
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339743/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339743/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339743/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339743/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339743/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339743/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks1/task_1773053339737_safari-yi-aç-ve-ekrana-bak/screenshots/step_01_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks1/task_1773053339737_safari-yi-aç-ve-ekrana-bak/screenshots/step_01_02.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339750/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339750/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339750/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339750/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339750/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339750/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks1/task_1773053339737_safari-yi-aç-ve-ekrana-bak/screenshots/step_02_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks1/task_1773053339737_safari-yi-aç-ve-ekrana-bak/screenshots/step_02_02.png",
+          "type": "image"
+        }
+      ]
+    },
+    {
+      "name": "type_visible_field",
+      "request": "Safari'yi aç ve arama kutusuna kittens yaz",
+      "task_id": "task_1773053339775_safari-yi-aç-ve-arama-kutusuna-kittens-yaz",
+      "status": "completed",
+      "success": true,
+      "planned_steps": 2,
+      "completed_steps": 2,
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": "",
+      "elapsed_s": 0.046,
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339783/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339783/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339783/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339783/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339783/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339783/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks2/task_1773053339775_safari-yi-aç-ve-arama-kutusuna-kittens-yaz/screenshots/step_01_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks2/task_1773053339775_safari-yi-aç-ve-arama-kutusuna-kittens-yaz/screenshots/step_01_02.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339800/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339800/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339800/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339800/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339800/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339800/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks2/task_1773053339775_safari-yi-aç-ve-arama-kutusuna-kittens-yaz/screenshots/step_02_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks2/task_1773053339775_safari-yi-aç-ve-arama-kutusuna-kittens-yaz/screenshots/step_02_02.png",
+          "type": "image"
+        }
+      ]
+    },
+    {
+      "name": "click_button_transition",
+      "request": "Safari'yi aç ve Continue butonuna tıkla",
+      "task_id": "task_1773053339821_safari-yi-aç-ve-continue-butonuna-tıkla",
+      "status": "completed",
+      "success": true,
+      "planned_steps": 1,
+      "completed_steps": 1,
+      "retry_count": 0,
+      "replan_count": 1,
+      "failure_code": "",
+      "elapsed_s": 0.018,
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339824/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339824/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339824/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339824/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339824/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339824/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks3/task_1773053339821_safari-yi-aç-ve-continue-butonuna-tıkla/screenshots/step_01_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks3/task_1773053339821_safari-yi-aç-ve-continue-butonuna-tıkla/screenshots/step_01_02.png",
+          "type": "image"
+        }
+      ]
+    },
+    {
+      "name": "browser_fill_submit",
+      "request": "https://search.local aç ve arama kutusuna \"kittens\" yaz ve submit et",
+      "task_id": "task_1773053339839_https-search-local-aç-ve-arama-kutusuna-kittens-",
+      "status": "completed",
+      "success": true,
+      "planned_steps": 4,
+      "completed_steps": 4,
+      "retry_count": 1,
+      "replan_count": 1,
+      "failure_code": "",
+      "elapsed_s": 0.026,
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339842/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339842/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339842/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339842/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339842/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339842/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks4/task_1773053339839_https-search-local-aç-ve-arama-kutusuna-kittens-/screenshots/step_01_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339845/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339845/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339845/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339845/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339845/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339845/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks4/task_1773053339839_https-search-local-aç-ve-arama-kutusuna-kittens-/screenshots/step_02_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339848/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339848/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339848/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339848/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339848/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339848/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks4/task_1773053339839_https-search-local-aç-ve-arama-kutusuna-kittens-/screenshots/step_03_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339852/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339852/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339852/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339852/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339852/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339852/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks4/task_1773053339839_https-search-local-aç-ve-arama-kutusuna-kittens-/screenshots/step_03_02.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339858/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339858/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339858/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339858/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339858/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339858/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks4/task_1773053339839_https-search-local-aç-ve-arama-kutusuna-kittens-/screenshots/step_04_01.png",
+          "type": "image"
+        }
+      ]
+    },
+    {
+      "name": "native_dialog_fallback",
+      "request": "https://upload.local aç ve yükleme diyaloğunu onayla",
+      "task_id": "task_1773053339865_https-upload-local-aç-ve-yükleme-diyaloğunu-onay",
+      "status": "completed",
+      "success": true,
+      "planned_steps": 3,
+      "completed_steps": 3,
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": "",
+      "elapsed_s": 0.035,
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339868/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339868/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339868/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339868/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339868/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339868/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks5/task_1773053339865_https-upload-local-aç-ve-yükleme-diyaloğunu-onay/screenshots/step_01_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks5/task_1773053339865_https-upload-local-aç-ve-yükleme-diyaloğunu-onay/screenshots/step_01_02.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339874/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339874/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339874/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339874/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339874/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339874/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks5/task_1773053339865_https-upload-local-aç-ve-yükleme-diyaloğunu-onay/screenshots/step_02_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339880/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339880/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339880/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339880/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339880/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339880/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks5/task_1773053339865_https-upload-local-aç-ve-yükleme-diyaloğunu-onay/screenshots/step_03_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks5/task_1773053339865_https-upload-local-aç-ve-yükleme-diyaloğunu-onay/screenshots/step_03_02.png",
+          "type": "image"
+        }
+      ]
+    },
+    {
+      "name": "login_form_fill",
+      "request": "https://login.local aç ve email alanına \"user@example.com\" yaz, şifre alanına \"secret123\" yaz ve giriş yap",
+      "task_id": "task_1773053339899_https-login-local-aç-ve-email-alanına-user-examp",
+      "status": "completed",
+      "success": true,
+      "planned_steps": 4,
+      "completed_steps": 4,
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": "",
+      "elapsed_s": 0.018,
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339902/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339902/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339902/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339902/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339902/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339902/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks6/task_1773053339899_https-login-local-aç-ve-email-alanına-user-examp/screenshots/step_01_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339905/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339905/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339905/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339905/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339905/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339905/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks6/task_1773053339899_https-login-local-aç-ve-email-alanına-user-examp/screenshots/step_02_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339908/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339908/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339908/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339908/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339908/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339908/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks6/task_1773053339899_https-login-local-aç-ve-email-alanına-user-examp/screenshots/step_03_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339911/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339911/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339911/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339911/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339911/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339911/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks6/task_1773053339899_https-login-local-aç-ve-email-alanına-user-examp/screenshots/step_04_01.png",
+          "type": "image"
+        }
+      ]
+    },
+    {
+      "name": "upload_flow",
+      "request": "Safari'yi aç ve https://upload.local adresini aç ve yükleme diyaloğunu onayla",
+      "task_id": "task_1773053339918_safari-yi-aç-ve-https-upload-local-adresini-aç-v",
+      "status": "completed",
+      "success": true,
+      "planned_steps": 3,
+      "completed_steps": 3,
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": "",
+      "elapsed_s": 0.035,
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339921/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339921/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339921/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339921/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339921/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339921/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks7/task_1773053339918_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_01_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks7/task_1773053339918_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_01_02.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339928/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339928/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339928/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339928/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339928/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339928/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks7/task_1773053339918_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_02_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339933/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339933/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339933/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339933/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339933/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339933/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks7/task_1773053339918_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_03_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks7/task_1773053339918_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_03_02.png",
+          "type": "image"
+        }
+      ]
+    },
+    {
+      "name": "multi_step_browser_navigation",
+      "request": "https://wizard.local aç ve Continue butonuna tıkla sonra Next butonuna tıkla",
+      "task_id": "task_1773053339953_https-wizard-local-aç-ve-continue-butonuna-tıkla",
+      "status": "completed",
+      "success": true,
+      "planned_steps": 3,
+      "completed_steps": 3,
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": "",
+      "elapsed_s": 0.017,
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339956/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339956/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339956/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339956/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339956/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339956/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks8/task_1773053339953_https-wizard-local-aç-ve-continue-butonuna-tıkla/screenshots/step_01_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339959/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339959/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339959/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339959/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339959/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339959/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks8/task_1773053339953_https-wizard-local-aç-ve-continue-butonuna-tıkla/screenshots/step_02_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339963/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339963/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339963/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339963/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339963/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053339963/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks8/task_1773053339953_https-wizard-local-aç-ve-continue-butonuna-tıkla/screenshots/step_03_01.png",
+          "type": "image"
+        }
+      ]
+    },
+    {
+      "name": "wrong_window_recovery",
+      "request": "Safari'yi aç ve Continue butonuna tıkla",
+      "task_id": "task_1773053339969_safari-yi-aç-ve-continue-butonuna-tıkla",
+      "status": "completed",
+      "success": true,
+      "planned_steps": 1,
+      "completed_steps": 1,
+      "retry_count": 0,
+      "replan_count": 2,
+      "failure_code": "",
+      "elapsed_s": 0.019,
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339972/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339972/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339972/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339972/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339972/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339972/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks9/task_1773053339969_safari-yi-aç-ve-continue-butonuna-tıkla/screenshots/step_01_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks9/task_1773053339969_safari-yi-aç-ve-continue-butonuna-tıkla/screenshots/step_01_02.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339976/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339976/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339976/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339976/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339976/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053339976/target_decisions.json",
+          "type": "json"
+        }
+      ]
+    },
+    {
+      "name": "dom_screen_dom_continuation",
+      "request": "https://upload.local aç ve yükleme diyaloğunu onayla ve upload tamamlandı durumunu doğrula",
+      "task_id": "task_1773053339988_https-upload-local-aç-ve-yükleme-diyaloğunu-onay",
+      "status": "completed",
+      "success": true,
+      "planned_steps": 4,
+      "completed_steps": 4,
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": "",
+      "elapsed_s": 0.131,
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340072/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340072/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340072/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340072/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340072/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340072/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks10/task_1773053339988_https-upload-local-aç-ve-yükleme-diyaloğunu-onay/screenshots/step_01_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks10/task_1773053339988_https-upload-local-aç-ve-yükleme-diyaloğunu-onay/screenshots/step_01_02.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340080/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340080/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340080/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340080/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340080/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340080/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks10/task_1773053339988_https-upload-local-aç-ve-yükleme-diyaloğunu-onay/screenshots/step_02_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340087/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340087/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340087/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340087/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340087/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340087/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks10/task_1773053339988_https-upload-local-aç-ve-yükleme-diyaloğunu-onay/screenshots/step_03_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks10/task_1773053339988_https-upload-local-aç-ve-yükleme-diyaloğunu-onay/screenshots/step_03_02.png",
+          "type": "image"
+        }
+      ]
+    },
+    {
+      "name": "upload_flow_with_confirmation",
+      "request": "Safari'yi aç ve https://upload.local adresini aç ve yükleme diyaloğunu onayla ve tamamlandığını doğrula",
+      "task_id": "task_1773053340119_safari-yi-aç-ve-https-upload-local-adresini-aç-v",
+      "status": "completed",
+      "success": true,
+      "planned_steps": 4,
+      "completed_steps": 4,
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": "",
+      "elapsed_s": 0.12,
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340181/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340181/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340181/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340181/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340181/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340181/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks11/task_1773053340119_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_01_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks11/task_1773053340119_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_01_02.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340189/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340189/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340189/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340189/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340189/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340189/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks11/task_1773053340119_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_02_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340195/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340195/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340195/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340195/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340195/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340195/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks11/task_1773053340119_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_03_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks11/task_1773053340119_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_03_02.png",
+          "type": "image"
+        }
+      ]
+    },
+    {
+      "name": "app_switch_focused_field_typing",
+      "request": "Finder'ı aç sonra Safari'ye geç ve arama kutusuna kittens yaz",
+      "task_id": "task_1773053340239_finder-ı-aç-sonra-safari-ye-geç-ve-arama-kutusun",
+      "status": "completed",
+      "success": true,
+      "planned_steps": 3,
+      "completed_steps": 3,
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": "",
+      "elapsed_s": 0.045,
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340247/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340247/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340247/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340247/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340247/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340247/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks12/task_1773053340239_finder-ı-aç-sonra-safari-ye-geç-ve-arama-kutusun/screenshots/step_01_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks12/task_1773053340239_finder-ı-aç-sonra-safari-ye-geç-ve-arama-kutusun/screenshots/step_01_02.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340254/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340254/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340254/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340254/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340254/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340254/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks12/task_1773053340239_finder-ı-aç-sonra-safari-ye-geç-ve-arama-kutusun/screenshots/step_02_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks12/task_1773053340239_finder-ı-aç-sonra-safari-ye-geç-ve-arama-kutusun/screenshots/step_02_02.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340263/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340263/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340263/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340263/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340263/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340263/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks12/task_1773053340239_finder-ı-aç-sonra-safari-ye-geç-ve-arama-kutusun/screenshots/step_03_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks12/task_1773053340239_finder-ı-aç-sonra-safari-ye-geç-ve-arama-kutusun/screenshots/step_03_02.png",
+          "type": "image"
+        }
+      ]
+    },
+    {
+      "name": "long_mixed_login_continue",
+      "request": "Safari'yi aç ve https://login.local aç ve email alanına \"user@example.com\" yaz, şifre alanına \"secret123\" yaz ve giriş yap sonra Continue butonuna tıkla",
+      "task_id": "task_1773053340283_safari-yi-aç-ve-https-login-local-aç-ve-email-al",
+      "status": "completed",
+      "success": true,
+      "planned_steps": 6,
+      "completed_steps": 6,
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": "",
+      "elapsed_s": 0.053,
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340289/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340289/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340289/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340289/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340289/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340289/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks13/task_1773053340283_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_01_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks13/task_1773053340283_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_01_02.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340294/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340294/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340294/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340294/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340294/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340294/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks13/task_1773053340283_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_02_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340299/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340299/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340299/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340299/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340299/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340299/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks13/task_1773053340283_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_03_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340305/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340305/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340305/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340305/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340305/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340305/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks13/task_1773053340283_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_04_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340311/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340311/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340311/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340311/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340311/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340311/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks13/task_1773053340283_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_05_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340317/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340317/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340317/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340317/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340317/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340317/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks13/task_1773053340283_safari-yi-aç-ve-https-login-local-aç-ve-email-al/screenshots/step_06_01.png",
+          "type": "image"
+        }
+      ]
+    },
+    {
+      "name": "browser_desktop_browser_continuation",
+      "request": "Safari'yi aç ve https://upload.local adresini aç ve yükleme diyaloğunu onayla sonra Save butonuna tıkla",
+      "task_id": "task_1773053340336_safari-yi-aç-ve-https-upload-local-adresini-aç-v",
+      "status": "completed",
+      "success": true,
+      "planned_steps": 4,
+      "completed_steps": 4,
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": "",
+      "elapsed_s": 0.07,
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340354/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340354/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340354/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340354/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340354/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340354/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks14/task_1773053340336_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_01_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks14/task_1773053340336_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_01_02.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340361/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340361/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340361/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340361/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340361/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340361/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks14/task_1773053340336_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_02_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340368/before.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340368/after.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340368/ui_state.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340368/screen_summary.md",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340368/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/screen_operator/1773053340368/target_decisions.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks14/task_1773053340336_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_03_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks14/task_1773053340336_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_03_02.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340382/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340382/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340382/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340382/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340382/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340382/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks14/task_1773053340336_safari-yi-aç-ve-https-upload-local-adresini-aç-v/screenshots/step_04_01.png",
+          "type": "image"
+        }
+      ]
+    },
+    {
+      "name": "telegram_triggered_operator_flow",
+      "request": "@ElyanBot /run https://search.local aç ve arama kutusuna \"kittens\" yaz ve submit et",
+      "task_id": "task_1773053340406_https-search-local-aç-ve-arama-kutusuna-kittens-",
+      "status": "completed",
+      "success": true,
+      "planned_steps": 3,
+      "completed_steps": 3,
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": "",
+      "elapsed_s": 0.015,
+      "artifacts": [
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340409/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340409/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340409/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340409/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340409/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340409/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks15/task_1773053340406_https-search-local-aç-ve-arama-kutusuna-kittens-/screenshots/step_01_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340412/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340412/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340412/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340412/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340412/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340412/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks15/task_1773053340406_https-search-local-aç-ve-arama-kutusuna-kittens-/screenshots/step_02_01.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340415/dom_snapshot.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340415/dom_snapshot.html",
+          "type": "text"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340415/navigation.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340415/action_log.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340415/verification.json",
+          "type": "json"
+        },
+        {
+          "path": "/Users/emrekoca/.elyan/browser_runtime/1773053340415/page.png",
+          "type": "image"
+        },
+        {
+          "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053339733/workspace/tasks15/task_1773053340406_https-search-local-aç-ve-arama-kutusuna-kittens-/screenshots/step_03_01.png",
+          "type": "image"
+        }
+      ]
+    }
+  ],
+  "elapsed_s": 0.686
+}

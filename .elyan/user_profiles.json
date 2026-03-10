@@ -1,23 +1,40 @@
 {
   "0": {
-    "preferred_language": "tr",
+    "preferred_language": "en",
     "top_topics": {
-      "masaüstünde": 11,
-      "var": 11,
-      "ekran": 5,
-      "görüntüsü": 5,
-      "word": 5,
-      "dosyası": 5,
-      "içine": 5,
-      "köpek": 5
+      "masaüstünde": 25,
+      "var": 25,
+      "ekran": 17,
+      "görüntüsü": 17,
+      "word": 17,
+      "dosyası": 17,
+      "içine": 17,
+      "köpek": 17,
+      "not": 14,
+      "işi": 12,
+      "planla": 12,
+      "uygula:": 12,
+      "~/desktop/": 12,
+      "-test/a": 12,
+      "klasörü": 12,
+      "not.md": 12,
+      "içeriği": 12,
+      "bunu": 6,
+      "duvar": 6,
+      "kağıdı": 6
     },
     "successful_actions": {
       "list_files": 11,
-      "multi_task": 10
+      "multi_task": 22,
+      "write_file": 14,
+      "set_wallpaper": 6
     },
-    "failed_actions": {},
+    "failed_actions": {
+      "list_files": 14,
+      "multi_task": 24
+    },
     "response_length_bias": "short",
-    "updated_at": 1771974664
+    "updated_at": 1773157077
   },
   "8433815573": {
     "preferred_language": "tr",
@@ -35,5 +52,13 @@
     "failed_actions": {},
     "response_length_bias": "short",
     "updated_at": 1771819510
+  },
+  "local": {
+    "preferred_language": "auto",
+    "top_topics": {},
+    "successful_actions": {},
+    "failed_actions": {},
+    "response_length_bias": "short",
+    "updated_at": 1772928659
   }
 }

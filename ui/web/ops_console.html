@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Elyan Ops Console</title>
+  <link rel="stylesheet" href="/ui/web/ops_console.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">ADMIN ONLY</p>
+        <h1>Elyan Ops Console</h1>
+        <p class="hero-text">
+          Kullanici, plan ve kota durumlarini tek noktadan izle. Plan asamalarini sec, kullanici bazli yogunlugu gor ve background gorevlere mudahale et.
+        </p>
+      </div>
+      <div class="hero-actions">
+        <span id="sync-pill" class="pill">Baglanti kontrol ediliyor</span>
+        <button id="refresh-btn" class="btn primary" type="button">Yenile</button>
+      </div>
+    </header>
+
+    <section class="metrics" id="metrics-grid">
+      <article class="metric">
+        <span class="metric-k">Kullanicilar</span>
+        <strong id="users-total">-</strong>
+        <span id="users-active" class="metric-sub">Aktif: -</span>
+      </article>
+      <article class="metric">
+        <span class="metric-k">Plan Yuku</span>
+        <strong id="tasks-total">-</strong>
+        <span id="tasks-active" class="metric-sub">Calisan: -</span>
+      </article>
+      <article class="metric">
+        <span class="metric-k">Quota Alarmi</span>
+        <strong id="quota-blocked">-</strong>
+        <span id="failed-total" class="metric-sub">Riskli plan: -</span>
+      </article>
+      <article class="metric">
+        <span class="metric-k">Planner</span>
+        <strong id="planner-active">-</strong>
+        <span id="planner-completed" class="metric-sub">Tamamlanan: -</span>
+      </article>
+    </section>
+
+    <section class="workspace">
+      <aside class="panel users-panel">
+        <div class="panel-head">
+          <div>
+            <h2>Kullanici Fleet</h2>
+            <p id="user-count-note" class="muted">Henuez veri yok.</p>
+          </div>
+          <input id="user-search" type="search" placeholder="Kullanici ara..." />
+        </div>
+        <div id="user-list" class="user-list"></div>
+      </aside>
+
+      <main class="panel board-panel">
+        <div class="panel-head board-head">
+          <div>
+            <h2>Plan Board</h2>
+            <p class="muted">Foreground ve background akislari ayni yonetici bakisinda birlestirilir.</p>
+          </div>
+          <div class="board-controls">
+            <select id="state-filter">
+              <option value="">Tum state'ler</option>
+              <option value="pending">pending</option>
+              <option value="planning">planning</option>
+              <option value="executing">executing</option>
+              <option value="verifying">verifying</option>
+              <option value="queued">queued</option>
+              <option value="running">running</option>
+              <option value="partial">partial</option>
+              <option value="completed">completed</option>
+              <option value="failed">failed</option>
+              <option value="cancelled">cancelled</option>
+            </select>
+            <button id="clear-selection-btn" class="btn" type="button">Secimi Temizle</button>
+          </div>
+        </div>
+        <div class="board-grid">
+          <section class="lane">
+            <div class="lane-head">
+              <h3>Execution</h3>
+              <span id="lane-execution-count" class="pill lane-pill">0</span>
+            </div>
+            <div id="lane-execution" class="lane-body"></div>
+          </section>
+          <section class="lane">
+            <div class="lane-head">
+              <h3>Attention</h3>
+              <span id="lane-attention-count" class="pill lane-pill">0</span>
+            </div>
+            <div id="lane-attention" class="lane-body"></div>
+          </section>
+          <section class="lane">
+            <div class="lane-head">
+              <h3>Done</h3>
+              <span id="lane-done-count" class="pill lane-pill">0</span>
+            </div>
+            <div id="lane-done" class="lane-body"></div>
+          </section>
+        </div>
+      </main>
+
+      <aside class="panel detail-panel">
+        <div class="panel-head">
+          <div>
+            <h2>Detail Studio</h2>
+            <p class="muted">Secili kullanici veya plan burada yonetilir.</p>
+          </div>
+          <span id="last-sync" class="muted">Son senkron: -</span>
+        </div>
+
+        <section class="detail-block">
+          <h3>Kullanici</h3>
+          <div id="selected-user" class="empty-state">Bir kullanici sec.</div>
+          <div class="tier-actions">
+            <button class="btn tier-btn" data-tier="free" type="button">FREE</button>
+            <button class="btn tier-btn" data-tier="pro" type="button">PRO</button>
+            <button class="btn tier-btn" data-tier="enterprise" type="button">ENTERPRISE</button>
+          </div>
+        </section>
+
+        <section class="detail-block">
+          <h3>Plan</h3>
+          <div id="selected-plan" class="empty-state">Bir plan sec.</div>
+          <div class="task-actions">
+            <button id="cancel-task-btn" class="btn" type="button">Background Cancel</button>
+            <button id="requeue-task-btn" class="btn" type="button">Background Requeue</button>
+          </div>
+        </section>
+
+        <section class="detail-block">
+          <h3>Plan Timeline</h3>
+          <ul id="timeline-list" class="timeline"></ul>
+        </section>
+
+        <section class="detail-block">
+          <h3>Artifacts + Subtasks</h3>
+          <div id="artifact-list" class="stack-list"></div>
+          <div id="subtask-list" class="stack-list"></div>
+        </section>
+      </aside>
+    </section>
+  </div>
+
+  <script src="/ui/web/ops_console.js"></script>
+</body>
+</html>

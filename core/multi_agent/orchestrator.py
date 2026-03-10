@@ -37,6 +37,24 @@ class AgentOrchestrator:
         self.qa_pipeline = QAPipeline(agent_instance)
         self.team_roster: list[dict[str, str]] = []
 
+    @staticmethod
+    def _specialist_role_key(key: str) -> str:
+        token = str(key or "").strip().lower()
+        mapping = {
+            "lead": "planning",
+            "pm_agent": "planning",
+            "researcher": "research_worker",
+            "builder": "code",
+            "executor": "code_worker",
+            "coder": "code_worker",
+            "ops": "worker",
+            "tool_runner": "worker",
+            "qa": "qa",
+            "qa_expert": "qa",
+            "communicator": "creative",
+        }
+        return mapping.get(token, "reasoning")
+
     async def manage_flow(self, plan: Any, original_input: str) -> str:
         """
         Industrial Loop: Reason -> Plan -> Surgical Execute -> Layered Verify
@@ -419,19 +437,35 @@ class AgentOrchestrator:
     async def _run_specialist(self, key: str, prompt: str) -> str:
         specialist = self.registry.get(key)
         final_prompt = f"ROLÜN: {specialist.system_prompt}\n\nİSTEK: {prompt}"
-        
-        target_model = specialist.preferred_model or "gpt-4o"
+        role_key = self._specialist_role_key(key)
+        collab_cfg = self.main_agent.llm.orchestrator.get_collaboration_settings() if getattr(self.main_agent, "llm", None) else {"enabled": False}
+        model_config = None
+        if not bool(collab_cfg.get("enabled")) and getattr(self.main_agent, "llm", None):
+            target_model = specialist.preferred_model or ""
+            model_config = self.main_agent.llm.orchestrator.resolve_model_hint(target_model, role=role_key) if target_model else None
         
         if hasattr(self, "budget_tracker"):
             self.budget_tracker.consume(input_tokens=(len(final_prompt) // 4), output_tokens=0)
             
+        async def _invoke_llm():
+            try:
+                return await self.main_agent.llm.generate(
+                    final_prompt,
+                    role=role_key,
+                    model_config=model_config,
+                    strict_model_config=bool(model_config),
+                    user_id="system",
+                )
+            except TypeError:
+                return await self.main_agent.llm.generate(
+                    final_prompt,
+                    role=role_key,
+                    model_config=model_config,
+                    user_id="system",
+                )
+
         result = await with_timeout(
-            self.main_agent.llm.generate(
-                final_prompt,
-                role=specialist.role,
-                model_config={"model": target_model},
-                user_id="system"
-            ),
+            _invoke_llm(),
             seconds=STEP_TIMEOUT,
             fallback=f'{{"outputs": ["Hata: {specialist.name} zaman aşımı"], "risks": ["Timeout"]}}',
             context=f"factory:{key}"

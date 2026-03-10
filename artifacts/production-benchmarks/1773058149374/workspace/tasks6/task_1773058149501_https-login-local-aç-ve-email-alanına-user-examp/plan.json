@@ -1,0 +1,52 @@
+[
+  {
+    "kind": "browser",
+    "name": "open_page",
+    "action": "open",
+    "url": "https://login.local",
+    "expected_url_contains": "login.local",
+    "expected_title_contains": "",
+    "verify": {
+      "url_contains": "login.local"
+    },
+    "repair_policy": {
+      "max_retries": 1
+    }
+  },
+  {
+    "kind": "browser",
+    "name": "fill_email",
+    "action": "type",
+    "selector": "#email",
+    "text": "user@example.com",
+    "verify": {
+      "text_contains": "user@example.com"
+    },
+    "repair_policy": {
+      "max_retries": 1
+    }
+  },
+  {
+    "kind": "browser",
+    "name": "fill_password",
+    "action": "type",
+    "selector": "#password",
+    "text": "secret123",
+    "verify": {
+      "text_contains": "secret123"
+    },
+    "repair_policy": {
+      "max_retries": 1
+    }
+  },
+  {
+    "kind": "browser",
+    "name": "click_login",
+    "action": "click",
+    "selector": "#login",
+    "verify": {},
+    "repair_policy": {
+      "max_retries": 1
+    }
+  }
+]

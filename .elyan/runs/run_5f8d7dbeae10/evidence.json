@@ -1,0 +1,42 @@
+{
+  "run_id": "run_5f8d7dbeae10",
+  "manifest_path": "/Users/emrekoca/Desktop/bot/.elyan/proofs/run_5f8d7dbeae10/manifest.json",
+  "steps": [
+    {
+      "step": "Uygulamayı aç",
+      "tool": "open_app",
+      "status": "success",
+      "input_hash": "e3bd8d542f883041b58028780ab1b937f47664b878a5dabd6b82f2953ef19a9c",
+      "params_hash": "d93f04409fbcfe31bfbb633baaef8c324f8f49e489f793285bc5ae5b9e3e17e9",
+      "result_hash": "5f7d83afc61769282559c96867542a1c3884f63d18b0336a90e9dbb0ca184fce",
+      "duration_ms": 1,
+      "ts": 1773155195.753952
+    },
+    {
+      "step": "Araştırma",
+      "tool": "advanced_research",
+      "status": "success",
+      "input_hash": "1a48f572650d11c5e86457fedf269a6616d69b01641960eda98bab812ba8f43d",
+      "params_hash": "2dd52c03913cb8bbeb9d0b07860cfe03f33ede3ba183a2435ce06d95755691cc",
+      "result_hash": "30d49af572e7562a816d37440b8a1ed5ae8c700ef2acd66fdbd042c495459c8e",
+      "duration_ms": 1,
+      "ts": 1773155195.7559931
+    },
+    {
+      "step": "Kaydet",
+      "tool": "write_file",
+      "status": "success",
+      "input_hash": "a6411213a82f9c8ea5e5311e306a9898fa4e2ed9a868e9626e3ee22329781fbd",
+      "params_hash": "44b0793dca03636501b818c5bd011695c4f36856cc3040823499e60b7b1ea3e0",
+      "result_hash": "58706303f0ac1321d9b232c4a1a125b1cee18e22d38575a4227f2c231e948075",
+      "duration_ms": 1,
+      "ts": 1773155195.758728
+    }
+  ],
+  "artifacts": [],
+  "metadata": {
+    "status": "success",
+    "errors": []
+  },
+  "written_at": 1773155195.7688031
+}

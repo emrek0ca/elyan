@@ -6,6 +6,7 @@ from core.monitoring import (
     get_monitoring,
     record_operation,
     record_error,
+    record_orchestration_decision,
 )
 
 def test_monitoring_healthy():
@@ -74,3 +75,20 @@ def test_monitoring_tracker_records_operation_and_error():
     assert after["errors_total"] >= before["errors_total"] + 1
     assert after["last_operation"]["operation"] == "task_execution"
     assert after["last_error"]["component"] == "task_engine"
+
+
+def test_monitoring_tracker_records_orchestration_decision():
+    tracker = get_monitoring()
+    before = tracker.get_orchestration_summary()
+
+    record_orchestration_decision(
+        mode="team_mode",
+        selected=True,
+        reason="forced",
+        metadata={"team_forced": True, "complexity": 0.92},
+    )
+
+    after = tracker.get_orchestration_summary()
+    assert after["decisions_total"] >= before["decisions_total"] + 1
+    assert after["selected_by_mode"].get("team_mode", 0) >= before["selected_by_mode"].get("team_mode", 0)
+    assert after["reason_counts"].get("forced", 0) >= before["reason_counts"].get("forced", 0)

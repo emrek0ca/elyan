@@ -1,0 +1,1 @@
+{"event": "run.started", "request_id": "run_f21bf6d8fad8", "machine_id": "", "selected_capability": "", "workflow_path": [], "extracted_params": {}, "tool_name": "", "status": "started", "latency_ms": 0, "memory_mb": 131.52, "retry_count": 0, "payload": {"source": "legacy_run_store", "metrics": {"memory_mb": 131.52, "threads": 3, "open_files": 13}}, "ts": 1773157080.0753589}

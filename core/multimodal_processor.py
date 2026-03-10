@@ -144,8 +144,11 @@ class MultiModalProcessor:
                 result = await analyze_image(file_path, prompt="Extract all text.")
                 return result
 
-            # ... (rest of image operations: metadata, resize) ...
-            return {"success": False, "error": "Operation incomplete in upgrade"}
+            elif operation in {"metadata", "resize", "crop", "rotate", "convert", "grayscale", "thumbnail"}:
+                from tools.vision_tools import process_image_file
+                return await process_image_file(file_path, operation=operation, **params)
+
+            return {"success": False, "error": f"Unknown image op: {operation}"}
 
         except Exception as e:
             logger.error(f"Image processing error: {e}")

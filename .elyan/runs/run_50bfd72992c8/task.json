@@ -1,0 +1,97 @@
+{
+  "run_id": "run_50bfd72992c8",
+  "user_input": "google aç ve sonra ekran görüntüsü al",
+  "task_spec": {},
+  "metadata": {
+    "action": "multi_task",
+    "job_type": "browser_task",
+    "capability_domain": "general",
+    "workflow_id": "general_assistance_workflow",
+    "hybrid_model": {
+      "role": "inference",
+      "routing_role": "router",
+      "critic_role": "critic",
+      "tool_first": false,
+      "prefer_local": true,
+      "tier": "balanced"
+    },
+    "channel": "cli",
+    "user_id": "local",
+    "status": "success"
+  },
+  "task_state": {
+    "task_id": "task_a421f1e3a4",
+    "objective": "google aç ve sonra ekran görüntüsü al",
+    "context": {
+      "user_input": "google aç ve sonra ekran görüntüsü al",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "multi_task",
+      "job_type": "browser_task",
+      "capability_domain": "general",
+      "workflow_id": "general_assistance_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "open_app",
+        "description": "google aç"
+      },
+      {
+        "id": "subtask_2",
+        "action": "take_screenshot",
+        "description": "ve ekran görüntüsü al"
+      }
+    ],
+    "artifacts": [],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1772929399.987157,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1772929399.993099,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1772929399.9957929,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1772929400.1185641,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1772929400.123025,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "multi_task",
+          "job_type": "browser_task"
+        }
+      }
+    ],
+    "created_at": 1772929399.987156,
+    "updated_at": 1772929400.123025
+  },
+  "written_at": 1772929400.126836
+}

@@ -88,6 +88,8 @@ class SubAgentValidator:
                     ok = self._gate_tool_success(result.result)
                 elif g == "artifact_paths_nonempty":
                     ok = bool(artifacts)
+                elif g == "artifact_or_content":
+                    ok = bool(artifacts) or self._gate_has_content(payload_text)
                 else:
                     ok = True
             except Exception as exc:

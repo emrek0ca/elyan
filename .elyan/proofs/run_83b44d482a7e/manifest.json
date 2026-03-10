@@ -1,0 +1,46 @@
+{
+  "run_id": "run_83b44d482a7e",
+  "started_at": 1772928741.569091,
+  "completed_at": 1772928741.6888409,
+  "status": "partial",
+  "error": "contract_decl:missing:required_outputs; contract_decl:missing:guardrails; contract_decl:missing:verify",
+  "steps": [
+    {
+      "step": "Projects klasörünü listele",
+      "tool": "list_files",
+      "status": "success",
+      "input_hash": "528b189470dcef2d288c679dc5b244e2dfd1960f4a496e66aa945a7b22bdfc2a",
+      "params_hash": "650d982f93161c69fdce71fdc23555bbbf46bbbf0fcde35fee5dc54fe3a1b580",
+      "result_hash": "2fe3433b25cee3ea1b4b7c0b788e5cca220f481324eb2627580cda0e89047c90",
+      "duration_ms": 1,
+      "ts": 1772928741.68402
+    },
+    {
+      "step": "not.txt oku ve",
+      "tool": "read_file",
+      "status": "success",
+      "input_hash": "e78e5ba70408ad7399b22c7d42896ae30a3e38efbf00d8feaef05498c1dce01f",
+      "params_hash": "c4dbf26d581a572f680517a0940b8f305ddda25b87d15bbf930abb2b552353b8",
+      "result_hash": "7a7cf383d2ed702410db084203fcf2f948479ecf288d5106f6af1b0161660930",
+      "duration_ms": 1,
+      "ts": 1772928741.6857731
+    },
+    {
+      "step": "bunu sil",
+      "tool": "delete_file",
+      "status": "success",
+      "input_hash": "f94266d4b4e27dd210be8c42a69fffc6bdd920c2667e001aee7f02b8a3d7cf28",
+      "params_hash": "77bf94eda76aab18b821b72a54c8e80c1835d432aebd0e494f5c0e775a2077db",
+      "result_hash": "2b82e120325bd43c1163ae295e3d81713c9e8e5514f195d4d39adbd927d63820",
+      "duration_ms": 1,
+      "ts": 1772928741.687551
+    }
+  ],
+  "artifacts": [],
+  "metadata": {
+    "action": "multi_task",
+    "job_type": "file_operations",
+    "channel": "cli",
+    "user_id": "local"
+  }
+}

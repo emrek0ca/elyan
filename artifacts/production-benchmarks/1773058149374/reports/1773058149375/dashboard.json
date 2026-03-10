@@ -1,0 +1,149 @@
+{
+  "pass_count": 20,
+  "total": 20,
+  "average_retries": 0.1,
+  "average_replans": 0.5,
+  "remaining_failure_codes": [],
+  "tasks": [
+    {
+      "name": "open_app_frontmost",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": ""
+    },
+    {
+      "name": "type_visible_field",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": ""
+    },
+    {
+      "name": "click_button_transition",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 1,
+      "failure_code": ""
+    },
+    {
+      "name": "browser_fill_submit",
+      "final_status": "completed",
+      "retry_count": 1,
+      "replan_count": 1,
+      "failure_code": ""
+    },
+    {
+      "name": "native_dialog_fallback",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": ""
+    },
+    {
+      "name": "login_form_fill",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": ""
+    },
+    {
+      "name": "upload_flow",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": ""
+    },
+    {
+      "name": "multi_step_browser_navigation",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": ""
+    },
+    {
+      "name": "wrong_window_recovery",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 2,
+      "failure_code": ""
+    },
+    {
+      "name": "dom_screen_dom_continuation",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 1,
+      "failure_code": ""
+    },
+    {
+      "name": "upload_flow_with_confirmation",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 1,
+      "failure_code": ""
+    },
+    {
+      "name": "app_switch_focused_field_typing",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": ""
+    },
+    {
+      "name": "long_mixed_login_continue",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": ""
+    },
+    {
+      "name": "browser_desktop_browser_continuation",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": ""
+    },
+    {
+      "name": "telegram_triggered_operator_flow",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": ""
+    },
+    {
+      "name": "telegram_desktop_task_completion",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 1,
+      "failure_code": ""
+    },
+    {
+      "name": "research_document_creation_verification",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": ""
+    },
+    {
+      "name": "app_switch_finder_safari_cursor_terminal",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 0,
+      "failure_code": ""
+    },
+    {
+      "name": "login_continue_upload_flow",
+      "final_status": "completed",
+      "retry_count": 0,
+      "replan_count": 2,
+      "failure_code": ""
+    },
+    {
+      "name": "interrupted_resume_after_partial_completion",
+      "final_status": "completed",
+      "retry_count": 1,
+      "replan_count": 1,
+      "failure_code": ""
+    }
+  ]
+}

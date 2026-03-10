@@ -1,0 +1,45 @@
+[
+  {
+    "step_index": 7,
+    "rationale": "skip_already_satisfied_steps",
+    "trace": {
+      "trigger": "success",
+      "step_index": 6,
+      "failed_codes": [],
+      "current_step_name": "click_continue",
+      "actions": [
+        {
+          "kind": "skip_already_satisfied_steps",
+          "skipped": [
+            "open_upload_page"
+          ]
+        }
+      ]
+    },
+    "new_step_names": [
+      "confirm_upload_dialog",
+      "verify_upload_completion"
+    ],
+    "timestamp": 1773058456.077339
+  },
+  {
+    "step_index": 8,
+    "rationale": "skip_already_satisfied_steps",
+    "trace": {
+      "trigger": "success",
+      "step_index": 7,
+      "failed_codes": [],
+      "current_step_name": "confirm_upload_dialog",
+      "actions": [
+        {
+          "kind": "skip_already_satisfied_steps",
+          "skipped": [
+            "verify_upload_completion"
+          ]
+        }
+      ]
+    },
+    "new_step_names": [],
+    "timestamp": 1773058456.099
+  }
+]

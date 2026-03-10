@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from core.gateway.router import GatewayRouter
 from core.gateway.message import UnifiedMessage
 from core.gateway.response import UnifiedResponse
+from core.channel_delivery import channel_delivery_bridge
 
 
 def _make_message(**kwargs):
@@ -44,6 +45,11 @@ class TestGatewayRouter:
         router.register_adapter("test_channel", mock_adapter)
         assert "test_channel" in router.adapters
         mock_adapter.on_message.assert_called_once()
+
+    def test_router_registers_channel_delivery_sender(self):
+        router, _ = self._router()
+        assert callable(channel_delivery_bridge._sender)
+        assert channel_delivery_bridge._sender.__self__ is router
 
     @pytest.mark.asyncio
     async def test_send_outgoing_response_calls_adapter(self):
@@ -109,6 +115,168 @@ class TestGatewayRouter:
         assert sent.attachments == []
         assert len(sent.text) <= 3500
         assert "kısaltıldı" in sent.text
+
+    @pytest.mark.asyncio
+    async def test_send_outgoing_response_preserves_attachment_summary_when_channel_cannot_send_files(self):
+        router, _ = self._router()
+
+        class _Adapter:
+            def __init__(self):
+                self.sent = []
+
+            def on_message(self, cb):
+                _ = cb
+
+            async def send_message(self, chat_id, response):
+                self.sent.append((chat_id, response))
+
+            def get_capabilities(self):
+                return {"markdown": False, "buttons": False, "images": False, "files": False}
+
+            async def connect(self):
+                return None
+
+            async def disconnect(self):
+                return None
+
+            def get_status(self):
+                return "connected"
+
+        adapter = _Adapter()
+        router.register_adapter("fallback_channel", adapter)
+        response = UnifiedResponse(
+            text="Rapor hazır",
+            attachments=[{"path": "/tmp/report.docx", "name": "report.docx", "type": "file"}],
+        )
+        await router.send_outgoing_response("fallback_channel", "chat-9", response)
+        sent = adapter.sent[0][1]
+        assert sent.attachments == []
+        assert "Dosyalar:" in sent.text
+        assert "report.docx" in sent.text
+
+    @pytest.mark.asyncio
+    async def test_handle_incoming_message_preserves_agent_response_metadata(self):
+        router, mock_agent = self._router()
+
+        envelope = SimpleNamespace(
+            text="Aktif gorevler:\n- away_1 [running] rapor",
+            attachments=[],
+            evidence_manifest_path="",
+            run_id="run_meta",
+            status="success",
+            metadata={"task_list": [{"task_id": "away_1", "state": "running"}]},
+            to_unified_attachments=lambda: [],
+        )
+        mock_agent.process_envelope = AsyncMock(return_value=envelope)
+
+        class _Adapter:
+            def __init__(self):
+                self.sent = []
+
+            def on_message(self, cb):
+                _ = cb
+
+            async def send_message(self, chat_id, response):
+                self.sent.append((chat_id, response))
+
+            def get_capabilities(self):
+                return {"markdown": True, "buttons": True, "images": True, "files": True}
+
+            async def connect(self):
+                return None
+
+            async def disconnect(self):
+                return None
+
+            def get_status(self):
+                return "connected"
+
+        adapter = _Adapter()
+        router.register_adapter("test", adapter)
+
+        async def _fake_route_message(channel_type, user_id):
+            _ = (channel_type, user_id)
+            return mock_agent
+
+        from core.gateway import router as gateway_router_module
+
+        original = gateway_router_module.agent_router.route_message
+        gateway_router_module.agent_router.route_message = _fake_route_message
+        try:
+            await router.handle_incoming_message(_make_message(channel_type="test"))
+        finally:
+            gateway_router_module.agent_router.route_message = original
+
+        sent = adapter.sent[-1][1]
+        assert sent.metadata["run_id"] == "run_meta"
+        assert sent.metadata["task_list"][0]["task_id"] == "away_1"
+
+    @pytest.mark.asyncio
+    async def test_normalize_response_adds_task_inbox_buttons_for_button_channels(self):
+        router, _ = self._router()
+
+        class _Adapter:
+            def on_message(self, cb):
+                _ = cb
+
+            async def send_message(self, chat_id, response):
+                _ = (chat_id, response)
+
+            def get_capabilities(self):
+                return {"markdown": True, "buttons": True, "images": True, "files": True}
+
+            async def connect(self):
+                return None
+
+            async def disconnect(self):
+                return None
+
+            def get_status(self):
+                return "connected"
+
+        adapter = _Adapter()
+        router.register_adapter("telegram", adapter)
+        response = UnifiedResponse(
+            text="Aktif gorevler",
+            metadata={"task_list": [{"task_id": "away_77", "state": "running"}]},
+        )
+        normalized = GatewayRouter._normalize_response_for_channel("telegram", response, adapter)
+        assert normalized.buttons
+        assert normalized.buttons[0]["callback_data"] == "task|status|away_77"
+
+    @pytest.mark.asyncio
+    async def test_normalize_response_adds_resume_suggestion_buttons(self):
+        router, _ = self._router()
+
+        class _Adapter:
+            def on_message(self, cb):
+                _ = cb
+
+            async def send_message(self, chat_id, response):
+                _ = (chat_id, response)
+
+            def get_capabilities(self):
+                return {"markdown": True, "buttons": True, "images": True, "files": True}
+
+            async def connect(self):
+                return None
+
+            async def disconnect(self):
+                return None
+
+            def get_status(self):
+                return "connected"
+
+        adapter = _Adapter()
+        router.register_adapter("telegram", adapter)
+        response = UnifiedResponse(
+            text="Tamamlandı.\n\nİstersen yarım kalan göreve devam edebilirim.",
+            metadata={"task_suggestion": {"task_id": "away_88", "suggested_action": "retry", "state": "failed"}},
+        )
+        normalized = GatewayRouter._normalize_response_for_channel("telegram", response, adapter)
+        assert normalized.buttons
+        assert normalized.buttons[0]["text"] == "Devam Et"
+        assert normalized.buttons[0]["callback_data"] == "task|retry|away_88"
 
     @pytest.mark.asyncio
     async def test_send_outgoing_response_retries_with_plain_fallback_on_error(self):

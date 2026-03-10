@@ -1,5 +1,6 @@
 from typing import Dict, Any
 from config.elyan_config import elyan_config
+from core.model_catalog import default_model_for_provider, normalize_model_name
 from utils.logger import get_logger
 
 logger = get_logger("neural_router")
@@ -7,7 +8,28 @@ logger = get_logger("neural_router")
 class NeuralRoleMapper:
     """Routes tasks to specific LLM models based on complexity and role."""
 
-    ROLE_NAMES = ("reasoning", "inference", "creative", "code")
+    ROLE_NAMES = (
+        "reasoning",
+        "inference",
+        "creative",
+        "code",
+        "router",
+        "critic",
+        "worker",
+        "research_worker",
+        "code_worker",
+        "planning",
+        "qa",
+    )
+    ROLE_ALIASES = {
+        "router": "inference",
+        "critic": "reasoning",
+        "worker": "reasoning",
+        "research_worker": "reasoning",
+        "code_worker": "code",
+        "planning": "reasoning",
+        "qa": "reasoning",
+    }
 
     def __init__(self):
         self.role_map: Dict[str, Dict[str, Any]] = {}
@@ -36,8 +58,8 @@ class NeuralRoleMapper:
         provider = str(provider or "").strip() or "ollama"
         model = elyan_config.get("models.default.model")
         if not model:
-            model = "llama3.1:8b" if provider == "ollama" else "gpt-4o"
-        return {"provider": provider, "model": model}
+            model = default_model_for_provider(provider)
+        return {"provider": provider, "model": normalize_model_name(provider, model)}
 
     def get_model_for_role(self, role: str) -> Dict[str, Any]:
         """
@@ -52,12 +74,35 @@ class NeuralRoleMapper:
             return default_cfg
 
         role_name = (role or "inference").lower()
-        selected = self.role_map.get(role_name) or default_cfg
+        if role_name == "router":
+            config_roles = elyan_config.get("models.roles", {}) or {}
+            router_cfg = config_roles.get("router") if isinstance(config_roles, dict) else None
+            local_default = {
+                "provider": "ollama",
+                "model": normalize_model_name(
+                    "ollama",
+                    str(
+                        elyan_config.get("models.providers.ollama.model", "")
+                        or elyan_config.get("models.providers.ollama.default_model", "")
+                        or elyan_config.get("models.local.model", default_model_for_provider("ollama"))
+                    ),
+                ),
+            }
+            if isinstance(router_cfg, dict) and (router_cfg.get("provider") or router_cfg.get("model")):
+                return {
+                    "provider": router_cfg.get("provider") or local_default["provider"],
+                    "model": normalize_model_name(router_cfg.get("provider") or local_default["provider"], router_cfg.get("model") or local_default["model"]),
+                }
+            return local_default
+        selected = self.role_map.get(role_name)
+        if not isinstance(selected, dict):
+            alias = self.ROLE_ALIASES.get(role_name, role_name)
+            selected = self.role_map.get(alias) or default_cfg
         if not isinstance(selected, dict):
             return default_cfg
         return {
             "provider": selected.get("provider") or default_cfg["provider"],
-            "model": selected.get("model") or default_cfg["model"],
+            "model": normalize_model_name(selected.get("provider") or default_cfg["provider"], selected.get("model") or default_cfg["model"]),
         }
 
     def detect_role(self, prompt: str) -> str:

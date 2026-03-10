@@ -49,3 +49,5 @@ async def test_agent_team_build_tasks_from_numbered_brief_when_planner_empty(mon
     assert tasks[1].depends_on == [tasks[0].task_id]
     assert tasks[2].depends_on == [tasks[1].task_id]
     assert tasks[0].action in {"create_folder", "write_file", "list_files", "chat"}
+    assert all(str(t.objective or "").strip() for t in tasks[:3])
+    assert all(isinstance(t.success_criteria, list) and len(t.success_criteria) >= 1 for t in tasks[:3])

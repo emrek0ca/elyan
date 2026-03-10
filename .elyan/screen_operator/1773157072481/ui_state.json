@@ -1,0 +1,83 @@
+{
+  "frontmost_app": "Safari",
+  "active_window": {
+    "title": "Checkout",
+    "bounds": {
+      "x": 0,
+      "y": 0,
+      "width": 1280,
+      "height": 800
+    }
+  },
+  "screenshot_path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-246/test_runtime_recovers_wrong_ap0/screen_before_1773157072480.png",
+  "elements": [
+    {
+      "label": "Safari",
+      "role": "frontmost_app",
+      "source": "window_metadata",
+      "confidence": 0.99
+    },
+    {
+      "label": "Checkout",
+      "role": "window_title",
+      "source": "window_metadata",
+      "confidence": 0.95
+    },
+    {
+      "label": "Continue",
+      "role": "button",
+      "x": 320,
+      "y": 92,
+      "width": 80,
+      "height": 28,
+      "frontmost_app": "Safari",
+      "window_title": "Checkout",
+      "source": "accessibility",
+      "confidence": 0.92
+    },
+    {
+      "label": "Finder",
+      "role": "frontmost_app",
+      "source": "prior_ui_state",
+      "confidence": 0.99,
+      "frontmost_app": "Safari",
+      "window_title": "Checkout"
+    },
+    {
+      "label": "Desktop",
+      "role": "window_title",
+      "source": "prior_ui_state",
+      "confidence": 0.95,
+      "frontmost_app": "Safari",
+      "window_title": "Checkout"
+    }
+  ],
+  "clickable_targets": [
+    {
+      "label": "Continue",
+      "role": "button",
+      "x": 320,
+      "y": 92,
+      "width": 80,
+      "height": 28,
+      "frontmost_app": "Safari",
+      "window_title": "Checkout",
+      "source": "accessibility",
+      "confidence": 0.92
+    }
+  ],
+  "text_fields": [],
+  "summary": "Frontmost app: Safari. Window: Checkout. Continue butonu gorunuyor. OCR: Continue",
+  "fallback_order": [
+    "accessibility_and_window_metadata",
+    "vision_detection",
+    "ocr",
+    "last_known_ui_target_cache"
+  ],
+  "source_counts": {
+    "window_metadata": 2,
+    "accessibility": 1,
+    "prior_ui_state": 2
+  },
+  "confidence": 0.96
+}

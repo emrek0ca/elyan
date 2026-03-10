@@ -1,0 +1,46 @@
+{
+  "run_id": "run_8a1bf6e316fa",
+  "manifest_path": "/Users/emrekoca/Desktop/bot/.elyan/proofs/run_8a1bf6e316fa/manifest.json",
+  "steps": [
+    {
+      "step": "Projects klasörünü listele",
+      "tool": "list_files",
+      "status": "success",
+      "input_hash": "528b189470dcef2d288c679dc5b244e2dfd1960f4a496e66aa945a7b22bdfc2a",
+      "params_hash": "650d982f93161c69fdce71fdc23555bbbf46bbbf0fcde35fee5dc54fe3a1b580",
+      "result_hash": "45987971ae5ba2347dc5b1664a36f6f98ac9545ef0eed39a7d61d59df7492aea",
+      "duration_ms": 1,
+      "ts": 1773157016.823115
+    },
+    {
+      "step": "not.txt oku ve",
+      "tool": "read_file",
+      "status": "success",
+      "input_hash": "e78e5ba70408ad7399b22c7d42896ae30a3e38efbf00d8feaef05498c1dce01f",
+      "params_hash": "ea2420d3dc2bd6225660a6b1ac3e68982ec6fe429cc0b1edad9e573ebd3237dc",
+      "result_hash": "8424cb5afa6f5ee2bd1e704146819d4da9b91f5fed90f4d415c5a1b943936a81",
+      "duration_ms": 1,
+      "ts": 1773157016.8255858
+    },
+    {
+      "step": "bunu sil",
+      "tool": "delete_file",
+      "status": "success",
+      "input_hash": "f94266d4b4e27dd210be8c42a69fffc6bdd920c2667e001aee7f02b8a3d7cf28",
+      "params_hash": "185320299aae71fea07e5a9c3146dda7bf7a8fe25c18c78803602b9dbb595351",
+      "result_hash": "e3e58f2217b6d623a95c66ddcb263adf6f2c0273485e12527513579adf528676",
+      "duration_ms": 1,
+      "ts": 1773157016.8279831
+    }
+  ],
+  "artifacts": [],
+  "metadata": {
+    "status": "partial",
+    "errors": [
+      "contract_decl:missing:required_outputs",
+      "contract_decl:missing:guardrails",
+      "contract_decl:missing:verify"
+    ]
+  },
+  "written_at": 1773157016.842394
+}

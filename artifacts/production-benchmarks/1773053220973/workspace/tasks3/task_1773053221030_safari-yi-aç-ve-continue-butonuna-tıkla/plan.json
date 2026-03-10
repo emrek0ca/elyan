@@ -1,0 +1,13 @@
+[
+  {
+    "kind": "system",
+    "name": "open_safari",
+    "tool": "open_app",
+    "params": {
+      "app_name": "Safari"
+    },
+    "verify": {
+      "frontmost_app": "Safari"
+    }
+  }
+]

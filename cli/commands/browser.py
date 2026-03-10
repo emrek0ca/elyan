@@ -2,7 +2,7 @@
 CLI: browser commands — Full implementation
 """
 import asyncio
-import json
+
 import click
 
 
@@ -189,3 +189,98 @@ def profiles_list():
 
 def register(cli):
     cli.add_command(browser_group, name="browser")
+
+
+def handle_browser(args) -> int:
+    action = str(getattr(args, "action", "") or "").strip().lower()
+    target = str(getattr(args, "target", "") or "").strip()
+    url = str(getattr(args, "url", "") or "").strip()
+
+    async def _run() -> int:
+        from tools.browser_automation import browse_url, extract_webpage_links, extract_webpage_text
+
+        if action in {"navigate"}:
+            final_url = url or target
+            if not final_url:
+                print("URL gerekli.")
+                return 1
+            result = await browse_url(final_url)
+            if result.get("success"):
+                print(f"Gidildi: {result.get('url')}")
+                title = str(result.get("title") or "").strip()
+                if title:
+                    print(f"Baslik: {title}")
+                return 0
+            print(result.get("error", "Tarayici gezintisi basarisiz."))
+            return 1
+
+        if action in {"extract"}:
+            final_url = url or target
+            if not final_url:
+                print("URL gerekli.")
+                return 1
+            result = await extract_webpage_text(final_url)
+            if result.get("success"):
+                text = str(result.get("text") or "").strip()
+                print(text[:4000] if text else "(bos)")
+                return 0
+            print(result.get("error", "Metin cikarma basarisiz."))
+            return 1
+
+        if action in {"snapshot", "screenshot"}:
+            final_url = url or target
+            if final_url:
+                result = await browse_url(final_url)
+                if result.get("success"):
+                    title = str(result.get("title") or "").strip()
+                    print(f"Sayfa acildi: {result.get('url')}")
+                    if title:
+                        print(f"Baslik: {title}")
+                    print("Not: CLI browser screenshot su anda Playwright entegrasyonu olmadan goruntu dosyasi uretemiyor.")
+                    return 0
+                print(result.get("error", "Sayfa acilamadi."))
+                return 1
+            print("URL verildiginde sayfa acilip ozetlenir. Tam screenshot icin operator/browser tool akisi kullanilmali.")
+            return 0
+
+        if action in {"profiles", "list-profiles"}:
+            try:
+                from tools.browser.profile_manager import BrowserProfileManager
+
+                manager = BrowserProfileManager()
+                profiles = manager.list_profiles()
+            except Exception:
+                profiles = []
+            if not profiles:
+                print("Kayitli browser profili yok.")
+                return 0
+            for item in profiles:
+                print(f"- {item}")
+            return 0
+
+        if action == "clear-profile":
+            profile_name = target or str(getattr(args, "profile", "") or "").strip()
+            if not profile_name:
+                print("Profil adi gerekli.")
+                return 1
+            try:
+                from tools.browser.profile_manager import BrowserProfileManager
+
+                manager = BrowserProfileManager()
+                ok = manager.delete_profile(profile_name) if hasattr(manager, "delete_profile") else False
+            except Exception:
+                ok = False
+            if ok:
+                print(f"Profil temizlendi: {profile_name}")
+                return 0
+            print(f"Profil temizlenemedi: {profile_name}")
+            return 1
+
+        if action in {"click", "type", "scroll", "back", "forward", "refresh", "close"}:
+            print(f"'{action}' komutu interaktif browser oturumu gerektiriyor. Bu yuzey CLI smoke-safe modda bilgi veriyor.")
+            return 0
+
+        print(f"Bilinmeyen browser komutu: {action or '-'}")
+        return 1
+
+    return asyncio.run(_run())

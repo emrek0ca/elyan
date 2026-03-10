@@ -1,0 +1,184 @@
+{
+  "frontmost_app": "Safari",
+  "active_window": {
+    "title": "Results",
+    "bounds": {
+      "x": 0,
+      "y": 0,
+      "width": 1280,
+      "height": 800
+    }
+  },
+  "screenshot_path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-239/test_operator_task_runtime_res0/screen_after_1_1_1773156168472.png",
+  "elements": [
+    {
+      "label": "Safari",
+      "role": "frontmost_app",
+      "source": "window_metadata",
+      "confidence": 0.99
+    },
+    {
+      "label": "Results",
+      "role": "window_title",
+      "source": "window_metadata",
+      "confidence": 0.95
+    },
+    {
+      "label": "Search field",
+      "role": "text_field",
+      "x": 110,
+      "y": 90,
+      "width": 160,
+      "height": 30,
+      "frontmost_app": "Safari",
+      "window_title": "Search",
+      "source": "cache",
+      "confidence": 0.92,
+      "_cache_meta": {
+        "seen_count": 3,
+        "last_seen_at": 1773156168.472342,
+        "last_action_kind": "type",
+        "frontmost_app": "Safari",
+        "window_title": "Search",
+        "last_verified_success": true,
+        "verified_success_count": 1,
+        "last_verified_success_at": 1773156168.4581099
+      }
+    },
+    {
+      "label": "Search",
+      "role": "button",
+      "x": 320,
+      "y": 92,
+      "width": 80,
+      "height": 28,
+      "frontmost_app": "Safari",
+      "window_title": "Search",
+      "source": "cache",
+      "confidence": 0.92,
+      "_cache_meta": {
+        "seen_count": 2,
+        "last_seen_at": 1773156168.472346,
+        "last_action_kind": "",
+        "frontmost_app": "Safari",
+        "window_title": "Search",
+        "last_verified_success": false,
+        "verified_success_count": 0,
+        "last_verified_success_at": 0.0
+      }
+    },
+    {
+      "label": "kittens",
+      "role": "ocr_text",
+      "source": "cache",
+      "confidence": 0.95,
+      "frontmost_app": "Safari",
+      "window_title": "Search",
+      "x": 120,
+      "y": 98,
+      "width": 70,
+      "height": 18,
+      "_cache_meta": {
+        "seen_count": 2,
+        "last_seen_at": 1773156168.472349,
+        "last_action_kind": "",
+        "frontmost_app": "Safari",
+        "window_title": "Search",
+        "last_verified_success": false,
+        "verified_success_count": 0,
+        "last_verified_success_at": 0.0
+      }
+    },
+    {
+      "label": "Search",
+      "role": "window_title",
+      "source": "prior_ui_state",
+      "confidence": 0.95,
+      "frontmost_app": "Safari",
+      "window_title": "Results"
+    }
+  ],
+  "clickable_targets": [
+    {
+      "label": "Search field",
+      "role": "text_field",
+      "x": 110,
+      "y": 90,
+      "width": 160,
+      "height": 30,
+      "frontmost_app": "Safari",
+      "window_title": "Search",
+      "source": "cache",
+      "confidence": 0.92,
+      "_cache_meta": {
+        "seen_count": 3,
+        "last_seen_at": 1773156168.472342,
+        "last_action_kind": "type",
+        "frontmost_app": "Safari",
+        "window_title": "Search",
+        "last_verified_success": true,
+        "verified_success_count": 1,
+        "last_verified_success_at": 1773156168.4581099
+      }
+    },
+    {
+      "label": "Search",
+      "role": "button",
+      "x": 320,
+      "y": 92,
+      "width": 80,
+      "height": 28,
+      "frontmost_app": "Safari",
+      "window_title": "Search",
+      "source": "cache",
+      "confidence": 0.92,
+      "_cache_meta": {
+        "seen_count": 2,
+        "last_seen_at": 1773156168.472346,
+        "last_action_kind": "",
+        "frontmost_app": "Safari",
+        "window_title": "Search",
+        "last_verified_success": false,
+        "verified_success_count": 0,
+        "last_verified_success_at": 0.0
+      }
+    }
+  ],
+  "text_fields": [
+    {
+      "label": "Search field",
+      "role": "text_field",
+      "x": 110,
+      "y": 90,
+      "width": 160,
+      "height": 30,
+      "frontmost_app": "Safari",
+      "window_title": "Search",
+      "source": "cache",
+      "confidence": 0.92,
+      "_cache_meta": {
+        "seen_count": 3,
+        "last_seen_at": 1773156168.472342,
+        "last_action_kind": "type",
+        "frontmost_app": "Safari",
+        "window_title": "Search",
+        "last_verified_success": true,
+        "verified_success_count": 1,
+        "last_verified_success_at": 1773156168.4581099
+      }
+    }
+  ],
+  "summary": "Frontmost app: Safari. Window: Results. Results for kittens. OCR: Results for kittens",
+  "fallback_order": [
+    "accessibility_and_window_metadata",
+    "vision_detection",
+    "ocr",
+    "last_known_ui_target_cache"
+  ],
+  "source_counts": {
+    "window_metadata": 2,
+    "cache": 3,
+    "prior_ui_state": 1
+  },
+  "confidence": 0.947
+}

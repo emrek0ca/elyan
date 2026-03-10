@@ -1,0 +1,1 @@
+Frontmost app: Safari. Window: Upload Dialog. Native dialog acik. Open gorunuyor. OCR: Open

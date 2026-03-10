@@ -1,0 +1,24 @@
+[
+  {
+    "step_index": 3,
+    "rationale": "rewrite_browser_step_to_screen_fallback",
+    "trace": {
+      "trigger": "failure",
+      "step_index": 3,
+      "failed_codes": [
+        "NATIVE_DIALOG_REQUIRED"
+      ],
+      "current_step_name": "confirm_upload_dialog",
+      "actions": [
+        {
+          "kind": "rewrite_browser_step_to_screen_fallback"
+        }
+      ]
+    },
+    "new_step_names": [
+      "screen_fallback_confirm-upload-dialog",
+      "click_save"
+    ],
+    "timestamp": 1773058150.88117
+  }
+]

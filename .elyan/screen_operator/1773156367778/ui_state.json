@@ -1,0 +1,155 @@
+{
+  "frontmost_app": "Finder",
+  "active_window": {
+    "title": "Open B Done",
+    "bounds": {
+      "x": 0,
+      "y": 0,
+      "width": 1280,
+      "height": 800
+    }
+  },
+  "screenshot_path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-242/test_desktop_host_prefers_curr0/screen_after_1_1_1773156367778.png",
+  "elements": [
+    {
+      "label": "Finder",
+      "role": "frontmost_app",
+      "source": "window_metadata",
+      "confidence": 0.99
+    },
+    {
+      "label": "Open B Done",
+      "role": "window_title",
+      "source": "window_metadata",
+      "confidence": 0.95
+    },
+    {
+      "label": "Open",
+      "role": "button",
+      "x": 100,
+      "y": 100,
+      "width": 80,
+      "height": 20,
+      "frontmost_app": "Finder",
+      "window_title": "Open A",
+      "source": "cache",
+      "confidence": 0.92,
+      "_cache_meta": {
+        "seen_count": 3,
+        "last_seen_at": 1773156367.7781792,
+        "last_action_kind": "click",
+        "frontmost_app": "Finder",
+        "window_title": "Open A",
+        "last_verified_success": true,
+        "verified_success_count": 1,
+        "last_verified_success_at": 1773156367.775626
+      }
+    },
+    {
+      "label": "Open",
+      "role": "button",
+      "x": 400,
+      "y": 100,
+      "width": 80,
+      "height": 20,
+      "frontmost_app": "Finder",
+      "window_title": "Open B",
+      "source": "cache",
+      "confidence": 0.92,
+      "_cache_meta": {
+        "seen_count": 3,
+        "last_seen_at": 1773156367.7781749,
+        "last_action_kind": "click",
+        "frontmost_app": "Finder",
+        "window_title": "Open B",
+        "last_verified_success": true,
+        "verified_success_count": 1,
+        "last_verified_success_at": 1773156367.775626
+      }
+    },
+    {
+      "label": "Open B",
+      "role": "window_title",
+      "source": "prior_ui_state",
+      "confidence": 0.95,
+      "frontmost_app": "Finder",
+      "window_title": "Open B Done"
+    },
+    {
+      "label": "Open A Done",
+      "role": "window_title",
+      "source": "prior_ui_state",
+      "confidence": 0.95,
+      "frontmost_app": "Finder",
+      "window_title": "Open B"
+    },
+    {
+      "label": "Open A",
+      "role": "window_title",
+      "source": "prior_ui_state",
+      "confidence": 0.95,
+      "frontmost_app": "Finder",
+      "window_title": "Open A Done"
+    }
+  ],
+  "clickable_targets": [
+    {
+      "label": "Open",
+      "role": "button",
+      "x": 100,
+      "y": 100,
+      "width": 80,
+      "height": 20,
+      "frontmost_app": "Finder",
+      "window_title": "Open A",
+      "source": "cache",
+      "confidence": 0.92,
+      "_cache_meta": {
+        "seen_count": 3,
+        "last_seen_at": 1773156367.7781792,
+        "last_action_kind": "click",
+        "frontmost_app": "Finder",
+        "window_title": "Open A",
+        "last_verified_success": true,
+        "verified_success_count": 1,
+        "last_verified_success_at": 1773156367.775626
+      }
+    },
+    {
+      "label": "Open",
+      "role": "button",
+      "x": 400,
+      "y": 100,
+      "width": 80,
+      "height": 20,
+      "frontmost_app": "Finder",
+      "window_title": "Open B",
+      "source": "cache",
+      "confidence": 0.92,
+      "_cache_meta": {
+        "seen_count": 3,
+        "last_seen_at": 1773156367.7781749,
+        "last_action_kind": "click",
+        "frontmost_app": "Finder",
+        "window_title": "Open B",
+        "last_verified_success": true,
+        "verified_success_count": 1,
+        "last_verified_success_at": 1773156367.775626
+      }
+    }
+  ],
+  "text_fields": [],
+  "summary": "Frontmost app: Finder. Window: Open B Done. Open B tamamlandi. OCR: Done",
+  "fallback_order": [
+    "accessibility_and_window_metadata",
+    "vision_detection",
+    "ocr",
+    "last_known_ui_target_cache"
+  ],
+  "source_counts": {
+    "window_metadata": 2,
+    "cache": 2,
+    "prior_ui_state": 3
+  },
+  "confidence": 0.947
+}

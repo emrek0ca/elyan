@@ -1,0 +1,59 @@
+{
+  "ok": true,
+  "status": "success",
+  "checks": [
+    {
+      "code": "dom_available",
+      "passed": true
+    },
+    {
+      "code": "screenshot_present",
+      "passed": true,
+      "details": {
+        "path": "/Users/emrekoca/Desktop/bot/.elyan/browser_runtime/1773156230031/page.png"
+      }
+    },
+    {
+      "code": "navigation_changed",
+      "passed": true,
+      "details": {
+        "before_url": "https://upload.local",
+        "after_url": "https://upload.local"
+      }
+    },
+    {
+      "code": "title_matches",
+      "passed": true,
+      "details": {
+        "title": "Upload"
+      }
+    },
+    {
+      "code": "url_matches",
+      "passed": true,
+      "details": {
+        "url": "https://upload.local"
+      }
+    }
+  ],
+  "failed": [],
+  "failed_codes": [],
+  "repairable": true,
+  "summary": "browser verification for open",
+  "evidence_refs": [
+    {
+      "type": "browser_state",
+      "before_url": "https://upload.local",
+      "after_url": "https://upload.local"
+    },
+    {
+      "type": "screenshot",
+      "path": "/Users/emrekoca/Desktop/bot/.elyan/browser_runtime/1773156230031/page.png"
+    }
+  ],
+  "metrics": {
+    "dom_changed": 0,
+    "url_changed": 0,
+    "title_changed": 0
+  }
+}

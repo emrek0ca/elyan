@@ -2,6 +2,7 @@
 
 from typing import List, Dict, Any
 from core.skills.base import BaseSkill
+from core.skills.tool_runtime import execute_registered_tool, wrap_skill_tool_result
 
 
 class EmailSkill(BaseSkill):
@@ -29,16 +30,18 @@ class EmailSkill(BaseSkill):
             params = context.get("params", {})
 
             if command == "send":
-                from tools.email_tools import send_email
                 to = params.get("to", "")
                 subject = params.get("subject", "")
                 body = params.get("body", "")
-                result = await send_email(to=to, subject=subject, body=body)
-                return {"success": True, "result": result}
+                result = await execute_registered_tool(
+                    "send_email",
+                    {"to": to, "subject": subject, "body": body},
+                    source="builtin_email_skill",
+                )
+                return wrap_skill_tool_result(result)
             elif command == "check":
-                from tools.email_tools import check_inbox
-                result = await check_inbox()
-                return {"success": True, "result": result}
+                result = await execute_registered_tool("get_unread_emails", {}, source="builtin_email_skill")
+                return wrap_skill_tool_result(result)
             else:
                 return {"success": False, "error": f"Unknown command: {command}"}
         except Exception as e:

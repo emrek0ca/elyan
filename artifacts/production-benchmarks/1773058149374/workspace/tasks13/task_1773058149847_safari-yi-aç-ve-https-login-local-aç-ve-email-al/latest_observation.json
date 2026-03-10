@@ -1,0 +1,178 @@
+{
+  "step_index": 6,
+  "failed_codes": [],
+  "ui_state": {},
+  "browser_state": {
+    "success": true,
+    "dom_available": true,
+    "url": "https://login.local/dashboard",
+    "title": "Dashboard",
+    "visible_text": "Welcome back",
+    "dom_hash": "b9882beb30e1028fdb25c2f926524d2424030bdcce25619a7f431e4b9376c7bd",
+    "scroll": {
+      "x": 0,
+      "y": 0
+    },
+    "session_id": "fake-browser",
+    "headless": true
+  },
+  "desktop_host_state": {
+    "version": 1,
+    "updated_at": 1773058149.851511,
+    "frontmost_app": "Safari",
+    "active_window": {
+      "title": "Login",
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 800
+      }
+    },
+    "last_screenshot": "/Users/emrekoca/.elyan/screen_operator/1773058149850/after.png",
+    "last_ui_state": {
+      "frontmost_app": "Safari",
+      "active_window": {
+        "title": "Login",
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 800
+        }
+      },
+      "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen13/screen_before_1773058149850.png",
+      "elements": [
+        {
+          "label": "Safari",
+          "role": "frontmost_app",
+          "source": "window_metadata",
+          "confidence": 0.99
+        },
+        {
+          "label": "Login",
+          "role": "window_title",
+          "source": "window_metadata",
+          "confidence": 0.95
+        }
+      ],
+      "clickable_targets": [],
+      "text_fields": [],
+      "summary": "Frontmost app: Safari. Window: Login. Safari frontmost. OCR: Safari",
+      "fallback_order": [
+        "accessibility_and_window_metadata",
+        "vision_detection",
+        "ocr",
+        "last_known_ui_target_cache"
+      ],
+      "source_counts": {
+        "window_metadata": 2
+      },
+      "confidence": 0.97
+    },
+    "current_task_state": {
+      "last_ui_state": {
+        "frontmost_app": "Safari",
+        "active_window": {
+          "title": "Login",
+          "bounds": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 800
+          }
+        },
+        "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen13/screen_before_1773058149850.png",
+        "elements": [
+          {
+            "label": "Safari",
+            "role": "frontmost_app",
+            "source": "window_metadata",
+            "confidence": 0.99
+          },
+          {
+            "label": "Login",
+            "role": "window_title",
+            "source": "window_metadata",
+            "confidence": 0.95
+          }
+        ],
+        "clickable_targets": [],
+        "text_fields": [],
+        "summary": "Frontmost app: Safari. Window: Login. Safari frontmost. OCR: Safari",
+        "fallback_order": [
+          "accessibility_and_window_metadata",
+          "vision_detection",
+          "ocr",
+          "last_known_ui_target_cache"
+        ],
+        "source_counts": {
+          "window_metadata": 2
+        },
+        "confidence": 0.97
+      },
+      "ui_state": {
+        "frontmost_app": "Safari",
+        "active_window": {
+          "title": "Login",
+          "bounds": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 800
+          }
+        },
+        "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773058149374/workspace/screen13/screen_before_1773058149850.png",
+        "elements": [
+          {
+            "label": "Safari",
+            "role": "frontmost_app",
+            "source": "window_metadata",
+            "confidence": 0.99
+          },
+          {
+            "label": "Login",
+            "role": "window_title",
+            "source": "window_metadata",
+            "confidence": 0.95
+          }
+        ],
+        "clickable_targets": [],
+        "text_fields": [],
+        "summary": "Frontmost app: Safari. Window: Login. Safari frontmost. OCR: Safari",
+        "fallback_order": [
+          "accessibility_and_window_metadata",
+          "vision_detection",
+          "ocr",
+          "last_known_ui_target_cache"
+        ],
+        "source_counts": {
+          "window_metadata": 2
+        },
+        "confidence": 0.97
+      },
+      "last_target_cache": {},
+      "recent_action_logs": [],
+      "verifier_outcomes": []
+    },
+    "target_cache": {},
+    "recent_action_logs": [],
+    "verifier_outcomes": [],
+    "last_instruction": "ekrana bak",
+    "last_mode": "inspect",
+    "last_status": "success"
+  },
+  "recovery_hints": {
+    "action": "click",
+    "selector": "#continue",
+    "dom_available": true,
+    "current_url": "https://login.local/dashboard",
+    "current_title": "Dashboard",
+    "visible_text": "Welcome back",
+    "fallback_used": false,
+    "fallback_reason": "",
+    "expected_text": "",
+    "failed_codes": []
+  },
+  "task_state": {}
+}

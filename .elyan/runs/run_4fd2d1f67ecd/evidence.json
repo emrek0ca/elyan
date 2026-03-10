@@ -1,0 +1,96 @@
+{
+  "run_id": "run_4fd2d1f67ecd",
+  "manifest_path": "/Users/emrekoca/Desktop/bot/.elyan/proofs/run_4fd2d1f67ecd/manifest.json",
+  "steps": [
+    {
+      "step": "~/Desktop/elyan-test/a klasörü oluştur",
+      "tool": "create_folder",
+      "status": "success",
+      "input_hash": "3600f87e86c6a16bd42c8cb3f6362049086192c5b42b4f0c312c66e7cc6b9f67",
+      "params_hash": "293f811564f64ae1eddde28a725de6969206f33047d63ef60d841d9ecdd64bda",
+      "result_hash": "e47eb5b1eb7606306f719a232cb28f39d2ef2af606716f85c4a7e67c21f2cfc6",
+      "duration_ms": 2,
+      "ts": 1772929425.758066
+    },
+    {
+      "step": "not.md yaz",
+      "tool": "write_file",
+      "status": "success",
+      "input_hash": "8a1e0b215422900be3786038226ef64e544374aa9de65f3aa3752b468492d698",
+      "params_hash": "0559cebe874b32a8e9d386adceffc16981ffa1847250d7a264d3f765ec5ce141",
+      "result_hash": "d2af973d7818b6b0ddf95a95036f04958dcc55c8c169f8fb9fc53369af6d7580",
+      "duration_ms": 2,
+      "ts": 1772929425.7619882
+    },
+    {
+      "step": "not.md yaz doğrula",
+      "tool": "read_file",
+      "status": "success",
+      "input_hash": "0d2ea6f1b5cc7f4c39e4571f22aab5c57e84e11b173fda6252f22e473bc26aa5",
+      "params_hash": "a2456c764a3dbd0be4eeae3170dcb3eb0acf328a860a14b359de389ac41d7b49",
+      "result_hash": "0ecafa7c264ed5c6529aaa067b125ec9c14f9f7ae86dcb63ffe81d8c6b31c60f",
+      "duration_ms": 1,
+      "ts": 1772929425.764998
+    },
+    {
+      "step": "içeriği doğrula",
+      "tool": "read_file",
+      "status": "success",
+      "input_hash": "f19226d9b99c429bcff9ec6ad1e5c4402d9f9333ba689de8f37d0b7616eb185d",
+      "params_hash": "a2456c764a3dbd0be4eeae3170dcb3eb0acf328a860a14b359de389ac41d7b49",
+      "result_hash": "0ecafa7c264ed5c6529aaa067b125ec9c14f9f7ae86dcb63ffe81d8c6b31c60f",
+      "duration_ms": 1,
+      "ts": 1772929425.767713
+    },
+    {
+      "step": "bana artifact yollarını ver.",
+      "tool": "list_files",
+      "status": "success",
+      "input_hash": "b08e32bd41eaae136d3cad81dea4e5afd701ee57c4c6ee18814d2e93e4b9510f",
+      "params_hash": "62914f102c3bcda0614344447c7117c93c203b7c08e33b61c7ff9ba94ee4b614",
+      "result_hash": "192aee7fb3f1157c63ac649b7d47e8ec4f6830d575bdbd192cc077022c7d6787",
+      "duration_ms": 1,
+      "ts": 1772929425.770294
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-114/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+      "name": "not.md",
+      "type": "text",
+      "mime": "",
+      "size_bytes": 176,
+      "sha256": "debae189fb6c4b90d2e3b8e3dbf03d8fba05712d5a242ea6eb84b748ad9ec957",
+      "tool": "write_file",
+      "source": "tool",
+      "source_result": {
+        "success": true,
+        "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-114/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+        "content": "# not.md\n\nBu dosya Elyan deterministic executor tarafindan uretildi.\nOlusturma zamani: 2026-03-08 03:23:45\nGorev ozeti: not.md\nDurum: olusturuldu ve dogrulama adimi icin hazir.",
+        "verified": true,
+        "size_bytes": 176,
+        "sha256": "debae189fb6c4b90d2e3b8e3dbf03d8fba05712d5a242ea6eb84b748ad9ec957",
+        "_content_preview": "# not.md\n\nBu dosya Elyan deterministic executor tarafindan uretildi.\nOlusturma zamani: 2026-03-08 03",
+        "_contract_verified": true
+      },
+      "evidence": {
+        "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-114/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+        "exists": true,
+        "is_file": true,
+        "is_dir": false,
+        "size_bytes": 176,
+        "mtime": 1772929425.760969,
+        "sha256": "debae189fb6c4b90d2e3b8e3dbf03d8fba05712d5a242ea6eb84b748ad9ec957"
+      }
+    }
+  ],
+  "metadata": {
+    "status": "partial",
+    "errors": [
+      "contract_decl:missing:required_outputs",
+      "contract_decl:missing:guardrails",
+      "contract_decl:missing:verify"
+    ]
+  },
+  "written_at": 1772929425.7790148
+}

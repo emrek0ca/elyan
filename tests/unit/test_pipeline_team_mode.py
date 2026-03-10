@@ -8,6 +8,7 @@ from core.pipeline import (
     StageVerify,
     _job_type_from_action,
     _looks_actionable_input,
+    _should_realign_to_capability,
     _try_llm_intent_rescue,
 )
 
@@ -48,6 +49,13 @@ class _DummyAgent:
 
 @pytest.mark.asyncio
 async def test_stage_execute_team_mode_partial_falls_back_to_orchestrator(monkeypatch):
+    decisions = []
+
+    def _record(**kwargs):
+        decisions.append(kwargs)
+
+    monkeypatch.setattr("core.pipeline.record_orchestration_decision", _record)
+
     class _FakeTeam:
         def __init__(self, *args, **kwargs):
             _ = (args, kwargs)
@@ -91,11 +99,19 @@ async def test_stage_execute_team_mode_partial_falls_back_to_orchestrator(monkey
 
     assert "ORCH_FALLBACK_OK" in out.final_response
     assert any(str(e).startswith("team_mode_incomplete:") for e in out.errors)
+    assert any(d.get("mode") == "team_mode" and d.get("selected") is True for d in decisions)
+    assert any(d.get("mode") == "team_mode" and d.get("selected") is False for d in decisions)
 
 
 @pytest.mark.asyncio
 async def test_stage_execute_team_mode_respects_runtime_policy_parallel_override(monkeypatch):
     captured = {}
+    decisions = []
+
+    def _record(**kwargs):
+        decisions.append(kwargs)
+
+    monkeypatch.setattr("core.pipeline.record_orchestration_decision", _record)
 
     class _FakeTeam:
         def __init__(self, _agent, config):
@@ -137,6 +153,7 @@ async def test_stage_execute_team_mode_respects_runtime_policy_parallel_override
     assert captured.get("timeout_s") == 120
     assert captured.get("max_retries") == 3
     assert captured.get("use_llm_planner") is False
+    assert any(d.get("mode") == "team_mode" and d.get("selected") is True for d in decisions)
 
 
 def test_pipeline_actionable_input_heuristic():
@@ -152,6 +169,35 @@ def test_pipeline_job_type_from_action_for_communication_route():
     assert _job_type_from_action("http_request", "communication") == "api_integration"
     assert _job_type_from_action("write_file", "communication") == "file_operations"
     assert _job_type_from_action("edit_text_file", "communication") == "file_operations"
+
+
+def test_pipeline_job_type_from_action_overrides_browser_task_for_screen_actions():
+    assert _job_type_from_action("screen_workflow", "browser_task") == "system_automation"
+    assert _job_type_from_action("analyze_screen", "browser_task") == "system_automation"
+
+
+def test_pipeline_capability_realign_for_screen_status_phrase():
+    assert _should_realign_to_capability(
+        user_input="durum nedir",
+        action="open_app",
+        capability_domain="screen_operator",
+        capability_confidence=0.91,
+        capability_primary_action="screen_workflow",
+        intent_confidence=0.42,
+        override_threshold=0.5,
+    ) is True
+
+
+def test_pipeline_capability_realign_skips_simple_open_app():
+    assert _should_realign_to_capability(
+        user_input="safari aç",
+        action="open_app",
+        capability_domain="screen_operator",
+        capability_confidence=0.91,
+        capability_primary_action="screen_workflow",
+        intent_confidence=0.95,
+        override_threshold=0.5,
+    ) is False
 
 
 @pytest.mark.asyncio
@@ -187,6 +233,36 @@ async def test_stage_execute_rescues_actionable_chat_into_direct_intent():
     assert out.action == "set_wallpaper"
     assert out.job_type == "system_automation"
     assert agent.direct_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_stage_execute_preserves_screen_workflow_boundary_on_direct_failure():
+    class _ScreenFailAgent(_DummyAgent):
+        def _should_run_direct_intent(self, intent, user_input):
+            _ = user_input
+            return isinstance(intent, dict) and str(intent.get("action") or "") == "screen_workflow"
+
+        async def _run_direct_intent(self, *args, **kwargs):
+            _ = (args, kwargs)
+            self._last_direct_intent_payload = {
+                "success": False,
+                "error": "vision_timeout:9.0s",
+                "artifacts": [{"path": "/tmp/screen.png", "type": "image"}],
+                "ui_map": {"frontmost_app": "Cursor", "running_apps": ["Cursor"]},
+            }
+            return "Hata: vision_timeout:9.0s"
+
+    ctx = PipelineContext(user_input="ekranda ne var", user_id="u1", channel="cli")
+    ctx.job_type = "browser_task"
+    ctx.intent = {"action": "screen_workflow", "params": {"instruction": "ekranda ne var", "mode": "inspect"}}
+    ctx.action = "screen_workflow"
+
+    out = await StageExecute().run(ctx, _ScreenFailAgent())
+
+    assert "vision_timeout:9.0s" in (out.final_response or "")
+    assert len(out.tool_results) == 1
+    assert out.tool_results[0]["source"] == "direct_intent"
+    assert isinstance(out.tool_results[0].get("raw"), dict)
 
 
 @pytest.mark.asyncio

@@ -102,7 +102,11 @@ class AutoPatchEngine:
 
     def _patch_missing_file(self, node: DAGNode, failed_gates: List[QAGate]) -> bool:
         """Dosya yok hatasını onarır."""
-        missing = [g.params.get("path") for g in failed_gates if g.check_type == "file_exists"]
+        missing = [
+            str(g.params.get("path") or "").strip()
+            for g in (failed_gates or [])
+            if g.check_type == "file_exists" and str(g.params.get("path") or "").strip()
+        ]
         if missing:
             patch = f"\n\n[AUTO-PATCH ARTIFACT_MISSING]: Şu dosyanın eksiksiz oluşturulması ZORUNLUDUR: {', '.join(missing)}"
             node.params["_auto_patch_instruction"] = patch

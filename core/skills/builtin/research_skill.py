@@ -2,6 +2,7 @@
 
 from typing import List, Dict, Any
 from core.skills.base import BaseSkill
+from core.skills.tool_runtime import execute_registered_tool, wrap_skill_tool_result
 
 
 class ResearchSkill(BaseSkill):
@@ -29,21 +30,22 @@ class ResearchSkill(BaseSkill):
             params = context.get("params", {})
 
             if command == "search":
-                from tools.web_tools.search_engine import web_search
                 query = params.get("query", "")
-                result = await web_search(query)
-                return {"success": True, "result": result}
+                result = await execute_registered_tool("web_search", {"query": query}, source="builtin_research_skill")
+                return wrap_skill_tool_result(result)
             elif command == "deep":
-                from tools.research_tools.advanced_research import advanced_research
                 topic = params.get("topic", "")
                 depth = params.get("depth", "medium")
-                result = await advanced_research(topic, depth=depth)
-                return {"success": True, "result": result}
+                result = await execute_registered_tool(
+                    "advanced_research",
+                    {"topic": topic, "depth": depth},
+                    source="builtin_research_skill",
+                )
+                return wrap_skill_tool_result(result)
             elif command == "scrape":
-                from tools.web_tools.web_scraper import scrape_url
                 url = params.get("url", "")
-                result = await scrape_url(url)
-                return {"success": True, "result": result}
+                result = await execute_registered_tool("scrape_page", {"url": url}, source="builtin_research_skill")
+                return wrap_skill_tool_result(result)
             else:
                 return {"success": False, "error": f"Unknown command: {command}"}
         except Exception as e:

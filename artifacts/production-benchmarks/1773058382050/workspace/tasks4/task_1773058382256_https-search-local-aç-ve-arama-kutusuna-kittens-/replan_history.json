@@ -1,0 +1,26 @@
+[
+  {
+    "step_index": 3,
+    "rationale": "rerun_browser_step_after_state_check",
+    "trace": {
+      "trigger": "failure",
+      "step_index": 3,
+      "failed_codes": [
+        "TEXT_NOT_VERIFIED",
+        "SUBMIT_NOT_VERIFIED"
+      ],
+      "current_step_name": "submit_form",
+      "actions": [
+        {
+          "kind": "rerun_browser_step_after_state_check",
+          "url": "https://search.local"
+        }
+      ]
+    },
+    "new_step_names": [
+      "status_check_submit-form",
+      "submit_form"
+    ],
+    "timestamp": 1773058382.289334
+  }
+]

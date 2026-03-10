@@ -123,11 +123,15 @@ class SubAgentExecutor:
     ) -> str:
         allowed = ", ".join(sorted(session.allowed_tools)) if session.allowed_tools else "any"
         task_desc = str(session.task.description or session.task.name or "").strip()
+        objective = str(session.task.objective or task_desc).strip()
+        success_criteria = "; ".join(str(x) for x in (session.task.success_criteria or [])[:5]) or "somut çıktı üret"
         obs = str(last_result)[:1400] if last_result is not None else "none"
         note_txt = "; ".join(notes[-5:]) if notes else "none"
         return (
             f"Sen bir '{session.specialist_key}' sub-agent'isin.\n"
             f"Görev: {task_desc}\n"
+            f"Amaç: {objective}\n"
+            f"Başarı ölçütü: {success_criteria}\n"
             f"İterasyon: {iteration}/{self.max_iterations}\n"
             f"İzinli tool'lar: {allowed}\n"
             f"Son gözlem: {obs}\n"
@@ -137,6 +141,19 @@ class SubAgentExecutor:
             "veya\n"
             '{"final":"kısa sonuç özeti","done":true}\n'
         )
+
+    @staticmethod
+    def _llm_role_for_specialist(specialist_key: str) -> str:
+        token = str(specialist_key or "").strip().lower()
+        mapping = {
+            "lead": "planning",
+            "researcher": "research_worker",
+            "builder": "code_worker",
+            "ops": "worker",
+            "qa": "qa",
+            "communicator": "creative",
+        }
+        return mapping.get(token, "reasoning")
 
     async def _call_llm_for_next_action(
         self,
@@ -157,7 +174,14 @@ class SubAgentExecutor:
         )
         try:
             uid = str(getattr(self.agent, "current_user_id", "local") or "local")
-            resp = await llm.generate(prompt, user_id=uid)
+            try:
+                resp = await llm.generate(
+                    prompt,
+                    role=self._llm_role_for_specialist(getattr(session, "specialist_key", "")),
+                    user_id=uid,
+                )
+            except TypeError:
+                resp = await llm.generate(prompt, user_id=uid)
             return self._parse_llm_directive(resp)
         except Exception as exc:
             notes.append(f"llm_error:{exc}")
@@ -231,6 +255,13 @@ class SubAgentExecutor:
             session.task.action or "chat",
             session.task.params,
         )
+        try:
+            if session.workspace_path:
+                session.pipeline_state.store("workspace_path", session.workspace_path)
+            if session.memory_path:
+                session.pipeline_state.store("memory_path", session.memory_path)
+        except Exception:
+            pass
 
         try:
             for i in range(1, self.max_iterations + 1):
@@ -285,7 +316,12 @@ class SubAgentExecutor:
                     if directive_key in seen_directives:
                         notes.append(f"repeated_directive:{action}")
                         if executed:
-                            break
+                            p_action, p_params = await self._planner_fallback_directive(session)
+                            if p_action and f"{p_action}:{json.dumps(p_params, sort_keys=True, default=str)}" not in seen_directives:
+                                action = p_action
+                                params = p_params
+                            else:
+                                break
                     else:
                         seen_directives.add(directive_key)
 
@@ -351,7 +387,7 @@ class SubAgentExecutor:
             result = SubAgentResult(
                 status=status,
                 result=payload,
-                notes=notes,
+                notes=notes[:12],
                 artifacts=artifacts,
                 execution_time_ms=elapsed,
                 token_usage={"prompt": 0, "completion": 0, "cost_usd": 0.0},

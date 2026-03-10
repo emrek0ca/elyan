@@ -1,0 +1,13 @@
+{
+  "run_id": "run_fc00474bae18",
+  "written_at": 1773156208.930976,
+  "status": "success",
+  "text_summary": "[1] Uygulamayı aç\nSafari açıldı\n\n[2] Araştırma\nKöpekler hakkında kısa araştırma özeti\n\n[3] Kaydet\nİşlem tamamlandı: ~/Desktop/not.txt\nNot: çıktı dosyası doğrulanamadı: ~/Desktop/not.txt\n\nAraştırma kalite özeti:\nGüven skoru (otomatik): %35\nAçık riskler:\n- Bazı kaynaklar güncellik/doğruluk açısından manuel teyit gerektirebilir.",
+  "errors": [],
+  "artifact_manifest": [],
+  "metadata": {
+    "manifest_path": "/Users/emrekoca/Desktop/bot/.elyan/proofs/run_fc00474bae18/manifest.json",
+    "action": "multi_task",
+    "job_type": "research_report"
+  }
+}

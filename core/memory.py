@@ -15,11 +15,20 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, List, Dict
+from core.storage_paths import resolve_elyan_data_dir
 from utils.logger import get_logger
 from .embedding_codec import serialize_embedding, deserialize_embedding
 
 logger = get_logger("memory")
 DEFAULT_USER_MEMORY_LIMIT_GB = 10.0
+
+
+def _default_memory_dir() -> Path:
+    return resolve_elyan_data_dir() / "memory"
+
+
+def _default_elyan_config_path() -> Path:
+    return resolve_elyan_data_dir() / "elyan.json"
 
 
 def _is_unwritable_db_error(exc: Exception) -> bool:
@@ -35,10 +44,10 @@ def _is_unwritable_db_error(exc: Exception) -> bool:
 def _resolve_default_db_path() -> str:
     """
     Resolve default memory DB path.
-    Canonical path: ~/.elyan/memory/memory.db
+    Canonical path: <elyan_data_dir>/memory/memory.db
     Legacy path:    ~/.config/cdacs-bot/memory.db (auto-copied if needed)
     """
-    canonical_dir = Path.home() / ".elyan" / "memory"
+    canonical_dir = _default_memory_dir()
     canonical_dir.mkdir(parents=True, exist_ok=True)
     canonical_db = canonical_dir / "memory.db"
 
@@ -55,9 +64,9 @@ def _resolve_default_db_path() -> str:
 
 def _config_user_limit_gb() -> Optional[float]:
     """
-    Read memory.maxUserStorageGB from ~/.elyan/elyan.json if available.
+    Read memory.maxUserStorageGB from <elyan_data_dir>/elyan.json if available.
     """
-    config_path = Path.home() / ".elyan" / "elyan.json"
+    config_path = _default_elyan_config_path()
     if not config_path.exists():
         return None
     try:
@@ -81,7 +90,7 @@ def _default_user_limit_bytes() -> int:
     Priority:
     1) ELYAN_MAX_USER_MEMORY_BYTES
     2) ELYAN_MAX_USER_MEMORY_GB
-    3) ~/.elyan/elyan.json memory.maxUserStorageGB
+    3) <elyan_data_dir>/elyan.json memory.maxUserStorageGB
     4) default: 10GB
     """
     raw_bytes = os.getenv("ELYAN_MAX_USER_MEMORY_BYTES")

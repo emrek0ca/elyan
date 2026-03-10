@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
 )
 
 from config.settings_manager import SettingsPanel
+from core.model_orchestrator import model_orchestrator
 from ui.components import GlassFrame, Switch, AnimatedButton
 from utils.logger import get_logger
 
@@ -101,6 +102,20 @@ class ConnectionTestWorker(QThread):
             r = httpx.get("https://api.openai.com/v1/models", headers=headers, timeout=8.0)
             retryable = r.status_code in {408, 429, 500, 502, 503, 504}
             return (r.status_code == 200, "OpenAI API doğrulandı" if r.status_code == 200 else "OpenAI API hatası", f"HTTP {r.status_code}", retryable)
+        if provider == "anthropic":
+            headers = {
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            }
+            body = {
+                "model": "claude-3-5-haiku-latest",
+                "max_tokens": 8,
+                "messages": [{"role": "user", "content": "ping"}],
+            }
+            r = httpx.post("https://api.anthropic.com/v1/messages", headers=headers, json=body, timeout=8.0)
+            retryable = r.status_code in {408, 429, 500, 502, 503, 504}
+            return (r.status_code == 200, "Anthropic API doğrulandı" if r.status_code == 200 else "Anthropic API hatası", f"HTTP {r.status_code}", retryable)
         return False, "Bilinmeyen provider", provider, False
 
 
@@ -116,6 +131,7 @@ class CleanAIPanel(QWidget):
             "groq": ["llama-3.3-70b-versatile", "mixtral-8x7b-32768", "llama-3.1-8b-instant"],
             "gemini": ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
             "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
+            "anthropic": ["claude-opus-4-5-20251101", "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
             "ollama": [],
         }
         self._setup_ui()
@@ -154,7 +170,7 @@ class CleanAIPanel(QWidget):
         row_provider.addWidget(provider_label)
 
         self._provider_combo = QComboBox()
-        self._provider_combo.addItems(["groq", "gemini", "openai", "ollama"])
+        self._provider_combo.addItems(["groq", "gemini", "openai", "anthropic", "ollama"])
         self._provider_combo.currentTextChanged.connect(self._on_provider_changed)
         self._provider_combo.setStyleSheet(
             """
@@ -550,7 +566,7 @@ class CleanAIPanel(QWidget):
             "llm_sticky_selection": bool(self._sticky_switch.is_checked()),
             "llm_fallback_mode": self._fallback_mode.currentText().strip(),
         }
-        updates["llm_fallback_order"] = [provider, "groq", "gemini", "openai", "ollama"]
+        updates["llm_fallback_order"] = [provider, "groq", "gemini", "openai", "anthropic", "ollama"]
         self._settings.update(updates)
         self._apply_live_llm_updates(updates)
         self._set_status("success", f"Ayarlar kaydedildi: {provider}/{model}", "Canlı LLM konfigürasyonu güncellendi.")
@@ -582,7 +598,9 @@ class CleanAIPanel(QWidget):
             llm.host = str(updates.get("ollama_host", llm.host))
             llm.sticky_selection = bool(updates.get("llm_sticky_selection", True))
             llm.fallback_mode = str(updates.get("llm_fallback_mode", "conservative"))
-            llm.fallback_order = list(updates.get("llm_fallback_order", [provider, "groq", "gemini", "openai", "ollama"]))
+            llm.fallback_order = list(
+                updates.get("llm_fallback_order", [provider, "groq", "gemini", "openai", "anthropic", "ollama"])
+            )
             llm.llm_temperature = float(updates.get("llm_temperature", getattr(llm, "llm_temperature", 0.7)))
             llm.llm_max_tokens = int(updates.get("llm_max_tokens", getattr(llm, "llm_max_tokens", 2048)))
             api_key = str(updates.get("api_key", ""))
@@ -592,5 +610,8 @@ class CleanAIPanel(QWidget):
                 llm.api_key = api_key
             elif provider == "openai":
                 llm.openai_api_key = api_key
+            elif provider == "anthropic":
+                llm.anthropic_api_key = api_key
+            model_orchestrator._load_providers()
         except Exception as exc:
             logger.debug(f"Live LLM update skipped: {exc}")

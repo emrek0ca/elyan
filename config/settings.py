@@ -2,6 +2,7 @@ import os
 import platform
 from pathlib import Path
 from dotenv import load_dotenv
+from core.version import APP_VERSION
 
 load_dotenv()
 
@@ -67,7 +68,7 @@ GOOGLE_API_KEY = _get_secret("GOOGLE_API_KEY", "google_api_key")
 
 # System Identity
 APP_NAME = "Elyan"
-VERSION = "18.0.0"
+VERSION = APP_VERSION
 
 # Task Execution
 TASK_TIMEOUT = int(os.getenv("TASK_TIMEOUT", "120"))

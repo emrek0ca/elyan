@@ -1,0 +1,109 @@
+{
+  "run_id": "run_aa7119ea5de3",
+  "written_at": 1773151744.315104,
+  "artifacts": [
+    {
+      "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-215/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+      "name": "not.md",
+      "type": "text",
+      "mime": "",
+      "size_bytes": 176,
+      "sha256": "a16978927ba523c6eb79e8ffef7cd909f996a3e33957f1db29b41971c9ada447",
+      "tool": "write_file",
+      "source": "tool",
+      "source_result": {
+        "success": true,
+        "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-215/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+        "content": "# not.md\n\nBu dosya Elyan deterministic executor tarafindan uretildi.\nOlusturma zamani: 2026-03-10 17:09:04\nGorev ozeti: not.md\nDurum: olusturuldu ve dogrulama adimi icin hazir.",
+        "status": "success",
+        "message": "",
+        "artifacts": [
+          {
+            "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-215/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+            "type": "text",
+            "name": "not.md",
+            "mime": "",
+            "size_bytes": 0,
+            "sha256": "",
+            "tool": "write_file",
+            "source": "agent_fallback_callable",
+            "source_result": {
+              "success": true,
+              "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-215/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+              "content": "# not.md\n\nBu dosya Elyan deterministic executor tarafindan uretildi.\nOlusturma zamani: 2026-03-10 17:09:04\nGorev ozeti: not.md\nDurum: olusturuldu ve dogrulama adimi icin hazir."
+            }
+          }
+        ],
+        "artifact_manifest": [
+          {
+            "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-215/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+            "type": "text",
+            "name": "not.md",
+            "mime": "",
+            "size_bytes": 0,
+            "sha256": "",
+            "tool": "write_file",
+            "source": "agent_fallback_callable",
+            "source_result": {
+              "success": true,
+              "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-215/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+              "content": "# not.md\n\nBu dosya Elyan deterministic executor tarafindan uretildi.\nOlusturma zamani: 2026-03-10 17:09:04\nGorev ozeti: not.md\nDurum: olusturuldu ve dogrulama adimi icin hazir."
+            }
+          }
+        ],
+        "evidence": [],
+        "errors": [],
+        "metrics": {
+          "tool_name": "write_file",
+          "wrapper_source": "agent_fallback_callable",
+          "raw_type": "dict",
+          "agent_source": "agent_fallback_callable"
+        },
+        "data": {},
+        "_tool_result": {
+          "status": "success",
+          "message": "",
+          "artifacts": [
+            {
+              "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-215/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+              "type": "text",
+              "name": "not.md",
+              "mime": "",
+              "size_bytes": 0,
+              "sha256": "",
+              "tool": "write_file",
+              "source": "agent_fallback_callable",
+              "source_result": {
+                "success": true,
+                "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-215/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+                "content": "# not.md\n\nBu dosya Elyan deterministic executor tarafindan uretildi.\nOlusturma zamani: 2026-03-10 17:09:04\nGorev ozeti: not.md\nDurum: olusturuldu ve dogrulama adimi icin hazir."
+              }
+            }
+          ],
+          "evidence": [],
+          "data": {},
+          "errors": [],
+          "metrics": {},
+          "raw": null,
+          "tool": "write_file",
+          "source": "agent_fallback_callable",
+          "raw_type": "dict"
+        },
+        "verified": true,
+        "size_bytes": 176,
+        "sha256": "a16978927ba523c6eb79e8ffef7cd909f996a3e33957f1db29b41971c9ada447",
+        "_content_preview": "# not.md\n\nBu dosya Elyan deterministic executor tarafindan uretildi.\nOlusturma zamani: 2026-03-10 17",
+        "_contract_verified": true
+      },
+      "evidence": {
+        "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-215/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+        "exists": true,
+        "is_file": true,
+        "is_dir": false,
+        "size_bytes": 176,
+        "mtime": 1773151744.2959166,
+        "sha256": "a16978927ba523c6eb79e8ffef7cd909f996a3e33957f1db29b41971c9ada447"
+      }
+    }
+  ]
+}

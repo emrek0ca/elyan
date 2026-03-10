@@ -1,0 +1,147 @@
+{
+  "run_id": "run_e331b8c544ad",
+  "written_at": 1773156234.755792,
+  "status": "partial",
+  "user_input": "köpekler araştır",
+  "task_spec": {
+    "intent": "research_batch",
+    "version": "1.1",
+    "source": "intent_normalizer",
+    "goal": "köpekler araştır",
+    "constraints": {
+      "deterministic_defaults": true,
+      "forbid_command_dump_content": true
+    },
+    "context_assumptions": [
+      "default_policy_filled"
+    ],
+    "artifacts_expected": [],
+    "checks": [
+      {
+        "step_id": "step_1",
+        "checks": [
+          {
+            "type": "tool_success"
+          }
+        ]
+      }
+    ],
+    "rollback": [],
+    "required_tools": [
+      "research_document_delivery"
+    ],
+    "risk_level": "low",
+    "timeouts": {
+      "step_timeout_s": 90,
+      "run_timeout_s": 600
+    },
+    "retries": {
+      "max_attempts": 1
+    },
+    "steps": [
+      {
+        "id": "step_1",
+        "action": "research_document_delivery",
+        "params": {
+          "topic": "köpekler araştır",
+          "depth": "standard",
+          "include_word": true,
+          "include_report": true
+        },
+        "depends_on": [],
+        "checks": [
+          {
+            "type": "tool_success"
+          }
+        ],
+        "description": "köpekler araştır"
+      }
+    ]
+  },
+  "task_state": {
+    "task_id": "task_d04e472f87",
+    "objective": "köpekler araştır",
+    "context": {
+      "user_input": "köpekler araştır",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "research_document_delivery",
+      "job_type": "research_report",
+      "capability_domain": "research",
+      "workflow_id": "research_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "advanced_research",
+        "description": "köpekler araştır"
+      }
+    ],
+    "artifacts": [],
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773156234.581429,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773156234.598816,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773156234.6066968,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773156234.7344189,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 2
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1773156234.746094,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "research_document_delivery",
+          "job_type": "research_report"
+        }
+      }
+    ],
+    "created_at": 1773156234.581428,
+    "updated_at": 1773156234.746094
+  },
+  "metadata": {
+    "action": "research_document_delivery",
+    "job_type": "research_report",
+    "capability_domain": "research",
+    "workflow_id": "research_workflow",
+    "hybrid_model": {
+      "role": "inference",
+      "routing_role": "router",
+      "critic_role": "critic",
+      "tool_first": false,
+      "prefer_local": true,
+      "tier": "balanced"
+    },
+    "channel": "cli",
+    "user_id": "local",
+    "status": "partial"
+  }
+}

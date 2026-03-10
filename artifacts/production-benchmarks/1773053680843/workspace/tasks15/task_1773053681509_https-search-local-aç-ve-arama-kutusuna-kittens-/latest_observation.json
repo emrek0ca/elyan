@@ -1,0 +1,47 @@
+{
+  "step_index": 3,
+  "failed_codes": [],
+  "ui_state": {},
+  "browser_state": {
+    "success": true,
+    "dom_available": true,
+    "url": "https://search.local?q=kittens",
+    "title": "Results",
+    "visible_text": "Results for kittens",
+    "dom_hash": "264e76efd09b7f5b7b9c9027034d4b4f837656823f881e743714ea0a367e593e",
+    "scroll": {
+      "x": 0,
+      "y": 0
+    },
+    "session_id": "fake-browser",
+    "headless": true
+  },
+  "desktop_host_state": {
+    "version": 1,
+    "updated_at": 1773053681.512618,
+    "frontmost_app": "",
+    "active_window": {},
+    "last_screenshot": "",
+    "last_ui_state": {},
+    "current_task_state": {},
+    "target_cache": {},
+    "recent_action_logs": [],
+    "verifier_outcomes": [],
+    "last_instruction": "",
+    "last_mode": "",
+    "last_status": ""
+  },
+  "recovery_hints": {
+    "action": "submit",
+    "selector": "#q",
+    "dom_available": true,
+    "current_url": "https://search.local?q=kittens",
+    "current_title": "Results",
+    "visible_text": "Results for kittens",
+    "fallback_used": false,
+    "fallback_reason": "",
+    "expected_text": "kittens",
+    "failed_codes": []
+  },
+  "task_state": {}
+}

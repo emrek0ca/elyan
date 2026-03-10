@@ -1,0 +1,87 @@
+{
+  "run_id": "run_e22cc3f3f155",
+  "written_at": 1773156233.5469491,
+  "status": "success",
+  "user_input": "bilgisayarın şarjı kaç",
+  "task_spec": {},
+  "task_state": {
+    "task_id": "task_63ee4a38aa",
+    "objective": "bilgisayarın şarjı kaç",
+    "context": {
+      "user_input": "bilgisayarın şarjı kaç",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "get_battery_status",
+      "job_type": "browser_task",
+      "capability_domain": "general",
+      "workflow_id": "general_assistance_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773156233.38625,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773156233.3995059,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773156233.4060621,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773156233.5266402,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1773156233.537704,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "get_battery_status",
+          "job_type": "browser_task"
+        }
+      }
+    ],
+    "created_at": 1773156233.38625,
+    "updated_at": 1773156233.537704
+  },
+  "metadata": {
+    "action": "get_battery_status",
+    "job_type": "browser_task",
+    "capability_domain": "general",
+    "workflow_id": "general_assistance_workflow",
+    "hybrid_model": {
+      "role": "inference",
+      "routing_role": "router",
+      "critic_role": "critic",
+      "tool_first": false,
+      "prefer_local": true,
+      "tier": "balanced"
+    },
+    "channel": "cli",
+    "user_id": "local",
+    "status": "success"
+  }
+}

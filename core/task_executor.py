@@ -1,8 +1,10 @@
 import asyncio
+import inspect
 from typing import Any, Callable
 from config.settings import TASK_TIMEOUT, CIRCUIT_BREAKER_THRESHOLD
 from utils.logger import get_logger
 from datetime import datetime, timedelta
+from core.compat.legacy_tool_wrappers import normalize_legacy_tool_payload
 
 logger = get_logger("task_executor")
 
@@ -61,23 +63,62 @@ class TaskExecutor:
             self.tool_circuit_breakers[tool_name] = CircuitBreaker()
         return self.tool_circuit_breakers[tool_name]
 
+    @staticmethod
+    def _normalize_executor_result(
+        tool_name: str,
+        raw_result: Any,
+        *,
+        elapsed_s: float = 0.0,
+        error_code: str = "",
+    ) -> dict[str, Any]:
+        normalized = normalize_legacy_tool_payload(raw_result, tool=tool_name, source="task_executor")
+        metrics = dict(normalized.get("metrics") or {})
+        metrics["executor_duration_ms"] = max(0, int(round(float(elapsed_s or 0.0) * 1000.0)))
+        metrics.setdefault("tool_name", str(tool_name or ""))
+        normalized["metrics"] = metrics
+
+        data = dict(normalized.get("data") or {})
+        if error_code and not str(data.get("error_code") or "").strip():
+            data["error_code"] = str(error_code)
+        normalized["data"] = data
+
+        if error_code and not str(normalized.get("error_code") or "").strip():
+            normalized["error_code"] = str(error_code)
+        if not normalized.get("message") and normalized.get("error"):
+            normalized["message"] = str(normalized.get("error") or "")
+        return normalized
+
     async def execute(self, tool_func: Callable, params: dict[str, Any]) -> dict[str, Any]:
         tool_name = tool_func.__name__
 
         # Check per-tool circuit breaker
         tool_breaker = self._get_tool_breaker(tool_name)
         if not tool_breaker.can_execute():
-            return {
-                "success": False,
-                "error": f"{tool_name} aracı çok fazla hata verdi. Lütfen birkaç saniye bekleyin."
-            }
+            return self._normalize_executor_result(
+                tool_name,
+                {
+                    "success": False,
+                    "status": "blocked",
+                    "error": f"{tool_name} aracı çok fazla hata verdi. Lütfen birkaç saniye bekleyin.",
+                    "errors": ["CIRCUIT_BREAKER_OPEN"],
+                    "data": {"error_code": "CIRCUIT_BREAKER_OPEN", "blocker": "tool_circuit_breaker"},
+                },
+                error_code="CIRCUIT_BREAKER_OPEN",
+            )
 
         # Global circuit breaker check (for total system protection)
         if not self.circuit_breaker.can_execute():
-            return {
-                "success": False,
-                "error": "Sistem çok fazla hata verdi. Koruma modunda. Lütfen birkaç saniye bekleyin."
-            }
+            return self._normalize_executor_result(
+                tool_name,
+                {
+                    "success": False,
+                    "status": "blocked",
+                    "error": "Sistem çok fazla hata verdi. Koruma modunda. Lütfen birkaç saniye bekleyin.",
+                    "errors": ["CIRCUIT_BREAKER_OPEN"],
+                    "data": {"error_code": "CIRCUIT_BREAKER_OPEN", "blocker": "global_circuit_breaker"},
+                },
+                error_code="CIRCUIT_BREAKER_OPEN",
+            )
 
         # Parallelism Enabled (v15.0) - Removed is_busy blocking
         # self.is_busy = True # No longer using simple flag
@@ -86,19 +127,27 @@ class TaskExecutor:
         logger.info(f"Executing {tool_name} with params: {params}")
 
         try:
-            result = await asyncio.wait_for(
-                tool_func(**params),
-                timeout=TASK_TIMEOUT
-            )
+            pending = tool_func(**params)
+            if inspect.isawaitable(pending):
+                result = await asyncio.wait_for(
+                    pending,
+                    timeout=TASK_TIMEOUT
+                )
+            else:
+                result = pending
 
             task_end = datetime.now()
             elapsed = (task_end - task_start).total_seconds()
             logger.info(f"Task {tool_name} completed in {elapsed:.2f}s")
+            result = self._normalize_executor_result(tool_name, result, elapsed_s=elapsed)
 
             # Record in task history
-            self._record_task(tool_name, result.get("success", False), elapsed)
+            success = bool(result.get("success", False))
+            failure_detail = ""
+            if not success:
+                failure_detail = str(result.get("error") or result.get("message") or "")
+            self._record_task(tool_name, success, elapsed, failure_detail or None)
 
-            success = result.get("success", False)
             if success:
                 tool_breaker.record_success()
                 self.circuit_breaker.record_success()
@@ -114,10 +163,18 @@ class TaskExecutor:
             elapsed = (datetime.now() - task_start).total_seconds()
             logger.error(f"Task {tool_name} timed out after {TASK_TIMEOUT}s")
             self._record_task(tool_name, False, elapsed, "timeout")
-            return {
-                "success": False,
-                "error": f"Görev zaman aşımına uğradı ({TASK_TIMEOUT}s)"
-            }
+            return self._normalize_executor_result(
+                tool_name,
+                {
+                    "success": False,
+                    "status": "failed",
+                    "error": f"Görev zaman aşımına uğradı ({TASK_TIMEOUT}s)",
+                    "errors": ["TIMEOUT"],
+                    "data": {"error_code": "TIMEOUT"},
+                },
+                elapsed_s=elapsed,
+                error_code="TIMEOUT",
+            )
 
         except Exception as e:
             tool_breaker.record_failure()
@@ -125,10 +182,18 @@ class TaskExecutor:
             elapsed = (datetime.now() - task_start).total_seconds()
             logger.error(f"Task {tool_name} execution error: {str(e)}")
             self._record_task(tool_name, False, elapsed, str(e))
-            return {
-                "success": False,
-                "error": f"Görev hatası: {str(e)[:100]}"
-            }
+            return self._normalize_executor_result(
+                tool_name,
+                {
+                    "success": False,
+                    "status": "failed",
+                    "error": f"Görev hatası: {str(e)[:100]}",
+                    "errors": ["EXECUTION_EXCEPTION"],
+                    "data": {"error_code": "EXECUTION_EXCEPTION", "exception_type": type(e).__name__},
+                },
+                elapsed_s=elapsed,
+                error_code="EXECUTION_EXCEPTION",
+            )
 
         finally:
             # self.is_busy = False # No longer needed

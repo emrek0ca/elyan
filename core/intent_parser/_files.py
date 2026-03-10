@@ -9,6 +9,65 @@ from ._base import BaseParser, _RE_FOLDER_NAME_PATTERNS
 
 
 class FileParser(BaseParser):
+    @staticmethod
+    def _extract_create_folder_name(original: str) -> str:
+        raw = str(original or "").strip()
+        if not raw:
+            return ""
+
+        quoted = re.findall(r"[\"“”'`](.+?)[\"“”'`]", raw)
+        for item in quoted:
+            candidate = str(item or "").strip(" .,:;-_/")
+            if re.fullmatch(r"[\w\- ]{1,80}", candidate, re.IGNORECASE):
+                return candidate.replace(" ", "-")
+
+        patterns = (
+            r"\b([a-zA-Z0-9][\w\-]{0,80})\s+adında\s+klas[öo]r(?:ü|u)?\b",
+            r"\b([a-zA-Z0-9][\w\-]{0,80})\s+adinda\s+klasor(?:u)?\b",
+            r"\b(?:adında|adli|isimli|named)\s+([a-zA-Z0-9][\w\-]{0,80})\s+klas[öo]r\b",
+            r"\b(?:adinda|adli|isimli|named)\s+([a-zA-Z0-9][\w\-]{0,80})\s+klasor\b",
+            r"(?:masaüst(?:üne|ünde)?|masaust(?:une|unde)?|desktop(?:a|e|ta|te)?|belgeler(?:de)?|documents(?:ta|te)?|indirilenler(?:de)?|downloads(?:ta|te)?)\s+([a-zA-Z0-9][\w\-]{0,80})\s+klas[öo]r(?:ü|u)?\s+(?:oluştur|olustur|kur|aç|ac|yap|ekle)\b",
+            r"\b([a-zA-Z0-9][\w\-]{0,80})\s+klas[öo]r(?:ü|u)?\s+(?:oluştur|olustur|kur|aç|ac|yap|ekle)\b",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, raw, re.IGNORECASE)
+            if match:
+                return str(match.group(1) or "").strip(" .,:;-_/")
+        return ""
+
+    @staticmethod
+    def _extract_write_content(original: str) -> str:
+        raw = str(original or "").strip()
+        if not raw:
+            return ""
+
+        quoted = re.findall(r"[\"“”'`](.+?)[\"“”'`]", raw)
+        if quoted:
+            candidate = str(quoted[0] or "").strip()
+            if len(candidate) >= 2:
+                return candidate
+
+        patterns = (
+            r"(?:masaüstüne|masaustune|desktop(?:a|e)?)(?:\s+bir)?\s+not(?:\s+olarak)?\s+(.+?)\s+yaz\b",
+            r"(?:masaüstüne|masaustune|desktop(?:a|e)?)(?:\s+bir)?\s+not(?:\s+olarak)?\s+(.+?)\s+kaydet\b",
+            r"\bnot(?:\s+olarak)?\s+(.+?)\s+yaz\b",
+            r"\bnot(?:\s+olarak)?\s+(.+?)\s+kaydet\b",
+            r"\byaz[:\s]+(.+)$",
+            r"\bkaydet[:\s]+(.+)$",
+            r"\boluştur[:\s]+(.+)$",
+            r"\bolustur[:\s]+(.+)$",
+            r"\biçeriği[:\s]+(.+)$",
+            r"\bicerigi[:\s]+(.+)$",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, raw, re.IGNORECASE)
+            if not match:
+                continue
+            content = str(match.group(1) or "").strip()
+            content = re.sub(r"\s+", " ", content).strip(" .,:;-")
+            if len(content) >= 2:
+                return content
+        return ""
 
     # ── Create Folder ─────────────────────────────────────────────────────────
     def _parse_create_folder(self, text: str, text_norm: str, original: str) -> dict | None:
@@ -16,9 +75,11 @@ class FileParser(BaseParser):
             return None
         if not any(v in text for v in ["olustur", "oluştur", "kur", "ac", "aç", "yap", "ekle"]):
             return None
-        name = None
+        name = self._extract_create_folder_name(original)
         for pat in _RE_FOLDER_NAME_PATTERNS:
-            m = pat.search(text)
+            if name:
+                break
+            m = pat.search(original)
             if m:
                 name = m.group(1)
                 break
@@ -73,14 +134,11 @@ class FileParser(BaseParser):
     def _parse_write_file(self, text: str, text_norm: str, original: str) -> dict | None:
         triggers = ["not yaz", "dosya oluştur", "kaydet", "yaz:", "not oluştur",
                     "liste yaz", "dosya yaz", "metin kaydet", "not al",
-                    "bunu kaydet", "dosya olarak kaydet", "masaüstüne kaydet"]
+                    "bunu kaydet", "dosya olarak kaydet", "masaüstüne kaydet",
+                    "masaüstüne not", "masaustune not", "not olarak", "desktop note"]
         if not any(t in text for t in triggers):
             return None
-        m = re.search(r'yaz[:\s]+(.+)|oluştur[:\s]+(.+)|kaydet[:\s]+(.+)|içeriği[:\s]+(.+)',
-                      text, re.IGNORECASE)
-        content = ""
-        if m:
-            content = (m.group(1) or m.group(2) or m.group(3) or m.group(4) or "").strip()
+        content = self._extract_write_content(original)
         filename = "not.txt"
         fm = re.search(r'([\w\-.]+\.[a-z0-9]{2,8})', text, re.IGNORECASE)
         if fm:

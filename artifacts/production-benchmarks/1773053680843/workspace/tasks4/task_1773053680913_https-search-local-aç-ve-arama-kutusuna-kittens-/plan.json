@@ -1,0 +1,49 @@
+[
+  {
+    "kind": "browser",
+    "name": "open_page",
+    "action": "open",
+    "url": "https://search.local",
+    "expected_url_contains": "search.local",
+    "expected_title_contains": "Search",
+    "verify": {
+      "url_contains": "search.local"
+    },
+    "repair_policy": {
+      "max_retries": 1
+    }
+  },
+  {
+    "kind": "browser",
+    "name": "fill_q",
+    "action": "type",
+    "selector": "#q",
+    "text": "kittens",
+    "verify": {
+      "text_contains": "kittens"
+    },
+    "repair_policy": {
+      "max_retries": 1
+    }
+  },
+  {
+    "kind": "browser",
+    "name": "status_check_submit-form",
+    "action": "status",
+    "verify": {}
+  },
+  {
+    "kind": "browser",
+    "name": "submit_form",
+    "action": "submit",
+    "selector": "#q",
+    "expected_text": "kittens",
+    "verify": {
+      "text_contains": "kittens"
+    },
+    "repair_policy": {
+      "max_retries": 1
+    },
+    "replanned_after_state_check": true
+  }
+]

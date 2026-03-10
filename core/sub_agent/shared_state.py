@@ -13,6 +13,8 @@ class TeamTask:
     specialist: str
     action: str
     params: Dict[str, Any] = field(default_factory=dict)
+    objective: str = ""
+    success_criteria: List[str] = field(default_factory=list)
     depends_on: List[str] = field(default_factory=list)
     gates: List[str] = field(default_factory=list)
     task_id: str = field(default_factory=lambda: f"team_task_{uuid.uuid4().hex[:8]}")

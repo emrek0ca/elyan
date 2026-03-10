@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import tempfile
 import time
 import uuid
 from datetime import datetime
@@ -20,13 +21,22 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from utils.logger import get_logger
+from core.storage_paths import resolve_elyan_data_dir
 from core.multi_agent.orchestrator import get_orchestrator
 from core.intelligent_planner import get_intelligent_planner
 
 logger = get_logger("routine_engine")
 
-ROUTINE_PERSIST_PATH = Path.home() / ".elyan" / "routines.json"
-ROUTINE_REPORT_DIR = Path.home() / ".elyan" / "reports" / "routines"
+def _default_routine_persist_path() -> Path:
+    return resolve_elyan_data_dir() / "routines.json"
+
+
+def _default_routine_report_dir() -> Path:
+    return resolve_elyan_data_dir() / "reports" / "routines"
+
+
+ROUTINE_PERSIST_PATH = _default_routine_persist_path()
+ROUTINE_REPORT_DIR = _default_routine_report_dir()
 
 _RE_URL = re.compile(r"https?://[^\s]+", re.IGNORECASE)
 _RE_DOMAIN = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s]*)?", re.IGNORECASE)
@@ -912,16 +922,27 @@ class RoutineEngine:
     def _default_excel_path(self, routine: dict[str, Any]) -> str:
         day = datetime.now().strftime("%Y%m%d")
         slug = _safe_slug(routine.get("name", "routine"))
-        out_dir = Path.home() / "Desktop" / "elyan_reports" / day
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir = self._default_report_output_dir(day)
         return str(out_dir / f"{slug}.xlsx")
 
     def _default_summary_path(self, routine: dict[str, Any]) -> str:
         day = datetime.now().strftime("%Y%m%d")
         slug = _safe_slug(routine.get("name", "routine"))
-        out_dir = Path.home() / "Desktop" / "elyan_reports" / day
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir = self._default_report_output_dir(day)
         return str(out_dir / f"{slug}_summary.md")
+
+    def _default_report_output_dir(self, day: str) -> Path:
+        candidates = [
+            ROUTINE_REPORT_DIR / day,
+            Path(tempfile.gettempdir()) / "elyan" / "reports" / "routines" / day,
+        ]
+        for path in candidates:
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+                return path
+            except Exception:
+                continue
+        return Path(".")
 
     def _build_excel_rows(self, run_context: dict[str, Any]) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []

@@ -1,0 +1,2 @@
+direct_intent_failed:research_document_delivery
+completion:missing_artifacts

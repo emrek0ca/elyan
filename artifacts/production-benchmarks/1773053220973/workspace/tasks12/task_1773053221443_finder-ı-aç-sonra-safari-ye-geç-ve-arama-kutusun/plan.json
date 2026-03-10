@@ -1,0 +1,453 @@
+[
+  {
+    "kind": "system",
+    "name": "open_finder",
+    "tool": "open_app",
+    "params": {
+      "app_name": "Finder"
+    },
+    "verify": {
+      "frontmost_app": "Finder"
+    }
+  },
+  {
+    "kind": "system",
+    "name": "open_safari",
+    "tool": "open_app",
+    "params": {
+      "app_name": "Safari"
+    },
+    "verify": {
+      "frontmost_app": "Safari"
+    }
+  },
+  {
+    "kind": "screen",
+    "name": "fill_screen_field",
+    "instruction": "Search field icine \"ı aç sonra Safari\" yaz",
+    "verify": {
+      "text_contains": "ı aç sonra Safari",
+      "frontmost_app": "Safari"
+    },
+    "repair_policy": {
+      "max_retries": 1
+    },
+    "task_state": {
+      "current_step": 0,
+      "attempts": 3,
+      "ui_state": {
+        "frontmost_app": "Safari",
+        "active_window": {
+          "title": "Search",
+          "bounds": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 800
+          }
+        },
+        "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053220973/workspace/screen12/screen_after_1_2_1773053221538.png",
+        "elements": [
+          {
+            "label": "Safari",
+            "role": "frontmost_app",
+            "source": "window_metadata",
+            "confidence": 0.99
+          },
+          {
+            "label": "Search",
+            "role": "window_title",
+            "source": "window_metadata",
+            "confidence": 0.95
+          },
+          {
+            "label": "Search field",
+            "role": "text_field",
+            "x": 110,
+            "y": 90,
+            "width": 160,
+            "height": 30,
+            "frontmost_app": "Safari",
+            "window_title": "Search",
+            "source": "accessibility",
+            "confidence": 0.92
+          },
+          {
+            "label": "kittens",
+            "role": "ocr_text",
+            "source": "ocr",
+            "confidence": 0.95,
+            "frontmost_app": "Safari",
+            "window_title": "Search",
+            "x": 120,
+            "y": 98,
+            "width": 70,
+            "height": 18
+          },
+          {
+            "label": "Finder",
+            "role": "frontmost_app",
+            "source": "prior_ui_state",
+            "confidence": 0.99,
+            "frontmost_app": "Safari",
+            "window_title": "Search"
+          },
+          {
+            "label": "Finder",
+            "role": "window_title",
+            "source": "prior_ui_state",
+            "confidence": 0.95,
+            "frontmost_app": "Safari",
+            "window_title": "Search"
+          }
+        ],
+        "clickable_targets": [
+          {
+            "label": "Search field",
+            "role": "text_field",
+            "x": 110,
+            "y": 90,
+            "width": 160,
+            "height": 30,
+            "frontmost_app": "Safari",
+            "window_title": "Search",
+            "source": "accessibility",
+            "confidence": 0.92
+          }
+        ],
+        "text_fields": [
+          {
+            "label": "Search field",
+            "role": "text_field",
+            "x": 110,
+            "y": 90,
+            "width": 160,
+            "height": 30,
+            "frontmost_app": "Safari",
+            "window_title": "Search",
+            "source": "accessibility",
+            "confidence": 0.92
+          }
+        ],
+        "summary": "Frontmost app: Safari. Window: Search. Search field icinde kittens yaziyor. OCR: kittens",
+        "fallback_order": [
+          "accessibility_and_window_metadata",
+          "vision_detection",
+          "ocr",
+          "last_known_ui_target_cache"
+        ],
+        "source_counts": {
+          "window_metadata": 2,
+          "accessibility": 1,
+          "ocr": 1,
+          "prior_ui_state": 2
+        },
+        "confidence": 0.958
+      },
+      "last_ui_state": {
+        "frontmost_app": "Safari",
+        "active_window": {
+          "title": "Search",
+          "bounds": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 800
+          }
+        },
+        "screenshot_path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053220973/workspace/screen12/screen_after_1_2_1773053221538.png",
+        "elements": [
+          {
+            "label": "Safari",
+            "role": "frontmost_app",
+            "source": "window_metadata",
+            "confidence": 0.99
+          },
+          {
+            "label": "Search",
+            "role": "window_title",
+            "source": "window_metadata",
+            "confidence": 0.95
+          },
+          {
+            "label": "Search field",
+            "role": "text_field",
+            "x": 110,
+            "y": 90,
+            "width": 160,
+            "height": 30,
+            "frontmost_app": "Safari",
+            "window_title": "Search",
+            "source": "accessibility",
+            "confidence": 0.92
+          },
+          {
+            "label": "kittens",
+            "role": "ocr_text",
+            "source": "ocr",
+            "confidence": 0.95,
+            "frontmost_app": "Safari",
+            "window_title": "Search",
+            "x": 120,
+            "y": 98,
+            "width": 70,
+            "height": 18
+          },
+          {
+            "label": "Finder",
+            "role": "frontmost_app",
+            "source": "prior_ui_state",
+            "confidence": 0.99,
+            "frontmost_app": "Safari",
+            "window_title": "Search"
+          },
+          {
+            "label": "Finder",
+            "role": "window_title",
+            "source": "prior_ui_state",
+            "confidence": 0.95,
+            "frontmost_app": "Safari",
+            "window_title": "Search"
+          }
+        ],
+        "clickable_targets": [
+          {
+            "label": "Search field",
+            "role": "text_field",
+            "x": 110,
+            "y": 90,
+            "width": 160,
+            "height": 30,
+            "frontmost_app": "Safari",
+            "window_title": "Search",
+            "source": "accessibility",
+            "confidence": 0.92
+          }
+        ],
+        "text_fields": [
+          {
+            "label": "Search field",
+            "role": "text_field",
+            "x": 110,
+            "y": 90,
+            "width": 160,
+            "height": 30,
+            "frontmost_app": "Safari",
+            "window_title": "Search",
+            "source": "accessibility",
+            "confidence": 0.92
+          }
+        ],
+        "summary": "Frontmost app: Safari. Window: Search. Search field icinde kittens yaziyor. OCR: kittens",
+        "fallback_order": [
+          "accessibility_and_window_metadata",
+          "vision_detection",
+          "ocr",
+          "last_known_ui_target_cache"
+        ],
+        "source_counts": {
+          "window_metadata": 2,
+          "accessibility": 1,
+          "ocr": 1,
+          "prior_ui_state": 2
+        },
+        "confidence": 0.958
+      },
+      "last_target_cache": {
+        "search field@@safari@@search": {
+          "label": "Search field",
+          "role": "text_field",
+          "x": 110,
+          "y": 90,
+          "width": 160,
+          "height": 30,
+          "frontmost_app": "Safari",
+          "window_title": "Search",
+          "source": "cache",
+          "confidence": 0.92,
+          "_cache_meta": {
+            "seen_count": 2,
+            "last_seen_at": 1773053221.538518,
+            "last_action_kind": "",
+            "frontmost_app": "Safari",
+            "window_title": "Search",
+            "last_verified_success": false,
+            "verified_success_count": 0,
+            "last_verified_success_at": 0.0
+          }
+        },
+        "search field": {
+          "label": "Search field",
+          "role": "text_field",
+          "x": 110,
+          "y": 90,
+          "width": 160,
+          "height": 30,
+          "frontmost_app": "Safari",
+          "window_title": "Search",
+          "source": "cache",
+          "confidence": 0.92,
+          "_cache_meta": {
+            "seen_count": 1,
+            "last_seen_at": 1773053221.450351,
+            "last_action_kind": "",
+            "frontmost_app": "Safari",
+            "window_title": "Search",
+            "last_verified_success": false,
+            "verified_success_count": 0,
+            "last_verified_success_at": 0.0
+          }
+        },
+        "kittens@@safari@@search": {
+          "label": "kittens",
+          "role": "ocr_text",
+          "source": "cache",
+          "confidence": 0.95,
+          "frontmost_app": "Safari",
+          "window_title": "Search",
+          "x": 120,
+          "y": 98,
+          "width": 70,
+          "height": 18,
+          "_cache_meta": {
+            "seen_count": 2,
+            "last_seen_at": 1773053221.538523,
+            "last_action_kind": "",
+            "frontmost_app": "Safari",
+            "window_title": "Search",
+            "last_verified_success": false,
+            "verified_success_count": 0,
+            "last_verified_success_at": 0.0
+          }
+        },
+        "kittens": {
+          "label": "kittens",
+          "role": "ocr_text",
+          "source": "cache",
+          "confidence": 0.95,
+          "frontmost_app": "Safari",
+          "window_title": "Search",
+          "x": 120,
+          "y": 98,
+          "width": 70,
+          "height": 18,
+          "_cache_meta": {
+            "seen_count": 1,
+            "last_seen_at": 1773053221.522399,
+            "last_action_kind": "",
+            "frontmost_app": "Safari",
+            "window_title": "Search",
+            "last_verified_success": false,
+            "verified_success_count": 0,
+            "last_verified_success_at": 0.0
+          }
+        }
+      },
+      "verifier_outcomes": [
+        {
+          "ok": false,
+          "status": "failed",
+          "checks": [
+            {
+              "code": "after_screenshot_present",
+              "passed": true,
+              "details": {
+                "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053220973/workspace/screen12/screen_after_1_1_1773053221537.png"
+              }
+            },
+            {
+              "code": "ui_state_present",
+              "passed": true,
+              "details": {
+                "element_count": 6
+              }
+            },
+            {
+              "code": "typed_text_visible",
+              "passed": false,
+              "details": {
+                "typed_text": "ı aç sonra safari"
+              }
+            }
+          ],
+          "failed": [
+            "typed_text_visible"
+          ],
+          "failed_codes": [
+            "NO_VISUAL_CHANGE"
+          ],
+          "repairable": true,
+          "summary": "screen action verification for type",
+          "evidence_refs": [
+            {
+              "type": "screenshot",
+              "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053220973/workspace/screen12/screen_before_1773053221537.png"
+            },
+            {
+              "type": "screenshot",
+              "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053220973/workspace/screen12/screen_after_1_1_1773053221537.png"
+            }
+          ],
+          "metrics": {
+            "visual_change": 0,
+            "window_changed": 0,
+            "app_changed": 0
+          },
+          "target_visible_after": true
+        },
+        {
+          "ok": false,
+          "status": "failed",
+          "checks": [
+            {
+              "code": "after_screenshot_present",
+              "passed": true,
+              "details": {
+                "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053220973/workspace/screen12/screen_after_1_2_1773053221538.png"
+              }
+            },
+            {
+              "code": "ui_state_present",
+              "passed": true,
+              "details": {
+                "element_count": 6
+              }
+            },
+            {
+              "code": "typed_text_visible",
+              "passed": false,
+              "details": {
+                "typed_text": "ı aç sonra safari"
+              }
+            }
+          ],
+          "failed": [
+            "typed_text_visible"
+          ],
+          "failed_codes": [
+            "NO_VISUAL_CHANGE"
+          ],
+          "repairable": true,
+          "summary": "screen action verification for type",
+          "evidence_refs": [
+            {
+              "type": "screenshot",
+              "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053220973/workspace/screen12/screen_after_1_1_1773053221537.png"
+            },
+            {
+              "type": "screenshot",
+              "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053220973/workspace/screen12/screen_after_1_2_1773053221538.png"
+            }
+          ],
+          "metrics": {
+            "visual_change": 0,
+            "window_changed": 0,
+            "app_changed": 0
+          },
+          "target_visible_after": true
+        }
+      ]
+    },
+    "max_retries_per_action": 1
+  }
+]

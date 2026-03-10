@@ -1,0 +1,72 @@
+{
+  "run_id": "run_47731b80f312",
+  "user_input": "karmaşık görevi tamamla",
+  "task_spec": {},
+  "metadata": {
+    "action": "",
+    "job_type": "communication",
+    "capability_domain": "general",
+    "workflow_id": "",
+    "hybrid_model": {},
+    "channel": "cli",
+    "user_id": "local",
+    "status": "success"
+  },
+  "task_state": {
+    "task_id": "task_15c63ff498",
+    "objective": "karmaşık görevi tamamla",
+    "context": {
+      "user_input": "karmaşık görevi tamamla",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "",
+      "job_type": "communication",
+      "capability_domain": "general",
+      "workflow_id": "",
+      "hybrid_model": {}
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773156209.2954109,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773156209.309657,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773156209.316169,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773156209.322794,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1773156209.328914,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "",
+          "job_type": "communication"
+        }
+      }
+    ],
+    "created_at": 1773156209.29541,
+    "updated_at": 1773156209.328914
+  },
+  "written_at": 1773156209.334678
+}

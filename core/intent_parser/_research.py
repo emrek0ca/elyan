@@ -54,7 +54,20 @@ class ResearchParser(BaseParser):
         if any(k in text for k in ["akademik", "bilimsel", "hakemli", "makale", "journal", "paper"]):
             params["source_policy"] = "academic"
             params["min_reliability"] = 0.72
-        elif any(k in text for k in ["resmi", "official", "devlet", "bakanlık", "bakanlik", ".gov"]):
+        elif any(
+            k in text
+            for k in [
+                "official",
+                "devlet",
+                "bakanlık",
+                "bakanlik",
+                ".gov",
+                "resmi kaynak",
+                "resmi site",
+                "resmi kurum",
+                "resmi veri",
+            ]
+        ):
             params["source_policy"] = "official"
             params["min_reliability"] = 0.75
         elif any(k in text for k in ["güvenilir", "guvenilir", "trusted", "doğrulanmış", "dogrulanmis"]):
@@ -76,7 +89,11 @@ class ResearchParser(BaseParser):
         deliver_markers = [
             "gönder", "gonder", "kopya", "ilet", "paylaş", "paylas", "telegram", "whatsapp", "telefon",
         ]
-        if any(k in text for k in doc_markers):
+        simple_answer_markers = [
+            "kısaca", "kisaca", "kısa anlat", "kisa anlat", "sadece anlat", "özetle", "ozetle",
+        ]
+        wants_delivery = any(k in text for k in doc_markers) or not any(k in text for k in simple_answer_markers)
+        if wants_delivery:
             depth_for_delivery = {
                 "quick": "quick",
                 "standard": "standard",

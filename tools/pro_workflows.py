@@ -5,8 +5,11 @@ Professional workflow tools for higher-level assistant capabilities.
 from __future__ import annotations
 
 from datetime import datetime
+import hashlib
 from pathlib import Path
+import re
 from typing import Any
+import unicodedata
 
 from security.validator import validate_path
 from utils.logger import get_logger
@@ -47,24 +50,165 @@ def _brief_excerpt(brief: str, *, fallback: str) -> str:
     return raw[:220]
 
 
+def _normalize_text(text: str) -> str:
+    return unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode("ascii").lower()
+
+
+def _mix_hex(color_a: str, color_b: str, ratio: float) -> str:
+    ratio = max(0.0, min(1.0, float(ratio)))
+    a = color_a.lstrip("#")
+    b = color_b.lstrip("#")
+    if len(a) != 6 or len(b) != 6:
+        return f"#{a or b or '000000'}"[:7]
+    blended = []
+    for idx in range(0, 6, 2):
+        av = int(a[idx:idx + 2], 16)
+        bv = int(b[idx:idx + 2], 16)
+        blended.append(f"{int(round((av * ratio) + (bv * (1.0 - ratio)))):02x}")
+    return f"#{''.join(blended)}"
+
+
+def _requested_palette(brief: str, theme: str) -> dict[str, str] | None:
+    low = _normalize_text(f"{brief} {theme}")
+    if not low:
+        return None
+
+    warm_combo = (("sari" in low or "yellow" in low) and ("turuncu" in low or "orange" in low))
+    mono_combo = (("siyah" in low or "black" in low) and ("beyaz" in low or "white" in low))
+    if warm_combo:
+        return {
+            "accent": "#f59e0b",
+            "accent2": "#f97316",
+            "bg1": "#fff4cc",
+            "bg2": "#ffd7a8",
+        }
+    if mono_combo:
+        return {
+            "accent": "#111827",
+            "accent2": "#475569",
+            "bg1": "#f8fafc",
+            "bg2": "#e2e8f0",
+        }
+
+    color_map = [
+        (("sari", "yellow"), "#f59e0b"),
+        (("turuncu", "orange"), "#f97316"),
+        (("kirmizi", "red"), "#ef4444"),
+        (("mavi", "blue"), "#2563eb"),
+        (("yesil", "green"), "#16a34a"),
+        (("mor", "purple"), "#7c3aed"),
+        (("pembe", "pink"), "#ec4899"),
+        (("siyah", "black"), "#111827"),
+        (("beyaz", "white"), "#f8fafc"),
+    ]
+    colors: list[str] = []
+    for aliases, hex_value in color_map:
+        if any(alias in low for alias in aliases):
+            colors.append(hex_value)
+    if not colors:
+        return None
+
+    accent = colors[0]
+    accent2 = colors[1] if len(colors) > 1 else _mix_hex(accent, "#7c2d12", 0.45)
+    return {
+        "accent": accent,
+        "accent2": accent2,
+        "bg1": _mix_hex(accent, "#fff9f0", 0.16),
+        "bg2": _mix_hex(accent2, "#fff1df", 0.22),
+    }
+
+
+def _contains_term(text: str, term: str) -> bool:
+    haystack = f" {_normalize_text(text)} "
+    needle = _normalize_text(term).strip()
+    if not needle:
+        return False
+    if " " in needle or "-" in needle:
+        return needle in haystack
+    return re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", haystack) is not None
+
+
+def _contains_any_term(text: str, terms: tuple[str, ...]) -> bool:
+    return any(_contains_term(text, term) for term in terms)
+
+
+def _looks_like_non_document_request(topic: str, brief: str) -> bool:
+    low = f"{str(topic or '').lower()} {str(brief or '').lower()}".strip()
+    if not low:
+        return True
+    browser_markers = (
+        "safari",
+        "chrome",
+        "browser",
+        "tarayıcı",
+        "tarayici",
+        "google",
+        "web",
+        "site",
+        "sayfa",
+        "url",
+        "arat",
+        "ara",
+        "search",
+        "aç",
+        "ac",
+        "git",
+    )
+    image_markers = (
+        "resim",
+        "resimleri",
+        "görsel",
+        "gorsel",
+        "foto",
+        "image",
+        "images",
+        "wallpaper",
+    )
+    doc_markers = (
+        "belge",
+        "doküman",
+        "dokuman",
+        "rapor",
+        "brief",
+        "summary",
+        "özet",
+        "ozet",
+        "kurumsal",
+        "profesyonel",
+        "executive",
+        "analysis",
+        "analiz",
+        "risk",
+        "aksiyon",
+    )
+    singular_image_phrase = " resmi " in f" {low} "
+    looks_browser_like = any(marker in low for marker in browser_markers) and (
+        any(marker in low for marker in image_markers) or singular_image_phrase
+    )
+    if looks_browser_like and not any(marker in low for marker in doc_markers):
+        return True
+    meaningful = [token for token in low.replace(",", " ").split() if token.strip()]
+    return len(meaningful) < 3 and not any(marker in low for marker in doc_markers)
+
+
 def _derive_web_profile(project_name: str, brief: str, theme: str) -> dict[str, Any]:
     low = str(brief or "").lower()
     layout = "landing"
-    if any(k in low for k in ("dashboard", "panel", "analitik", "kpi", "rapor ekranı", "rapor ekrani")):
+    if _contains_any_term(brief, ("dashboard", "panel", "analitik", "kpi", "rapor ekrani", "rapor ekrani")):
         layout = "dashboard"
-    elif any(k in low for k in ("e-ticaret", "ecommerce", "shop", "store", "ürün", "urun", "sepet")):
+    elif _contains_any_term(brief, ("e-ticaret", "ecommerce", "shop", "store", "urun", "sepet")):
         layout = "commerce"
-    elif any(k in low for k in ("portfolio", "portföy", "portfoy", "cv", "özgeçmiş", "ozgecmis")):
+    elif _contains_any_term(brief, ("portfolio", "portfolyo", "portfoy", "cv", "ozgecmis")):
         layout = "portfolio"
-    elif any(k in low for k in ("blog", "makale", "yazı", "yazi")):
+    elif _contains_any_term(brief, ("blog", "makale", "yazi")):
         layout = "blog"
 
     style = str(theme or "").strip().lower() or "professional"
-    if any(k in low for k in ("minimal", "clean", "sade")):
+    if _contains_any_term(brief, ("minimal", "clean", "sade")):
         style = "minimal"
-    elif any(k in low for k in ("neon", "cyber", "futuristic", "futuristik")):
+    elif _contains_any_term(brief, ("neon", "cyber", "futuristic", "futuristik")):
         style = "futuristic"
-    elif any(k in low for k in ("enterprise", "kurumsal", "corporate", "b2b")):
+    elif _contains_any_term(brief, ("enterprise", "kurumsal", "corporate", "b2b")):
         style = "corporate"
     elif style not in {"professional", "minimal", "futuristic", "corporate"}:
         style = "professional"
@@ -75,17 +219,20 @@ def _derive_web_profile(project_name: str, brief: str, theme: str) -> dict[str, 
         "futuristic": {"accent": "#06b6d4", "accent2": "#8b5cf6", "bg1": "#0b1020", "bg2": "#101827"},
         "corporate": {"accent": "#1d4ed8", "accent2": "#0369a1", "bg1": "#eef2ff", "bg2": "#e0e7ff"},
     }[style]
+    palette_override = _requested_palette(brief, theme)
+    if palette_override:
+        palette = dict(palette_override)
 
     features = {
         "counter": _wants_counter_feature(brief),
-        "todo": any(k in low for k in ("todo", "to do", "yapılacak", "yapilacak", "task list")),
-        "search": any(k in low for k in ("arama", "search", "filtre", "filter")),
-        "contact_form": any(k in low for k in ("form", "iletişim", "iletisim", "contact", "lead")),
-        "theme_toggle": any(k in low for k in ("dark mode", "tema", "theme")) or style == "futuristic",
-        "timer": any(k in low for k in ("timer", "pomodoro", "süre", "sure", "zamanlayıcı", "zamanlayici")),
-        "tailwind": any(k in low for k in ("tailwind", "modern css", "utility first", "responsive ui")),
-        "motion": any(k in low for k in ("animation", "animasyon", "gsap", "framer", "scroll reveal")),
-        "gallery_mode": any(k in low for k in ("galeri", "gallery", "portfolio", "portföy", "portfoy")),
+        "todo": _contains_any_term(brief, ("todo", "to do", "yapilacak", "task list")),
+        "search": _contains_any_term(brief, ("arama", "search", "filtre", "filter")),
+        "contact_form": _contains_any_term(brief, ("form", "iletisim", "contact", "lead")),
+        "theme_toggle": _contains_any_term(brief, ("dark mode", "tema", "theme")) or style == "futuristic",
+        "timer": _contains_any_term(brief, ("timer", "pomodoro", "sure", "zamanlayici")),
+        "tailwind": _contains_any_term(brief, ("tailwind", "modern css", "utility first", "responsive ui")),
+        "motion": _contains_any_term(brief, ("animation", "animasyon", "gsap", "framer", "scroll reveal")),
+        "gallery_mode": _contains_any_term(brief, ("galeri", "gallery", "portfolio", "portfolyo", "portfoy")),
     }
     # Default modern UI on web scaffold; keeps baseline quality higher.
     if not features["tailwind"]:
@@ -106,6 +253,13 @@ def _derive_web_profile(project_name: str, brief: str, theme: str) -> dict[str, 
 
     title = str(project_name or "Elyan Web App").strip() or "Elyan Web App"
     subtitle = _brief_excerpt(brief, fallback=f"{title} için özelleştirilmiş web uygulaması")
+    cta = "Hemen Basla"
+    if layout == "portfolio":
+        cta = "Projeleri Incele"
+    elif layout == "commerce":
+        cta = "Koleksiyonu Kesfet"
+    elif layout == "dashboard":
+        cta = "Pano'yu Ac"
 
     return {
         "layout": layout,
@@ -115,12 +269,659 @@ def _derive_web_profile(project_name: str, brief: str, theme: str) -> dict[str, 
         "sections": sections,
         "title": title,
         "subtitle": subtitle,
-        "cta": "Hemen Başla",
+        "cta": cta,
     }
+
+
+def _build_portfolio_assets(profile: dict[str, Any]) -> tuple[str, str, str]:
+    palette = profile["palette"]
+    features = profile["features"]
+    title = _escape_html(profile["title"])
+    subtitle = _escape_html(profile["subtitle"])
+    skill_chips = "".join(
+        f"<span class=\"skill-chip\">{_escape_html(item)}</span>"
+        for item in [
+            "Brand Systems",
+            "UI Direction",
+            "Motion Language",
+            "Responsive Frontend",
+            "Case Studies",
+            "Launch Support",
+        ]
+    )
+
+    project_cards = "".join(
+        [
+            (
+                "<article class=\"project-card reveal\">"
+                "<p class=\"project-tag\">Signature Build</p>"
+                "<h3>Warm Identity System</h3>"
+                "<p>Hero, color choreography ve editorial ritimle ilk izlenimi guclendirir.</p>"
+                "<ul class=\"project-meta\"><li>Visual system</li><li>Responsive grid</li><li>CTA hierarchy</li></ul>"
+                "</article>"
+            ),
+            (
+                "<article class=\"project-card reveal alt\">"
+                "<p class=\"project-tag\">Featured Work</p>"
+                "<h3>Story-Driven Case Study</h3>"
+                "<p>Is akisini sadece gostermek yerine neden-sonuc iliskisiyle anlatan kart yapisi.</p>"
+                "<ul class=\"project-meta\"><li>Process framing</li><li>Outcome metrics</li><li>Scroll pacing</li></ul>"
+                "</article>"
+            ),
+            (
+                "<article class=\"project-card reveal tone\">"
+                "<p class=\"project-tag\">Client Funnel</p>"
+                "<h3>Contact Conversion</h3>"
+                "<p>Iletisim bolumu ziyaretciyi kaybetmeden net bir sonraki adima tasir.</p>"
+                "<ul class=\"project-meta\"><li>Trust layer</li><li>Offer clarity</li><li>Inquiry path</li></ul>"
+                "</article>"
+            ),
+        ]
+    )
+
+    gallery_block = ""
+    if features.get("gallery_mode"):
+        gallery_block = """
+    <section class="gallery-grid reveal" aria-label="Portfolio gallery">
+      <figure class="gallery-item"><img src="https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1200&q=80" alt="Creative workspace" loading="lazy" /><figcaption>Concept direction</figcaption></figure>
+      <figure class="gallery-item"><img src="https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?auto=format&fit=crop&w=1200&q=80" alt="Project wall" loading="lazy" /><figcaption>Launch-ready compositions</figcaption></figure>
+      <figure class="gallery-item"><img src="https://images.unsplash.com/photo-1524758631624-e2822e304c36?auto=format&fit=crop&w=1200&q=80" alt="Studio detail" loading="lazy" /><figcaption>Warm editorial detail</figcaption></figure>
+    </section>
+"""
+
+    contact_body = (
+        """
+        <form id="leadForm" class="lead-form">
+          <input name="name" type="text" placeholder="Ad Soyad" required />
+          <input name="email" type="email" placeholder="E-posta" required />
+          <textarea name="message" rows="4" placeholder="Proje hedefinizi kisaca yazin"></textarea>
+          <button type="submit" class="btn primary">Gorusme Talebi Gonder</button>
+          <p id="leadStatus" class="contact-note"></p>
+        </form>
+"""
+        if features.get("contact_form")
+        else """
+        <div class="contact-stack">
+          <a class="contact-link" href="mailto:hello@example.com">hello@example.com</a>
+          <p class="contact-note">Brief, zamanlama ve beklentiyle gelin. Ilk yanit yapisi 24 saat icinde hazir.</p>
+        </div>
+"""
+    )
+
+    theme_toggle = ""
+    if features.get("theme_toggle"):
+        theme_toggle = '<button id="themeToggle" type="button" class="btn ghost small">Tema Degistir</button>'
+
+    tailwind_cdn = ""
+    gsap_cdn = ""
+    if features.get("tailwind"):
+        tailwind_cdn = '  <script src="https://cdn.tailwindcss.com"></script>\n'
+    if features.get("motion"):
+        gsap_cdn = (
+            '  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>\n'
+            '  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>\n'
+        )
+
+    html = f"""<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{title}</title>
+  <meta name="description" content="{subtitle}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+{tailwind_cdn}{gsap_cdn}  <link rel="stylesheet" href="./styles/main.css">
+</head>
+<body data-style="{_escape_html(profile['style'])}">
+  <div class="page-orb orb-left"></div>
+  <div class="page-orb orb-right"></div>
+
+  <header class="site-header">
+    <nav class="topbar reveal" aria-label="Primary">
+      <a href="#top" class="brand-mark">Portfolio Atelier</a>
+      <div class="nav-links">
+        <a href="#about" data-scroll>Hakkimda</a>
+        <a href="#projects" data-scroll>Projeler</a>
+        <a href="#skills" data-scroll>Yetenekler</a>
+        <a href="#contact" data-scroll>Iletisim</a>
+      </div>
+    </nav>
+
+    <section class="portfolio-hero" id="top">
+      <div class="hero-copy reveal">
+        <p class="eyebrow">Warm, editorial, conversion-focused</p>
+        <h1>{title}</h1>
+        <p class="lead">{subtitle}</p>
+        <div class="hero-actions">
+          {theme_toggle}
+          <a href="#projects" data-scroll class="btn primary">{_escape_html(profile['cta'])}</a>
+          <a href="#contact" data-scroll class="btn secondary">Iletisime Gec</a>
+        </div>
+        <div class="hero-metrics">
+          <article class="metric-card">
+            <span>Focus</span>
+            <strong>Portfolio clarity</strong>
+          </article>
+          <article class="metric-card">
+            <span>Palette</span>
+            <strong>Custom brief colors</strong>
+          </article>
+          <article class="metric-card">
+            <span>Build</span>
+            <strong>Responsive static site</strong>
+          </article>
+        </div>
+      </div>
+
+      <aside class="hero-panel reveal">
+        <p class="panel-kicker">Selected profile</p>
+        <h2>Intentional first impression</h2>
+        <p>Bu duzen, tek bir placeholder baslik yerine kim oldugunuzu, nasil calistiginizi ve ne sundugunuzu ayni ekranda anlatir.</p>
+        <div class="panel-stripes">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+      </aside>
+    </section>
+  </header>
+
+  <main class="container">
+    <section class="section-shell about-shell reveal" id="about">
+      <div>
+        <p class="section-label">About</p>
+        <h2>Kimlik, yetenek ve sonuc ayni anlatida toplandi.</h2>
+      </div>
+      <p class="section-copy">Klasik portfolyo bloklari yerine daha net bir akis kullanildi: giris, secilen isler, yetenek bandi ve iletisim gecisi. Renk karari brief'ten cekilir, duzen responsive kalir.</p>
+    </section>
+
+    <section class="section-shell project-showcase" id="projects">
+      <div class="section-heading reveal">
+        <p class="section-label">Featured Work</p>
+        <h2>Portfolyo istediginizde artik gercekten portfolyo uretiliyor.</h2>
+      </div>
+      <div class="project-grid">
+        {project_cards}
+      </div>
+    </section>
+
+    <section class="section-shell skills-shell reveal" id="skills">
+      <div class="section-heading">
+        <p class="section-label">Capabilities</p>
+        <h2>Sunum, arayuz ve teslimat dili ayni sistemde.</h2>
+      </div>
+      <div class="skill-cloud">
+        {skill_chips}
+      </div>
+    </section>
+{gallery_block}
+    <section class="section-shell contact-shell reveal" id="contact">
+      <div class="section-heading">
+        <p class="section-label">Contact</p>
+        <h2>Bir sonraki proje icin net bir cikis yolu.</h2>
+      </div>
+      {contact_body}
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>Generated as a high-signal portfolio scaffold.</p>
+  </footer>
+
+  <script src="./scripts/main.js"></script>
+</body>
+</html>
+"""
+
+    css = f""":root {{
+  --bg-start: {palette['bg1']};
+  --bg-end: {palette['bg2']};
+  --surface: rgba(255, 255, 255, 0.72);
+  --surface-strong: rgba(255, 255, 255, 0.9);
+  --surface-muted: rgba(255, 247, 237, 0.7);
+  --text: #1f160d;
+  --muted: #6b5b4d;
+  --line: rgba(120, 85, 46, 0.16);
+  --accent: {palette['accent']};
+  --accent-2: {palette['accent2']};
+  --shadow: 0 28px 80px rgba(74, 39, 14, 0.14);
+}}
+* {{ box-sizing: border-box; }}
+html {{ scroll-behavior: smooth; }}
+body {{
+  margin: 0;
+  min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
+  font-family: "Manrope", "Segoe UI", sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.82), transparent 32%),
+    linear-gradient(145deg, var(--bg-start) 0%, #fff8ef 38%, var(--bg-end) 100%);
+}}
+body[data-theme="dark"] {{
+  --surface: rgba(24, 16, 10, 0.78);
+  --surface-strong: rgba(31, 20, 12, 0.92);
+  --surface-muted: rgba(48, 30, 17, 0.78);
+  --text: #f7ecdf;
+  --muted: #dbc5af;
+  --line: rgba(255, 214, 170, 0.18);
+  --shadow: 0 28px 80px rgba(0, 0, 0, 0.34);
+}}
+a {{ color: inherit; text-decoration: none; }}
+.page-orb {{
+  position: fixed;
+  width: 36rem;
+  height: 36rem;
+  border-radius: 999px;
+  pointer-events: none;
+  filter: blur(18px);
+  opacity: 0.34;
+  z-index: 0;
+}}
+.orb-left {{
+  top: -12rem;
+  left: -10rem;
+  background: radial-gradient(circle, var(--accent) 0%, transparent 68%);
+}}
+.orb-right {{
+  right: -12rem;
+  top: 18rem;
+  background: radial-gradient(circle, var(--accent-2) 0%, transparent 68%);
+}}
+.site-header,
+.container,
+.site-footer {{
+  position: relative;
+  z-index: 1;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding-left: 28px;
+  padding-right: 28px;
+}}
+.topbar {{
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding-top: 24px;
+}}
+.brand-mark {{
+  font-family: "Space Grotesk", "Segoe UI", sans-serif;
+  font-size: 0.95rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}}
+.nav-links {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  color: var(--muted);
+  font-size: 0.96rem;
+}}
+.portfolio-hero {{
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.9fr);
+  gap: 24px;
+  padding: 44px 0 28px;
+  align-items: stretch;
+}}
+.hero-copy,
+.hero-panel,
+.section-shell {{
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(16px);
+}}
+.hero-copy {{
+  padding: 34px;
+}}
+.eyebrow,
+.section-label,
+.panel-kicker,
+.project-tag {{
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.76rem;
+  color: var(--muted);
+}}
+.hero-copy h1,
+.section-heading h2,
+.about-shell h2,
+.hero-panel h2 {{
+  margin: 12px 0 0;
+  font-family: "Space Grotesk", "Segoe UI", sans-serif;
+  line-height: 0.96;
+}}
+.hero-copy h1 {{
+  font-size: clamp(3.6rem, 10vw, 7rem);
+  max-width: 10ch;
+}}
+.lead,
+.section-copy,
+.hero-panel p {{
+  font-size: 1.05rem;
+  line-height: 1.7;
+  color: var(--muted);
+}}
+.hero-actions {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 28px;
+}}
+.hero-metrics {{
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 32px;
+}}
+.metric-card {{
+  padding: 14px 16px;
+  border-radius: 20px;
+  background: var(--surface-strong);
+  border: 1px solid var(--line);
+}}
+.metric-card span {{
+  display: block;
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-bottom: 10px;
+}}
+.metric-card strong {{
+  font-size: 0.98rem;
+}}
+.hero-panel {{
+  padding: 28px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0)),
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 22%, transparent), transparent 54%),
+    var(--surface-muted);
+}}
+.panel-stripes {{
+  display: grid;
+  gap: 10px;
+  margin-top: 24px;
+}}
+.panel-stripes span {{
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}}
+.container {{
+  display: grid;
+  gap: 18px;
+  padding-bottom: 38px;
+}}
+.section-shell {{
+  padding: 28px;
+}}
+.about-shell {{
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 24px;
+}}
+.project-grid {{
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 18px;
+}}
+.project-card {{
+  position: relative;
+  overflow: hidden;
+  min-height: 260px;
+  padding: 22px;
+  border-radius: 24px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.82), rgba(255,255,255,0.58));
+  border: 1px solid rgba(255,255,255,0.44);
+}}
+.project-card::after {{
+  content: "";
+  position: absolute;
+  inset: auto -24px -34px auto;
+  width: 160px;
+  height: 160px;
+  border-radius: 999px;
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 72%, white), transparent 68%);
+  opacity: 0.45;
+}}
+.project-card.alt::after {{
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent-2) 74%, white), transparent 68%);
+}}
+.project-card.tone {{
+  background: linear-gradient(180deg, rgba(255, 248, 239, 0.88), rgba(255, 238, 219, 0.72));
+}}
+.project-card h3 {{
+  margin: 14px 0 10px;
+  font-family: "Space Grotesk", "Segoe UI", sans-serif;
+  font-size: 1.42rem;
+}}
+.project-card p {{
+  color: var(--muted);
+  line-height: 1.65;
+}}
+.project-meta {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0;
+  margin: auto 0 0;
+  list-style: none;
+}}
+.project-meta li,
+.skill-chip {{
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: var(--surface-strong);
+  border: 1px solid var(--line);
+  font-size: 0.9rem;
+}}
+.skills-shell .section-heading {{
+  margin-bottom: 18px;
+}}
+.skill-cloud {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}}
+.gallery-grid {{
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}}
+.gallery-item {{
+  margin: 0;
+  overflow: hidden;
+  border-radius: 24px;
+  border: 1px solid var(--line);
+  background: var(--surface-strong);
+  box-shadow: var(--shadow);
+}}
+.gallery-item img {{
+  display: block;
+  width: 100%;
+  height: 280px;
+  object-fit: cover;
+}}
+.gallery-item figcaption {{
+  padding: 12px 14px;
+  color: var(--muted);
+}}
+.contact-shell {{
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 20px;
+  align-items: start;
+}}
+.lead-form,
+.contact-stack {{
+  display: grid;
+  gap: 12px;
+}}
+.contact-link {{
+  font-family: "Space Grotesk", "Segoe UI", sans-serif;
+  font-size: clamp(1.6rem, 4vw, 2.6rem);
+}}
+.contact-note {{
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.65;
+}}
+.btn {{
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0.9rem 1.2rem;
+  font: inherit;
+  cursor: pointer;
+  transition: transform 180ms ease, box-shadow 180ms ease, background 180ms ease;
+}}
+.btn:hover {{
+  transform: translateY(-2px);
+}}
+.btn.small {{
+  padding: 0.75rem 1rem;
+  font-size: 0.88rem;
+}}
+.btn.primary {{
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #fff;
+  box-shadow: 0 14px 34px rgba(249, 115, 22, 0.22);
+}}
+.btn.secondary {{
+  background: var(--surface-strong);
+  color: var(--text);
+  border-color: var(--line);
+}}
+.btn.ghost {{
+  background: transparent;
+  color: var(--text);
+  border-color: var(--line);
+}}
+input,
+textarea {{
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 14px 16px;
+  background: var(--surface-strong);
+  color: var(--text);
+  font: inherit;
+}}
+textarea {{
+  min-height: 148px;
+  resize: vertical;
+}}
+.site-footer {{
+  padding-top: 0;
+  padding-bottom: 26px;
+  color: var(--muted);
+}}
+@media (max-width: 980px) {{
+  .portfolio-hero,
+  .about-shell,
+  .contact-shell,
+  .project-grid,
+  .gallery-grid {{
+    grid-template-columns: 1fr;
+  }}
+  .hero-copy h1 {{
+    max-width: none;
+  }}
+}}
+@media (max-width: 720px) {{
+  .site-header,
+  .container,
+  .site-footer {{
+    padding-left: 18px;
+    padding-right: 18px;
+  }}
+  .topbar {{
+    flex-direction: column;
+    align-items: flex-start;
+  }}
+  .hero-copy,
+  .hero-panel,
+  .section-shell {{
+    border-radius: 22px;
+    padding: 22px;
+  }}
+  .hero-metrics {{
+    grid-template-columns: 1fr;
+  }}
+}}
+"""
+
+    js_lines = [
+        "document.addEventListener('DOMContentLoaded', () => {",
+        "  const qs = (id) => document.getElementById(id);",
+        "  for (const link of document.querySelectorAll('[data-scroll]')) {",
+        "    link.addEventListener('click', (event) => {",
+        "      const href = link.getAttribute('href') || '';",
+        "      if (!href.startsWith('#')) return;",
+        "      const target = document.querySelector(href);",
+        "      if (!target) return;",
+        "      event.preventDefault();",
+        "      target.scrollIntoView({ behavior: 'smooth', block: 'start' });",
+        "    });",
+        "  }",
+    ]
+    if features.get("theme_toggle"):
+        js_lines.extend(
+            [
+                "  const themeToggle = qs('themeToggle');",
+                "  themeToggle?.addEventListener('click', () => {",
+                "    const current = document.body.getAttribute('data-theme') || 'light';",
+                "    document.body.setAttribute('data-theme', current === 'dark' ? 'light' : 'dark');",
+                "  });",
+            ]
+        )
+    if features.get("contact_form"):
+        js_lines.extend(
+            [
+                "  const leadForm = qs('leadForm');",
+                "  const leadStatus = qs('leadStatus');",
+                "  leadForm?.addEventListener('submit', (event) => {",
+                "    event.preventDefault();",
+                "    if (leadStatus) leadStatus.textContent = 'Mesaj alindi. Geri donus yapilacak.';",
+                "    leadForm.reset();",
+                "  });",
+            ]
+        )
+    if features.get("motion"):
+        js_lines.extend(
+            [
+                "  if (window.gsap) {",
+                "    if (window.ScrollTrigger) window.gsap.registerPlugin(window.ScrollTrigger);",
+                "    window.gsap.from('.portfolio-hero', { opacity: 0, y: 20, duration: 0.9, ease: 'power2.out' });",
+                "    document.querySelectorAll('.reveal').forEach((node, index) => {",
+                "      window.gsap.from(node, {",
+                "        opacity: 0,",
+                "        y: 26,",
+                "        duration: 0.72,",
+                "        delay: Math.min(index * 0.05, 0.22),",
+                "        scrollTrigger: window.ScrollTrigger ? { trigger: node, start: 'top 90%' } : undefined,",
+                "      });",
+                "    });",
+                "  }",
+            ]
+        )
+    js_lines.extend(["  console.log('Elyan dynamic scaffold ready');", "});"])
+    return html, css, "\n".join(js_lines) + "\n"
 
 
 def _build_vanilla_assets(project_name: str, brief: str, theme: str) -> tuple[str, str, str, dict[str, Any]]:
     profile = _derive_web_profile(project_name, brief, theme)
+    if profile.get("layout") == "portfolio":
+        html, css, js = _build_portfolio_assets(profile)
+        return html, css, js, profile
+
     palette = profile["palette"]
     features = profile["features"]
     sections = profile["sections"]
@@ -914,18 +1715,47 @@ export default function RootLayout({ children }) {
             }
 
         for path, content in file_map.items():
+            if not str(content or "").strip():
+                return {
+                    "success": False,
+                    "error": f"EMPTY_CONTENT_BLOCKED: {path.name} icin bos icerik uretildi.",
+                    "error_code": "EMPTY_CONTENT_BLOCKED",
+                }
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
             files_written.append(str(path))
 
+        empty_files = [item for item in files_written if Path(item).exists() and Path(item).stat().st_size == 0]
+        if empty_files:
+            return {
+                "success": False,
+                "error": f"SCAFFOLD_VERIFY_FAILED: Bos dosyalar bulundu: {', '.join(empty_files)}",
+                "error_code": "SCAFFOLD_VERIFY_FAILED",
+                "files_created": files_written,
+            }
+
+        preview_source = ""
+        if files_written:
+            try:
+                preview_source = Path(files_written[0]).read_text(encoding="utf-8", errors="ignore")[:200]
+            except Exception:
+                preview_source = ""
+        total_bytes = sum(Path(item).stat().st_size for item in files_written if Path(item).exists())
+        digest = hashlib.sha256("".join(sorted(files_written)).encode("utf-8")).hexdigest()
+
         return {
             "success": True,
+            "ok": True,
             "project_name": project_name,
             "stack": actual_stack,
             "theme": theme,
             "brief": brief,
+            "path": str(project_dir),
             "project_dir": str(project_dir),
             "files_created": files_written,
+            "bytes_written": total_bytes,
+            "sha256": digest,
+            "preview_200_chars": preview_source,
             "message": f"Web scaffold olusturuldu: {project_dir}",
         }
     except Exception as exc:
@@ -1367,6 +2197,13 @@ async def generate_document_pack(
         if not valid or base_dir is None:
             return {"success": False, "error": msg}
 
+        if _looks_like_non_document_request(topic, brief):
+            return {
+                "success": False,
+                "error": "Belge paketi için yeterli içerik/brief yok veya istek belge dışı görünüyor.",
+                "error_code": "INVALID_DOCUMENT_BRIEF",
+            }
+
         safe_topic = _safe_project_slug(topic).replace("_", " ")
         pack_dir = (base_dir / f"{_safe_project_slug(topic)}_document_pack").resolve()
         pack_dir.mkdir(parents=True, exist_ok=True)
@@ -1558,7 +2395,7 @@ async def research_document_delivery(
     language: str = "tr",
     output_dir: str = "~/Desktop",
     include_word: bool = True,
-    include_excel: bool = True,
+    include_excel: bool = False,
     include_report: bool = True,
     source_policy: str = "trusted",
     min_reliability: float = 0.62,
@@ -1845,21 +2682,6 @@ async def research_document_delivery(
             dedup_outputs.append(key)
         outputs = dedup_outputs
 
-        note_path = delivery_dir / "DELIVERY_NOTE.txt"
-        note_path.write_text(
-            "\n".join(
-                [
-                    f"Research delivery hazır: {topic_clean}",
-                    "",
-                    f"Citation style: {citation_style}",
-                    "Kopya gönderimi için dosyalar:",
-                    *[f"- {p}" for p in outputs[:10]],
-                ]
-            ),
-            encoding="utf-8",
-        )
-        outputs.append(str(note_path))
-
         message_lines = [
             f"Araştırma + belge paketi hazır: {delivery_dir}",
             f"Konu: {topic_clean}",
@@ -1871,14 +2693,17 @@ async def research_document_delivery(
 
         return {
             "success": True,
+            "ok": True,
             "topic": topic_clean,
             "depth": normalized_depth,
             "source_policy": policy,
             "min_reliability": min_rel,
             "citation_style": citation_style,
             "include_bibliography": include_bibliography,
+            "path": str(delivery_dir),
             "delivery_dir": str(delivery_dir),
             "outputs": outputs,
+            "artifacts": outputs,
             "source_count": source_count,
             "finding_count": len(findings),
             "quality_summary": {

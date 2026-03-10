@@ -106,6 +106,13 @@ class AgentTeam:
             params = planner._sanitize_subtask_params(action, {}, name=step_text, goal=brief)
             specialist = self._select_specialist(action, step_text)
             gates = self._derive_gates(specialist, action, params)
+            objective, success_criteria = self._derive_success_contract(
+                brief=brief,
+                title=step_text,
+                specialist=specialist,
+                action=action,
+                params=params,
+            )
             depends_on = [tasks[-1].task_id] if tasks else []
             tasks.append(
                 TeamTask(
@@ -113,6 +120,8 @@ class AgentTeam:
                     specialist=specialist,
                     action=action,
                     params=params,
+                    objective=objective,
+                    success_criteria=success_criteria,
                     gates=gates,
                     depends_on=depends_on,
                     max_retries=max(0, int(self.config.max_retries_per_task or 0)),
@@ -138,7 +147,46 @@ class AgentTeam:
             gates.append("valid_html")
         elif path.endswith(".py"):
             gates.append("valid_python")
+        gates.append("tool_success")
         return self._dedupe(gates)
+
+    def _derive_success_contract(
+        self,
+        *,
+        brief: str,
+        title: str,
+        specialist: str,
+        action: str,
+        params: Dict[str, Any],
+    ) -> Tuple[str, List[str]]:
+        objective = str(title or brief or "").strip() or "Somut ve doğrulanabilir çıktı üret"
+        criteria: List[str] = []
+        if specialist == "researcher":
+            criteria.extend([
+                "Boş ve placeholder olmayan içerik üret",
+                "Kısa kanıt özeti ver",
+            ])
+        elif specialist == "qa":
+            criteria.extend([
+                "Doğrulama notu üret",
+                "Risk varsa açıkça yaz",
+            ])
+        elif specialist == "communicator":
+            criteria.extend([
+                "Sonucu kısa ve net özetle",
+                "Gereksiz teknik detay verme",
+            ])
+        else:
+            criteria.append("Somut bir çıktı üret")
+
+        a = str(action or "").strip().lower()
+        path = str((params or {}).get("path") or "").strip()
+        if a in {"write_file", "take_screenshot", "write_word", "write_excel"} or path:
+            criteria.append("Üretilen dosya yolu artifact listesinde olsun")
+            criteria.append("Dosya boş olmasın")
+        else:
+            criteria.append("Sonuç en az bir uygulanabilir çıktı içersin")
+        return objective, self._dedupe(criteria)
 
     @staticmethod
     def _quality_score(*, status: str, failed_gates: List[str], retry_count: int) -> float:
@@ -182,6 +230,8 @@ class AgentTeam:
                     specialist="researcher",
                     action="advanced_research",
                     params={"topic": brief, "depth": "standard"},
+                    objective="Görevi anlamlandır ve uygulanabilir araştırma çıktısı üret",
+                    success_criteria=["Boş olmayan araştırma özeti üret", "Placeholder içerik üretme"],
                     gates=["has_content", "no_placeholder"],
                 )
             )
@@ -191,6 +241,8 @@ class AgentTeam:
                     specialist="builder",
                     action="chat",
                     params={"message": f"Uygulanabilir bir çıktı üret: {brief}"},
+                    objective="Araştırma çıktısını uygulanabilir sonuca dönüştür",
+                    success_criteria=["Somut bir sonuç veya artifact üret", "Boş yanıt verme"],
                     gates=["has_content"],
                     depends_on=[tasks[0].task_id],
                 )
@@ -204,12 +256,21 @@ class AgentTeam:
             deps = list(getattr(st, "dependencies", []) or [])
             specialist = self._select_specialist(action, name, getattr(st, "action", ""))
             gates = self._derive_gates(specialist, action, params)
+            objective, success_criteria = self._derive_success_contract(
+                brief=brief,
+                title=name,
+                specialist=specialist,
+                action=action,
+                params=params,
+            )
             tasks.append(
                 TeamTask(
                     title=name,
                     specialist=specialist,
                     action=action,
                     params=params,
+                    objective=objective,
+                    success_criteria=success_criteria,
                     depends_on=deps,
                     gates=gates,
                     max_retries=max(0, int(self.config.max_retries_per_task or 0)),
@@ -241,6 +302,8 @@ class AgentTeam:
                         action=task.action,
                         params=payload,
                         description=brief,
+                        objective=str(task.objective or task.title or brief),
+                        success_criteria=list(task.success_criteria or []),
                         domain=task.specialist,
                         dependencies=list(task.depends_on or []),
                         gates=list(task.gates or []),
@@ -280,6 +343,8 @@ class AgentTeam:
                         "status": result.status,
                         "result": result.result,
                         "quality_score": q_score,
+                        "objective": str(task.objective or ""),
+                        "success_criteria": list(task.success_criteria or []),
                         "validation": {"passed": True, "failed_gates": []},
                     }
                 )
@@ -312,6 +377,8 @@ class AgentTeam:
                         "status": "retrying",
                         "result": result.result,
                         "quality_score": q_score,
+                        "objective": str(task.objective or ""),
+                        "success_criteria": list(task.success_criteria or []),
                         "validation": {"passed": False, "failed_gates": list(validation.failed_gates)},
                     }
                 )
@@ -347,6 +414,8 @@ class AgentTeam:
                     "status": "failed",
                     "result": fail_result,
                     "quality_score": q_score,
+                    "objective": str(task.objective or ""),
+                    "success_criteria": list(task.success_criteria or []),
                     "validation": {"passed": False, "failed_gates": list(validation.failed_gates)},
                 }
             )
@@ -396,7 +465,9 @@ class AgentTeam:
         completed = [t for t in final_tasks if t.status == "completed"]
         failed = [t for t in final_tasks if t.status == "failed"]
 
-        if failed and not completed:
+        total = max(1, len(final_tasks))
+        completion_ratio = len(completed) / float(total)
+        if completion_ratio < 0.6:
             status = "failed"
         elif failed:
             status = "partial"
@@ -414,7 +485,11 @@ class AgentTeam:
             notes.append("failed_tasks: " + ", ".join(t.title for t in failed[:10]))
         quality_values = [float(o.get("quality_score", 0.0) or 0.0) for o in outputs if "quality_score" in o]
         if quality_values:
-            notes.append(f"quality_avg: {round(sum(quality_values) / max(1, len(quality_values)), 2)}")
+            quality_avg = round(sum(quality_values) / max(1, len(quality_values)), 2)
+            notes.append(f"quality_avg: {quality_avg}")
+            if status == "success" and quality_avg < 0.7:
+                status = "partial"
+                notes.append("completion_gate: quality_avg_below_threshold")
         # Pull a compact message digest for final lead summary.
         digest = []
         for _ in range(20):

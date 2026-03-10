@@ -1,0 +1,34 @@
+[
+  {
+    "task_step": 1,
+    "task_step_name": "open_safari",
+    "step": 1,
+    "planned_action": {
+      "kind": "open_app",
+      "params": {
+        "app_name": "Safari"
+      }
+    },
+    "execution_result": {
+      "success": true,
+      "status": "success",
+      "message": "Safari focus attempted."
+    }
+  },
+  {
+    "task_step": 1,
+    "task_step_name": "recover_focus_safari",
+    "step": 1,
+    "planned_action": {
+      "kind": "open_app",
+      "params": {
+        "app_name": "Safari"
+      }
+    },
+    "execution_result": {
+      "success": true,
+      "status": "success",
+      "message": "Safari focus attempted."
+    }
+  }
+]

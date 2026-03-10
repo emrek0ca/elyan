@@ -1,0 +1,54 @@
+[
+  {
+    "task_step": 1,
+    "task_step_name": "open_page",
+    "step": 1,
+    "action": "open",
+    "params": {
+      "url": "https://search.local",
+      "selector": "",
+      "text": ""
+    },
+    "result": {
+      "success": true,
+      "url": "https://search.local",
+      "title": "Search",
+      "status_code": 200,
+      "dom_available": true
+    }
+  },
+  {
+    "task_step": 2,
+    "task_step_name": "fill_q",
+    "step": 1,
+    "action": "type",
+    "params": {
+      "url": "",
+      "selector": "#q",
+      "text": "kittens"
+    },
+    "result": {
+      "success": true,
+      "selector": "#q",
+      "text": "kittens",
+      "dom_available": true
+    }
+  },
+  {
+    "task_step": 3,
+    "task_step_name": "submit_form",
+    "step": 1,
+    "action": "submit",
+    "params": {
+      "url": "",
+      "selector": "#q",
+      "text": ""
+    },
+    "result": {
+      "success": true,
+      "selector": "#q",
+      "key": "Enter",
+      "dom_available": true
+    }
+  }
+]

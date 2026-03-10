@@ -1,0 +1,97 @@
+{
+  "run_id": "run_a5a597b6ab31",
+  "user_input": "word dosyası oluştur ve içine köpek araştırmasını yaz",
+  "task_spec": {},
+  "metadata": {
+    "action": "multi_task",
+    "job_type": "file_operations",
+    "capability_domain": "research",
+    "workflow_id": "research_workflow",
+    "hybrid_model": {
+      "role": "inference",
+      "routing_role": "router",
+      "critic_role": "critic",
+      "tool_first": false,
+      "prefer_local": true,
+      "tier": "balanced"
+    },
+    "channel": "cli",
+    "user_id": "local",
+    "status": "partial"
+  },
+  "task_state": {
+    "task_id": "task_8ffcb35e90",
+    "objective": "word dosyası oluştur ve içine köpek araştırmasını yaz",
+    "context": {
+      "user_input": "word dosyası oluştur ve içine köpek araştırmasını yaz",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "multi_task",
+      "job_type": "file_operations",
+      "capability_domain": "research",
+      "workflow_id": "research_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "chat",
+        "description": "word dosyası oluştur"
+      },
+      {
+        "id": "subtask_2",
+        "action": "write_file",
+        "description": "içine köpek araştırmasını yaz"
+      }
+    ],
+    "artifacts": [],
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773156372.774663,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773156372.791984,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773156372.800082,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773156372.926344,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 3
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1773156372.938587,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "multi_task",
+          "job_type": "file_operations"
+        }
+      }
+    ],
+    "created_at": 1773156372.7746618,
+    "updated_at": 1773156372.938587
+  },
+  "written_at": 1773156372.9488692
+}

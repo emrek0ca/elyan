@@ -34,7 +34,7 @@ def test_multi_task_split_for_open_and_research_with_plain_ve():
     tasks = result.get("tasks", [])
     assert len(tasks) >= 2
     assert tasks[0].get("action") == "open_app"
-    assert any(t.get("action") in {"research", "web_search"} for t in tasks)
+    assert any(t.get("action") in {"research", "web_search", "research_document_delivery"} for t in tasks)
 
 
 def test_open_and_research_without_connector_still_multi_task():
@@ -44,8 +44,11 @@ def test_open_and_research_without_connector_still_multi_task():
     tasks = result.get("tasks", [])
     assert len(tasks) >= 2
     assert tasks[0].get("action") == "open_app"
-    assert tasks[1].get("action") in {"research", "web_search"}
-    topic = str(tasks[1].get("params", {}).get("topic", ""))
+    assert tasks[1].get("action") in {"research", "web_search", "research_document_delivery"}
+    topic = str(
+        tasks[1].get("params", {}).get("topic", "")
+        or tasks[1].get("params", {}).get("brief", "")
+    )
     assert "köpekler" in topic
 
 
@@ -128,6 +131,16 @@ def test_excel_parser_extracts_headers_and_content():
     assert "günlük gelir" in str(params.get("content", ""))
 
 
+def test_write_file_parser_handles_desktop_note_natural_language():
+    parser = IntentParser()
+    result = parser.parse("masaüstüne not olarak Ahmet'e borcum var yaz")
+    assert result.get("action") == "write_file"
+    params = result.get("params", {})
+    assert "Desktop" in str(params.get("path", ""))
+    assert str(params.get("path", "")).endswith("not.txt")
+    assert "Ahmet'e borcum var" in str(params.get("content", ""))
+
+
 def test_multi_task_split_handles_then_connector():
     parser = IntentParser()
     result = parser.parse("safariyi aç sonra köpekler hakkında araştırma yap")
@@ -135,13 +148,13 @@ def test_multi_task_split_handles_then_connector():
     tasks = result.get("tasks", [])
     assert len(tasks) >= 2
     assert tasks[0].get("action") == "open_app"
-    assert tasks[1].get("action") in {"research", "web_search"}
+    assert tasks[1].get("action") in {"research", "web_search", "research_document_delivery"}
 
 
 def test_research_parser_infers_academic_policy():
     parser = IntentParser()
     result = parser.parse("köpek sağlığı hakkında akademik kaynaklarla araştırma yap, güvenilirlik en az %80")
-    assert result.get("action") == "research"
+    assert result.get("action") == "research_document_delivery"
     params = result.get("params", {})
     assert params.get("source_policy") == "academic"
     assert params.get("min_reliability") == 0.8
@@ -150,9 +163,12 @@ def test_research_parser_infers_academic_policy():
 def test_research_parser_strips_copy_noise_from_topic():
     parser = IntentParser()
     result = parser.parse("köpekler hakkında araştırma yap ve kopyala")
-    assert result.get("action") in {"research", "multi_task"}
-    if result.get("action") == "research":
-        topic = str(result.get("params", {}).get("topic", "")).lower()
+    assert result.get("action") in {"research", "research_document_delivery", "multi_task"}
+    if result.get("action") in {"research", "research_document_delivery"}:
+        topic = str(
+            result.get("params", {}).get("topic", "")
+            or result.get("params", {}).get("brief", "")
+        ).lower()
         assert "kopyala" not in topic
         assert "köpekler" in topic
 
@@ -224,3 +240,26 @@ def test_dashboard_no_browser_mode_does_not_open(monkeypatch):
     monkeypatch.setattr(dashboard.webbrowser, "open", lambda url: opened.append(url))
     dashboard.open_dashboard(port=18888, no_browser=True)
     assert opened == []
+
+
+def test_dashboard_default_mode_uses_product_url(monkeypatch):
+    opened = []
+    monkeypatch.setattr(dashboard.webbrowser, "open", lambda url: opened.append(url))
+
+    dashboard.open_dashboard(port=18888)
+
+    assert opened == ["http://localhost:18888/product"]
+
+
+def test_dashboard_ops_mode_uses_tokenized_ops_url(monkeypatch):
+    monkeypatch.setattr(dashboard.elyan_config, "get", lambda key, default=None: "" if key == "gateway.admin.token" else 18888)
+    saved = []
+    monkeypatch.setattr(dashboard.elyan_config, "set", lambda key, value: saved.append((key, value)))
+    monkeypatch.setattr(dashboard.secrets, "token_urlsafe", lambda n: "ops-token")
+    opened = []
+    monkeypatch.setattr(dashboard.webbrowser, "open", lambda url: opened.append(url))
+
+    dashboard.open_dashboard(port=18888, ops=True)
+
+    assert saved == [("gateway.admin.token", "ops-token")]
+    assert opened == ["http://localhost:18888/ops?token=ops-token"]

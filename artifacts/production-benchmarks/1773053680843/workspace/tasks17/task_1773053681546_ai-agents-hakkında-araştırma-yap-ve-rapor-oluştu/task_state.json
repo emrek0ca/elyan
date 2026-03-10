@@ -1,0 +1,511 @@
+{
+  "version": 1,
+  "task_id": "task_1773053681546_ai-agents-hakkında-araştırma-yap-ve-rapor-oluştu",
+  "name": "ai-agents-hakkında-araştırma-yap-ve-rapor-oluştur",
+  "goal": "AI agents hakkında araştırma yap ve rapor oluştur",
+  "status": "failed",
+  "created_at": 1773053681.546238,
+  "updated_at": 1773053681.553853,
+  "current_step": 1,
+  "completed_steps": [],
+  "failed_steps": [
+    {
+      "step_index": 1,
+      "name": "research_document_delivery",
+      "kind": "system",
+      "attempts": 2,
+      "failed_codes": [
+        "ARTIFACT_MISSING",
+        "EMPTY_FILE_OUTPUT"
+      ],
+      "message": "AI agents report ready."
+    }
+  ],
+  "retry_counts": {
+    "1": 1
+  },
+  "repair_history": [
+    {
+      "step_index": 1,
+      "name": "research_document_delivery",
+      "kind": "system",
+      "attempt": 1,
+      "retry_count": 1,
+      "failed_codes": [
+        "ARTIFACT_MISSING",
+        "EMPTY_FILE_OUTPUT"
+      ],
+      "strategy": "rerun_step",
+      "status": "retry_scheduled",
+      "timestamp": 1773053681.550055
+    }
+  ],
+  "replan_history": [],
+  "replan_count": 0,
+  "last_failure_reason": "ARTIFACT_MISSING",
+  "latest_observation": {
+    "step_index": 1,
+    "failed_codes": [
+      "ARTIFACT_MISSING",
+      "EMPTY_FILE_OUTPUT"
+    ],
+    "ui_state": {},
+    "browser_state": {},
+    "desktop_host_state": {
+      "version": 1,
+      "updated_at": 1773053681.5478568,
+      "frontmost_app": "",
+      "active_window": {},
+      "last_screenshot": "",
+      "last_ui_state": {},
+      "current_task_state": {},
+      "target_cache": {},
+      "recent_action_logs": [],
+      "verifier_outcomes": [],
+      "last_instruction": "",
+      "last_mode": "",
+      "last_status": ""
+    },
+    "recovery_hints": {},
+    "task_state": {}
+  },
+  "last_ui_state": {},
+  "browser_state": {},
+  "desktop_host_state": {
+    "version": 1,
+    "updated_at": 1773053681.5478568,
+    "frontmost_app": "",
+    "active_window": {},
+    "last_screenshot": "",
+    "last_ui_state": {},
+    "current_task_state": {},
+    "target_cache": {},
+    "recent_action_logs": [],
+    "verifier_outcomes": [],
+    "last_instruction": "",
+    "last_mode": "",
+    "last_status": ""
+  },
+  "artifacts": [],
+  "verifier_outcomes": [
+    {
+      "step_index": 1,
+      "name": "research_document_delivery",
+      "kind": "system",
+      "verification": {
+        "ok": false,
+        "status": "failed",
+        "checks": [
+          {
+            "code": "step_result_success",
+            "passed": true,
+            "details": {
+              "status": "success"
+            }
+          },
+          {
+            "code": "artifact_count_min",
+            "passed": false,
+            "details": {
+              "actual": 0,
+              "expected": 2
+            }
+          },
+          {
+            "code": "artifacts_exist",
+            "passed": false,
+            "details": {
+              "artifact_count": 0
+            }
+          },
+          {
+            "code": "artifacts_non_empty",
+            "passed": false,
+            "details": {
+              "artifact_count": 0
+            }
+          }
+        ],
+        "failed": [
+          "artifact_count_min",
+          "artifacts_exist",
+          "artifacts_non_empty"
+        ],
+        "failed_codes": [
+          "ARTIFACT_MISSING",
+          "EMPTY_FILE_OUTPUT"
+        ],
+        "repairable": false,
+        "summary": "scenario verification for research_document_delivery",
+        "evidence_refs": [
+          {
+            "type": "ui_state",
+            "frontmost_app": "",
+            "window_title": ""
+          },
+          {
+            "type": "browser_state",
+            "url": "",
+            "title": ""
+          }
+        ],
+        "metrics": {
+          "action_log_count": 1,
+          "verifier_outcome_count": 0
+        }
+      }
+    },
+    {
+      "step_index": 1,
+      "name": "research_document_delivery",
+      "kind": "system",
+      "verification": {
+        "ok": false,
+        "status": "failed",
+        "checks": [
+          {
+            "code": "step_result_success",
+            "passed": true,
+            "details": {
+              "status": "success"
+            }
+          },
+          {
+            "code": "artifact_count_min",
+            "passed": false,
+            "details": {
+              "actual": 0,
+              "expected": 2
+            }
+          },
+          {
+            "code": "artifacts_exist",
+            "passed": false,
+            "details": {
+              "artifact_count": 0
+            }
+          },
+          {
+            "code": "artifacts_non_empty",
+            "passed": false,
+            "details": {
+              "artifact_count": 0
+            }
+          }
+        ],
+        "failed": [
+          "artifact_count_min",
+          "artifacts_exist",
+          "artifacts_non_empty"
+        ],
+        "failed_codes": [
+          "ARTIFACT_MISSING",
+          "EMPTY_FILE_OUTPUT"
+        ],
+        "repairable": false,
+        "summary": "scenario verification for research_document_delivery",
+        "evidence_refs": [
+          {
+            "type": "ui_state",
+            "frontmost_app": "",
+            "window_title": ""
+          },
+          {
+            "type": "browser_state",
+            "url": "",
+            "title": ""
+          }
+        ],
+        "metrics": {
+          "action_log_count": 1,
+          "verifier_outcome_count": 0
+        }
+      }
+    }
+  ],
+  "metadata": {
+    "request": "AI agents hakkında araştırma yap ve rapor oluştur",
+    "planner": "live_operator_task_planner_v1",
+    "plan": {
+      "name": "ai-agents-hakkında-araştırma-yap-ve-rapor-oluştur",
+      "goal": "AI agents hakkında araştırma yap ve rapor oluştur",
+      "steps": [
+        {
+          "kind": "system",
+          "name": "research_document_delivery",
+          "tool": "research_document_delivery",
+          "params": {
+            "topic": "AI agents",
+            "language": "tr"
+          },
+          "verify": {
+            "artifact_count_min": 2,
+            "artifacts_exist": true,
+            "artifacts_non_empty": true
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        }
+      ]
+    },
+    "planning_trace": {
+      "request": "AI agents hakkında araştırma yap ve rapor oluştur",
+      "planning_request": "AI agents hakkında araştırma yap ve rapor oluştur",
+      "matched_rules": [
+        "research_document_flow"
+      ],
+      "assumptions": [],
+      "missing_inputs": [],
+      "extracted": {
+        "app_name": "",
+        "app_sequence": [],
+        "browser_app": "",
+        "url": "",
+        "urls": [],
+        "typed_text": "",
+        "named_field_values": [],
+        "field_label": "",
+        "selector": "",
+        "button_label": "",
+        "button_sequence": [],
+        "research_topic": "AI agents"
+      },
+      "bounded": true,
+      "safe_mode": "deterministic"
+    },
+    "original_plan": {
+      "name": "ai-agents-hakkında-araştırma-yap-ve-rapor-oluştur",
+      "goal": "AI agents hakkında araştırma yap ve rapor oluştur",
+      "steps": [
+        {
+          "kind": "system",
+          "name": "research_document_delivery",
+          "tool": "research_document_delivery",
+          "params": {
+            "topic": "AI agents",
+            "language": "tr"
+          },
+          "verify": {
+            "artifact_count_min": 2,
+            "artifacts_exist": true,
+            "artifacts_non_empty": true
+          },
+          "repair_policy": {
+            "max_retries": 1
+          }
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_index": 1,
+      "name": "research_document_delivery",
+      "kind": "system",
+      "status": "failed",
+      "attempts": 2,
+      "verification": {
+        "ok": false,
+        "status": "failed",
+        "checks": [
+          {
+            "code": "step_result_success",
+            "passed": true,
+            "details": {
+              "status": "success"
+            }
+          },
+          {
+            "code": "artifact_count_min",
+            "passed": false,
+            "details": {
+              "actual": 0,
+              "expected": 2
+            }
+          },
+          {
+            "code": "artifacts_exist",
+            "passed": false,
+            "details": {
+              "artifact_count": 0
+            }
+          },
+          {
+            "code": "artifacts_non_empty",
+            "passed": false,
+            "details": {
+              "artifact_count": 0
+            }
+          }
+        ],
+        "failed": [
+          "artifact_count_min",
+          "artifacts_exist",
+          "artifacts_non_empty"
+        ],
+        "failed_codes": [
+          "ARTIFACT_MISSING",
+          "EMPTY_FILE_OUTPUT"
+        ],
+        "repairable": false,
+        "summary": "scenario verification for research_document_delivery",
+        "evidence_refs": [
+          {
+            "type": "ui_state",
+            "frontmost_app": "",
+            "window_title": ""
+          },
+          {
+            "type": "browser_state",
+            "url": "",
+            "title": ""
+          }
+        ],
+        "metrics": {
+          "action_log_count": 1,
+          "verifier_outcome_count": 0
+        }
+      },
+      "message": "AI agents report ready.",
+      "error": "",
+      "error_code": "",
+      "screenshots": [],
+      "artifacts": [],
+      "result": {
+        "success": true,
+        "status": "success",
+        "message": "AI agents report ready.",
+        "summary": "AI agents report ready.",
+        "tool_result": {
+          "success": true,
+          "status": "success",
+          "message": "AI agents report ready.",
+          "summary": "AI agents report ready.",
+          "artifacts": [
+            {
+              "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/research17/research_report.md",
+              "type": "text"
+            },
+            {
+              "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/research17/sources.json",
+              "type": "json"
+            }
+          ]
+        },
+        "post_observation": {},
+        "ui_state": {},
+        "screenshots": [],
+        "artifacts": [],
+        "action_logs": [
+          {
+            "step": 1,
+            "planned_action": {
+              "kind": "research_document_delivery",
+              "params": {
+                "topic": "AI agents",
+                "language": "tr"
+              }
+            },
+            "execution_result": {
+              "success": true,
+              "status": "success",
+              "message": "AI agents report ready.",
+              "summary": "AI agents report ready.",
+              "artifacts": [
+                {
+                  "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/research17/research_report.md",
+                  "type": "text"
+                },
+                {
+                  "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/research17/sources.json",
+                  "type": "json"
+                }
+              ]
+            }
+          }
+        ],
+        "verifier_outcomes": [],
+        "task_state": {}
+      }
+    }
+  ],
+  "step_definitions": [
+    {
+      "kind": "system",
+      "name": "research_document_delivery",
+      "tool": "research_document_delivery",
+      "params": {
+        "topic": "AI agents",
+        "language": "tr"
+      },
+      "verify": {
+        "artifact_count_min": 2,
+        "artifacts_exist": true,
+        "artifacts_non_empty": true
+      },
+      "repair_policy": {
+        "max_retries": 1
+      }
+    }
+  ],
+  "action_logs": [
+    {
+      "task_step": 1,
+      "task_step_name": "research_document_delivery",
+      "step": 1,
+      "planned_action": {
+        "kind": "research_document_delivery",
+        "params": {
+          "topic": "AI agents",
+          "language": "tr"
+        }
+      },
+      "execution_result": {
+        "success": true,
+        "status": "success",
+        "message": "AI agents report ready.",
+        "summary": "AI agents report ready.",
+        "artifacts": [
+          {
+            "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/research17/research_report.md",
+            "type": "text"
+          },
+          {
+            "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/research17/sources.json",
+            "type": "json"
+          }
+        ]
+      }
+    },
+    {
+      "task_step": 1,
+      "task_step_name": "research_document_delivery",
+      "step": 1,
+      "planned_action": {
+        "kind": "research_document_delivery",
+        "params": {
+          "topic": "AI agents",
+          "language": "tr"
+        }
+      },
+      "execution_result": {
+        "success": true,
+        "status": "success",
+        "message": "AI agents report ready.",
+        "summary": "AI agents report ready.",
+        "artifacts": [
+          {
+            "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/research17/research_report.md",
+            "type": "text"
+          },
+          {
+            "path": "/Users/emrekoca/Desktop/bot/artifacts/production-benchmarks/1773053680843/workspace/research17/sources.json",
+            "type": "json"
+          }
+        ]
+      }
+    }
+  ],
+  "target_decisions": []
+}

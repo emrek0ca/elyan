@@ -1,0 +1,36 @@
+{
+  "run_id": "run_51cc87416596",
+  "started_at": 1772928801.1347609,
+  "completed_at": 1772928801.2669928,
+  "status": "partial",
+  "error": "direct_intent_failed:research_document_delivery; completion:missing_artifacts",
+  "steps": [
+    {
+      "step": "step_1",
+      "tool": "research_document_delivery",
+      "status": "failed",
+      "input_hash": "983709b2c17897ee6e82e0fd6abbb47aa899b6d687150c7c9b8421b335197c36",
+      "params_hash": "8785fd51b648da6b94d11bb2310c5ae6a9e35f08c83ec00d39a421fa3e13c46b",
+      "result_hash": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "duration_ms": 1,
+      "ts": 1772928801.261148
+    },
+    {
+      "step": "köpekler araştır",
+      "tool": "advanced_research",
+      "status": "success",
+      "input_hash": "9d18cfaa3dd19d9cb17b98631845c50fb64e802a9e00efa4267bc9afbe29ad4a",
+      "params_hash": "68b3702654a49f1d1cab4576d54ee5cc19906e14b2563a6c5a7c82105d87858b",
+      "result_hash": "715f90acbcef850a1e4ee2ab8dde7164b283d7d17e6b7f77fa403647261df2ac",
+      "duration_ms": 1,
+      "ts": 1772928801.2650502
+    }
+  ],
+  "artifacts": [],
+  "metadata": {
+    "action": "research_document_delivery",
+    "job_type": "research_report",
+    "channel": "cli",
+    "user_id": "local"
+  }
+}

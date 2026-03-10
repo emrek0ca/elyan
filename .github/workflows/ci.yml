@@ -130,7 +130,7 @@ jobs:
 
   # ─── 5. Benchmark Suite ─────────────────────────────────────────────────────
   benchmark:
-    name: Performance Benchmark
+    name: Production Path Benchmark
     runs-on: ubuntu-latest
     needs: [test]
     steps:
@@ -145,18 +145,24 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
+          pip install pytest pytest-asyncio
 
-      - name: Run benchmark suite
+      - name: Run production benchmark suite
         env:
           PYTHONPATH: ${{ github.workspace }}
           ELYAN_ENV: test
-        run: python scripts/benchmark.py --json --output benchmark-results.json
+        run: |
+          python scripts/run_production_path_benchmarks.py \
+            --reports-root "${{ github.workspace }}/artifacts/production-benchmarks" \
+            --min-pass-count 5 \
+            --require-perfect
 
       - name: Upload benchmark results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-results
-          path: benchmark-results.json
+          name: production-benchmark-results
+          path: ${{ github.workspace }}/artifacts/production-benchmarks
 
   # ─── 5b. Regression Pipeline ─────────────────────────────────────────────────
   regression:
@@ -240,7 +246,7 @@ jobs:
   release:
     name: Docker Push (Release)
     runs-on: ubuntu-latest
-    needs: [lint, test, regression, docker]
+    needs: [lint, test, benchmark, regression, docker]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4

@@ -1,0 +1,19 @@
+[
+  {
+    "kind": "system",
+    "name": "research_document_delivery",
+    "tool": "research_document_delivery",
+    "params": {
+      "topic": "AI agents",
+      "language": "tr"
+    },
+    "verify": {
+      "artifact_count_min": 2,
+      "artifacts_exist": true,
+      "artifacts_non_empty": true
+    },
+    "repair_policy": {
+      "max_retries": 1
+    }
+  }
+]

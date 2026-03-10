@@ -5,6 +5,7 @@ import json
 import inspect
 import urllib.request
 import subprocess
+import urllib.parse
 from collections import deque
 import psutil
 from pathlib import Path
@@ -591,6 +592,30 @@ def gateway_health(as_json: bool = False, port: int | None = None):
         print(f"❌  UNHEALTHY — port {gateway_port}")
         if payload.get("error"):
             print(f"    Error: {payload['error']}")
+
+
+def gateway_reload(port: int | None = None, as_json: bool = False):
+    gateway_port = int(port or DEFAULT_PORT)
+    url = f"http://127.0.0.1:{gateway_port}/api/channels/sync"
+    try:
+        req = urllib.request.Request(url, method="POST")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        payload = {"ok": False, "message": f"Gateway reload failed: {exc}", "port": gateway_port}
+        if as_json:
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+        else:
+            print(f"❌  {payload['message']}")
+        return
+
+    if as_json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return
+    if data.get("ok"):
+        print(f"✅  {data.get('message', 'Gateway runtime reload tamamlandı.')}")
+    else:
+        print(f"❌  {data.get('message', 'Gateway runtime reload başarısız.')}")
 
 
 def gateway_logs(tail: int = 50, level: str = "info", filter_term: str | None = None):

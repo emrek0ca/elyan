@@ -1,0 +1,3 @@
+direct_intent_failed:screen_workflow
+completion:missing_screen_summary
+completion:no_successful_tool_result

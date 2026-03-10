@@ -1,0 +1,22 @@
+[
+  {
+    "step_index": 2,
+    "rationale": "skip_already_satisfied_steps",
+    "trace": {
+      "trigger": "success",
+      "step_index": 1,
+      "failed_codes": [],
+      "current_step_name": "open_safari",
+      "actions": [
+        {
+          "kind": "skip_already_satisfied_steps",
+          "skipped": [
+            "click_continue"
+          ]
+        }
+      ]
+    },
+    "new_step_names": [],
+    "timestamp": 1773053680.905041
+  }
+]
