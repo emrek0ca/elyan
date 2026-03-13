@@ -16,8 +16,10 @@ def _looks_like_file_path(value: str) -> bool:
 
 def infer_artifact_type(path: str, explicit_type: str = "") -> str:
     declared = str(explicit_type or "").strip().lower()
-    if declared in {"file", "image", "text"}:
+    if declared in {"file", "image", "text", "directory"}:
         return declared
+    if declared in {"dir", "folder"}:
+        return "directory"
     suffix = Path(str(path or "")).suffix.lower()
     if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
         return "image"
@@ -174,7 +176,25 @@ def collect_artifacts(payload: Any, *, tool: str = "", source: str = "execution"
     deduped: Dict[str, ArtifactRecord] = {}
     for artifact in candidates:
         key = str(artifact.path or "").strip()
-        if key and key not in deduped:
+        if not key:
+            continue
+        existing = deduped.get(key)
+        if existing is None:
+            deduped[key] = artifact
+            continue
+        existing_score = (
+            1 if existing.type != "file" else 0,
+            1 if bool(existing.mime) else 0,
+            1 if bool(existing.size_bytes) else 0,
+            1 if bool(existing.sha256) else 0,
+        )
+        candidate_score = (
+            1 if artifact.type != "file" else 0,
+            1 if bool(artifact.mime) else 0,
+            1 if bool(artifact.size_bytes) else 0,
+            1 if bool(artifact.sha256) else 0,
+        )
+        if candidate_score > existing_score:
             deduped[key] = artifact
     return list(deduped.values())
 

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-TASK_SPEC_SCHEMA_VERSION = "1.1"
+TASK_SPEC_SCHEMA_VERSION = "1.2"
 _SCHEMA_PATH = Path(__file__).with_name("task_spec.schema.json")
 _CACHED_SCHEMA: Dict[str, Any] | None = None
 
@@ -123,22 +123,52 @@ def _validate_checks(checks: Any, prefix: str, errors: List[str]) -> None:
             errors.append(f"invalid:{prefix}[{cidx}].type:{ctype}")
 
 
+def _has_dependency_cycle(deps_by_step: Dict[str, List[str]]) -> bool:
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def _dfs(node: str) -> bool:
+        if node in visiting:
+            return True
+        if node in visited:
+            return False
+        visiting.add(node)
+        for dep in deps_by_step.get(node, []):
+            if dep and _dfs(dep):
+                return True
+        visiting.remove(node)
+        visited.add(node)
+        return False
+
+    for node in deps_by_step.keys():
+        if _dfs(node):
+            return True
+    return False
+
+
 def _manual_validate(task_spec: Any) -> Tuple[bool, List[str]]:
     errors: List[str] = []
     if not isinstance(task_spec, dict):
         return False, ["spec_not_dict"]
 
     required_root = (
+        "task_id",
         "intent",
         "version",
         "goal",
+        "user_goal",
+        "entities",
+        "deliverables",
         "constraints",
         "context_assumptions",
         "artifacts_expected",
         "checks",
         "rollback",
         "required_tools",
+        "tool_candidates",
+        "priority",
         "risk_level",
+        "success_criteria",
         "timeouts",
         "retries",
         "steps",
@@ -147,6 +177,9 @@ def _manual_validate(task_spec: Any) -> Tuple[bool, List[str]]:
         if key not in task_spec:
             errors.append(f"missing:{key}")
 
+    task_id = str(task_spec.get("task_id") or "").strip()
+    if not task_id:
+        errors.append("invalid:task_id")
     intent = str(task_spec.get("intent") or "").strip().lower()
     if intent not in _ALLOWED_INTENTS:
         errors.append("invalid:intent")
@@ -156,6 +189,20 @@ def _manual_validate(task_spec: Any) -> Tuple[bool, List[str]]:
     goal = str(task_spec.get("goal") or "").strip()
     if not goal:
         errors.append("invalid:goal")
+    user_goal = str(task_spec.get("user_goal") or "").strip()
+    if not user_goal:
+        errors.append("invalid:user_goal")
+    slots = task_spec.get("slots")
+    if slots is not None and not isinstance(slots, dict):
+        errors.append("invalid:slots")
+    entities = task_spec.get("entities")
+    if not isinstance(entities, dict):
+        errors.append("invalid:entities")
+    success_criteria_root = task_spec.get("success_criteria")
+    if not isinstance(success_criteria_root, list) or not success_criteria_root:
+        errors.append("invalid:success_criteria")
+    elif any(not str(x or "").strip() for x in success_criteria_root):
+        errors.append("invalid:success_criteria.item")
 
     if not isinstance(task_spec.get("constraints"), dict):
         errors.append("invalid:constraints")
@@ -167,6 +214,23 @@ def _manual_validate(task_spec: Any) -> Tuple[bool, List[str]]:
         errors.append("invalid:checks")
     if not isinstance(task_spec.get("rollback"), list):
         errors.append("invalid:rollback")
+    deliverables = task_spec.get("deliverables")
+    if not isinstance(deliverables, list) or not deliverables:
+        errors.append("invalid:deliverables")
+    else:
+        for didx, item in enumerate(deliverables, start=1):
+            if not isinstance(item, dict):
+                errors.append(f"invalid:deliverables[{didx}]")
+                continue
+            name = str(item.get("name") or "").strip()
+            kind = str(item.get("kind") or "").strip().lower()
+            required = item.get("required")
+            if not name:
+                errors.append(f"missing:deliverables[{didx}].name")
+            if kind not in {"file", "directory", "response", "report", "document", "artifact"}:
+                errors.append(f"invalid:deliverables[{didx}].kind")
+            if not isinstance(required, bool):
+                errors.append(f"invalid:deliverables[{didx}].required")
 
     artifacts_expected = task_spec.get("artifacts_expected")
     if isinstance(artifacts_expected, list):
@@ -189,6 +253,15 @@ def _manual_validate(task_spec: Any) -> Tuple[bool, List[str]]:
         errors.append("invalid:required_tools")
     elif any(not str(t or "").strip() for t in tools):
         errors.append("invalid:required_tools.item")
+    tool_candidates = task_spec.get("tool_candidates")
+    if not isinstance(tool_candidates, list) or not tool_candidates:
+        errors.append("invalid:tool_candidates")
+    elif any(not str(t or "").strip() for t in tool_candidates):
+        errors.append("invalid:tool_candidates.item")
+
+    priority = str(task_spec.get("priority") or "").strip().lower()
+    if priority not in {"low", "normal", "high", "critical"}:
+        errors.append("invalid:priority")
 
     risk = str(task_spec.get("risk_level") or "").strip().lower()
     if risk not in {"low", "med", "high", "guarded", "dangerous"}:
@@ -303,6 +376,12 @@ def _manual_validate(task_spec: Any) -> Tuple[bool, List[str]]:
                         expected = str(check.get("text") or step.get("expect_contains") or "").strip()
                         if not expected:
                             errors.append(f"invalid:steps[{idx}].checks[{cidx}].contains_text")
+        if "success_criteria" in step:
+            step_criteria = step.get("success_criteria")
+            if not isinstance(step_criteria, list):
+                errors.append(f"invalid:steps[{idx}].success_criteria")
+            elif any(not str(x or "").strip() for x in step_criteria):
+                errors.append(f"invalid:steps[{idx}].success_criteria.item")
 
         raw_deps = step.get("depends_on") if step.get("depends_on") is not None else step.get("dependencies")
         deps: List[str] = []
@@ -323,6 +402,8 @@ def _manual_validate(task_spec: Any) -> Tuple[bool, List[str]]:
                 errors.append(f"invalid:steps.depends_on.self:{step_id}")
             elif dep not in step_ids:
                 errors.append(f"invalid:steps.depends_on.unknown:{step_id}->{dep}")
+    if not any(e.startswith("invalid:steps.depends_on.unknown:") for e in errors) and _has_dependency_cycle(deps_by_step):
+        errors.append("invalid:steps.depends_on.cycle")
 
     checks_payload = task_spec.get("checks")
     if isinstance(checks_payload, list):

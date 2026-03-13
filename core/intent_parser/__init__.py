@@ -116,7 +116,7 @@ class IntentParser(
             self._parse_random_content,
         ]
         self._multi_split_re = re.compile(
-            r"\s*(?:[,;]+\s*|\s+(?:ve\s+sonra|ardından|ardindan|sonra|sonrasında|sonrasinda|then)\s+)\s*",
+            r"\s*(?:[,;]+\s*|\s+(?:ve\s+sonra|ardından|ardindan|sonra|sonrasında|sonrasinda|then|açıp|acip|çalıştırıp|calistirip|gidip|girip|yazıp|yazip)\s+)\s*",
             re.IGNORECASE,
         )
 
@@ -179,7 +179,15 @@ class IntentParser(
         """
         Basit çok-adımlı cümleleri (ve sonra / ardından) tek plana dönüştür.
         """
-        parts = [p.strip() for p in self._multi_split_re.split(original) if p.strip()]
+        normalized = re.sub(r"\baçıp\b", "aç sonra", original, flags=re.IGNORECASE)
+        normalized = re.sub(r"\bacip\b", "aç sonra", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"\bçalıştırıp\b", "çalıştır sonra", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"\bcalistirip\b", "çalıştır sonra", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"\bgidip\b", "git sonra", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"\bgirip\b", "gir sonra", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"\byazıp\b", "yaz sonra", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"\byazip\b", "yaz sonra", normalized, flags=re.IGNORECASE)
+        parts = [p.strip() for p in self._multi_split_re.split(normalized) if p.strip()]
         if len(parts) < 2 and " ve " in original.lower():
             # Plain "ve" fallback only when both sides look action-like.
             raw_parts = [p.strip() for p in re.split(r"\s+ve\s+", original, flags=re.IGNORECASE) if p.strip()]
@@ -214,6 +222,23 @@ class IntentParser(
 
         if len(tasks) < 2:
             return None
+
+        # Terminal odaklı ardışık komutlarda ikinci adımı UI üzerinden çalıştır:
+        # "terminal aç ve X komutunu çalıştır" -> open_app(Terminal) + type_text(enter)
+        for idx in range(1, len(tasks)):
+            prev = tasks[idx - 1] if isinstance(tasks[idx - 1], dict) else {}
+            cur = tasks[idx] if isinstance(tasks[idx], dict) else {}
+            prev_action = str(prev.get("action") or "").strip().lower()
+            cur_action = str(cur.get("action") or "").strip().lower()
+            prev_app = str((prev.get("params") or {}).get("app_name") or "").strip().lower()
+            if prev_action == "open_app" and prev_app == "terminal" and cur_action == "run_safe_command":
+                cmd = str((cur.get("params") or {}).get("command") or "").strip()
+                if not cmd:
+                    continue
+                cur["action"] = "type_text"
+                cur["params"] = {"text": cmd, "press_enter": True}
+                cur["description"] = "Komut terminalde çalıştırılıyor..."
+
         return {
             "action": "multi_task",
             "tasks": tasks,

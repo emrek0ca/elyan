@@ -11,7 +11,9 @@ Designed for "daily operator" workflows such as:
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import re
 import tempfile
 import time
@@ -919,6 +921,46 @@ class RoutineEngine:
         )
         return _tool_success(result), _tool_text(result), result
 
+    @staticmethod
+    def _max_parallel_tool_calls() -> int:
+        raw = str(os.getenv("ELYAN_ROUTINE_MAX_PARALLEL", "4") or "4").strip()
+        try:
+            value = int(raw)
+        except Exception:
+            value = 4
+        return max(1, min(12, value))
+
+    async def _run_tool_batch(
+        self,
+        agent,
+        *,
+        tool_name: str,
+        targets: list[dict[str, Any]],
+        user_input: str,
+        step_name: str,
+    ) -> list[tuple[bool, str, Any]]:
+        if not targets:
+            return []
+        limit = self._max_parallel_tool_calls()
+        sem = asyncio.Semaphore(limit)
+        results: list[tuple[bool, str, Any] | None] = [None] * len(targets)
+
+        async def _job(index: int, params: dict[str, Any]) -> None:
+            async with sem:
+                try:
+                    results[index] = await self._run_tool(
+                        agent,
+                        tool_name,
+                        params,
+                        user_input=user_input,
+                        step_name=step_name,
+                    )
+                except Exception as exc:
+                    results[index] = (False, f"Hata: {exc}", None)
+
+        await asyncio.gather(*[_job(i, dict(params or {})) for i, params in enumerate(targets)])
+        return [row if row is not None else (False, "Hata: bilinmeyen batch hatası", None) for row in results]
+
     def _default_excel_path(self, routine: dict[str, Any]) -> str:
         day = datetime.now().strftime("%Y%m%d")
         slug = _safe_slug(routine.get("name", "routine"))
@@ -1021,14 +1063,14 @@ class RoutineEngine:
                 targets = explicit_urls or panel_urls[:1] or ["https://www.google.com"]
                 outs = []
                 step_ok = True
-                for url in targets[:5]:
-                    ok, msg, _ = await self._run_tool(
-                        agent,
-                        "open_url",
-                        {"url": url},
-                        user_input=text,
-                        step_name=f"routine_step_{step_index}",
-                    )
+                batch = await self._run_tool_batch(
+                    agent,
+                    tool_name="open_url",
+                    targets=[{"url": url} for url in targets[:5]],
+                    user_input=text,
+                    step_name=f"routine_step_{step_index}",
+                )
+                for url, (ok, _msg, _raw) in zip(targets[:5], batch):
                     step_ok = step_ok and ok
                     outs.append(f"{url} ({'OK' if ok else 'FAIL'})")
                     run_context.setdefault("artifacts", []).append({"type": "url", "value": url})
@@ -1042,14 +1084,14 @@ class RoutineEngine:
                     return True, True, "Uyarı: Panel URL tanımlı değil. Bu adım atlandı."
                 outs = []
                 step_ok = True
-                for url in targets[:8]:
-                    ok, _msg, _ = await self._run_tool(
-                        agent,
-                        "open_url",
-                        {"url": url},
-                        user_input=text,
-                        step_name=f"routine_step_{step_index}",
-                    )
+                batch = await self._run_tool_batch(
+                    agent,
+                    tool_name="open_url",
+                    targets=[{"url": url} for url in targets[:8]],
+                    user_input=text,
+                    step_name=f"routine_step_{step_index}",
+                )
+                for url, (ok, _msg, _raw) in zip(targets[:8], batch):
                     step_ok = step_ok and ok
                     outs.append(f"{url} ({'OK' if ok else 'FAIL'})")
                 return True, step_ok, "Panel açılışları: " + ", ".join(outs)
@@ -1077,27 +1119,32 @@ class RoutineEngine:
                 if targets:
                     checked = 0
                     failed = 0
-                    for url in targets[:5]:
-                        ok, msg, raw = await self._run_tool(
-                            agent,
-                            "fetch_page",
-                            {"url": url},
-                            user_input=text,
-                            step_name=f"routine_step_{step_index}",
-                        )
+                    target_urls = targets[:5]
+                    batch = await self._run_tool_batch(
+                        agent,
+                        tool_name="fetch_page",
+                        targets=[{"url": url} for url in target_urls],
+                        user_input=text,
+                        step_name=f"routine_step_{step_index}",
+                    )
+                    for url, (ok, msg, raw) in zip(target_urls, batch):
                         if not ok:
                             failed += 1
                             findings.append({"source": url, "title": "erişim hatası", "summary": _clean_text(msg)[:220], "url": url})
                             continue
-                        checked += 1
                         title = _clean_text(raw.get("title") if isinstance(raw, dict) else "") or url
                         content = _clean_text(raw.get("content") if isinstance(raw, dict) else msg)
+                        if not content and title == url:
+                            failed += 1
+                            findings.append({"source": url, "title": "boş içerik", "summary": "Sayfa açıldı fakat doğrulanabilir içerik alınamadı.", "url": url})
+                            continue
+                        checked += 1
                         summary = content[:220] if content else title
                         findings.append({"source": url, "title": title, "summary": summary, "url": url})
                     if checked == 0:
                         if failed > 0:
-                            return True, True, f"Uyarı: {failed} panel erişimi başarısız. Erişilebilen veri yok."
-                        return True, True, "Uyarı: Panel kontrolünde okunabilir veri alınamadı."
+                            return True, False, f"Hata: {failed} panelde okunabilir veri alınamadı."
+                        return True, False, "Hata: Panel kontrolünde okunabilir veri alınamadı."
                     if failed > 0:
                         return True, True, f"{checked} panel kontrol edildi, {failed} panelde erişim hatası var."
                     return True, True, f"{checked} panel kontrol edildi."
@@ -1126,7 +1173,7 @@ class RoutineEngine:
                                 }
                             )
                     return True, True, msg
-                return True, True, f"Uyarı: Web arama adımı başarısız: {_clean_text(msg)[:180]}"
+                return True, False, f"Hata: Web arama adımı başarısız: {_clean_text(msg)[:180]}"
 
             if ("excel" in low or "tablo" in low or "xlsx" in low) and any(
                 k in low for k in ("oluştur", "olustur", "hazırla", "hazirla", "create", "yaz")
@@ -1156,7 +1203,7 @@ class RoutineEngine:
                 if w_ok:
                     run_context.setdefault("artifacts", []).append({"type": "summary", "value": fallback_path})
                     return True, True, f"Excel oluşturulamadı, özet dosyası yazıldı: {fallback_path}"
-                return True, True, f"Uyarı: Excel raporu oluşturulamadı: {out_path}"
+                return True, False, f"Hata: Excel raporu oluşturulamadı: {out_path}"
 
             if any(k in low for k in ("özet rapor", "ozet rapor", "özet", "ozet", "rapor hazırla", "rapor hazirla")):
                 summary_text = self._build_summary_text(routine, run_context)

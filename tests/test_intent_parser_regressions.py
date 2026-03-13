@@ -33,7 +33,19 @@ def test_research_prompt_defaults_to_document_delivery():
     assert result.get("action") == "research_document_delivery"
     params = result.get("params", {})
     assert params.get("include_word") is True
+    assert params.get("include_excel") is False
+    assert params.get("include_pdf") is False
     assert params.get("include_report") is True
+
+
+def test_research_prompt_can_request_latex_delivery():
+    parser = IntentParser()
+    result = parser.parse("Fourier serileri hakkında araştırma yap ve latex rapor hazırla")
+    assert result is not None
+    assert result.get("action") == "research_document_delivery"
+    params = result.get("params", {})
+    assert params.get("include_latex") is True
+    assert params.get("include_word") is False
 
 
 def test_system_status_does_not_route_to_screenshot():
@@ -226,6 +238,124 @@ def test_browser_new_tab_command_routes_to_multi_task():
     assert tasks[0].get("params", {}).get("app_name") == "Google Chrome"
     assert tasks[1].get("action") == "key_combo"
     assert tasks[1].get("params", {}).get("combo") == "cmd+t"
+    assert tasks[1].get("params", {}).get("target_app") == "Google Chrome"
+
+
+def test_browser_new_tab_command_with_acip_routes_to_multi_task():
+    parser = IntentParser()
+    result = parser.parse("chrome dan yeni sekme açıp google.com aç")
+    assert result is not None
+    assert result.get("action") == "multi_task"
+    tasks = result.get("tasks", [])
+    assert len(tasks) >= 2
+    assert tasks[0].get("action") == "open_app"
+    assert tasks[1].get("action") == "key_combo"
+
+
+def test_open_app_focus_variants_route_to_open_app():
+    parser = IntentParser()
+    for utterance in ("safariye geç", "safari'ye geç", "safari odaklan"):
+        result = parser.parse(utterance)
+        assert result is not None
+        assert result.get("action") == "open_app"
+        assert result.get("params", {}).get("app_name") == "Safari"
+
+
+def test_terminal_open_phrase_routes_to_open_app_not_command_execution():
+    parser = IntentParser()
+    result = parser.parse("terminal aç")
+    assert result is not None
+    assert result.get("action") == "open_app"
+    assert result.get("params", {}).get("app_name") == "Terminal"
+
+
+def test_terminal_restart_command_phrase_routes_to_run_safe_command_not_restart_system():
+    parser = IntentParser()
+    result = parser.parse("elyan restart komutunu çalıştır")
+    assert result is not None
+    assert result.get("action") == "run_safe_command"
+    command = str(result.get("params", {}).get("command", "")).lower()
+    assert "elyan" in command and "restart" in command
+
+
+def test_terminal_open_and_restart_command_routes_to_multi_task_without_restart_system():
+    parser = IntentParser()
+    result = parser.parse("Terminal aç ve elyan restart komutunu çalıştır")
+    assert result is not None
+    assert result.get("action") == "multi_task"
+    tasks = result.get("tasks", [])
+    assert len(tasks) >= 2
+    assert tasks[0].get("action") == "open_app"
+    assert tasks[1].get("action") == "type_text"
+    assert tasks[1].get("params", {}).get("press_enter") is True
+    assert "elyan restart" in str(tasks[1].get("params", {}).get("text", "")).lower()
+    assert all(t.get("action") != "restart_system" for t in tasks)
+
+
+def test_terminal_openip_restart_command_routes_to_multi_task_without_restart_system():
+    parser = IntentParser()
+    result = parser.parse("terminal açıp elyan restart komutunu çalıştır")
+    assert result is not None
+    assert result.get("action") == "multi_task"
+    tasks = result.get("tasks", [])
+    assert len(tasks) >= 2
+    assert tasks[0].get("action") == "open_app"
+    assert tasks[1].get("action") == "type_text"
+    assert "elyan restart" in str(tasks[1].get("params", {}).get("text", "")).lower()
+    assert all(t.get("action") != "restart_system" for t in tasks)
+
+
+def test_terminalden_ssh_root_command_routes_to_terminal_multi_task():
+    parser = IntentParser()
+    result = parser.parse("terminalden ssh root komutunu çalıştır")
+    assert result is not None
+    assert result.get("action") == "multi_task"
+    tasks = result.get("tasks", [])
+    assert len(tasks) == 2
+    assert tasks[0].get("action") == "open_app"
+    assert tasks[0].get("params", {}).get("app_name") == "Terminal"
+    assert tasks[1].get("action") == "type_text"
+    assert tasks[1].get("params", {}).get("press_enter") is True
+    command = str(tasks[1].get("params", {}).get("text", "")).lower()
+    assert command == "ssh root"
+
+
+def test_terminalden_cd_desktop_command_normalizes_and_routes_to_terminal_ui():
+    parser = IntentParser()
+    result = parser.parse("terminalden cd desktop komutu çalıştır")
+    assert result is not None
+    assert result.get("action") == "multi_task"
+    tasks = result.get("tasks", [])
+    assert len(tasks) == 2
+    assert tasks[0].get("action") == "open_app"
+    assert tasks[1].get("action") == "type_text"
+    params = tasks[1].get("params", {})
+    assert params.get("press_enter") is True
+    assert str(params.get("text") or "").strip() == "cd ~/Desktop"
+
+
+def test_ultra_short_app_invocation_routes_to_open_app():
+    parser = IntentParser()
+    result = parser.parse("safari a.")
+    assert result is not None
+    assert result.get("action") == "open_app"
+    assert result.get("params", {}).get("app_name") == "Safari"
+
+
+def test_focus_phrase_uses_open_app_with_focus_reply():
+    parser = IntentParser()
+    result = parser.parse("chrome'a geç")
+    assert result is not None
+    assert result.get("action") == "open_app"
+    assert result.get("params", {}).get("app_name") == "Google Chrome"
+    assert "öne al" in str(result.get("reply", "")).lower() or "one al" in str(result.get("reply", "")).lower()
+
+
+def test_typo_focus_phrase_normalizes_to_open_app():
+    parser = IntentParser()
+    result = parser.parse("chromea geç")
+    assert result is not None
+    assert result.get("action") == "open_app"
 
 
 def test_power_off_command_routes_to_shutdown_system():

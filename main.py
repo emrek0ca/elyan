@@ -425,7 +425,7 @@ def _run_gateway(port: int):
         if not loop.run_until_complete(agent.initialize()):
             click.echo("❌ Başlatma hatası.")
             return
-        loop.run_until_complete(server.start())
+        loop.run_until_complete(server.start(port=port))
         click.echo(f"\n  ✅ Elyan v{VERSION} çalışıyor — port {port}")
         click.echo(f"  🌐 Dashboard: http://localhost:{port}/dashboard")
         click.echo("  Ctrl+C ile durdur.\n")

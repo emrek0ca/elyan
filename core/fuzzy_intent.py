@@ -17,6 +17,7 @@ from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 from config.settings import HOME_DIR
+from core.nlu_normalizer import normalize_turkish_text
 from utils.logger import get_logger
 
 logger = get_logger("fuzzy_intent")
@@ -96,7 +97,7 @@ _FILLER_WORDS_ASCII = {_normalize_tr(w) for w in _FILLER_WORDS}
 # BUG-PERF-002/003: Pre-compile module-level regexes (never recompile per call)
 _RE_APOSTROPHE = re.compile(r"[''`]([a-zçğıöşü]{1,4})\b")
 _RE_TR_SUFFIX = re.compile(
-    r'\b(\w{2,})\s+([uüiı]|[yns][uüiıeaıo]|[td][aeiıoöuü]n?|l[aeiıoöuü]r[iıuü]?)\b'
+    r'\b(\w{2,})\s+([aeuüiı]|[yns][uüiıeaıo]|[td][aeiıoöuü]n?|l[aeiıoöuü]r[iıuü]?)\b'
 )
 _RE_WHITESPACE = re.compile(r"\s+")
 _TR_SUFFIX_STOP = frozenset({'ne', 'bu', 'şu', 'su', 'de', 'da'})
@@ -105,7 +106,9 @@ _TR_SUFFIX_STOP = frozenset({'ne', 'bu', 'şu', 'su', 'de', 'da'})
 def normalize_turkish(text: str) -> str:
     """Gunluk Turkce konusma dilini standart forma cevirir."""
     original = text
-    text = text.lower().strip()
+    text = normalize_turkish_text(text)
+    if not text:
+        return ""
 
     # 1. Turkce tirnak/apostrof ekleri cikar: chrome'u, safari'yi, dosyanın
     text = _RE_APOSTROPHE.sub("", text)

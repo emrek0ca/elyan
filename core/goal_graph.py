@@ -106,15 +106,30 @@ class GoalGraphPlanner:
                 ds.append(key)
         constraints["deliverables"] = ds
 
-        evidence_markers = (
-            "kanıt", "kanit", "proof", "manifest", "hash", "sha256",
-            "ss", "screenshot", "ekran görüntüsü", "ekran goruntusu",
-            "dosya paylaş", "dosya paylas",
+        evidence_patterns = (
+            r"\bkanıt\b",
+            r"\bkanit\b",
+            r"\bproof\b",
+            r"\bmanifest\b",
+            r"\bhash\b",
+            r"\bsha256\b",
+            r"\bss\b",
+            r"\bscreenshot\b",
+            r"ekran görüntüsü",
+            r"ekran goruntusu",
+            r"dosya paylaş",
+            r"dosya paylas",
         )
-        if any(m in t for m in evidence_markers):
+        if any(re.search(pat, t, re.IGNORECASE) for pat in evidence_patterns):
             constraints["requires_evidence"] = True
 
-        if "screenshot" in t or "ss" in t or "ekran görünt" in t or "ekran gorunt" in t:
+        screenshot_patterns = (
+            r"\bscreenshot\b",
+            r"\bss\b",
+            r"ekran görünt",
+            r"ekran gorunt",
+        )
+        if any(re.search(pat, t, re.IGNORECASE) for pat in screenshot_patterns):
             constraints["proof_formats"].append("screenshot")
         if any(k in t for k in ("manifest", "hash", "sha256", "log")):
             constraints["proof_formats"].append("manifest")

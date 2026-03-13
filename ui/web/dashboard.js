@@ -8,8 +8,11 @@ const HERO_WORKFLOWS = new Set([
 let runningWorkflowName = "";
 window.__elyanProductHome = {};
 window.__elyanModels = {};
+window.__moduleAutomations = { summary: {}, health_rows: [], tasks: [] };
 
 const els = {
+  tabs: Array.from(document.querySelectorAll("[data-tab]")),
+  panels: Array.from(document.querySelectorAll("[data-panel]")),
   gateway: qs("#gateway-pill"),
   refresh: qs("#refresh-btn"),
   model: qs("#model-value"),
@@ -33,10 +36,16 @@ const els = {
   workflowPresets: qs("#workflow-preset-list"),
   workflowReport: qs("#workflow-report"),
   setup: qs("#setup-list"),
+  moduleHealthSummary: qs("#module-health-summary"),
+  moduleHealth: qs("#module-health-list"),
   onboarding: qs("#onboarding-list"),
   release: qs("#release-list"),
   modelPoolSummary: qs("#model-pool-summary"),
   modelRegistry: qs("#model-registry-list"),
+  modelDefaultSummary: qs("#model-default-summary"),
+  modelFallbackSummary: qs("#model-fallback-summary"),
+  modelRouterSummary: qs("#model-router-summary"),
+  modelProviderStatus: qs("#model-provider-status"),
   modelProviderInput: qs("#model-provider-input"),
   modelNameInput: qs("#model-name-input"),
   modelAliasInput: qs("#model-alias-input"),
@@ -48,6 +57,16 @@ const els = {
   collabMaxModelsInput: qs("#collab-max-models-input"),
   collabRolesInput: qs("#collab-roles-input"),
   collabSaveBtn: qs("#collab-save-btn"),
+  profileSummary: qs("#profile-summary"),
+  agentNameInput: qs("#agent-name-input"),
+  agentLanguageInput: qs("#agent-language-input"),
+  agentPersonalityInput: qs("#agent-personality-input"),
+  responseModeInput: qs("#response-mode-input"),
+  responseBiasInput: qs("#response-bias-input"),
+  profileLocalFirstInput: qs("#profile-local-first-input"),
+  profileAutonomousInput: qs("#profile-autonomous-input"),
+  systemPromptInput: qs("#system-prompt-input"),
+  profileSaveBtn: qs("#profile-save-btn"),
   quickActions: Array.from(document.querySelectorAll("[data-quick-prompt]")),
 };
 
@@ -124,6 +143,16 @@ function addChat(text, who = "bot") {
   row.textContent = text;
   els.chatLog.appendChild(row);
   els.chatLog.scrollTop = els.chatLog.scrollHeight;
+}
+
+function activateTab(name) {
+  const target = String(name || "overview").trim();
+  els.tabs.forEach((button) => {
+    button.classList.toggle("active", button.dataset.tab === target);
+  });
+  els.panels.forEach((panel) => {
+    panel.classList.toggle("active", panel.dataset.panel === target);
+  });
 }
 
 function renderChannels(payload) {
@@ -214,6 +243,78 @@ function renderBenchmark(payload) {
     `<li><strong>Remaining Failure Codes</strong><div class="meta">${h(failureCodes.length ? failureCodes.join(", ") : "none")}</div></li>`,
     `<li><strong>Last Benchmark</strong><div class="meta">${h(benchmark?.last_benchmark_timestamp || "-")}</div></li>`,
   ].join("");
+}
+
+function fmtTimestamp(seconds) {
+  const raw = Number(seconds || 0);
+  if (!Number.isFinite(raw) || raw <= 0) return "-";
+  try {
+    return new Date(raw * 1000).toLocaleString("tr-TR");
+  } catch {
+    return "-";
+  }
+}
+
+function renderModuleHealth(payload) {
+  const prevState = window.__moduleAutomations || {};
+  const automations = payload?.automations || {};
+  const moduleHealth = payload?.module_health || automations?.module_health || {};
+  const summary = payload?.summary || moduleHealth?.summary || prevState.summary || {};
+  const healthRows = Array.isArray(payload?.health_rows)
+    ? payload.health_rows
+    : (Array.isArray(moduleHealth?.modules) ? moduleHealth.modules : (Array.isArray(prevState.health_rows) ? prevState.health_rows : []));
+  const taskRows = Array.isArray(payload?.tasks)
+    ? payload.tasks
+    : (Array.isArray(prevState.tasks) ? prevState.tasks : []);
+
+  window.__moduleAutomations = {
+    summary,
+    health_rows: healthRows,
+    tasks: taskRows,
+  };
+
+  const healthByTaskId = {};
+  healthRows.forEach((row) => {
+    const taskId = String(row?.task_id || "").trim();
+    if (taskId) healthByTaskId[taskId] = row;
+  });
+  const rows = taskRows.length
+    ? taskRows.map((task) => {
+        const taskId = String(task?.task_id || "").trim();
+        const merged = { ...task, ...(healthByTaskId[taskId] || {}) };
+        merged.task_id = taskId;
+        return merged;
+      })
+    : healthRows;
+
+  if (els.moduleHealthSummary) {
+    els.moduleHealthSummary.textContent =
+      `Aktif: ${Number(summary.active_modules || summary.active || 0)} | Saglikli: ${Number(summary.healthy || 0)} | ` +
+      `Sorunlu: ${Number(summary.failing || 0)} | Circuit Open: ${Number(summary.circuit_open || 0)} | Beklemede: ${Number(summary.paused || 0)}`;
+  }
+
+  if (!els.moduleHealth) return;
+  els.moduleHealth.innerHTML = rows.length
+    ? rows.map((row) => {
+        const health = String(row?.health || "unknown");
+        const healthLabel = health === "healthy"
+          ? "healthy"
+          : (health === "failing" ? "failing" : (health === "circuit_open" ? "circuit_open" : "unknown"));
+        const pillCls = health === "healthy" ? "ok" : (health === "failing" ? "err" : (health === "circuit_open" ? "warn" : ""));
+        const nextRetryAt = Number(row?.next_retry_at || 0);
+        const circuitUntil = Number(row?.circuit_open_until || 0);
+        const now = Math.floor(Date.now() / 1000);
+        const retryHint = nextRetryAt > now ? `retry: ${Math.max(1, Math.round((nextRetryAt - now) / 60))} dk` : "retry: hazir";
+        const circuitHint = circuitUntil > now ? `circuit: ${Math.max(1, Math.round((circuitUntil - now) / 60))} dk` : "circuit: kapali";
+        const moduleId = h(row?.module_id || "-");
+        const taskId = h(row?.task_id || "");
+        const status = String(row?.status || "active").toLowerCase();
+        const paused = status === "paused" || status === "disabled";
+        const duration = Number(row?.last_duration_ms || 0);
+        const durationTxt = duration > 0 ? `${duration}ms` : "-";
+        return `<li><strong>${moduleId}</strong><div class="meta"><span class="pill ${pillCls}">${h(healthLabel)}</span> status=${h(status)} | fail_streak=${h(String(row?.fail_streak ?? 0))} | timeout=${h(String(row?.timeout_seconds ?? 0))}s | duration=${h(durationTxt)}</div><div class="meta">last_run: ${h(fmtTimestamp(row?.last_run))} | ${h(retryHint)} | ${h(circuitHint)}</div><div class="preset-actions"><button class="btn" type="button" data-module-action="run_now" data-module-task-id="${taskId}">Run now</button><button class="btn" type="button" data-module-action="${paused ? "resume" : "pause"}" data-module-task-id="${taskId}">${paused ? "Resume" : "Pause"}</button><button class="btn" type="button" data-module-action="remove" data-module-task-id="${taskId}">Remove</button></div></li>`;
+      }).join("")
+    : "<li>Module health verisi yok.</li>";
 }
 
 function renderWorkflowPresets(payload) {
@@ -431,6 +532,26 @@ function renderModels(payload) {
   if (els.modelPoolSummary) {
     els.modelPoolSummary.textContent = `${enabledCount} kayitli model | ${readyCount} kullanima hazir | collab=${collaboration.enabled ? "acik" : "kapali"} | strategy=${strategy} | max=${maxModels}`;
   }
+  if (els.modelDefaultSummary) {
+    els.modelDefaultSummary.textContent = `${state.default?.provider || "-"} / ${state.default?.model || "-"}`;
+  }
+  if (els.modelFallbackSummary) {
+    els.modelFallbackSummary.textContent = `${state.fallback?.provider || "-"} / ${state.fallback?.model || "-"}`;
+  }
+  if (els.modelRouterSummary) {
+    const active = `${state.active_provider || "-"} / ${state.active_model || "-"}`;
+    els.modelRouterSummary.textContent = `${state.router_enabled ? "acik" : "kapali"} | aktif: ${active}`;
+  }
+  if (els.modelProviderStatus) {
+    const providerRows = Object.entries(state.provider_keys || {});
+    els.modelProviderStatus.innerHTML = providerRows.length
+      ? providerRows.map(([provider, meta]) => {
+          const configured = Boolean(meta?.configured);
+          const label = configured ? "bagli" : "eksik";
+          return `<li><strong>${h(provider)}</strong><div class="meta"><span class="pill ${configured ? "ok" : "warn"}">${label}</span> ${h(meta?.via || meta?.source || "")}</div></li>`;
+        }).join("")
+      : "<li>Provider key durumu yok.</li>";
+  }
   if (els.modelRegistry) {
     els.modelRegistry.innerHTML = registry.length
       ? registry.map((item) => {
@@ -441,7 +562,7 @@ function renderModels(payload) {
           const status = item.enabled === false ? "disabled" : (item.status || (item.has_api_key === false ? "missing_credentials" : "configured"));
           const rolesText = Array.isArray(item.roles) && item.roles.length ? item.roles.join(", ") : "all roles";
           const okCls = status === "configured" ? "ok" : (status === "disabled" ? "" : "warn");
-          return `<li><strong>${alias || `${provider}/${model}`}</strong><div class="model-meta">${provider}/${model}</div><div class="model-meta">roles: ${h(rolesText)} | priority: ${h(String(item.priority ?? 50))}</div><div class="model-meta"><span class="pill ${okCls}">${h(status)}</span></div><div class="model-actions"><button class="btn" type="button" data-model-default="${id}">Varsayilan Yap</button><button class="btn" type="button" data-model-remove="${id}">Kaldir</button></div></li>`;
+          return `<li><strong>${alias || `${provider}/${model}`}</strong><div class="model-meta">${provider}/${model}</div><div class="model-meta">roles: ${h(rolesText)} | priority: ${h(String(item.priority ?? 50))}</div><div class="model-meta"><span class="pill ${okCls}">${h(status)}</span></div><div class="model-actions"><button class="btn" type="button" data-model-default="${id}">Varsayilan Yap</button><button class="btn" type="button" data-model-fallback="${id}">Fallback Yap</button><button class="btn" type="button" data-model-remove="${id}">Kaldir</button></div></li>`;
         }).join("")
       : "<li>Henuz kayitli model yok.</li>";
   }
@@ -456,6 +577,46 @@ function renderModels(payload) {
   }
   if (els.collabRolesInput) {
     els.collabRolesInput.value = roles.join(", ");
+  }
+}
+
+function renderAgentProfile(payload) {
+  const profile = payload?.profile || payload || {};
+  const runtimePolicy = profile.runtime_policy || {};
+  const userProfile = profile.user_profile || {};
+  if (els.agentNameInput) {
+    els.agentNameInput.value = String(profile.name || "Elyan");
+  }
+  if (els.agentLanguageInput) {
+    els.agentLanguageInput.value = String(profile.language || "tr");
+  }
+  if (els.agentPersonalityInput) {
+    els.agentPersonalityInput.value = String(profile.personality || "professional");
+  }
+  if (els.responseModeInput) {
+    els.responseModeInput.value = String(runtimePolicy.response_mode || "friendly");
+  }
+  if (els.responseBiasInput) {
+    els.responseBiasInput.value = String(userProfile.response_length_bias || "short");
+  }
+  if (els.profileLocalFirstInput) {
+    els.profileLocalFirstInput.checked = Boolean(runtimePolicy.model_local_first);
+  }
+  if (els.profileAutonomousInput) {
+    els.profileAutonomousInput.checked = Boolean(profile.autonomous);
+  }
+  if (els.systemPromptInput) {
+    els.systemPromptInput.value = String(profile.system_prompt || "");
+  }
+  if (els.profileSummary) {
+    const topTopics = Array.isArray(userProfile.top_topics) && userProfile.top_topics.length ? userProfile.top_topics.join(", ") : "henuz ogrenilmedi";
+    const topActions = Array.isArray(userProfile.top_actions) && userProfile.top_actions.length ? userProfile.top_actions.join(", ") : "henuz ogrenilmedi";
+    els.profileSummary.innerHTML = [
+      `<div class="profile-line"><strong>Calisma Dili</strong><div>${h(userProfile.preferred_language || profile.language || "tr")}</div></div>`,
+      `<div class="profile-line"><strong>Yanıt Uzunlugu</strong><div>${h(userProfile.response_length_bias || "short")}</div></div>`,
+      `<div class="profile-line"><strong>Sik Konular</strong><div>${h(topTopics)}</div></div>`,
+      `<div class="profile-line"><strong>Basarili Aksiyonlar</strong><div>${h(topActions)}</div></div>`,
+    ].join("");
   }
 }
 
@@ -510,6 +671,23 @@ async function saveModels(payload) {
   return out;
 }
 
+function buildAgentProfilePayload() {
+  return {
+    name: String(els.agentNameInput?.value || "Elyan").trim() || "Elyan",
+    language: String(els.agentLanguageInput?.value || "tr").trim().toLowerCase(),
+    personality: String(els.agentPersonalityInput?.value || "professional").trim().toLowerCase(),
+    autonomous: Boolean(els.profileAutonomousInput?.checked),
+    system_prompt: String(els.systemPromptInput?.value || "").trim(),
+    runtime_policy: {
+      response_mode: String(els.responseModeInput?.value || "friendly").trim().toLowerCase(),
+      model_local_first: Boolean(els.profileLocalFirstInput?.checked),
+    },
+    user_profile: {
+      response_length_bias: String(els.responseBiasInput?.value || "short").trim().toLowerCase(),
+    },
+  };
+}
+
 async function addOrUpdateModelEntry() {
   const entry = buildRegistryEntryFromInputs();
   if (!entry) {
@@ -539,6 +717,16 @@ async function saveCollaborationSettings() {
   els.statusNote.textContent = "Collaboration ayarlari kaydedildi.";
 }
 
+async function saveAgentProfile() {
+  const out = await api("/api/agent/profile", {
+    method: "POST",
+    body: JSON.stringify(buildAgentProfilePayload()),
+    timeoutMs: 30000,
+  });
+  renderAgentProfile(out || {});
+  els.statusNote.textContent = "Kisisellestirme ayarlari kaydedildi.";
+}
+
 async function removeModelEntry(entryId) {
   const current = currentModelState();
   const registry = Array.isArray(current.registry) ? current.registry : [];
@@ -565,6 +753,21 @@ async function setDefaultModel(entryId) {
   els.statusNote.textContent = `Varsayilan model guncellendi: ${selected.provider}/${selected.model}`;
 }
 
+async function setFallbackModel(entryId) {
+  const current = currentModelState();
+  const registry = Array.isArray(current.registry) ? current.registry : [];
+  const selected = registry.find((item) => String(item.id || `${item.provider}:${item.model}`) === String(entryId || ""));
+  if (!selected) return;
+  await saveModels({
+    fallback_provider: selected.provider,
+    fallback_model: selected.model,
+    registry,
+    collaboration: buildCollaborationPayload(),
+    sync_roles: false,
+  });
+  els.statusNote.textContent = `Fallback model guncellendi: ${selected.provider}/${selected.model}`;
+}
+
 function renderProductHome(payload) {
   window.__elyanProductHome = payload || {};
   renderProductBanner(payload || {});
@@ -587,7 +790,7 @@ async function loadAll() {
   setSyncNote("yenileniyor");
   try {
     const product = await api("/api/product/home").catch(() => ({ ok: false }));
-    const [status, channels, runs, tasks, activity, toolEvents, evidence, models] = await Promise.all([
+    const [status, channels, runs, tasks, activity, toolEvents, evidence, models, agentProfile, telemetry, moduleAutomations] = await Promise.all([
       api("/api/status"),
       api("/api/channels"),
       api("/api/runs/recent"),
@@ -596,6 +799,9 @@ async function loadAll() {
       api("/api/tool-events?limit=80"),
       api("/api/tool-requests?limit=80"),
       api("/api/models"),
+      api("/api/agent/profile"),
+      api("/api/health/telemetry").catch(() => ({ ok: false, automations: { active_count: 0, module_health: { summary: {}, modules: [] } } })),
+      api("/api/automations/modules?include_inactive=1&limit=100").catch(() => ({ ok: false, summary: {}, health_rows: [], tasks: [] })),
     ]);
     renderStatus(status || {});
     renderChannels(channels || {});
@@ -605,6 +811,8 @@ async function loadAll() {
     renderToolEvents(toolEvents || {});
     renderEvidence(evidence || {});
     renderModels(models || {});
+    renderAgentProfile(agentProfile || {});
+    renderModuleHealth((moduleAutomations && moduleAutomations.ok) ? moduleAutomations : (telemetry || {}));
     if (product && product.ok) {
       renderProductHome(product);
     }
@@ -659,6 +867,24 @@ async function runPresetWorkflow(name) {
     runningWorkflowName = "";
     renderWorkflowPresets(window.__elyanProductHome || {});
     renderOnboarding(window.__elyanProductHome || {});
+  }
+}
+
+async function runModuleAutomationAction(action, taskId) {
+  const act = String(action || "").trim().toLowerCase();
+  const rid = String(taskId || "").trim();
+  if (!act || !rid) return;
+  els.statusNote.textContent = `Module action: ${act} (${rid})`;
+  try {
+    const out = await api("/api/automations/modules/action", {
+      method: "POST",
+      body: JSON.stringify({ action: act, task_id: rid }),
+      timeoutMs: 120000,
+    });
+    renderModuleHealth(out || {});
+    els.statusNote.textContent = `Module action tamamlandi: ${act} (${rid})`;
+  } catch (err) {
+    els.statusNote.textContent = `Module action hatasi: ${err.message || err}`;
   }
 }
 
@@ -748,6 +974,9 @@ function connectWs() {
           const ram = Number(data.hardware.ram || 0).toFixed(0);
           els.gateway.textContent = `${els.gateway.textContent.split("(")[0].trim()} (cpu:${cpu}% ram:${ram}%)`;
         }
+        if (data.automations) {
+          renderModuleHealth({ automations: data.automations });
+        }
       }
     } catch (err) {
       console.warn("WS parse error", err);
@@ -771,6 +1000,14 @@ els.chatInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") sendMessage();
 });
 document.addEventListener("click", (event) => {
+  const tabButton = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-tab]")
+    : null;
+  if (tabButton) {
+    const tab = String(tabButton.getAttribute("data-tab") || "").trim();
+    if (tab) activateTab(tab);
+    return;
+  }
   const button = event.target && typeof event.target.closest === "function"
     ? event.target.closest("[data-workflow-run]")
     : null;
@@ -796,12 +1033,33 @@ document.addEventListener("click", (event) => {
     const id = String(defaultButton.getAttribute("data-model-default") || "").trim();
     if (!id) return;
     setDefaultModel(id);
+    return;
+  }
+  const fallbackButton = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-model-fallback]")
+    : null;
+  if (fallbackButton) {
+    const id = String(fallbackButton.getAttribute("data-model-fallback") || "").trim();
+    if (!id) return;
+    setFallbackModel(id);
+    return;
+  }
+  const moduleButton = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-module-action]")
+    : null;
+  if (moduleButton) {
+    const action = String(moduleButton.getAttribute("data-module-action") || "").trim();
+    const taskId = String(moduleButton.getAttribute("data-module-task-id") || "").trim();
+    if (!action || !taskId) return;
+    runModuleAutomationAction(action, taskId);
   }
 });
 
 els.modelAddBtn?.addEventListener("click", addOrUpdateModelEntry);
 els.collabSaveBtn?.addEventListener("click", saveCollaborationSettings);
+els.profileSaveBtn?.addEventListener("click", saveAgentProfile);
 
+activateTab("overview");
 addChat("Elyan hazir. Komut verebilirsin.", "bot");
 loadAll();
 connectWs();

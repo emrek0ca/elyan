@@ -86,15 +86,15 @@ def conversational_greeting(hour: Optional[int] = None) -> str:
 
 
 def get_varied_greeting() -> str:
-    """Samuel-style professional varied greeting"""
+    """Kisa, dogal ve samimi selamlama"""
     hour = datetime.now().hour
     base = conversational_greeting(hour)
 
     suffixes = [
-        " Size nasıl yardımcı olabilirim?",
-        " Stratejik asistanınız hazır. Buyurun.",
-        " Bugün ne yapalım?",
-        " Sizi dinliyorum.",
+        " Nasıl yardımcı olayım?",
+        " Ne yapalım?",
+        " Buradayım.",
+        " Dinliyorum.",
     ]
     return base + random.choice(suffixes)
 
@@ -263,13 +263,13 @@ def format_tool_result(tool_name: str, result: dict) -> str:
         return out.strip()
 
     if tool_name == "run_safe_command":
-        output = result.get("output", "").strip()
-        error = result.get("error", "").strip()
-        rc = result.get("return_code", 0)
+        output = str(result.get("output") or result.get("stdout") or "").strip()
+        error = str(result.get("error") or result.get("stderr") or "").strip()
+        rc = result.get("return_code", result.get("returncode", result.get("exit_code", 0)))
         if rc != 0:
             return f"Komut basarisiz ({rc}):\n{error}"
         if not output:
-            return f"Komut calistirildi: {result.get('command', '')}"
+            return f"Komut calistirildi: {str(result.get('command') or '').strip()}"
         if len(output) > 1000:
             output = output[:1000] + "\n... (kisaltildi)"
         return output

@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 from config.settings import HOME_DIR
+from core.nlu_normalizer import normalize_turkish_ascii
 from utils.logger import get_logger
 
 logger = get_logger("intent_parser")
@@ -116,11 +117,8 @@ class BaseParser:
         }
 
     def _normalize(self, text: str) -> str:
-        """Türkçe karakterleri normalize et"""
-        replacements = {"ı": "i", "ğ": "g", "ü": "u", "ş": "s", "ö": "o", "ç": "c"}
-        for old, new in replacements.items():
-            text = text.replace(old, new)
-        return text
+        """Türkçe typo/argo + ascii normalize katmanı"""
+        return normalize_turkish_ascii(text)
 
     def _resolve_alias_folder_path(self, folder: str) -> str:
         """

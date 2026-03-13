@@ -1,5 +1,6 @@
 from pathlib import Path
 import importlib
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -11,6 +12,7 @@ from tools.pro_workflows import (
     generate_document_pack,
     research_document_delivery,
 )
+from tools.research_tools.advanced_research import _build_query_decomposition
 
 
 @pytest.mark.asyncio
@@ -204,7 +206,7 @@ async def test_create_coding_verification_report_scores_project(monkeypatch, tmp
 
 
 @pytest.mark.asyncio
-async def test_research_document_delivery_generates_pack(monkeypatch, tmp_path):
+async def test_research_document_delivery_returns_only_requested_outputs(monkeypatch, tmp_path):
     monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
 
     base_report = tmp_path / "base_report.pdf"
@@ -250,20 +252,321 @@ async def test_research_document_delivery_generates_pack(monkeypatch, tmp_path):
     )
     assert result.get("success") is True
     outputs = result.get("outputs", [])
-    assert any(str(x).endswith(".md") for x in outputs)
-    assert any(str(x).endswith(".txt") for x in outputs)
     assert any(str(x).endswith(".docx") for x in outputs)
     assert any(str(x).endswith(".xlsx") for x in outputs)
-    assert not any("DELIVERY_NOTE.txt" in str(x) for x in outputs)
+    assert not any(str(x).endswith(".md") for x in outputs)
+    assert not any(str(x).endswith(".txt") for x in outputs)
+    assert not any(str(x).endswith(".pdf") for x in outputs)
     assert isinstance(result.get("quality_summary"), dict)
     assert "avg_reliability" in result.get("quality_summary", {})
+    assert str(result.get("path", "")).endswith(".docx")
+    assert isinstance(result.get("supporting_artifacts"), list)
+    assert result.get("supporting_artifacts") == []
 
-    md_path = next((Path(str(x)) for x in outputs if str(x).endswith(".md")), None)
-    assert md_path is not None and md_path.exists()
-    md_text = md_path.read_text(encoding="utf-8")
-    assert "## Methodology" in md_text
-    assert "## Risk & Limitations" in md_text
-    assert "## Next Actions" in md_text
+
+@pytest.mark.asyncio
+async def test_research_document_delivery_word_only_stays_single_artifact(monkeypatch, tmp_path):
+    monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
+
+    captured = {}
+
+    async def _fake_research(**kwargs):
+        return {
+            "success": True,
+            "topic": kwargs.get("topic", "test"),
+            "summary": "Kısa özet\n\nOperasyonel Öneriler:\n- Gürültü olmamalı.",
+            "findings": [
+                "• Fourier serileri periyodik fonksiyonları sinüs ve kosinüs bileşenleriyle ifade eder. (Kaynak: example.com, Güven: %90)",
+                "• Isı denklemi çözümünde klasik kullanım alanlarından biridir. (Kaynak: math.example, Güven: %88)",
+            ],
+            "sources": [{"title": "Kaynak 1", "url": "https://example.com", "reliability_score": 0.9}],
+            "source_count": 1,
+            "report_paths": [str(tmp_path / "base_report.md")],
+        }
+
+    async def _fake_write_word(path=None, **kwargs):
+        captured["content"] = kwargs.get("content")
+        p = Path(str(path))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"docx")
+        return {"success": True, "path": str(p)}
+
+    research_mod = importlib.import_module("tools.research_tools.advanced_research")
+    word_mod = importlib.import_module("tools.office_tools.word_tools")
+    excel_mod = importlib.import_module("tools.office_tools.excel_tools")
+    monkeypatch.setattr(research_mod, "advanced_research", _fake_research)
+    monkeypatch.setattr(word_mod, "write_word", _fake_write_word)
+    monkeypatch.setattr(excel_mod, "write_excel", AsyncMock())
+
+    result = await research_document_delivery(
+        topic="Fourier Denklem",
+        brief="tek bir düzenli word belgesi hazırla",
+        depth="comprehensive",
+        output_dir=str(tmp_path),
+        include_word=True,
+        include_excel=False,
+        include_report=True,
+    )
+
+    assert result.get("success") is True
+    outputs = result.get("outputs", [])
+    assert len(outputs) == 1
+    assert str(outputs[0]).endswith(".docx")
+    assert "Araştırma belgesi hazır:" in str(result.get("message", ""))
+    assert "Güven:" not in str(captured.get("content", ""))
+    assert "Operasyonel Öneriler" not in str(captured.get("content", ""))
+    assert "Yönetici Özeti" not in str(captured.get("content", ""))
+    assert "Ana Bulgular" not in str(captured.get("content", ""))
+    assert "Kaynak Politikası" not in str(captured.get("content", ""))
+    assert "güvenilirlik eşiği" not in str(captured.get("content", "")).lower()
+    assert "BUders" not in str(captured.get("content", ""))
+    assert "Denklem 1" not in str(captured.get("content", ""))
+
+
+@pytest.mark.asyncio
+async def test_research_document_delivery_pdf_only_returns_single_pdf(monkeypatch, tmp_path):
+    monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
+
+    async def _fake_research(**kwargs):
+        return {
+            "success": True,
+            "topic": kwargs.get("topic", "test"),
+            "summary": "Fourier dönüşümü sinyalleri frekans bileşenlerine ayırır.",
+            "findings": [
+                "• Fourier dönüşümü zaman alanındaki bir sinyali frekans alanında ifade etmeyi sağlar. (Kaynak: example.com, Güven: %90)",
+            ],
+            "sources": [{"title": "Kaynak 1", "url": "https://example.com", "reliability_score": 0.9}],
+            "source_count": 1,
+            "report_paths": [],
+        }
+
+    def _fake_write_pdf(path, title, content):
+        p = Path(str(path))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"%PDF-1.4")
+        return {"success": True, "path": str(p), "title": title, "content": content}
+
+    research_mod = importlib.import_module("tools.research_tools.advanced_research")
+    monkeypatch.setattr(research_mod, "advanced_research", _fake_research)
+    monkeypatch.setattr("tools.pro_workflows._write_simple_pdf", _fake_write_pdf)
+
+    result = await research_document_delivery(
+        topic="Fourier Dönüşümü",
+        brief="tek pdf hazırla",
+        depth="comprehensive",
+        output_dir=str(tmp_path),
+        include_word=False,
+        include_excel=False,
+        include_pdf=True,
+        include_report=True,
+    )
+
+    assert result.get("success") is True
+    outputs = result.get("outputs", [])
+    assert len(outputs) == 1
+    assert str(outputs[0]).endswith(".pdf")
+
+
+@pytest.mark.asyncio
+async def test_generate_document_pack_defaults_to_single_docx(monkeypatch, tmp_path):
+    monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
+    captured = {}
+
+    async def _fake_write_word(path=None, **kwargs):
+        p = Path(str(path))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"docx")
+        captured["content"] = kwargs.get("content", "")
+        return {"success": True, "path": str(p), "content": kwargs.get("content")}
+
+    monkeypatch.setattr("tools.office_tools.word_tools.write_word", _fake_write_word)
+
+    result = await generate_document_pack(
+        topic="Onboarding Süreci",
+        brief="Yeni çalışanların ilk hafta izleyeceği adımları açıkla.",
+        output_dir=str(tmp_path),
+    )
+
+    assert result.get("success") is True
+    outputs = result.get("outputs", [])
+    assert len(outputs) == 1
+    assert str(outputs[0]).endswith(".docx")
+    assert str(result.get("path", "")).endswith(".docx")
+    assert len(str(captured.get("content", ""))) >= 200
+
+
+@pytest.mark.asyncio
+async def test_generate_document_pack_ignores_command_only_brief(monkeypatch, tmp_path):
+    monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
+    captured = {}
+
+    async def _fake_write_word(path=None, **kwargs):
+        p = Path(str(path))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"docx")
+        captured["content"] = kwargs.get("content", "")
+        return {"success": True, "path": str(p), "content": kwargs.get("content")}
+
+    monkeypatch.setattr("tools.office_tools.word_tools.write_word", _fake_write_word)
+
+    result = await generate_document_pack(
+        topic="Fourier Denklem",
+        brief="fourier denklem için sadece word belgesi hazırla",
+        output_dir=str(tmp_path),
+        preferred_formats=["docx"],
+    )
+
+    assert result.get("success") is True
+    content = str(captured.get("content", ""))
+    assert "sadece word belgesi hazırla" not in content.lower()
+    assert len(content) >= 200
+
+
+@pytest.mark.asyncio
+async def test_generate_document_pack_supports_latex(monkeypatch, tmp_path):
+    monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
+
+    result = await generate_document_pack(
+        topic="Fourier Denklem",
+        brief="latex formatında sade belge hazırla",
+        output_dir=str(tmp_path),
+        preferred_formats=["tex"],
+    )
+
+    assert result.get("success") is True
+    outputs = result.get("outputs", [])
+    assert len(outputs) == 1
+    assert str(outputs[0]).endswith(".tex")
+    tex = Path(outputs[0]).read_text(encoding="utf-8")
+    assert "\\documentclass" in tex
+    assert "Fourier Denklem" in tex
+
+
+@pytest.mark.asyncio
+async def test_research_document_delivery_fails_when_requested_artifact_cannot_be_created(monkeypatch, tmp_path):
+    monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
+
+    async def _fake_research(**kwargs):
+        return {
+            "success": True,
+            "topic": kwargs.get("topic", "test"),
+            "summary": "Fourier dönüşümü, bir sinyalin frekans bileşenlerini anlamaya yarar.",
+            "findings": [
+                "• Fourier dönüşümü, işaretleri frekans uzayında incelemeyi sağlar. (Kaynak: example.com, Güven: %90)",
+                "• Mühendislikte filtreleme ve analiz için yaygın biçimde kullanılır. (Kaynak: example.com, Güven: %88)",
+            ],
+            "sources": [{"title": "Kaynak 1", "url": "https://example.com", "reliability_score": 0.9}],
+            "source_count": 1,
+            "report_paths": [str(tmp_path / "base_report.md")],
+        }
+
+    async def _fake_write_word(path=None, **kwargs):
+        return {"success": False, "error": "python-docx kurulu değil."}
+
+    research_mod = importlib.import_module("tools.research_tools.advanced_research")
+    word_mod = importlib.import_module("tools.office_tools.word_tools")
+    monkeypatch.setattr(research_mod, "advanced_research", _fake_research)
+    monkeypatch.setattr(word_mod, "write_word", _fake_write_word)
+
+    result = await research_document_delivery(
+        topic="Fourier Denklem",
+        brief="tek bir düzenli word belgesi hazırla",
+        output_dir=str(tmp_path),
+        include_word=True,
+        include_excel=False,
+        include_pdf=False,
+    )
+
+    assert result.get("success") is False
+    assert result.get("error") == "Belge oluşturulamadı."
+    assert "python-docx kurulu değil." in " ".join(result.get("warnings", []))
+
+
+@pytest.mark.asyncio
+async def test_research_document_delivery_prefers_llm_synthesis_when_available(monkeypatch, tmp_path):
+    monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
+    captured = {}
+
+    async def _fake_research(**kwargs):
+        return {
+            "success": True,
+            "topic": kwargs.get("topic", "test"),
+            "summary": "Ham özet",
+            "findings": [
+                "• Fourier serileri periyodik fonksiyonların sinüs ve kosinüs bileşenleriyle temsilini sağlar. (Kaynak: example.com, Güven: %90)",
+                "• Isı denklemi çözümü Fourier yaklaşımının tarihsel kullanım alanlarından biridir. (Kaynak: math.example, Güven: %88)",
+            ],
+            "sources": [
+                {"title": "Kaynak 1", "url": "https://example.com", "reliability_score": 0.9},
+                {"title": "Kaynak 2", "url": "https://math.example.edu", "reliability_score": 0.91},
+            ],
+            "source_count": 2,
+            "report_paths": [],
+        }
+
+    async def _fake_llm_body(**kwargs):
+        return (
+            "Fourier denklemi ve Fourier serileri, bir fonksiyonun trigonometrik bileşenler üzerinden ifade edilmesini sağlar.\n\n"
+            "Bu yaklaşım özellikle periyodik davranışların analizinde ve ısı denklemi gibi problemlerde önem taşır.\n\n"
+            "Metnin geri kalanı burada sade araştırma anlatımı olarak devam eder ve konu odağını korur."
+        )
+
+    async def _fake_write_word(path=None, **kwargs):
+        captured["content"] = kwargs.get("content", "")
+        p = Path(str(path))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"docx")
+        return {"success": True, "path": str(p)}
+
+    research_mod = importlib.import_module("tools.research_tools.advanced_research")
+    word_mod = importlib.import_module("tools.office_tools.word_tools")
+    monkeypatch.setattr(research_mod, "advanced_research", _fake_research)
+    monkeypatch.setattr(word_mod, "write_word", _fake_write_word)
+    monkeypatch.setattr("tools.pro_workflows._synthesize_research_body_with_llm", _fake_llm_body)
+
+    result = await research_document_delivery(
+        topic="Fourier Denklem",
+        brief="tek bir düzenli word belgesi hazırla",
+        output_dir=str(tmp_path),
+        include_word=True,
+        include_excel=False,
+        include_pdf=False,
+    )
+
+    assert result.get("success") is True
+    assert "trigonometrik bileşenler" in str(captured.get("content", ""))
+
+
+def test_advanced_research_math_query_decomposition_enriches_queries():
+    plan = _build_query_decomposition("fourier denklem")
+    queries = [str(item).lower() for item in plan.get("queries", [])]
+    assert any("formula" in item for item in queries)
+    assert any("pdf lecture notes" in item for item in queries)
+
+
+@pytest.mark.asyncio
+async def test_generate_document_pack_respects_pdf_preference(monkeypatch, tmp_path):
+    monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
+
+    def _fake_write_pdf(path, title, content):
+        p = Path(str(path))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"%PDF-1.4")
+        return {"success": True, "path": str(p), "title": title, "content": content}
+
+    monkeypatch.setattr("tools.pro_workflows._write_simple_pdf", _fake_write_pdf)
+
+    result = await generate_document_pack(
+        topic="Onboarding Süreci",
+        brief="Bunu sade bir pdf olarak hazırla.",
+        output_dir=str(tmp_path),
+        preferred_formats=["pdf"],
+    )
+
+    assert result.get("success") is True
+    outputs = result.get("outputs", [])
+    assert len(outputs) == 1
+    assert str(outputs[0]).endswith("DOCUMENT.pdf")
 
 
 @pytest.mark.asyncio

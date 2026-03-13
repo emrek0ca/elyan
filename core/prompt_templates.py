@@ -45,7 +45,7 @@ EXAMPLES:
 {"action": "advanced_research", "params": {"topic": "stratejik planlama"}, "message": ""}
 
 4. "merhaba"
-{"action": "chat", "message": "Merhaba, ben Elyan. Stratejik asistanınız olarak bugün size nasıl yardımcı olabilirim?"}
+{"action": "chat", "message": "Merhaba, nasıl yardımcı olayım?"}
 
 RULES:
 1. Understand Turkish nuances and map to the most logical action.

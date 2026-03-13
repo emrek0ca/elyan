@@ -157,3 +157,20 @@ def test_gateway_reload_posts_sync(monkeypatch, capsys):
     gateway.gateway_reload(port=18789, as_json=False)
     out = capsys.readouterr().out
     assert "Senkronizasyon tamamlandi" in out
+
+
+def test_running_gateway_pid_ignores_pidfile_for_other_port(monkeypatch):
+    monkeypatch.setattr(gateway, "_read_pidfile", lambda: 23060)
+    monkeypatch.setattr(gateway.psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(gateway, "_process_listens_on_port", lambda pid, port: False)
+    monkeypatch.setattr(gateway, "_find_listener_pid", lambda port: None)
+
+    assert gateway._running_gateway_pid(18889) is None
+
+
+def test_running_gateway_pid_accepts_pidfile_when_port_matches(monkeypatch):
+    monkeypatch.setattr(gateway, "_read_pidfile", lambda: 23060)
+    monkeypatch.setattr(gateway.psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(gateway, "_process_listens_on_port", lambda pid, port: True)
+
+    assert gateway._running_gateway_pid(18889) == 23060

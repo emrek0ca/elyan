@@ -9,6 +9,7 @@ from typing import Dict, Optional, Any, List, Tuple
 from dataclasses import dataclass
 from enum import Enum
 
+from core.nlu_normalizer import normalize_turkish_text
 from utils.logger import get_logger
 
 logger = get_logger("fast_response")
@@ -51,10 +52,10 @@ class FastResponseSystem:
         # Greeting patterns
         self.greeting_patterns = [
             (r'^(merhaba|selam|hey|hi|hello|sa|mrb)$', None),  # dynamic
-            (r'\b(nasılsın|nasılsınız|how are you|naber|nbr)\b', "Iyiyim, sen nasilsin?"),
+            (r'\b(nasılsın|nasılsınız|nasilsin|nasilsiniz|how are you|naber|nbr)\b', "İyiyim, sen nasılsın?"),
             (r'\b(günaydın|good morning)\b', None),  # dynamic
             (r'\b(iyi akşamlar|good evening)\b', None),  # dynamic
-            (r'\b(iyi geceler|good night)\b', "Iyi geceler!"),
+            (r'\b(iyi geceler|good night)\b', "İyi geceler!"),
         ]
 
         # Thanks/acknowledgment patterns
@@ -66,7 +67,7 @@ class FastResponseSystem:
 
         # Conversational catch-all patterns (LLM yerine hızlı yanıt)
         self.conversational_patterns = [
-            (r'^(napiyorsun|napıyorsun|napiyon|napıyon|naptın|naptin|ne yapıyorsun|ne yapiyorsun)\b',
+            (r'^(napiyorsun|napıyorsun|napiosun|napıosun|napiyosun|napıyon|napiyon|naptın|naptin|ne yapıyorsun|ne yapiyorsun)\b',
              None),  # dynamic - get_varied_greeting gibi bir şey döner
             (r'^(elyan)\s*$', None),  # Sadece isim yazıldıysa
         ]
@@ -123,7 +124,7 @@ class FastResponseSystem:
 
     def can_answer_quickly(self, question: str) -> Tuple[bool, QuestionType]:
         """Check if question can be answered quickly"""
-        question_lower = question.lower().strip()
+        question_lower = normalize_turkish_text(question)
 
         # Check greetings
         for pattern, _ in self.greeting_patterns:
@@ -171,7 +172,7 @@ class FastResponseSystem:
         start_time = time.time()
         self.stats["total_requests"] += 1
 
-        question_lower = question.lower().strip()
+        question_lower = normalize_turkish_text(question)
         can_answer, q_type = self.can_answer_quickly(question)
 
         if not can_answer:
@@ -196,9 +197,9 @@ class FastResponseSystem:
         # Try conversational catch-all
         if not answer:
             _conv_replies = [
-                "Seninle konuşuyorum, yardıma hazırım.",
-                "Buradayım. Bir şeye ihtiyacın var mı?",
-                "Evet? Nasıl yardımcı olabilirim?",
+                "Buradayım, seni dinliyorum.",
+                "Seninleyim. Ne lazım?",
+                "Hazırım, söyle.",
                 "Dinliyorum.",
             ]
             for pattern, response in self.conversational_patterns:

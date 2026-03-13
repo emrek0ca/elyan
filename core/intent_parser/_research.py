@@ -84,7 +84,7 @@ class ResearchParser(BaseParser):
                 pass
 
         doc_markers = [
-            "rapor", "belge", "dokuman", "doküman", "word", "docx", "excel", "xlsx", "tablo", "dosya",
+            "rapor", "belge", "dokuman", "doküman", "word", "docx", "excel", "xlsx", "tablo", "dosya", "pdf",
         ]
         deliver_markers = [
             "gönder", "gonder", "kopya", "ilet", "paylaş", "paylas", "telegram", "whatsapp", "telefon",
@@ -99,11 +99,17 @@ class ResearchParser(BaseParser):
                 "standard": "standard",
                 "deep": "comprehensive",
             }.get(depth, "comprehensive")
-            include_word = any(k in text for k in ["rapor", "belge", "word", "docx", "dokuman", "doküman"])
+            include_pdf = "pdf" in text
+            include_latex = any(k in text for k in ["latex", "tex"])
             include_excel = any(k in text for k in ["excel", "xlsx", "tablo", "csv"])
-            if not include_word and not include_excel:
-                include_word = True
-                include_excel = True
+            explicit_word = any(k in text for k in ["word", "docx", "dokuman", "doküman"])
+            generic_doc = any(k in text for k in ["rapor", "belge"])
+            include_word = explicit_word or (generic_doc and not include_excel and not include_pdf and not include_latex)
+            if not include_word and not include_excel and not include_latex:
+                if include_pdf:
+                    include_word = False
+                else:
+                    include_word = True
             return {
                 "action": "research_document_delivery",
                 "params": {
@@ -113,6 +119,8 @@ class ResearchParser(BaseParser):
                     "language": "tr",
                     "include_word": include_word,
                     "include_excel": include_excel,
+                    "include_pdf": include_pdf,
+                    "include_latex": include_latex,
                     "include_report": True,
                     "deliver_copy": any(k in text for k in deliver_markers),
                     "source_policy": params.get("source_policy", "trusted"),

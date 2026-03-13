@@ -67,6 +67,10 @@ class _DummyLearning:
 
 
 class _DummyProfile:
+    def profile_summary(self, user_id):
+        _ = user_id
+        return {}
+
     def update_after_interaction(self, user_id, **kwargs):
         _ = (user_id, kwargs)
         return None
@@ -328,6 +332,23 @@ def test_agent_infer_general_tool_intent_terminal_command():
     assert intent.get("params", {}).get("command") == "pwd"
 
 
+def test_agent_extract_terminal_command_cleans_komutu_suffix():
+    command = Agent._extract_terminal_command_from_text("terminalden cd desktop komutu çalıştır")
+    assert command == "cd ~/Desktop"
+
+
+def test_agent_extract_terminal_command_handles_openip_connector():
+    command = Agent._extract_terminal_command_from_text("terminal açıp elyan restart komutunu çalıştır")
+    assert command == "elyan restart"
+
+
+def test_agent_split_multi_step_text_handles_turkish_ip_connector():
+    parts = Agent._split_multi_step_text("terminal açıp elyan restart komutunu çalıştır")
+    assert len(parts) >= 2
+    assert "terminal aç" in parts[0]
+    assert "elyan restart" in parts[1]
+
+
 def test_agent_execute_tool_infers_missing_command_for_run_safe_command(monkeypatch):
     agent = Agent()
     agent.llm = _DummyLLM()
@@ -380,6 +401,40 @@ def test_agent_infer_general_tool_intent_research_document_delivery():
     params = intent.get("params", {})
     assert params.get("include_word") is True
     assert params.get("include_excel") is True
+
+
+def test_agent_infer_general_tool_intent_research_document_delivery_defaults_to_word_only():
+    agent = Agent()
+    intent = agent._infer_general_tool_intent("fourier denklem hakkında araştırma yap ve rapor hazırla")
+    assert intent is not None
+    assert intent.get("action") == "research_document_delivery"
+    params = intent.get("params", {})
+    assert params.get("include_word") is True
+    assert params.get("include_excel") is False
+    assert params.get("include_pdf") is False
+
+
+def test_agent_infer_general_tool_intent_research_document_delivery_pdf_only():
+    agent = Agent()
+    intent = agent._infer_general_tool_intent("fourier denklem hakkında araştırma yap ve pdf rapor hazırla")
+    assert intent is not None
+    assert intent.get("action") == "research_document_delivery"
+    params = intent.get("params", {})
+    assert params.get("include_word") is False
+    assert params.get("include_excel") is False
+    assert params.get("include_pdf") is True
+
+
+def test_agent_infer_general_tool_intent_research_document_delivery_latex_only():
+    agent = Agent()
+    intent = agent._infer_general_tool_intent("fourier denklem hakkında araştırma yap ve latex rapor hazırla")
+    assert intent is not None
+    assert intent.get("action") == "research_document_delivery"
+    params = intent.get("params", {})
+    assert params.get("include_word") is False
+    assert params.get("include_excel") is False
+    assert params.get("include_pdf") is False
+    assert params.get("include_latex") is True
 
 
 def test_agent_infer_general_tool_intent_summarize_document():
@@ -629,6 +684,27 @@ def test_agent_infer_general_tool_intent_uses_last_path_for_pronoun_delete(tmp_p
     assert intent is not None
     assert intent.get("action") == "delete_file"
     assert intent.get("params", {}).get("path") == str(last_file)
+
+
+def test_agent_infer_general_tool_intent_batch_delete_screenshot_images(tmp_path, monkeypatch):
+    agent = Agent()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    intent = agent._infer_general_tool_intent("Masaüstündeki ekran resimlerini sil")
+    assert intent is not None
+    assert intent.get("action") == "delete_file"
+    params = intent.get("params", {})
+    assert str(params.get("directory", "")).endswith("Desktop")
+    assert isinstance(params.get("patterns"), list) and params.get("patterns")
+
+
+def test_agent_runtime_normalize_user_input_applies_learned_aliases():
+    agent = Agent()
+    agent.learning = _DummyLearning(
+        prefs={"nlu_aliases": {"ggl": "google", "chrma": "chrome a"}}
+    )
+    normalized = agent._runtime_normalize_user_input("chrma geç ve ggl aç")
+    assert "chrome a" in normalized
+    assert "google" in normalized
 
 
 def test_agent_infer_multi_task_intent_from_free_form_sequence(tmp_path, monkeypatch):
@@ -1538,7 +1614,7 @@ def test_agent_postprocess_network_marks_warning_for_5xx():
 def test_agent_should_share_manifest_only_when_requested_or_required():
     agent = Agent()
     ctx = SimpleNamespace(action="set_wallpaper", requires_evidence=False, runtime_policy={})
-    assert agent._should_share_manifest("duvar kağıdı yap", ctx) is True
+    assert agent._should_share_manifest("duvar kağıdı yap", ctx) is False
     assert agent._should_share_manifest("kanıt ve manifest paylaş", ctx) is True
     ctx.requires_evidence = True
     assert agent._should_share_manifest("duvar kağıdı yap", ctx) is True
@@ -1760,6 +1836,7 @@ def test_agent_runs_multi_task_intent_directly(monkeypatch):
     agent = Agent()
     agent.llm = _DummyLLM()
     agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+    agent.user_profile = _DummyProfile()
     agent.quick_intent = _DummyQuickIntent()
     agent.intent_parser = SimpleNamespace(
         parse=lambda _text: {
@@ -1785,6 +1862,171 @@ def test_agent_runs_multi_task_intent_directly(monkeypatch):
     assert "[1] Listele" in response
     assert "a.txt" in response
     assert "/tmp/elyan_test.png" in response
+
+
+def test_agent_run_direct_intent_multi_task_fail_fast_on_dependency(monkeypatch):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+
+    calls = []
+
+    async def _fake_open_app(app_name=None):
+        calls.append(("open_app", app_name))
+        return {"success": True, "app_name": app_name or "Safari", "message": "Safari opened."}
+
+    async def _fake_key_combo(combo=None, target_app=None):
+        calls.append(("key_combo", combo, target_app))
+        return {"success": False, "error": "hedef uygulama doğrulanamadı", "combo": combo, "target_app": target_app}
+
+    async def _fake_open_url(url=None):
+        calls.append(("open_url", url))
+        return {"success": True, "url": url}
+
+    monkeypatch.setattr(
+        "core.agent.AVAILABLE_TOOLS",
+        {"open_app": _fake_open_app, "key_combo": _fake_key_combo, "open_url": _fake_open_url},
+    )
+
+    intent = {
+        "action": "multi_task",
+        "tasks": [
+            {"id": "task_1", "action": "open_app", "params": {"app_name": "Safari"}, "description": "Safari aç"},
+            {"id": "task_2", "action": "key_combo", "params": {"combo": "cmd+t", "target_app": "Safari"}, "depends_on": ["task_1"], "description": "Yeni sekme"},
+            {"id": "task_3", "action": "open_url", "params": {"url": "https://example.com"}, "depends_on": ["task_2"], "description": "Sayfayı aç"},
+        ],
+    }
+
+    out = asyncio.run(agent._run_direct_intent(intent, "safari aç sonra yeni sekme", "inference", []))
+    assert "hedef uygulama" in out.lower()
+    assert len(calls) >= 3
+    assert calls[0][0] == "open_app"
+    assert sum(1 for row in calls if row[0] == "key_combo") == 2
+    assert all(row[0] != "open_url" for row in calls)
+    payload = agent._last_direct_intent_payload if isinstance(agent._last_direct_intent_payload, dict) else {}
+    assert payload.get("success") is False
+    assert payload.get("completed_steps") == 1
+    assert payload.get("total_steps") == 3
+    assert payload.get("failure_class") in {"state_mismatch", "tool_failure", "unknown_failure"}
+
+
+def test_agent_run_direct_intent_policy_block_fail_fast_no_blind_retry(monkeypatch):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+
+    calls = {"count": 0}
+
+    async def _fake_run_safe_command(command=None):
+        _ = command
+        calls["count"] += 1
+        return {"success": False, "error": "Security policy blocked this action."}
+
+    monkeypatch.setattr("core.agent.AVAILABLE_TOOLS", {"run_safe_command": _fake_run_safe_command})
+
+    intent = {
+        "action": "multi_task",
+        "tasks": [
+            {
+                "id": "task_1",
+                "action": "run_safe_command",
+                "params": {"command": "echo ok"},
+                "description": "Komut calistir",
+            }
+        ],
+    }
+
+    out = asyncio.run(agent._run_direct_intent(intent, "komutu çalıştır", "inference", []))
+    assert "başarısız" in out.lower() or "basarisiz" in out.lower() or "hata" in out.lower()
+    assert calls["count"] == 1
+    payload = agent._last_direct_intent_payload if isinstance(agent._last_direct_intent_payload, dict) else {}
+    failed = payload.get("failed_step", {}) if isinstance(payload.get("failed_step"), dict) else {}
+    assert str(failed.get("failure_class") or "") == "policy_block"
+
+
+def test_agent_run_direct_intent_state_mismatch_refocuses_before_retry(monkeypatch):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+
+    calls: list[tuple] = []
+    key_combo_calls = {"count": 0}
+
+    async def _fake_open_app(app_name=None):
+        calls.append(("open_app", app_name))
+        return {"success": True, "app_name": app_name or "Safari", "verified": True}
+
+    async def _fake_key_combo(combo=None, target_app=None):
+        key_combo_calls["count"] += 1
+        calls.append(("key_combo", combo, target_app))
+        if key_combo_calls["count"] == 1:
+            return {
+                "success": False,
+                "error": "hedef uygulama doğrulanamadı",
+                "combo": combo,
+                "target_app": target_app,
+                "frontmost_app": "Finder",
+            }
+        return {"success": True, "combo": combo, "target_app": target_app, "verified": True, "message": "ok"}
+
+    monkeypatch.setattr("core.agent.AVAILABLE_TOOLS", {"open_app": _fake_open_app, "key_combo": _fake_key_combo})
+
+    intent = {
+        "action": "multi_task",
+        "tasks": [
+            {
+                "id": "task_1",
+                "action": "key_combo",
+                "params": {"combo": "cmd+t", "target_app": "Safari"},
+                "description": "Yeni sekme",
+            }
+        ],
+    }
+
+    out = asyncio.run(agent._run_direct_intent(intent, "yeni sekme aç", "inference", []))
+    assert "ok" in out.lower() or "başarı" in out.lower() or "basari" in out.lower()
+    assert key_combo_calls["count"] == 2
+    assert ("open_app", "Safari") in calls
+    payload = agent._last_direct_intent_payload if isinstance(agent._last_direct_intent_payload, dict) else {}
+    assert payload.get("success") is True
+    rows = payload.get("steps", []) if isinstance(payload.get("steps"), list) else []
+    assert rows and isinstance(rows[0], dict)
+    recovery_notes = rows[0].get("recovery_notes", []) if isinstance(rows[0].get("recovery_notes"), list) else []
+    assert any("refocus_app:Safari" in str(note) for note in recovery_notes)
+
+
+def test_agent_run_direct_intent_compacts_multi_task_output_when_policy_enabled(monkeypatch):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+    monkeypatch.setattr(
+        Agent,
+        "_current_runtime_policy",
+        staticmethod(lambda: {"response": {"compact_actions": True}}),
+    )
+
+    async def _fake_open_app(app_name=None):
+        return {"success": True, "app_name": app_name or "Safari", "message": "Safari opened.", "verified": True}
+
+    async def _fake_key_combo(combo=None, target_app=None):
+        _ = combo
+        return {"success": True, "target_app": target_app, "combo": "cmd+t", "message": "Yeni sekme açıldı.", "verified": True}
+
+    monkeypatch.setattr(
+        "core.agent.AVAILABLE_TOOLS",
+        {"open_app": _fake_open_app, "key_combo": _fake_key_combo},
+    )
+
+    intent = {
+        "action": "multi_task",
+        "tasks": [
+            {"id": "task_1", "action": "open_app", "params": {"app_name": "Safari"}, "description": "Safari aç"},
+            {"id": "task_2", "action": "key_combo", "params": {"combo": "cmd+t", "target_app": "Safari"}, "depends_on": ["task_1"], "description": "Yeni sekme aç"},
+        ],
+    }
+    response = asyncio.run(agent._run_direct_intent(intent, "safari aç sonra yeni sekme aç", "inference", []))
+    assert response.startswith("✅ 2 adım tamamlandı")
+    assert "[1]" not in response
 
 
 def test_agent_process_executes_numbered_plan_steps(monkeypatch, tmp_path):
@@ -1863,6 +2105,7 @@ def test_agent_multi_task_reorders_research_before_empty_word_write(monkeypatch)
     agent = Agent()
     agent.llm = _DummyLLM()
     agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+    agent.user_profile = _DummyProfile()
     agent.quick_intent = _DummyQuickIntent()
     agent.intent_parser = SimpleNamespace(
         parse=lambda _text: {
@@ -2006,6 +2249,20 @@ def test_agent_prepare_research_document_delivery_academic_defaults():
     assert params.get("min_reliability", 0) >= 0.78
     assert params.get("citation_style") == "apa7"
     assert params.get("include_bibliography") is True
+    assert params.get("include_excel") is False
+    assert params.get("include_pdf") is False
+    assert params.get("include_latex") is False
+
+
+def test_agent_prepare_generate_document_pack_prefers_pdf_when_requested():
+    agent = Agent()
+    params = agent._prepare_tool_params(
+        "generate_document_pack",
+        {"topic": "Fourier Denklem"},
+        user_input="fourier denklem için pdf belge hazırla",
+        step_name="Belge oluştur",
+    )
+    assert params.get("preferred_formats") == ["pdf"]
 
 
 def test_agent_prepare_edit_text_file_infers_operations():
@@ -2545,6 +2802,49 @@ def test_agent_run_runtime_task_spec_retries_failed_validation(monkeypatch, tmp_
     assert write_count["n"] == 2
 
 
+def test_agent_run_runtime_task_spec_policy_block_fail_fast_without_retry(monkeypatch):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+
+    call_count = {"n": 0}
+
+    async def _fake_execute_tool(tool_name, params, **kwargs):
+        _ = (tool_name, params, kwargs)
+        call_count["n"] += 1
+        return {"success": False, "error": "Security policy blocked this action."}
+
+    monkeypatch.setattr(agent, "_execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(agent, "_validate_runtime_task_spec", lambda _spec: (True, []))
+
+    task_spec = {
+        "intent": "automation_batch",
+        "version": "1.0",
+        "goal": "policy block test",
+        "constraints": {},
+        "context_assumptions": [],
+        "artifacts_expected": [],
+        "checks": [],
+        "rollback": [],
+        "required_tools": ["run_safe_command"],
+        "risk_level": "low",
+        "timeouts": {"step_timeout_s": 60, "run_timeout_s": 300},
+        "retries": {"max_attempts": 3},
+        "steps": [
+            {
+                "id": "step_1",
+                "action": "run_safe_command",
+                "params": {"command": "echo ok"},
+                "checks": [{"type": "tool_success"}],
+            }
+        ],
+    }
+
+    out = asyncio.run(agent._run_runtime_task_spec(task_spec, user_input="test"))
+    assert "Hata kodu:" in out
+    assert call_count["n"] == 1
+
+
 def test_agent_run_runtime_task_spec_enforces_exit_code_check(monkeypatch):
     agent = Agent()
     agent.llm = _DummyLLM()
@@ -2988,3 +3288,110 @@ def test_agent_prepare_tool_params_computer_use_builds_steps():
     actions = [str(s.get("action") or "") for s in steps if isinstance(s, dict)]
     assert "open_app" in actions
     assert "open_url" in actions
+
+
+def test_agent_infer_model_a_intent_open_app(monkeypatch):
+    class _Model:
+        @staticmethod
+        def predict(_text):
+            return "open_app", 0.93
+
+    agent = Agent()
+    monkeypatch.setattr(agent, "_load_model_a", lambda model_path="": _Model())
+    intent = agent._infer_model_a_intent(
+        "safari aç",
+        min_confidence=0.7,
+        model_path="/tmp/model.json",
+        allowed_actions=["open_app"],
+    )
+    assert isinstance(intent, dict)
+    assert intent.get("action") == "open_app"
+    assert intent.get("params", {}).get("app_name") == "Safari"
+    assert float(intent.get("confidence", 0.0)) >= 0.7
+
+
+def test_agent_infer_model_a_intent_run_safe_command(monkeypatch):
+    class _Model:
+        @staticmethod
+        def predict(_text):
+            return "run_safe_command", 0.89
+
+    agent = Agent()
+    monkeypatch.setattr(agent, "_load_model_a", lambda model_path="": _Model())
+    intent = agent._infer_model_a_intent(
+        "terminalde pwd komutunu çalıştır",
+        min_confidence=0.6,
+        allowed_actions=["run_safe_command"],
+    )
+    assert isinstance(intent, dict)
+    assert intent.get("action") == "run_safe_command"
+    assert intent.get("params", {}).get("command") == "pwd"
+
+
+def test_agent_infer_model_a_intent_rejects_not_allowed_action(monkeypatch):
+    class _Model:
+        @staticmethod
+        def predict(_text):
+            return "open_app", 0.95
+
+    agent = Agent()
+    monkeypatch.setattr(agent, "_load_model_a", lambda model_path="": _Model())
+    intent = agent._infer_model_a_intent(
+        "safari aç",
+        min_confidence=0.7,
+        allowed_actions=["write_file"],
+    )
+    assert intent is None
+
+
+def test_agent_format_result_text_renders_open_app_verification():
+    agent = Agent()
+    text = agent._format_result_text(
+        {
+            "success": True,
+            "app_name": "Safari",
+            "message": "Safari opened.",
+            "frontmost_app": "Safari",
+            "verified": True,
+        }
+    )
+    assert "Safari opened." in text
+    assert "Odak: Safari" in text
+    assert "Doğrulama: OK" in text
+
+
+def test_agent_format_result_text_renders_key_combo_target_warning():
+    agent = Agent()
+    text = agent._format_result_text(
+        {
+            "success": False,
+            "combo": "cmd+t",
+            "target_app": "Google Chrome",
+            "frontmost_app": "Finder",
+            "verified": False,
+            "verification_warning": "key_combo hedef dışı uygulamaya gitti: Finder",
+        }
+    )
+    assert "Hedef: Google Chrome" in text
+    assert "Odak: Finder" in text
+    assert "Doğrulama: Başarısız" in text
+    assert "hedef dışı" in text
+
+
+def test_agent_format_result_text_renders_research_document_delivery_concisely():
+    agent = Agent()
+    text = agent._format_result_text(
+        {
+            "success": True,
+            "path": "/tmp/Fourier.docx",
+            "delivery_dir": "/tmp/fourier_research_delivery",
+            "outputs": ["/tmp/Fourier.docx"],
+            "summary": "Uzun özet burada olmamalı",
+            "sources": [{"title": "Kaynak", "url": "https://example.com"}],
+            "source_count": 4,
+            "finding_count": 5,
+        }
+    )
+    assert "Araştırma belgesi hazır: /tmp/Fourier.docx" in text
+    assert "Kaynak: 4" in text
+    assert "Uzun özet" not in text

@@ -30,6 +30,8 @@ from .verifier import (
     verify_code_gates,
     verify_research_gates,
     verify_asset_gates,
+    verify_taskspec_contract,
+    build_reflexion_hint,
     build_critic_review_prompt,
 )
 from .telemetry import JobTelemetryAccumulator, estimate_token_cost
@@ -63,6 +65,8 @@ __all__ = [
     "verify_code_gates",
     "verify_research_gates",
     "verify_asset_gates",
+    "verify_taskspec_contract",
+    "build_reflexion_hint",
     "build_critic_review_prompt",
     "JobTelemetryAccumulator",
     "estimate_token_cost",

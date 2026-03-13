@@ -47,10 +47,47 @@ def test_chat_uses_single_router_path():
             return "Merhaba, yardımcı olayım."
 
         client._call_any_provider = fake_call_any_provider
-        return await client.chat("selam")
+        return await client.chat("bir şey soracağım")
 
     result = asyncio.run(run_case())
     assert "Merhaba" in result
+
+
+def test_chat_greeting_shortcuts_without_provider_call():
+    client = LLMClient()
+
+    async def run_case():
+        async def fake_call_any_provider(prompt: str, user_message: str = "", temp: float = 0.3, max_tokens=None):
+            raise AssertionError("provider should not be called for greeting")
+
+        client._call_any_provider = fake_call_any_provider
+        return await client.chat("selam")
+
+    result = asyncio.run(run_case())
+    assert result
+    assert "Deliverable Spec" not in result
+    assert len(result.splitlines()) <= 2
+
+
+def test_chat_sanitizes_internal_planning_markers():
+    client = LLMClient()
+
+    async def run_case():
+        async def fake_call_any_provider(prompt: str, user_message: str = "", temp: float = 0.3, max_tokens=None):
+            return (
+                "Merhaba!\n"
+                "Deliverable Spec: Kullanıcıya yardımcı olmak\n"
+                "Done Criteria: Kullanıcı memnun olsun\n\n"
+                "Nasıl yardımcı olayım?"
+            )
+
+        client._call_any_provider = fake_call_any_provider
+        return await client.chat("bir şey soracağım")
+
+    result = asyncio.run(run_case())
+    assert "Deliverable Spec" not in result
+    assert "Done Criteria" not in result
+    assert result == "Merhaba!\n\nNasıl yardımcı olayım?"
 
 
 def test_generate_cost_guard_caps_temperature_and_tokens():
@@ -86,7 +123,7 @@ def test_chat_cost_guard_uses_short_token_budget():
             return "ok"
 
         client._call_any_provider = fake_call_any_provider
-        await client.chat("selam")
+        await client.chat("yardım lazım")
         return captured
 
     captured = asyncio.run(run_case())

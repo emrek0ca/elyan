@@ -27,6 +27,29 @@ def _default_config() -> AppConfig:
             runtime_policy={"preset": "balanced"},
             capability_router={"enabled": True, "min_confidence_override": 0.5},
             planning={"use_llm": True, "max_subtasks": 10},
+            nlu={
+                "model_a": {
+                    "enabled": True,
+                    "model_path": "~/.elyan/models/nlu/baseline_intent_model.json",
+                    "min_confidence": 0.78,
+                    "allowed_actions": [
+                        "open_app",
+                        "close_app",
+                        "open_url",
+                        "web_search",
+                        "create_folder",
+                        "list_files",
+                        "read_file",
+                        "write_file",
+                        "run_safe_command",
+                        "http_request",
+                        "api_health_get_save",
+                        "set_wallpaper",
+                        "analyze_screen",
+                        "take_screenshot",
+                    ],
+                }
+            },
             flags={
                 "agentic_v2": False,
                 "dag_exec": False,

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Elyan Operator V1</title>
+  <title>Elyan Control Center</title>
   <link rel="stylesheet" href="/ui/web/dashboard.css" />
 </head>
 <body>
@@ -12,162 +12,362 @@
       <div class="brand">
         <div class="logo">E</div>
         <div>
-          <h1 class="title">ELYAN Operator V1</h1>
-          <p class="sub">Hazirlik, hero workflow'ler ve gorev sonuclari tek ekranda.</p>
+          <h1 class="title">Elyan Control Center</h1>
+          <p class="sub">Model yonetimi, kisisellestirme ve operasyon tek panelde.</p>
         </div>
       </div>
-      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <div class="topbar-actions">
         <span id="gateway-pill" class="pill">Gateway: kontrol ediliyor</span>
         <button class="btn" id="refresh-btn" type="button">Yenile</button>
       </div>
     </header>
 
-    <section class="banner">
-      <div>
-        <strong id="status-note">Urun paneli hazirlaniyor...</strong>
-        <div id="status-detail" class="banner-meta">Uretim yolu ve hazirlik bilgileri yukleniyor.</div>
-      </div>
-      <div id="last-sync">Son senkron: -</div>
-    </section>
+    <nav class="tabs" aria-label="Dashboard sections">
+      <button class="tab-btn active" type="button" data-tab="overview">Genel Bakis</button>
+      <button class="tab-btn" type="button" data-tab="models">LLM Yonetimi</button>
+      <button class="tab-btn" type="button" data-tab="profile">Kisisellestirme</button>
+      <button class="tab-btn" type="button" data-tab="ops">Operasyon</button>
+    </nav>
 
-    <section class="grid">
-      <div class="stats">
-        <div class="metric">
-          <div class="k">Aktif Model</div>
-          <div class="v" id="model-value">-</div>
+    <section class="tab-panel active" data-panel="overview">
+      <section class="banner">
+        <div>
+          <strong id="status-note">Panel hazirlaniyor...</strong>
+          <div id="status-detail" class="banner-meta">Durum, model ve gorev verileri yukleniyor.</div>
         </div>
-        <div class="metric">
-          <div class="k">Uptime</div>
-          <div class="v" id="uptime-value">-</div>
+        <div id="last-sync">Son senkron: -</div>
+      </section>
+
+      <section class="grid">
+        <div class="stats">
+          <div class="metric">
+            <div class="k">Aktif Model</div>
+            <div class="v" id="model-value">-</div>
+          </div>
+          <div class="metric">
+            <div class="k">Uptime</div>
+            <div class="v" id="uptime-value">-</div>
+          </div>
+          <div class="metric">
+            <div class="k">Araclar</div>
+            <div class="v" id="tools-value">-</div>
+          </div>
+          <div class="metric">
+            <div class="k">Aktif Kanallar</div>
+            <div class="v" id="channels-value">-</div>
+          </div>
         </div>
-        <div class="metric">
-          <div class="k">Araçlar</div>
-          <div class="v" id="tools-value">-</div>
-        </div>
-        <div class="metric">
-          <div class="k">Aktif Kanallar</div>
-          <div class="v" id="channels-value">-</div>
-        </div>
-      </div>
 
-      <article class="card readiness">
-        <h2>Operator Readiness</h2>
-        <ul class="list" id="readiness-list"></ul>
-      </article>
-
-      <article class="card benchmark">
-        <h2>Benchmark Health</h2>
-        <ul class="list" id="benchmark-summary"></ul>
-      </article>
-
-      <article class="card workflows">
-        <h2>Preset Workflows</h2>
-        <p class="muted">Hero workflow'ler tek tikla ayni uretim yolu uzerinden calisir.</p>
-        <div class="preset-list" id="workflow-preset-list"></div>
-      </article>
-
-      <article class="card workflow-report-card">
-        <h2>Task Report</h2>
-        <div id="workflow-report" class="report-panel">Henuz preset workflow calistirilmadi.</div>
-      </article>
-
-      <article class="card setup">
-        <h2>Setup / Release Readiness</h2>
-        <ul class="list" id="setup-list"></ul>
-      </article>
-
-      <article class="card onboarding">
-        <h2>Onboarding / Quickstart</h2>
-        <ul class="list" id="onboarding-list"></ul>
-      </article>
-
-      <article class="card release">
-        <h2>Release / Health</h2>
-        <ul class="list" id="release-list"></ul>
-      </article>
-
-      <article class="card model-hub">
-        <h2>Model Hub</h2>
-        <p class="muted" id="model-pool-summary">Model havuzu yukleniyor.</p>
-        <div class="model-grid">
-          <div class="model-stack">
-            <div class="model-form">
-              <select id="model-provider-input">
-                <option value="openai">openai</option>
-                <option value="anthropic">anthropic</option>
-                <option value="google">google</option>
-                <option value="groq">groq</option>
-                <option value="ollama">ollama</option>
-              </select>
-              <input id="model-name-input" type="text" placeholder="Model adi (orn: gpt-4o, claude-3-5-sonnet-latest)" />
-              <input id="model-alias-input" type="text" placeholder="Kisa etiket (opsiyonel)" />
-              <input id="model-roles-input" type="text" placeholder="Roller (orn: reasoning,code,qa)" />
-              <input id="model-key-input" type="password" placeholder="API key (cloud provider icin opsiyonel update)" />
-            </div>
-            <div class="preset-actions">
-              <button class="btn primary" id="model-add-btn" type="button">Modeli Ekle / Guncelle</button>
-            </div>
-            <div class="model-collab">
-              <label><input id="collab-enabled-input" type="checkbox" /> Multi-LLM collaboration acik</label>
-              <select id="collab-strategy-input">
-                <option value="synthesize">synthesize</option>
-                <option value="round_robin">round_robin</option>
-                <option value="planner_critic">planner_critic</option>
-              </select>
-              <input id="collab-max-models-input" type="number" min="1" max="5" value="3" />
-              <input id="collab-roles-input" type="text" placeholder="Collab roller (orn: reasoning,planning,code,qa)" />
-              <button class="btn" id="collab-save-btn" type="button">Collab Ayarlarini Kaydet</button>
+        <article class="card readiness">
+          <div class="card-head">
+            <div>
+              <h2>Operator Readiness</h2>
+              <p class="muted">Temel runtime, browser ve kanal hazirligi.</p>
             </div>
           </div>
-          <ul class="list model-registry" id="model-registry-list"></ul>
-        </div>
-      </article>
+          <ul class="list" id="readiness-list"></ul>
+        </article>
 
-      <article class="card channels">
-        <h2>Kanallar</h2>
-        <ul class="list" id="channel-list"></ul>
-      </article>
+        <article class="card benchmark">
+          <div class="card-head">
+            <div>
+              <h2>Benchmark Health</h2>
+              <p class="muted">Regresyon ve benchmark ozeti.</p>
+            </div>
+          </div>
+          <ul class="list" id="benchmark-summary"></ul>
+        </article>
 
-      <article class="card runs">
-        <h2>Son Kosular</h2>
-        <ul class="list" id="run-list"></ul>
-      </article>
+        <article class="card setup">
+          <div class="card-head">
+            <div>
+              <h2>Setup / Release Readiness</h2>
+              <p class="muted">Calisma ortami ve cikis hazirligi.</p>
+            </div>
+          </div>
+          <ul class="list" id="setup-list"></ul>
+        </article>
 
-      <article class="card chat">
-        <h2>Direkt Komut</h2>
-        <div class="chat-log" id="chat-log"></div>
-        <div class="chat-row">
-          <input id="chat-input" type="text" placeholder="Komut yaz..." />
-          <button class="btn primary" id="send-btn" type="button">Gonder</button>
-        </div>
-        <div class="quick-actions">
-          <button class="btn" type="button" data-quick-prompt="durum nedir">Durum</button>
-          <button class="btn" type="button" data-quick-prompt="ekrana bak ve ne oldugunu soyle">Ekran Oku</button>
-          <button class="btn" type="button" data-quick-prompt="aktif gorevler">Gorevler</button>
-          <button class="btn" type="button" data-quick-prompt="bitcoin hakkinda profesyonel belge hazirla">Research</button>
-        </div>
-        <p class="muted">Mesajlar `POST /api/message` uzerinden gonderilir.</p>
-      </article>
+        <article class="card release">
+          <div class="card-head">
+            <div>
+              <h2>Release / Health</h2>
+              <p class="muted">Urun giris noktasi ve hizli saglik kontrolu.</p>
+            </div>
+          </div>
+          <ul class="list" id="release-list"></ul>
+        </article>
 
-      <article class="card tasks">
-        <h2>Task Center</h2>
-        <ul class="list" id="task-list"></ul>
-      </article>
+        <article class="card chat">
+          <div class="card-head">
+            <div>
+              <h2>Direkt Komut</h2>
+              <p class="muted">Dashboard uzerinden tek satir komut calistir.</p>
+            </div>
+          </div>
+          <div class="chat-log" id="chat-log"></div>
+          <div class="chat-row">
+            <input id="chat-input" type="text" placeholder="Komut yaz..." />
+            <button class="btn primary" id="send-btn" type="button">Gonder</button>
+          </div>
+          <div class="quick-actions">
+            <button class="btn" type="button" data-quick-prompt="durum nedir">Durum</button>
+            <button class="btn" type="button" data-quick-prompt="aktif gorevler">Gorevler</button>
+            <button class="btn" type="button" data-quick-prompt="safari ac">Safari</button>
+            <button class="btn" type="button" data-quick-prompt="bugunku calisma durumunu ozetle">Ozet</button>
+          </div>
+        </article>
 
-      <article class="card activity">
-        <h2>Canli Aktivite</h2>
-        <ul class="list" id="activity-list"></ul>
-      </article>
+        <article class="card tasks">
+          <div class="card-head">
+            <div>
+              <h2>Task Center</h2>
+              <p class="muted">Aktif ve son gorevler.</p>
+            </div>
+          </div>
+          <ul class="list" id="task-list"></ul>
+        </article>
 
-      <article class="card tool-stream">
-        <h2>Tool Event Stream</h2>
-        <ul class="list" id="tool-event-list"></ul>
-      </article>
+        <article class="card channels">
+          <div class="card-head">
+            <div>
+              <h2>Kanallar</h2>
+              <p class="muted">Bagli iletisim kanallari.</p>
+            </div>
+          </div>
+          <ul class="list" id="channel-list"></ul>
+        </article>
 
-      <article class="card evidence">
-        <h2>Kanit Paneli</h2>
-        <ul class="list" id="evidence-list"></ul>
-      </article>
+        <article class="card runs">
+          <div class="card-head">
+            <div>
+              <h2>Son Kosular</h2>
+              <p class="muted">Son uc task ve workflow kosulari.</p>
+            </div>
+          </div>
+          <ul class="list" id="run-list"></ul>
+        </article>
+      </section>
+    </section>
+
+    <section class="tab-panel" data-panel="models">
+      <section class="grid">
+        <article class="card model-overview">
+          <div class="card-head">
+            <div>
+              <h2>Model Durumu</h2>
+              <p class="muted">Varsayilan, fallback ve provider baglanti ozeti.</p>
+            </div>
+          </div>
+          <div class="summary-grid">
+            <div class="summary-box">
+              <div class="k">Varsayilan</div>
+              <div class="v" id="model-default-summary">-</div>
+            </div>
+            <div class="summary-box">
+              <div class="k">Fallback</div>
+              <div class="v" id="model-fallback-summary">-</div>
+            </div>
+            <div class="summary-box">
+              <div class="k">Router</div>
+              <div class="v" id="model-router-summary">-</div>
+            </div>
+          </div>
+          <ul class="list compact-list" id="model-provider-status"></ul>
+        </article>
+
+        <article class="card model-hub">
+          <div class="card-head">
+            <div>
+              <h2>Model Hub</h2>
+              <p class="muted" id="model-pool-summary">Model havuzu yukleniyor.</p>
+            </div>
+          </div>
+          <div class="model-grid">
+            <div class="model-stack">
+              <div class="model-form">
+                <select id="model-provider-input">
+                  <option value="openai">openai</option>
+                  <option value="anthropic">anthropic</option>
+                  <option value="google">google</option>
+                  <option value="groq">groq</option>
+                  <option value="ollama">ollama</option>
+                </select>
+                <input id="model-name-input" type="text" placeholder="Model adi (orn: gpt-4o)" />
+                <input id="model-alias-input" type="text" placeholder="Kisa etiket (opsiyonel)" />
+                <input id="model-roles-input" type="text" placeholder="Roller (orn: reasoning,code,qa)" />
+                <input id="model-key-input" type="password" placeholder="API key (opsiyonel)" />
+              </div>
+              <div class="preset-actions">
+                <button class="btn primary" id="model-add-btn" type="button">Modeli Ekle / Guncelle</button>
+              </div>
+              <div class="model-collab">
+                <label><input id="collab-enabled-input" type="checkbox" /> Multi-LLM collaboration acik</label>
+                <select id="collab-strategy-input">
+                  <option value="synthesize">synthesize</option>
+                  <option value="round_robin">round_robin</option>
+                  <option value="planner_critic">planner_critic</option>
+                </select>
+                <input id="collab-max-models-input" type="number" min="1" max="5" value="3" />
+                <input id="collab-roles-input" type="text" placeholder="Collab roller (orn: reasoning,planning,code,qa)" />
+                <button class="btn" id="collab-save-btn" type="button">Collab Ayarlarini Kaydet</button>
+              </div>
+            </div>
+            <ul class="list model-registry" id="model-registry-list"></ul>
+          </div>
+        </article>
+      </section>
+    </section>
+
+    <section class="tab-panel" data-panel="profile">
+      <section class="grid">
+        <article class="card profile-summary-card">
+          <div class="card-head">
+            <div>
+              <h2>Kullanici Profili</h2>
+              <p class="muted">Ogrenilen tercih ve kullanim ozeti.</p>
+            </div>
+          </div>
+          <div id="profile-summary" class="profile-summary">Profil verisi yukleniyor.</div>
+        </article>
+
+        <article class="card profile-editor">
+          <div class="card-head">
+            <div>
+              <h2>Agent Kisisellestirme</h2>
+              <p class="muted">Yanıt stili, dil ve sistem davranisi.</p>
+            </div>
+          </div>
+          <div class="form-grid">
+            <label>
+              <span>Agent Adi</span>
+              <input id="agent-name-input" type="text" placeholder="Elyan" />
+            </label>
+            <label>
+              <span>Dil</span>
+              <select id="agent-language-input">
+                <option value="tr">Turkce</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+            <label>
+              <span>Kisilik</span>
+              <select id="agent-personality-input">
+                <option value="professional">professional</option>
+                <option value="technical">technical</option>
+                <option value="friendly">friendly</option>
+                <option value="concise">concise</option>
+                <option value="creative">creative</option>
+              </select>
+            </label>
+            <label>
+              <span>Yanıt Modu</span>
+              <select id="response-mode-input">
+                <option value="concise">concise</option>
+                <option value="friendly">friendly</option>
+                <option value="formal">formal</option>
+              </select>
+            </label>
+            <label>
+              <span>Yanıt Uzunlugu</span>
+              <select id="response-bias-input">
+                <option value="short">short</option>
+                <option value="medium">medium</option>
+                <option value="detailed">detailed</option>
+              </select>
+            </label>
+            <label class="toggle-field">
+              <input id="profile-local-first-input" type="checkbox" />
+              <span>Yerel model once</span>
+            </label>
+            <label class="toggle-field">
+              <input id="profile-autonomous-input" type="checkbox" />
+              <span>Otonom mod acik</span>
+            </label>
+          </div>
+          <label class="textarea-field">
+            <span>Sistem Promptu</span>
+            <textarea id="system-prompt-input" rows="7" placeholder="Agent davranis rehberi"></textarea>
+          </label>
+          <div class="preset-actions">
+            <button class="btn primary" id="profile-save-btn" type="button">Profili Kaydet</button>
+          </div>
+        </article>
+      </section>
+    </section>
+
+    <section class="tab-panel" data-panel="ops">
+      <section class="grid">
+        <article class="card workflows">
+          <div class="card-head">
+            <div>
+              <h2>Preset Workflows</h2>
+              <p class="muted">Onceden tanimli operator akislari.</p>
+            </div>
+          </div>
+          <div class="preset-list" id="workflow-preset-list"></div>
+        </article>
+
+        <article class="card workflow-report-card">
+          <div class="card-head">
+            <div>
+              <h2>Task Report</h2>
+              <p class="muted">Son workflow veya gorev cikti ozeti.</p>
+            </div>
+          </div>
+          <div id="workflow-report" class="report-panel">Henuz preset workflow calistirilmadi.</div>
+        </article>
+
+        <article class="card module-health">
+          <div class="card-head">
+            <div>
+              <h2>Agent Modules Health</h2>
+              <p class="muted" id="module-health-summary">Module health yukleniyor.</p>
+            </div>
+          </div>
+          <ul class="list" id="module-health-list"></ul>
+        </article>
+
+        <article class="card onboarding">
+          <div class="card-head">
+            <div>
+              <h2>Onboarding / Quickstart</h2>
+              <p class="muted">Ilk kullanim ve hizli demo adimlari.</p>
+            </div>
+          </div>
+          <ul class="list" id="onboarding-list"></ul>
+        </article>
+
+        <article class="card activity">
+          <div class="card-head">
+            <div>
+              <h2>Canli Aktivite</h2>
+              <p class="muted">Gateway ve task olay akisi.</p>
+            </div>
+          </div>
+          <ul class="list" id="activity-list"></ul>
+        </article>
+
+        <article class="card tool-stream">
+          <div class="card-head">
+            <div>
+              <h2>Tool Event Stream</h2>
+              <p class="muted">Tool bazli calisma izi.</p>
+            </div>
+          </div>
+          <ul class="list" id="tool-event-list"></ul>
+        </article>
+
+        <article class="card evidence">
+          <div class="card-head">
+            <div>
+              <h2>Kanit Paneli</h2>
+              <p class="muted">Artifact ve kanit kayitlari.</p>
+            </div>
+          </div>
+          <ul class="list" id="evidence-list"></ul>
+        </article>
+      </section>
     </section>
   </div>
 

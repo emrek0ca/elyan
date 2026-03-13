@@ -6,6 +6,7 @@ import pytest
 
 from core.pipeline import PipelineContext, StageVerify
 from core.contracts.execution_result import coerce_execution_result
+from core.contracts.tool_result import coerce_tool_result
 from core.pipeline_upgrade.contracts import (
     assign_model_roles,
     load_output_contract,
@@ -13,7 +14,7 @@ from core.pipeline_upgrade.contracts import (
     validate_research_payload,
 )
 from core.pipeline_upgrade.verifier import verify_research_gates
-from tools.file_tools import write_file
+from tools.file_tools import copy_file, list_files, move_file, read_file, rename_file, search_files, write_file
 from tools.pro_workflows import create_web_project_scaffold
 from tools.research_tools.advanced_research import ResearchSource, _build_research_contract_payload
 
@@ -93,9 +94,132 @@ async def test_write_file_returns_contract_metadata(tmp_path):
     path = tmp_path / "report.md"
     result = await write_file(str(path), "x" * 80)
     assert result["success"] is True
+    assert result["status"] == "success"
     assert result["bytes_written"] >= 80
     assert len(result["sha256"]) == 64
     assert result["preview_200_chars"] == "x" * 80
+    assert str(result["output_path"]).endswith("report.md")
+    assert result["artifacts"]
+
+
+@pytest.mark.asyncio
+async def test_list_files_returns_standardized_payload_and_coerces(tmp_path):
+    sample = tmp_path / "note.txt"
+    sample.write_text("ok", encoding="utf-8")
+
+    result = await list_files(str(tmp_path))
+    normalized = coerce_tool_result(result, tool="list_files")
+
+    assert result["success"] is True
+    assert result["status"] == "success"
+    assert str(result["output_path"]).endswith(tmp_path.name)
+    assert result["artifacts"][0]["type"] == "directory"
+    assert result["count"] == 1
+    assert result["data"]["count"] == 1
+    assert result["data"]["items"][0]["name"] == "note.txt"
+    assert normalized.status == "success"
+    assert normalized.artifacts[0].type == "directory"
+    assert normalized.artifacts[0].path == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_read_file_returns_standardized_payload_and_coerces(tmp_path):
+    sample = tmp_path / "note.txt"
+    sample.write_text("merhaba dunya", encoding="utf-8")
+
+    result = await read_file(str(sample))
+    normalized = coerce_tool_result(result, tool="read_file")
+
+    assert result["success"] is True
+    assert result["status"] == "success"
+    assert str(result["output_path"]).endswith("note.txt")
+    assert result["content"] == "merhaba dunya"
+    assert result["data"]["content"] == "merhaba dunya"
+    assert result["bytes_read"] == len("merhaba dunya")
+    assert result["artifacts"][0]["type"] == "text"
+    assert normalized.status == "success"
+    assert normalized.artifacts[0].type == "text"
+    assert normalized.artifacts[0].path == str(sample)
+
+
+@pytest.mark.asyncio
+async def test_search_files_returns_sorted_standardized_payload(tmp_path):
+    a = tmp_path / "b_note.txt"
+    b = tmp_path / "a_note.txt"
+    a.write_text("x", encoding="utf-8")
+    b.write_text("x", encoding="utf-8")
+
+    result = await search_files("*.txt", str(tmp_path))
+    normalized = coerce_tool_result(result, tool="search_files")
+
+    assert result["success"] is True
+    assert result["status"] == "success"
+    assert result["count"] == 2
+    assert result["matches"] == sorted(result["matches"])
+    assert result["data"]["count"] == 2
+    assert normalized.status == "success"
+    assert normalized.artifacts[0].type == "directory"
+
+
+@pytest.mark.asyncio
+async def test_move_file_returns_verified_standardized_payload(tmp_path):
+    source = tmp_path / "from.txt"
+    target_dir = tmp_path / "dest"
+    target_dir.mkdir()
+    source.write_text("icerik", encoding="utf-8")
+
+    result = await move_file(str(source), str(target_dir))
+    normalized = coerce_tool_result(result, tool="move_file")
+
+    moved_path = target_dir / "from.txt"
+    assert result["success"] is True
+    assert result["status"] == "success"
+    assert result["destination"] == str(moved_path)
+    assert result["data"]["moved"] is True
+    assert moved_path.exists()
+    assert not source.exists()
+    assert normalized.status == "success"
+    assert normalized.artifacts[0].path == str(moved_path)
+
+
+@pytest.mark.asyncio
+async def test_copy_file_returns_verified_standardized_payload(tmp_path):
+    source = tmp_path / "from.txt"
+    target_dir = tmp_path / "dest"
+    target_dir.mkdir()
+    source.write_text("icerik", encoding="utf-8")
+
+    result = await copy_file(str(source), str(target_dir))
+    normalized = coerce_tool_result(result, tool="copy_file")
+
+    copied_path = target_dir / "from.txt"
+    assert result["success"] is True
+    assert result["status"] == "success"
+    assert result["destination"] == str(copied_path)
+    assert result["data"]["copied"] is True
+    assert copied_path.exists()
+    assert source.exists()
+    assert normalized.status == "success"
+    assert normalized.artifacts[0].path == str(copied_path)
+
+
+@pytest.mark.asyncio
+async def test_rename_file_returns_verified_standardized_payload(tmp_path):
+    source = tmp_path / "old.txt"
+    source.write_text("icerik", encoding="utf-8")
+
+    result = await rename_file(str(source), "new.txt")
+    normalized = coerce_tool_result(result, tool="rename_file")
+
+    renamed_path = tmp_path / "new.txt"
+    assert result["success"] is True
+    assert result["status"] == "success"
+    assert result["new_name"] == "new.txt"
+    assert result["data"]["renamed"] is True
+    assert renamed_path.exists()
+    assert not source.exists()
+    assert normalized.status == "success"
+    assert normalized.artifacts[0].path == str(renamed_path)
 
 
 @pytest.mark.asyncio

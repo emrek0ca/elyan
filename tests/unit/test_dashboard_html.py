@@ -7,6 +7,8 @@ def test_dashboard_html_contains_task_center_and_quick_actions():
     html = Path("/Users/emrekoca/Desktop/bot/ui/web/dashboard.html").read_text(encoding="utf-8")
 
     assert "Task Center" in html
+    assert 'data-tab="overview"' in html
+    assert 'data-panel="models"' in html
     assert 'id="task-list"' in html
     assert 'id="workflow-preset-list"' in html
     assert 'id="workflow-report"' in html
@@ -18,6 +20,9 @@ def test_dashboard_html_contains_task_center_and_quick_actions():
     assert 'id="model-pool-summary"' in html
     assert 'id="model-add-btn"' in html
     assert 'id="collab-save-btn"' in html
+    assert 'id="profile-save-btn"' in html
+    assert 'id="agent-name-input"' in html
+    assert 'id="profile-summary"' in html
     assert "data-quick-prompt=" in html
     assert 'id="status-note"' in html
     assert 'id="status-detail"' in html

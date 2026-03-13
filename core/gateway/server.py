@@ -26,6 +26,7 @@ from core.proactive.intervention import get_intervention_manager
 from core.model_catalog import default_model_for_provider
 from core.tool_usage import get_tool_usage_snapshot
 from core.runtime_policy import get_runtime_policy_resolver
+from core.user_profile import get_user_profile_store
 from core.runtime import (
     EMRE_WORKFLOW_PRESETS,
     list_emre_workflow_reports,
@@ -53,6 +54,12 @@ _tool_health_cache: dict = {
     "probe": False,
     "items": {},
     "summary": {},
+}
+_recent_runs_cache: dict[str, Any] = {
+    "ts": 0.0,
+    "signature": (),
+    "limit": 0,
+    "items": [],
 }
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "::ffff:127.0.0.1", "localhost"}
 _ADMIN_READ_PATHS = {
@@ -786,6 +793,9 @@ class ElyanGatewayServer:
         self.app.router.add_post('/api/routines/run', self.handle_routine_run)
         self.app.router.add_get('/api/routines/history', self.handle_routine_history)
         self.app.router.add_delete('/api/routines/{id}', self.handle_routine_remove)
+        self.app.router.add_get('/api/automations/modules', self.handle_module_automations)
+        self.app.router.add_post('/api/automations/modules/action', self.handle_module_automations_action)
+        self.app.router.add_post('/api/automations/modules/update', self.handle_module_automations_update)
         self.app.router.add_get('/api/tool-requests', self.handle_tool_requests)
         self.app.router.add_get('/api/tool-requests/stats', self.handle_tool_requests_stats)
         self.app.router.add_get('/api/tool-events', self.handle_tool_events)
@@ -899,6 +909,10 @@ class ElyanGatewayServer:
             return web.json_response({"error": str(e)}, status=400)
 
     async def handle_agent_profile_get(self, request):
+        try:
+            user_profile = get_user_profile_store().profile_summary("local")
+        except Exception:
+            user_profile = {}
         profile = {
             "name": str(elyan_config.get("agent.name", "Elyan") or "Elyan"),
             "personality": str(elyan_config.get("agent.personality", "professional") or "professional"),
@@ -923,6 +937,41 @@ class ElyanGatewayServer:
             "planning": {
                 "use_llm": bool(elyan_config.get("agent.planning.use_llm", True)),
                 "max_subtasks": int(elyan_config.get("agent.planning.max_subtasks", 10) or 10),
+            },
+            "nlu": {
+                "model_a": {
+                    "enabled": bool(elyan_config.get("agent.nlu.model_a.enabled", True)),
+                    "model_path": str(
+                        elyan_config.get(
+                            "agent.nlu.model_a.model_path",
+                            "~/.elyan/models/nlu/baseline_intent_model.json",
+                        )
+                        or "~/.elyan/models/nlu/baseline_intent_model.json"
+                    ),
+                    "min_confidence": float(elyan_config.get("agent.nlu.model_a.min_confidence", 0.78) or 0.78),
+                    "allowed_actions": list(
+                        elyan_config.get(
+                            "agent.nlu.model_a.allowed_actions",
+                            [
+                                "open_app",
+                                "close_app",
+                                "open_url",
+                                "web_search",
+                                "create_folder",
+                                "list_files",
+                                "read_file",
+                                "write_file",
+                                "run_safe_command",
+                                "http_request",
+                                "api_health_get_save",
+                                "set_wallpaper",
+                                "analyze_screen",
+                                "take_screenshot",
+                            ],
+                        )
+                        or []
+                    ),
+                }
             },
             "flags": {
                 "agentic_v2": bool(elyan_config.get("agent.flags.agentic_v2", False)),
@@ -984,6 +1033,12 @@ class ElyanGatewayServer:
                 "require_confirmation_for_risky": bool(elyan_config.get("security.requireConfirmationForRisky", True)),
                 "require_evidence_for_dangerous": bool(elyan_config.get("security.requireEvidenceForDangerous", True)),
             },
+            "user_profile": {
+                "preferred_language": str(user_profile.get("preferred_language", "auto") or "auto"),
+                "response_length_bias": str(user_profile.get("response_length_bias", "short") or "short"),
+                "top_topics": list(user_profile.get("top_topics", []) or []),
+                "top_actions": list(user_profile.get("top_actions", []) or []),
+            },
         }
         return web.json_response({"ok": True, "profile": profile})
 
@@ -1006,10 +1061,13 @@ class ElyanGatewayServer:
 
         capability_data = data.get("capability", {}) if isinstance(data.get("capability"), dict) else {}
         planning_data = data.get("planning", {}) if isinstance(data.get("planning"), dict) else {}
+        nlu_data = data.get("nlu", {}) if isinstance(data.get("nlu"), dict) else {}
+        model_a_data = nlu_data.get("model_a", {}) if isinstance(nlu_data.get("model_a"), dict) else {}
         orchestration_data = data.get("orchestration", {}) if isinstance(data.get("orchestration"), dict) else {}
         flags_data = data.get("flags", {}) if isinstance(data.get("flags"), dict) else {}
         skills_data = data.get("skills", {}) if isinstance(data.get("skills"), dict) else {}
         runtime_policy_data = data.get("runtime_policy", {}) if isinstance(data.get("runtime_policy"), dict) else {}
+        user_profile_data = data.get("user_profile", {}) if isinstance(data.get("user_profile"), dict) else {}
 
         capability_enabled = bool(
             capability_data.get(
@@ -1037,6 +1095,51 @@ class ElyanGatewayServer:
         planning_max_subtasks = planning_data.get(
             "max_subtasks",
             data.get("planning_max_subtasks", elyan_config.get("agent.planning.max_subtasks", 10)),
+        )
+        model_a_enabled = bool(
+            model_a_data.get(
+                "enabled",
+                data.get("model_a_enabled", elyan_config.get("agent.nlu.model_a.enabled", True)),
+            )
+        )
+        model_a_path = str(
+            model_a_data.get(
+                "model_path",
+                data.get(
+                    "model_a_path",
+                    elyan_config.get("agent.nlu.model_a.model_path", "~/.elyan/models/nlu/baseline_intent_model.json"),
+                ),
+            )
+            or "~/.elyan/models/nlu/baseline_intent_model.json"
+        ).strip()
+        model_a_min_confidence = model_a_data.get(
+            "min_confidence",
+            data.get("model_a_min_confidence", elyan_config.get("agent.nlu.model_a.min_confidence", 0.78)),
+        )
+        model_a_allowed_actions = model_a_data.get(
+            "allowed_actions",
+            data.get(
+                "model_a_allowed_actions",
+                elyan_config.get(
+                    "agent.nlu.model_a.allowed_actions",
+                    [
+                        "open_app",
+                        "close_app",
+                        "open_url",
+                        "web_search",
+                        "create_folder",
+                        "list_files",
+                        "read_file",
+                        "write_file",
+                        "run_safe_command",
+                        "http_request",
+                        "api_health_get_save",
+                        "set_wallpaper",
+                        "analyze_screen",
+                        "take_screenshot",
+                    ],
+                ),
+            ),
         )
         flag_agentic_v2 = bool(
             flags_data.get(
@@ -1229,6 +1332,9 @@ class ElyanGatewayServer:
                 data.get("require_evidence_for_dangerous", elyan_config.get("security.requireEvidenceForDangerous", True)),
             )
         )
+        response_length_bias = str(
+            user_profile_data.get("response_length_bias", data.get("response_length_bias", "short")) or "short"
+        ).strip().lower()
 
         if personality not in {"professional", "technical", "friendly", "concise", "creative"}:
             personality = "professional"
@@ -1248,6 +1354,56 @@ class ElyanGatewayServer:
             planning_max_subtasks = max(1, min(20, int(planning_max_subtasks)))
         except Exception:
             planning_max_subtasks = int(elyan_config.get("agent.planning.max_subtasks", 10) or 10)
+        try:
+            model_a_min_confidence = max(0.4, min(0.99, float(model_a_min_confidence)))
+        except Exception:
+            model_a_min_confidence = float(elyan_config.get("agent.nlu.model_a.min_confidence", 0.78) or 0.78)
+        if not model_a_path:
+            model_a_path = str(
+                elyan_config.get("agent.nlu.model_a.model_path", "~/.elyan/models/nlu/baseline_intent_model.json")
+                or "~/.elyan/models/nlu/baseline_intent_model.json"
+            )
+        if not isinstance(model_a_allowed_actions, list):
+            model_a_allowed_actions = list(
+                elyan_config.get(
+                    "agent.nlu.model_a.allowed_actions",
+                    [
+                        "open_app",
+                        "close_app",
+                        "open_url",
+                        "web_search",
+                        "create_folder",
+                        "list_files",
+                        "read_file",
+                        "write_file",
+                        "run_safe_command",
+                        "http_request",
+                        "api_health_get_save",
+                        "set_wallpaper",
+                        "analyze_screen",
+                        "take_screenshot",
+                    ],
+                )
+                or []
+            )
+        model_a_allowed_actions = [str(x).strip().lower() for x in model_a_allowed_actions if str(x).strip()]
+        if not model_a_allowed_actions:
+            model_a_allowed_actions = [
+                "open_app",
+                "close_app",
+                "open_url",
+                "web_search",
+                "create_folder",
+                "list_files",
+                "read_file",
+                "write_file",
+                "run_safe_command",
+                "http_request",
+                "api_health_get_save",
+                "set_wallpaper",
+                "analyze_screen",
+                "take_screenshot",
+            ]
         try:
             multi_agent_complexity_threshold = max(0.5, min(1.0, float(multi_agent_complexity_threshold)))
         except Exception:
@@ -1305,6 +1461,10 @@ class ElyanGatewayServer:
         elyan_config.set("agent.api_tools.enabled", api_tools_enabled)
         elyan_config.set("agent.planning.use_llm", planning_use_llm)
         elyan_config.set("agent.planning.max_subtasks", planning_max_subtasks)
+        elyan_config.set("agent.nlu.model_a.enabled", model_a_enabled)
+        elyan_config.set("agent.nlu.model_a.model_path", model_a_path)
+        elyan_config.set("agent.nlu.model_a.min_confidence", model_a_min_confidence)
+        elyan_config.set("agent.nlu.model_a.allowed_actions", model_a_allowed_actions)
         elyan_config.set("agent.flags.agentic_v2", flag_agentic_v2)
         elyan_config.set("agent.flags.dag_exec", flag_dag_exec)
         elyan_config.set("agent.flags.strict_taskspec", flag_strict_taskspec)
@@ -1336,6 +1496,8 @@ class ElyanGatewayServer:
             default_user_role = "operator"
         if response_mode not in {"friendly", "concise", "formal"}:
             response_mode = "friendly"
+        if response_length_bias not in {"short", "medium", "detailed"}:
+            response_length_bias = "short"
         elyan_config.set("security.kvkk.strict", kvkk_strict_mode)
         elyan_config.set("security.kvkk.redactCloudPrompts", redact_cloud_prompts)
         elyan_config.set("security.kvkk.allowCloudFallback", allow_cloud_fallback)
@@ -1349,6 +1511,15 @@ class ElyanGatewayServer:
         elyan_config.set("agent.response_style.friendly", response_friendly)
         elyan_config.set("agent.response_style.share_manifest_default", share_manifest_default)
         elyan_config.set("agent.response_style.share_attachments_default", share_attachments_default)
+        try:
+            profile_store = get_user_profile_store()
+            local_profile = profile_store.get("local")
+            local_profile["preferred_language"] = language
+            local_profile["response_length_bias"] = response_length_bias
+            local_profile["updated_at"] = int(time.time())
+            profile_store._save()
+        except Exception:
+            pass
 
         push_activity("agent_profile", "dashboard", f"profile updated ({personality}/{language}, ma={multi_agent_enabled})", True)
 
@@ -2435,6 +2606,8 @@ class ElyanGatewayServer:
             hw = monitor.get_health_snapshot()
             orchestration = mon.get_orchestration_summary()
             pipeline_jobs = mon.get_pipeline_job_summary()
+            active_automations = automation_registry.get_active()
+            module_health = automation_registry.get_module_health(limit=12)
             
             return web.json_response({
                 "ok": True,
@@ -2451,8 +2624,9 @@ class ElyanGatewayServer:
                     "budget": token_budget.get_usage_summary()
                 },
                 "automations": {
-                    "active_count": len(automation_registry.get_active()),
-                    "tasks": automation_registry.get_active()[:10]
+                    "active_count": len(active_automations),
+                    "tasks": active_automations[:10],
+                    "module_health": module_health,
                 },
                 "orchestration": orchestration,
                 "pipeline_jobs": pipeline_jobs,
@@ -2467,6 +2641,7 @@ class ElyanGatewayServer:
 
     async def handle_recent_runs(self, request):
         """Return recent run summaries from the resolved runs root."""
+        global _recent_runs_cache
         try:
             limit = int(request.rel_url.query.get("limit", 10))
         except Exception:
@@ -2477,8 +2652,29 @@ class ElyanGatewayServer:
         if not runs_root.exists():
             return web.json_response({"runs": [], "count": 0})
 
-        run_dirs = [p for p in runs_root.iterdir() if p.is_dir()]
-        run_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        run_stats: list[tuple[Path, float]] = []
+        for p in runs_root.iterdir():
+            if not p.is_dir():
+                continue
+            try:
+                mtime = float(p.stat().st_mtime)
+            except Exception:
+                mtime = 0.0
+            run_stats.append((p, mtime))
+        run_stats.sort(key=lambda row: row[1], reverse=True)
+        run_dirs = [row[0] for row in run_stats]
+        mtime_by_name = {row[0].name: int(row[1]) for row in run_stats}
+
+        signature = tuple((p.name, mtime_by_name.get(p.name, 0)) for p in run_dirs[:limit])
+        now_ts = time.time()
+        cache_ttl_s = 6.0
+        if (
+            _recent_runs_cache.get("signature") == signature
+            and int(_recent_runs_cache.get("limit", 0) or 0) >= limit
+            and (now_ts - float(_recent_runs_cache.get("ts", 0.0) or 0.0)) <= cache_ttl_s
+        ):
+            cached = list(_recent_runs_cache.get("items") or [])
+            return web.json_response({"runs": cached[:limit], "count": min(limit, len(cached)), "cached": True})
 
         items = []
         for run_dir in run_dirs[:limit]:
@@ -2556,10 +2752,16 @@ class ElyanGatewayServer:
                     "artifacts": artifacts,
                     "summary_path": str(summary_path),
                     "evidence_path": str(evidence_path),
-                    "created_at": int(run_dir.stat().st_mtime),
+                    "created_at": int(mtime_by_name.get(run_dir.name, 0)),
                 }
             )
 
+        _recent_runs_cache = {
+            "ts": now_ts,
+            "signature": signature,
+            "limit": limit,
+            "items": list(items),
+        }
         return web.json_response({"runs": items, "count": len(items)})
 
     # ── Routine automation (new) ────────────────────────────────────────────
@@ -2998,6 +3200,175 @@ class ElyanGatewayServer:
         self.cron.remove_job(self._routine_job_id(rid))
         push_activity("routine_remove", "dashboard", rid, True)
         return web.json_response({"ok": True})
+
+    @staticmethod
+    def _module_automation_snapshot(*, include_inactive: bool = True, limit: int = 100) -> dict[str, Any]:
+        from core.automation_registry import automation_registry
+
+        health = automation_registry.get_module_health(limit=max(1, min(100, int(limit or 100))))
+        tasks = automation_registry.list_module_tasks(
+            include_inactive=bool(include_inactive),
+            limit=max(1, min(200, int(limit or 100) * 2)),
+        )
+        summary = health.get("summary") if isinstance(health, dict) else {}
+        if tasks:
+            summary = {
+                "active_modules": sum(1 for row in tasks if str(row.get("status") or "").strip().lower() == "active"),
+                "healthy": sum(1 for row in tasks if str(row.get("health") or "").strip().lower() == "healthy"),
+                "failing": sum(1 for row in tasks if str(row.get("health") or "").strip().lower() == "failing"),
+                "unknown": sum(1 for row in tasks if str(row.get("health") or "").strip().lower() == "unknown"),
+                "circuit_open": sum(1 for row in tasks if str(row.get("health") or "").strip().lower() == "circuit_open"),
+                "paused": sum(1 for row in tasks if str(row.get("status") or "").strip().lower() in {"paused", "disabled"}),
+            }
+        return {
+            "summary": summary,
+            "health_rows": health.get("modules") if isinstance(health, dict) else [],
+            "tasks": tasks,
+        }
+
+    async def handle_module_automations(self, request):
+        allowed, error = self._require_admin_access(request)
+        if not allowed:
+            return web.json_response({"ok": False, "error": error}, status=403)
+
+        include_inactive = str(request.rel_url.query.get("include_inactive", "1")).strip().lower() not in {"0", "false", "no"}
+        try:
+            limit = int(request.rel_url.query.get("limit", 100))
+        except Exception:
+            limit = 100
+        snapshot = self._module_automation_snapshot(include_inactive=include_inactive, limit=limit)
+        return web.json_response({"ok": True, **snapshot})
+
+    async def handle_module_automations_action(self, request):
+        allowed, error = self._require_admin_access(request)
+        if not allowed:
+            return web.json_response({"ok": False, "error": error}, status=403)
+
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+
+        action = str(data.get("action") or "").strip().lower()
+        task_id = str(data.get("task_id") or "").strip()
+        raw_ids = data.get("task_ids", [])
+        task_ids: list[str] = []
+        if isinstance(raw_ids, list):
+            task_ids = [str(item).strip() for item in raw_ids if str(item).strip()]
+        if task_id:
+            task_ids.insert(0, task_id)
+        # Preserve order while deduplicating.
+        unique_ids: list[str] = []
+        seen_ids: set[str] = set()
+        for rid in task_ids:
+            if rid not in seen_ids:
+                seen_ids.add(rid)
+                unique_ids.append(rid)
+        task_ids = unique_ids
+        if action not in {"run_now", "pause", "resume", "remove"}:
+            return web.json_response({"ok": False, "error": "invalid action"}, status=400)
+        if not task_ids:
+            return web.json_response({"ok": False, "error": "task_id required"}, status=400)
+
+        from core.automation_registry import automation_registry
+
+        try:
+            results: list[dict[str, Any]] = []
+            for rid in task_ids:
+                if action == "run_now":
+                    result = await automation_registry.run_task_now(rid, agent=self.agent)
+                    ok = bool(result.get("success"))
+                    results.append({"task_id": rid, "ok": ok, "status": str(result.get("status") or ""), "result": result})
+                    push_activity("module_run_now", "dashboard", f"{rid} -> {result.get('status')}", ok)
+                    continue
+
+                if action == "pause":
+                    changed = automation_registry.set_status(rid, "paused")
+                    results.append({"task_id": rid, "ok": bool(changed), "status": "paused" if changed else "not_found"})
+                    if changed:
+                        push_activity("module_pause", "dashboard", rid, True)
+                    continue
+                if action == "resume":
+                    changed = automation_registry.set_status(rid, "active")
+                    results.append({"task_id": rid, "ok": bool(changed), "status": "active" if changed else "not_found"})
+                    if changed:
+                        push_activity("module_resume", "dashboard", rid, True)
+                    continue
+
+                changed = automation_registry.unregister(rid)
+                results.append({"task_id": rid, "ok": bool(changed), "status": "removed" if changed else "not_found"})
+                if changed:
+                    push_activity("module_remove", "dashboard", rid, True)
+
+            success_count = sum(1 for item in results if bool(item.get("ok")))
+            if success_count <= 0:
+                return web.json_response(
+                    {
+                        "ok": False,
+                        "error": "task not found",
+                        "action": action,
+                        "results": results,
+                        **self._module_automation_snapshot(include_inactive=True, limit=100),
+                    },
+                    status=404,
+                )
+            snapshot = self._module_automation_snapshot(include_inactive=True, limit=100)
+            response_payload = {
+                "ok": success_count == len(results),
+                "action": action,
+                "requested": len(results),
+                "succeeded": success_count,
+                "failed": len(results) - success_count,
+                "results": results,
+                "result": results[0] if len(results) == 1 else {"count": len(results)},
+                **snapshot,
+            }
+            return web.json_response(response_payload)
+        except Exception as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+    async def handle_module_automations_update(self, request):
+        allowed, error = self._require_admin_access(request)
+        if not allowed:
+            return web.json_response({"ok": False, "error": error}, status=403)
+
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+
+        task_id = str(data.get("task_id") or "").strip()
+        if not task_id:
+            return web.json_response({"ok": False, "error": "task_id required"}, status=400)
+
+        raw_params = data.get("params")
+        params: dict[str, Any] | None = raw_params if isinstance(raw_params, dict) else None
+        workspace = str(data.get("workspace") or "").strip()
+        if workspace:
+            params = dict(params or {})
+            params.setdefault("workspace", workspace)
+
+        from core.automation_registry import automation_registry
+
+        updated = automation_registry.update_module_task(
+            task_id,
+            interval_seconds=data.get("interval_seconds", data.get("interval")),
+            timeout_seconds=data.get("timeout_seconds", data.get("timeout")),
+            max_retries=data.get("max_retries", data.get("retries")),
+            retry_backoff_seconds=data.get("retry_backoff_seconds", data.get("backoff")),
+            circuit_breaker_threshold=data.get("circuit_breaker_threshold", data.get("circuit_threshold")),
+            circuit_breaker_cooldown_seconds=data.get(
+                "circuit_breaker_cooldown_seconds", data.get("circuit_cooldown")
+            ),
+            params=params,
+            channel=data.get("channel"),
+            status=data.get("status"),
+        )
+        if not updated:
+            return web.json_response({"ok": False, "error": "task not found"}, status=404)
+
+        snapshot = self._module_automation_snapshot(include_inactive=True, limit=100)
+        return web.json_response({"ok": True, "task": updated, **snapshot})
 
     # ── Tools management (new) ───────────────────────────────────────────────
     @staticmethod
@@ -4405,6 +4776,8 @@ class ElyanGatewayServer:
         hw = monitor.get_health_snapshot()
         orchestration = mon.get_orchestration_summary()
         pipeline_jobs = mon.get_pipeline_job_summary()
+        active_automations = automation_registry.get_active()
+        module_health = automation_registry.get_module_health(limit=8)
         
         return {
             "timestamp": time.time(),
@@ -4420,7 +4793,8 @@ class ElyanGatewayServer:
                 "budget": token_budget.get_usage_summary()
             },
             "automations": {
-                "active_count": len(automation_registry.get_active())
+                "active_count": len(active_automations),
+                "module_health": module_health,
             },
             "orchestration": orchestration,
             "pipeline_jobs": pipeline_jobs,

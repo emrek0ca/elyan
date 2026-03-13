@@ -107,6 +107,24 @@ def _is_port_listening(port: int) -> bool:
     return bool(_find_listener_pids(port))
 
 
+def _process_listens_on_port(pid: int, port: int) -> bool:
+    try:
+        if not psutil.pid_exists(pid):
+            return False
+        proc = psutil.Process(pid)
+        for conn in proc.connections(kind="tcp"):
+            laddr = getattr(conn, "laddr", None)
+            if not laddr:
+                continue
+            if getattr(laddr, "port", None) != int(port):
+                continue
+            if conn.status == psutil.CONN_LISTEN:
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def _is_elyan_like_process(pid: int) -> bool:
     try:
         if not psutil.pid_exists(pid):
@@ -133,7 +151,7 @@ def _describe_process(pid: int) -> str:
 
 def _running_gateway_pid(port: int) -> int | None:
     pid = _read_pidfile()
-    if pid and psutil.pid_exists(pid):
+    if pid and psutil.pid_exists(pid) and _process_listens_on_port(pid, port):
         return pid
     if pid and not psutil.pid_exists(pid):
         _clear_pidfile()

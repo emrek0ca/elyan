@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 from typing import Any
 import unicodedata
+from urllib.parse import urlparse
 
 from security.validator import validate_path
 from utils.logger import get_logger
@@ -52,6 +53,563 @@ def _brief_excerpt(brief: str, *, fallback: str) -> str:
 
 def _normalize_text(text: str) -> str:
     return unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode("ascii").lower()
+
+
+def _clean_research_sentence(text: str) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    value = value.lstrip("•- ").strip()
+    value = re.sub(r"\s+", " ", value)
+    value = re.sub(r"(?<=[a-zçğıöşü])(?=[A-ZÇĞİÖŞÜ])", " ", value)
+    value = re.sub(r"(?<=[A-Za-zÇĞİÖŞÜçğıöşü])(?=\()", " ", value)
+    value = re.sub(r"\s+([,.;:!?])", r"\1", value)
+    return value.strip()
+
+
+def _strip_research_annotation(text: str) -> str:
+    value = _clean_research_sentence(text)
+    if not value:
+        return ""
+    value = re.sub(r"\s*\((?:Kaynak|Güven|Guven):[^)]*\)\s*$", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\s*\(Kaynak:[^)]*\)\s*$", "", value, flags=re.IGNORECASE)
+    return value.strip(" -")
+
+
+def _strip_research_meta_lines(text: str) -> str:
+    if not text:
+        return ""
+    blocked_patterns = (
+        r"^\s*Yönetici Özeti:?\s*$",
+        r"^\s*Ana Bulgular.*$",
+        r"^\s*Kanıt Matrisi.*$",
+        r"^\s*Araştırma Konusu:.*$",
+        r"^\s*Kapsam:.*$",
+        r"^\s*Kaynak Profili:.*$",
+        r"^\s*Kaynak Politikası:.*$",
+        r"^\s*Not:.*$",
+        r"^\s*Öne Çıkan Alan Adları:.*$",
+        r"^\s*Operasyonel Öneriler:.*$",
+        r"^\s*Sınırlılıklar:.*$",
+        r"^\s*Önerilen Devam Adımı:.*$",
+    )
+    kept: list[str] = []
+    for raw in str(text or "").splitlines():
+        line = _clean_research_sentence(raw)
+        if not line:
+            continue
+        if any(re.search(pattern, line, flags=re.IGNORECASE) for pattern in blocked_patterns):
+            continue
+        low = _normalize_text(line)
+        if any(token in low for token in ("guvenilirlik", "kaynak orani", "kaynak incelendi", "ortalama guven")):
+            continue
+        kept.append(line)
+    return "\n\n".join(kept).strip()
+
+
+def _is_low_value_research_statement(text: str) -> bool:
+    line = _clean_research_sentence(text)
+    if not line:
+        return True
+    low = _normalize_text(line)
+    if len(line) < 60:
+        return True
+    blocked_tokens = (
+        "youtube",
+        "video",
+        "videosudur",
+        "bu ders",
+        "buders",
+        "ornek soru",
+        "örnek soru",
+        "sekil",
+        "şekil",
+        "denklem 1",
+        "denklem 2",
+        "denklem 3",
+        "sx (f)",
+        "sx(f)",
+        "guven:",
+        "kaynak:",
+        "kanit matrisi",
+    )
+    if any(token in low for token in blocked_tokens):
+        return True
+    if re.search(r"\b\d+\s*ve\s*\d+\b", low) and "denklem" in low:
+        return True
+    if re.search(r"[A-Za-z]\([A-Za-z]", line):
+        return True
+    return False
+
+
+def _domain_from_url(url: str) -> str:
+    try:
+        host = urlparse(str(url or "")).netloc.lower().strip()
+        return host[4:] if host.startswith("www.") else host
+    except Exception:
+        return ""
+
+
+def _is_low_value_source(url: str) -> bool:
+    low = _normalize_text(url)
+    blocked = (
+        "youtube.com",
+        "youtu.be",
+        "instagram.com",
+        "tiktok.com",
+        "x.com",
+        "twitter.com",
+        "facebook.com",
+        "reddit.com",
+        "blogspot.",
+        "wordpress.",
+    )
+    return any(token in low for token in blocked)
+
+
+def _select_research_sources_for_document(
+    sources: list[dict[str, Any]],
+    *,
+    min_rel: float,
+    limit: int = 6,
+) -> list[dict[str, Any]]:
+    ranked: list[tuple[float, dict[str, Any]]] = []
+    for src in list(sources or []):
+        if not isinstance(src, dict):
+            continue
+        url = str(src.get("url") or "").strip()
+        if not url or _is_low_value_source(url):
+            continue
+        try:
+            rel = float(src.get("reliability_score", 0.0) or 0.0)
+        except Exception:
+            rel = 0.0
+        if rel < min_rel:
+            continue
+        domain = _domain_from_url(url)
+        bonus = 0.0
+        if domain.endswith((".edu", ".gov", ".org", ".ac.tr")):
+            bonus += 0.2
+        if any(token in domain for token in ("wikipedia.org", "springer", "sciencedirect", "nature", "ankara.edu.tr", "gibtu.edu.tr")):
+            bonus += 0.15
+        ranked.append((rel + bonus, src))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return [dict(item[1]) for item in ranked[:limit]]
+
+
+def _topic_terms(topic: str) -> list[str]:
+    return [token for token in re.findall(r"[a-zA-ZğüşöçıİĞÜŞÖÇ0-9]+", str(topic or "").lower()) if len(token) >= 3]
+
+
+def _research_body_seems_relevant(topic: str, body: str) -> bool:
+    text = str(body or "").strip()
+    if len(text) < 280:
+        return False
+    terms = _topic_terms(topic)
+    if not terms:
+        return len(text) >= 280
+    matches = sum(1 for token in set(terms) if token in text.lower())
+    return matches >= max(1, min(2, len(set(terms))))
+
+
+async def _synthesize_research_body_with_llm(
+    *,
+    topic: str,
+    brief: str,
+    findings: list[str],
+    sources: list[dict[str, Any]],
+    language: str = "tr",
+) -> str:
+    if not findings or not sources:
+        return ""
+    try:
+        from core.llm_client import LLMClient
+
+        llm = LLMClient()
+        source_lines = []
+        for idx, src in enumerate(sources[:6], start=1):
+            title = _clean_research_sentence(str(src.get("title") or "").strip()) or "Kaynak"
+            url = str(src.get("url") or "").strip()
+            rel = float(src.get("reliability_score", 0.0) or 0.0)
+            source_lines.append(f"{idx}. {title} | {url} | reliability={rel:.2f}")
+
+        finding_lines = []
+        for idx, finding in enumerate(findings[:6], start=1):
+            finding_lines.append(f"{idx}. {_strip_research_annotation(finding)}")
+
+        prompt = (
+            "Aşağıdaki doğrulanmış araştırma girdilerinden kullanıcıya verilecek belge metnini üret.\n"
+            "Kurallar:\n"
+            "- Yalnızca verilen bulgular ve kaynaklara dayan.\n"
+            "- Türkçe yaz.\n"
+            "- Düz paragraf üret; markdown başlığı, madde işareti, tablo, güven skoru, metodoloji, sınırlılıklar, öneriler yazma.\n"
+            "- Konuyu gerçekten açıkla; komut metnini tekrar etme.\n"
+            "- Emin olmadığın bilgiyi ekleme.\n"
+            "- 5 ile 7 paragraf arasında kal.\n"
+            "- Matematik konusuysa tanım, mantık ve kullanım bağlamını sade şekilde anlat.\n"
+            "- Sadece nihai belge metnini döndür.\n\n"
+            f"Konu: {topic}\n"
+            f"Kullanıcı odağı: {brief or topic}\n\n"
+            "Temiz bulgular:\n"
+            + "\n".join(finding_lines)
+            + "\n\nKaynaklar:\n"
+            + "\n".join(source_lines)
+        )
+        response = await llm.generate(
+            prompt,
+            role="research_worker",
+            temperature=0.2,
+            disable_collaboration=True,
+        )
+        text = str(response or "").strip().strip("`")
+        text = re.sub(r"^#+\s.*$", "", text, flags=re.MULTILINE).strip()
+        if _research_body_seems_relevant(topic, text):
+            return text
+    except Exception as exc:
+        logger.debug("llm_research_synthesis_failed: %s", exc)
+    return ""
+
+
+def _latex_escape(text: str) -> str:
+    s = str(text or "")
+    replacements = {
+        "\\": r"\textbackslash{}",
+        "&": r"\&",
+        "%": r"\%",
+        "$": r"\$",
+        "#": r"\#",
+        "_": r"\_",
+        "{": r"\{",
+        "}": r"\}",
+        "~": r"\textasciitilde{}",
+        "^": r"\textasciicircum{}",
+    }
+    for old, new in replacements.items():
+        s = s.replace(old, new)
+    return s
+
+
+def _build_latex_document(title: str, paragraphs: list[str]) -> str:
+    body = "\n\n".join(_latex_escape(p) + "\n" for p in paragraphs if str(p).strip())
+    return (
+        "\\documentclass[12pt]{article}\n"
+        "\\usepackage[utf8]{inputenc}\n"
+        "\\usepackage[T1]{fontenc}\n"
+        "\\usepackage[turkish]{babel}\n"
+        "\\usepackage[a4paper,margin=1in]{geometry}\n"
+        "\\begin{document}\n"
+        f"\\title{{{_latex_escape(title)}}}\n"
+        "\\date{}\n"
+        "\\maketitle\n\n"
+        f"{body}\n"
+        "\\end{document}\n"
+    )
+
+
+def _select_research_document_findings(findings: list[str], *, limit: int = 5) -> list[str]:
+    selected: list[str] = []
+    seen_findings: set[str] = set()
+    for item in findings:
+        clean = _strip_research_annotation(item)
+        if not clean or _is_low_value_research_statement(clean):
+            continue
+        key = _normalize_text(clean)[:120]
+        if key in seen_findings:
+            continue
+        seen_findings.add(key)
+        selected.append(clean)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def _extract_report_summary(summary: str, findings: list[str], topic: str) -> str:
+    blocked_exact = {
+        "yonetici ozeti",
+        "yonetici ozeti:",
+        "ana bulgular (kanit odakli):",
+        "ana bulgular",
+        "kanit matrisi (ilk 5 kaynak):",
+        "operasyonel oneriler:",
+        "sinirliliklar:",
+    }
+    blocked_prefixes = (
+        "arastirma konusu:",
+        "kapsam:",
+        "kaynak profili:",
+        "kaynak politikasi:",
+        "not:",
+        "one cikan alan adlari:",
+        "onerilen devam adimi:",
+    )
+    lines = []
+    for raw in str(summary or "").splitlines():
+        clean = _clean_research_sentence(raw)
+        if not clean:
+            continue
+        low = _normalize_text(clean)
+        if low in blocked_exact:
+            continue
+        if any(prefix in low for prefix in blocked_prefixes):
+            continue
+        if any(token in low for token in ("guvenilirlik", "kaynak orani", "kaynak incelendi", "ortalama guven")):
+            continue
+        if low.startswith(("-", "1.", "2.", "3.", "4.", "5.", "6.")):
+            continue
+        lines.append(clean)
+        if len(lines) >= 3:
+            break
+    if lines:
+        return "\n\n".join(lines)
+
+    clean_findings = [_strip_research_annotation(item) for item in findings if _strip_research_annotation(item)]
+    if clean_findings:
+        lead = clean_findings[:2]
+        return (
+            f"Bu rapor {topic} başlığını temel kaynaklar üzerinden özetler.\n\n"
+            + " ".join(lead)
+        ).strip()
+    return f"Bu rapor {topic} başlığını güvenilir kaynaklar üzerinden kısa ve düzenli biçimde özetler."
+
+
+def _extract_plain_paragraphs(text: str) -> list[str]:
+    raw = str(text or "").replace("\r\n", "\n")
+    parts = []
+    for chunk in re.split(r"\n\s*\n", raw):
+        clean = _clean_research_sentence(chunk)
+        if not clean:
+            continue
+        if len(clean) < 12:
+            continue
+        parts.append(clean)
+    return parts
+
+
+def _normalize_document_instruction(text: str) -> str:
+    value = _clean_research_sentence(text)
+    if not value:
+        return ""
+    low = _normalize_text(value)
+    command_markers = (
+        "hazirla",
+        "hazirlar misin",
+        "olustur",
+        "uret",
+        "yaz",
+        "rapor",
+        "belge",
+        "dokuman",
+        "dokumani",
+        "word",
+        "docx",
+        "pdf",
+        "excel",
+        "xlsx",
+        "tek bir",
+        "sadece",
+    )
+    if sum(1 for marker in command_markers if marker in low) >= 2:
+        return ""
+    return value
+
+
+def _infer_requested_document_formats(
+    topic: str,
+    brief: str,
+    preferred_formats: Any = None,
+) -> list[str]:
+    explicit: list[str] = []
+    if isinstance(preferred_formats, str) and preferred_formats.strip():
+        preferred_formats = [preferred_formats]
+    if isinstance(preferred_formats, (list, tuple, set)):
+        for item in preferred_formats:
+            value = _normalize_text(str(item or ""))
+            if value in {"docx", "word"} and "docx" not in explicit:
+                explicit.append("docx")
+            elif value in {"xlsx", "excel", "csv"} and "xlsx" not in explicit:
+                explicit.append("xlsx")
+            elif value == "pdf" and "pdf" not in explicit:
+                explicit.append("pdf")
+            elif value in {"latex", "tex"} and "tex" not in explicit:
+                explicit.append("tex")
+            elif value in {"markdown", "md"} and "md" not in explicit:
+                explicit.append("md")
+            elif value in {"txt", "text"} and "txt" not in explicit:
+                explicit.append("txt")
+
+    low = _normalize_text(f"{topic} {brief}")
+    marker_map = [
+        ("pdf", "pdf"),
+        ("latex", "tex"),
+        ("tex", "tex"),
+        ("word", "docx"),
+        ("docx", "docx"),
+        ("excel", "xlsx"),
+        ("xlsx", "xlsx"),
+        ("csv", "xlsx"),
+        ("tablo", "xlsx"),
+        ("markdown", "md"),
+        ("md", "md"),
+        ("txt", "txt"),
+        ("metin", "txt"),
+    ]
+    for marker, fmt in marker_map:
+        if marker in low and fmt not in explicit:
+            explicit.append(fmt)
+
+    return explicit or ["docx"]
+
+
+def _build_plain_document_paragraphs(topic: str, brief: str, audience: str = "executive") -> list[str]:
+    paragraphs = _extract_plain_paragraphs(_normalize_document_instruction(brief))
+    topic_clean = str(topic or "").strip() or "Bu konu"
+    fallback_paragraphs = [
+        (
+            f"{topic_clean} bu belgede açık, düzenli ve doğrudan bir dille ele alınır. "
+            f"Metin, kavramın ne olduğunu, neden önemli olduğunu ve hangi bağlamlarda kullanıldığını kullanıcı açısından anlaşılır hale getirmeyi hedefler."
+        ),
+        (
+            f"İlk bölümde {topic_clean.lower()} konusunun temel çerçevesi kurulurken, devamında öne çıkan bileşenler, "
+            f"uygulama alanları ve dikkat edilmesi gereken noktalar sade bir akışla açıklanır. "
+            f"Bu yapı özellikle {audience} odaklı okunabilirlik için kısa ama yoğun paragraflar üretir."
+        ),
+        (
+            f"Belgenin sonunda konuya dair pratik bir toparlama yapılır; böylece okuyucu {topic_clean.lower()} başlığını "
+            f"sadece tanımsal olarak değil, kullanım ve karar verme bağlamında da kavramış olur."
+        ),
+    ]
+    if not paragraphs:
+        return fallback_paragraphs
+    if len("\n\n".join(paragraphs)) >= 200:
+        return paragraphs[:12]
+    return paragraphs[:3] + fallback_paragraphs
+
+
+def _build_plain_document_text(topic: str, brief: str, audience: str = "executive") -> str:
+    paragraphs = _build_plain_document_paragraphs(topic, brief, audience=audience)
+    return "\n\n".join(paragraphs).strip()
+
+
+def _build_excel_document_payload(topic: str, brief: str, audience: str = "executive") -> dict[str, list[dict[str, Any]]]:
+    paragraphs = _build_plain_document_paragraphs(topic, brief, audience=audience)
+    overview = [
+        {"Alan": "Konu", "Deger": str(topic or "").strip() or "Belge"},
+        {"Alan": "Hedef Kitle", "Deger": audience},
+        {"Alan": "Paragraf Sayisi", "Deger": len(paragraphs)},
+    ]
+    content_rows = [
+        {"No": idx, "Metin": paragraph}
+        for idx, paragraph in enumerate(paragraphs, start=1)
+    ]
+    return {
+        "Ozet": overview,
+        "Icerik": content_rows or [{"No": 1, "Metin": str(topic or "").strip() or "Belge içeriği"}],
+    }
+
+
+def _write_simple_pdf(path: str, title: str, content: str) -> dict[str, Any]:
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import inch
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    except Exception as exc:
+        return {"success": False, "error": f"PDF oluşturma bağımlılığı hazır değil: {exc}"}
+
+    file_path = Path(path).expanduser().resolve()
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        name="PlainDocTitle",
+        parent=styles["Heading1"],
+        fontSize=18,
+        spaceAfter=18,
+    )
+    body_style = ParagraphStyle(
+        name="PlainDocBody",
+        parent=styles["Normal"],
+        leading=16,
+        spaceAfter=10,
+    )
+
+    story = [Paragraph(_escape_html(title), title_style), Spacer(1, 0.2 * inch)]
+    for para in _extract_plain_paragraphs(content) or [str(content or "").strip()]:
+        text = _escape_html(para).replace("\n", "<br/>")
+        if text:
+            story.append(Paragraph(text, body_style))
+            story.append(Spacer(1, 0.1 * inch))
+
+    try:
+        doc = SimpleDocTemplate(str(file_path), pagesize=A4, rightMargin=56, leftMargin=56, topMargin=56, bottomMargin=56)
+        doc.build(story)
+        return {"success": True, "path": str(file_path), "filename": file_path.name}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+def _build_research_word_content(
+    *,
+    topic: str,
+    brief: str,
+    audience: str,
+    depth: str,
+    policy: str,
+    min_rel: float,
+    summary: str,
+    findings: list[str],
+    sources: list[dict[str, Any]],
+    source_count: int,
+    avg_reliability: float,
+    include_bibliography: bool,
+) -> str:
+    clean_findings = _select_research_document_findings(findings, limit=5)
+
+    intro = _strip_research_meta_lines(_extract_report_summary(summary, clean_findings, topic))
+    if not intro:
+        intro = (
+            f"{topic} konusu için temel kaynaklar taranmış ve belge, konuya doğrudan giriş sağlayacak sade bir araştırma metni olarak düzenlenmiştir."
+        )
+    scope_note = _normalize_document_instruction(brief)
+    source_rows = []
+    for idx, src in enumerate(sources[:8], start=1):
+        if not isinstance(src, dict):
+            continue
+        title = _clean_research_sentence(str(src.get("title") or "").strip()) or "Başlıksız kaynak"
+        url = str(src.get("url") or "").strip()
+        rel_raw = src.get("reliability_score", 0.0)
+        try:
+            rel = float(rel_raw or 0.0)
+        except Exception:
+            rel = 0.0
+        line = f"{idx}. {title}"
+        if url:
+            line += f" - {url}"
+        source_rows.append(line)
+
+    body_paragraphs = [
+        intro,
+        (
+            f"{topic} konusu için temel literatür ve açıklayıcı kaynaklar karşılaştırıldı. "
+            f"Metin, aynı konuyu tekrarlayan dağınık cümleler yerine doğrudan anlaşılabilir bir araştırma özeti sunacak şekilde düzenlendi."
+        ),
+    ]
+    if scope_note and _normalize_text(scope_note) not in _normalize_text(intro):
+        body_paragraphs.append(f"Bu belge şu odakla hazırlandı: {scope_note}.")
+    if clean_findings:
+        body_paragraphs.extend(clean_findings)
+    else:
+        body_paragraphs.append("Doğrudan kullanılabilir bulgu sınırlı kaldığı için ikinci tur kaynak taraması önerilir.")
+
+    conclusion = (
+        f"Sonuç olarak {topic.lower()} başlığı, hem temel kavramsal çerçevesi hem de uygulama mantığıyla birlikte okunabilir bir bütün oluşturur."
+        if source_count >= 3
+        else f"Sonuç olarak {topic.lower()} başlığı için çekirdek çerçeve kurulmuştur; daha fazla kaynakla metin genişletilebilir."
+    )
+    body_paragraphs.append(conclusion)
+    if include_bibliography and source_rows:
+        body_paragraphs.append("Kaynakça:\n" + "\n".join(source_rows))
+    return "\n\n".join(part for part in body_paragraphs if str(part).strip()).strip()
 
 
 def _mix_hex(color_a: str, color_b: str, ratio: float) -> str:
@@ -2187,10 +2745,11 @@ async def generate_document_pack(
     brief: str = "",
     audience: str = "executive",
     language: str = "tr",
-    output_dir: str = "~/Desktop"
+    output_dir: str = "~/Desktop",
+    preferred_formats: Any = None,
 ) -> dict[str, Any]:
     """
-    Generate a professional multi-format document pack (docx + markdown + txt).
+    Generate a user-focused document in the requested format(s).
     """
     try:
         valid, msg, base_dir = validate_path(output_dir)
@@ -2209,178 +2768,89 @@ async def generate_document_pack(
         pack_dir.mkdir(parents=True, exist_ok=True)
 
         now_str = datetime.now().strftime("%Y-%m-%d")
-        summary = brief.strip() or (
-            f"{safe_topic} konusunda {audience} hedef kitlesine yonelik profesyonel degerlendirme. "
-            "Bu belge paketi karar almayi hizlandiracak net ozet ve eylem odakli cikarimlar sunar."
-        )
-        findings = [
-            {"title": "Durum Analizi", "summary": f"{safe_topic} icin mevcut durum ve kritik noktalar degerlendirildi."},
-            {"title": "Riskler", "summary": "Operasyonel, teknik ve zamanlama riskleri listelendi."},
-            {"title": "Firsatlar", "summary": "Kisa ve orta vadeli yuksek etki alanlari belirlendi."},
-        ]
-        key_insights = [
-            "Karar kalitesini artirmak icin kapsam ve hedef metrikleri netlestirilmeli.",
-            "Uygulama yol haritasi fazlara ayrilarak risk azaltilmali.",
-            "Teslimat kalitesi icin dogrulama adimlari zorunlu hale getirilmeli.",
-        ]
-        sources = [
-            {"name": "Internal Analysis", "url": "local://analysis", "reliability": "high"},
-            {"name": "Project Context", "url": "local://project_context", "reliability": "high"},
-        ]
-        bibliography = [
-            f"[{now_str}] Internal notes and project context synthesis",
-        ]
+        requested_formats = _infer_requested_document_formats(topic, brief, preferred_formats=preferred_formats)
+        body_text = _build_plain_document_text(safe_topic, brief or topic, audience=audience)
+        outputs: list[str] = []
+        warnings: list[str] = []
 
-        research_data = {
-            "topic": safe_topic,
-            "summary": summary,
-            "findings": findings,
-            "key_insights": key_insights,
-            "sources": sources,
-            "statistics": {"audience": audience, "language": language},
-            "bibliography": bibliography,
-        }
+        if "docx" in requested_formats:
+            from tools.office_tools.word_tools import write_word
 
-        outputs = []
-
-        # Always produce local markdown/txt pack in requested output directory.
-        report_md = pack_dir / "PROFESSIONAL_REPORT.md"
-        report_md.write_text(
-            "\n".join(
-                [
-                    f"# {safe_topic} - Professional Report",
-                    "",
-                    f"Date: {now_str}",
-                    f"Audience: {audience}",
-                    f"Language: {language}",
-                    "",
-                    "## Executive Summary",
-                    summary,
-                    "",
-                    "## Key Findings",
-                    *[f"- {item['title']}: {item['summary']}" for item in findings],
-                    "",
-                    "## Key Insights",
-                    *[f"- {item}" for item in key_insights],
-                    "",
-                    "## Sources",
-                    *[f"- {s['name']} ({s['url']}) - reliability: {s['reliability']}" for s in sources],
-                ]
-            ),
-            encoding="utf-8",
-        )
-        outputs.append(str(report_md))
-
-        report_txt = pack_dir / "PROFESSIONAL_REPORT.txt"
-        report_txt.write_text(
-            "\n".join(
-                [
-                    f"{safe_topic} - Professional Report",
-                    "=" * 48,
-                    "",
-                    "Executive Summary:",
-                    summary,
-                    "",
-                    "Key Findings:",
-                    *[f"* {item['title']}: {item['summary']}" for item in findings],
-                    "",
-                    "Key Insights:",
-                    *[f"* {item}" for item in key_insights],
-                ]
-            ),
-            encoding="utf-8",
-        )
-        outputs.append(str(report_txt))
-
-        # Try docx generation best-effort. If environment blocks it, continue.
-        docx_warning = ""
-        try:
-            from tools.document_generator.professional_document import generate_research_document
-
-            result = await generate_research_document(
-                research_data=research_data,
-                format="docx",
-                template="business_report",
-                custom_title=f"{safe_topic} - Professional Pack",
-                language=language,
+            docx_path = pack_dir / "DOCUMENT.docx"
+            word_result = await write_word(
+                path=str(docx_path),
+                title=safe_topic,
+                content=body_text,
             )
-            if result.get("success") and result.get("path"):
-                src = Path(result["path"])
-                dst = pack_dir / src.name
-                if src.exists() and src.resolve() != dst.resolve():
-                    dst.write_bytes(src.read_bytes())
-                    outputs.append(str(dst))
-                else:
-                    outputs.append(str(src))
+            if isinstance(word_result, dict) and word_result.get("success") and word_result.get("path"):
+                outputs.append(str(word_result["path"]))
             else:
-                docx_warning = str(result.get("error", "docx generation unavailable"))
-        except Exception as exc:
-            docx_warning = str(exc)
+                warnings.append(str((word_result or {}).get("error") or "docx generation failed"))
 
-        executive_md = pack_dir / "EXECUTIVE_ACTIONS.md"
-        executive_md.write_text(
-            "\n".join(
-                [
-                    f"# Executive Actions - {safe_topic}",
-                    "",
-                    f"Audience: {audience}",
-                    f"Date: {now_str}",
-                    "",
-                    "## Top 5 Actions",
-                    "1. Scope and quality gates netlestir.",
-                    "2. Faz bazli uygulama plani cikart.",
-                    "3. Kritik riskler icin sahiplik ata.",
-                    "4. Haftalik ilerleme metriklerini takip et.",
-                    "5. Sonuclari karar toplantisina hazir paketle sun.",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        outputs.append(str(executive_md))
+        if "xlsx" in requested_formats:
+            from tools.office_tools.excel_tools import write_excel
 
-        risk_md = pack_dir / "RISK_REGISTER.md"
-        risk_md.write_text(
-            "\n".join(
-                [
-                    f"# Risk Register - {safe_topic}",
-                    "",
-                    "| Risk | Impact | Likelihood | Mitigation | Owner |",
-                    "|---|---|---|---|---|",
-                    "| Scope creep | High | Medium | Change control policy | PM |",
-                    "| Delivery delay | High | Medium | Weekly milestone tracking | Tech Lead |",
-                    "| Quality regression | Medium | Medium | QA gates + review checklist | QA |",
-                    "| Stakeholder misalignment | High | Low | Weekly stakeholder sync | Product |",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        outputs.append(str(risk_md))
+            excel_path = pack_dir / "DOCUMENT.xlsx"
+            excel_result = await write_excel(
+                path=str(excel_path),
+                data=_build_excel_document_payload(safe_topic, brief or topic, audience=audience),
+                headers={
+                    "Ozet": ["Alan", "Deger"],
+                    "Icerik": ["No", "Metin"],
+                },
+                sheet_name="Ozet",
+                multi_sheet=True,
+            )
+            if isinstance(excel_result, dict) and excel_result.get("success") and excel_result.get("path"):
+                outputs.append(str(excel_result["path"]))
+            else:
+                warnings.append(str((excel_result or {}).get("error") or "excel generation failed"))
 
-        actions_csv = pack_dir / "ACTION_REGISTER.csv"
-        actions_csv.write_text(
-            "\n".join(
-                [
-                    "action_id,action,owner,priority,status,due_date",
-                    "A1,Scope and quality gates netlestir,PM,High,Open,",
-                    "A2,Faz bazli uygulama plani cikart,Tech Lead,High,Open,",
-                    "A3,Risk sahipliklerini ata,PM,Medium,Open,",
-                    "A4,Haftalik KPI takip paneli ac,Ops,Medium,Open,",
-                    "A5,Yonetici sunum paketini finalize et,Product,High,Open,",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        outputs.append(str(actions_csv))
+        if "pdf" in requested_formats:
+            pdf_path = pack_dir / "DOCUMENT.pdf"
+            pdf_result = _write_simple_pdf(str(pdf_path), safe_topic, body_text)
+            if isinstance(pdf_result, dict) and pdf_result.get("success") and pdf_result.get("path"):
+                outputs.append(str(pdf_result["path"]))
+            else:
+                warnings.append(str((pdf_result or {}).get("error") or "pdf generation failed"))
+
+        if "tex" in requested_formats:
+            tex_path = pack_dir / "DOCUMENT.tex"
+            tex_path.write_text(
+                _build_latex_document(safe_topic, _build_plain_document_paragraphs(safe_topic, brief or topic, audience=audience)),
+                encoding="utf-8",
+            )
+            outputs.append(str(tex_path))
+
+        if "md" in requested_formats:
+            md_path = pack_dir / "DOCUMENT.md"
+            md_path.write_text(f"# {safe_topic}\n\n{body_text}\n", encoding="utf-8")
+            outputs.append(str(md_path))
+
+        if "txt" in requested_formats:
+            txt_path = pack_dir / "DOCUMENT.txt"
+            txt_path.write_text(body_text, encoding="utf-8")
+            outputs.append(str(txt_path))
+
+        if not outputs:
+            return {
+                "success": False,
+                "error": "Belge oluşturulamadı.",
+                "warnings": warnings,
+            }
+
+        primary_output = outputs[0]
 
         response = {
             "success": True,
             "topic": topic,
             "pack_dir": str(pack_dir),
+            "path": primary_output,
             "outputs": outputs,
-            "message": f"Document pack olusturuldu: {pack_dir}",
+            "message": f"Belge hazır: {primary_output}",
         }
-        if docx_warning:
-            response["docx_warning"] = docx_warning
+        if warnings:
+            response["warnings"] = warnings
         return response
     except Exception as exc:
         logger.error(f"generate_document_pack error: {exc}")
@@ -2396,11 +2866,14 @@ async def research_document_delivery(
     output_dir: str = "~/Desktop",
     include_word: bool = True,
     include_excel: bool = False,
+    include_pdf: bool = False,
+    include_latex: bool = False,
     include_report: bool = True,
     source_policy: str = "trusted",
     min_reliability: float = 0.62,
     citation_style: str = "none",
     include_bibliography: bool = False,
+    deliver_copy: bool = False,
 ) -> dict[str, Any]:
     """
     Execute a high-quality research workflow, generate deliverable documents,
@@ -2453,7 +2926,8 @@ async def research_document_delivery(
             depth=normalized_depth,
             language=language,
             include_evaluation=True,
-            generate_report=bool(include_report),
+            generate_report=False,
+            persist_quick_report=bool(deliver_copy),
             source_policy=policy,
             min_reliability=min_rel,
             max_findings=8,
@@ -2470,9 +2944,11 @@ async def research_document_delivery(
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
         findings = [str(x).strip() for x in (research_result.get("findings") or []) if str(x).strip()]
+        cleaned_document_findings = _select_research_document_findings(findings, limit=6)
         summary = str(research_result.get("summary") or "").strip()
         sources = research_result.get("sources") if isinstance(research_result.get("sources"), list) else []
-        source_count = int(research_result.get("source_count") or len(sources))
+        filtered_sources = _select_research_sources_for_document(sources, min_rel=min_rel, limit=6)
+        source_count = int(research_result.get("source_count") or len(filtered_sources or sources))
         reliability_scores = []
         for src in sources:
             if not isinstance(src, dict):
@@ -2482,150 +2958,76 @@ async def research_document_delivery(
             except Exception:
                 continue
         avg_reliability = (sum(reliability_scores) / len(reliability_scores)) if reliability_scores else 0.0
-        methodology_text = (
-            f"Kaynaklar {policy} politikasına göre toplandı, min güvenilirlik eşiği {min_rel:.2f} olarak uygulandı. "
-            f"Derinlik seviyesi: {normalized_depth}."
-        )
-        risks_and_limits = [
-            "Gerçek zamanlı veri değişimleri sonuçları etkileyebilir.",
-            "Seçilen kaynak havuzu konuya göre önyargı barındırabilir.",
-            "Özet, mevcut kaynak kalitesiyle sınırlıdır.",
-        ]
-        next_actions = [
-            "Kritik bulguları kurum içi veriyle karşılaştır.",
-            "Gerekli ise kaynak havuzunu genişletip ikinci tur doğrulama yap.",
-            "Karar öncesi uygulama etkisini küçük ölçekli pilotla test et.",
-        ]
+        outputs: list[str] = []
+        warnings: list[str] = []
+        supporting_artifacts: list[str] = []
 
-        report_md = delivery_dir / "RESEARCH_DELIVERY.md"
-        report_md.write_text(
-            "\n".join(
-                [
-                    f"# Research Delivery - {topic_clean}",
-                    "",
-                    f"- Date: {now_str}",
-                    f"- Audience: {audience}",
-                    f"- Depth: {normalized_depth}",
-                    f"- Source policy: {policy}",
-                    f"- Min reliability: {min_rel:.2f}",
-                    f"- Citation style: {citation_style}",
-                    f"- Source count: {source_count}",
-                    f"- Avg reliability: {avg_reliability:.2f}",
-                    "",
-                    "## Executive Summary",
-                    summary or "Özet üretilemedi.",
-                    "",
-                    "## Methodology",
-                    methodology_text,
-                    "",
-                    "## Findings",
-                    *([f"- {item}" for item in findings] or ["- Bulgu üretilemedi."]),
-                    "",
-                    "## Sources",
-                    *[
-                        f"- {str(src.get('title') or src.get('url') or 'source')} ({str(src.get('url') or '').strip()})"
-                        for src in sources[:20]
-                        if isinstance(src, dict)
-                    ],
-                    "",
-                    "## Risk & Limitations",
-                    *[f"- {line}" for line in risks_and_limits],
-                    "",
-                    "## Next Actions",
-                    *[f"- {line}" for line in next_actions],
-                    "",
-                    "## Bibliography" if include_bibliography else "## Notes",
-                    *(
-                        [
-                            f"- {str(src.get('title') or src.get('url') or 'source')} | {str(src.get('url') or '').strip()}"
-                            for src in sources[:20]
-                            if isinstance(src, dict)
-                        ]
-                        if include_bibliography
-                        else [f"- Citation style: {citation_style}"]
-                    ),
-                ]
-            ),
-            encoding="utf-8",
+        llm_body = await _synthesize_research_body_with_llm(
+            topic=topic_clean,
+            brief=brief,
+            findings=cleaned_document_findings or findings,
+            sources=filtered_sources or sources,
+            language=language,
         )
 
-        report_txt = delivery_dir / "RESEARCH_DELIVERY.txt"
-        report_txt.write_text(
-            "\n".join(
-                [
-                    f"Research Delivery - {topic_clean}",
-                    "=" * 58,
-                    f"Date: {now_str}",
-                    f"Depth: {normalized_depth}",
-                    f"Citation style: {citation_style}",
-                    f"Source count: {source_count}",
-                    f"Avg reliability: {avg_reliability:.2f}",
-                    "",
-                    "Executive Summary:",
-                    summary or "Özet üretilemedi.",
-                    "",
-                    "Methodology:",
-                    methodology_text,
-                    "",
-                    "Findings:",
-                    *([f"* {item}" for item in findings] or ["* Bulgu üretilemedi."]),
-                    "",
-                    "Risk & Limitations:",
-                    *([f"* {line}" for line in risks_and_limits] or ["* -"]),
-                    "",
-                    "Next Actions:",
-                    *([f"* {line}" for line in next_actions] or ["* -"]),
-                ]
-            ),
-            encoding="utf-8",
+        heuristic_body = _build_research_word_content(
+            topic=topic_clean,
+            brief=brief,
+            audience=audience,
+            depth=normalized_depth,
+            policy=policy,
+            min_rel=min_rel,
+            summary=summary,
+            findings=cleaned_document_findings or findings,
+            sources=filtered_sources or sources,
+            source_count=source_count,
+            avg_reliability=avg_reliability,
+            include_bibliography=include_bibliography,
         )
+        research_body = llm_body or heuristic_body
+        research_paragraphs = _extract_plain_paragraphs(research_body)
 
-        outputs: list[str] = [str(report_md), str(report_txt)]
+        if include_pdf:
+            pdf_path = delivery_dir / "RESEARCH_DELIVERY.pdf"
+            pdf_result = _write_simple_pdf(
+                str(pdf_path),
+                f"Araştırma Raporu - {topic_clean}",
+                research_body,
+            )
+            if isinstance(pdf_result, dict) and pdf_result.get("success") and pdf_result.get("path"):
+                outputs.append(str(pdf_result["path"]))
+            else:
+                warnings.append(str((pdf_result or {}).get("error") or "pdf generation failed"))
 
         if include_word:
             word_path = delivery_dir / "RESEARCH_DELIVERY.docx"
-            word_content = "\n\n".join(
-                [
-                    f"Konu: {topic_clean}",
-                    f"Tarih: {now_str}",
-                    f"Hedef Kitle: {audience}",
-                    f"Araştırma Derinliği: {normalized_depth}",
-                    f"Kaynak Sayısı: {source_count}",
-                    f"Ortalama Güvenilirlik: {avg_reliability:.2f}",
-                    "",
-                    "Yönetici Özeti",
-                    summary or "Özet üretilemedi.",
-                    "",
-                    "Yöntem",
-                    methodology_text,
-                    "",
-                    "Temel Bulgular",
-                    *([f"- {item}" for item in findings] or ["- Bulgu üretilemedi."]),
-                    "",
-                    "Risk ve Kısıtlar",
-                    *([f"- {line}" for line in risks_and_limits] or ["- Yok"]),
-                    "",
-                    "Sonraki Adımlar",
-                    *([f"- {line}" for line in next_actions] or ["- Yok"]),
-                ]
-            )
             word_result = await write_word(
                 path=str(word_path),
-                title=f"Research Delivery - {topic_clean}",
-                content=word_content,
+                title=f"Araştırma Raporu - {topic_clean}",
+                content=research_body,
             )
             if isinstance(word_result, dict) and word_result.get("success") and word_result.get("path"):
                 outputs.append(str(word_result["path"]))
+            else:
+                warnings.append(str((word_result or {}).get("error") or "word generation failed"))
+
+        if include_latex:
+            latex_path = delivery_dir / "RESEARCH_DELIVERY.tex"
+            latex_path.write_text(
+                _build_latex_document(f"Araştırma Raporu - {topic_clean}", research_paragraphs or [research_body]),
+                encoding="utf-8",
+            )
+            outputs.append(str(latex_path))
 
         if include_excel:
             excel_path = delivery_dir / "RESEARCH_DELIVERY.xlsx"
             rows: list[dict[str, Any]] = []
-            for idx, item in enumerate(findings, start=1):
+            for idx, item in enumerate(cleaned_document_findings or findings, start=1):
                 rows.append(
                     {
                         "Tip": "Finding",
                         "No": idx,
-                        "Metin": item[:1000],
+                        "Metin": _strip_research_annotation(item)[:1000],
                         "Kaynak": "",
                         "Guvenilirlik": "",
                     }
@@ -2653,22 +3055,51 @@ async def research_document_delivery(
             )
             if isinstance(excel_result, dict) and excel_result.get("success") and excel_result.get("path"):
                 outputs.append(str(excel_result["path"]))
+            else:
+                warnings.append(str((excel_result or {}).get("error") or "excel generation failed"))
 
-        for report_path in research_result.get("report_paths", []) if isinstance(research_result.get("report_paths"), list) else []:
-            if not isinstance(report_path, str) or not report_path.strip():
-                continue
-            src = Path(report_path).expanduser()
-            if not src.exists() or not src.is_file():
-                continue
-            dst = delivery_dir / src.name
-            try:
-                if src.resolve() != dst.resolve():
-                    dst.write_bytes(src.read_bytes())
-                    outputs.append(str(dst))
-                else:
-                    outputs.append(str(src))
-            except Exception:
-                outputs.append(str(src))
+        if not include_word and not include_excel and not include_pdf and not include_latex:
+            report_md = delivery_dir / "RESEARCH_DELIVERY.md"
+            report_md.write_text(
+                "\n".join(
+                    [
+                        f"# Araştırma Raporu - {topic_clean}",
+                        "",
+                        f"- Tarih: {now_str}",
+                        f"- Hedef kitle: {audience}",
+                        f"- Derinlik: {normalized_depth}",
+                        f"- Kaynak politikası: {policy}",
+                        f"- Min güvenilirlik: {min_rel:.2f}",
+                        "",
+                        "## Kısa Özet",
+                        _extract_report_summary(summary, findings, topic_clean),
+                        "",
+                        "## Temel Bulgular",
+                        *([f"- {_strip_research_annotation(item)}" for item in findings[:6] if _strip_research_annotation(item)] or ["- Bulgu üretilemedi."]),
+                        "",
+                        "## Kaynaklar",
+                        *[
+                            f"- {_clean_research_sentence(str(src.get('title') or src.get('url') or 'source'))} | {str(src.get('url') or '').strip()}"
+                            for src in (filtered_sources or sources)[:12]
+                            if isinstance(src, dict)
+                        ],
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            outputs.append(str(report_md))
+
+        if deliver_copy:
+            for report_path in research_result.get("report_paths", []) if isinstance(research_result.get("report_paths"), list) else []:
+                if not isinstance(report_path, str) or not report_path.strip():
+                    continue
+                src = Path(report_path).expanduser()
+                if not src.exists() or not src.is_file():
+                    continue
+                try:
+                    supporting_artifacts.append(str(src.resolve()))
+                except Exception:
+                    supporting_artifacts.append(str(src))
 
         dedup_outputs: list[str] = []
         seen_paths: set[str] = set()
@@ -2682,16 +3113,33 @@ async def research_document_delivery(
             dedup_outputs.append(key)
         outputs = dedup_outputs
 
-        message_lines = [
-            f"Araştırma + belge paketi hazır: {delivery_dir}",
-            f"Konu: {topic_clean}",
-            f"Kaynak: {source_count} | Bulgu: {len(findings)}",
-            f"Ortalama güvenilirlik: {avg_reliability:.2f}",
-            "Kopya gönderimi için dosyalar:",
-            *[f"- {p}" for p in outputs[:8]],
-        ]
+        dedup_supporting: list[str] = []
+        seen_supporting: set[str] = set()
+        for item in supporting_artifacts:
+            if not isinstance(item, str) or not item.strip():
+                continue
+            key = str(Path(item).expanduser())
+            if key in seen_supporting or key in seen_paths:
+                continue
+            seen_supporting.add(key)
+            dedup_supporting.append(key)
+        supporting_artifacts = dedup_supporting
 
-        return {
+        if not outputs:
+            return {
+                "success": False,
+                "error": "Belge oluşturulamadı.",
+                "warnings": warnings,
+                "delivery_dir": str(delivery_dir),
+            }
+
+        primary_output = outputs[0]
+
+        message_lines = [f"Araştırma belgesi hazır: {primary_output}"]
+        if len(outputs) > 1:
+            message_lines.append(f"Ek çıktı sayısı: {len(outputs) - 1}")
+
+        response = {
             "success": True,
             "ok": True,
             "topic": topic_clean,
@@ -2700,10 +3148,11 @@ async def research_document_delivery(
             "min_reliability": min_rel,
             "citation_style": citation_style,
             "include_bibliography": include_bibliography,
-            "path": str(delivery_dir),
+            "path": primary_output,
             "delivery_dir": str(delivery_dir),
             "outputs": outputs,
             "artifacts": outputs,
+            "supporting_artifacts": supporting_artifacts,
             "source_count": source_count,
             "finding_count": len(findings),
             "quality_summary": {
@@ -2714,6 +3163,9 @@ async def research_document_delivery(
             "summary": summary,
             "message": "\n".join(message_lines),
         }
+        if warnings:
+            response["warnings"] = warnings
+        return response
     except Exception as exc:
         logger.error(f"research_document_delivery error: {exc}")
         return {"success": False, "error": str(exc)}

@@ -161,6 +161,20 @@ class SystemParser(BaseParser):
     def _parse_power_control(self, text: str, text_norm: str, original: str) -> dict | None:
         if any(k in text for k in ["ekranı kilitle", "ekrani kilitle", "lock screen"]):
             return {"action": "lock_screen", "params": {}, "reply": "Ekran kilitleniyor..."}
+        command_context_markers = (
+            "komutunu çalıştır",
+            "komutunu calistir",
+            "komut çalıştır",
+            "komut calistir",
+            "terminal",
+            "bash",
+            "shell",
+            "run ",
+            "execute ",
+        )
+        if any(marker in text for marker in command_context_markers):
+            # "elyan restart komutunu çalıştır" gibi ifadelerde sistem restart'ına gitme.
+            return None
         # Restart/reboot recognised regardless of subject word
         if any(k in text for k in ["yeniden başlat", "yeniden baslat", "restart", "reboot"]):
             return {"action": "restart_system", "params": {}, "reply": "Sistem yeniden başlatılıyor..."}

@@ -3,16 +3,23 @@ from core.spec.task_spec import validate_task_spec, TASK_SPEC_SCHEMA_VERSION
 
 def _base_spec(intent: str):
     return {
+        "task_id": "task_test_1",
         "intent": intent,
         "version": TASK_SPEC_SCHEMA_VERSION,
         "goal": "test",
+        "user_goal": "test",
+        "entities": {"topic": "test"},
+        "deliverables": [{"name": "test-output", "kind": "response", "required": True}],
         "constraints": {},
         "context_assumptions": [],
         "artifacts_expected": [],
         "checks": [],
         "rollback": [],
         "required_tools": ["write_file"],
+        "tool_candidates": ["write_file"],
+        "priority": "normal",
         "risk_level": "low",
+        "success_criteria": ["task_completed"],
         "timeouts": {"step_timeout_s": 10, "run_timeout_s": 60},
         "retries": {"max_attempts": 1},
         "steps": [],
@@ -70,6 +77,17 @@ def test_validate_task_spec_unknown_dependency_fails():
     ok, errors = validate_task_spec(spec, strict_schema=False)
     assert ok is False
     assert any("invalid:steps.depends_on.unknown:s1->s2" == e for e in errors)
+
+
+def test_validate_task_spec_cycle_dependency_fails():
+    spec = _base_spec("filesystem_batch")
+    spec["steps"] = [
+        {"id": "s1", "action": "mkdir", "path": "~/Desktop/a", "depends_on": ["s2"]},
+        {"id": "s2", "action": "write_file", "path": "~/Desktop/a/not.md", "content": "abc", "depends_on": ["s1"]},
+    ]
+    ok, errors = validate_task_spec(spec, strict_schema=False)
+    assert ok is False
+    assert "invalid:steps.depends_on.cycle" in errors
 
 
 def test_validate_task_spec_unknown_root_check_step_id_fails():
@@ -145,3 +163,21 @@ def test_validate_task_spec_empty_goal_fails():
     ok, errors = validate_task_spec(spec, strict_schema=False)
     assert ok is False
     assert "invalid:goal" in errors
+
+
+def test_validate_task_spec_missing_deliverables_fails():
+    spec = _base_spec("filesystem_batch")
+    spec["deliverables"] = []
+    spec["steps"] = [{"id": "s1", "action": "mkdir", "path": "~/Desktop/a"}]
+    ok, errors = validate_task_spec(spec, strict_schema=False)
+    assert ok is False
+    assert "invalid:deliverables" in errors
+
+
+def test_validate_task_spec_invalid_priority_fails():
+    spec = _base_spec("filesystem_batch")
+    spec["priority"] = "urgent"
+    spec["steps"] = [{"id": "s1", "action": "mkdir", "path": "~/Desktop/a"}]
+    ok, errors = validate_task_spec(spec, strict_schema=False)
+    assert ok is False
+    assert "invalid:priority" in errors

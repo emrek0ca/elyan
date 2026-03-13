@@ -4,21 +4,32 @@
   "title": "Elyan TaskSpec",
   "type": "object",
   "required": [
+    "task_id",
     "intent",
     "version",
     "goal",
+    "user_goal",
+    "entities",
+    "deliverables",
     "constraints",
     "context_assumptions",
     "artifacts_expected",
     "checks",
     "rollback",
     "required_tools",
+    "tool_candidates",
+    "priority",
+    "success_criteria",
     "risk_level",
     "timeouts",
     "retries",
     "steps"
   ],
   "properties": {
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
     "intent": {
       "type": "string",
       "enum": [
@@ -38,6 +49,56 @@
     "goal": {
       "type": "string",
       "minLength": 1
+    },
+    "user_goal": {
+      "type": "string",
+      "minLength": 1
+    },
+    "slots": {
+      "type": "object"
+    },
+    "entities": {
+      "type": "object"
+    },
+    "deliverables": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "required"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "file",
+              "directory",
+              "response",
+              "report",
+              "document",
+              "artifact"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "success_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
     },
     "constraints": {
       "type": "object"
@@ -111,6 +172,22 @@
         "type": "string"
       },
       "minItems": 1
+    },
+    "tool_candidates": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "priority": {
+      "type": "string",
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "critical"
+      ]
     },
     "risk_level": {
       "type": "string",
@@ -204,6 +281,12 @@
           },
           "description": {
             "type": "string"
+          },
+          "success_criteria": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "anyOf": [

@@ -1,0 +1,160 @@
+{
+  "class_doc_count": {
+    "type_text": 4,
+    "mkdir": 4,
+    "list_files": 4,
+    "write_file": 4,
+    "summarize_text": 4,
+    "summarize_document": 2,
+    "research_document_delivery": 3,
+    "api_health_check": 2,
+    "advanced_research": 4,
+    "run_safe_command": 2
+  },
+  "class_token_count": {
+    "type_text": 26,
+    "mkdir": 76,
+    "list_files": 18,
+    "write_file": 22,
+    "summarize_text": 16,
+    "summarize_document": 11,
+    "research_document_delivery": 15,
+    "api_health_check": 3,
+    "advanced_research": 17,
+    "run_safe_command": 9
+  },
+  "token_count_by_class": {
+    "type_text": {
+      "kendimi": 2,
+      "seviyorum": 2,
+      "yazisni": 2,
+      "masaustune": 4,
+      "kaydet": 2,
+      "lutfen": 2,
+      "elyan": 2,
+      "not": 2,
+      "olarak": 2,
+      "sen": 2,
+      "kimsin": 2,
+      "yaz": 2
+    },
+    "mkdir": {
+      "bu": 2,
+      "isi": 2,
+      "planla": 2,
+      "ve": 4,
+      "uygula": 2,
+      "1": 2,
+      "desktop": 2,
+      "elyan": 4,
+      "test": 4,
+      "a": 2,
+      "klasoru": 4,
+      "olustur": 4,
+      "2": 2,
+      "not": 4,
+      "md": 4,
+      "yaz": 4,
+      "3": 2,
+      "icerigi": 2,
+      "dogrula": 4,
+      "4": 2,
+      "bana": 2,
+      "artifact": 2,
+      "yollarini": 2,
+      "ver": 2,
+      "lutfen": 2,
+      "masaustunde": 2,
+      "sonra": 2,
+      "ardindan": 2,
+      "icerigini": 2
+    },
+    "list_files": {
+      "dosyalari": 2,
+      "bir": 2,
+      "kontrol": 2,
+      "eder": 2,
+      "misin": 2,
+      "lutfen": 2,
+      "masaustunde": 2,
+      "ne": 2,
+      "var": 2
+    },
+    "write_file": {
+      "bunu": 2,
+      "word": 1,
+      "olarak": 4,
+      "kaydet": 2,
+      "masaustune": 2,
+      "not": 3,
+      "sen": 2,
+      "kimsin": 2,
+      "yaz": 2,
+      "lutfen": 2
+    },
+    "summarize_text": {
+      "bunu": 4,
+      "detayli": 2,
+      "ozetle": 4,
+      "lutfen": 2,
+      "daha": 2,
+      "kisa": 2
+    },
+    "summarize_document": {
+      "aynisini": 2,
+      "ama": 2,
+      "daha": 2,
+      "kisa": 2,
+      "yap": 2,
+      "lutfen": 1
+    },
+    "research_document_delivery": {
+      "bunu": 2,
+      "arastirip": 2,
+      "profesyonel": 2,
+      "rapor": 2,
+      "yap": 2,
+      "lutfen": 2,
+      "akbank": 1,
+      "hissesi": 1,
+      "arastir": 1
+    },
+    "api_health_check": {
+      "restar": 2,
+      "lutfen": 1
+    },
+    "advanced_research": {
+      "fourier": 3,
+      "hakkinda": 1,
+      "arastirma": 1,
+      "yap": 3,
+      "lutfen": 2,
+      "safariden": 1,
+      "pi": 1,
+      "arastir": 1,
+      "analiz": 2,
+      "arastirmasi": 2
+    },
+    "run_safe_command": {
+      "kopek": 2,
+      "resmi": 2,
+      "indir": 2,
+      "masaustune": 2,
+      "lutfen": 1
+    }
+  },
+  "vocab_size": 70,
+  "total_docs": 33,
+  "labels": [
+    "advanced_research",
+    "api_health_check",
+    "list_files",
+    "mkdir",
+    "research_document_delivery",
+    "run_safe_command",
+    "summarize_document",
+    "summarize_text",
+    "type_text",
+    "write_file"
+  ]
+}

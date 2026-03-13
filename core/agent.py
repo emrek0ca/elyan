@@ -20,6 +20,8 @@ from core.output_contract import get_contract_engine
 from core.neural_router import neural_router
 from core.action_lock import action_lock
 from core.quick_intent import get_quick_intent_detector, IntentCategory as _IC
+from core.fast_response import get_fast_response_system, QuestionType
+from core.nlu_normalizer import normalize_turkish_text
 from core.intelligent_planner import get_intelligent_planner
 from core.intent_parser import get_intent_parser
 from core.capability_router import get_capability_router
@@ -42,6 +44,7 @@ from core.cdg_engine import cdg_engine
 from core.style_profile import style_profile
 from core.constraint_engine import constraint_engine
 from core.failure_clustering import failure_clustering
+from core.failure_classification import classify_failure_class
 from core.predictive_tasks import get_predictive_task_engine
 from core.timeout_guard import (
     with_timeout, friendly_timeout_message,
@@ -71,8 +74,10 @@ from core.repair.state_machine import classify_error, RepairStateMachine
 from core.repair.error_codes import PLAN_ERROR, TOOL_ERROR, ENV_ERROR, VALIDATION_ERROR
 from core.compat.legacy_tool_wrappers import normalize_legacy_tool_payload
 from core.security.runtime_guard import runtime_security_guard
+from core.recovery_policy import select_recovery_strategy
 from core.compliance.audit_trail import audit_trail
 from core.spec.task_spec import validate_task_spec, TASK_SPEC_SCHEMA_VERSION
+from core.spec.task_spec_standard import coerce_task_spec_standard, extract_slots_from_intent
 from security.validator import validate_input, sanitize_input
 from security.privacy_guard import redact_text, sanitize_for_storage, sanitize_object, is_external_provider
 from security.tool_policy import tool_policy
@@ -291,6 +296,10 @@ class Agent:
         self._last_tool_confirmation: dict[str, Any] = {"key": "", "ts": 0.0}
         self._away_notifier_registered = False
         self._task_suggestion_cache: dict[str, float] = {}
+        self._nlu_model_a = None
+        self._nlu_model_a_path: str = ""
+        self._nlu_model_a_mtime: float = 0.0
+        self._nlu_model_a_load_error: str = ""
         self._register_away_notifier()
 
     def _register_away_notifier(self) -> None:
@@ -349,7 +358,63 @@ class Agent:
         return False
 
     @staticmethod
+    def _sanitize_chat_reply(text: Any) -> str:
+        content = str(text or "").replace("\r\n", "\n").strip()
+        if not content:
+            return ""
+        lines = content.splitlines()
+        cleaned: list[str] = []
+        skip_prefixes = (
+            "deliverable spec:",
+            "done criteria:",
+            "başarı kriteri:",
+            "success criteria:",
+            "sistem notu:",
+            "❌ completion gate failed:",
+            "completion gate failed:",
+        )
+        for line in lines:
+            stripped = line.strip()
+            lower = stripped.lower()
+            if not stripped:
+                if cleaned and cleaned[-1] != "":
+                    cleaned.append("")
+                continue
+            if lower.startswith(skip_prefixes):
+                continue
+            if lower.startswith("- kullanıcının ") or lower.startswith("- kullanıcıya "):
+                continue
+            cleaned.append(stripped)
+        content = "\n".join(cleaned).strip()
+        return _re.sub(r"\n{3,}", "\n\n", content)
+
+    @staticmethod
+    def _fast_chat_reply(user_input: str = "") -> str | None:
+        try:
+            fast = get_fast_response_system().get_fast_response(str(user_input or ""))
+        except Exception:
+            fast = None
+        if not fast or fast.question_type != QuestionType.GREETING:
+            return None
+        return Agent._sanitize_chat_reply(fast.answer)
+
+    @staticmethod
+    def _build_information_question_prompt(user_input: str) -> str:
+        question = str(user_input or "").strip()
+        return (
+            "Aşağıdaki soruyu tek başına değerlendir.\n"
+            "Önceki konuşmayı referans alma.\n"
+            "Kısa, doğal ve doğrudan Türkçe cevap ver.\n"
+            "İç plan, görev maddesi, sistem notu, başarı kriteri, araç açıklaması yazma.\n"
+            "Sorunun cevabını 2-4 cümlede ver.\n\n"
+            f"Soru: {question}"
+        )
+
+    @staticmethod
     def _fallback_chat_without_llm(user_input: str = "") -> str:
+        quick = Agent._fast_chat_reply(user_input)
+        if quick:
+            return quick
         text = str(user_input or "").lower()
         if any(k in text for k in ("durum", "status", "sağlık", "saglik", "health")):
             return "LLM bağlantısı hazır değil. 'elyan models status' ve 'elyan gateway health --json' ile kontrol edebilirsin."
@@ -1010,6 +1075,7 @@ class Agent:
                     "mode": "background",
                 },
             )
+        effective_user_input = self._runtime_normalize_user_input(user_input)
         task = task_brain.create_task(
             objective=user_input,
             user_input=user_input,
@@ -1029,7 +1095,7 @@ class Agent:
             ).strip().lower()
 
         ctx = PipelineContext(
-            user_input=user_input,
+            user_input=effective_user_input,
             user_id=uid,
             channel=str(channel or "cli"),
         )
@@ -1048,6 +1114,8 @@ class Agent:
             "name": runtime_policy.name,
             "capability": dict(runtime_policy.capability),
             "planning": dict(runtime_policy.planning),
+            "execution": dict(runtime_policy.execution),
+            "nlu": dict(runtime_policy.nlu),
             "orchestration": dict(runtime_policy.orchestration),
             "api_tools": dict(runtime_policy.api_tools),
             "skills": dict(runtime_policy.skills),
@@ -1061,10 +1129,15 @@ class Agent:
         except Exception:
             profile = {}
         response_cfg = ctx.runtime_policy.get("response", {}) if isinstance(ctx.runtime_policy.get("response"), dict) else {}
-        response_bias = str(profile.get("response_length_bias") or "short").strip().lower()
+        response_bias_raw = profile.get("response_length_bias") if isinstance(profile, dict) else None
+        response_bias = str(response_bias_raw or "").strip().lower()
         if response_bias in {"short", "medium", "detailed"}:
-            response_cfg.setdefault("mode", "concise" if response_bias == "short" else ("formal" if response_bias == "medium" else "friendly"))
-        response_cfg.setdefault("friendly", False if response_bias == "short" else bool(response_cfg.get("friendly", True)))
+            response_cfg["mode"] = "concise" if response_bias == "short" else ("formal" if response_bias == "medium" else "friendly")
+            response_cfg["friendly"] = False if response_bias == "short" else bool(response_cfg.get("friendly", True))
+            response_cfg["compact_actions"] = bool(response_bias == "short")
+        else:
+            response_cfg.setdefault("friendly", bool(response_cfg.get("friendly", True)))
+            response_cfg["compact_actions"] = False
         response_cfg.setdefault("share_attachments_default", True)
         ctx.runtime_policy["response"] = response_cfg
         if autonomy_mode in {"full", "full-autonomy", "tam_otonom", "tam-otonom"}:
@@ -1072,16 +1145,28 @@ class Agent:
             sec_cfg = ctx.runtime_policy.get("security", {}) if isinstance(ctx.runtime_policy.get("security"), dict) else {}
             sec_cfg["require_confirmation_for_risky"] = False
             ctx.runtime_policy["security"] = sec_cfg
+            exec_cfg = ctx.runtime_policy.get("execution", {}) if isinstance(ctx.runtime_policy.get("execution"), dict) else {}
+            exec_cfg["mode"] = "operator"
+            ctx.runtime_policy["execution"] = exec_cfg
             tools_cfg = ctx.runtime_policy.get("tools", {}) if isinstance(ctx.runtime_policy.get("tools"), dict) else {}
             tools_cfg["require_approval"] = []
             ctx.runtime_policy["tools"] = tools_cfg
             ctx.runtime_policy["metadata"]["interactive_approval"] = False
-        low = str(user_input or "").lower()
+        low = str(effective_user_input or "").lower()
         ctx.team_mode_forced = any(tok in low for tok in ("team mode", "agent team", "sub-agent", "ekip modu", "takım modu"))
         if isinstance(metadata, dict):
             for k, v in metadata.items():
                 if isinstance(k, str):
                     ctx.runtime_policy["metadata"][k] = v
+            exec_mode = str(
+                metadata.get("execution_mode")
+                or metadata.get("agent_mode")
+                or ""
+            ).strip()
+            if exec_mode:
+                exec_cfg = ctx.runtime_policy.get("execution", {}) if isinstance(ctx.runtime_policy.get("execution"), dict) else {}
+                exec_cfg["mode"] = exec_mode
+                ctx.runtime_policy["execution"] = exec_cfg
 
         ledger_token = _active_ledger.set(ledger)
         runtime_policy_token = _active_runtime_policy.set(dict(ctx.runtime_policy or {}))
@@ -1091,7 +1176,7 @@ class Agent:
             task_brain.save_task(task)
             run_store.write_task(
                 {},
-                user_input=user_input,
+                user_input=effective_user_input,
                 metadata={"channel": channel, "user_id": uid, "phase": "planning"},
                 task_state=task.to_dict(),
             )
@@ -1275,7 +1360,7 @@ class Agent:
                 run_id=run_id,
                 text=final_text,
                 attachments=refs,
-                evidence_manifest_path=manifest if share_manifest else "",
+                evidence_manifest_path=manifest,
                 status=status,
                 error="; ".join(str(e) for e in (ctx.errors or []) if str(e).strip()),
                 metadata={
@@ -1291,6 +1376,7 @@ class Agent:
                     "model_provider": str(getattr(ctx, "provider", "") or ""),
                     "model_name": str(getattr(ctx, "model", "") or ""),
                     "hybrid_model": dict(getattr(ctx, "hybrid_model", {}) or {}),
+                    "share_manifest": bool(share_manifest),
                 },
             )
         except Exception as exc:
@@ -1306,9 +1392,10 @@ class Agent:
                 run_id=run_id,
                 text=f"Çalıştırma sırasında kritik bir hata oluştu: {err}",
                 attachments=[],
-                evidence_manifest_path=manifest if self._should_share_manifest(user_input, ctx) else "",
+                evidence_manifest_path=manifest,
                 status="failed",
                 error=err,
+                metadata={"share_manifest": bool(self._should_share_manifest(user_input, ctx))},
             )
         finally:
             _active_ledger.reset(ledger_token)
@@ -1407,12 +1494,6 @@ class Agent:
         keywords = ("kanıt", "kanit", "manifest", "hash", "sha256", "ss", "screenshot", "kanıtla", "kanıt gönder")
         if any(k in low for k in keywords):
             return True
-        try:
-            action = str(getattr(ctx, "action", "") or "").strip().lower()
-            if action in {"set_wallpaper", "take_screenshot", "analyze_screen", "screen_workflow", "research_document_delivery"}:
-                return True
-        except Exception:
-            pass
         try:
             if getattr(ctx, "requires_evidence", False):
                 return True
@@ -1962,6 +2043,12 @@ class Agent:
             prompt = safe_params.get("message") or user_input
             try:
                 from core.resilience.fallback_manager import fallback_manager
+                quick = self._fast_chat_reply(prompt)
+                if quick:
+                    return quick
+                prompt_to_send = prompt
+                if self._is_information_question(prompt):
+                    prompt_to_send = self._build_information_question_prompt(prompt)
                 if self._ensure_llm():
                     llm_cfg, allowed_providers = self._resolve_llm_config_for_runtime("inference")
                     if llm_cfg.get("type") == "none":
@@ -1969,9 +2056,9 @@ class Agent:
                     else:
                         provider = str(llm_cfg.get("type") or llm_cfg.get("provider") or "").strip().lower()
                         flags = self._runtime_security_flags()
-                        redacted_prompt = prompt
+                        redacted_prompt = prompt_to_send
                         if bool(flags.get("kvkk_strict_mode")) and bool(flags.get("redact_cloud_prompts")) and is_external_provider(provider):
-                            redacted_prompt = redact_text(str(prompt or ""))
+                            redacted_prompt = redact_text(str(prompt_to_send or ""))
                         result = await fallback_manager.execute_with_fallback(
                             self,
                             llm_cfg,
@@ -1982,16 +2069,16 @@ class Agent:
                 else:
                     result = self._fallback_chat_without_llm(prompt)
                 success = True
-                return result
+                return self._sanitize_chat_reply(result)
             except Exception as exc:
                 err_text = str(exc)
                 # Last resort fallback if primary and secondary failed
                 try:
                     from core.llm.factory import get_llm_client
                     alt_client = get_llm_client("ollama", "llama3.2:3b")
-                    result = await alt_client.generate(prompt, user_id=uid)
+                    result = await alt_client.generate(prompt_to_send, user_id=uid)
                     success = True
-                    return result
+                    return self._sanitize_chat_reply(result)
                 except Exception:
                     raise exc
             finally:
@@ -2137,9 +2224,10 @@ class Agent:
             if mapped_tool == "set_wallpaper" and isinstance(result, dict) and result.get("success"):
                 try:
                     if "take_screenshot" in AVAILABLE_TOOLS:
+                        stamp = int(time.time() * 1000)
                         proof = self._normalize_tool_execution_result(
                             "take_screenshot",
-                            await self.kernel.tools.execute("take_screenshot", {"filename": "wallpaper_proof.png"}),
+                            await self.kernel.tools.execute("take_screenshot", {"filename": f"wallpaper_proof_{stamp}.png"}),
                             source="agent_kernel_execute",
                         )
                         if isinstance(proof, dict) and proof.get("success"):
@@ -2159,9 +2247,10 @@ class Agent:
                 ):
                     proof_map = result.get("_proof", {}) if isinstance(result.get("_proof"), dict) else {}
                     if not proof_map.get("screenshot"):
+                        stamp = int(time.time() * 1000)
                         shot = self._normalize_tool_execution_result(
                             "take_screenshot",
-                            await self.kernel.tools.execute("take_screenshot", {"filename": f"proof_{mapped_tool}.png"}),
+                            await self.kernel.tools.execute("take_screenshot", {"filename": f"proof_{mapped_tool}_{stamp}.png"}),
                             source="agent_kernel_execute",
                         )
                         if isinstance(shot, dict) and shot.get("success"):
@@ -3873,7 +3962,7 @@ class Agent:
 
     @staticmethod
     def _is_creative_writing_request(text: str) -> bool:
-        t = str(text or "").lower().strip()
+        t = normalize_turkish_text(text)
         creative_markers = (
             "şiir yaz", "siir yaz", "hikaye yaz", "hikâye yaz", "masal yaz",
             "deneme yaz", "essay yaz", "mektup yaz", "yazı yaz", "yazi yaz",
@@ -3885,8 +3974,10 @@ class Agent:
 
     @staticmethod
     def _is_information_question(text: str) -> bool:
-        t = str(text or "").strip().lower()
+        t = normalize_turkish_text(text)
         if not t:
+            return False
+        if t in {"naber", "nasılsın", "nasılsınız", "ne yapıyorsun", "ne yaptın", "elyan"}:
             return False
 
         # File/system/tool operations should not be treated as plain Q&A.
@@ -4453,6 +4544,62 @@ class Agent:
         normalized = " ".join(normalized.split())
         return normalized
 
+    def _runtime_normalize_user_input(self, user_input: str) -> str:
+        normalized = self._normalize_user_input(user_input)
+        try:
+            prefs = self.learning.get_preferences(min_confidence=0.65) or {}
+        except Exception:
+            prefs = {}
+        alias_maps = []
+        for key in ("nlu_aliases", "phrase_aliases", "user_nlu_aliases"):
+            value = prefs.get(key)
+            if isinstance(value, dict):
+                alias_maps.append(value)
+        if not alias_maps:
+            return normalized
+
+        output = normalized
+        for alias_map in alias_maps:
+            for raw_alias, canonical in alias_map.items():
+                src = str(raw_alias or "").strip()
+                dst = str(canonical or "").strip()
+                if not src or not dst:
+                    continue
+                output = _re.sub(
+                    rf"(?<!\w){_re.escape(src)}(?!\w)",
+                    dst,
+                    output,
+                    flags=_re.IGNORECASE,
+                )
+        return " ".join(str(output or "").split())
+
+    @staticmethod
+    def _infer_batch_delete_patterns(text: str) -> tuple[str, list[str]] | tuple[str, list[str]]:
+        low = str(text or "").lower()
+        screenshot_markers = (
+            "ekran resmi",
+            "ekran resimleri",
+            "ekran görüntüsü",
+            "ekran görüntüleri",
+            "ekran goruntusu",
+            "ekran goruntuleri",
+            "screenshot",
+            "screen shot",
+            "ss",
+        )
+        image_markers = ("resim", "görsel", "gorsel", "foto", "png", "jpg", "jpeg", "hepsini", "tümünü", "tumunu")
+        if any(m in low for m in screenshot_markers) and any(m in low for m in image_markers):
+            return (
+                "Masaüstündeki ekran görüntüleri temizleniyor...",
+                [
+                    "Ekran Resmi*",
+                    "Ekran Görüntüsü*",
+                    "Screenshot*",
+                    "Screen Shot *",
+                ],
+            )
+        return ("", [])
+
     @staticmethod
     def _extract_first_url(text: str) -> str:
         if not text:
@@ -4498,7 +4645,7 @@ class Agent:
 
     @staticmethod
     def _is_likely_chat_message(text: str) -> bool:
-        t = str(text or "").lower().strip()
+        t = normalize_turkish_text(text)
         if not t:
             return True
         words = t.split()
@@ -4776,17 +4923,41 @@ class Agent:
         return ""
 
     @staticmethod
+    def _normalize_terminal_command(command: str) -> str:
+        cmd = str(command or "").strip()
+        if not cmd:
+            return ""
+        cmd = _re.sub(r"\s+", " ", cmd).strip(" \t\r\n.,;:!?")
+        cmd = _re.sub(r"\s+\b(?:komut(?:u|unu|un)?|command)\b\s*$", "", cmd, flags=_re.IGNORECASE).strip(" \t\r\n.,;:!?")
+        cmd = _re.sub(r"\s+(?:çalıştır|calistir|run|execute)\b\s*$", "", cmd, flags=_re.IGNORECASE).strip(" \t\r\n.,;:!?")
+
+        m_cd = _re.match(r"^\s*cd\s+(.+?)\s*$", cmd, _re.IGNORECASE)
+        if not m_cd:
+            return cmd
+
+        target = str(m_cd.group(1) or "").strip().strip("\"'")
+        if not target:
+            return "cd ~"
+        if _re.match(r"^(desktop|masaüstü|masaustu|masa ustu)$", target, _re.IGNORECASE):
+            return "cd ~/Desktop"
+        m_sub = _re.match(r"^(desktop|masaüstü|masaustu|masa ustu)([/\\].+)$", target, _re.IGNORECASE)
+        if m_sub:
+            suffix = str(m_sub.group(2) or "").replace("\\", "/")
+            return f"cd ~/Desktop{suffix}"
+        return cmd
+
+    @staticmethod
     def _extract_terminal_command_from_text(user_input: str) -> str:
-        text = str(user_input or "").strip()
+        text = normalize_turkish_text(user_input)
         if not text:
             return ""
 
         if text.startswith("$"):
-            return text[1:].strip()
+            return Agent._normalize_terminal_command(text[1:].strip())
 
         patterns = (
-            r"(?:terminal(?:de)?|shell(?:de)?|konsol(?:da)?|komut satır(?:ı|inda)?)\s*(?:şunu|bunu)?\s*(?:çalıştır|calistir|run|execute)?\s*[:\-]?\s*(.+)$",
-            r"(?:çalıştır|calistir|run|execute)\s*(?:şunu|bunu)?\s*(?:terminal(?:de)?|shell(?:de)?|konsol(?:da)?)?\s*[:\-]?\s*(.+)$",
+            r"(?:terminal(?:\s*(?:den|dan|de))?\b|shell(?:\s*(?:den|dan|de))?\b|konsol(?:\s*(?:dan|da))?\b|komut satır(?:ı|inda)?)\s*(?:şunu|bunu)?\s*(?:çalıştır|calistir|run|execute)?\s*[:\-]?\s*(.+)$",
+            r"(?:çalıştır|calistir|run|execute)\s*(?:şunu|bunu)?\s*(?:terminal(?:\s*(?:den|dan|de))?\b|shell(?:\s*(?:den|dan|de))?\b|konsol(?:\s*(?:dan|da))?\b)?\s*[:\-]?\s*(.+)$",
             r"(?:komut(?:u)?|command)\s*[:\-]\s*(.+)$",
         )
         for pattern in patterns:
@@ -4794,19 +4965,21 @@ class Agent:
             if not m:
                 continue
             cmd = str(m.group(1) or "").strip(" \"'`")
-            cmd = _re.sub(r"\s+(?:komutunu?|command)\s*(?:çalıştır|calistir|run|execute)$", "", cmd, flags=_re.IGNORECASE).strip()
+            cmd = _re.sub(r"\s+(?:komut(?:u|unu|un)?|command)\s*(?:çalıştır|calistir|run|execute)$", "", cmd, flags=_re.IGNORECASE).strip()
             cmd = _re.sub(r"\s+(?:çalıştır|calistir|run|execute)$", "", cmd, flags=_re.IGNORECASE).strip()
+            cmd = _re.sub(r"^(?:ve|sonra|ardından|ardindan|açıp|çalıştırıp|gidip|girip)\s+", "", cmd, flags=_re.IGNORECASE).strip()
             if cmd:
-                return cmd
+                return Agent._normalize_terminal_command(cmd)
 
         # Last resort for explicit terminal intent: use tail segment after marker.
-        for marker in ("terminal", "shell", "konsol", "komut satırı", "komut satiri"):
+        for marker in ("terminal de", "terminal den", "terminal dan", "terminalde", "terminalden", "terminaldan", "terminal", "shell de", "shell den", "shellde", "shellden", "shell", "konsol da", "konsol dan", "konsolda", "konsoldan", "konsol", "komut satırı", "komut satiri"):
             low = text.lower()
             idx = low.find(marker)
             if idx >= 0:
                 tail = text[idx + len(marker):].strip(" :,-")
                 if tail:
-                    return tail
+                    tail = _re.sub(r"^(?:ve|sonra|ardından|ardindan|açıp|çalıştırıp|gidip|girip)\s+", "", tail, flags=_re.IGNORECASE).strip()
+                    return Agent._normalize_terminal_command(tail)
         return ""
 
     @staticmethod
@@ -5083,6 +5256,12 @@ class Agent:
         numbered = Agent._extract_numbered_steps(text)
         if len(numbered) >= 2:
             return numbered
+
+        text = _re.sub(r"\b(?:açıp|acip|açip)\b", "aç sonra", text, flags=_re.IGNORECASE)
+        text = _re.sub(r"\b(?:çalıştırıp|calistirip)\b", "çalıştır sonra", text, flags=_re.IGNORECASE)
+        text = _re.sub(r"\bgidip\b", "git sonra", text, flags=_re.IGNORECASE)
+        text = _re.sub(r"\bgirip\b", "gir sonra", text, flags=_re.IGNORECASE)
+        text = _re.sub(r"\b(?:yazıp|yazip)\b", "yaz sonra", text, flags=_re.IGNORECASE)
 
         # Primary split tokens for multi-step execution.
         primary = _re.split(
@@ -6055,6 +6234,10 @@ class Agent:
             "retries": {"max_attempts": 2},
             "steps": steps,
         }
+        task_spec = coerce_task_spec_standard(
+            task_spec,
+            user_input=user_input,
+        )
         return task_spec if self._validate_filesystem_task_spec(task_spec) else None
 
     def _validate_filesystem_task_spec(self, task_spec: Any) -> bool:
@@ -6184,6 +6367,12 @@ class Agent:
             "retries": {"max_attempts": 2},
             "steps": steps,
         }
+        task_spec = coerce_task_spec_standard(
+            task_spec,
+            user_input=user_input,
+            intent_payload=intent,
+            intent_confidence=float(intent.get("confidence", 0.0) or 0.0),
+        )
         ok, _errors = self._validate_runtime_task_spec(task_spec)
         return task_spec if ok else None
 
@@ -6309,6 +6498,12 @@ class Agent:
             "version": TASK_SPEC_SCHEMA_VERSION,
             "source": "intent_normalizer",
             "goal": str(user_input or "").strip() or str(intent.get("reply") or "görev"),
+            "slots": extract_slots_from_intent(
+                {
+                    "action": action,
+                    "params": normalized_params,
+                }
+            ),
             "constraints": {
                 "deterministic_defaults": True,
                 "forbid_command_dump_content": True,
@@ -6323,6 +6518,12 @@ class Agent:
             "retries": {"max_attempts": 1},
             "steps": [step],
         }
+        task_spec = coerce_task_spec_standard(
+            task_spec,
+            user_input=user_input,
+            intent_payload=intent,
+            intent_confidence=float(intent.get("confidence", 0.0) or 0.0),
+        )
 
         ok, _errors = self._validate_runtime_task_spec(task_spec)
         return task_spec if ok else None
@@ -6571,6 +6772,53 @@ class Agent:
         except Exception:
             return TOOL_ERROR
 
+    async def _apply_failure_recovery_strategy(
+        self,
+        *,
+        failure_class: str,
+        step_action: str,
+        params: dict[str, Any],
+        result: Any,
+        reason: str,
+        user_input: str,
+        step_name: str,
+    ) -> tuple[dict[str, Any], bool, str]:
+        clean_params = dict(params or {})
+        payload = result if isinstance(result, dict) else {}
+        strategy = select_recovery_strategy(
+            failure_class=failure_class,
+            action=step_action,
+            reason=reason,
+            params=clean_params,
+            result=payload,
+        )
+        kind = str(strategy.get("kind") or "").strip().lower()
+        stop_retry = bool(strategy.get("stop_retry", False))
+        note = str(strategy.get("note") or "").strip()
+
+        if kind == "patch_params":
+            patch = strategy.get("params_patch") if isinstance(strategy.get("params_patch"), dict) else {}
+            if patch:
+                clean_params.update(patch)
+            return clean_params, stop_retry, note
+
+        if kind == "refocus_app":
+            app_name = str(strategy.get("focus_app") or "").strip()
+            if app_name:
+                focus_res = await self._execute_tool(
+                    "open_app",
+                    {"app_name": app_name},
+                    user_input=user_input,
+                    step_name=f"{step_name} (Recovery: focus)",
+                )
+                focus_ok = not (isinstance(focus_res, dict) and focus_res.get("success") is False)
+                status = "ok" if focus_ok else "failed"
+                suffix = f"{note}:{status}" if note else f"refocus_app:{app_name}:{status}"
+                return clean_params, stop_retry, suffix
+            return clean_params, stop_retry, note
+
+        return clean_params, stop_retry, note
+
     async def _run_runtime_task_spec(self, task_spec: dict[str, Any], *, user_input: str) -> str:
         ok, errors = self._validate_runtime_task_spec(task_spec)
         if not ok:
@@ -6654,12 +6902,14 @@ class Agent:
             step_desc = str(step.get("description") or f"Adım {idx}")
             tool_name = self._task_spec_action_to_tool(step_action)
             if not tool_name:
+                fail_reason = f"unsupported_action:{step_action}"
                 return {
                     "idx": idx,
                     "step_id": step_id,
                     "step_desc": step_desc,
                     "text": f"Hata: Desteklenmeyen adım ({step_action}).",
-                    "fail_reason": f"unsupported_action:{step_action}",
+                    "fail_reason": fail_reason,
+                    "failure_class": classify_failure_class(reason=fail_reason, action=step_action),
                     "path": "",
                     "retry_notes": [],
                 }
@@ -6679,7 +6929,9 @@ class Agent:
             result: Any = {"success": False, "error": "not_executed"}
             fail_reason = ""
             fail_code = ""
+            failure_class = ""
             retry_notes: list[str] = []
+            recovery_notes: list[str] = []
 
             for attempt in range(1, attempts + 1):
                 if (time.perf_counter() - run_started) > run_timeout_s:
@@ -6739,7 +6991,28 @@ class Agent:
 
                 if not fail_reason:
                     fail_code = ""
+                    failure_class = ""
                     break
+                failure_class = classify_failure_class(
+                    reason=fail_reason,
+                    error_code=fail_code,
+                    action=step_action,
+                    payload=result if isinstance(result, dict) else {},
+                )
+                if attempt < attempts:
+                    params, stop_retry, recovery_note = await self._apply_failure_recovery_strategy(
+                        failure_class=failure_class,
+                        step_action=step_action,
+                        params=params,
+                        result=result,
+                        reason=fail_reason,
+                        user_input=user_input,
+                        step_name=step_desc,
+                    )
+                    if recovery_note:
+                        recovery_notes.append(recovery_note)
+                    if stop_retry:
+                        break
                 if attempt < attempts:
                     retry_notes.append(f"[{idx}] {step_desc}\nTekrar deneme {attempt}/{attempts - 1}: {fail_reason}")
 
@@ -6750,6 +7023,13 @@ class Agent:
                 or ""
             ).strip()
             resolved_path = self._resolve_path_with_desktop_fallback(path, user_input=user_input) if path else ""
+            if fail_reason and not failure_class:
+                failure_class = classify_failure_class(
+                    reason=fail_reason,
+                    error_code=fail_code,
+                    action=step_action,
+                    payload=result if isinstance(result, dict) else {},
+                )
             return {
                 "idx": idx,
                 "step_id": step_id,
@@ -6757,8 +7037,10 @@ class Agent:
                 "text": self._format_result_text(result),
                 "fail_reason": fail_reason,
                 "fail_code": fail_code,
+                "failure_class": failure_class,
                 "path": resolved_path,
                 "retry_notes": retry_notes,
+                "recovery_notes": recovery_notes,
             }
 
         async def _run_rollback(trigger_reason: str) -> None:
@@ -7169,8 +7451,252 @@ class Agent:
         except Exception:
             return None
 
-    def _infer_general_tool_intent(self, user_input: str) -> Optional[dict[str, Any]]:
+    @staticmethod
+    def _model_a_default_path() -> str:
+        configured = str(
+            elyan_config.get("agent.nlu.model_a.model_path", "~/.elyan/models/nlu/baseline_intent_model.json")
+            or "~/.elyan/models/nlu/baseline_intent_model.json"
+        ).strip()
+        return str(Path(configured).expanduser())
+
+    def _load_model_a(self, model_path: str = "") -> Any:
+        path_raw = str(model_path or "").strip()
+        path = str(Path(path_raw).expanduser()) if path_raw else self._model_a_default_path()
+        file_path = Path(path)
+        if not file_path.exists():
+            return None
+
+        try:
+            mtime = float(file_path.stat().st_mtime)
+        except Exception:
+            mtime = 0.0
+
+        if (
+            self._nlu_model_a is not None
+            and self._nlu_model_a_path == path
+            and abs(float(self._nlu_model_a_mtime or 0.0) - mtime) < 1e-6
+        ):
+            return self._nlu_model_a
+
+        try:
+            from core.nlu import NaiveBayesIntentModel
+
+            loaded = NaiveBayesIntentModel.load(file_path)
+            self._nlu_model_a = loaded
+            self._nlu_model_a_path = path
+            self._nlu_model_a_mtime = mtime
+            self._nlu_model_a_load_error = ""
+            return loaded
+        except Exception as exc:
+            self._nlu_model_a = None
+            self._nlu_model_a_path = path
+            self._nlu_model_a_mtime = 0.0
+            self._nlu_model_a_load_error = str(exc)
+            logger.debug(f"model_a_load_failed: {exc}")
+            return None
+
+    @staticmethod
+    def _normalize_model_a_action(label: Any) -> str:
+        action = str(label or "").strip().lower().replace("-", "_").replace(" ", "_")
+        action = _re.sub(r"[^a-z0-9_]", "", action)
+        return _re.sub(r"_+", "_", action).strip("_")
+
+    def _build_model_a_intent(
+        self,
+        action_label: str,
+        *,
+        user_input: str,
+        confidence: float,
+    ) -> Optional[dict[str, Any]]:
+        raw_action = self._normalize_model_a_action(action_label)
+        if not raw_action:
+            return None
+        mapped_action = str(ACTION_TO_TOOL.get(raw_action, raw_action) or raw_action).strip().lower()
+        action = mapped_action if mapped_action in AVAILABLE_TOOLS else raw_action
+        low = str(user_input or "").lower()
+
+        if action in {"open_app", "close_app"}:
+            app_name = self._infer_app_name(user_input)
+            if not app_name:
+                return None
+            return {
+                "action": action,
+                "params": {"app_name": app_name},
+                "confidence": round(float(confidence), 4),
+                "_fallback_source": "model_a",
+            }
+
+        if action in {"web_search", "browser_search", "search_web"}:
+            query = self._extract_topic(user_input, "").strip()
+            if not query or query == "genel konu":
+                query = str(user_input or "").strip()
+            if not query:
+                return None
+            params: dict[str, Any] = {"query": query}
+            if any(k in low for k in ("resim", "gorsel", "görsel", "image", "foto")):
+                params["mode"] = "images"
+            return {
+                "action": "web_search",
+                "params": params,
+                "confidence": round(float(confidence), 4),
+                "_fallback_source": "model_a",
+            }
+
+        if action == "open_url":
+            url = self._extract_first_url(user_input)
+            if not url:
+                return None
+            return {
+                "action": "open_url",
+                "params": {"url": url},
+                "confidence": round(float(confidence), 4),
+                "_fallback_source": "model_a",
+            }
+
+        if action in {"create_folder", "list_files", "read_file", "write_file"}:
+            default_name = {
+                "create_folder": "yeni_klasor",
+                "list_files": "",
+                "read_file": "not.md",
+                "write_file": "not.md",
+            }
+            if action == "create_folder":
+                path_tokens = self._extract_path_like_tokens(user_input)
+                raw_path = ""
+                for tok in path_tokens:
+                    st = str(tok).strip()
+                    if "/" in st or st.startswith(("~", "/", "./", "../")):
+                        raw_path = st
+                        break
+                hint = self._extract_folder_hint_from_text(user_input).strip()
+                path = raw_path or (f"~/Desktop/{hint}" if hint else "~/Desktop/yeni_klasor")
+                return {
+                    "action": "create_folder",
+                    "params": {"path": path},
+                    "confidence": round(float(confidence), 4),
+                    "_fallback_source": "model_a",
+                }
+            if action == "list_files":
+                hint = self._extract_folder_hint_from_text(user_input).strip()
+                path = f"~/Desktop/{hint}" if hint else "~/Desktop"
+                return {
+                    "action": "list_files",
+                    "params": {"path": path},
+                    "confidence": round(float(confidence), 4),
+                    "_fallback_source": "model_a",
+                }
+            path = self._extract_file_path_from_text(user_input, default_name[action] or "not.md")
+            params: dict[str, Any] = {"path": path}
+            if action == "write_file":
+                content = self._extract_inline_write_content(user_input).strip()
+                if not content:
+                    topic = self._extract_topic(user_input, "").strip()
+                    if topic and topic != "genel konu":
+                        content = topic
+                params["content"] = content
+            return {
+                "action": action,
+                "params": params,
+                "confidence": round(float(confidence), 4),
+                "_fallback_source": "model_a",
+            }
+
+        if action == "run_safe_command":
+            command = self._extract_terminal_command_from_text(user_input).strip()
+            if not command:
+                return None
+            return {
+                "action": "run_safe_command",
+                "params": {"command": command},
+                "confidence": round(float(confidence), 4),
+                "_fallback_source": "model_a",
+            }
+
+        if action in {"http_request", "api_health_get_save"}:
+            url = self._extract_first_url(user_input).strip()
+            if not url:
+                return None
+            params = {
+                "url": url,
+                "method": self._infer_http_method(f" {low} "),
+            }
+            return {
+                "action": action,
+                "params": params,
+                "confidence": round(float(confidence), 4),
+                "_fallback_source": "model_a",
+            }
+
+        if action == "set_wallpaper":
+            params: dict[str, Any] = {}
+            image_url = self._extract_first_url(user_input).strip()
+            if image_url:
+                params["image_url"] = image_url
+            topic = self._extract_topic(user_input, "").strip()
+            if topic and topic != "genel konu":
+                params["search_query"] = topic
+            if not params:
+                params["search_query"] = "wallpaper"
+            return {
+                "action": "set_wallpaper",
+                "params": params,
+                "confidence": round(float(confidence), 4),
+                "_fallback_source": "model_a",
+            }
+
+        if action in {"analyze_screen", "take_screenshot"}:
+            params = {"prompt": user_input} if action == "analyze_screen" else {}
+            return {
+                "action": action,
+                "params": params,
+                "confidence": round(float(confidence), 4),
+                "_fallback_source": "model_a",
+            }
+
+        return None
+
+    def _infer_model_a_intent(
+        self,
+        user_input: str,
+        *,
+        min_confidence: float = 0.78,
+        model_path: str = "",
+        allowed_actions: Optional[list[str]] = None,
+    ) -> Optional[dict[str, Any]]:
         text = str(user_input or "").strip()
+        if not text:
+            return None
+        model = self._load_model_a(model_path=model_path)
+        if model is None:
+            return None
+
+        try:
+            action_label, confidence = model.predict(text)
+            confidence = float(confidence or 0.0)
+        except Exception as exc:
+            logger.debug(f"model_a_predict_failed: {exc}")
+            return None
+
+        threshold = max(0.0, min(1.0, float(min_confidence or 0.78)))
+        if confidence < threshold:
+            return None
+
+        normalized_pred = self._normalize_model_a_action(action_label)
+        if not normalized_pred:
+            return None
+        if normalized_pred in {"", "chat", "unknown", "clarify"}:
+            return None
+
+        if isinstance(allowed_actions, list) and allowed_actions:
+            allowed = {self._normalize_model_a_action(x) for x in allowed_actions if str(x).strip()}
+            mapped = self._normalize_model_a_action(ACTION_TO_TOOL.get(normalized_pred, normalized_pred))
+            if normalized_pred not in allowed and mapped not in allowed:
+                return None
+
+        return self._build_model_a_intent(normalized_pred, user_input=text, confidence=confidence)
+
+    def _infer_general_tool_intent(self, user_input: str) -> Optional[dict[str, Any]]:
+        text = self._runtime_normalize_user_input(user_input)
         low = text.lower()
         if not text:
             return None
@@ -7385,7 +7911,7 @@ class Agent:
             "araştır", "arastir", "araştırma", "arastirma", "research", "incele", "analiz",
         )
         doc_markers = (
-            "belge", "doküman", "dokuman", "rapor", "word", "docx", "excel", "xlsx", "tablo",
+            "belge", "doküman", "dokuman", "rapor", "word", "docx", "excel", "xlsx", "tablo", "pdf",
             "dosya", "kayıt", "kayit",
         )
         deliver_markers = (
@@ -7404,11 +7930,14 @@ class Agent:
             elif any(k in low for k in ("uzman", "expert", "derin", "derinlemesine", "çok kapsamlı", "cok kapsamli")):
                 depth = "expert"
 
-            include_word = any(k in low for k in ("word", "docx", "belge", "doküman", "dokuman", "rapor"))
+            include_pdf = any(k in low for k in ("pdf",))
+            include_latex = any(k in low for k in ("latex", "tex"))
             include_excel = any(k in low for k in ("excel", "xlsx", "tablo", "csv"))
-            if not include_word and not include_excel:
+            explicit_word = any(k in low for k in ("word", "docx", "doküman", "dokuman"))
+            generic_doc = any(k in low for k in ("belge", "rapor"))
+            include_word = explicit_word or (generic_doc and not include_excel and not include_pdf and not include_latex)
+            if not include_word and not include_excel and not include_pdf and not include_latex:
                 include_word = True
-                include_excel = True
 
             needs_delivery = any(k in low for k in deliver_markers)
             is_academic = any(k in low for k in academic_markers)
@@ -7423,6 +7952,8 @@ class Agent:
                     "output_dir": "~/Desktop",
                     "include_word": include_word,
                     "include_excel": include_excel,
+                    "include_pdf": include_pdf,
+                    "include_latex": include_latex,
                     "include_report": True,
                     "source_policy": "academic" if is_academic else "trusted",
                     "min_reliability": 0.78 if is_academic else 0.62,
@@ -7635,6 +8166,32 @@ class Agent:
                 }
 
         delete_markers = ("sil", "kaldır", "kaldir", "delete", "remove")
+        batch_delete_reply, batch_delete_patterns = self._infer_batch_delete_patterns(text)
+        if batch_delete_patterns and any(m in low for m in delete_markers):
+            batch_dir = ""
+            for tok in tokens:
+                st = str(tok).strip()
+                if st and not Path(st).suffix:
+                    batch_dir = st
+                    break
+            if not batch_dir:
+                folder_hint = self._extract_folder_hint_from_text(text)
+                if folder_hint:
+                    batch_dir = f"~/Desktop/{folder_hint}"
+            if not batch_dir:
+                batch_dir = self._get_last_directory()
+            return {
+                "action": "delete_file",
+                "params": {
+                    "path": "",
+                    "directory": batch_dir or str(Path.home() / "Desktop"),
+                    "patterns": batch_delete_patterns,
+                    "recursive": False,
+                    "max_files": 400,
+                    "force": False,
+                },
+                "reply": batch_delete_reply,
+            }
         if (file_name or bare_file_name or (references_last and last_path)) and any(m in low for m in delete_markers):
             selected_name = file_name or bare_file_name
             delete_path = str(last_dir / selected_name) if selected_name else str(last_path)
@@ -8110,7 +8667,8 @@ class Agent:
                             "depth": "comprehensive",
                             "output_dir": "~/Desktop",
                             "include_word": True,
-                            "include_excel": True,
+                            "include_excel": any(k in text for k in ("excel", "xlsx", "tablo", "csv")),
+                            "include_pdf": any(k in text for k in ("pdf",)),
                             "include_report": True,
                             "deliver_copy": True,
                         },
@@ -8726,6 +9284,15 @@ class Agent:
                 intent["task_spec"] = runtime_task_spec
 
         if isinstance(runtime_task_spec, dict):
+            runtime_task_spec = coerce_task_spec_standard(
+                runtime_task_spec,
+                user_input=user_input,
+                intent_payload=intent,
+                intent_confidence=float(intent.get("confidence", 0.0) or 0.0),
+            )
+            intent["task_spec"] = runtime_task_spec
+
+        if isinstance(runtime_task_spec, dict):
             spec_intent = str(runtime_task_spec.get("intent") or "").strip().lower()
             bypass_actions = {
                 "create_coding_project",
@@ -8783,44 +9350,353 @@ class Agent:
                     task_spec = self._build_filesystem_task_spec(user_input, tasks)
                 if isinstance(task_spec, dict) and self._validate_filesystem_task_spec(task_spec):
                     return await self._run_filesystem_task_spec(task_spec, user_input=user_input)
+            if not tasks:
+                self._last_direct_intent_payload = {
+                    "action": "multi_task",
+                    "success": False,
+                    "error": "no_executable_steps",
+                    "completed_steps": 0,
+                    "total_steps": 0,
+                }
+                return "Hata: Çok adımlı görev için yürütülebilir adım bulunamadı."
 
-            outputs = []
-            previous_output_text = ""
+            # If a document write step appears before its content-producing step,
+            # pull the closest research/summary task forward only when dependencies are implicit.
+            normalized_tasks = list(tasks)
             i = 0
-            while i < len(tasks):
-                task = tasks[i]
+            while i < len(normalized_tasks):
+                task = normalized_tasks[i]
                 if not isinstance(task, dict):
                     i += 1
                     continue
-
-                # If a document write step appears before its content-producing step,
-                # pull the closest research/summary task forward.
-                if self._task_needs_previous_output(task) and not previous_output_text:
-                    next_ctx_idx = self._find_next_context_task_index(tasks, start=i + 1)
+                has_explicit_deps = (
+                    task.get("depends_on") is not None
+                    or task.get("dependencies") is not None
+                )
+                if self._task_needs_previous_output(task) and not has_explicit_deps:
+                    next_ctx_idx = self._find_next_context_task_index(normalized_tasks, start=i + 1)
                     if next_ctx_idx is not None:
-                        tasks.insert(i, tasks.pop(next_ctx_idx))
-                        task = tasks[i]
-
-                t_action = str(task.get("action", "") or "")
-                t_params = task.get("params", {}) if isinstance(task.get("params"), dict) else {}
-                t_desc = str(task.get("description", "") or f"Adım {i + 1}")
-                t_params = self._hydrate_task_params_from_previous(
-                    t_action,
-                    t_params,
-                    previous_output_text,
-                )
-                result = await self._execute_tool(
-                    t_action,
-                    t_params,
-                    user_input=user_input,
-                    step_name=t_desc,
-                )
-                text = self._format_result_text(result)
-                if isinstance(text, str) and text.strip() and not text.lower().startswith("hata:"):
-                    previous_output_text = text.strip()
-                outputs.append(f"[{i + 1}] {t_desc}\n{text}")
+                        cand = normalized_tasks[next_ctx_idx]
+                        cand_has_explicit = (
+                            isinstance(cand, dict)
+                            and (cand.get("depends_on") is not None or cand.get("dependencies") is not None)
+                        )
+                        if not cand_has_explicit:
+                            normalized_tasks.insert(i, normalized_tasks.pop(next_ctx_idx))
                 i += 1
-            return "\n\n".join(outputs) if outputs else "Çok adımlı görev için yürütülebilir adım bulunamadı."
+
+            indexed_steps: list[dict[str, Any]] = []
+            known_ids: set[str] = set()
+            prev_step_id = ""
+            for idx, task in enumerate(normalized_tasks, start=1):
+                if not isinstance(task, dict):
+                    continue
+                step_id = str(task.get("id") or f"task_{idx}").strip() or f"task_{idx}"
+                while step_id in known_ids:
+                    step_id = f"{step_id}_{idx}"
+                known_ids.add(step_id)
+
+                raw_deps = task.get("depends_on") if task.get("depends_on") is not None else task.get("dependencies")
+                if isinstance(raw_deps, str):
+                    deps = [raw_deps.strip()] if raw_deps.strip() else []
+                elif isinstance(raw_deps, list):
+                    deps = [str(x).strip() for x in raw_deps if str(x).strip()]
+                else:
+                    deps = []
+
+                if not deps and prev_step_id:
+                    deps = [prev_step_id]
+
+                indexed_steps.append(
+                    {
+                        "idx": idx,
+                        "id": step_id,
+                        "action": str(task.get("action") or "").strip(),
+                        "params": dict(task.get("params") or {}) if isinstance(task.get("params"), dict) else {},
+                        "description": str(task.get("description") or f"Adım {idx}"),
+                        "depends_on": deps,
+                    }
+                )
+                prev_step_id = step_id
+
+            if not indexed_steps:
+                self._last_direct_intent_payload = {
+                    "action": "multi_task",
+                    "success": False,
+                    "error": "no_executable_steps",
+                    "completed_steps": 0,
+                    "total_steps": 0,
+                }
+                return "Hata: Çok adımlı görev için yürütülebilir adım bulunamadı."
+
+            missing_deps: list[str] = []
+            known = {str(s.get("id") or "") for s in indexed_steps}
+            for step in indexed_steps:
+                for dep in step.get("depends_on", []):
+                    if dep not in known:
+                        missing_deps.append(dep)
+            if missing_deps:
+                missing = ", ".join(dict.fromkeys(missing_deps))
+                self._last_direct_intent_payload = {
+                    "action": "multi_task",
+                    "success": False,
+                    "error": f"unknown_dependency:{missing}",
+                    "completed_steps": 0,
+                    "total_steps": len(indexed_steps),
+                }
+                return f"Hata: Bilinmeyen bağımlılık(lar): {missing}"
+
+            compact_mode = self._should_use_compact_action_responses(user_input=user_input)
+            policy = self._current_runtime_policy()
+            orch_cfg = policy.get("orchestration", {}) if isinstance(policy.get("orchestration"), dict) else {}
+            max_parallel = 2
+            try:
+                max_parallel = int(orch_cfg.get("max_parallel", orch_cfg.get("team_max_parallel", 2)) or 2)
+            except Exception:
+                max_parallel = 2
+            max_parallel = max(1, min(4, max_parallel))
+            default_attempts = 2
+            ui_serial_actions = {
+                "open_app",
+                "close_app",
+                "open_url",
+                "key_combo",
+                "press_key",
+                "type_text",
+                "mouse_click",
+                "mouse_move",
+                "computer_use",
+                "take_screenshot",
+                "screen_workflow",
+                "analyze_screen",
+                "operator_mission_control",
+                "vision_operator_loop",
+            }
+            app_control_actions = {"open_app", "close_app", "key_combo", "open_url"}
+
+            pending: dict[str, dict[str, Any]] = {str(s["id"]): s for s in indexed_steps}
+            completed: set[str] = set()
+            step_outputs: dict[str, str] = {}
+            latest_output_text = ""
+            detailed_outputs: list[str] = []
+            step_rows: list[dict[str, Any]] = []
+            failed_row: dict[str, Any] | None = None
+
+            def _step_succeeded(step_action: str, result: Any, text: str) -> bool:
+                if isinstance(result, dict):
+                    if result.get("success") is False:
+                        return False
+                    if step_action in app_control_actions and result.get("verified") is False:
+                        return False
+                t = str(text or "").strip().lower()
+                if not t:
+                    return False
+                if t.startswith("hata:") or "hata kodu:" in t:
+                    return False
+                if "başarısız" in t or "basarisiz" in t:
+                    return False
+                return True
+
+            def _step_fail_reason(result: Any, text: str) -> str:
+                if isinstance(result, dict):
+                    for key in ("error", "verification_warning", "message", "summary"):
+                        val = str(result.get(key) or "").strip()
+                        if val:
+                            return val
+                cleaned = str(text or "").strip()
+                return cleaned if cleaned else "adım başarısız"
+
+            async def _run_step(step: dict[str, Any]) -> dict[str, Any]:
+                nonlocal latest_output_text
+                step_action = str(step.get("action") or "").strip()
+                step_desc = str(step.get("description") or f"Adım {step.get('idx')}")
+                params = dict(step.get("params") or {}) if isinstance(step.get("params"), dict) else {}
+                deps = [str(x).strip() for x in step.get("depends_on", []) if str(x).strip()]
+                dep_text = ""
+                for dep_id in deps:
+                    candidate = str(step_outputs.get(dep_id) or "").strip()
+                    if candidate:
+                        dep_text = candidate
+                if not dep_text:
+                    dep_text = latest_output_text
+                params = self._hydrate_task_params_from_previous(step_action, params, dep_text)
+
+                attempts = default_attempts
+                retries = step.get("retries") if isinstance(step.get("retries"), dict) else {}
+                if "max_attempts" in retries:
+                    try:
+                        attempts = int(retries.get("max_attempts") or attempts)
+                    except Exception:
+                        attempts = default_attempts
+                elif "retry_budget" in step:
+                    try:
+                        attempts = int(step.get("retry_budget") or 0) + 1
+                    except Exception:
+                        attempts = default_attempts
+                attempts = max(1, min(4, attempts))
+
+                last_result: Any = {}
+                last_text = ""
+                reason = ""
+                failure_class = ""
+                recovery_notes: list[str] = []
+                used_attempts = 0
+                for attempt in range(1, attempts + 1):
+                    used_attempts = attempt
+                    last_result = await self._execute_tool(
+                        step_action,
+                        params,
+                        user_input=user_input,
+                        step_name=step_desc,
+                    )
+                    last_text = str(self._format_result_text(last_result) or "").strip()
+                    if _step_succeeded(step_action, last_result, last_text):
+                        reason = ""
+                        failure_class = ""
+                        break
+                    reason = _step_fail_reason(last_result, last_text)
+                    failure_class = classify_failure_class(
+                        reason=reason,
+                        action=step_action,
+                        payload=last_result if isinstance(last_result, dict) else {},
+                    )
+                    if attempt < attempts:
+                        params, stop_retry, recovery_note = await self._apply_failure_recovery_strategy(
+                            failure_class=failure_class,
+                            step_action=step_action,
+                            params=params,
+                            result=last_result,
+                            reason=reason,
+                            user_input=user_input,
+                            step_name=step_desc,
+                        )
+                        if recovery_note:
+                            recovery_notes.append(recovery_note)
+                        if stop_retry:
+                            break
+
+                success = not bool(reason)
+                if success and last_text:
+                    latest_output_text = last_text
+                if success:
+                    failure_class = ""
+                return {
+                    "id": str(step.get("id") or ""),
+                    "idx": int(step.get("idx") or 0),
+                    "action": step_action,
+                    "description": step_desc,
+                    "depends_on": deps,
+                    "success": success,
+                    "attempts": used_attempts,
+                    "reason": reason,
+                    "failure_class": failure_class,
+                    "recovery_notes": recovery_notes,
+                    "result": last_result,
+                    "text": last_text,
+                }
+
+            while pending:
+                ready: list[dict[str, Any]] = []
+                for step in pending.values():
+                    deps = [str(x).strip() for x in step.get("depends_on", []) if str(x).strip()]
+                    if all(dep in completed for dep in deps):
+                        ready.append(step)
+
+                if not ready:
+                    failed_row = {
+                        "idx": 0,
+                        "description": "Task graph",
+                        "reason": "döngüsel veya çözülemeyen bağımlılık",
+                        "success": False,
+                    }
+                    break
+
+                ready.sort(key=lambda s: int(s.get("idx", 0) or 0))
+                has_ui_step = any(str(s.get("action") or "").strip().lower() in ui_serial_actions for s in ready)
+                if has_ui_step or len(ready) == 1:
+                    batch = [ready[0]]
+                else:
+                    batch = ready[:max_parallel]
+
+                batch_results = await asyncio.gather(*(_run_step(step) for step in batch), return_exceptions=True)
+                for pos, raw in enumerate(batch_results):
+                    step = batch[pos]
+                    sid = str(step.get("id") or "")
+                    if isinstance(raw, Exception):
+                        row = {
+                            "id": sid,
+                            "idx": int(step.get("idx") or 0),
+                            "action": str(step.get("action") or ""),
+                            "description": str(step.get("description") or ""),
+                            "depends_on": list(step.get("depends_on") or []),
+                            "success": False,
+                            "attempts": 1,
+                            "reason": str(raw),
+                            "failure_class": classify_failure_class(
+                                reason=str(raw),
+                                action=str(step.get("action") or ""),
+                            ),
+                            "result": {"success": False, "error": str(raw)},
+                            "text": f"Hata: {raw}",
+                        }
+                    else:
+                        row = raw
+
+                    step_rows.append(row)
+                    pending.pop(sid, None)
+                    if row.get("success"):
+                        completed.add(sid)
+                        text = str(row.get("text") or "").strip()
+                        if text:
+                            step_outputs[sid] = text
+                        if not compact_mode:
+                            detailed_outputs.append(f"[{row.get('idx')}] {row.get('description')}\n{text}")
+                        continue
+
+                    if not compact_mode:
+                        err_text = str(row.get("text") or "").strip()
+                        if not err_text:
+                            err_text = f"Hata: {row.get('reason') or 'adım başarısız'}"
+                        detailed_outputs.append(f"[{row.get('idx')}] {row.get('description')}\n{err_text}")
+                    failed_row = row
+                    break
+
+                if failed_row is not None:
+                    break
+
+            total_steps = len(indexed_steps)
+            completed_steps = len([r for r in step_rows if r.get("success")])
+            success_all = failed_row is None and completed_steps == total_steps
+            self._last_direct_intent_payload = {
+                "action": "multi_task",
+                "success": success_all,
+                "total_steps": total_steps,
+                "completed_steps": completed_steps,
+                "failed_step": failed_row or {},
+                "failure_class": str((failed_row or {}).get("failure_class") or ""),
+                "steps": step_rows,
+            }
+
+            if compact_mode:
+                if success_all:
+                    if completed_steps > 0:
+                        return f"✅ {completed_steps} adım tamamlandı."
+                    return "✅ Tamamlandı."
+                fail_idx = int(failed_row.get("idx") or 0) if isinstance(failed_row, dict) else 0
+                fail_desc = str((failed_row or {}).get("description") or "adım").strip()
+                fail_reason = str((failed_row or {}).get("reason") or "").strip()
+                msg = f"❌ {fail_idx}. adım başarısız: {fail_desc}."
+                if fail_reason:
+                    msg += f" {fail_reason}"
+                return msg
+
+            if detailed_outputs:
+                if not success_all and failed_row is not None and int(failed_row.get("idx") or 0) == 0:
+                    detailed_outputs.append(f"Hata: {failed_row.get('reason')}")
+                return "\n\n".join(detailed_outputs)
+            if success_all:
+                return "✅ Çok adımlı görev tamamlandı."
+            return "Hata: Çok adımlı görev tamamlanamadı."
 
         if low_action == "create_coding_project":
             params = intent.get("params", {}) if isinstance(intent.get("params"), dict) else {}
@@ -9089,7 +9965,57 @@ class Agent:
 
         result = await self._execute_tool(action, params, user_input=user_input, step_name=intent.get("reply", ""))
         self._last_direct_intent_payload = result
+        compact = self._compact_direct_tool_response(low_action, result, user_input=user_input)
+        if compact is not None:
+            return compact
         return self._format_result_text(result)
+
+    def _should_use_compact_action_responses(self, *, user_input: str = "") -> bool:
+        policy = self._current_runtime_policy()
+        response_cfg = policy.get("response", {}) if isinstance(policy.get("response"), dict) else {}
+        if bool(response_cfg.get("compact_actions", False)):
+            return True
+        low = str(user_input or "").lower()
+        return any(tok in low for tok in ("kısa", "kisa", "kısaca", "kisaca", "özet", "ozet"))
+
+    def _compact_direct_tool_response(self, action: str, result: Any, *, user_input: str = "") -> str | None:
+        if not self._should_use_compact_action_responses(user_input=user_input):
+            return None
+
+        low_action = str(action or "").strip().lower()
+        payload = result if isinstance(result, dict) else {}
+        success = not (isinstance(result, dict) and result.get("success") is False)
+        if not success:
+            err = str(payload.get("error") or payload.get("verification_warning") or "").strip()
+            return f"Hata: {err or 'işlem başarısız'}."
+
+        if low_action == "open_app":
+            app = str(payload.get("app_name") or "").strip()
+            if app:
+                return f"{app} açıldı."
+            return "Uygulama açıldı."
+        if low_action == "close_app":
+            app = str(payload.get("app_name") or "").strip()
+            if app:
+                return f"{app} kapatıldı."
+            return "Uygulama kapatıldı."
+        if low_action == "open_url":
+            return "Sayfa açıldı."
+        if low_action in {"key_combo", "press_key", "type_text"}:
+            msg = str(payload.get("message") or "").strip()
+            if msg:
+                return msg
+            if low_action == "key_combo":
+                combo = str(payload.get("combo") or "").strip()
+                return f"Kısayol uygulandı: {combo or 'tamam'}."
+            return "İşlem tamamlandı."
+        if low_action == "take_screenshot":
+            path = str(payload.get("path") or "").strip()
+            if path:
+                return f"Ekran görüntüsü alındı: {path}"
+            return "Ekran görüntüsü alındı."
+
+        return None
 
     def _task_needs_previous_output(self, task: dict) -> bool:
         action = str(task.get("action", "") or "").strip()
@@ -9619,7 +10545,10 @@ class Agent:
                 clean["path"] = resolved or candidate
         elif tool_name == "delete_file":
             path = str(clean.get("path") or "").strip()
-            if not path:
+            has_batch_pattern = bool(clean.get("pattern")) or (
+                isinstance(clean.get("patterns"), list) and any(str(x or "").strip() for x in clean.get("patterns", []))
+            )
+            if not path and not has_batch_pattern:
                 m = _re.search(r"([\w\-.]+\.[a-z0-9]{2,8})", user_input, _re.IGNORECASE)
                 if m:
                     base_dir = Path(self._get_last_directory()).expanduser()
@@ -9632,6 +10561,16 @@ class Agent:
                 candidate = self._resolve_path_with_desktop_fallback(path, user_input=user_input)
                 resolved = self._resolve_existing_path_from_context(candidate, user_input=user_input)
                 clean["path"] = resolved or candidate
+            elif has_batch_pattern:
+                directory = str(clean.get("directory") or self._extract_path_from_text(user_input) or self._get_last_directory() or "~/Desktop").strip()
+                clean["directory"] = self._resolve_path_with_desktop_fallback(directory, user_input=user_input)
+                if "max_files" in clean:
+                    try:
+                        clean["max_files"] = max(1, min(2000, int(clean.get("max_files") or 200)))
+                    except Exception:
+                        clean["max_files"] = 200
+                else:
+                    clean["max_files"] = 400
             force = clean.get("force")
             if not isinstance(force, bool):
                 low = f"{step_name} {user_input}".lower()
@@ -10260,7 +11199,13 @@ class Agent:
                 include_word = True
             include_excel = clean.get("include_excel")
             if include_excel is None:
-                include_excel = True
+                include_excel = False
+            include_pdf = clean.get("include_pdf")
+            if include_pdf is None:
+                include_pdf = False
+            include_latex = clean.get("include_latex")
+            if include_latex is None:
+                include_latex = False
             include_report = clean.get("include_report")
             if include_report is None:
                 include_report = True
@@ -10274,12 +11219,52 @@ class Agent:
                 "output_dir": str(clean.get("output_dir") or "~/Desktop").strip() or "~/Desktop",
                 "include_word": bool(include_word),
                 "include_excel": bool(include_excel),
+                "include_pdf": bool(include_pdf),
+                "include_latex": bool(include_latex),
                 "include_report": bool(include_report),
                 "source_policy": source_policy,
                 "min_reliability": min_rel_value,
                 "deliver_copy": bool(clean.get("deliver_copy", False)),
                 "citation_style": str(clean.get("citation_style") or ("apa7" if academic_mode else "none")).strip().lower(),
                 "include_bibliography": bool(clean.get("include_bibliography", academic_mode)),
+            }
+        elif tool_name == "generate_document_pack":
+            topic = self._sanitize_research_topic(
+                clean.get("topic") or self._extract_topic(user_input, step_name),
+                user_input=user_input,
+                step_name=step_name,
+            )
+            brief = str(clean.get("brief") or self._extract_inline_write_content(user_input) or user_input or "").strip()
+            low = f"{step_name} {user_input}".lower()
+            preferred_formats = clean.get("preferred_formats")
+            if not isinstance(preferred_formats, list) or not preferred_formats:
+                preferred_formats = []
+                wants_pdf = "pdf" in low
+                wants_latex = any(k in low for k in ("latex", "tex"))
+                wants_excel = any(k in low for k in ("excel", "xlsx", "tablo", "csv"))
+                wants_word = any(k in low for k in ("word", "docx", "doküman", "dokuman"))
+                generic_doc = any(k in low for k in ("belge", "rapor"))
+                if wants_word or (generic_doc and not wants_pdf and not wants_excel and not wants_latex):
+                    preferred_formats.append("docx")
+                if wants_excel:
+                    preferred_formats.append("xlsx")
+                if wants_pdf:
+                    preferred_formats.append("pdf")
+                if wants_latex:
+                    preferred_formats.append("tex")
+                if any(k in low for k in ("markdown", ".md")):
+                    preferred_formats.append("md")
+                if any(k in low for k in ("txt", "metin dosyası", "metin dosyasi")):
+                    preferred_formats.append("txt")
+                if not preferred_formats:
+                    preferred_formats = ["docx"]
+            clean = {
+                "topic": topic,
+                "brief": brief,
+                "audience": str(clean.get("audience") or "executive").strip() or "executive",
+                "language": str(clean.get("language") or "tr").strip() or "tr",
+                "output_dir": str(clean.get("output_dir") or "~/Desktop").strip() or "~/Desktop",
+                "preferred_formats": preferred_formats,
             }
         elif tool_name == "db_execute":
             query = str(clean.get("query") or clean.get("sql") or "").strip()
@@ -10480,6 +11465,28 @@ class Agent:
 
     @staticmethod
     def _render_research_result(result: dict[str, Any]) -> str | None:
+        outputs = result.get("outputs")
+        delivery_dir = str(result.get("delivery_dir") or "").strip()
+        if isinstance(outputs, list) and outputs:
+            clean_outputs = [str(item).strip() for item in outputs if str(item).strip()]
+            if clean_outputs:
+                primary = clean_outputs[0]
+                line = f"Araştırma belgesi hazır: {primary}"
+                source_count = result.get("source_count")
+                finding_count = result.get("finding_count")
+                meta = []
+                if source_count is not None:
+                    meta.append(f"Kaynak: {source_count}")
+                if finding_count is not None:
+                    meta.append(f"Bulgu: {finding_count}")
+                if meta:
+                    line += "\n" + " | ".join(meta)
+                if len(clean_outputs) > 1:
+                    line += f"\nEk çıktı: {len(clean_outputs) - 1}"
+                return line
+        if delivery_dir and isinstance(result.get("path"), str):
+            return f"Araştırma çıktısı hazır: {str(result.get('path') or '').strip()}"
+
         summary = str(result.get("summary") or "").strip()
         if not summary:
             return None
@@ -10553,6 +11560,35 @@ class Agent:
             if result.get("success") is False:
                 if result.get("not_found"):
                     return None  # Signal for LLM fallback
+                if isinstance(result.get("combo"), str) and ("target_app" in result or "frontmost_app" in result):
+                    combo = str(result.get("combo") or "").strip()
+                    lines = [f"Hata: {result.get('error', 'İşlem başarısız.')}"]
+                    if combo:
+                        lines.append(f"Kısayol: {combo}")
+                    target_app = str(result.get("target_app") or "").strip()
+                    if target_app:
+                        lines.append(f"Hedef: {target_app}")
+                    frontmost = str(result.get("frontmost_app") or "").strip()
+                    if frontmost:
+                        lines.append(f"Odak: {frontmost}")
+                    if result.get("verified") is False:
+                        lines.append("Doğrulama: Başarısız")
+                    warn = str(result.get("verification_warning") or "").strip()
+                    if warn:
+                        lines.append(f"Not: {warn}")
+                    return "\n".join(lines)
+                if isinstance(result.get("app_name"), str) and ("frontmost_app" in result or "verified" in result):
+                    app_name = str(result.get("app_name") or "").strip()
+                    lines = [f"Hata: {result.get('error', 'İşlem başarısız.')}"]
+                    if app_name:
+                        lines.append(f"Uygulama: {app_name}")
+                    frontmost = str(result.get("frontmost_app") or "").strip()
+                    if frontmost:
+                        lines.append(f"Odak: {frontmost}")
+                    warn = str(result.get("verification_warning") or "").strip()
+                    if warn:
+                        lines.append(f"Not: {warn}")
+                    return "\n".join(lines)
                 return f"Hata: {result.get('error', 'İşlem başarısız.')}"
 
             for payload in _iter_payloads(result):
@@ -10699,6 +11735,43 @@ class Agent:
             if isinstance(result.get("summary"), str) and result.get("summary"):
                 return result["summary"]
 
+            if isinstance(result.get("app_name"), str) and ("frontmost_app" in result or "verified" in result):
+                app_name = str(result.get("app_name") or "").strip()
+                base = str(result.get("message") or "").strip() or (f"{app_name} opened." if app_name else "Uygulama açıldı.")
+                lines = [base]
+                frontmost = str(result.get("frontmost_app") or "").strip()
+                if frontmost:
+                    lines.append(f"Odak: {frontmost}")
+                verified = result.get("verified")
+                if verified is True:
+                    lines.append("Doğrulama: OK")
+                elif verified is False:
+                    lines.append("Doğrulama: Başarısız")
+                warn = str(result.get("verification_warning") or "").strip()
+                if warn:
+                    lines.append(f"Not: {warn}")
+                return "\n".join(lines)
+
+            if isinstance(result.get("combo"), str) and ("target_app" in result or "frontmost_app" in result):
+                combo = str(result.get("combo") or "").strip()
+                base = str(result.get("message") or "").strip() or (f"Kısayol uygulandı: {combo}" if combo else "Kısayol uygulandı.")
+                lines = [base]
+                target_app = str(result.get("target_app") or "").strip()
+                if target_app:
+                    lines.append(f"Hedef: {target_app}")
+                frontmost = str(result.get("frontmost_app") or "").strip()
+                if frontmost:
+                    lines.append(f"Odak: {frontmost}")
+                verified = result.get("verified")
+                if verified is True:
+                    lines.append("Doğrulama: OK")
+                elif verified is False:
+                    lines.append("Doğrulama: Başarısız")
+                warn = str(result.get("verification_warning") or "").strip()
+                if warn:
+                    lines.append(f"Not: {warn}")
+                return "\n".join(lines)
+
             if isinstance(result.get("message"), str) and result.get("message"):
                 msg = result["message"]
                 extra_paths: list[str] = []
@@ -10806,6 +11879,25 @@ class Agent:
                 return "\n".join(parts)
 
             # Kod çalıştırma renderer
+            if "returncode" in result or "stdout" in result or "stderr" in result:
+                out_text = str(result.get("stdout") or result.get("output") or "").strip()
+                err_text = str(result.get("stderr") or result.get("error") or "").strip()
+                rc_raw = result.get("returncode", result.get("return_code", result.get("exit_code", 0)))
+                try:
+                    rc = int(rc_raw)
+                except Exception:
+                    rc = 0
+                if rc != 0:
+                    if err_text:
+                        return f"Hata: Komut basarisiz (rc={rc})\n{err_text[:800]}"
+                    return f"Hata: Komut basarisiz (rc={rc})"
+                if out_text:
+                    return f"```\n{out_text[:2000]}\n```"
+                command = str(result.get("command") or "").strip()
+                if command:
+                    return f"Komut calistirildi: {command}"
+                return "Komut calistirildi."
+
             if "output" in result and "return_code" in result:
                 output_text = str(result.get("output") or "").strip()
                 err_text = str(result.get("error_output") or "").strip()

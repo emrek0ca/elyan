@@ -67,6 +67,53 @@ class GatewayRouter:
         keep = max(0, limit - len(suffix))
         return raw[:keep].rstrip() + suffix
 
+    @staticmethod
+    def _sanitize_outbound_text(text: str) -> str:
+        raw = str(text or "").replace("\r\n", "\n").strip()
+        if not raw:
+            return ""
+        cleaned_lines: list[str] = []
+        skip_prefixes = (
+            "deliverable spec:",
+            "done criteria:",
+            "başarı kriteri:",
+            "success criteria:",
+            "sistem notu:",
+            "❌ completion gate failed:",
+            "completion gate failed:",
+        )
+        for line in raw.splitlines():
+            stripped = line.strip()
+            lower = stripped.lower()
+            if not stripped:
+                if cleaned_lines and cleaned_lines[-1] != "":
+                    cleaned_lines.append("")
+                continue
+            if lower.startswith(skip_prefixes):
+                continue
+            if lower.startswith("- kullanıcının ") or lower.startswith("- kullanıcıya "):
+                continue
+            cleaned_lines.append(stripped)
+        cleaned = "\n".join(cleaned_lines).strip()
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        low = cleaned.lower()
+        greeting_markers = ("merhaba", "selam", "günaydın", "iyi günler", "iyi akşamlar", "hoş geldiniz")
+        verbose_markers = (
+            "görünen o ki",
+            "tekrar selamlaşma",
+            "size nasıl yardımcı olabilirim",
+            "lütfen bir konu belirtiniz",
+            "öncelikle size nasıl yardımcı olabileceğimi anlamak istiyorum",
+            "isterseniz sohbetimizden önceki konular",
+        )
+        if (
+            len(cleaned) > 140
+            and any(marker in low for marker in greeting_markers)
+            and any(marker in low for marker in verbose_markers)
+        ):
+            return "Merhaba. Nasıl yardımcı olayım?"
+        return cleaned
+
     @classmethod
     def _build_task_inbox_buttons(cls, response: UnifiedResponse) -> list[dict[str, Any]]:
         if list(getattr(response, "buttons", []) or []):
@@ -141,7 +188,8 @@ class GatewayRouter:
         supports_files = bool(resolved_caps.get("files"))
 
         envelope = response.to_channel_envelope() if hasattr(response, "to_channel_envelope") else ChannelEnvelope(text=str(getattr(response, "text", "") or ""))
-        text = cls._truncate_text_for_channel(str(envelope.text or ""), channel_type)
+        text = cls._sanitize_outbound_text(str(envelope.text or ""))
+        text = cls._truncate_text_for_channel(text, channel_type)
         if not text.strip():
             text = "İşlem tamamlandı."
 
@@ -355,7 +403,9 @@ class GatewayRouter:
                     attachments = [a.to_dict() if hasattr(a, "to_dict") else a for a in raw_attachments if isinstance(a, (dict, object))]
 
                 manifest = str(getattr(envelope, "evidence_manifest_path", "") or "").strip()
-                if manifest:
+                meta = dict(getattr(envelope, "metadata", {}) or {})
+                should_attach_manifest = bool(meta.get("share_manifest", False))
+                if manifest and should_attach_manifest:
                     attachments.append({"path": manifest, "type": "manifest"})
                 response = UnifiedResponse(
                     text=text,
@@ -364,7 +414,7 @@ class GatewayRouter:
                     metadata={
                         "run_id": getattr(envelope, "run_id", ""),
                         "status": getattr(envelope, "status", "success"),
-                        **(dict(getattr(envelope, "metadata", {}) or {})),
+                        **meta,
                     },
                 )
             else:

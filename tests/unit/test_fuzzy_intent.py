@@ -56,6 +56,10 @@ class TestNormalizeTurkish:
         assert "yi" not in result.split()
         assert "safari" in result
 
+    def test_shared_nlu_normalizer_is_used_for_attached_suffixes(self):
+        result = normalize_turkish("chromea geç")
+        assert result == "chrome geç"
+
 
 class TestFuzzyIntentMatcher:
     """FuzzyIntentMatcher.match() temel testleri."""

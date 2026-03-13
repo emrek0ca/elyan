@@ -67,8 +67,10 @@ def test_dashboard_js_uses_longer_message_timeout_and_friendly_abort_text():
     assert "status-detail" in js
     assert "/api/product/home" in js
     assert "/api/models" in js
+    assert "/api/agent/profile" in js
     assert "model-add-btn" in js
     assert "collab-save-btn" in js
+    assert "profile-save-btn" in js
     assert "/api/product/workflows/run" in js
     assert "onboarding-list" in js
     assert "release-list" in js

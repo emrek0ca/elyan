@@ -9,6 +9,7 @@ from typing import Dict, Optional, List, Tuple
 from dataclasses import dataclass
 from enum import Enum
 
+from core.nlu_normalizer import normalize_turkish_ascii, normalize_turkish_text
 from utils.logger import get_logger
 
 logger = get_logger("quick_intent")
@@ -128,7 +129,7 @@ class QuickIntentDetector:
         # Pre-compute ASCII-normalized patterns for Turkish text matching
         self.patterns_ascii = {}
         for category, pats in self.patterns.items():
-            self.patterns_ascii[category] = [self._normalize_tr(p) for p in pats]
+            self.patterns_ascii[category] = [normalize_turkish_ascii(p) for p in pats]
 
         # Stats
         self.stats = {
@@ -139,18 +140,30 @@ class QuickIntentDetector:
 
         logger.info("Quick Intent Detector initialized")
 
-    @staticmethod
-    def _normalize_tr(text: str) -> str:
-        tr_map = str.maketrans('çğıöşüÇĞİÖŞÜ', 'cgiosuCGIOSU')
-        return text.translate(tr_map)
-
     def detect(self, text: str) -> QuickIntent:
         """Detect intent quickly"""
         start_time = time.time()
 
-        text_lower = text.lower().strip()
+        text_lower = normalize_turkish_text(text)
+        direct_chat_phrases = {
+            "naber",
+            "nasılsın",
+            "nasılsınız",
+            "ne yapıyorsun",
+            "ne yaptın",
+            "elyan",
+        }
+        if text_lower in direct_chat_phrases:
+            detection_time = time.time() - start_time
+            return QuickIntent(
+                category=IntentCategory.CHAT,
+                confidence=0.96,
+                requires_llm=True,
+                estimated_complexity="trivial",
+                detection_time=detection_time,
+            )
         # Also try ASCII-normalized version for matching
-        text_ascii = self._normalize_tr(text_lower)
+        text_ascii = normalize_turkish_ascii(text)
 
         # Try each category
         best_category = IntentCategory.UNKNOWN

@@ -16,6 +16,47 @@ import urllib.request
 logger = get_logger("system_tools")
 
 
+def _tool_error_payload(error: str, *, retryable: bool = False, **extra: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "success": False,
+        "status": "failed",
+        "error": str(error or "").strip(),
+        "errors": [str(error or "").strip()] if str(error or "").strip() else [],
+        "retryable": bool(retryable),
+        "data": {},
+    }
+    payload.update(extra)
+    return payload
+
+
+def _tool_success_payload(
+    *,
+    message: str = "",
+    path: str = "",
+    artifact_type: str = "file",
+    data: dict[str, Any] | None = None,
+    warnings: list[str] | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "success": True,
+        "status": "success",
+        "message": str(message or "").strip(),
+        "retryable": False,
+        "data": dict(data or {}),
+    }
+    clean_path = str(path or "").strip()
+    if clean_path:
+        payload["path"] = clean_path
+        payload["output_path"] = clean_path
+        payload["artifacts"] = [{"path": clean_path, "type": str(artifact_type or "file").strip().lower() or "file"}]
+    clean_warnings = [str(item).strip() for item in list(warnings or []) if str(item).strip()]
+    if clean_warnings:
+        payload["warnings"] = clean_warnings
+    payload.update(extra)
+    return payload
+
+
 def _operator_step_timeout_s() -> float:
     raw = str(os.getenv("ELYAN_OPERATOR_STEP_TIMEOUT_S", "8")).strip()
     try:
@@ -1531,13 +1572,10 @@ async def get_battery_status() -> dict[str, Any]:
 # --- APP & PROCESS CONTROL ---
 
 @tool("open_app", "Launch a desktop application.")
-async def open_app(app_name: Optional[str] = None) -> dict[str, Any]:
+async def open_app(app_name: Optional[str] = None, settle_timeout_s: float = 1.2) -> dict[str, Any]:
     try:
         if not app_name or not str(app_name).strip():
-            return {
-                "success": False,
-                "error": "app_name gerekli (örnek: Safari, Google Chrome, Finder)."
-            }
+            return _tool_error_payload("app_name gerekli (örnek: Safari, Google Chrome, Finder).")
         app_name = str(app_name).strip()
         process = await asyncio.create_subprocess_exec(
             "open",
@@ -1549,10 +1587,58 @@ async def open_app(app_name: Optional[str] = None) -> dict[str, Any]:
         stdout, stderr = await process.communicate()
         if process.returncode != 0:
             error = (stderr.decode("utf-8", errors="ignore") or stdout.decode("utf-8", errors="ignore")).strip()
-            return {"success": False, "error": error or f"{app_name} açılamadı."}
-        return {"success": True, "message": f"{app_name} opened."}
+            return _tool_error_payload(error or f"{app_name} açılamadı.", retryable=True)
+
+        # Explicit activation reduces races for subsequent keyboard actions.
+        try:
+            activate_script = f'tell application "{_escape_applescript_text(app_name)}" to activate'
+            await _run_osascript(activate_script)
+        except Exception:
+            pass
+
+        target_norm = _normalize_text_for_match(app_name)
+        frontmost = ""
+        verified = False
+        warn = ""
+        try:
+            timeout_s = max(0.0, min(3.0, float(settle_timeout_s or 1.2)))
+        except Exception:
+            timeout_s = 1.2
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() <= deadline:
+            frontmost = await _get_frontmost_app_name()
+            front_norm = _normalize_text_for_match(frontmost)
+            if target_norm and front_norm == target_norm:
+                verified = True
+                break
+            if timeout_s <= 0:
+                break
+            await asyncio.sleep(0.08)
+
+        if not frontmost:
+            warn = "frontmost_app doğrulanamadı (System Events erişimi kısıtlı olabilir)."
+        elif not verified:
+            warn = f"frontmost_app uyumsuz: beklenen={app_name}, görünen={frontmost}"
+
+        output = _tool_success_payload(
+            message=f"{app_name} opened.",
+            data={
+                "app_name": app_name,
+                "frontmost_app": frontmost,
+                "verified": bool(verified),
+                "activated": True,
+            },
+            app_name=app_name,
+            frontmost_app=frontmost,
+            verified=bool(verified),
+            activated=True,
+            warnings=[warn] if warn else [],
+        )
+        if warn:
+            output["verification_warning"] = warn
+        return output
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return _tool_error_payload(str(e), retryable=True)
 
 @tool("close_app", "Quit a running application.")
 async def close_app(app_name: Optional[str] = None) -> dict[str, Any]:
@@ -1740,14 +1826,50 @@ async def press_key(key: str, modifiers: Optional[List[str]] = None) -> dict[str
 
 
 @tool("key_combo", "Press a key combo like 'cmd+l' or 'cmd+shift+4'.")
-async def key_combo(combo: str) -> dict[str, Any]:
+async def key_combo(combo: str, target_app: Optional[str] = None, settle_ms: int = 120) -> dict[str, Any]:
     try:
+        target = str(target_app or "").strip()
+        if target:
+            script = f'tell application "{_escape_applescript_text(target)}" to activate'
+            code, _out, err = await _run_osascript(script)
+            if code != 0:
+                return {"success": False, "error": err or f"{target} odaklanamadi."}
+            try:
+                delay_ms = max(0, min(1500, int(settle_ms or 120)))
+            except Exception:
+                delay_ms = 120
+            if delay_ms > 0:
+                await asyncio.sleep(delay_ms / 1000.0)
+
         parts = [p.strip().lower() for p in str(combo or "").split("+") if p.strip()]
         if len(parts) < 2:
             return {"success": False, "error": "combo formatı geçersiz. Örnek: cmd+l"}
         key = parts[-1]
         modifiers = parts[:-1]
-        return await press_key(key=key, modifiers=modifiers)
+        result = await press_key(key=key, modifiers=modifiers)
+        if not isinstance(result, dict):
+            return {"success": False, "error": "key_combo sonucu gecersiz."}
+        if result.get("success") is not True:
+            return result
+
+        if target:
+            frontmost = await _get_frontmost_app_name()
+            target_norm = _normalize_text_for_match(target)
+            front_norm = _normalize_text_for_match(frontmost)
+            result["target_app"] = target
+            result["frontmost_app"] = frontmost
+            if frontmost and target_norm and front_norm != target_norm:
+                result["success"] = False
+                result["verified"] = False
+                result["verification_warning"] = f"key_combo hedef dışı uygulamaya gitti: {frontmost}"
+                result["error"] = result["verification_warning"]
+                return result
+            if not frontmost:
+                result["verification_warning"] = "frontmost_app doğrulanamadı."
+            result["verified"] = bool(frontmost and target_norm and front_norm == target_norm)
+
+        result.setdefault("message", f"Kısayol uygulandı: {combo}")
+        return result
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -2238,15 +2360,22 @@ async def take_screenshot(filename: Optional[str] = None) -> dict[str, Any]:
         stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
             error = (stderr.decode("utf-8", errors="ignore") or stdout.decode("utf-8", errors="ignore")).strip()
-            return {"success": False, "error": error or "Ekran görüntüsü alınamadı."}
+            return _tool_error_payload(error or "Ekran görüntüsü alınamadı.", retryable=True)
         if not path.exists():
-            return {"success": False, "error": f"Ekran görüntüsü dosyası oluşmadı: {path}"}
+            return _tool_error_payload(f"Ekran görüntüsü dosyası oluşmadı: {path}", retryable=True)
         size_bytes = int(path.stat().st_size) if path.is_file() else 0
         if size_bytes <= 0:
-            return {"success": False, "error": f"Ekran görüntüsü boş görünüyor: {path}"}
-        return {"success": True, "path": str(path), "size_bytes": size_bytes}
+            return _tool_error_payload(f"Ekran görüntüsü boş görünüyor: {path}", retryable=True)
+        return _tool_success_payload(
+            message="Screenshot captured.",
+            path=str(path),
+            artifact_type="image",
+            data={"size_bytes": size_bytes, "filename": path.name},
+            size_bytes=size_bytes,
+            filename=path.name,
+        )
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return _tool_error_payload(str(e), retryable=True)
 
 @tool("analyze_screen", "Capture current screen and analyze its content with vision AI.")
 async def analyze_screen(prompt: str = "Ekranda ne var? Özetle.") -> dict[str, Any]:

@@ -222,6 +222,35 @@ class FileParser(BaseParser):
             return None
         if any(w in text for w in ["silme işlemi", "silinmesini", "silinir"]):
             return None
+        screenshot_markers = (
+            "ekran resmi",
+            "ekran resimleri",
+            "ekran görüntüsü",
+            "ekran goruntusu",
+            "screenshot",
+            "screen shot",
+            "ss",
+        )
+        image_markers = ("resim", "görsel", "gorsel", "foto", "png", "jpg", "jpeg", "hepsini", "tümünü", "tumunu")
+        if any(m in text for m in screenshot_markers) and any(m in text for m in image_markers):
+            base_dir = self._extract_path(text) or str(HOME_DIR / "Desktop")
+            return {
+                "action": "delete_file",
+                "params": {
+                    "path": "",
+                    "directory": base_dir,
+                    "patterns": [
+                        "Ekran Resmi*",
+                        "Ekran Görüntüsü*",
+                        "Screenshot*",
+                        "Screen Shot *",
+                    ],
+                    "recursive": False,
+                    "max_files": 400,
+                    "force": False,
+                },
+                "reply": "Masaüstündeki ekran görüntüleri temizleniyor...",
+            }
         m = re.search(r'[\w\-]+\.\w+', text)
         if m:
             filename = m.group()

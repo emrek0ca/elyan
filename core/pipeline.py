@@ -42,6 +42,8 @@ from core.pipeline_upgrade import (
     verify_code_gates,
     verify_research_gates,
     verify_asset_gates,
+    verify_taskspec_contract,
+    build_reflexion_hint,
     build_critic_review_prompt,
     JobTelemetryAccumulator,
     estimate_token_cost,
@@ -49,17 +51,146 @@ from core.pipeline_upgrade import (
 from core.workspace_contract import ensure_workspace_contract
 from core.hybrid_model_policy import build_hybrid_model_plan
 from core.verifier import evaluate_runtime_capability
+from core.failure_classification import classify_failure_class
+from core.recovery_policy import select_recovery_strategy
 from core.telemetry.runtime_trace import ensure_runtime_trace, update_runtime_trace
+from core.spec.task_spec_standard import coerce_task_spec_standard
 
 logger = get_logger("pipeline")
 
 
 _NON_ACTIONABLE_INTENTS = {"", "chat", "unknown", "communication", "answer", "respond", "direct", "show_help"}
 _SHALLOW_ACTION_INTENTS = {"", "chat", "unknown", "communication", "answer", "respond", "direct", "show_help", "open_app", "open_url", "get_word_definition"}
+_MODEL_A_SAFE_ACTIONS = [
+    "open_app",
+    "close_app",
+    "open_url",
+    "web_search",
+    "create_folder",
+    "list_files",
+    "read_file",
+    "write_file",
+    "run_safe_command",
+    "http_request",
+    "api_health_get_save",
+    "set_wallpaper",
+    "analyze_screen",
+    "take_screenshot",
+]
+
+_EXECUTION_MODE_ALIASES = {
+    "chat": "chat",
+    "conversation": "chat",
+    "conversational": "chat",
+    "talk": "chat",
+    "assist": "assist",
+    "assisted": "assist",
+    "assistant": "assist",
+    "review": "assist",
+    "confirmed": "assist",
+    "operator": "operator",
+    "operate": "operator",
+    "autonomy": "operator",
+    "full": "operator",
+    "full-autonomy": "operator",
+    "full_autonomy": "operator",
+}
+
+_OP_MODE_TO_EXEC_MODE = {
+    "advisory": "chat",
+    "assisted": "assist",
+    "confirmed": "assist",
+    "trusted": "operator",
+    "operator": "operator",
+}
 
 
 def _normalize_action(action: Any) -> str:
     return str(action or "").strip().lower()
+
+
+def _normalize_execution_mode(mode: Any) -> str:
+    raw = str(mode or "").strip().lower()
+    if not raw:
+        return ""
+    return _EXECUTION_MODE_ALIASES.get(raw, raw if raw in {"chat", "assist", "operator"} else "")
+
+
+def _resolve_execution_mode(ctx: Any) -> str:
+    policy = ctx.runtime_policy if isinstance(getattr(ctx, "runtime_policy", {}), dict) else {}
+    execution_cfg = policy.get("execution", {}) if isinstance(policy.get("execution"), dict) else {}
+    metadata = policy.get("metadata", {}) if isinstance(policy.get("metadata"), dict) else {}
+
+    for candidate in (
+        metadata.get("execution_mode"),
+        metadata.get("agent_mode"),
+        execution_cfg.get("mode"),
+    ):
+        normalized = _normalize_execution_mode(candidate)
+        if normalized:
+            return normalized
+
+    derive = bool(execution_cfg.get("derive_from_operator_mode", False))
+    if derive:
+        security_cfg = policy.get("security", {}) if isinstance(policy.get("security"), dict) else {}
+        op_mode = str(security_cfg.get("operator_mode") or "").strip().lower()
+        mapped = _normalize_execution_mode(_OP_MODE_TO_EXEC_MODE.get(op_mode, ""))
+        if mapped:
+            return mapped
+
+    default_mode = _normalize_execution_mode(execution_cfg.get("default_mode"))
+    if default_mode:
+        return default_mode
+    return "operator"
+
+
+def _build_assist_mode_preview(ctx: Any) -> str:
+    intent = ctx.intent if isinstance(getattr(ctx, "intent", {}), dict) else {}
+    action = _normalize_action(getattr(ctx, "action", "") or intent.get("action"))
+    params = intent.get("params", {}) if isinstance(intent.get("params"), dict) else {}
+    policy = ctx.runtime_policy if isinstance(getattr(ctx, "runtime_policy", {}), dict) else {}
+    execution_cfg = policy.get("execution", {}) if isinstance(policy.get("execution"), dict) else {}
+    try:
+        max_steps = int(execution_cfg.get("assist_preview_max_steps", 6) or 6)
+    except Exception:
+        max_steps = 6
+    max_steps = max(1, min(12, max_steps))
+
+    lines: list[str] = [
+        "Assist Mode: plan hazir, otomatik calistirma kapali.",
+        f"Intent: {action or 'chat'}",
+    ]
+    if params:
+        preview = []
+        for key in ("path", "url", "app_name", "command", "topic", "query"):
+            val = str(params.get(key) or "").strip()
+            if val:
+                preview.append(f"{key}={val}")
+        if preview:
+            lines.append("Slots: " + ", ".join(preview[:6]))
+
+    tasks = intent.get("tasks") if isinstance(intent.get("tasks"), list) else []
+    if tasks:
+        lines.append("Plan:")
+        for idx, task in enumerate(tasks[:max_steps], start=1):
+            if not isinstance(task, dict):
+                continue
+            step_action = _normalize_action(task.get("action"))
+            desc = str(task.get("description") or task.get("title") or "").strip()
+            lines.append(f"{idx}. {step_action or 'step'} - {desc or 'adim'}")
+    elif isinstance(getattr(ctx, "plan", None), list) and ctx.plan:
+        lines.append("Plan:")
+        for idx, step in enumerate(ctx.plan[:max_steps], start=1):
+            if not isinstance(step, dict):
+                continue
+            step_action = _normalize_action(step.get("action"))
+            desc = str(step.get("description") or step.get("title") or "").strip()
+            lines.append(f"{idx}. {step_action or 'step'} - {desc or 'adim'}")
+    else:
+        lines.append("Plan: 1 adimli dogrudan islem.")
+
+    lines.append("Operator Mode icin `execution_mode=operator` gonder.")
+    return "\n".join(lines)
 
 
 def _build_capability_fallback_params(action: str, user_input: str) -> Dict[str, Any]:
@@ -134,19 +265,24 @@ def _should_realign_to_capability(
             "screen", "screenshot", "bilgisayari kullan", "bilgisayarı kullan",
             "tikla", "tıkla", "click", "type", "mouse", "klavye", "tuş", "tus",
         )
+        operator_step_markers = (
+            "durum nedir", "ekrana bak", "ekranı oku", "ekrani oku", "ekranda ne var",
+            "ardindan", "ardından", "ve sonra", "ayni anda", "aynı anda",
+            "tikla", "tıkla", "yaz", "click", "type", "mouse", "klavye", "tuş", "tus",
+            "kısayol", "kisayol",
+        )
+        if current_action == "multi_task" and _looks_simple_app_control_command(low_input):
+            return False
         if not any(k in low_input for k in explicit_screen_markers) and any(
             k in low_input for k in ("araştır", "arastir", "research", "kaydet", "rapor", "belge", "word", "excel")
         ):
             return False
         simple_app_control = current_action in {"open_app", "close_app"} and not any(
-            k in low_input
-            for k in (
-                "durum nedir", "ekrana bak", "ekranı oku", "ekrani oku", "ekranda ne var",
-                "ardindan", "ardından", "ve sonra", "ayni anda", "aynı anda",
-                "tikla", "tıkla", "yaz", "click", "type",
-            )
+            k in low_input for k in operator_step_markers
         )
-        if simple_app_control and float(intent_confidence or 0.0) >= 0.9:
+        # Basit app odaklama/acma/kapama komutlari deterministic parser sonucunda kalmali.
+        # Aksi halde "safari ac" gibi net komutlar gereksizce screen_operator path'ine kayiyor.
+        if simple_app_control:
             return False
         return any(
             k in low_input
@@ -230,6 +366,158 @@ def _looks_actionable_input(text: str, attachments: Optional[List[str]] = None) 
     return False
 
 
+def _looks_simple_app_control_command(text: str) -> bool:
+    low = str(text or "").strip().lower()
+    if not low:
+        return False
+    ui_markers = (
+        "tıkla", "tikla", "click", "type", "yaz", "enter", "buton", "button",
+        "mouse", "imlec", "cursor", "tuş", "tus", "kısayol", "kisayol",
+        "sekme", "tab", "adres çubuğu", "adres cubugu",
+    )
+    if any(marker in low for marker in ui_markers):
+        return False
+    control_markers = ("aç", "ac", "kapat", "close", "open", "geç", "odaklan", "focus", "launch", "başlat", "baslat")
+    if not any(marker in low for marker in control_markers):
+        return False
+    app_markers = (
+        "safari", "chrome", "firefox", "vscode", "vs code", "visual studio code",
+        "terminal", "iterm", "finder", "telegram", "discord", "slack", "spotify",
+        "mail", "calendar", "takvim", "notes", "notlar", "preview", "photos",
+        "mesajlar", "messages", "browser", "tarayıcı", "tarayici",
+    )
+    if any(marker in low for marker in app_markers):
+        return True
+    return bool(re.search(r"[\"']([^\"']{2,40})[\"']\s*(aç|ac|kapat|open|close|focus|odaklan)", low))
+
+
+def _resolve_model_a_policy(ctx: Any) -> tuple[bool, str, float, list[str]]:
+    enabled = True
+    model_path = str(Path.home() / ".elyan" / "models" / "nlu" / "baseline_intent_model.json")
+    min_confidence = 0.78
+    allowed_actions = list(_MODEL_A_SAFE_ACTIONS)
+
+    try:
+        from config.elyan_config import elyan_config
+
+        enabled = bool(elyan_config.get("agent.nlu.model_a.enabled", enabled))
+        model_path = str(elyan_config.get("agent.nlu.model_a.model_path", model_path) or model_path)
+        min_confidence = float(elyan_config.get("agent.nlu.model_a.min_confidence", min_confidence) or min_confidence)
+        configured_actions = elyan_config.get("agent.nlu.model_a.allowed_actions", None)
+        if isinstance(configured_actions, list) and configured_actions:
+            allowed_actions = [str(x).strip().lower() for x in configured_actions if str(x).strip()]
+    except Exception:
+        pass
+
+    try:
+        policy = ctx.runtime_policy if isinstance(ctx.runtime_policy, dict) else {}
+        nlu_cfg = policy.get("nlu", {}) if isinstance(policy.get("nlu"), dict) else {}
+        model_a_cfg = nlu_cfg.get("model_a", {}) if isinstance(nlu_cfg.get("model_a"), dict) else {}
+        meta = policy.get("metadata", {}) if isinstance(policy.get("metadata"), dict) else {}
+        if "enabled" in model_a_cfg:
+            enabled = bool(model_a_cfg.get("enabled"))
+        if "model_path" in model_a_cfg:
+            model_path = str(model_a_cfg.get("model_path") or model_path)
+        if "min_confidence" in model_a_cfg:
+            min_confidence = float(model_a_cfg.get("min_confidence") or min_confidence)
+        if isinstance(model_a_cfg.get("allowed_actions"), list) and model_a_cfg.get("allowed_actions"):
+            allowed_actions = [str(x).strip().lower() for x in model_a_cfg.get("allowed_actions") if str(x).strip()]
+        if "model_a_enabled" in meta:
+            enabled = bool(meta.get("model_a_enabled"))
+        if "model_a_path" in meta:
+            model_path = str(meta.get("model_a_path") or model_path)
+        if "model_a_min_confidence" in meta:
+            min_confidence = float(meta.get("model_a_min_confidence") or min_confidence)
+    except Exception:
+        pass
+
+    min_confidence = max(0.0, min(1.0, float(min_confidence or 0.78)))
+    return enabled, model_path, min_confidence, [str(x).strip().lower() for x in allowed_actions if str(x).strip()]
+
+
+def _try_model_a_intent_rescue(
+    ctx: Any,
+    agent: Any,
+    *,
+    enabled: bool,
+    model_path: str,
+    min_confidence: float,
+    allowed_actions: list[str],
+) -> bool:
+    if not enabled:
+        return False
+    if _normalize_action(getattr(ctx, "action", "")) not in _NON_ACTIONABLE_INTENTS:
+        return False
+    if not _looks_actionable_input(getattr(ctx, "user_input", ""), getattr(ctx, "attachments", [])):
+        return False
+
+    infer = getattr(agent, "_infer_model_a_intent", None)
+    if not callable(infer):
+        return False
+
+    try:
+        inferred = infer(
+            getattr(ctx, "user_input", ""),
+            min_confidence=min_confidence,
+            model_path=model_path,
+            allowed_actions=list(allowed_actions or []),
+        )
+    except Exception:
+        return False
+    if not isinstance(inferred, dict):
+        return False
+
+    action = _normalize_action(inferred.get("action"))
+    if action in _NON_ACTIONABLE_INTENTS:
+        return False
+    confidence = float(inferred.get("confidence", 0.0) or 0.0)
+    if confidence < max(0.0, min(1.0, float(min_confidence or 0.0))):
+        return False
+
+    ctx.intent = inferred
+    ctx.action = action
+    ctx.job_type = _job_type_from_action(ctx.action, getattr(ctx, "job_type", "communication"))
+    logger.info("Route rescue via Model-A intent: action=%s c=%.2f", ctx.action, confidence)
+    return True
+
+
+def _build_low_confidence_actionable_clarification(ctx: Any) -> str:
+    user_input = str(getattr(ctx, "user_input", "") or "").strip()
+    attachments = getattr(ctx, "attachments", None)
+    action = _normalize_action(getattr(ctx, "action", ""))
+    if action not in _NON_ACTIONABLE_INTENTS:
+        return ""
+    if not _looks_actionable_input(user_input, attachments):
+        return ""
+
+    intent = getattr(ctx, "intent", {})
+    if not isinstance(intent, dict):
+        intent = {}
+    intent_conf = float(intent.get("confidence", 0.0) or 0.0)
+    intent_score = float(getattr(ctx, "intent_score", 0.0) or 0.0)
+    capability_conf = float(getattr(ctx, "capability_confidence", 0.0) or 0.0)
+    confidence = max(intent_conf, intent_score, min(0.49, capability_conf * 0.7))
+    if confidence >= 0.5:
+        return ""
+
+    low = user_input.lower()
+    prompts: List[str] = []
+    if any(k in low for k in ("safari", "chrome", "firefox", "browser", "tarayici", "tarayıcı")):
+        prompts.append("Hangi sayfayi veya arama sorgusunu acmami istiyorsun?")
+    if any(k in low for k in ("kaydet", "dosya", "klasor", "klasör", "path", "yol")):
+        prompts.append("Ciktiyi hangi dosya/klasor yoluna kaydetmemi istiyorsun?")
+    if any(k in low for k in ("tikla", "tıkla", "yaz", "enter", "bas", "button", "buton")):
+        prompts.append("UI adimini netlestir: hangi buton/alan ve hangi sirada?")
+    if not prompts:
+        prompts.append("Tek cumlede hedef + beklenen cikti + (varsa) dosya yolunu yazar misin?")
+
+    prompt_lines = "\n".join(f"- {row}" for row in prompts[:2])
+    return (
+        "Komutu yanlis calistirmamak icin netlestirmem gerekiyor.\n"
+        f"{prompt_lines}"
+    ).strip()
+
+
 def _looks_execution_failure_text(text: str) -> bool:
     low = str(text or "").strip().lower()
     if not low:
@@ -248,6 +536,31 @@ def _looks_execution_failure_text(text: str) -> bool:
         "unavailable",
     )
     return any(m in low for m in failure_markers)
+
+
+def _extract_direct_failure_class(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    primary = str(payload.get("failure_class") or "").strip().lower()
+    if primary:
+        return primary
+    failed_step = payload.get("failed_step")
+    if isinstance(failed_step, dict):
+        nested = str(failed_step.get("failure_class") or "").strip().lower()
+        if nested:
+            return nested
+    return ""
+
+
+def _infer_failure_class_from_text(text: str) -> str:
+    low = str(text or "").strip().lower()
+    if not low:
+        return ""
+    if any(tok in low for tok in ("policy block", "security policy", "permission denied", "yetki yok", "izin yok")):
+        return "policy_block"
+    if any(tok in low for tok in ("planlama", "planning", "dependency", "bagimlilik", "bağımlılık")):
+        return "planning_failure"
+    return ""
 
 
 def _has_successful_tool_result(tool_results: List[Dict[str, Any]]) -> bool:
@@ -379,6 +692,227 @@ def _repair_screen_completion(ctx) -> Dict[str, Any]:
         controlled += f" Artifact sayisi: {len(screenshot_paths)}."
     ctx.final_response = controlled
     return {"repaired": False, "summary": "", "strategy": "screen_controlled_failure", "artifacts": screenshot_paths}
+
+
+def _is_non_empty_file(path: str) -> bool:
+    try:
+        from pathlib import Path as _Path
+
+        target = _Path(str(path or "")).expanduser()
+        return bool(target.exists() and target.is_file() and int(target.stat().st_size) > 0)
+    except Exception:
+        return False
+
+
+async def _repair_taskspec_contract(ctx, agent, task_spec: Dict[str, Any], verification_payload: Dict[str, Any]) -> Dict[str, Any]:
+    failed = [str(x).strip() for x in list((verification_payload or {}).get("failed") or []) if str(x).strip()]
+    if not failed or not isinstance(task_spec, dict):
+        return {"repaired": False, "strategy": "noop", "rechecked": verification_payload or {}}
+
+    reparable_markers = (
+        "deliverable:",
+        "criteria:artifact_file_exists",
+        "criteria:artifact_path_exists",
+        "criteria:artifact_file_not_empty",
+        "document:missing_artifact",
+        "document:empty_artifact",
+    )
+    if not any(any(marker in item for marker in reparable_markers) for item in failed):
+        return {"repaired": False, "strategy": "unsupported_failure", "rechecked": verification_payload or {}}
+
+    steps = task_spec.get("steps") if isinstance(task_spec.get("steps"), list) else []
+    if not steps:
+        return {"repaired": False, "strategy": "no_steps", "rechecked": verification_payload or {}}
+
+    required_artifacts = [
+        dict(item)
+        for item in list(task_spec.get("artifacts_expected") or [])
+        if isinstance(item, dict) and bool(item.get("must_exist", False))
+    ]
+    needs_repair: set[str] = set()
+    for item in required_artifacts:
+        path = str(item.get("path") or "").strip()
+        if not path:
+            continue
+        kind = str(item.get("type") or "").strip().lower()
+        from pathlib import Path as _Path
+
+        if kind == "directory" and not _Path(path).expanduser().exists():
+            needs_repair.add(path)
+        elif kind == "file" and not _is_non_empty_file(path):
+            needs_repair.add(path)
+
+    ran_steps: list[str] = []
+    executed = False
+    local_action_tool_map = {
+        "mkdir": "create_folder",
+        "write_file": "write_file",
+    }
+
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        action = str(step.get("action") or "").strip().lower()
+        if action not in local_action_tool_map:
+            continue
+        step_path = str(step.get("path") or ((step.get("params") or {}).get("path") if isinstance(step.get("params"), dict) else "") or "").strip()
+        if step_path and needs_repair and step_path not in needs_repair:
+            continue
+
+        if action == "mkdir":
+            res = await agent._execute_tool(
+                local_action_tool_map[action],
+                {"path": step_path},
+                user_input=str(getattr(ctx, "user_input", "") or ""),
+                step_name=f"{step.get('id') or 'step'} (verify_repair)",
+            )
+            ctx.tool_results.append(
+                {
+                    "tool": "create_folder",
+                    "action": "verify_repair_mkdir",
+                    "success": not (isinstance(res, dict) and res.get("success") is False),
+                    "path": step_path,
+                    "result": res,
+                }
+            )
+            executed = True
+            ran_steps.append(str(step.get("id") or "mkdir"))
+            continue
+
+        if action == "write_file":
+            content = str(step.get("content") or ((step.get("params") or {}).get("content") if isinstance(step.get("params"), dict) else "") or "").strip()
+            if not step_path or not content:
+                continue
+            res = await agent._execute_tool(
+                local_action_tool_map[action],
+                {"path": step_path, "content": content},
+                user_input=str(getattr(ctx, "user_input", "") or ""),
+                step_name=f"{step.get('id') or 'step'} (verify_repair)",
+            )
+            ctx.tool_results.append(
+                {
+                    "tool": "write_file",
+                    "action": "verify_repair_write_file",
+                    "success": not (isinstance(res, dict) and res.get("success") is False),
+                    "path": step_path,
+                    "result": res,
+                }
+            )
+            executed = True
+            ran_steps.append(str(step.get("id") or "write_file"))
+            if isinstance(getattr(ctx, "intent", None), dict):
+                params = ctx.intent.get("params") if isinstance(ctx.intent.get("params"), dict) else {}
+                params["path"] = step_path
+                ctx.intent["params"] = params
+
+    if not executed:
+        return {"repaired": False, "strategy": "no_repairable_steps", "rechecked": verification_payload or {}}
+
+    produced_paths = collect_paths_from_tool_results(ctx.tool_results)
+    rechecked = verify_taskspec_contract(
+        task_spec=task_spec,
+        job_type=str(getattr(ctx, "job_type", "") or ""),
+        final_response=str(getattr(ctx, "final_response", "") or ""),
+        tool_results=[r for r in list(getattr(ctx, "tool_results", []) or []) if isinstance(r, dict)],
+        produced_paths=produced_paths,
+    )
+    if rechecked.get("ok", False):
+        repaired_paths = [str(p).strip() for p in produced_paths if str(p).strip()]
+        if repaired_paths:
+            ctx.final_response = f"{str(getattr(ctx, 'final_response', '') or '').strip()}\nOnarım sonrası doğrulandı: {repaired_paths[0]}".strip()
+    return {
+        "repaired": bool(rechecked.get("ok", False)),
+        "strategy": "taskspec_artifact_replay",
+        "replayed_steps": ran_steps,
+        "rechecked": rechecked,
+    }
+
+
+def _classify_taskspec_failure(task_contract: Dict[str, Any], *, action: str) -> str:
+    failed = [str(x).strip() for x in list((task_contract or {}).get("failed") or []) if str(x).strip()]
+    artifact_markers = ("deliverable:", "document:missing_artifact", "document:empty_artifact", "criteria:artifact_")
+    if any(any(marker in item for marker in artifact_markers) for item in failed):
+        return "planning_failure"
+    return classify_failure_class(reason=", ".join(failed), action=action, payload=task_contract if isinstance(task_contract, dict) else {})
+
+
+def _build_code_quality_gate_plan(*, produced_paths: List[str], failed_gates: List[str]) -> Dict[str, Any]:
+    gates = [str(x).strip().lower() for x in (failed_gates or []) if str(x).strip()]
+    paths = [str(p).strip() for p in (produced_paths or []) if str(p).strip()]
+    suffixes = {Path(p).suffix.lower() for p in paths}
+
+    commands: list[str] = []
+    stack = "generic"
+    if suffixes & {".py"}:
+        stack = "python"
+        if "lint" in gates:
+            commands.append("ruff check .")
+        if "smoke" in gates:
+            commands.append("python -m pytest -q")
+        if "typecheck" in gates:
+            commands.append("mypy .")
+    elif suffixes & {".ts", ".tsx", ".js", ".jsx"}:
+        stack = "node"
+        if "lint" in gates:
+            commands.append("npm run lint")
+        if "smoke" in gates:
+            commands.append("npm test -- --runInBand")
+        if "typecheck" in gates:
+            commands.append("npm run typecheck")
+    elif suffixes & {".go"}:
+        stack = "go"
+        if "lint" in gates:
+            commands.append("go vet ./...")
+        if "smoke" in gates:
+            commands.append("go test ./...")
+    elif suffixes & {".rs"}:
+        stack = "rust"
+        if "lint" in gates:
+            commands.append("cargo clippy -- -D warnings")
+        if "smoke" in gates:
+            commands.append("cargo test")
+    else:
+        if "lint" in gates:
+            commands.append("run project lint command")
+        if "smoke" in gates:
+            commands.append("run project test command")
+        if "typecheck" in gates:
+            commands.append("run project typecheck command")
+
+    commands = [cmd for i, cmd in enumerate(commands) if cmd and cmd not in commands[:i]]
+    return {
+        "stack": stack,
+        "failed_gates": gates,
+        "commands": commands,
+        "repairable": bool(commands),
+    }
+
+
+def _build_research_recovery_plan(
+    *,
+    failed_gates: List[str],
+    source_urls: List[str],
+    payload_errors: List[str],
+) -> Dict[str, Any]:
+    gates = [str(x).strip().lower() for x in (failed_gates or []) if str(x).strip()]
+    payload_errs = [str(x).strip() for x in (payload_errors or []) if str(x).strip()]
+    steps: list[str] = []
+    if "sources" in gates:
+        steps.append("En az 3 güvenilir kaynak ekle")
+    if "claim_mapping" in gates:
+        steps.append("Ana iddiaları kaynaklarla eşle")
+    if "unknowns" in gates:
+        steps.append("Belirsizlikler ve sınırlılıklar bölümü ekle")
+    if any(item.startswith("payload:") for item in gates) or payload_errs:
+        steps.append("Yapısal research payload üret ve doğrula")
+    steps = [item for i, item in enumerate(steps) if item not in steps[:i]]
+    return {
+        "failed_gates": gates,
+        "source_count": len([str(x).strip() for x in (source_urls or []) if str(x).strip()]),
+        "payload_errors": payload_errs,
+        "steps": steps,
+        "repairable": bool(steps),
+    }
 
 
 def _evaluate_completion_gate(ctx) -> Dict[str, Any]:
@@ -699,6 +1233,7 @@ class PipelineContext:
     understand_phase: Dict[str, Any] = field(default_factory=dict)
     phase_records: Dict[str, Any] = field(default_factory=dict)
     output_contract_spec: Dict[str, Any] = field(default_factory=dict)
+    world_snapshot: Dict[str, Any] = field(default_factory=dict)
 
     # Stage 3: Plan
     plan: List[Dict] = field(default_factory=list)
@@ -1093,6 +1628,27 @@ class StageRoute(PipelineStage):
             except Exception:
                 pass
 
+        # World model snapshot: deterministic bridge from memory -> plan context.
+        try:
+            from core.world_model import get_world_model
+
+            ctx.world_snapshot = get_world_model().build_snapshot(
+                user_id=ctx.user_id,
+                query=ctx.user_input,
+                goal_graph=ctx.goal_graph,
+                memory_results=ctx.memory_results,
+                action=ctx.action,
+                job_type=ctx.job_type,
+            )
+            if isinstance(ctx.telemetry, dict):
+                ctx.telemetry["world_model"] = {
+                    "domains": list(ctx.world_snapshot.get("domains", []) or []),
+                    "strategy_count": len(list(ctx.world_snapshot.get("strategy_hints", []) or [])),
+                    "experience_hits": len(list(ctx.world_snapshot.get("similar_experiences", []) or [])),
+                }
+        except Exception as world_exc:
+            logger.debug(f"World model snapshot skipped: {world_exc}")
+
         # Capability realignment: fix shallow/misaligned parser actions using high-confidence capability plan.
         try:
             parsed_conf = 0.0
@@ -1139,6 +1695,8 @@ class StageRoute(PipelineStage):
                 if fallback_action and fallback_action in AVAILABLE_TOOLS:
                     low_input = str(ctx.user_input or "").lower()
                     if fallback_action in {"screen_workflow", "vision_operator_loop", "operator_mission_control"}:
+                        if _looks_simple_app_control_command(low_input):
+                            fallback_action = ""
                         explicit_screen_markers = (
                             "durum nedir", "ekrana bak", "ekranı oku", "ekrani oku", "ekranda ne var",
                             "screen", "screenshot", "bilgisayari kullan", "bilgisayarı kullan",
@@ -1323,6 +1881,20 @@ class StageRoute(PipelineStage):
 
         ctx.job_type = _job_type_from_action(ctx.action, ctx.job_type)
 
+        # Model-A rescue: deterministic low-cost intent recovery before LLM fallback.
+        try:
+            model_a_enabled, model_a_path, model_a_min_conf, model_a_allowed = _resolve_model_a_policy(ctx)
+            _try_model_a_intent_rescue(
+                ctx,
+                agent,
+                enabled=model_a_enabled,
+                model_path=model_a_path,
+                min_confidence=model_a_min_conf,
+                allowed_actions=model_a_allowed,
+            )
+        except Exception:
+            pass
+
         # Last-mile rescue with LLM JSON tool intent when deterministic routing could not map an action.
         try:
             llm_threshold = max(0.5, float(capability_override_threshold or 0.5))
@@ -1368,6 +1940,14 @@ class StageRoute(PipelineStage):
                     task_spec = agent._build_task_spec_from_intent(ctx.user_input, ctx.intent, ctx.job_type)
                     if isinstance(task_spec, dict):
                         ctx.intent["task_spec"] = task_spec
+                if isinstance(task_spec, dict):
+                    task_spec = coerce_task_spec_standard(
+                        task_spec,
+                        user_input=ctx.user_input,
+                        intent_payload=ctx.intent,
+                        intent_confidence=float(ctx.intent.get("confidence", 0.0) or 0.0),
+                    )
+                    ctx.intent["task_spec"] = task_spec
 
                 if strict_taskspec:
                     from core.spec.task_spec import validate_task_spec
@@ -1383,6 +1963,16 @@ class StageRoute(PipelineStage):
                         ctx.delivery_blocked = True
         except Exception as e:
             logger.debug(f"TaskSpec normalization skipped: {e}")
+
+        try:
+            clarification = _build_low_confidence_actionable_clarification(ctx)
+            if clarification:
+                ctx.action = "clarify"
+                ctx.job_type = "communication"
+                ctx.final_response = clarification
+                ctx.delivery_blocked = True
+        except Exception:
+            pass
 
         # Feedback / Correction Detection
         try:
@@ -1692,6 +2282,32 @@ class StageExecute(PipelineStage):
                 ctx.stage_timings["execute"] = time.time() - t0
                 return ctx
 
+            exec_mode = _resolve_execution_mode(ctx)
+            if isinstance(ctx.telemetry, dict):
+                ctx.telemetry["execution_mode"] = exec_mode
+
+            # Conversation Brain boundary:
+            # - chat mode: actionable commands are understood but not executed.
+            # - assist mode: produce deterministic plan preview without side effects.
+            actionable = _looks_actionable_input(ctx.user_input, ctx.attachments) or _normalize_action(ctx.action) not in _NON_ACTIONABLE_INTENTS
+            if exec_mode == "chat" and actionable:
+                ctx.final_response = (
+                    "Chat Mode aktif. Bu istegi anladim ama islem baslatmadim.\n"
+                    + _build_assist_mode_preview(ctx)
+                )
+                ctx.intent = {"action": "chat", "params": {"mode": "chat"}}
+                ctx.action = "chat"
+                ctx.job_type = "communication"
+                ctx.stage_timings["execute"] = time.time() - t0
+                return ctx
+            if exec_mode == "assist" and actionable:
+                ctx.final_response = _build_assist_mode_preview(ctx)
+                ctx.intent = {"action": "chat", "params": {"mode": "assist", "preview_only": True}}
+                ctx.action = "chat"
+                ctx.job_type = "communication"
+                ctx.stage_timings["execute"] = time.time() - t0
+                return ctx
+
             if flag_enabled(ctx, "upgrade_workspace_isolation", default=False):
                 try:
                     if not ctx.workspace_path:
@@ -1788,7 +2404,12 @@ class StageExecute(PipelineStage):
                 )
                 if direct_text is not None:
                     direct_failed = _looks_execution_failure_text(direct_text)
+                    direct_verification_failed = False
+                    direct_verification_warning = ""
                     direct_payload = getattr(agent, "_last_direct_intent_payload", None)
+                    direct_failure_class = _extract_direct_failure_class(direct_payload) or _infer_failure_class_from_text(
+                        direct_text
+                    )
                     direct_row = {
                         "action": str(ctx.action or ""),
                         "success": not direct_failed,
@@ -1802,18 +2423,67 @@ class StageExecute(PipelineStage):
                         for key in ("status", "summary", "artifacts", "screenshots", "observations", "ui_map", "ocr", "objects", "error"):
                             if key in direct_payload:
                                 direct_row[key] = direct_payload.get(key)
+                        app_control_actions = {"open_app", "close_app", "key_combo", "open_url"}
+                        if _normalize_action(ctx.action) in app_control_actions:
+                            verified_raw = direct_payload.get("verified")
+                            warn_raw = str(direct_payload.get("verification_warning") or "").strip()
+                            direct_verification_warning = warn_raw
+                            if verified_raw is False:
+                                direct_verification_failed = True
+                            warn_low = warn_raw.lower()
+                            if any(
+                                marker in warn_low
+                                for marker in (
+                                    "uyumsuz",
+                                    "hedef dışı",
+                                    "hedef disi",
+                                    "dogrulanamadi",
+                                    "doğrulanamadı",
+                                )
+                            ):
+                                direct_verification_failed = True
+                            if direct_verification_failed:
+                                direct_row["success"] = False
                     ctx.tool_results.append(direct_row)
                     # Post-proof: set_wallpaper sonrası ekran görüntüsü
                     if ctx.action == "set_wallpaper":
                         try:
                             if "take_screenshot" in AVAILABLE_TOOLS:
-                                shot = await agent._execute_tool("take_screenshot", {"filename": "wallpaper_proof.png"}, user_input=ctx.user_input, step_name="Kanıt SS")
+                                shot = await agent._execute_tool(
+                                    "take_screenshot",
+                                    {"filename": f"wallpaper_proof_{int(time.time() * 1000)}.png"},
+                                    user_input=ctx.user_input,
+                                    step_name="Kanıt SS",
+                                )
                                 proof_txt = agent._format_result_text(shot)
                                 if proof_txt:
                                     direct_text += f"\nKanıt: {proof_txt}"
                         except Exception:
                             pass
+                    if direct_verification_failed:
+                        warn_text = (
+                            f"\nNot: {direct_verification_warning}"
+                            if direct_verification_warning
+                            else "\nNot: Aksiyon dogrulama katisi basarisiz."
+                        )
+                        ctx.errors.append(f"direct_intent_unverified:{ctx.action}")
+                        ctx.final_response += str(direct_text or "").strip() + warn_text
+                        if action_lock.is_locked:
+                            action_lock.unlock()
+                        ctx.stage_timings["execute"] = time.time() - t0
+                        return ctx
                     if direct_failed:
+                        if direct_failure_class in {"policy_block", "planning_failure"}:
+                            logger.warning(
+                                "Direct intent failed with deterministic class=%s; skipping fallback.",
+                                direct_failure_class,
+                            )
+                            ctx.errors.append(f"direct_intent_blocked:{direct_failure_class}")
+                            ctx.final_response += str(direct_text or "")
+                            if action_lock.is_locked:
+                                action_lock.unlock()
+                            ctx.stage_timings["execute"] = time.time() - t0
+                            return ctx
                         screen_actions = {"screen_workflow", "analyze_screen", "take_screenshot", "vision_operator_loop", "operator_mission_control", "computer_use"}
                         if _normalize_action(ctx.action) in screen_actions:
                             logger.warning("Direct intent screen/operator result failed; preserving workflow boundary.")
@@ -2534,6 +3204,7 @@ class StageVerify(PipelineStage):
         if flag_enabled(ctx, "upgrade_verify_mandatory_gates", default=False):
             try:
                 produced_paths = collect_paths_from_tool_results(ctx.tool_results)
+                task_spec = ctx.intent.get("task_spec") if isinstance(ctx.intent, dict) and isinstance(ctx.intent.get("task_spec"), dict) else None
                 expected_ext = []
                 if isinstance(ctx.intent, dict):
                     exp = ctx.intent.get("expected_extensions")
@@ -2548,7 +3219,55 @@ class StageVerify(PipelineStage):
                     produced_paths=produced_paths,
                     evidence_checks=evidence_checks,
                 )
+
+                task_contract = verify_taskspec_contract(
+                    task_spec=task_spec,
+                    job_type=ctx.job_type,
+                    final_response=ctx.final_response,
+                    tool_results=[r for r in ctx.tool_results if isinstance(r, dict)],
+                    produced_paths=produced_paths,
+                )
+                if not task_contract.get("ok", True):
+                    taskspec_failure_class = _classify_taskspec_failure(
+                        task_contract,
+                        action=str(getattr(ctx, "action", "") or ""),
+                    )
+                    recovery_strategy = select_recovery_strategy(
+                        failure_class=taskspec_failure_class,
+                        action=str(getattr(ctx, "action", "") or ""),
+                        reason=", ".join(str(x) for x in list(task_contract.get("failed") or [])),
+                        params=ctx.intent.get("params") if isinstance(ctx.intent.get("params"), dict) else {},
+                        result={"task_spec": task_spec or {}, "failed": list(task_contract.get("failed") or [])},
+                    )
+                    ctx.qa_results["taskspec_failure"] = {
+                        "class": taskspec_failure_class,
+                        "failed": [str(x) for x in list(task_contract.get("failed") or []) if str(x).strip()],
+                    }
+                    ctx.qa_results["taskspec_recovery_strategy"] = recovery_strategy
+                    recovery_kind = str(recovery_strategy.get("kind") or "").strip().lower()
+                    repair_info = {"repaired": False, "strategy": "noop", "rechecked": task_contract}
+                    if recovery_kind == "replay_taskspec_artifact":
+                        repair_info = await _repair_taskspec_contract(ctx, agent, task_spec or {}, task_contract)
+                        ctx.qa_results["taskspec_contract_repair"] = repair_info
+                        if repair_info.get("repaired"):
+                            produced_paths = collect_paths_from_tool_results(ctx.tool_results)
+                            task_contract = repair_info.get("rechecked") if isinstance(repair_info.get("rechecked"), dict) else task_contract
+                            repair_evidence = list(evidence_checks)
+                            repair_evidence.append("taskspec_contract_repaired")
+                            contract_res = enforce_output_contract(
+                                job_type=ctx.job_type,
+                                expected_extensions=expected_ext,
+                                produced_paths=produced_paths,
+                                evidence_checks=repair_evidence,
+                            )
+                            if isinstance(ctx.telemetry, dict):
+                                repair_steps = list(ctx.telemetry.get("repair_steps", []) or [])
+                                strategy = str(repair_info.get("strategy") or "").strip()
+                                if strategy and strategy not in repair_steps:
+                                    repair_steps.append(strategy)
+                                    ctx.telemetry["repair_steps"] = repair_steps
                 ctx.qa_results["upgrade_output_contract"] = contract_res
+                ctx.qa_results["taskspec_contract"] = task_contract
 
                 mismatch = detect_artifact_mismatch(expected_extensions=expected_ext, produced_paths=produced_paths)
                 if mismatch:
@@ -2565,6 +3284,55 @@ class StageVerify(PipelineStage):
                     )
                     ctx.qa_results["code_gate"] = code_gate
                     if not code_gate.get("ok", False):
+                        code_failure_class = "planning_failure"
+                        declared_missing = [
+                            str(x).strip().lower()
+                            for x in list((((ctx.qa_results.get("output_contract") or {}) if isinstance(ctx.qa_results.get("output_contract"), dict) else {}).get("signals") or {}).get("missing") or [])
+                            if str(x).strip()
+                        ]
+                        normalized_missing = []
+                        for item in declared_missing:
+                            if item == "tests":
+                                normalized_missing.append("smoke")
+                            else:
+                                normalized_missing.append(item)
+                        combined_failed_gates = list(dict.fromkeys(
+                            [str(x).strip().lower() for x in list(code_gate.get("failed") or []) if str(x).strip()] + normalized_missing
+                        ))
+                        code_gate_plan = _build_code_quality_gate_plan(
+                            produced_paths=produced_paths,
+                            failed_gates=combined_failed_gates,
+                        )
+                        code_recovery_strategy = select_recovery_strategy(
+                            failure_class=code_failure_class,
+                            action=str(getattr(ctx, "action", "") or ""),
+                            reason=", ".join(f"code:{x}" for x in combined_failed_gates),
+                            params=ctx.intent.get("params") if isinstance(ctx.intent.get("params"), dict) else {},
+                            result={
+                                "code_gate": {"failed": combined_failed_gates},
+                                "quality_gate_commands": list(code_gate_plan.get("commands") or []),
+                            },
+                        )
+                        ctx.qa_results["code_failure"] = {
+                            "class": code_failure_class,
+                            "failed": combined_failed_gates,
+                        }
+                        ctx.qa_results["code_recovery_strategy"] = code_recovery_strategy
+                        if code_gate_plan.get("repairable"):
+                            ctx.qa_results["code_repair_plan"] = code_gate_plan
+                            if str(code_recovery_strategy.get("kind") or "").strip().lower() == "quality_gate_plan":
+                                cmds = [str(x).strip() for x in list(code_gate_plan.get("commands") or []) if str(x).strip()]
+                                if cmds:
+                                    marker = "Quality gate next:"
+                                    hint = f"{marker} " + " ; ".join(cmds[:3])
+                                    if hint not in str(ctx.final_response or ""):
+                                        ctx.final_response = f"{str(ctx.final_response or '').rstrip()}\n{hint}".strip()
+                                    if isinstance(ctx.telemetry, dict):
+                                        repair_steps = list(ctx.telemetry.get("repair_steps", []) or [])
+                                        strategy = str(code_recovery_strategy.get("note") or code_recovery_strategy.get("kind") or "").strip()
+                                        if strategy and strategy not in repair_steps:
+                                            repair_steps.append(strategy)
+                                            ctx.telemetry["repair_steps"] = repair_steps
                         gate_failed.extend([f"code:{x}" for x in code_gate.get("failed", [])])
                 elif _is_research_task(ctx):
                     research_urls = _collect_urls(ctx.final_response, ctx.tool_results)
@@ -2582,6 +3350,47 @@ class StageVerify(PipelineStage):
                         "ok": payload_ok,
                         "errors": payload_errors,
                     }
+                    if not research_gate.get("ok", False) or not payload_ok:
+                        combined_research_failed = list(dict.fromkeys(
+                            [str(x).strip() for x in list(research_gate.get("failed") or []) if str(x).strip()] +
+                            [f"payload:{err}" for err in payload_errors]
+                        ))
+                        research_failure_class = "planning_failure"
+                        research_repair_plan = _build_research_recovery_plan(
+                            failed_gates=combined_research_failed,
+                            source_urls=research_urls,
+                            payload_errors=payload_errors,
+                        )
+                        research_recovery_strategy = select_recovery_strategy(
+                            failure_class=research_failure_class,
+                            action=str(getattr(ctx, "action", "") or ""),
+                            reason=", ".join(f"research:{x}" for x in combined_research_failed),
+                            params=ctx.intent.get("params") if isinstance(ctx.intent.get("params"), dict) else {},
+                            result={
+                                "research_gate": {"failed": combined_research_failed},
+                                "research_repair_steps": list(research_repair_plan.get("steps") or []),
+                            },
+                        )
+                        ctx.qa_results["research_failure"] = {
+                            "class": research_failure_class,
+                            "failed": combined_research_failed,
+                        }
+                        ctx.qa_results["research_recovery_strategy"] = research_recovery_strategy
+                        if research_repair_plan.get("repairable"):
+                            ctx.qa_results["research_repair_plan"] = research_repair_plan
+                            if str(research_recovery_strategy.get("kind") or "").strip().lower() == "research_revision_plan":
+                                steps = [str(x).strip() for x in list(research_repair_plan.get("steps") or []) if str(x).strip()]
+                                if steps:
+                                    marker = "Research next:"
+                                    hint = f"{marker} " + " ; ".join(steps[:3])
+                                    if hint not in str(ctx.final_response or ""):
+                                        ctx.final_response = f"{str(ctx.final_response or '').rstrip()}\n{hint}".strip()
+                                    if isinstance(ctx.telemetry, dict):
+                                        repair_steps = list(ctx.telemetry.get("repair_steps", []) or [])
+                                        strategy = str(research_recovery_strategy.get("note") or research_recovery_strategy.get("kind") or "").strip()
+                                        if strategy and strategy not in repair_steps:
+                                            repair_steps.append(strategy)
+                                            ctx.telemetry["repair_steps"] = repair_steps
                     if not payload_ok:
                         gate_failed.extend([f"research_payload:{err}" for err in payload_errors])
                 elif ctx.attachment_index:
@@ -2592,6 +3401,8 @@ class StageVerify(PipelineStage):
 
                 if not contract_res.get("ok", True):
                     gate_failed.extend([f"contract:{x}" for x in contract_res.get("errors", [])])
+                if not task_contract.get("ok", True):
+                    gate_failed.extend([f"taskspec:{x}" for x in task_contract.get("failed", [])])
                 if mismatch:
                     gate_failed.append("artifact_mismatch")
 
@@ -2599,7 +3410,12 @@ class StageVerify(PipelineStage):
                     ctx.verified = False
                     ctx.delivery_blocked = True
                     ctx.errors.extend(gate_failed)
-                    ctx.final_response = f"{str(ctx.final_response or '').rstrip()}\n\n❌ Verify gate failed: {', '.join(gate_failed)}"
+                    reflexion_hint = build_reflexion_hint(
+                        verification_payload=task_contract,
+                        job_type=ctx.job_type,
+                    )
+                    suffix = f"\n{reflexion_hint}" if reflexion_hint else ""
+                    ctx.final_response = f"{str(ctx.final_response or '').rstrip()}\n\n❌ Verify gate failed: {', '.join(gate_failed)}{suffix}"
             except Exception as verify_exc:
                 ctx.errors.append(f"upgrade_verify_gate:{verify_exc}")
 
@@ -2618,6 +3434,25 @@ class StageVerify(PipelineStage):
                 capability_runtime["repair"] = repair_info
             verify_info = capability_runtime.get("verify", {}) if isinstance(capability_runtime.get("verify"), dict) else {}
             ctx.qa_results["capability_runtime"] = capability_runtime
+            capability_failed_codes = []
+            if isinstance(verify_info.get("failed_codes"), list):
+                capability_failed_codes = [str(x).strip() for x in verify_info.get("failed_codes", []) if str(x).strip()]
+            elif isinstance(capability_runtime.get("failed_codes"), list):
+                capability_failed_codes = [str(x).strip() for x in capability_runtime.get("failed_codes", []) if str(x).strip()]
+            capability_failed_reasons = [str(x).strip() for x in list(verify_info.get("failed") or []) if str(x).strip()]
+            capability_reason = ", ".join(capability_failed_reasons)
+            capability_failure_class = classify_failure_class(
+                reason=capability_reason,
+                failed_codes=capability_failed_codes,
+                action=str(getattr(ctx, "action", "") or ""),
+                payload=verify_info if isinstance(verify_info, dict) else {},
+            )
+            if capability_failed_reasons:
+                ctx.qa_results["capability_failure"] = {
+                    "class": capability_failure_class,
+                    "failed": capability_failed_reasons,
+                    "failed_codes": capability_failed_codes,
+                }
 
             repair_strategy = str(repair_info.get("strategy") or "").strip()
             trace_repairs = list(ctx.telemetry.get("repair_steps", []) or []) if isinstance(ctx.telemetry, dict) else []
@@ -2628,6 +3463,12 @@ class StageVerify(PipelineStage):
             if isinstance(ctx.telemetry, dict) and isinstance(ctx.telemetry.get("verifier_results"), dict):
                 verifier_results = dict(ctx.telemetry.get("verifier_results") or {})
             verifier_results["capability_runtime"] = verify_info
+            if capability_failed_reasons:
+                verifier_results["capability_failure"] = {
+                    "class": capability_failure_class,
+                    "failed": capability_failed_reasons,
+                    "failed_codes": capability_failed_codes,
+                }
             update_runtime_trace(
                 ctx,
                 tool_calls=list(ctx.tool_calls or []),
@@ -2781,6 +3622,42 @@ class StageDeliver(PipelineStage):
                     ctx.final_response or ctx.llm_response, 
                     {"role": "assistant", "channel": ctx.channel, "type": "response"}
                 ))
+        except Exception:
+            pass
+
+        # Experience learning loop: persist verified/partial runs for later strategy selection.
+        try:
+            action_name = str(ctx.action or "").strip().lower()
+            if action_name not in {"", "chat", "communication", "unknown"}:
+                from core.world_model import get_world_model
+
+                if ctx.delivery_blocked:
+                    success_score = 0.2
+                elif ctx.verified:
+                    success_score = 1.0
+                elif str(ctx.final_response or ctx.llm_response or "").strip():
+                    success_score = 0.65
+                else:
+                    success_score = 0.0
+
+                get_world_model().record_experience(
+                    user_id=ctx.user_id,
+                    goal=ctx.user_input,
+                    action=ctx.action,
+                    job_type=ctx.job_type,
+                    plan=ctx.plan,
+                    tool_calls=ctx.tool_calls,
+                    errors=ctx.errors,
+                    final_response=ctx.final_response or ctx.llm_response,
+                    verified=bool(ctx.verified and not ctx.delivery_blocked),
+                    success_score=success_score,
+                    metadata={
+                        "channel": ctx.channel,
+                        "requires_evidence": bool(ctx.requires_evidence),
+                        "goal_stage_count": int(ctx.goal_stage_count or 1),
+                        "world_domains": list((ctx.world_snapshot or {}).get("domains", []) or []),
+                    },
+                )
         except Exception:
             pass
 

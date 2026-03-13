@@ -278,6 +278,50 @@ class TestGatewayRouter:
         assert normalized.buttons[0]["text"] == "Devam Et"
         assert normalized.buttons[0]["callback_data"] == "task|retry|away_88"
 
+    def test_normalize_response_strips_internal_planning_markers(self):
+        class _Adapter:
+            def get_capabilities(self):
+                return {"markdown": True, "buttons": True, "images": True, "files": True}
+
+        response = UnifiedResponse(
+            text="Merhaba!\nDeliverable Spec: Kullanıcıya yardımcı olmak\nDone Criteria: Memnuniyet\n\nNasıl yardımcı olayım?"
+        )
+        normalized = GatewayRouter._normalize_response_for_channel("telegram", response, _Adapter())
+        assert "Deliverable Spec" not in normalized.text
+        assert "Done Criteria" not in normalized.text
+        assert normalized.text == "Merhaba!\n\nNasıl yardımcı olayım?"
+
+    def test_normalize_response_compacts_verbose_greeting(self):
+        class _Adapter:
+            def get_capabilities(self):
+                return {"markdown": True, "buttons": True, "images": True, "files": True}
+
+        response = UnifiedResponse(
+            text=(
+                "Merhaba! Görünen o ki, tekrar selamlaşma yapıyoruz. "
+                "Size nasıl yardımcı olabilirim? Lütfen bir konu belirtiniz "
+                "ki size yardımcı olayım. İsterseniz önceki konulara da dönebiliriz."
+            )
+        )
+        normalized = GatewayRouter._normalize_response_for_channel("telegram", response, _Adapter())
+        assert normalized.text == "Merhaba. Nasıl yardımcı olayım?"
+
+    def test_normalize_response_strips_system_note_and_completion_gate_lines(self):
+        class _Adapter:
+            def get_capabilities(self):
+                return {"markdown": True, "buttons": True, "images": True, "files": True}
+
+        response = UnifiedResponse(
+            text=(
+                "Fatih Terim eski futbolcu ve teknik direktördür.\n"
+                "Sistem notu: Yüksek Bellek kullanımı şu an %86.\n"
+                "- Kullanıcının ihtiyacını belirlemek\n"
+                "❌ Completion gate failed: completion:no_successful_tool_result"
+            )
+        )
+        normalized = GatewayRouter._normalize_response_for_channel("telegram", response, _Adapter())
+        assert normalized.text == "Fatih Terim eski futbolcu ve teknik direktördür."
+
     @pytest.mark.asyncio
     async def test_send_outgoing_response_retries_with_plain_fallback_on_error(self):
         router, _ = self._router()
@@ -434,6 +478,34 @@ class TestGatewayRouter:
             assert called_kwargs["metadata"]["channel_type"] == "telegram"
             assert called_kwargs["metadata"]["channel_id"] == "chan-001"
             assert called_kwargs["metadata"]["user_id"] == "user-001"
+
+    @pytest.mark.asyncio
+    async def test_handle_incoming_message_does_not_attach_manifest_without_explicit_share_flag(self):
+        router, mock_agent = self._router()
+        mock_agent.process_envelope = AsyncMock(
+            return_value=SimpleNamespace(
+                text="ok",
+                attachments=[],
+                evidence_manifest_path="/tmp/manifest.json",
+                run_id="run1",
+                status="success",
+                metadata={},
+                to_unified_attachments=lambda: [],
+            )
+        )
+
+        mock_ar = AsyncMock()
+        mock_ar.route_message = AsyncMock(return_value=mock_agent)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("core.gateway.router.agent_router", mock_ar)
+            router.send_outgoing_response = AsyncMock()
+
+            msg = _make_message(channel_type="telegram", text="raporu hazırla")
+            await router.handle_incoming_message(msg)
+
+            sent_response = router.send_outgoing_response.call_args[0][2]
+            assert sent_response.attachments == []
 
     @pytest.mark.asyncio
     async def test_handle_incoming_message_error_sends_error_response(self):

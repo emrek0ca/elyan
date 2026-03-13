@@ -3,6 +3,7 @@ import json
 import asyncio
 import time
 import importlib.util
+import re
 from typing import Any, Optional
 from config.elyan_config import elyan_config
 from core.model_orchestrator import model_orchestrator
@@ -12,6 +13,7 @@ from .intent_parser import IntentParser
 from .intent_classifier import get_classifier
 from .llm_optimizer import get_llm_optimizer
 from .pricing_tracker import get_pricing_tracker
+from .fast_response import FastResponseSystem, QuestionType
 from security.privacy_guard import redact_text, is_external_provider
 from utils.logger import get_logger
 
@@ -25,6 +27,7 @@ class LLMClient:
         self.classifier = get_classifier()
         self.llm_optimizer = get_llm_optimizer()
         self.pricing_tracker = get_pricing_tracker()
+        self.fast_response = FastResponseSystem()
 
         # Router / fallback configuration
         self.llm_type: str = "openai"
@@ -51,6 +54,32 @@ class LLMClient:
             "9. En son teknoloji talebinde deprecated yaklaşım kullanma; stabil modern kütüphane/pratikleri seç.\n"
             "10. Cevap yerine eylem gerekiyorsa talimat listesi yazmak yerine aracı çalıştır ve sonuç/kanıtla dön."
         )
+
+    def _sanitize_chat_output(self, text: Any) -> str:
+        content = str(text or "").replace("\r\n", "\n").strip()
+        if not content:
+            return ""
+        lines = content.splitlines()
+        cleaned: list[str] = []
+        skip_prefixes = (
+            "deliverable spec:",
+            "done criteria:",
+            "başarı kriteri:",
+            "success criteria:",
+        )
+        for line in lines:
+            stripped = line.strip()
+            lower = stripped.lower()
+            if not stripped:
+                if cleaned and cleaned[-1] != "":
+                    cleaned.append("")
+                continue
+            if lower.startswith(skip_prefixes):
+                continue
+            cleaned.append(stripped)
+        content = "\n".join(cleaned).strip()
+        content = re.sub(r"\n{3,}", "\n\n", content)
+        return content
 
     def _resolve_system_prompt(self) -> str:
         custom = str(
@@ -599,29 +628,40 @@ class LLMClient:
         # but here we might need to add it to contents or use a different endpoint.
         # For simplicity, keeping original logic but adding usage tracking.
         
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(url, json={"contents": contents})
-            data = resp.json()
-            # This is a bit simplified, Gemini structure can be complex
-            content = data['candidates'][0]['content']['parts'][0]['text']
-            usage = data.get('usageMetadata')
-            if usage:
-                self.pricing_tracker.record_usage(
-                    provider="gemini",
-                    model=model,
-                    prompt_tokens=usage.get('promptTokenCount', 0),
-                    completion_tokens=usage.get('candidatesTokenCount', 0),
-                    user_id=user_id
-                )
-            return content
-        
         data = {"contents": contents}
         if system_prompt:
             data["system_instruction"] = {"parts": [{"text": system_prompt}]}
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(url, json=data)
-            return resp.json()['candidates'][0]['content']['parts'][0]['text']
+            payload = resp.json()
+
+            if isinstance(payload, dict) and payload.get("error"):
+                raise RuntimeError(f"gemini_error:{payload.get('error')}")
+
+            candidates = payload.get("candidates") if isinstance(payload, dict) else None
+            if not isinstance(candidates, list) or not candidates:
+                raise RuntimeError(f"gemini_invalid_response:{str(payload)[:200]}")
+
+            content_parts = (((candidates[0] or {}).get("content") or {}).get("parts") or [])
+            content = ""
+            for part in content_parts:
+                if isinstance(part, dict):
+                    content += str(part.get("text") or "")
+            content = content.strip()
+            if not content:
+                raise RuntimeError("gemini_empty_response")
+
+            usage = payload.get("usageMetadata") or {}
+            if usage:
+                self.pricing_tracker.record_usage(
+                    provider="gemini",
+                    model=model,
+                    prompt_tokens=usage.get("promptTokenCount", 0),
+                    completion_tokens=usage.get("candidatesTokenCount", 0),
+                    user_id=user_id
+                )
+            return content
 
     async def _call_anthropic(self, prompt: str, system_prompt: str, cfg: dict, history: list = None, user_id: str = "local") -> str:
         model = cfg.get("model", "claude-3-5-sonnet-latest")
@@ -783,6 +823,9 @@ class LLMClient:
 
     async def chat(self, text: str, history: list = None, user_id: str = "local") -> str:
         """Kısa sohbet yanıtı üretir. cost_guard açıksa token bütçesini kısıtlar."""
+        fast = self.fast_response.get_fast_response(text)
+        if fast and fast.question_type == QuestionType.GREETING:
+            return self._sanitize_chat_output(fast.answer)
         max_tokens = 260 if self.cost_guard else None
         temp = 0.3
         system = self._resolve_system_prompt()
@@ -790,6 +833,7 @@ class LLMClient:
         # If _call_any_provider has been monkey-patched on the instance, use it
         _patched = self.__dict__.get('_call_any_provider')
         if _patched is not None:
-            return await _patched(prompt, user_message=text, temp=temp, max_tokens=max_tokens)
-        return await self._call_any_provider(prompt, user_message=text, temp=temp,
-                                              max_tokens=max_tokens)
+            return self._sanitize_chat_output(await _patched(prompt, user_message=text, temp=temp, max_tokens=max_tokens))
+        return self._sanitize_chat_output(
+            await self._call_any_provider(prompt, user_message=text, temp=temp, max_tokens=max_tokens)
+        )

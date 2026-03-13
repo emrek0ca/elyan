@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 
 from core.scheduler import routine_engine as re_mod
@@ -37,6 +38,20 @@ class _ToolAgent:
         if tool_name == "take_screenshot":
             return {"success": True, "path": "/tmp/shot.png"}
         return {"success": True}
+
+
+class _ToolAgentFetchFail(_ToolAgent):
+    async def _execute_tool(self, tool_name: str, params: dict, **kwargs):
+        if tool_name == "fetch_page":
+            return {"success": False, "error": "timeout"}
+        return await super()._execute_tool(tool_name, params, **kwargs)
+
+
+class _ToolAgentReportFail(_ToolAgent):
+    async def _execute_tool(self, tool_name: str, params: dict, **kwargs):
+        if tool_name in {"write_excel", "write_file"}:
+            return {"success": False, "error": "disk full"}
+        return await super()._execute_tool(tool_name, params, **kwargs)
 
 
 def test_add_and_list_routine(tmp_path, monkeypatch):
@@ -214,3 +229,72 @@ def test_suggest_from_text_detects_hour_suffix_da(tmp_path, monkeypatch):
 
     suggestion = engine.suggest_from_text("Her gün 9'da rapor gönder")
     assert suggestion["expression"] == "0 9 * * *"
+
+
+@pytest.mark.asyncio
+async def test_run_routine_fails_when_all_panel_fetches_fail(tmp_path, monkeypatch):
+    path = tmp_path / "routines.json"
+    monkeypatch.setattr(re_mod, "ROUTINE_PERSIST_PATH", path)
+    monkeypatch.setattr(re_mod, "ROUTINE_REPORT_DIR", tmp_path / "reports")
+    engine = re_mod.RoutineEngine()
+    item = engine.add_routine(
+        name="Panel strict fail",
+        expression="0 9 * * *",
+        steps=["Yeni veri var mı kontrol et"],
+        panels=["https://seller.example.com"],
+    )
+
+    out = await engine.run_routine(item["id"], _ToolAgentFetchFail())
+    assert out["success"] is False
+    assert out["steps"][0]["success"] is False
+    assert "okunabilir veri alınamadı" in out["steps"][0]["output"].lower()
+
+
+@pytest.mark.asyncio
+async def test_run_routine_fails_when_report_artifacts_cannot_be_written(tmp_path, monkeypatch):
+    path = tmp_path / "routines.json"
+    monkeypatch.setattr(re_mod, "ROUTINE_PERSIST_PATH", path)
+    monkeypatch.setattr(re_mod, "ROUTINE_REPORT_DIR", tmp_path / "reports")
+    engine = re_mod.RoutineEngine()
+    item = engine.add_routine(
+        name="Report strict fail",
+        expression="0 9 * * *",
+        steps=["Excel / tablo oluştur"],
+    )
+
+    out = await engine.run_routine(item["id"], _ToolAgentReportFail())
+    assert out["success"] is False
+    assert out["steps"][0]["success"] is False
+    assert "excel raporu oluşturulamadı" in out["steps"][0]["output"].lower()
+
+
+@pytest.mark.asyncio
+async def test_tool_batch_executes_in_parallel_with_cap(tmp_path, monkeypatch):
+    path = tmp_path / "routines.json"
+    monkeypatch.setattr(re_mod, "ROUTINE_PERSIST_PATH", path)
+    monkeypatch.setenv("ELYAN_ROUTINE_MAX_PARALLEL", "3")
+    engine = re_mod.RoutineEngine()
+
+    active = {"value": 0, "max": 0}
+
+    async def _fake_run_tool(agent, tool_name, params, *, user_input, step_name):
+        _ = (agent, tool_name, params, user_input, step_name)
+        active["value"] += 1
+        active["max"] = max(active["max"], active["value"])
+        await asyncio.sleep(0.05)
+        active["value"] -= 1
+        return True, "ok", {"success": True}
+
+    monkeypatch.setattr(engine, "_run_tool", _fake_run_tool)
+    rows = await engine._run_tool_batch(
+        _ToolAgent(),
+        tool_name="fetch_page",
+        targets=[{"url": f"https://example.com/{i}"} for i in range(6)],
+        user_input="test",
+        step_name="batch_test",
+    )
+
+    assert len(rows) == 6
+    assert all(row[0] for row in rows)
+    assert active["max"] >= 2
+    assert active["max"] <= 3

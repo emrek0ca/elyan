@@ -324,14 +324,20 @@ class ModelOrchestrator:
     def rank_candidates(self, role: str = "inference", exclude: set | None = None) -> List[Dict[str, Any]]:
         role_name = str(role or "inference").strip().lower() or "inference"
         excluded = {self._normalize_provider(item) for item in (exclude or set())}
+        provider_priority = {
+            self._normalize_provider(provider): idx
+            for idx, provider in enumerate(self._priority_for_role(role_name))
+        }
         try:
             preferred = neural_router.get_model_for_role(role_name) or {}
         except Exception:
             preferred = {}
         pref_provider = self._normalize_provider(preferred.get("provider") or preferred.get("type"))
         pref_model = str(preferred.get("model") or "").strip().lower()
+        pref_rank = provider_priority.get(pref_provider, 99)
         collab = self.get_collaboration_settings()
         ranked: List[tuple[tuple[Any, ...], Dict[str, Any]]] = []
+        seen_keys: set[str] = set()
         for entry in self.registry:
             provider = self._normalize_provider(entry.get("provider") or entry.get("type"))
             if provider in excluded:
@@ -347,14 +353,16 @@ class ModelOrchestrator:
                 continue
             role_match = True
             score = 0
-            if pref_provider and provider == pref_provider:
+            pref_bonus_allowed = role_name in {"router", "inference"} or pref_rank <= 1
+            if pref_provider and provider == pref_provider and pref_bonus_allowed:
                 score += 100
-            if pref_model and str(entry.get("model") or "").strip().lower() == pref_model:
+            if pref_model and str(entry.get("model") or "").strip().lower() == pref_model and pref_bonus_allowed:
                 score += 120
             if role_match:
                 score += 30
             if role_name in collab["roles"]:
                 score += 10
+            score += max(0, 25 - (provider_priority.get(provider, 99) * 5))
             success_rate = 0.0
             metrics = self.metrics.get(provider) or {}
             total = int(metrics.get("success", 0)) + int(metrics.get("failure", 0))
@@ -362,7 +370,30 @@ class ModelOrchestrator:
                 success_rate = float(metrics.get("success", 0)) / total
                 score += int(success_rate * 20)
             score -= min(10, int(entry.get("priority", 50)) // 10)
+            seen_keys.add(f"{provider}:{str(entry.get('model') or '').strip().lower()}")
             ranked.append(((-score, int(entry.get("priority", 50)), provider, str(entry.get("model") or "")), entry))
+
+        # Providers may be updated programmatically in tests/runtime without rebuilding registry.
+        # Synthesize missing candidates from current provider state so role-aware fallback remains correct.
+        for provider, provider_cfg in self.providers.items():
+            provider_name = self._normalize_provider(provider)
+            if provider_name in excluded:
+                continue
+            model_name = str(provider_cfg.get("model") or "").strip()
+            key = f"{provider_name}:{model_name.lower()}"
+            if key in seen_keys:
+                continue
+            entry = {
+                "id": key,
+                "provider": provider_name,
+                "type": provider_name,
+                "model": model_name,
+                "enabled": True,
+                "priority": 50,
+                "roles": [],
+            }
+            score = 30 + max(0, 25 - (provider_priority.get(provider_name, 99) * 5))
+            ranked.append(((-score, 50, provider_name, model_name), entry))
         ranked.sort(key=lambda item: item[0])
         return [dict(item[1]) for item in ranked]
 

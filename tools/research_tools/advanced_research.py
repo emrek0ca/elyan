@@ -53,11 +53,14 @@ _OFFICIAL_DOMAIN_HINTS = (
     "europa.eu",
 )
 _LOW_VALUE_DOMAIN_HINTS = (
+    "blog.",
     "blogspot.",
     "wordpress.",
     "tumblr.",
     "pinterest.",
     "tiktok.",
+    "youtube.com",
+    "youtu.be",
     "instagram.com",
     "facebook.com",
     "x.com",
@@ -98,6 +101,23 @@ _STOPWORDS = {
     "ve", "ile", "bir", "bu", "için", "olan", "de", "da", "the", "and", "is", "of", "to", "in", "a",
     "veya", "daha", "çok", "gibi", "ama", "fakat", "hem", "güncel", "genel", "üzerine", "hakkında",
 }
+
+_MATH_TOPIC_HINTS = (
+    "denklem",
+    "equation",
+    "fourier",
+    "seri",
+    "series",
+    "transform",
+    "donusum",
+    "dönüşüm",
+    "integral",
+    "turev",
+    "türev",
+    "fonksiyon",
+    "function",
+    "teorem",
+)
 
 _SOURCE_POLICIES = {"balanced", "trusted", "academic", "official"}
 
@@ -437,7 +457,11 @@ def _quality_snapshot(sources: list["ResearchSource"], findings: list[str]) -> d
 
 def _build_query_decomposition(topic: str) -> dict[str, Any]:
     clean = _normalize_text(topic)
-    facets = ["definition", "history", "applications", "examples", "key claims"]
+    low = clean.lower()
+    if any(hint in low for hint in _MATH_TOPIC_HINTS):
+        facets = ["definition", "formula", "proof", "applications", "pdf lecture notes", "university notes"]
+    else:
+        facets = ["definition", "history", "applications", "examples", "key claims"]
     base_terms = [token for token in _tokenize_topic(clean)[:6]]
     queries = [clean]
     for facet in facets:
@@ -664,6 +688,7 @@ async def advanced_research(
     language: str = "tr",
     include_evaluation: bool = True,
     generate_report: bool = False,  # CHANGED: Report generation disabled for speed (task takes 5 mins otherwise)
+    persist_quick_report: bool = True,
     source_policy: str = "balanced",
     min_reliability: float = 0.55,
     max_findings: int = 6,
@@ -758,7 +783,7 @@ async def advanced_research(
             result.progress = 10
             # Pull larger pool and then filter by source policy.
             search_pool_size = max(target_sources * 2, target_sources + 4)
-            search_results = await _perform_web_search(topic, search_pool_size, language)
+            search_results = await _perform_topic_web_search(topic, search_pool_size, language)
             search_results = _apply_source_policy(search_results, source_policy, target_sources=target_sources)
             policy_stats = _source_policy_stats(search_results, source_policy)
 
@@ -861,9 +886,10 @@ async def advanced_research(
             }
 
             report_paths = []
-            quick_report_path = _persist_quick_research_report(topic, result)
-            if quick_report_path:
-                report_paths.append(quick_report_path)
+            if persist_quick_report:
+                quick_report_path = _persist_quick_research_report(topic, result)
+                if quick_report_path:
+                    report_paths.append(quick_report_path)
             if generate_report:
                 try:
                     from .advanced_report import generate_advanced_professional_report
@@ -1213,6 +1239,55 @@ async def _perform_web_search(
     except Exception as e:
         logger.warning(f"Web arama hatası: {e}")
         return []
+
+
+async def _perform_topic_web_search(
+    topic: str,
+    num_results: int,
+    language: str,
+) -> list[dict[str, Any]]:
+    target_n = max(int(num_results or 1), 1)
+    plan = _build_query_decomposition(topic)
+    queries = list(plan.get("queries") or [])[:4]
+    if not queries:
+        queries = [topic]
+
+    merged: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for query in queries:
+        results = await _perform_web_search(query, max(target_n, 4), language)
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "").split("#", 1)[0].rstrip("/")
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            merged.append(dict(item))
+
+    if not merged:
+        return []
+
+    ranked: list[tuple[float, dict[str, Any]]] = []
+    total = len(merged)
+    topic_terms = list(plan.get("topic_terms") or [])
+    for idx, item in enumerate(merged):
+        score = _search_result_score(item, idx, total)
+        overlap = _keyword_overlap_score(
+            f"{item.get('snippet', '')} {item.get('title', '')}",
+            str(item.get("url") or ""),
+            str(item.get("title") or ""),
+            topic_terms,
+        )
+        ranked.append((score + (overlap * 0.25), item))
+    ranked.sort(key=lambda x: x[0], reverse=True)
+
+    final_results: list[dict[str, Any]] = []
+    for score, item in ranked[:target_n]:
+        payload = dict(item)
+        payload["_rank_score"] = round(float(score), 3)
+        final_results.append(payload)
+    return final_results
 
 
 async def _extract_findings(

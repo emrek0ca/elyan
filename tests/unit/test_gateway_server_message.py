@@ -256,6 +256,132 @@ async def test_handle_models_get_returns_registry_and_collaboration(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_handle_agent_profile_get_includes_nlu_model_a(monkeypatch):
+    values = {
+        "agent.nlu.model_a.enabled": True,
+        "agent.nlu.model_a.model_path": "/tmp/model_a.json",
+        "agent.nlu.model_a.min_confidence": 0.82,
+        "agent.nlu.model_a.allowed_actions": ["open_app", "web_search"],
+    }
+    monkeypatch.setattr(gateway_server.elyan_config, "get", lambda key, default=None: values.get(key, default))
+    monkeypatch.setattr(
+        gateway_server,
+        "get_user_profile_store",
+        lambda: SimpleNamespace(profile_summary=lambda _user_id: {
+            "preferred_language": "tr",
+            "response_length_bias": "short",
+            "top_topics": ["ai agents"],
+            "top_actions": ["open_app"],
+        }),
+    )
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    resp = await gateway_server.ElyanGatewayServer.handle_agent_profile_get(srv, SimpleNamespace())
+    payload = json.loads(resp.text)
+    profile = payload.get("profile", {})
+    model_a = profile.get("nlu", {}).get("model_a", {})
+
+    assert payload.get("ok") is True
+    assert model_a.get("enabled") is True
+    assert model_a.get("model_path") == "/tmp/model_a.json"
+    assert abs(float(model_a.get("min_confidence") or 0.0) - 0.82) < 1e-9
+    assert model_a.get("allowed_actions") == ["open_app", "web_search"]
+    assert profile.get("user_profile", {}).get("response_length_bias") == "short"
+    assert profile.get("user_profile", {}).get("top_topics") == ["ai agents"]
+
+
+@pytest.mark.asyncio
+async def test_handle_agent_profile_update_persists_nlu_model_a(monkeypatch):
+    store = {"agent.runtime_policy.preset": "balanced"}
+    saved_profiles = {}
+
+    def _get(key, default=None):
+        return store.get(key, default)
+
+    def _set(key, value):
+        store[key] = value
+
+    monkeypatch.setattr(gateway_server.elyan_config, "get", _get)
+    monkeypatch.setattr(gateway_server.elyan_config, "set", _set)
+    monkeypatch.setattr(gateway_server, "push_activity", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        gateway_server,
+        "get_user_profile_store",
+        lambda: SimpleNamespace(
+            get=lambda user_id: saved_profiles.setdefault(user_id, {}),
+            profile_summary=lambda user_id: saved_profiles.get(user_id, {}),
+            _save=lambda: None,
+        ),
+    )
+
+    req = _Req(
+        {
+            "runtime_policy": {"preset": "custom"},
+            "user_profile": {"response_length_bias": "detailed"},
+            "nlu": {
+                "model_a": {
+                    "enabled": True,
+                    "model_path": "~/models/model_a.json",
+                    "min_confidence": 0.9,
+                    "allowed_actions": ["open_app", "run_safe_command"],
+                }
+            },
+        }
+    )
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    resp = await gateway_server.ElyanGatewayServer.handle_agent_profile_update(srv, req)
+    payload = json.loads(resp.text)
+    profile = payload.get("profile", {})
+    model_a = profile.get("nlu", {}).get("model_a", {})
+
+    assert payload.get("ok") is True
+    assert store.get("agent.nlu.model_a.enabled") is True
+    assert store.get("agent.nlu.model_a.model_path") == "~/models/model_a.json"
+    assert abs(float(store.get("agent.nlu.model_a.min_confidence") or 0.0) - 0.9) < 1e-9
+    assert store.get("agent.nlu.model_a.allowed_actions") == ["open_app", "run_safe_command"]
+    assert model_a.get("enabled") is True
+    assert model_a.get("allowed_actions") == ["open_app", "run_safe_command"]
+    assert saved_profiles["local"]["response_length_bias"] == "detailed"
+    assert saved_profiles["local"]["preferred_language"] == "tr"
+
+
+@pytest.mark.asyncio
+async def test_handle_recent_runs_uses_short_cache(monkeypatch, tmp_path):
+    runs_root = tmp_path / "runs"
+    run_dir = runs_root / "run_1"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "evidence.json").write_text(
+        json.dumps({"metadata": {"status": "ok"}, "steps": [], "artifacts": []}),
+        encoding="utf-8",
+    )
+    (run_dir / "task.json").write_text(
+        json.dumps({"metadata": {"action": "health_check"}}),
+        encoding="utf-8",
+    )
+    (run_dir / "summary.md").write_text("# ok\n", encoding="utf-8")
+
+    monkeypatch.setattr(gateway_server, "resolve_runs_root", lambda: runs_root)
+    monkeypatch.setattr(
+        gateway_server,
+        "_recent_runs_cache",
+        {"ts": 0.0, "signature": (), "limit": 0, "items": []},
+    )
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    req = SimpleNamespace(rel_url=SimpleNamespace(query={"limit": "5"}))
+
+    first = await gateway_server.ElyanGatewayServer.handle_recent_runs(srv, req)
+    first_payload = json.loads(first.text)
+    assert first_payload["count"] == 1
+    assert first_payload.get("cached") is None
+
+    second = await gateway_server.ElyanGatewayServer.handle_recent_runs(srv, req)
+    second_payload = json.loads(second.text)
+    assert second_payload["count"] == 1
+    assert second_payload.get("cached") is True
+
+
+@pytest.mark.asyncio
 async def test_handle_models_update_persists_registry_and_collaboration(monkeypatch):
     stored = {
         "models.default": {"provider": "openai", "model": "gpt-4o"},
@@ -599,3 +725,103 @@ async def test_handle_admin_overview_rejects_non_local_without_token(monkeypatch
 
     assert resp.status == 403
     assert payload["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_handle_module_automations_action_remove_missing_returns_404(monkeypatch):
+    class _FakeRegistry:
+        @staticmethod
+        def unregister(task_id):
+            _ = task_id
+            return False
+
+        @staticmethod
+        def get_module_health(limit=12):
+            _ = limit
+            return {"summary": {"active_modules": 0, "healthy": 0, "failing": 0, "unknown": 0, "circuit_open": 0}, "modules": []}
+
+        @staticmethod
+        def list_module_tasks(include_inactive=True, limit=100):
+            _ = (include_inactive, limit)
+            return []
+
+    monkeypatch.setattr("core.automation_registry.automation_registry", _FakeRegistry())
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    srv._require_admin_access = lambda request: (True, "")
+    req = _Req({"action": "remove", "task_id": "__missing__"})
+
+    resp = await gateway_server.ElyanGatewayServer.handle_module_automations_action(srv, req)
+    payload = json.loads(resp.text)
+
+    assert resp.status == 404
+    assert payload["ok"] is False
+    assert "task not found" in str(payload.get("error") or "")
+
+
+@pytest.mark.asyncio
+async def test_handle_module_automations_action_bulk_partial_success(monkeypatch):
+    class _FakeRegistry:
+        @staticmethod
+        def set_status(task_id, status):
+            _ = status
+            return task_id == "t_ok"
+
+        @staticmethod
+        def get_module_health(limit=12):
+            _ = limit
+            return {"summary": {"active_modules": 1, "healthy": 1, "failing": 0, "unknown": 0, "circuit_open": 0}, "modules": []}
+
+        @staticmethod
+        def list_module_tasks(include_inactive=True, limit=100):
+            _ = (include_inactive, limit)
+            return [{"task_id": "t_ok", "module_id": "context_recovery", "status": "active", "health": "healthy"}]
+
+    monkeypatch.setattr("core.automation_registry.automation_registry", _FakeRegistry())
+    monkeypatch.setattr(gateway_server, "push_activity", lambda *_a, **_k: None)
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    srv._require_admin_access = lambda request: (True, "")
+    req = _Req({"action": "pause", "task_ids": ["t_ok", "t_missing"]})
+
+    resp = await gateway_server.ElyanGatewayServer.handle_module_automations_action(srv, req)
+    payload = json.loads(resp.text)
+
+    assert resp.status == 200
+    assert payload["ok"] is False
+    assert payload["succeeded"] == 1
+    assert payload["failed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_handle_module_automations_update_success(monkeypatch):
+    class _FakeRegistry:
+        @staticmethod
+        def update_module_task(task_id, **kwargs):
+            _ = kwargs
+            if task_id != "t1":
+                return None
+            return {"id": "t1", "module_id": "context_recovery", "interval_seconds": 1200}
+
+        @staticmethod
+        def get_module_health(limit=12):
+            _ = limit
+            return {"summary": {"active_modules": 1, "healthy": 1, "failing": 0, "unknown": 0, "circuit_open": 0}, "modules": []}
+
+        @staticmethod
+        def list_module_tasks(include_inactive=True, limit=100):
+            _ = (include_inactive, limit)
+            return [{"task_id": "t1", "module_id": "context_recovery", "status": "active", "health": "healthy"}]
+
+    monkeypatch.setattr("core.automation_registry.automation_registry", _FakeRegistry())
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    srv._require_admin_access = lambda request: (True, "")
+    req = _Req({"task_id": "t1", "interval_seconds": 1200, "timeout_seconds": 80, "status": "paused"})
+
+    resp = await gateway_server.ElyanGatewayServer.handle_module_automations_update(srv, req)
+    payload = json.loads(resp.text)
+
+    assert resp.status == 200
+    assert payload["ok"] is True
+    assert payload["task"]["id"] == "t1"

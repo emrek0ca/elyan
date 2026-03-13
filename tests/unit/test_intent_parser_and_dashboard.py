@@ -80,6 +80,24 @@ def test_delete_pronoun_routes_to_delete_file_with_context_placeholder():
     assert "path" in result.get("params", {})
 
 
+def test_delete_desktop_screenshot_images_routes_to_batch_delete_pattern():
+    parser = IntentParser()
+    result = parser.parse("Masaüstündeki ekran resimlerini sil")
+    assert result.get("action") == "delete_file"
+    params = result.get("params", {})
+    assert str(params.get("directory", "")).endswith("Desktop")
+    patterns = params.get("patterns", [])
+    assert isinstance(patterns, list) and patterns
+    assert any("screenshot" in str(p).lower() or "ekran" in str(p).lower() for p in patterns)
+
+
+def test_ultra_short_app_invocation_routes_to_open_app():
+    parser = IntentParser()
+    result = parser.parse("safari a.")
+    assert result.get("action") == "open_app"
+    assert result.get("params", {}).get("app_name") == "Safari"
+
+
 def test_reminder_sentence_with_time_routes_to_create_reminder():
     parser = IntentParser()
     result = parser.parse("Saat 22 de bana ilaç içmem gerekiyor hatırlat")

@@ -385,9 +385,41 @@ def main(argv: list[str] | None = None):
     # ── agents ──────────────────────────────────────────────────────────
     p = sub.add_parser("agents", help="Agent yönetimi")
     p.add_argument("action", nargs="?",
-                   choices=["list", "status", "add", "remove", "start", "stop", "logs", "info", "create"])
+                   choices=[
+                       "list",
+                       "status",
+                       "add",
+                       "remove",
+                       "start",
+                       "stop",
+                       "logs",
+                       "info",
+                       "create",
+                       "modules",
+                       "module-run",
+                       "module-enable",
+                       "module-tasks",
+                       "module-health",
+                       "module-run-now",
+                       "module-pause",
+                       "module-resume",
+                       "module-remove",
+                       "module-update",
+                       "module-reconcile",
+                   ])
     p.add_argument("id", nargs="?")
     p.add_argument("--channel", metavar="CHANNEL")
+    p.add_argument("--interval", type=int, metavar="SECONDS")
+    p.add_argument("--timeout", type=int, metavar="SECONDS")
+    p.add_argument("--retries", type=int, metavar="COUNT")
+    p.add_argument("--backoff", type=int, metavar="SECONDS")
+    p.add_argument("--circuit-threshold", type=int, metavar="COUNT")
+    p.add_argument("--circuit-cooldown", type=int, metavar="SECONDS")
+    p.add_argument("--status", choices=["active", "paused", "disabled"])
+    p.add_argument("--include-inactive", action="store_true")
+    p.add_argument("--json", dest="json", action="store_true")
+    p.add_argument("--workspace", metavar="PATH")
+    p.add_argument("--params", metavar="JSON")
 
     # ── browser ─────────────────────────────────────────────────────────
     p = sub.add_parser("browser", help="Tarayıcı otomasyonu")

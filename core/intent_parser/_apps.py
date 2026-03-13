@@ -97,7 +97,7 @@ class AppParser(BaseParser):
                 {
                     "id": "task_2",
                     "action": "key_combo",
-                    "params": {"combo": "cmd+t"},
+                    "params": {"combo": "cmd+t", "target_app": target_browser},
                     "description": "Yeni sekme aciliyor...",
                     "depends_on": ["task_1"],
                 },
@@ -108,7 +108,16 @@ class AppParser(BaseParser):
     # ── Open App ──────────────────────────────────────────────────────────────
     def _parse_open_app(self, text: str, text_norm: str, original: str) -> dict | None:
         open_t = ["aç", "ac", "başlat", "çalıştır", "open", "run", "start", "launch"]
+        focus_t = ["geç", "gec", "dön", "don", "odaklan", "göster", "goster", "switch", "focus"]
         if any(w in text for w in ["dosya", "klasör", "http", ".com", ".org"]):
+            return None
+        # "terminalden ssh root komutunu çalıştır" gibi komut-yürütme cümlelerini
+        # open_app'e düşürmeyip terminal command parser'ına bırak.
+        if (
+            "terminal" in text_norm
+            and re.search(r"\bkomut\w*\b", text, re.IGNORECASE)
+            and re.search(r"\b(çalıştır|calistir|run|execute)\b", text, re.IGNORECASE)
+        ):
             return None
         # Intent disambiguation: browser content/query requests should not degrade to plain open_app.
         browser_aliases = ("safari", "chrome", "krom", "tarayıcı", "tarayici", "browser")
@@ -135,7 +144,12 @@ class AppParser(BaseParser):
                 or re.search(pat_norm, text_norm, re.IGNORECASE)
             )
 
-        if any(t in text for t in open_t):
+        has_open_or_focus_verb = any(re.search(rf"\b{re.escape(t)}\b", text, re.IGNORECASE) for t in open_t) or any(
+            re.search(rf"\b{re.escape(t)}\b", text, re.IGNORECASE) for t in focus_t
+        )
+        has_focus_verb = any(re.search(rf"\b{re.escape(t)}\b", text, re.IGNORECASE) for t in focus_t)
+
+        if has_open_or_focus_verb:
             for alias, app in self.app_aliases.items():
                 if _alias_match(alias):
                     if wants_research:
@@ -192,12 +206,27 @@ class AppParser(BaseParser):
                             ],
                             "reply": f"{app} açılıyor ve '{topic}' araştırılıyor...",
                         }
-                    return {"action": "open_app", "params": {"app_name": app},
-                            "reply": f"{app} açılıyor..."}
+                    reply = f"{app} öne alınıyor..." if has_focus_verb else f"{app} açılıyor..."
+                    return {"action": "open_app", "params": {"app_name": app}, "reply": reply}
             for alias, url in self.url_aliases.items():
                 if alias in text_norm:
                     return {"action": "open_url", "params": {"url": url},
                             "reply": f"{alias.capitalize()} açılıyor..."}
+
+        # Ultra-short app invocation support: "safari a.", "chrome'a", "terminale"
+        compact = " ".join(str(original or text or "").strip().split()).strip().rstrip(".,;:!?")
+        if compact:
+            compact_low = compact.lower()
+            compact_norm = self._normalize(compact_low)
+            for alias, app in self.app_aliases.items():
+                alias_low = str(alias or "").strip().lower()
+                alias_norm = self._normalize(alias_low)
+                short_patterns = (
+                    rf"^{re.escape(alias_low)}(?:[' ]?(?:a|e|ya|ye|da|de|dan|den))?$",
+                    rf"^{re.escape(alias_norm)}(?:[' ]?(?:a|e|ya|ye|da|de|dan|den))?$",
+                )
+                if any(re.match(pattern, compact_low, re.IGNORECASE) or re.match(pattern, compact_norm, re.IGNORECASE) for pattern in short_patterns):
+                    return {"action": "open_app", "params": {"app_name": app}, "reply": f"{app} açılıyor..."}
         return None
 
     # ── Close App ─────────────────────────────────────────────────────────────
@@ -463,29 +492,91 @@ class AppParser(BaseParser):
         return None
 
     # ── Terminal Command ──────────────────────────────────────────────────────
+    def _normalize_terminal_command(self, command: str) -> str:
+        cmd = str(command or "").strip()
+        if not cmd:
+            return ""
+        cmd = re.sub(r"\s+", " ", cmd).strip(" \t\r\n.,;:!?")
+        cmd = re.sub(r"\s+\b(?:komut(?:u|unu|un)?|command)\b\s*$", "", cmd, flags=re.IGNORECASE).strip(" \t\r\n.,;:!?")
+        cmd = re.sub(r"\s+(?:çalıştır|calistir|run|execute)\b\s*$", "", cmd, flags=re.IGNORECASE).strip(" \t\r\n.,;:!?")
+
+        cd_match = re.match(r"^\s*cd\s+(.+?)\s*$", cmd, re.IGNORECASE)
+        if not cd_match:
+            return cmd
+        raw_target = str(cd_match.group(1) or "").strip().strip("\"'")
+        if not raw_target:
+            return "cd ~"
+
+        if re.match(r"^(desktop|masaüstü|masaustu|masa ustu)$", raw_target, re.IGNORECASE):
+            return "cd ~/Desktop"
+
+        subpath = re.match(r"^(desktop|masaüstü|masaustu|masa ustu)([/\\].+)$", raw_target, re.IGNORECASE)
+        if subpath:
+            suffix = str(subpath.group(2) or "").replace("\\", "/")
+            return f"cd ~/Desktop{suffix}"
+
+        return cmd
+
     def _parse_terminal_command(self, text: str, text_norm: str, original: str) -> dict | None:
-        triggers = ["terminal", "komut", "çalıştır", "run", "execute", "bash", "shell"]
-        patterns = [
-            r"(?:terminal|komut|çalıştır|run|execute)\s+(?:komutunu?|bunu|şunu)\s*[:\-]?\s*(.+)",
-            r"(.+?)\s+(?:komutunu?|çalıştır)",
-            r"run\s+(.+)", r"execute\s+(.+)",
-        ]
+        triggers = ["terminal", "komut", "çalıştır", "calistir", "run", "execute", "bash", "shell"]
         if not any(t in text for t in triggers):
             return None
-        command = None
+        command = ""
+        patterns = [
+            r"terminal(?:den|dan|de)?\b\s+(.+?)\s+komut\w*\s+(?:çalıştır|calistir)\b",
+            r"terminal(?:den|dan|de)?\b\s+(.+?)\s+(?:çalıştır|calistir)\b",
+            r"(.+?)\s+komut\w*\s+(?:çalıştır|calistir)\b",
+            r"(?:run|execute)\s+(.+)",
+            r"(?:çalıştır|calistir)\s+(.+)",
+        ]
         for pat in patterns:
             m = re.search(pat, text, re.IGNORECASE)
             if m:
-                command = m.group(1).strip()
+                command = str(m.group(1) or "").strip()
                 break
         if not command:
             words = text.split()
             for i, w in enumerate(words):
-                if w in triggers and i + 1 < len(words):
+                lw = str(w or "").lower()
+                if (lw in triggers or lw.startswith("terminal")) and i + 1 < len(words):
                     command = " ".join(words[i+1:])
                     break
+        command = re.sub(r"^(?:terminal(?:den|dan|de)?\b\s+)", "", str(command or ""), flags=re.IGNORECASE).strip(" .,:;-")
+        command = re.sub(r"^(?:komut(?:u|unu|un)?\s+)", "", command, flags=re.IGNORECASE).strip(" .,:;-")
+        command = re.sub(r"^(?:ve|sonra|ardından|ardindan|açıp|acip|çalıştırıp|calistirip|gidip|girip)\s+", "", command, flags=re.IGNORECASE).strip(" .,:;-")
+        command = self._normalize_terminal_command(command)
+        if not command or command.lower() in {
+            "terminal", "komut", "bunu", "şunu", "sunu",
+            "aç", "ac", "open", "start", "başlat", "baslat",
+            "çalıştır", "calistir", "run", "execute",
+        }:
+            return None
+
+        wants_terminal_open = bool(re.search(r"\bterminal(?:den|dan|de)?\b", text, re.IGNORECASE))
+        if wants_terminal_open:
+            return {
+                "action": "multi_task",
+                "tasks": [
+                    {
+                        "id": "task_1",
+                        "action": "open_app",
+                        "params": {"app_name": "Terminal"},
+                        "description": "Terminal açılıyor...",
+                    },
+                    {
+                        "id": "task_2",
+                        "action": "type_text",
+                        "params": {"text": command, "press_enter": True},
+                        "description": "Komut terminalde çalıştırılıyor...",
+                        "depends_on": ["task_1"],
+                    },
+                ],
+                "reply": f"Terminal açılıp komut çalıştırılıyor: {command}",
+            }
         if command:
-            safe = ["date", "uptime", "whoami", "pwd", "ls", "df", "du", "ping", "python", "node", "git"]
-            return {"action": "run_safe_command", "params": {"command": command},
-                    "reply": f"Terminal komutu çalıştırılıyor: {command}"}
+            return {
+                "action": "run_safe_command",
+                "params": {"command": command},
+                "reply": f"Terminal komutu çalıştırılıyor: {command}",
+            }
         return None

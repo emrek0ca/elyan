@@ -605,7 +605,7 @@ Return JSON array:
             cleaned.setdefault("depth", "comprehensive")
             cleaned.setdefault("output_dir", "~/Desktop")
             cleaned.setdefault("include_word", True)
-            cleaned.setdefault("include_excel", True)
+            cleaned.setdefault("include_excel", False)
             cleaned.setdefault("include_report", True)
         elif action == "http_request":
             cleaned.setdefault("method", "GET")

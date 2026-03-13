@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 import asyncio
 
+from core.contracts.tool_result import coerce_tool_result
 from tools import system_tools
 
 
@@ -20,6 +21,52 @@ class _Proc:
 
 
 @pytest.mark.asyncio
+async def test_open_app_reports_frontmost_verification(monkeypatch):
+    async def _fake_exec(*_args, **_kwargs):
+        return _Proc(returncode=0, stdout=b"", stderr=b"")
+
+    async def _fake_osascript(script: str):
+        _ = script
+        return (0, "", "")
+
+    async def _fake_frontmost():
+        return "Safari"
+
+    monkeypatch.setattr(system_tools.asyncio, "create_subprocess_exec", _fake_exec)
+    monkeypatch.setattr(system_tools, "_run_osascript", _fake_osascript)
+    monkeypatch.setattr(system_tools, "_get_frontmost_app_name", _fake_frontmost)
+
+    result = await system_tools.open_app("Safari", settle_timeout_s=0.0)
+    assert result["success"] is True
+    assert result["status"] == "success"
+    assert result["verified"] is True
+    assert result["frontmost_app"] == "Safari"
+    assert (result.get("data") or {}).get("app_name") == "Safari"
+
+
+@pytest.mark.asyncio
+async def test_key_combo_target_app_mismatch_returns_failure(monkeypatch):
+    async def _fake_osascript(script: str):
+        _ = script
+        return (0, "", "")
+
+    async def _fake_press_key(key: str = "", modifiers=None):
+        return {"success": True, "key": key, "modifiers": modifiers or []}
+
+    async def _fake_frontmost():
+        return "Finder"
+
+    monkeypatch.setattr(system_tools, "_run_osascript", _fake_osascript)
+    monkeypatch.setattr(system_tools, "press_key", _fake_press_key)
+    monkeypatch.setattr(system_tools, "_get_frontmost_app_name", _fake_frontmost)
+
+    result = await system_tools.key_combo("cmd+t", target_app="Google Chrome", settle_ms=0)
+    assert result["success"] is False
+    assert "hedef dışı uygulamaya gitti" in str(result.get("error") or "")
+    assert result.get("frontmost_app") == "Finder"
+
+
+@pytest.mark.asyncio
 async def test_take_screenshot_waits_for_process_and_verifies_file(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
 
@@ -34,8 +81,12 @@ async def test_take_screenshot_waits_for_process_and_verifies_file(monkeypatch, 
     monkeypatch.setattr(system_tools.asyncio, "create_subprocess_exec", _fake_exec)
     result = await system_tools.take_screenshot("proof.png")
     assert result["success"] is True
+    assert result["status"] == "success"
     assert result["size_bytes"] > 0
     assert Path(result["path"]).exists()
+    normalized = coerce_tool_result(result, tool="take_screenshot")
+    assert normalized.status == "success"
+    assert normalized.artifacts
 
 
 @pytest.mark.asyncio
@@ -48,6 +99,7 @@ async def test_take_screenshot_returns_error_on_nonzero_exit(monkeypatch, tmp_pa
     monkeypatch.setattr(system_tools.asyncio, "create_subprocess_exec", _fake_exec)
     result = await system_tools.take_screenshot("proof.png")
     assert result["success"] is False
+    assert result["status"] == "failed"
     assert "permission denied" in str(result.get("error") or "")
 
 
