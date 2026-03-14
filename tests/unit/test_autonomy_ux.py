@@ -34,6 +34,17 @@ def test_research_delivery_auto_shares_attachments():
     assert ok is True
 
 
+def test_advanced_research_auto_shares_attachments():
+    agent = Agent.__new__(Agent)
+    ctx = SimpleNamespace(
+        action="advanced_research",
+        requires_evidence=False,
+        runtime_policy={"response": {"share_attachments_default": True}},
+    )
+    ok = Agent._should_share_attachments(agent, "araştırma yap", ctx, [{"path": "/tmp/report.md"}])
+    assert ok is True
+
+
 def test_screen_workflow_auto_shares_attachments():
     agent = Agent.__new__(Agent)
     ctx = SimpleNamespace(
@@ -87,6 +98,23 @@ def test_format_result_text_reads_nested_raw_screen_summary():
     )
     assert "On planda Cursor acik, terminal gorunuyor." in text
     assert "fallback/operator_state" in text
+
+
+def test_render_research_result_prefers_report_paths():
+    text = Agent._render_research_result(
+        {
+            "success": True,
+            "report_paths": ["/tmp/report.md"],
+            "source_count": 6,
+            "finding_count": 4,
+            "quality_summary": {"critical_claim_coverage": 1.0, "uncertainty_count": 1},
+            "summary": "Uzun özet burada olmalı ama gösterilmemeli.",
+        }
+    )
+    assert text is not None
+    assert text.startswith("Araştırma notu hazır: /tmp/report.md")
+    assert "Kaynak: 6" in text
+    assert "Uzun özet burada" not in text
 
 
 def test_agent_detects_background_request_markers():

@@ -182,6 +182,38 @@ def test_agent_execute_tool_maps_research(monkeypatch):
     assert captured["topic"] == "iphone"
 
 
+def test_agent_should_upgrade_research_to_delivery_for_document_send_request():
+    assert Agent._should_upgrade_research_to_delivery("AB Yapay Zeka Yasasını araştır ve dosyayı gönder") is True
+    assert Agent._should_upgrade_research_to_delivery("AB Yapay Zeka Yasasını araştır") is False
+    assert Agent._should_upgrade_research_to_delivery("AB Yapay Zeka Yasasını araştır ve word dosyası oluştur") is False
+
+
+def test_agent_execute_tool_upgrades_advanced_research_to_delivery_when_document_requested(monkeypatch):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+
+    captured = {}
+
+    async def _fake_delivery(**kwargs):
+        captured.update(kwargs)
+        return {"success": True, "outputs": ["/tmp/report.docx"], "message": "ok"}
+
+    monkeypatch.setattr("core.agent.AVAILABLE_TOOLS", {"research_document_delivery": _fake_delivery})
+    result = asyncio.run(
+        agent._execute_tool(
+            "advanced_research",
+            {"topic": "AB Yapay Zeka Yasası"},
+            user_input="AB Yapay Zeka Yasasının şirketlere etkisini araştır ve dosyayı gönder",
+            step_name="Araştır",
+        )
+    )
+    assert result["success"] is True
+    assert captured["topic"] == "ab yapay zeka yasası"
+    assert captured["include_word"] is True
+    assert captured["deliver_copy"] is True
+
+
 def test_task_engine_bridge_loads_legacy_engine():
     from core.task_engine import get_task_engine
 
@@ -1452,6 +1484,20 @@ def test_agent_prepare_advanced_research_strips_copy_noise():
     assert "köpekler" in str(params.get("topic", "")).lower()
 
 
+def test_agent_prepare_advanced_research_strips_delivery_and_policy_noise():
+    agent = Agent()
+    params = agent._prepare_tool_params(
+        "advanced_research",
+        {"topic": "Türkiye ekonomisinin 10 yılını resmi kaynaklara öncelik vererek araştır ve dosyayı gönder"},
+        user_input="Türkiye ekonomisinin 10 yılını resmi kaynaklara öncelik vererek araştır ve dosyayı gönder",
+        step_name="Araştır",
+    )
+    topic = str(params.get("topic", "")).lower()
+    assert "resmi kaynaklara öncelik vererek" not in topic
+    assert "dosyayı gönder" not in topic
+    assert "türkiye ekonomisinin 10 yılını" in topic
+
+
 def test_agent_execute_tool_preserves_message_param_for_notification(monkeypatch):
     agent = Agent()
     agent.llm = _DummyLLM()
@@ -1585,6 +1631,30 @@ def test_agent_postprocess_marks_verified_for_existing_output(tmp_path):
     )
     assert result.get("verified") is True
     assert result.get("size_bytes", 0) > 0
+
+
+def test_agent_postprocess_wires_research_quality_into_contract_warning(tmp_path):
+    agent = Agent()
+    report_path = tmp_path / "report.docx"
+    report_path.write_bytes(b"docx")
+    result = agent._postprocess_tool_result(
+        "research_document_delivery",
+        {"output_dir": str(tmp_path)},
+        {
+            "success": True,
+            "path": str(report_path),
+            "quality_summary": {
+                "claim_coverage": 1.0,
+                "critical_claim_coverage": 0.5,
+                "uncertainty_count": 2,
+                "uncertainty_section_present": True,
+                "status": "partial",
+            },
+        },
+        user_input="araştırma raporu hazırla",
+    )
+    assert result.get("_contract_verified") is False
+    assert "critical_claim_support" in str(result.get("verification_warning") or "")
 
 
 def test_agent_postprocess_network_marks_verified_for_2xx():
@@ -2226,6 +2296,18 @@ def test_agent_prepare_research_params_infers_academic_policy():
     assert params.get("include_bibliography") is True
 
 
+def test_agent_prepare_research_params_infers_official_policy_for_regulation_topics():
+    agent = Agent()
+    params = agent._prepare_tool_params(
+        "advanced_research",
+        {"topic": "AB Yapay Zeka Yasası"},
+        user_input="AB Yapay Zeka Yasasının şirketlere etkisini ve uyum yükümlülüklerini araştır",
+        step_name="Araştır",
+    )
+    assert params.get("source_policy") == "official"
+    assert params.get("min_reliability", 0) >= 0.75
+
+
 def test_agent_prepare_research_params_infers_reliability_percent():
     agent = Agent()
     params = agent._prepare_tool_params(
@@ -2252,6 +2334,9 @@ def test_agent_prepare_research_document_delivery_academic_defaults():
     assert params.get("include_excel") is False
     assert params.get("include_pdf") is False
     assert params.get("include_latex") is False
+    assert params.get("document_profile") == "analytical"
+    assert params.get("citation_mode") == "inline"
+    assert params.get("include_bibliography") is True
 
 
 def test_agent_prepare_generate_document_pack_prefers_pdf_when_requested():
@@ -2401,6 +2486,53 @@ def test_agent_infer_conversational_followup_research_document_uses_recent_user_
     assert params.get("include_word") is True
     assert params.get("include_excel") is False
     assert params.get("audience") == "executive"
+
+
+def test_agent_infer_conversational_followup_revises_research_delivery_with_claim_map(monkeypatch, tmp_path):
+    agent = Agent()
+    delivery_dir = tmp_path / "fourier_research_delivery"
+    delivery_dir.mkdir(parents=True, exist_ok=True)
+    report_path = delivery_dir / "RESEARCH_DELIVERY.docx"
+    report_path.write_bytes(b"docx")
+    claim_map_path = delivery_dir / "claim_map.json"
+    claim_map_path.write_text("{}", encoding="utf-8")
+    agent.file_context["last_path"] = str(report_path)
+    agent._last_turn_context = {"action": "research_document_delivery", "success": True}
+    monkeypatch.setattr(
+        agent,
+        "_get_recent_user_text",
+        lambda *_args, **_kwargs: "Avrupa Birliği yapay zeka yasasının şirketlere etkisi",
+    )
+    monkeypatch.setattr(agent, "_get_recent_assistant_text", lambda *_args, **_kwargs: "Uzun araştırma cevabı")
+    monkeypatch.setattr(agent, "_get_recent_research_text", lambda *_args, **_kwargs: "Araştırma özeti\n- iddia 1\n- iddia 2")
+
+    intent = agent._infer_general_tool_intent("bunu daha kısa yap ve pdf yap")
+    assert intent is not None
+    assert intent.get("action") == "research_document_delivery"
+    params = intent.get("params", {})
+    assert params.get("document_profile") == "briefing"
+    assert params.get("include_pdf") is True
+    assert params.get("previous_claim_map_path") == str(claim_map_path)
+    assert params.get("revision_request") == "bunu daha kısa yap ve pdf yap"
+
+
+def test_agent_infer_conversational_followup_targets_single_section_for_research_revision(monkeypatch, tmp_path):
+    agent = Agent()
+    delivery_dir = tmp_path / "fourier_research_delivery"
+    delivery_dir.mkdir(parents=True, exist_ok=True)
+    report_path = delivery_dir / "RESEARCH_DELIVERY.docx"
+    report_path.write_bytes(b"docx")
+    (delivery_dir / "claim_map.json").write_text("{}", encoding="utf-8")
+    agent.file_context["last_path"] = str(report_path)
+    agent._last_turn_context = {"action": "research_document_delivery", "success": True}
+    monkeypatch.setattr(agent, "_get_recent_user_text", lambda *_args, **_kwargs: "Fourier araştırması")
+    monkeypatch.setattr(agent, "_get_recent_assistant_text", lambda *_args, **_kwargs: "Uzun araştırma cevabı")
+    monkeypatch.setattr(agent, "_get_recent_research_text", lambda *_args, **_kwargs: "Araştırma özeti\n- iddia 1")
+
+    intent = agent._infer_general_tool_intent("yalnızca özeti güncelle")
+    assert intent is not None
+    assert intent.get("action") == "research_document_delivery"
+    assert intent.get("params", {}).get("target_sections") == ["Kısa Özet"]
 
 
 def test_agent_infer_conversational_followup_professionalizes_previous_context(monkeypatch):

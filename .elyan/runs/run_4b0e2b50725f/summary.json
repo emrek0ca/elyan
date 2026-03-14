@@ -1,0 +1,73 @@
+{
+  "run_id": "run_4b0e2b50725f",
+  "written_at": 1773425028.616755,
+  "status": "success",
+  "user_input": "masaüstünü listele",
+  "task_spec": {},
+  "task_state": {
+    "task_id": "task_9501028af5",
+    "objective": "masaüstünü listele",
+    "context": {
+      "user_input": "masaüstünü listele",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "",
+      "job_type": "communication",
+      "capability_domain": "general",
+      "workflow_id": "",
+      "hybrid_model": {}
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773425028.5527601,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773425028.574025,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773425028.584746,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773425028.5954912,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1773425028.60614,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "",
+          "job_type": "communication"
+        }
+      }
+    ],
+    "created_at": 1773425028.5527601,
+    "updated_at": 1773425028.60614
+  },
+  "metadata": {
+    "action": "",
+    "job_type": "communication",
+    "capability_domain": "general",
+    "workflow_id": "",
+    "hybrid_model": {},
+    "channel": "cli",
+    "user_id": "local",
+    "status": "success"
+  }
+}

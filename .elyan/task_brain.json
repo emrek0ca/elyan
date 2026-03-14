@@ -16505,5 +16505,1194 @@
     ],
     "created_at": 1773157077.233,
     "updated_at": 1773157077.424684
+  },
+  "task_c4be84d280": {
+    "task_id": "task_c4be84d280",
+    "objective": "masaüstünde ne var",
+    "context": {
+      "user_input": "masaüstünde ne var",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "list_files",
+      "job_type": "file_operations",
+      "capability_domain": "file_ops",
+      "workflow_id": "file_operations_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "chat",
+        "description": "masaüstünde ne var"
+      }
+    ],
+    "artifacts": [],
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773486282.2973819,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773486282.3185449,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773486282.3292842,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773486282.4670668,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 3
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1773486282.4815822,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "list_files",
+          "job_type": "file_operations"
+        }
+      }
+    ],
+    "created_at": 1773486282.2973802,
+    "updated_at": 1773486282.4815822
+  },
+  "task_9fd257cecb": {
+    "task_id": "task_9fd257cecb",
+    "objective": "Merhaba",
+    "context": {
+      "user_input": "Merhaba",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "chat",
+      "job_type": "communication",
+      "capability_domain": "general",
+      "workflow_id": "general_assistance_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773486282.523627,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773486282.544369,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773486282.5545979,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773486282.68,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 1
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1773486282.695423,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "chat",
+          "job_type": "communication"
+        }
+      }
+    ],
+    "created_at": 1773486282.523625,
+    "updated_at": 1773486282.695423
+  },
+  "task_426a5fd5cd": {
+    "task_id": "task_426a5fd5cd",
+    "objective": "Projects klasörünü listele sonra not.txt oku ve ardından bunu sil",
+    "context": {
+      "user_input": "Projects klasörünü listele sonra not.txt oku ve ardından bunu sil",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "multi_task",
+      "job_type": "file_operations",
+      "capability_domain": "file_ops",
+      "workflow_id": "file_operations_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "create_folder",
+        "description": "Projects klasörünü listele"
+      },
+      {
+        "id": "subtask_2",
+        "action": "read_file",
+        "description": "not.txt oku"
+      },
+      {
+        "id": "subtask_3",
+        "action": "delete_file",
+        "description": "ardından bunu sil"
+      }
+    ],
+    "artifacts": [],
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773486282.8411908,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773486282.8633878,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773486282.8749719,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773486283.006559,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 3
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1773486283.017195,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "multi_task",
+          "job_type": "file_operations"
+        }
+      }
+    ],
+    "created_at": 1773486282.8411899,
+    "updated_at": 1773486283.017195
+  },
+  "task_8b429b91c9": {
+    "task_id": "task_8b429b91c9",
+    "objective": "Safari aç köpekler araştır masaüstüne kaydet",
+    "context": {
+      "user_input": "Safari aç köpekler araştır masaüstüne kaydet",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "multi_task",
+      "job_type": "research_report",
+      "capability_domain": "screen_operator",
+      "workflow_id": "screen_operator_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "write_file",
+        "description": "Safari aç köpekler araştır masaüstüne kaydet"
+      }
+    ],
+    "artifacts": [],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773486283.0317922,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773486283.051965,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773486283.062198,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773486283.194228,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1773486283.206941,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "multi_task",
+          "job_type": "research_report"
+        }
+      }
+    ],
+    "created_at": 1773486283.0317912,
+    "updated_at": 1773486283.206941
+  },
+  "task_7eb9ae4ae4": {
+    "task_id": "task_7eb9ae4ae4",
+    "objective": "fatih sultan kimdir",
+    "context": {
+      "user_input": "fatih sultan kimdir",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "chat",
+      "job_type": "communication",
+      "capability_domain": "general",
+      "workflow_id": "general_assistance_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773486283.223346,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773486283.244561,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773486283.2549078,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773486283.377473,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1773486283.392749,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "chat",
+          "job_type": "communication"
+        }
+      }
+    ],
+    "created_at": 1773486283.2233448,
+    "updated_at": 1773486283.392749
+  },
+  "task_738c069432": {
+    "task_id": "task_738c069432",
+    "objective": "masaüstündeki dosyaları sil",
+    "context": {
+      "user_input": "masaüstündeki dosyaları sil",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "",
+      "job_type": "communication",
+      "capability_domain": "general",
+      "workflow_id": "",
+      "hybrid_model": {}
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773486283.410594,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773486283.432197,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773486283.442653,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773486283.4527302,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1773486283.463043,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "",
+          "job_type": "communication"
+        }
+      }
+    ],
+    "created_at": 1773486283.410593,
+    "updated_at": 1773486283.463043
+  },
+  "task_70ad9c73f1": {
+    "task_id": "task_70ad9c73f1",
+    "objective": "bilgisayarın şarjı kaç",
+    "context": {
+      "user_input": "bilgisayarın şarjı kaç",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "get_battery_status",
+      "job_type": "browser_task",
+      "capability_domain": "general",
+      "workflow_id": "general_assistance_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773486283.476536,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773486283.496738,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773486283.506954,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773486283.6335082,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1773486283.648118,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "get_battery_status",
+          "job_type": "browser_task"
+        }
+      }
+    ],
+    "created_at": 1773486283.476535,
+    "updated_at": 1773486283.648118
+  },
+  "task_10a69bd678": {
+    "task_id": "task_10a69bd678",
+    "objective": "karmaşık görevi tamamla",
+    "context": {
+      "user_input": "karmaşık görevi tamamla",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "",
+      "job_type": "communication",
+      "capability_domain": "general",
+      "workflow_id": "",
+      "hybrid_model": {}
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773486283.665097,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773486283.687159,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773486283.6976829,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773486283.708072,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1773486283.7181172,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "",
+          "job_type": "communication"
+        }
+      }
+    ],
+    "created_at": 1773486283.665096,
+    "updated_at": 1773486283.7181172
+  },
+  "task_0ecd864118": {
+    "task_id": "task_0ecd864118",
+    "objective": "masaüstünü listele",
+    "context": {
+      "user_input": "masaüstünü listele",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "",
+      "job_type": "communication",
+      "capability_domain": "general",
+      "workflow_id": "",
+      "hybrid_model": {}
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773486283.73147,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773486283.751849,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773486283.762593,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773486283.773609,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1773486283.783917,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "",
+          "job_type": "communication"
+        }
+      }
+    ],
+    "created_at": 1773486283.7314692,
+    "updated_at": 1773486283.783917
+  },
+  "task_223618fe82": {
+    "task_id": "task_223618fe82",
+    "objective": "dosyaları kontrol et",
+    "context": {
+      "user_input": "dosyaları kontrol et",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "",
+      "job_type": "communication",
+      "capability_domain": "general",
+      "workflow_id": "",
+      "hybrid_model": {}
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773486283.7985961,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773486283.8218722,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773486283.832242,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773486283.843091,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1773486283.8531818,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "",
+          "job_type": "communication"
+        }
+      }
+    ],
+    "created_at": 1773486283.798594,
+    "updated_at": 1773486283.8531818
+  },
+  "task_6d21fb4364": {
+    "task_id": "task_6d21fb4364",
+    "objective": "dosyaları bir kontrol eder misin",
+    "context": {
+      "user_input": "dosyaları bir kontrol eder misin",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "list_files",
+      "job_type": "file_operations",
+      "capability_domain": "general",
+      "workflow_id": "general_assistance_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773486283.87025,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773486283.891114,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773486283.901078,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773486284.028348,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 3
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1773486284.0431511,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "list_files",
+          "job_type": "file_operations"
+        }
+      }
+    ],
+    "created_at": 1773486283.870249,
+    "updated_at": 1773486284.0431511
+  },
+  "task_8ab2fb7513": {
+    "task_id": "task_8ab2fb7513",
+    "objective": "google aç ve sonra ekran görüntüsü al",
+    "context": {
+      "user_input": "google aç ve sonra ekran görüntüsü al",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "multi_task",
+      "job_type": "browser_task",
+      "capability_domain": "general",
+      "workflow_id": "general_assistance_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "open_app",
+        "description": "google aç"
+      },
+      {
+        "id": "subtask_2",
+        "action": "take_screenshot",
+        "description": "ve ekran görüntüsü al"
+      }
+    ],
+    "artifacts": [],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773486284.103133,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773486284.124696,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773486284.135274,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773486284.265852,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1773486284.280114,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "multi_task",
+          "job_type": "browser_task"
+        }
+      }
+    ],
+    "created_at": 1773486284.103132,
+    "updated_at": 1773486284.280114
+  },
+  "task_2a8b5942ff": {
+    "task_id": "task_2a8b5942ff",
+    "objective": "Bu işi planla ve uygula: 1) ~/Desktop/elyan-test/a klasörü oluştur 2) not.md yaz 3) içeriği doğrula 4) bana artifact yollarını ver.",
+    "context": {
+      "user_input": "Bu işi planla ve uygula: 1) ~/Desktop/elyan-test/a klasörü oluştur 2) not.md yaz 3) içeriği doğrula 4) bana artifact yollarını ver.",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "multi_task",
+      "job_type": "file_operations",
+      "capability_domain": "file_ops",
+      "workflow_id": "file_operations_workflow",
+      "hybrid_model": {
+        "role": "reasoning",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": false,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "chat",
+        "description": "Bu işi planla"
+      },
+      {
+        "id": "subtask_2",
+        "action": "write_file",
+        "description": "uygula: 1) ~/Desktop/elyan-test/a klasörü oluştur 2) not.md yaz 3) içeriği doğrula 4) bana artifact yollarını ver."
+      }
+    ],
+    "artifacts": [
+      {
+        "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-386/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+        "name": "not.md",
+        "type": "text",
+        "mime": "",
+        "size_bytes": 176,
+        "sha256": "87af0d86bdabef0454cc5cca6a6c27f858400855bd06d4986d44ea74e3e94b6f",
+        "tool": "write_file",
+        "source": "tool",
+        "source_result": {
+          "success": true,
+          "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-386/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+          "content": "# not.md\n\nBu dosya Elyan deterministic executor tarafindan uretildi.\nOlusturma zamani: 2026-03-14 14:04:44\nGorev ozeti: not.md\nDurum: olusturuldu ve dogrulama adimi icin hazir.",
+          "status": "success",
+          "message": "",
+          "artifacts": [
+            {
+              "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-386/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+              "type": "text",
+              "name": "not.md",
+              "mime": "",
+              "size_bytes": 0,
+              "sha256": "",
+              "tool": "write_file",
+              "source": "agent_fallback_callable",
+              "source_result": {
+                "success": true,
+                "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-386/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+                "content": "# not.md\n\nBu dosya Elyan deterministic executor tarafindan uretildi.\nOlusturma zamani: 2026-03-14 14:04:44\nGorev ozeti: not.md\nDurum: olusturuldu ve dogrulama adimi icin hazir."
+              }
+            }
+          ],
+          "artifact_manifest": [
+            {
+              "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-386/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+              "type": "text",
+              "name": "not.md",
+              "mime": "",
+              "size_bytes": 0,
+              "sha256": "",
+              "tool": "write_file",
+              "source": "agent_fallback_callable",
+              "source_result": {
+                "success": true,
+                "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-386/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+                "content": "# not.md\n\nBu dosya Elyan deterministic executor tarafindan uretildi.\nOlusturma zamani: 2026-03-14 14:04:44\nGorev ozeti: not.md\nDurum: olusturuldu ve dogrulama adimi icin hazir."
+              }
+            }
+          ],
+          "evidence": [],
+          "errors": [],
+          "metrics": {
+            "tool_name": "write_file",
+            "wrapper_source": "agent_fallback_callable",
+            "raw_type": "dict",
+            "agent_source": "agent_fallback_callable"
+          },
+          "data": {},
+          "_tool_result": {
+            "status": "success",
+            "message": "",
+            "artifacts": [
+              {
+                "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-386/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+                "type": "text",
+                "name": "not.md",
+                "mime": "",
+                "size_bytes": 0,
+                "sha256": "",
+                "tool": "write_file",
+                "source": "agent_fallback_callable",
+                "source_result": {
+                  "success": true,
+                  "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-386/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+                  "content": "# not.md\n\nBu dosya Elyan deterministic executor tarafindan uretildi.\nOlusturma zamani: 2026-03-14 14:04:44\nGorev ozeti: not.md\nDurum: olusturuldu ve dogrulama adimi icin hazir."
+                }
+              }
+            ],
+            "evidence": [],
+            "data": {},
+            "errors": [],
+            "metrics": {},
+            "raw": null,
+            "tool": "write_file",
+            "source": "agent_fallback_callable",
+            "raw_type": "dict"
+          },
+          "verified": true,
+          "size_bytes": 176,
+          "sha256": "87af0d86bdabef0454cc5cca6a6c27f858400855bd06d4986d44ea74e3e94b6f",
+          "_content_preview": "# not.md\n\nBu dosya Elyan deterministic executor tarafindan uretildi.\nOlusturma zamani: 2026-03-14 14",
+          "_contract_verified": true
+        },
+        "evidence": {
+          "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-386/test_agent_process_executes_nu0/Desktop/elyan-test/a/not.md",
+          "exists": true,
+          "is_file": true,
+          "is_dir": false,
+          "size_bytes": 176,
+          "mtime": 1773486284.4780858,
+          "sha256": "87af0d86bdabef0454cc5cca6a6c27f858400855bd06d4986d44ea74e3e94b6f"
+        }
+      }
+    ],
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773486284.319349,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773486284.3409321,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773486284.351286,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773486284.492269,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 1,
+          "error_count": 3
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1773486284.506908,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "multi_task",
+          "job_type": "file_operations"
+        }
+      }
+    ],
+    "created_at": 1773486284.3193479,
+    "updated_at": 1773486284.506908
+  },
+  "task_a1a054af4e": {
+    "task_id": "task_a1a054af4e",
+    "objective": "word dosyası oluştur ve içine köpek araştırmasını yaz",
+    "context": {
+      "user_input": "word dosyası oluştur ve içine köpek araştırmasını yaz",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "multi_task",
+      "job_type": "file_operations",
+      "capability_domain": "research",
+      "workflow_id": "research_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "chat",
+        "description": "word dosyası oluştur"
+      },
+      {
+        "id": "subtask_2",
+        "action": "write_file",
+        "description": "içine köpek araştırmasını yaz"
+      }
+    ],
+    "artifacts": [],
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773486284.525173,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773486284.546863,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773486284.557819,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773486284.690683,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 3
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1773486284.705672,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "multi_task",
+          "job_type": "file_operations"
+        }
+      }
+    ],
+    "created_at": 1773486284.525172,
+    "updated_at": 1773486284.705672
+  },
+  "task_893ca9df33": {
+    "task_id": "task_893ca9df33",
+    "objective": "ss al",
+    "context": {
+      "user_input": "ss al",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "take_screenshot",
+      "job_type": "system_automation",
+      "capability_domain": "general",
+      "workflow_id": "general_assistance_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "take_screenshot",
+        "description": "ekran görüntüsü al"
+      }
+    ],
+    "artifacts": [],
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773486284.7236621,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773486284.74596,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773486284.757519,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773486284.890101,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 2
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1773486284.9048269,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "take_screenshot",
+          "job_type": "system_automation"
+        }
+      }
+    ],
+    "created_at": 1773486284.723661,
+    "updated_at": 1773486284.9048269
+  },
+  "task_1409d10a22": {
+    "task_id": "task_1409d10a22",
+    "objective": "köpekler araştır",
+    "context": {
+      "user_input": "köpekler araştır",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "research_document_delivery",
+      "job_type": "research_report",
+      "capability_domain": "research",
+      "workflow_id": "research_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "advanced_research",
+        "description": "köpekler araştır"
+      }
+    ],
+    "artifacts": [],
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773486284.921838,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773486284.9445472,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773486284.955568,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773486285.087856,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 2
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1773486285.102978,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "research_document_delivery",
+          "job_type": "research_report"
+        }
+      }
+    ],
+    "created_at": 1773486284.9218361,
+    "updated_at": 1773486285.102978
+  },
+  "task_0e57d98c73": {
+    "task_id": "task_0e57d98c73",
+    "objective": "fatih sultan kimdir",
+    "context": {
+      "user_input": "fatih sultan kimdir",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": []
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "state": "executing",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773486285.1683478,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773486285.190505,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773486285.2017338,
+        "note": "pipeline_started"
+      }
+    ],
+    "created_at": 1773486285.168347,
+    "updated_at": 1773486285.2017338
   }
 }

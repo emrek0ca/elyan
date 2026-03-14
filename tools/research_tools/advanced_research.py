@@ -33,6 +33,11 @@ _TRUSTED_DOMAIN_HINTS = (
     "reuters.com",
     "bbc.",
     "apnews.com",
+    "worldbank.org",
+    "oecd.org",
+    "imf.org",
+    "tuik.gov.tr",
+    "tcmb.gov.tr",
 )
 _ACADEMIC_DOMAIN_HINTS = (
     ".edu",
@@ -51,6 +56,16 @@ _OFFICIAL_DOMAIN_HINTS = (
     "cdc.gov",
     "nih.gov",
     "europa.eu",
+    "ec.europa.eu",
+    "eurostat.ec.europa.eu",
+    "tuik.gov.tr",
+    "tcmb.gov.tr",
+    "hmb.gov.tr",
+    "sbb.gov.tr",
+    "ticaret.gov.tr",
+    "worldbank.org",
+    "oecd.org",
+    "imf.org",
 )
 _LOW_VALUE_DOMAIN_HINTS = (
     "blog.",
@@ -117,6 +132,39 @@ _MATH_TOPIC_HINTS = (
     "fonksiyon",
     "function",
     "teorem",
+)
+
+_ECONOMY_TOPIC_HINTS = (
+    "ekonomi",
+    "economic",
+    "economy",
+    "gsyh",
+    "gdp",
+    "enflasyon",
+    "inflation",
+    "issizlik",
+    "işsizlik",
+    "buyume",
+    "büyüme",
+    "dis ticaret",
+    "dış ticaret",
+    "cari acik",
+    "cari açık",
+    "faiz",
+    "sanayi uretimi",
+    "sanayi üretimi",
+)
+
+_OFFICIAL_INSTITUTION_HINTS = (
+    "tuik",
+    "tcmb",
+    "hmb",
+    "sbb",
+    "ticaret.gov",
+    "worldbank",
+    "oecd",
+    "imf",
+    "eurostat",
 )
 
 _SOURCE_POLICIES = {"balanced", "trusted", "academic", "official"}
@@ -208,14 +256,17 @@ def _apply_source_policy(results: list[dict[str, Any]], policy: str, target_sour
     need = max(1, int(target_sources))
     if len(filtered) >= need:
         return filtered[:need]
+    if norm_policy in {"official", "academic"} and len(filtered) >= min(2, need):
+        return filtered[:need]
 
     # If strict policy yields too few results, softly backfill from balanced pool.
     merged = list(filtered)
+    backfill_target = min(2, need) if norm_policy in {"official", "academic"} else need
     for item in fallback:
         merged.append(item)
-        if len(merged) >= need:
+        if len(merged) >= backfill_target:
             break
-    return merged[:need]
+    return merged[: max(1, min(len(merged), need))]
 
 
 def _source_policy_stats(results: list[dict[str, Any]], policy: str) -> dict[str, Any]:
@@ -266,6 +317,21 @@ def _is_noise_sentence(text: str) -> bool:
     t = _normalize_text(text).lower()
     if not t:
         return True
+    boilerplate_prefixes = (
+        "bu çalışmanın amacı",
+        "bu calismanin amaci",
+        "bu çalışmada",
+        "bu calismada",
+        "bu makalenin amacı",
+        "bu makalenin amaci",
+        "bu makalede",
+        "this study aims",
+        "the aim of this study",
+    )
+    if any(t.startswith(prefix) for prefix in boilerplate_prefixes):
+        return True
+    if any(token in t for token in ("kısa bir özetini sunmaktır", "kisa bir ozetini sunmaktadir", "genel bir bakis sunmaktadir")):
+        return True
     if len(t) < 55:
         return True
     if len(t) > 320:
@@ -297,6 +363,13 @@ def _is_noise_sentence(text: str) -> bool:
 
 def _compact_finding_text(text: str, max_len: int = 210) -> str:
     t = _normalize_text(text)
+    t = re.sub(r"^%\s*\d+\s*", "", t)
+    t = re.sub(
+        r"^\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]{3,12}\s+\d{4}\s+by\s+(?:[A-ZÇĞİÖŞÜ][\wÇĞİÖŞÜçğıöşü'’-]*\s+){1,2}",
+        "",
+        t,
+    )
+    t = re.sub(r"\s+", " ", t).strip(" ,;:-")
     if len(t) <= max_len:
         return t
     cropped = t[:max_len].rstrip(" ,;:-")
@@ -405,6 +478,8 @@ def _search_result_score(item: dict[str, Any], rank_index: int, total: int) -> f
         score += 0.07
     if any(h in domain for h in _TRUSTED_DOMAIN_HINTS):
         score += 0.22
+    if any(h in domain for h in _OFFICIAL_INSTITUTION_HINTS):
+        score += 0.18
     if any(h in domain for h in _LOW_VALUE_DOMAIN_HINTS):
         score -= 0.35
     if any(p in path for p in _LOW_VALUE_URL_PARTS):
@@ -455,24 +530,124 @@ def _quality_snapshot(sources: list["ResearchSource"], findings: list[str]) -> d
     }
 
 
+def _claim_needs_manual_review(text: str) -> bool:
+    clean = _normalize_text(text).lower()
+    if not clean:
+        return False
+    if re.search(r"\b\d{1,4}(?:[.,]\d+)?\b", clean):
+        return True
+    if re.search(r"\b(?:19|20)\d{2}\b", clean):
+        return True
+    if re.search(r"\b(?:must|always|never|kesinlikle|mutlaka|kanıtlar|ispatlar|tam olarak)\b", clean):
+        return True
+    if re.search(r"\b[a-zçğıöşü]+\s+(?:üniversitesi|universitesi|bakanlığı|bakanligi|kurumu|enstitüsü|enstitusu)\b", clean):
+        return True
+    return False
+
+
+def _build_research_quality_summary(
+    *,
+    research_contract: dict[str, Any],
+    sources: list["ResearchSource"],
+    findings: list[str],
+    source_policy: str,
+    min_reliability: float,
+    source_policy_stats: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    quality = _quality_snapshot(sources, findings)
+    avg_reliability = (
+        sum(float(source.reliability_score or 0.0) for source in list(sources or [])) / max(len(list(sources or [])), 1)
+        if sources
+        else 0.0
+    )
+    claim_list = research_contract.get("claim_list") if isinstance(research_contract, dict) else []
+    citation_map = research_contract.get("citation_map") if isinstance(research_contract, dict) else {}
+    critical_ids = set(research_contract.get("critical_claim_ids") or []) if isinstance(research_contract, dict) else set()
+    uncertainty_log = research_contract.get("uncertainty_log") if isinstance(research_contract, dict) else []
+    conflicts = research_contract.get("conflicts") if isinstance(research_contract, dict) else []
+
+    claim_count = len(claim_list) if isinstance(claim_list, list) else 0
+    covered_claims = 0
+    critical_count = 0
+    critical_supported = 0
+    manual_review_claims = 0
+
+    for claim in claim_list or []:
+        if not isinstance(claim, dict):
+            continue
+        claim_id = str(claim.get("claim_id") or "").strip()
+        source_urls = [str(url).strip() for url in (claim.get("source_urls") or []) if str(url).strip()]
+        if source_urls:
+            covered_claims += 1
+        is_critical = bool(claim.get("critical")) or claim_id in critical_ids
+        if is_critical:
+            critical_count += 1
+            if len(set(source_urls)) >= 2:
+                critical_supported += 1
+        if _claim_needs_manual_review(str(claim.get("text") or "")):
+            manual_review_claims += 1
+
+    claim_coverage = covered_claims / max(claim_count, 1)
+    critical_claim_coverage = critical_supported / max(critical_count, 1) if critical_count else 1.0
+    uncertainty_count = len([item for item in (uncertainty_log or []) if str(item).strip()]) + len(conflicts or [])
+    citation_entry_count = 0
+    if isinstance(citation_map, dict):
+        for rows in citation_map.values():
+            if isinstance(rows, list):
+                citation_entry_count += len(rows)
+
+    status = "pass"
+    if claim_count == 0 or claim_coverage <= 0.0:
+        status = "fail"
+    elif critical_claim_coverage < 1.0 or uncertainty_count > 0:
+        status = "partial"
+
+    return {
+        **quality,
+        "avg_reliability": round(avg_reliability, 3),
+        "claim_count": claim_count,
+        "claim_coverage": round(claim_coverage, 2),
+        "critical_claim_count": critical_count,
+        "critical_claim_coverage": round(critical_claim_coverage, 2),
+        "citation_entry_count": citation_entry_count,
+        "uncertainty_count": uncertainty_count,
+        "conflict_count": len(conflicts or []),
+        "manual_review_claim_count": manual_review_claims,
+        "source_policy": str(source_policy or "trusted"),
+        "min_reliability_threshold": round(float(min_reliability or 0.0), 2),
+        "status": status,
+        "source_policy_stats": dict(source_policy_stats or {}),
+    }
+
+
 def _build_query_decomposition(topic: str) -> dict[str, Any]:
     clean = _normalize_text(topic)
     low = clean.lower()
     if any(hint in low for hint in _MATH_TOPIC_HINTS):
         facets = ["definition", "formula", "proof", "applications", "pdf lecture notes", "university notes"]
+    elif any(hint in low for hint in _ECONOMY_TOPIC_HINTS):
+        facets = ["gsyh", "enflasyon", "issizlik", "buyume", "dis ticaret", "resmi veri"]
     else:
         facets = ["definition", "history", "applications", "examples", "key claims"]
     base_terms = [token for token in _tokenize_topic(clean)[:6]]
     queries = [clean]
     for facet in facets:
         queries.append(f"{clean} {facet}")
+    if any(hint in low for hint in _ECONOMY_TOPIC_HINTS):
+        queries.extend(
+            [
+                f"{clean} tuik",
+                f"{clean} tcmb",
+                f"{clean} world bank oecd imf",
+            ]
+        )
     if base_terms:
         queries.extend([f"{clean} {' '.join(base_terms[:2])}", f"{clean} source pdf"])
     deduped = list(dict.fromkeys([item for item in queries if item]))
     return {
         "topic": clean,
         "facets": facets,
-        "queries": deduped[:8],
+        "queries": deduped[:10],
         "topic_terms": base_terms,
     }
 
@@ -507,24 +682,34 @@ def _build_research_contract_payload(topic: str, findings: list[str], sources: l
         for source in ranked_sources[:3]:
             if not source.url:
                 continue
+            overlap = _keyword_overlap_score(finding, source.url, source.title, topic_terms)
             selected.append(
                 {
                     "url": source.url,
                     "title": source.title,
                     "reliability_score": round(float(source.reliability_score or 0.0), 3),
                     "evidence_type": "summary",
+                    "domain": _domain_from_url(source.url),
+                    "accessed_at": str(source.fetched_at or datetime.now().isoformat()),
+                    "claim_overlap": round(float(overlap), 3),
                 }
             )
-        critical = idx <= 2
+        needs_manual_review = _claim_needs_manual_review(finding)
+        critical = idx <= 2 or needs_manual_review
         source_urls = [item["url"] for item in selected]
         if critical and len(set(source_urls)) < 2:
             uncertainty_log.append(f"{claim_id}: kritik iddia icin ikinci bagimsiz kaynak eksik.")
+        if needs_manual_review:
+            uncertainty_log.append(f"{claim_id}: sayisal/tarihsel/kurumsal ifade manuel teyit gerektirebilir.")
         claim_list.append(
             {
                 "claim_id": claim_id,
                 "text": _compact_finding_text(finding, max_len=240),
                 "source_urls": source_urls,
                 "critical": critical,
+                "source_count": len(set(source_urls)),
+                "needs_manual_review": needs_manual_review,
+                "missing_independent_source": bool(critical and len(set(source_urls)) < 2),
                 "confidence": round(
                     min(
                         1.0,
@@ -553,6 +738,7 @@ def _build_research_contract_payload(topic: str, findings: list[str], sources: l
                     "detail": "Sayisal ifadeler arasinda fark bulundu; manuel capraz kontrol onerilir.",
                 }
             )
+            uncertainty_log.append("Sayisal iddialar arasinda varyasyon bulundu; manuel capraz kontrol onerilir.")
 
     return {
         "query_decomposition": decomposition,
@@ -581,15 +767,19 @@ class ResearchSource:
     content: str = ""
     fetched: bool = False
     error: str | None = None
+    fetched_at: str = ""
 
     def to_dict(self) -> dict:
+        domain = _domain_from_url(self.url)
         return {
             "url": self.url,
             "title": self.title,
             "snippet": self.snippet,
             "reliability_score": self.reliability_score,
             "fetched": self.fetched,
-            "error": self.error
+            "error": self.error,
+            "domain": domain,
+            "fetched_at": self.fetched_at,
         }
 
 
@@ -603,6 +793,9 @@ class ResearchResult:
     sources: list[ResearchSource] = field(default_factory=list)
     findings: list[str] = field(default_factory=list)
     summary: str = ""
+    research_contract: dict[str, Any] = field(default_factory=dict)
+    quality_summary: dict[str, Any] = field(default_factory=dict)
+    source_policy_stats: dict[str, Any] = field(default_factory=dict)
     started_at: str | None = None
     completed_at: str | None = None
     progress: int = 0
@@ -617,6 +810,9 @@ class ResearchResult:
             "sources": [s.to_dict() for s in self.sources],
             "findings": self.findings,
             "summary": self.summary,
+            "research_contract": dict(self.research_contract or {}),
+            "quality_summary": dict(self.quality_summary or {}),
+            "source_policy_stats": dict(self.source_policy_stats or {}),
             "started_at": self.started_at,
             "completed_at": self.completed_at,
             "progress": self.progress
@@ -689,8 +885,8 @@ async def advanced_research(
     include_evaluation: bool = True,
     generate_report: bool = False,  # CHANGED: Report generation disabled for speed (task takes 5 mins otherwise)
     persist_quick_report: bool = True,
-    source_policy: str = "balanced",
-    min_reliability: float = 0.55,
+    source_policy: str = "trusted",
+    min_reliability: float = 0.62,
     max_findings: int = 6,
     citation_style: str = "none",
     include_bibliography: bool = False,
@@ -725,7 +921,7 @@ async def advanced_research(
         try:
             min_reliability = max(0.0, min(1.0, float(min_reliability)))
         except Exception:
-            min_reliability = 0.55
+            min_reliability = 0.62
         try:
             max_findings = max(3, min(12, int(max_findings)))
         except Exception:
@@ -834,6 +1030,7 @@ async def advanced_research(
                             source.reliability_score = eval_result.get("reliability_score", 0.5)
                             source.content = eval_result.get("content_preview", "")
                             source.fetched = True
+                            source.fetched_at = datetime.now().isoformat()
                         else:
                             source.error = eval_result.get("error")
                     except asyncio.TimeoutError:
@@ -869,6 +1066,17 @@ async def advanced_research(
             )
             quality = _quality_snapshot(result.sources, result.findings)
             research_contract = _build_research_contract_payload(topic, result.findings, result.sources)
+            quality_summary = _build_research_quality_summary(
+                research_contract=research_contract,
+                sources=result.sources,
+                findings=result.findings,
+                source_policy=source_policy,
+                min_reliability=min_reliability,
+                source_policy_stats=policy_stats,
+            )
+            result.research_contract = research_contract
+            result.quality_summary = quality_summary
+            result.source_policy_stats = policy_stats
 
             # Step 5: Generate professional report with visualizations
             result.progress = 95
@@ -879,6 +1087,7 @@ async def advanced_research(
                 "findings": result.findings,
                 "summary": result.summary,
                 "research_contract": research_contract,
+                "quality_summary": quality_summary,
                 "depth": research_depth.value,
                 "source_policy": source_policy,
                 "min_reliability": min_reliability,
@@ -956,6 +1165,7 @@ async def advanced_research(
                     "summary": result.summary,
                     "sources": sources_dict,
                     "quality": quality,
+                    "quality_summary": quality_summary,
                     "research_contract": research_contract,
                     "source_policy": source_policy,
                     "min_reliability": min_reliability,
@@ -984,6 +1194,7 @@ async def advanced_research(
                 "findings": result.findings,
                 "summary": result.summary,
                 "quality": quality,
+                "quality_summary": quality_summary,
                 "research_contract": research_contract,
                 "report_paths": report_paths,
                 "message": message
@@ -1248,7 +1459,9 @@ async def _perform_topic_web_search(
 ) -> list[dict[str, Any]]:
     target_n = max(int(num_results or 1), 1)
     plan = _build_query_decomposition(topic)
-    queries = list(plan.get("queries") or [])[:4]
+    topic_terms = list(plan.get("topic_terms") or [])
+    query_limit = 6 if any(hint in str(topic or "").lower() for hint in _ECONOMY_TOPIC_HINTS) else 4
+    queries = list(plan.get("queries") or [])[:query_limit]
     if not queries:
         queries = [topic]
 
@@ -1270,7 +1483,6 @@ async def _perform_topic_web_search(
 
     ranked: list[tuple[float, dict[str, Any]]] = []
     total = len(merged)
-    topic_terms = list(plan.get("topic_terms") or [])
     for idx, item in enumerate(merged):
         score = _search_result_score(item, idx, total)
         overlap = _keyword_overlap_score(
@@ -1408,11 +1620,11 @@ async def _generate_summary(
     topic: str,
     findings: list[str],
     sources: list[ResearchSource],
-    source_policy: str = "balanced",
-    min_reliability: float = 0.55,
+    source_policy: str = "trusted",
+    min_reliability: float = 0.62,
     source_policy_stats: dict[str, Any] | None = None,
 ) -> str:
-    """Araştırma sonuçlarını profesyonel, kanıt odaklı bir özet metnine dönüştür."""
+    """Araştırma sonuçlarını kısa ve karar odaklı bir özet metnine dönüştür."""
     quality = _quality_snapshot(sources, findings)
     source_count = quality["total_sources"]
     reliable_count = quality["reliable_sources"]
@@ -1428,6 +1640,7 @@ async def _generate_summary(
         item = _normalize_text(str(finding or "").lstrip("•- "))
         if len(item) < 24:
             continue
+        item = _compact_finding_text(item, max_len=180)
         key = item[:90].lower()
         if key in seen:
             continue
@@ -1438,62 +1651,46 @@ async def _generate_summary(
     if sources:
         avg_reliability = sum(float(s.reliability_score or 0.0) for s in sources) / max(len(sources), 1)
     confidence_label = "yüksek" if reliability_pct >= 80 else ("orta" if reliability_pct >= 60 else "düşük")
-    actions = _suggest_followup_actions(topic, cleaned_findings, reliability_pct)
+    ranked_sources = sorted(sources, key=lambda s: float(s.reliability_score or 0.0), reverse=True)[:3]
+    top_source_labels: list[str] = []
+    for src in ranked_sources:
+        title = _normalize_text(src.title)
+        domain = _domain_from_url(src.url)
+        label = title or domain or "Başlıksız kaynak"
+        if domain and domain not in label:
+            label = f"{label} ({domain})"
+        top_source_labels.append(label)
 
     lines: list[str] = []
-    lines.append("Yönetici Özeti:")
+    lines.append("Kısa Özet:")
     lines.append(
-        f"'{topic}' araştırmasında {source_count} kaynak incelendi; güvenilirlik eşiğini geçen kaynak oranı %{reliability_pct} ({confidence_label} güven)."
+        f"'{topic}' için {source_count} kaynak incelendi; güvenilirlik eşiğini geçen kaynak oranı %{reliability_pct} ({confidence_label} güven)."
     )
-    lines.append("")
-    lines.append(f"Araştırma Konusu: {topic}")
-    lines.append(f"Kapsam: {source_count} kaynak tarandı; güvenilirlik eşiğini geçen kaynak {reliable_count}/{source_count} (%{reliability_pct}).")
     lines.append(
-        f"Kaynak Profili: yüksek={high_rel}, orta={med_rel}, düşük={low_rel}, ortalama güven={avg_reliability:.2f}."
+        f"Kapsam: {reliable_count}/{source_count} kaynak eşik üstünde; kaynak profili yüksek={high_rel}, orta={med_rel}, düşük={low_rel}, ortalama güven={avg_reliability:.2f}."
     )
     if source_policy != "balanced":
-        lines.append(f"Kaynak Politikası: {source_policy} (min güvenilirlik: {min_reliability:.2f}).")
+        lines.append(f"Kaynak politikası: {source_policy} (min güvenilirlik: {min_reliability:.2f}).")
         stats = source_policy_stats or {}
         if bool(stats.get("fallback_used")):
             lines.append("Not: Seçilen politika için yeterli kaynak bulunamadığından sınırlı fallback uygulandı.")
     if top_domains:
-        lines.append("Öne Çıkan Alan Adları: " + ", ".join(top_domains[:5]))
+        lines.append("Öne çıkan alan adları: " + ", ".join(top_domains[:4]))
+    if top_source_labels:
+        lines.append("Önerilen referans seti: " + "; ".join(top_source_labels))
 
     if cleaned_findings:
         lines.append("")
-        lines.append("Ana Bulgular (kanıt odaklı):")
-        for idx, finding in enumerate(cleaned_findings[:6], 1):
+        lines.append("Karar için öne çıkan bulgular:")
+        for idx, finding in enumerate(cleaned_findings[:3], 1):
             lines.append(f"{idx}. {finding}")
     else:
         lines.append("")
-        lines.append("Ana Bulgular: Bu taramada doğrudan kullanılabilir bulgu sınırlı kaldı.")
+        lines.append("Bulgu: Bu taramada doğrudan kullanılabilir bulgu sınırlı kaldı.")
 
     lines.append("")
-    lines.append("Kanıt Matrisi (ilk 5 kaynak):")
-    ranked_sources = sorted(sources, key=lambda s: float(s.reliability_score or 0.0), reverse=True)[:5]
-    if ranked_sources:
-        for idx, src in enumerate(ranked_sources, 1):
-            domain = _domain_from_url(src.url)
-            title = _normalize_text(src.title) or domain or "Başlıksız kaynak"
-            rel = float(src.reliability_score or 0.0)
-            lines.append(f"{idx}. {title} | {domain} | güven={rel:.2f}")
-    else:
-        lines.append("- Kaynak bilgisi sınırlı.")
-
-    lines.append("")
-    lines.append("Operasyonel Öneriler:")
-    if actions:
-        for item in actions:
-            lines.append(f"- {item}")
-    else:
-        lines.append("- Ek öneri üretilemedi.")
-
-    lines.append("")
-    lines.append("Sınırlılıklar:")
-    lines.append("- Bulgular web kaynaklarından otomatik çıkarılmıştır; alan uzmanı doğrulaması önerilir.")
-    lines.append("- Tarih/bölge bilgisi olmayan kaynaklarda genelleme yapılmamalıdır.")
-    lines.append("")
-    lines.append("Önerilen Devam Adımı: İstersen bu başlığı alt konulara bölüp (sağlık, beslenme, eğitim, ırklar) karşılaştırmalı rapor üretebilirim.")
+    lines.append("Not: Ayrıntılı kaynak matrisi ve tam bulgu listesi rapor dosyasında tutulur; bu özet yalnız karar vermeyi hızlandırmak içindir.")
+    lines.append("Sınırlılık: Web kaynaklarından otomatik çıkarım yapıldığı için hukuki yorum veya uygulama takvimi uzman teyidiyle netleştirilmelidir.")
 
     return "\n".join(lines)
 
@@ -1544,8 +1741,28 @@ def _persist_quick_research_report(topic: str, result: ResearchResult) -> str:
             "## Özet",
             result.summary or "Özet üretilemedi.",
             "",
-            "## Bulgular",
+            "## Kalite Özeti",
         ]
+
+        quality_summary = result.quality_summary if isinstance(result.quality_summary, dict) else {}
+        if quality_summary:
+            lines.extend(
+                [
+                    f"- Durum: {quality_summary.get('status', 'unknown')}",
+                    f"- Claim coverage: {quality_summary.get('claim_coverage', 0):.2f}",
+                    f"- Critical claim coverage: {quality_summary.get('critical_claim_coverage', 0):.2f}",
+                    f"- Uncertainty count: {quality_summary.get('uncertainty_count', 0)}",
+                    "",
+                ]
+            )
+        else:
+            lines.extend(["- Kalite özeti üretilemedi.", ""])
+
+        lines.extend(
+            [
+            "## Bulgular",
+            ]
+        )
 
         if result.findings:
             for finding in result.findings[:12]:
@@ -1563,6 +1780,15 @@ def _persist_quick_research_report(topic: str, result: ResearchResult) -> str:
             lines.append(f"{idx}. {title} ({rel})")
             if url:
                 lines.append(f"   - {url}")
+
+        contract = result.research_contract if isinstance(result.research_contract, dict) else {}
+        uncertainty_log = contract.get("uncertainty_log") if isinstance(contract, dict) else []
+        if uncertainty_log:
+            lines.extend(["", "## Belirsizlikler"])
+            for item in uncertainty_log[:10]:
+                clean = str(item or "").strip()
+                if clean:
+                    lines.append(f"- {clean}")
 
         out_path.write_text("\n".join(lines), encoding="utf-8")
         return str(out_path)

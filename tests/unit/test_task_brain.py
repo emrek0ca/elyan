@@ -72,6 +72,41 @@ def test_run_store_emits_lifecycle_events(tmp_path, monkeypatch):
     assert events == ["run.started", "verify.finished", "deliver.finished", "run.completed"]
 
 
+def test_run_store_summary_includes_research_quality_metrics(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.evidence.run_store.resolve_runs_root", lambda: tmp_path / "runs")
+    store = RunStore("run_research_metrics_001")
+    summary_path = store.write_summary(
+        status="partial",
+        response_text="araştırma tamamlandı",
+        artifacts=[],
+        metadata={
+            "claim_coverage": 1.0,
+            "critical_claim_coverage": 0.5,
+            "uncertainty_count": 2,
+            "conflict_count": 1,
+            "manual_review_claim_count": 3,
+            "claim_map_path": "/tmp/claim_map.json",
+            "revision_summary_path": "/tmp/revision_summary.md",
+            "team_quality_avg": 0.82,
+            "team_research_claim_coverage": 1.0,
+            "team_research_critical_claim_coverage": 0.5,
+            "team_research_uncertainty_count": 2,
+        },
+    )
+    summary = Path(summary_path).read_text(encoding="utf-8")
+    assert "- Claim coverage: 1.00" in summary
+    assert "- Critical claim coverage: 0.50" in summary
+    assert "- Uncertainty count: 2" in summary
+    assert "- Conflict count: 1" in summary
+    assert "- Manual review claims: 3" in summary
+    assert "- Claim map: /tmp/claim_map.json" in summary
+    assert "- Revision summary: /tmp/revision_summary.md" in summary
+    assert "- Team quality avg: 0.82" in summary
+    assert "- Team research claim coverage: 1.00" in summary
+    assert "- Team research critical coverage: 0.50" in summary
+    assert "- Team research uncertainty count: 2" in summary
+
+
 def test_run_store_emits_capability_selected_event(tmp_path, monkeypatch):
     monkeypatch.setattr("core.evidence.run_store.resolve_runs_root", lambda: tmp_path / "runs")
     store = RunStore("run_capability_selected_001")

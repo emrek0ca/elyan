@@ -1,0 +1,13 @@
+{
+  "run_id": "run_5114c589e65d",
+  "written_at": 1773425041.087809,
+  "status": "success",
+  "text_summary": "Pil: %77 (pilde)",
+  "errors": [],
+  "artifact_manifest": [],
+  "metadata": {
+    "manifest_path": "/Users/emrekoca/Desktop/bot/.elyan/proofs/run_5114c589e65d/manifest.json",
+    "action": "get_battery_status",
+    "job_type": "browser_task"
+  }
+}

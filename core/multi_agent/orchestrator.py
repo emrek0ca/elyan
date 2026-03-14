@@ -631,11 +631,17 @@ class AgentOrchestrator:
         results = await manager.spawn_parallel(jobs, timeout=90)
         for (owner, step), result in zip(candidates, results):
             step.setdefault("_sub_agent", {})
+            payload = result.result if isinstance(result.result, dict) else {}
+            quality_summary = payload.get("quality_summary") if isinstance(payload, dict) and isinstance(payload.get("quality_summary"), dict) else {}
             step["_sub_agent"].update(
                 {
                     "owner": owner,
                     "status": result.status,
                     "notes": list(result.notes or []),
+                    "failed_gates": list(payload.get("failed_gates") or []) if isinstance(payload, dict) else [],
+                    "quality_summary": dict(quality_summary or {}),
+                    "claim_map_path": str(payload.get("claim_map_path") or "") if isinstance(payload, dict) else "",
+                    "revision_summary_path": str(payload.get("revision_summary_path") or "") if isinstance(payload, dict) else "",
                 }
             )
 

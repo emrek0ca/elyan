@@ -1,0 +1,12 @@
+{
+  "run_id": "run_123f981ee009",
+  "written_at": 1773425040.872879,
+  "status": "success",
+  "manifest_path": "/Users/emrekoca/Desktop/bot/.elyan/proofs/run_123f981ee009/manifest.json",
+  "steps": [],
+  "artifacts": [],
+  "metadata": {
+    "status": "success",
+    "errors": []
+  }
+}

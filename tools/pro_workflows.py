@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import hashlib
+import json
 from pathlib import Path
 import re
 from typing import Any
@@ -171,22 +172,43 @@ def _select_research_sources_for_document(
     sources: list[dict[str, Any]],
     *,
     min_rel: float,
+    source_policy: str = "trusted",
     limit: int = 6,
 ) -> list[dict[str, Any]]:
     ranked: list[tuple[float, dict[str, Any]]] = []
+    policy = _normalize_text(source_policy or "trusted")
     for src in list(sources or []):
         if not isinstance(src, dict):
             continue
         url = str(src.get("url") or "").strip()
         if not url or _is_low_value_source(url):
             continue
+        domain = _domain_from_url(url)
+        if policy == "official":
+            is_official = any(
+                token in domain
+                for token in (
+                    ".gov",
+                    "europa.eu",
+                    "ec.europa.eu",
+                    "eurostat.ec.europa.eu",
+                    "tuik.gov.tr",
+                    "tcmb.gov.tr",
+                    "hmb.gov.tr",
+                    "sbb.gov.tr",
+                    "worldbank.org",
+                    "oecd.org",
+                    "imf.org",
+                )
+            )
+            if not is_official:
+                continue
         try:
             rel = float(src.get("reliability_score", 0.0) or 0.0)
         except Exception:
             rel = 0.0
         if rel < min_rel:
             continue
-        domain = _domain_from_url(url)
         bonus = 0.0
         if domain.endswith((".edu", ".gov", ".org", ".ac.tr")):
             bonus += 0.2
@@ -195,6 +217,444 @@ def _select_research_sources_for_document(
         ranked.append((rel + bonus, src))
     ranked.sort(key=lambda item: item[0], reverse=True)
     return [dict(item[1]) for item in ranked[:limit]]
+
+
+def _normalize_document_profile(profile: str, audience: str = "executive") -> str:
+    raw = _normalize_text(profile or audience or "executive")
+    if raw in {"analytical", "analysis", "academic"}:
+        return "analytical"
+    if raw in {"briefing", "brief", "operator"}:
+        return "briefing"
+    return "executive"
+
+
+def _normalize_citation_mode(citation_mode: str, *, citation_style: str = "", include_bibliography: bool = False) -> str:
+    raw = _normalize_text(citation_mode)
+    if raw in {"none", "inline", "bibliography"}:
+        return raw
+    style = _normalize_text(citation_style)
+    if style and style != "none":
+        return "inline"
+    if include_bibliography:
+        return "inline"
+    return "none"
+
+
+def _quality_summary_from_research_payload(
+    *,
+    research_contract: dict[str, Any],
+    sources: list[dict[str, Any]],
+    findings: list[str],
+    source_policy: str,
+    min_reliability: float,
+) -> dict[str, Any]:
+    claim_list = research_contract.get("claim_list") if isinstance(research_contract, dict) else []
+    critical_ids = set(research_contract.get("critical_claim_ids") or []) if isinstance(research_contract, dict) else set()
+    conflicts = research_contract.get("conflicts") if isinstance(research_contract, dict) else []
+    uncertainty_log = research_contract.get("uncertainty_log") if isinstance(research_contract, dict) else []
+    reliability_scores: list[float] = []
+    top_domains: list[str] = []
+    seen_domains: set[str] = set()
+    reliable_sources = 0
+    high = 0
+    medium = 0
+    for src in list(sources or []):
+        if not isinstance(src, dict):
+            continue
+        try:
+            rel = float(src.get("reliability_score", 0.0) or 0.0)
+        except Exception:
+            rel = 0.0
+        reliability_scores.append(rel)
+        if rel >= 0.6:
+            reliable_sources += 1
+        if rel >= 0.8:
+            high += 1
+        elif rel >= 0.6:
+            medium += 1
+        domain = _domain_from_url(str(src.get("url") or ""))
+        if domain and domain not in seen_domains and len(top_domains) < 5:
+            seen_domains.add(domain)
+            top_domains.append(domain)
+
+    claim_count = 0
+    covered_claims = 0
+    critical_count = 0
+    critical_supported = 0
+    for claim in claim_list or []:
+        if not isinstance(claim, dict):
+            continue
+        claim_count += 1
+        source_urls = [str(url).strip() for url in (claim.get("source_urls") or []) if str(url).strip()]
+        if source_urls:
+            covered_claims += 1
+        claim_id = str(claim.get("claim_id") or "").strip()
+        if bool(claim.get("critical")) or claim_id in critical_ids:
+            critical_count += 1
+            if len(set(source_urls)) >= 2:
+                critical_supported += 1
+
+    claim_coverage = covered_claims / max(claim_count, 1) if claim_count else 0.0
+    critical_claim_coverage = critical_supported / max(critical_count, 1) if critical_count else 1.0
+    uncertainty_count = len([item for item in (uncertainty_log or []) if str(item).strip()]) + len(conflicts or [])
+    avg_reliability = sum(reliability_scores) / len(reliability_scores) if reliability_scores else 0.0
+    total_sources = len(reliability_scores)
+    status = "pass"
+    if claim_count == 0 or claim_coverage <= 0.0:
+        status = "fail"
+    elif critical_claim_coverage < 1.0 or uncertainty_count > 0:
+        status = "partial"
+
+    return {
+        "avg_reliability": avg_reliability,
+        "min_reliability_threshold": float(min_reliability or 0.0),
+        "source_policy": str(source_policy or "trusted"),
+        "total_sources": total_sources,
+        "reliable_sources": reliable_sources,
+        "reliability_pct": int((reliable_sources / total_sources) * 100) if total_sources else 0,
+        "high_reliability": high,
+        "medium_reliability": medium,
+        "low_reliability": max(0, total_sources - high - medium),
+        "finding_count": len(findings or []),
+        "top_domains": top_domains,
+        "claim_count": claim_count,
+        "claim_coverage": round(claim_coverage, 2),
+        "critical_claim_count": critical_count,
+        "critical_claim_coverage": round(critical_claim_coverage, 2),
+        "uncertainty_count": uncertainty_count,
+        "conflict_count": len(conflicts or []),
+        "status": status,
+    }
+
+
+def _claim_reference_label(claim_id: str, citations: list[dict[str, Any]], citation_mode: str) -> str:
+    clean_mode = _normalize_citation_mode(citation_mode)
+    if clean_mode == "none":
+        return ""
+    domains: list[str] = []
+    for row in list(citations or []):
+        if not isinstance(row, dict):
+            continue
+        domain = _domain_from_url(str(row.get("url") or ""))
+        title = _clean_research_sentence(str(row.get("title") or "").strip())
+        label = domain or title or str(row.get("url") or "").strip()
+        if label and label not in domains:
+            domains.append(label)
+    if not domains:
+        return ""
+    if clean_mode == "bibliography":
+        return f"[{claim_id}]"
+    return f" [Kaynak: {', '.join(domains[:2])}]"
+
+
+def _build_research_document_sections(
+    *,
+    topic: str,
+    brief: str,
+    profile: str,
+    citation_mode: str,
+    summary: str,
+    findings: list[str],
+    research_contract: dict[str, Any],
+    quality_summary: dict[str, Any],
+    include_bibliography: bool,
+) -> list[dict[str, Any]]:
+    normalized_profile = _normalize_document_profile(profile)
+    clean_summary = _strip_research_meta_lines(_extract_report_summary(summary, findings, topic))
+    if not clean_summary:
+        clean_summary = f"{topic} konusu, güvenilir kaynaklardan derlenen doğrulanmış iddialar üzerinden özetlenmiştir."
+
+    claim_list = research_contract.get("claim_list") if isinstance(research_contract, dict) else []
+    citation_map = research_contract.get("citation_map") if isinstance(research_contract, dict) else {}
+    conflicts = research_contract.get("conflicts") if isinstance(research_contract, dict) else []
+    uncertainty_log = research_contract.get("uncertainty_log") if isinstance(research_contract, dict) else []
+
+    overview_tail = {
+        "executive": "Metin, karar vermeyi kolaylaştıracak netlikte ve kısa tutulmuştur.",
+        "analytical": "Metin, iddiaların kaynağını ve güven düzeyini görünür tutacak şekilde biraz daha ayrıntılı düzenlenmiştir.",
+        "briefing": "Metin, hızlı durum değerlendirmesi için kısa ve yönlendirici kalacak şekilde sıkıştırılmıştır.",
+    }
+    sections: list[dict[str, Any]] = [
+        {
+            "title": "Kısa Özet",
+            "paragraphs": [
+                {
+                    "text": clean_summary,
+                    "claim_ids": [str(item.get("claim_id") or "") for item in (claim_list or [])[: max(1, min(2, len(claim_list or [])))] if str(item.get("claim_id") or "").strip()],
+                },
+                {
+                    "text": overview_tail[normalized_profile],
+                    "claim_ids": [],
+                },
+            ],
+        }
+    ]
+
+    finding_paragraphs: list[dict[str, Any]] = []
+    for claim in list(claim_list or []):
+        if not isinstance(claim, dict):
+            continue
+        claim_id = str(claim.get("claim_id") or "").strip()
+        text = _clean_research_sentence(str(claim.get("text") or "").strip())
+        if not text:
+            continue
+        citation_note = _claim_reference_label(claim_id, citation_map.get(claim_id, []), citation_mode)
+        finding_paragraphs.append(
+            {
+                "text": f"{text}{citation_note}".strip(),
+                "claim_ids": [claim_id] if claim_id else [],
+            }
+        )
+    if not finding_paragraphs:
+        for idx, finding in enumerate(findings, start=1):
+            clean = _strip_research_annotation(finding)
+            if clean:
+                finding_paragraphs.append({"text": clean, "claim_ids": [f"claim_{idx}"]})
+    sections.append({"title": "Temel Bulgular", "paragraphs": finding_paragraphs or [{"text": "Doğrudan bağlanabilir bulgu üretilemedi.", "claim_ids": []}]})
+
+    quality_lines = [
+        (
+            f"Toplam {int(quality_summary.get('total_sources', 0) or 0)} kaynak tarandı; "
+            f"ortalama güvenilirlik {float(quality_summary.get('avg_reliability', 0.0) or 0.0):.2f} olarak hesaplandı."
+        ),
+        (
+            f"Claim coverage {float(quality_summary.get('claim_coverage', 0.0) or 0.0):.2f}, "
+            f"kritik claim coverage {float(quality_summary.get('critical_claim_coverage', 0.0) or 0.0):.2f} seviyesinde."
+        ),
+    ]
+    sections.append({"title": "Kaynak Güven Özeti", "paragraphs": [{"text": row, "claim_ids": []} for row in quality_lines]})
+
+    risk_paragraphs: list[dict[str, Any]] = []
+    if conflicts:
+        for conflict in conflicts[:4]:
+            detail = _clean_research_sentence(str(conflict.get("detail") or "").strip())
+            if detail:
+                risk_paragraphs.append({"text": detail, "claim_ids": [str(item) for item in (conflict.get("claim_ids") or []) if str(item).strip()]})
+    if float(quality_summary.get("critical_claim_coverage", 0.0) or 0.0) < 1.0:
+        risk_paragraphs.append(
+            {
+                "text": "Bazı kritik iddialar ikinci bağımsız kaynakla doğrulanamadı; sonuçlar dikkatle kullanılmalıdır.",
+                "claim_ids": list(research_contract.get("critical_claim_ids") or []),
+            }
+        )
+    if not risk_paragraphs:
+        risk_paragraphs.append({"text": "Belirgin çelişki bulunmadı; yine de kritik sayısal ifadeler manuel teyit gerektirebilir.", "claim_ids": []})
+    sections.append({"title": "Açık Riskler", "paragraphs": risk_paragraphs})
+
+    uncertainty_paragraphs: list[dict[str, Any]] = []
+    for item in uncertainty_log[:6]:
+        clean = _clean_research_sentence(str(item or "").strip())
+        if clean:
+            match = re.search(r"(claim_\d+)", clean)
+            uncertainty_paragraphs.append({"text": clean, "claim_ids": [match.group(1)] if match else []})
+    if not uncertainty_paragraphs:
+        uncertainty_paragraphs.append({"text": "Belirgin belirsizlik kaydı oluşmadı; bu bölüm izlenebilirlik için korunur.", "claim_ids": []})
+    sections.append({"title": "Belirsizlikler", "paragraphs": uncertainty_paragraphs})
+
+    if include_bibliography:
+        bibliography_rows: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
+        for claim_id, citations in list((citation_map or {}).items())[:12]:
+            for row in list(citations or []):
+                if not isinstance(row, dict):
+                    continue
+                url = str(row.get("url") or "").strip()
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                title = _clean_research_sentence(str(row.get("title") or "").strip()) or url
+                bibliography_rows.append({"text": f"[{claim_id}] {title} - {url}", "claim_ids": [claim_id]})
+        if bibliography_rows:
+            sections.append({"title": "Kaynakça", "paragraphs": bibliography_rows})
+
+    return sections
+
+
+def _sections_to_document_text(title: str, sections: list[dict[str, Any]]) -> str:
+    lines = [title]
+    for section in list(sections or []):
+        heading = _clean_research_sentence(str(section.get("title") or "").strip())
+        if not heading:
+            continue
+        lines.extend(["", heading])
+        for paragraph in list(section.get("paragraphs") or []):
+            if isinstance(paragraph, dict):
+                text = _clean_research_sentence(str(paragraph.get("text") or "").strip())
+            else:
+                text = _clean_research_sentence(str(paragraph or "").strip())
+            if text:
+                lines.extend(["", text])
+    return "\n".join(lines).strip()
+
+
+def _build_claim_map_artifact(
+    *,
+    topic: str,
+    sections: list[dict[str, Any]],
+    research_contract: dict[str, Any],
+    quality_summary: dict[str, Any],
+    profile: str,
+    citation_mode: str,
+) -> dict[str, Any]:
+    claim_list = research_contract.get("claim_list") if isinstance(research_contract, dict) else []
+    claim_ids = {str(item.get("claim_id") or "").strip() for item in claim_list if isinstance(item, dict)}
+    used_claim_ids: set[str] = set()
+    section_rows: list[dict[str, Any]] = []
+    for section in list(sections or []):
+        title = _clean_research_sentence(str(section.get("title") or "").strip())
+        paragraphs = []
+        for paragraph in list(section.get("paragraphs") or []):
+            if not isinstance(paragraph, dict):
+                continue
+            paragraph_claim_ids = [str(item).strip() for item in (paragraph.get("claim_ids") or []) if str(item).strip()]
+            used_claim_ids.update(paragraph_claim_ids)
+            paragraphs.append(
+                {
+                    "text": str(paragraph.get("text") or "").strip(),
+                    "claim_ids": paragraph_claim_ids,
+                }
+            )
+        section_rows.append({"title": title, "paragraphs": paragraphs})
+
+    coverage = len(used_claim_ids & claim_ids) / max(len(claim_ids), 1) if claim_ids else 0.0
+    return {
+        "topic": topic,
+        "document_profile": _normalize_document_profile(profile),
+        "citation_mode": _normalize_citation_mode(citation_mode),
+        "generated_at": datetime.now().isoformat(),
+        "claim_coverage": round(coverage, 2),
+        "used_claim_ids": sorted(used_claim_ids),
+        "quality_summary": dict(quality_summary or {}),
+        "research_contract": dict(research_contract or {}),
+        "sections": section_rows,
+    }
+
+
+def _load_json_payload(path: str) -> dict[str, Any]:
+    candidate = Path(str(path or "")).expanduser()
+    if not candidate.exists() or not candidate.is_file():
+        return {}
+    try:
+        payload = json.loads(candidate.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _build_claim_map_revision_summary(
+    *,
+    previous_claim_map: dict[str, Any],
+    current_claim_map: dict[str, Any],
+    revision_request: str,
+) -> str:
+    prev_quality = previous_claim_map.get("quality_summary") if isinstance(previous_claim_map.get("quality_summary"), dict) else {}
+    curr_quality = current_claim_map.get("quality_summary") if isinstance(current_claim_map.get("quality_summary"), dict) else {}
+    prev_used = {
+        str(item).strip()
+        for item in list(previous_claim_map.get("used_claim_ids") or [])
+        if str(item).strip()
+    }
+    curr_used = {
+        str(item).strip()
+        for item in list(current_claim_map.get("used_claim_ids") or [])
+        if str(item).strip()
+    }
+    prev_sections = {
+        str(item.get("title") or "").strip()
+        for item in list(previous_claim_map.get("sections") or [])
+        if isinstance(item, dict) and str(item.get("title") or "").strip()
+    }
+    curr_sections = {
+        str(item.get("title") or "").strip()
+        for item in list(current_claim_map.get("sections") or [])
+        if isinstance(item, dict) and str(item.get("title") or "").strip()
+    }
+    lines = [
+        "# Revision Summary",
+        "",
+        f"- Revision request: {str(revision_request or '').strip() or '-'}",
+        f"- Previous profile: {previous_claim_map.get('document_profile') or '-'}",
+        f"- Current profile: {current_claim_map.get('document_profile') or '-'}",
+        f"- Previous citation mode: {previous_claim_map.get('citation_mode') or '-'}",
+        f"- Current citation mode: {current_claim_map.get('citation_mode') or '-'}",
+        f"- Claim coverage: {float(prev_quality.get('claim_coverage', 0.0) or 0.0):.2f} -> {float(curr_quality.get('claim_coverage', 0.0) or 0.0):.2f}",
+        f"- Critical claim coverage: {float(prev_quality.get('critical_claim_coverage', 0.0) or 0.0):.2f} -> {float(curr_quality.get('critical_claim_coverage', 0.0) or 0.0):.2f}",
+        f"- Uncertainty count: {int(prev_quality.get('uncertainty_count', 0) or 0)} -> {int(curr_quality.get('uncertainty_count', 0) or 0)}",
+        f"- Conflict count: {int(prev_quality.get('conflict_count', 0) or 0)} -> {int(curr_quality.get('conflict_count', 0) or 0)}",
+        "",
+        "## Structural Changes",
+        "",
+        f"- Added sections: {', '.join(sorted(curr_sections - prev_sections)) if curr_sections - prev_sections else '-'}",
+        f"- Removed sections: {', '.join(sorted(prev_sections - curr_sections)) if prev_sections - curr_sections else '-'}",
+        f"- Added claims: {', '.join(sorted(curr_used - prev_used)) if curr_used - prev_used else '-'}",
+        f"- Removed claims: {', '.join(sorted(prev_used - curr_used)) if prev_used - curr_used else '-'}",
+    ]
+    return "\n".join(lines).strip() + "\n"
+
+
+def _normalize_section_token(title: str) -> str:
+    return re.sub(r"\s+", " ", str(title or "").strip().lower())
+
+
+def _merge_sections_with_previous_claim_map(
+    *,
+    previous_claim_map: dict[str, Any],
+    current_sections: list[dict[str, Any]],
+    target_sections: list[str],
+) -> list[dict[str, Any]]:
+    targets = {
+        _normalize_section_token(title)
+        for title in list(target_sections or [])
+        if str(title or "").strip()
+    }
+    if not targets:
+        return list(current_sections or [])
+
+    previous_sections = previous_claim_map.get("sections") if isinstance(previous_claim_map, dict) else []
+    if not isinstance(previous_sections, list) or not previous_sections:
+        return list(current_sections or [])
+
+    current_map = {
+        _normalize_section_token(str(section.get("title") or "").strip()): dict(section)
+        for section in list(current_sections or [])
+        if isinstance(section, dict) and str(section.get("title") or "").strip()
+    }
+
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for section in previous_sections:
+        if not isinstance(section, dict):
+            continue
+        title = str(section.get("title") or "").strip()
+        key = _normalize_section_token(title)
+        if not key:
+            continue
+        seen.add(key)
+        if key in targets and key in current_map:
+            merged.append(dict(current_map[key]))
+        else:
+            paragraphs = []
+            for paragraph in list(section.get("paragraphs") or []):
+                if isinstance(paragraph, dict):
+                    paragraphs.append(
+                        {
+                            "text": str(paragraph.get("text") or "").strip(),
+                            "claim_ids": [
+                                str(item).strip()
+                                for item in list(paragraph.get("claim_ids") or [])
+                                if str(item).strip()
+                            ],
+                        }
+                    )
+            merged.append({"title": title, "paragraphs": paragraphs})
+
+    for section in list(current_sections or []):
+        if not isinstance(section, dict):
+            continue
+        key = _normalize_section_token(str(section.get("title") or "").strip())
+        if key and key not in seen:
+            merged.append(dict(section))
+    return merged
 
 
 def _topic_terms(topic: str) -> list[str]:
@@ -210,6 +670,31 @@ def _research_body_seems_relevant(topic: str, body: str) -> bool:
         return len(text) >= 280
     matches = sum(1 for token in set(terms) if token in text.lower())
     return matches >= max(1, min(2, len(set(terms))))
+
+
+def _should_use_llm_research_body(
+    *,
+    topic: str,
+    llm_body: str,
+    quality_summary: dict[str, Any],
+    source_policy_stats: dict[str, Any],
+    source_policy: str,
+    findings: list[str],
+    sources: list[dict[str, Any]],
+) -> bool:
+    if not llm_body or not _research_body_seems_relevant(topic, llm_body):
+        return False
+    if _normalize_text(source_policy) == "official":
+        return False
+    if bool(source_policy_stats.get("fallback_used")):
+        return False
+    if str(quality_summary.get("status") or "").strip().lower() != "pass":
+        return False
+    if len(list(findings or [])) < 3:
+        return False
+    if len(list(sources or [])) < 3:
+        return False
+    return True
 
 
 async def _synthesize_research_body_with_llm(
@@ -2872,8 +3357,13 @@ async def research_document_delivery(
     source_policy: str = "trusted",
     min_reliability: float = 0.62,
     citation_style: str = "none",
-    include_bibliography: bool = False,
+    include_bibliography: bool = True,
+    document_profile: str = "executive",
+    citation_mode: str = "inline",
     deliver_copy: bool = False,
+    previous_claim_map_path: str = "",
+    revision_request: str = "",
+    target_sections: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Execute a high-quality research workflow, generate deliverable documents,
@@ -2904,6 +3394,12 @@ async def research_document_delivery(
         citation_style = str(citation_style or "none").strip().lower()
         if citation_style not in {"none", "apa7", "mla", "ieee", "chicago"}:
             citation_style = "none"
+        citation_mode = _normalize_citation_mode(
+            citation_mode,
+            citation_style=citation_style,
+            include_bibliography=include_bibliography,
+        )
+        document_profile = _normalize_document_profile(document_profile, audience=audience)
         include_bibliography = bool(include_bibliography)
 
         try:
@@ -2947,7 +3443,32 @@ async def research_document_delivery(
         cleaned_document_findings = _select_research_document_findings(findings, limit=6)
         summary = str(research_result.get("summary") or "").strip()
         sources = research_result.get("sources") if isinstance(research_result.get("sources"), list) else []
-        filtered_sources = _select_research_sources_for_document(sources, min_rel=min_rel, limit=6)
+        research_contract = research_result.get("research_contract") if isinstance(research_result.get("research_contract"), dict) else {}
+        if not research_contract:
+            try:
+                from tools.research_tools.advanced_research import ResearchSource, _build_research_contract_payload
+
+                source_objs = [
+                    ResearchSource(
+                        url=str(src.get("url") or "").strip(),
+                        title=str(src.get("title") or "").strip(),
+                        snippet=str(src.get("snippet") or "").strip(),
+                        reliability_score=float(src.get("reliability_score", 0.0) or 0.0),
+                        fetched=bool(src.get("fetched", False)),
+                        fetched_at=str(src.get("fetched_at") or ""),
+                    )
+                    for src in sources
+                    if isinstance(src, dict)
+                ]
+                research_contract = _build_research_contract_payload(topic_clean, findings, source_objs)
+            except Exception:
+                research_contract = {}
+        filtered_sources = _select_research_sources_for_document(
+            sources,
+            min_rel=min_rel,
+            source_policy=policy,
+            limit=6,
+        )
         source_count = int(research_result.get("source_count") or len(filtered_sources or sources))
         reliability_scores = []
         for src in sources:
@@ -2958,10 +3479,20 @@ async def research_document_delivery(
             except Exception:
                 continue
         avg_reliability = (sum(reliability_scores) / len(reliability_scores)) if reliability_scores else 0.0
+        quality_summary = research_result.get("quality_summary") if isinstance(research_result.get("quality_summary"), dict) else {}
+        if not quality_summary:
+            quality_summary = _quality_summary_from_research_payload(
+                research_contract=research_contract,
+                sources=sources,
+                findings=findings,
+                source_policy=policy,
+                min_reliability=min_rel,
+            )
+        source_policy_stats = research_result.get("source_policy_stats") if isinstance(research_result.get("source_policy_stats"), dict) else {}
+        previous_claim_map = _load_json_payload(previous_claim_map_path)
         outputs: list[str] = []
         warnings: list[str] = []
         supporting_artifacts: list[str] = []
-
         llm_body = await _synthesize_research_body_with_llm(
             topic=topic_clean,
             brief=brief,
@@ -2969,23 +3500,102 @@ async def research_document_delivery(
             sources=filtered_sources or sources,
             language=language,
         )
+        summary_seed = (
+            llm_body
+            if _should_use_llm_research_body(
+                topic=topic_clean,
+                llm_body=llm_body,
+                quality_summary=quality_summary,
+                source_policy_stats=source_policy_stats,
+                source_policy=policy,
+                findings=cleaned_document_findings or findings,
+                sources=filtered_sources or sources,
+            )
+            else summary
+        )
 
-        heuristic_body = _build_research_word_content(
+        sections = _build_research_document_sections(
             topic=topic_clean,
             brief=brief,
-            audience=audience,
-            depth=normalized_depth,
-            policy=policy,
-            min_rel=min_rel,
-            summary=summary,
+            profile=document_profile,
+            citation_mode=citation_mode,
+            summary=summary_seed,
             findings=cleaned_document_findings or findings,
-            sources=filtered_sources or sources,
-            source_count=source_count,
-            avg_reliability=avg_reliability,
+            research_contract=research_contract,
+            quality_summary=quality_summary,
             include_bibliography=include_bibliography,
         )
-        research_body = llm_body or heuristic_body
+        sections = _merge_sections_with_previous_claim_map(
+            previous_claim_map=previous_claim_map,
+            current_sections=sections,
+            target_sections=list(target_sections or []),
+        )
+        research_body = _sections_to_document_text(f"Araştırma Raporu - {topic_clean}", sections)
+        if len(research_body) < 280:
+            heuristic_body = _build_research_word_content(
+                topic=topic_clean,
+                brief=brief,
+                audience=audience,
+                depth=normalized_depth,
+                policy=policy,
+                min_rel=min_rel,
+                summary=summary,
+                findings=cleaned_document_findings or findings,
+                sources=filtered_sources or sources,
+                source_count=source_count,
+                avg_reliability=avg_reliability,
+                include_bibliography=include_bibliography,
+            )
+            fallback_body = llm_body or heuristic_body
+            fallback_sections = _build_research_document_sections(
+                topic=topic_clean,
+                brief=brief,
+                profile=document_profile,
+                citation_mode=citation_mode,
+                summary=fallback_body or summary,
+                findings=cleaned_document_findings or findings,
+                research_contract=research_contract,
+                quality_summary=quality_summary,
+                include_bibliography=include_bibliography,
+            )
+            if fallback_sections:
+                sections = fallback_sections
+                research_body = _sections_to_document_text(f"Araştırma Raporu - {topic_clean}", sections)
+            else:
+                research_body = fallback_body
         research_paragraphs = _extract_plain_paragraphs(research_body)
+
+        claim_map_payload = _build_claim_map_artifact(
+            topic=topic_clean,
+            sections=sections,
+            research_contract=research_contract,
+            quality_summary=quality_summary,
+            profile=document_profile,
+            citation_mode=citation_mode,
+        )
+        claim_map_payload["delivery"] = {
+            "source_policy": policy,
+            "min_reliability": min_rel,
+            "depth": normalized_depth,
+            "audience": audience,
+        }
+        claim_map_path = delivery_dir / "claim_map.json"
+        claim_map_path.write_text(json.dumps(claim_map_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        supporting_artifacts.append(str(claim_map_path))
+        claim_coverage = float(claim_map_payload.get("claim_coverage", quality_summary.get("claim_coverage", 0.0)) or 0.0)
+        critical_claim_coverage = float(quality_summary.get("critical_claim_coverage", 0.0) or 0.0)
+        uncertainty_count = int(quality_summary.get("uncertainty_count", 0) or 0)
+        revision_summary = ""
+        revision_summary_path: Path | None = None
+        if previous_claim_map:
+            revision_summary = _build_claim_map_revision_summary(
+                previous_claim_map=previous_claim_map,
+                current_claim_map=claim_map_payload,
+                revision_request=revision_request,
+            )
+            revision_summary_path = delivery_dir / "revision_summary.md"
+            revision_summary_path.write_text(revision_summary, encoding="utf-8")
+            supporting_artifacts.append(str(revision_summary_path))
 
         if include_pdf:
             pdf_path = delivery_dir / "RESEARCH_DELIVERY.pdf"
@@ -3070,19 +3680,11 @@ async def research_document_delivery(
                         f"- Derinlik: {normalized_depth}",
                         f"- Kaynak politikası: {policy}",
                         f"- Min güvenilirlik: {min_rel:.2f}",
+                        f"- Claim coverage: {claim_coverage:.2f}",
+                        f"- Critical claim coverage: {critical_claim_coverage:.2f}",
+                        f"- Uncertainty count: {uncertainty_count}",
                         "",
-                        "## Kısa Özet",
-                        _extract_report_summary(summary, findings, topic_clean),
-                        "",
-                        "## Temel Bulgular",
-                        *([f"- {_strip_research_annotation(item)}" for item in findings[:6] if _strip_research_annotation(item)] or ["- Bulgu üretilemedi."]),
-                        "",
-                        "## Kaynaklar",
-                        *[
-                            f"- {_clean_research_sentence(str(src.get('title') or src.get('url') or 'source'))} | {str(src.get('url') or '').strip()}"
-                            for src in (filtered_sources or sources)[:12]
-                            if isinstance(src, dict)
-                        ],
+                        research_body,
                     ]
                 ),
                 encoding="utf-8",
@@ -3136,6 +3738,10 @@ async def research_document_delivery(
         primary_output = outputs[0]
 
         message_lines = [f"Araştırma belgesi hazır: {primary_output}"]
+        quality_status = str((quality_summary or {}).get("status") or ("partial" if critical_claim_coverage < 1.0 or uncertainty_count > 0 else "pass"))
+        message_lines.append(
+            f"Kalite: {quality_status} | Claim coverage: {claim_coverage:.2f} | Kritik claim coverage: {critical_claim_coverage:.2f} | Belirsizlik: {uncertainty_count}"
+        )
         if len(outputs) > 1:
             message_lines.append(f"Ek çıktı sayısı: {len(outputs) - 1}")
 
@@ -3148,18 +3754,37 @@ async def research_document_delivery(
             "min_reliability": min_rel,
             "citation_style": citation_style,
             "include_bibliography": include_bibliography,
+            "document_profile": document_profile,
+            "citation_mode": citation_mode,
             "path": primary_output,
             "delivery_dir": str(delivery_dir),
             "outputs": outputs,
-            "artifacts": outputs,
+            "artifacts": outputs + supporting_artifacts,
             "supporting_artifacts": supporting_artifacts,
             "source_count": source_count,
             "finding_count": len(findings),
+            "claim_coverage": round(claim_coverage, 2),
+            "critical_claim_coverage": round(critical_claim_coverage, 2),
+            "uncertainty_count": uncertainty_count,
             "quality_summary": {
+                **dict(quality_summary or {}),
                 "avg_reliability": avg_reliability,
                 "min_reliability_threshold": min_rel,
                 "source_policy": policy,
+                "claim_coverage": round(claim_coverage, 2),
+                "critical_claim_coverage": round(critical_claim_coverage, 2),
+                "uncertainty_count": uncertainty_count,
+                "uncertainty_section_present": any(
+                    str(section.get("title") or "").strip().lower() == "belirsizlikler"
+                    for section in list(sections or [])
+                    if isinstance(section, dict)
+                ),
+                "status": quality_status,
             },
+            "claim_map_path": str(claim_map_path),
+            "revision_summary": revision_summary,
+            "revision_summary_path": str(revision_summary_path) if revision_summary_path else "",
+            "research_contract": research_contract,
             "summary": summary,
             "message": "\n".join(message_lines),
         }

@@ -1,0 +1,1 @@
+Frontmost app: Safari. Window: Checkout. Continue butonu gorunuyor. OCR: Continue

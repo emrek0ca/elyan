@@ -1,0 +1,473 @@
+[
+  {
+    "step": 1,
+    "attempt": 1,
+    "planned_action": {
+      "kind": "click",
+      "target": {
+        "label": "Done",
+        "role": "button",
+        "x": 500,
+        "y": 150,
+        "width": 60,
+        "height": 28,
+        "frontmost_app": "Safari",
+        "window_title": "Next",
+        "source": "accessibility",
+        "confidence": 0.92
+      },
+      "alternates": [
+        {
+          "label": "Continue",
+          "role": "button",
+          "x": 320,
+          "y": 92,
+          "width": 80,
+          "height": 28,
+          "frontmost_app": "Safari",
+          "window_title": "Checkout",
+          "source": "cache",
+          "confidence": 0.92,
+          "_cache_meta": {
+            "seen_count": 2,
+            "last_seen_at": 1773425037.0381298,
+            "last_action_kind": "click",
+            "frontmost_app": "Safari",
+            "window_title": "Checkout",
+            "last_verified_success": true,
+            "verified_success_count": 1,
+            "last_verified_success_at": 1773425037.0381298
+          }
+        }
+      ],
+      "attempts": 1,
+      "decision_trace": {
+        "query": "done",
+        "action_kind": "click",
+        "preferred_roles": [
+          "button",
+          "checkbox",
+          "link",
+          "menu_item",
+          "radio",
+          "tab"
+        ],
+        "role_hints": [
+          "button"
+        ],
+        "require_coords": true,
+        "current_context": {
+          "frontmost_app": "Safari",
+          "active_window": "Next"
+        },
+        "chosen": {
+          "label": "Done",
+          "role": "button",
+          "source": "accessibility",
+          "score": 344.0,
+          "has_coords": true,
+          "frontmost_app": "safari",
+          "window_title": "next",
+          "reasons": [
+            {
+              "code": "confidence",
+              "points": 92.0,
+              "details": {
+                "confidence": 0.92
+              }
+            },
+            {
+              "code": "source_priority",
+              "points": 18.0,
+              "details": {
+                "source": "accessibility"
+              }
+            },
+            {
+              "code": "bounded_target",
+              "points": 18.0,
+              "details": {}
+            },
+            {
+              "code": "role_hint_match",
+              "points": 46.0,
+              "details": {
+                "role": "button"
+              }
+            },
+            {
+              "code": "button_like_role",
+              "points": 12.0,
+              "details": {
+                "role": "button"
+              }
+            },
+            {
+              "code": "label_exact_match",
+              "points": 124.0,
+              "details": {}
+            },
+            {
+              "code": "frontmost_app_context",
+              "points": 16.0,
+              "details": {
+                "item_app": "safari",
+                "current_app": "safari"
+              }
+            },
+            {
+              "code": "active_window_context",
+              "points": 18.0,
+              "details": {
+                "item_window": "next",
+                "current_window": "next"
+              }
+            }
+          ]
+        },
+        "candidates": [
+          {
+            "label": "Done",
+            "role": "button",
+            "source": "accessibility",
+            "score": 344.0,
+            "has_coords": true,
+            "frontmost_app": "safari",
+            "window_title": "next",
+            "reasons": [
+              {
+                "code": "confidence",
+                "points": 92.0,
+                "details": {
+                  "confidence": 0.92
+                }
+              },
+              {
+                "code": "source_priority",
+                "points": 18.0,
+                "details": {
+                  "source": "accessibility"
+                }
+              },
+              {
+                "code": "bounded_target",
+                "points": 18.0,
+                "details": {}
+              },
+              {
+                "code": "role_hint_match",
+                "points": 46.0,
+                "details": {
+                  "role": "button"
+                }
+              },
+              {
+                "code": "button_like_role",
+                "points": 12.0,
+                "details": {
+                  "role": "button"
+                }
+              },
+              {
+                "code": "label_exact_match",
+                "points": 124.0,
+                "details": {}
+              },
+              {
+                "code": "frontmost_app_context",
+                "points": 16.0,
+                "details": {
+                  "item_app": "safari",
+                  "current_app": "safari"
+                }
+              },
+              {
+                "code": "active_window_context",
+                "points": 18.0,
+                "details": {
+                  "item_window": "next",
+                  "current_window": "next"
+                }
+              }
+            ]
+          },
+          {
+            "label": "Continue",
+            "role": "button",
+            "source": "cache",
+            "score": 184.0,
+            "has_coords": true,
+            "frontmost_app": "safari",
+            "window_title": "checkout",
+            "reasons": [
+              {
+                "code": "confidence",
+                "points": 92.0,
+                "details": {
+                  "confidence": 0.92
+                }
+              },
+              {
+                "code": "source_priority",
+                "points": 6.0,
+                "details": {
+                  "source": "cache"
+                }
+              },
+              {
+                "code": "bounded_target",
+                "points": 18.0,
+                "details": {}
+              },
+              {
+                "code": "role_hint_match",
+                "points": 46.0,
+                "details": {
+                  "role": "button"
+                }
+              },
+              {
+                "code": "button_like_role",
+                "points": 12.0,
+                "details": {
+                  "role": "button"
+                }
+              },
+              {
+                "code": "label_mismatch",
+                "points": -14.0,
+                "details": {}
+              },
+              {
+                "code": "frontmost_app_context",
+                "points": 16.0,
+                "details": {
+                  "item_app": "safari",
+                  "current_app": "safari"
+                }
+              },
+              {
+                "code": "active_window_context",
+                "points": -48.0,
+                "details": {
+                  "item_window": "checkout",
+                  "current_window": "next"
+                }
+              },
+              {
+                "code": "recently_verified_success",
+                "points": 34.0,
+                "details": {}
+              },
+              {
+                "code": "verified_success_count",
+                "points": 6.0,
+                "details": {
+                  "count": 1
+                }
+              },
+              {
+                "code": "action_kind_history_match",
+                "points": 14.0,
+                "details": {
+                  "action_kind": "click"
+                }
+              },
+              {
+                "code": "recency_bonus",
+                "points": 14.0,
+                "details": {
+                  "age_s": 0.009
+                }
+              },
+              {
+                "code": "cached_app_context",
+                "points": 12.0,
+                "details": {
+                  "cached_app": "safari",
+                  "current_app": "safari"
+                }
+              },
+              {
+                "code": "cached_window_context",
+                "points": -24.0,
+                "details": {
+                  "cached_window": "checkout",
+                  "current_window": "next"
+                }
+              }
+            ]
+          }
+        ],
+        "rejected": [
+          {
+            "label": "Continue",
+            "role": "button",
+            "source": "cache",
+            "score": 184.0,
+            "has_coords": true,
+            "frontmost_app": "safari",
+            "window_title": "checkout",
+            "reasons": [
+              {
+                "code": "confidence",
+                "points": 92.0,
+                "details": {
+                  "confidence": 0.92
+                }
+              },
+              {
+                "code": "source_priority",
+                "points": 6.0,
+                "details": {
+                  "source": "cache"
+                }
+              },
+              {
+                "code": "bounded_target",
+                "points": 18.0,
+                "details": {}
+              },
+              {
+                "code": "role_hint_match",
+                "points": 46.0,
+                "details": {
+                  "role": "button"
+                }
+              },
+              {
+                "code": "button_like_role",
+                "points": 12.0,
+                "details": {
+                  "role": "button"
+                }
+              },
+              {
+                "code": "label_mismatch",
+                "points": -14.0,
+                "details": {}
+              },
+              {
+                "code": "frontmost_app_context",
+                "points": 16.0,
+                "details": {
+                  "item_app": "safari",
+                  "current_app": "safari"
+                }
+              },
+              {
+                "code": "active_window_context",
+                "points": -48.0,
+                "details": {
+                  "item_window": "checkout",
+                  "current_window": "next"
+                }
+              },
+              {
+                "code": "recently_verified_success",
+                "points": 34.0,
+                "details": {}
+              },
+              {
+                "code": "verified_success_count",
+                "points": 6.0,
+                "details": {
+                  "count": 1
+                }
+              },
+              {
+                "code": "action_kind_history_match",
+                "points": 14.0,
+                "details": {
+                  "action_kind": "click"
+                }
+              },
+              {
+                "code": "recency_bonus",
+                "points": 14.0,
+                "details": {
+                  "age_s": 0.009
+                }
+              },
+              {
+                "code": "cached_app_context",
+                "points": 12.0,
+                "details": {
+                  "cached_app": "safari",
+                  "current_app": "safari"
+                }
+              },
+              {
+                "code": "cached_window_context",
+                "points": -24.0,
+                "details": {
+                  "cached_window": "checkout",
+                  "current_window": "next"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "x": 530,
+      "y": 164
+    },
+    "execution_result": {
+      "success": true,
+      "x": 530,
+      "y": 164,
+      "action": "click"
+    },
+    "verification": {
+      "ok": true,
+      "status": "success",
+      "checks": [
+        {
+          "code": "after_screenshot_present",
+          "passed": true,
+          "details": {
+            "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-374/test_operator_task_runtime_ret0/screen_after_1_1_1773425037046.png"
+          }
+        },
+        {
+          "code": "ui_state_present",
+          "passed": true,
+          "details": {
+            "element_count": 6
+          }
+        },
+        {
+          "code": "visual_change_observed",
+          "passed": true,
+          "details": {
+            "visual_change": true,
+            "window_changed": true,
+            "app_changed": false,
+            "target_visible_after": true
+          }
+        }
+      ],
+      "failed": [],
+      "failed_codes": [],
+      "repairable": true,
+      "summary": "screen action verification for click",
+      "evidence_refs": [
+        {
+          "type": "screenshot",
+          "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-374/test_operator_task_runtime_ret0/screen_before_1773425037046.png"
+        },
+        {
+          "type": "screenshot",
+          "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-374/test_operator_task_runtime_ret0/screen_after_1_1_1773425037046.png"
+        }
+      ],
+      "metrics": {
+        "visual_change": 1,
+        "window_changed": 1,
+        "app_changed": 0
+      },
+      "target_visible_after": true
+    },
+    "after_summary": "Frontmost app: Safari. Window: Done. Done ekran acildi. OCR: Done"
+  }
+]

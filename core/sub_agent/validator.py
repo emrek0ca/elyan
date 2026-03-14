@@ -19,6 +19,72 @@ class ValidationResult:
 class SubAgentValidator:
     """Validates sub-agent output against deterministic gates."""
 
+    @staticmethod
+    def _payload_dict(result_payload: Any) -> Dict[str, Any]:
+        return dict(result_payload) if isinstance(result_payload, dict) else {}
+
+    @staticmethod
+    def _quality_summary(result_payload: Any) -> Dict[str, Any]:
+        payload = SubAgentValidator._payload_dict(result_payload)
+        summary = payload.get("quality_summary")
+        return dict(summary) if isinstance(summary, dict) else {}
+
+    @staticmethod
+    def _gate_research_contract_complete(result_payload: Any) -> bool:
+        payload = SubAgentValidator._payload_dict(result_payload)
+        contract = payload.get("research_contract")
+        if not isinstance(contract, dict):
+            return False
+        required = ("claim_list", "citation_map", "critical_claim_ids", "uncertainty_log", "conflicts")
+        return all(key in contract for key in required)
+
+    @staticmethod
+    def _gate_claim_coverage_full(result_payload: Any) -> bool:
+        quality = SubAgentValidator._quality_summary(result_payload)
+        try:
+            return float(quality.get("claim_coverage", 0.0) or 0.0) >= 1.0
+        except Exception:
+            return False
+
+    @staticmethod
+    def _gate_critical_claim_support(result_payload: Any) -> bool:
+        quality = SubAgentValidator._quality_summary(result_payload)
+        try:
+            return float(quality.get("critical_claim_coverage", 0.0) or 0.0) >= 1.0
+        except Exception:
+            return False
+
+    @staticmethod
+    def _gate_uncertainty_section_present(result_payload: Any) -> bool:
+        quality = SubAgentValidator._quality_summary(result_payload)
+        if "uncertainty_section_present" not in quality:
+            return False
+        return bool(quality.get("uncertainty_section_present"))
+
+    @staticmethod
+    def _gate_claim_map_present(result_payload: Any, artifacts: List[str]) -> bool:
+        payload = SubAgentValidator._payload_dict(result_payload)
+        claim_map_path = str(payload.get("claim_map_path") or "").strip()
+        if claim_map_path:
+            try:
+                if Path(claim_map_path).expanduser().exists():
+                    return True
+            except Exception:
+                pass
+        return any(str(item).endswith("claim_map.json") for item in list(artifacts or []))
+
+    @staticmethod
+    def _gate_revision_summary_present(result_payload: Any, artifacts: List[str]) -> bool:
+        payload = SubAgentValidator._payload_dict(result_payload)
+        revision_path = str(payload.get("revision_summary_path") or "").strip()
+        if revision_path:
+            try:
+                if Path(revision_path).expanduser().exists():
+                    return True
+            except Exception:
+                pass
+        return any(str(item).endswith("revision_summary.md") or str(item).endswith(".revision_summary.md") for item in list(artifacts or []))
+
     def _gate_file_exists(self, path: str) -> bool:
         return Path(path).expanduser().exists()
 
@@ -86,6 +152,18 @@ class SubAgentValidator:
                     ok = self._gate_no_placeholder(payload_text)
                 elif g == "tool_success":
                     ok = self._gate_tool_success(result.result)
+                elif g == "research_contract_complete":
+                    ok = self._gate_research_contract_complete(result.result)
+                elif g == "claim_coverage_full":
+                    ok = self._gate_claim_coverage_full(result.result)
+                elif g == "critical_claim_support":
+                    ok = self._gate_critical_claim_support(result.result)
+                elif g == "uncertainty_section_present":
+                    ok = self._gate_uncertainty_section_present(result.result)
+                elif g == "claim_map_present":
+                    ok = self._gate_claim_map_present(result.result, artifacts)
+                elif g == "revision_summary_present":
+                    ok = self._gate_revision_summary_present(result.result, artifacts)
                 elif g == "artifact_paths_nonempty":
                     ok = bool(artifacts)
                 elif g == "artifact_or_content":

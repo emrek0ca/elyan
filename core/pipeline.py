@@ -903,6 +903,12 @@ def _build_research_recovery_plan(
         steps.append("Ana iddiaları kaynaklarla eşle")
     if "unknowns" in gates:
         steps.append("Belirsizlikler ve sınırlılıklar bölümü ekle")
+    if "claim_coverage" in gates:
+        steps.append("Her ana paragrafı en az bir claim ile ilişkilendir")
+    if "critical_claim_coverage" in gates:
+        steps.append("Kritik iddialar için ikinci bağımsız kaynak ekle")
+    if "uncertainty_section" in gates:
+        steps.append("Belirsizlikler veya açık riskler bölümünü görünür kıl")
     if any(item.startswith("payload:") for item in gates) or payload_errs:
         steps.append("Yapısal research payload üret ve doğrula")
     steps = [item for i, item in enumerate(steps) if item not in steps[:i]]
@@ -1076,6 +1082,10 @@ def _format_research_contract_addendum(ctx) -> Dict[str, Any]:
     has_sources_section = _has_marker(text, ("kaynaklar:", "sources:", "references:"))
     has_confidence_section = _has_marker(text, ("güven skoru", "confidence", "trust score"))
     has_risk_section = _has_marker(text, ("açık risk", "acik risk", "riskler", "risks"))
+    has_uncertainty_section = _has_marker(text, ("belirsizlik", "uncertainty", "sınırlılık", "sinirlilik"))
+
+    research_payload = _extract_research_payload(getattr(ctx, "tool_results", []))
+    quality_summary = research_payload.get("quality_summary") if isinstance(research_payload, dict) and isinstance(research_payload.get("quality_summary"), dict) else {}
 
     urls = _collect_urls(text, getattr(ctx, "tool_results", []))
     source_rows = [f"- {u}" for u in urls[:5]]
@@ -1093,12 +1103,37 @@ def _format_research_contract_addendum(ctx) -> Dict[str, Any]:
 
     if not has_confidence_section:
         missing.append("confidence")
-        addendum_parts.append(f"Güven skoru (otomatik): %{int(round(auto_conf * 100))}")
+        if quality_summary:
+            addendum_parts.append(
+                f"Güven skoru (otomatik): %{int(round(float(quality_summary.get('avg_reliability', auto_conf) or auto_conf) * 100))}"
+            )
+        else:
+            addendum_parts.append(f"Güven skoru (otomatik): %{int(round(auto_conf * 100))}")
 
     if not has_risk_section:
         missing.append("risks")
         addendum_parts.append("Açık riskler:")
-        addendum_parts.append("- Bazı kaynaklar güncellik/doğruluk açısından manuel teyit gerektirebilir.")
+        if quality_summary and float(quality_summary.get("critical_claim_coverage", 1.0) or 1.0) < 1.0:
+            addendum_parts.append("- Bazı kritik iddialar ikinci bağımsız kaynakla doğrulanamadı.")
+        else:
+            addendum_parts.append("- Bazı kaynaklar güncellik/doğruluk açısından manuel teyit gerektirebilir.")
+
+    if not has_uncertainty_section:
+        missing.append("uncertainty")
+        addendum_parts.append("Belirsizlikler:")
+        uncertainty_count = int(quality_summary.get("uncertainty_count", 0) or 0) if quality_summary else 0
+        if uncertainty_count > 0:
+            addendum_parts.append(f"- Yapısal doğrulamada {uncertainty_count} belirsizlik kaydı bulundu.")
+        else:
+            addendum_parts.append("- Belirgin belirsizlik kaydı görünmüyor; yine de kritik sayısal iddialar manuel teyit gerektirir.")
+
+    if quality_summary:
+        addendum_parts.append(
+            f"Kritik claim coverage: %{int(round(float(quality_summary.get('critical_claim_coverage', 0.0) or 0.0) * 100))}"
+        )
+        addendum_parts.append(
+            f"Claim coverage: %{int(round(float(quality_summary.get('claim_coverage', 0.0) or 0.0) * 100))}"
+        )
 
     addendum_text = ""
     if addendum_parts:
@@ -1117,10 +1152,24 @@ def _extract_research_payload(tool_results: List[Dict[str, Any]]) -> Dict[str, A
         if not isinstance(row, dict):
             continue
         if isinstance(row.get("research_contract"), dict):
-            return dict(row.get("research_contract") or {})
+            payload = dict(row.get("research_contract") or {})
+            if isinstance(row.get("quality_summary"), dict):
+                payload["quality_summary"] = dict(row.get("quality_summary") or {})
+            if str(row.get("claim_map_path") or "").strip():
+                payload["claim_map_path"] = str(row.get("claim_map_path") or "").strip()
+            if str(row.get("revision_summary_path") or "").strip():
+                payload["revision_summary_path"] = str(row.get("revision_summary_path") or "").strip()
+            return payload
         result = row.get("result")
         if isinstance(result, dict) and isinstance(result.get("research_contract"), dict):
-            return dict(result.get("research_contract") or {})
+            payload = dict(result.get("research_contract") or {})
+            if isinstance(result.get("quality_summary"), dict):
+                payload["quality_summary"] = dict(result.get("quality_summary") or {})
+            if str(result.get("claim_map_path") or "").strip():
+                payload["claim_map_path"] = str(result.get("claim_map_path") or "").strip()
+            if str(result.get("revision_summary_path") or "").strip():
+                payload["revision_summary_path"] = str(result.get("revision_summary_path") or "").strip()
+            return payload
     return None
 
 
@@ -2725,6 +2774,11 @@ class StageExecute(PipelineStage):
                         team_result = await team.execute_project(ctx.user_input)
                         team_status = str(getattr(team_result, "status", "success") or "success").lower()
                         summary = str(getattr(team_result, "summary", "") or "")
+                        team_telemetry = dict(getattr(team_result, "telemetry", {}) or {})
+                        if team_telemetry:
+                            ctx.telemetry["team_mode"] = team_telemetry
+                            if isinstance(ctx.capability_plan, dict):
+                                ctx.capability_plan["team_mode_telemetry"] = team_telemetry
                         if summary:
                             ctx.final_response += summary
                         elif team_status == "success":
@@ -2747,7 +2801,7 @@ class StageExecute(PipelineStage):
                             mode="team_mode",
                             selected=False,
                             reason=f"team_incomplete:{team_status}",
-                            metadata={"fallback": "multi_agent_or_cdg", **telemetry_meta},
+                            metadata={"fallback": "multi_agent_or_cdg", **telemetry_meta, **team_telemetry},
                         )
                         if flag_enabled(ctx, "upgrade_fallback_ladder", default=False):
                             ctx.telemetry["fallback_ladder"] = fallback_ladder()

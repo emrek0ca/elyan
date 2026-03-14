@@ -177,6 +177,35 @@ class RunStore:
             lines.append(row)
 
         meta = metadata or {}
+        if isinstance(meta, dict):
+            if "claim_coverage" in meta:
+                lines.append(f"- Claim coverage: {float(meta.get('claim_coverage', 0.0) or 0.0):.2f}")
+            if "critical_claim_coverage" in meta:
+                lines.append(
+                    f"- Critical claim coverage: {float(meta.get('critical_claim_coverage', 0.0) or 0.0):.2f}"
+                )
+            if "uncertainty_count" in meta:
+                lines.append(f"- Uncertainty count: {int(meta.get('uncertainty_count', 0) or 0)}")
+            if "conflict_count" in meta:
+                lines.append(f"- Conflict count: {int(meta.get('conflict_count', 0) or 0)}")
+            if "manual_review_claim_count" in meta:
+                lines.append(f"- Manual review claims: {int(meta.get('manual_review_claim_count', 0) or 0)}")
+            if str(meta.get("claim_map_path") or "").strip():
+                lines.append(f"- Claim map: {str(meta.get('claim_map_path') or '').strip()}")
+            if str(meta.get("revision_summary_path") or "").strip():
+                lines.append(f"- Revision summary: {str(meta.get('revision_summary_path') or '').strip()}")
+            if "team_quality_avg" in meta:
+                lines.append(f"- Team quality avg: {float(meta.get('team_quality_avg', 0.0) or 0.0):.2f}")
+            if "team_research_claim_coverage" in meta:
+                lines.append(
+                    f"- Team research claim coverage: {float(meta.get('team_research_claim_coverage', 0.0) or 0.0):.2f}"
+                )
+            if "team_research_critical_claim_coverage" in meta:
+                lines.append(
+                    f"- Team research critical coverage: {float(meta.get('team_research_critical_claim_coverage', 0.0) or 0.0):.2f}"
+                )
+            if "team_research_uncertainty_count" in meta:
+                lines.append(f"- Team research uncertainty count: {int(meta.get('team_research_uncertainty_count', 0) or 0)}")
         if meta:
             lines.extend(["", "## Metadata", "", "```json", json.dumps(meta, ensure_ascii=False, indent=2, default=str), "```"])
 

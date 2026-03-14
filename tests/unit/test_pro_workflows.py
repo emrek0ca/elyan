@@ -1,5 +1,6 @@
 from pathlib import Path
 import importlib
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -259,9 +260,14 @@ async def test_research_document_delivery_returns_only_requested_outputs(monkeyp
     assert not any(str(x).endswith(".pdf") for x in outputs)
     assert isinstance(result.get("quality_summary"), dict)
     assert "avg_reliability" in result.get("quality_summary", {})
+    assert result.get("claim_coverage") >= 0.0
+    assert result.get("critical_claim_coverage") >= 0.0
     assert str(result.get("path", "")).endswith(".docx")
     assert isinstance(result.get("supporting_artifacts"), list)
-    assert result.get("supporting_artifacts") == []
+    assert any(str(item).endswith("claim_map.json") for item in result.get("supporting_artifacts", []))
+    assert str(result.get("claim_map_path", "")).endswith("claim_map.json")
+    assert result.get("document_profile") == "executive"
+    assert result.get("citation_mode") == "inline"
 
 
 @pytest.mark.asyncio
@@ -313,12 +319,12 @@ async def test_research_document_delivery_word_only_stays_single_artifact(monkey
     assert len(outputs) == 1
     assert str(outputs[0]).endswith(".docx")
     assert "Araştırma belgesi hazır:" in str(result.get("message", ""))
-    assert "Güven:" not in str(captured.get("content", ""))
+    assert "Kısa Özet" in str(captured.get("content", ""))
+    assert "Temel Bulgular" in str(captured.get("content", ""))
+    assert "Kaynak Güven Özeti" in str(captured.get("content", ""))
+    assert "Açık Riskler" in str(captured.get("content", ""))
+    assert "Belirsizlikler" in str(captured.get("content", ""))
     assert "Operasyonel Öneriler" not in str(captured.get("content", ""))
-    assert "Yönetici Özeti" not in str(captured.get("content", ""))
-    assert "Ana Bulgular" not in str(captured.get("content", ""))
-    assert "Kaynak Politikası" not in str(captured.get("content", ""))
-    assert "güvenilirlik eşiği" not in str(captured.get("content", "")).lower()
     assert "BUders" not in str(captured.get("content", ""))
     assert "Denklem 1" not in str(captured.get("content", ""))
 
@@ -495,12 +501,21 @@ async def test_research_document_delivery_prefers_llm_synthesis_when_available(m
             "findings": [
                 "• Fourier serileri periyodik fonksiyonların sinüs ve kosinüs bileşenleriyle temsilini sağlar. (Kaynak: example.com, Güven: %90)",
                 "• Isı denklemi çözümü Fourier yaklaşımının tarihsel kullanım alanlarından biridir. (Kaynak: math.example, Güven: %88)",
+                "• Sinyal işleme uygulamalarında frekans bileşenleri ayrıştırılabilir. (Kaynak: signals.example.edu, Güven: %87)",
             ],
             "sources": [
                 {"title": "Kaynak 1", "url": "https://example.com", "reliability_score": 0.9},
                 {"title": "Kaynak 2", "url": "https://math.example.edu", "reliability_score": 0.91},
+                {"title": "Kaynak 3", "url": "https://signals.example.edu", "reliability_score": 0.87},
             ],
-            "source_count": 2,
+            "source_count": 3,
+            "quality_summary": {
+                "claim_coverage": 1.0,
+                "critical_claim_coverage": 1.0,
+                "uncertainty_count": 0,
+                "status": "pass",
+            },
+            "source_policy_stats": {"fallback_used": False},
             "report_paths": [],
         }
 
@@ -535,6 +550,319 @@ async def test_research_document_delivery_prefers_llm_synthesis_when_available(m
 
     assert result.get("success") is True
     assert "trigonometrik bileşenler" in str(captured.get("content", ""))
+
+
+@pytest.mark.asyncio
+async def test_research_document_delivery_ignores_llm_synthesis_when_official_research_is_partial(monkeypatch, tmp_path):
+    monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
+    captured = {}
+
+    async def _fake_research(**kwargs):
+        return {
+            "success": True,
+            "topic": kwargs.get("topic", "test"),
+            "summary": "Kısa Özet:\n' Türkiye ekonomisinin son 10 yılı' için 3 kaynak incelendi.",
+            "findings": [
+                "• TÜİK verilerine göre enflasyon ve büyüme göstergeleri son on yılda belirgin dalgalanma göstermiştir. (Kaynak: tuik.gov.tr, Güven: %90)",
+                "• TCMB raporları fiyat istikrarı ve para politikası aktarım mekanizmasına dikkat çeker. (Kaynak: tcmb.gov.tr, Güven: %88)",
+                "• Bazı yıllarda dış finansman koşulları büyüme görünümünü sınırlamıştır. (Kaynak: worldbank.org, Güven: %86)",
+            ],
+            "sources": [
+                {"title": "TÜİK", "url": "https://data.tuik.gov.tr/a", "reliability_score": 0.9},
+                {"title": "TCMB", "url": "https://www.tcmb.gov.tr/b", "reliability_score": 0.88},
+                {"title": "World Bank", "url": "https://worldbank.org/c", "reliability_score": 0.86},
+            ],
+            "source_count": 3,
+            "quality_summary": {
+                "claim_coverage": 1.0,
+                "critical_claim_coverage": 1.0,
+                "uncertainty_count": 1,
+                "status": "partial",
+            },
+            "source_policy_stats": {"fallback_used": True},
+            "report_paths": [],
+        }
+
+    async def _fake_llm_body(**kwargs):
+        return "Türkiye ekonomisi tarih boyunca birçok alanda dönüşmüştür ve sanayi, tarım, teknoloji gibi alanlarda genel bir hikaye sunar."
+
+    async def _fake_write_word(path=None, **kwargs):
+        captured["content"] = kwargs.get("content", "")
+        p = Path(str(path))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"docx")
+        return {"success": True, "path": str(p)}
+
+    research_mod = importlib.import_module("tools.research_tools.advanced_research")
+    word_mod = importlib.import_module("tools.office_tools.word_tools")
+    monkeypatch.setattr(research_mod, "advanced_research", _fake_research)
+    monkeypatch.setattr(word_mod, "write_word", _fake_write_word)
+    monkeypatch.setattr("tools.pro_workflows._synthesize_research_body_with_llm", _fake_llm_body)
+
+    result = await research_document_delivery(
+        topic="Türkiye ekonomisinin son 10 yılı",
+        brief="resmi kaynaklarla word rapor hazırla",
+        output_dir=str(tmp_path),
+        include_word=True,
+        include_excel=False,
+        include_pdf=False,
+        source_policy="official",
+    )
+
+    assert result.get("success") is True
+    content = str(captured.get("content", ""))
+    assert "tarih boyunca birçok alanda dönüşmüştür" not in content
+    assert "TÜİK" in content or "TCMB" in content
+
+
+@pytest.mark.asyncio
+async def test_research_document_delivery_generates_claim_map_and_profile_variants(monkeypatch, tmp_path):
+    monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
+    captured = {}
+
+    async def _fake_research(**kwargs):
+        return {
+            "success": True,
+            "topic": kwargs.get("topic", "test"),
+            "summary": "Yönetici özeti benzeri bir ham metin.",
+            "findings": [
+                "• Birinci bulgu sayısal sonuç içerir ve doğrulanmalıdır. (Kaynak: example.com, Güven: %90)",
+                "• İkinci bulgu yöntemin uygulama alanlarını özetler. (Kaynak: math.example.edu, Güven: %88)",
+            ],
+            "sources": [
+                {"title": "Kaynak 1", "url": "https://example.com/report", "reliability_score": 0.9},
+                {"title": "Kaynak 2", "url": "https://math.example.edu/paper", "reliability_score": 0.91},
+            ],
+            "source_count": 2,
+            "research_contract": {
+                "claim_list": [
+                    {
+                        "claim_id": "claim_1",
+                        "text": "Birinci bulgu sayısal sonuç içerir.",
+                        "source_urls": ["https://example.com/report", "https://math.example.edu/paper"],
+                        "critical": True,
+                        "source_count": 2,
+                        "confidence": 0.9,
+                    },
+                    {
+                        "claim_id": "claim_2",
+                        "text": "İkinci bulgu uygulama alanlarını özetler.",
+                        "source_urls": ["https://math.example.edu/paper"],
+                        "critical": False,
+                        "source_count": 1,
+                        "confidence": 0.82,
+                    },
+                ],
+                "citation_map": {
+                    "claim_1": [
+                        {"url": "https://example.com/report", "title": "Kaynak 1", "reliability_score": 0.9},
+                        {"url": "https://math.example.edu/paper", "title": "Kaynak 2", "reliability_score": 0.91},
+                    ],
+                    "claim_2": [
+                        {"url": "https://math.example.edu/paper", "title": "Kaynak 2", "reliability_score": 0.91},
+                    ],
+                },
+                "critical_claim_ids": ["claim_1"],
+                "conflicts": [{"type": "numeric_variation", "claim_ids": ["claim_1"], "detail": "Sayisal ifade manuel teyit gerektirir."}],
+                "uncertainty_log": ["claim_1: manuel teyit gerekli."],
+            },
+            "quality_summary": {
+                "avg_reliability": 0.905,
+                "claim_coverage": 1.0,
+                "critical_claim_coverage": 1.0,
+                "uncertainty_count": 2,
+                "status": "partial",
+            },
+            "report_paths": [],
+        }
+
+    async def _fake_write_word(path=None, **kwargs):
+        captured["content"] = kwargs.get("content", "")
+        p = Path(str(path))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"docx")
+        return {"success": True, "path": str(p)}
+
+    research_mod = importlib.import_module("tools.research_tools.advanced_research")
+    word_mod = importlib.import_module("tools.office_tools.word_tools")
+    monkeypatch.setattr(research_mod, "advanced_research", _fake_research)
+    monkeypatch.setattr(word_mod, "write_word", _fake_write_word)
+
+    result = await research_document_delivery(
+        topic="Fourier Denklem",
+        brief="analitik briefing notu hazırla",
+        output_dir=str(tmp_path),
+        include_word=True,
+        include_excel=False,
+        include_pdf=False,
+        document_profile="analytical",
+        citation_mode="inline",
+    )
+
+    assert result.get("success") is True
+    assert result.get("document_profile") == "analytical"
+    assert result.get("claim_coverage") == 1.0
+    assert result.get("critical_claim_coverage") == 1.0
+    claim_map_path = Path(str(result.get("claim_map_path", "")))
+    assert claim_map_path.exists()
+    claim_map = claim_map_path.read_text(encoding="utf-8")
+    assert "\"claim_coverage\": 1.0" in claim_map
+    assert "Temel Bulgular" in str(captured.get("content", ""))
+    assert "Kaynak Güven Özeti" in str(captured.get("content", ""))
+
+
+@pytest.mark.asyncio
+async def test_research_document_delivery_emits_revision_summary_when_previous_claim_map_exists(monkeypatch, tmp_path):
+    monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
+
+    previous_claim_map = {
+        "document_profile": "executive",
+        "citation_mode": "inline",
+        "used_claim_ids": ["claim_1"],
+        "quality_summary": {
+            "claim_coverage": 1.0,
+            "critical_claim_coverage": 0.5,
+            "uncertainty_count": 2,
+            "conflict_count": 1,
+        },
+        "sections": [{"title": "Kısa Özet", "paragraphs": [{"text": "Eski özet", "claim_ids": ["claim_1"]}]}],
+    }
+    previous_path = tmp_path / "claim_map.json"
+    previous_path.write_text(json.dumps(previous_claim_map, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    async def _fake_research(**kwargs):
+        return {
+            "success": True,
+            "topic": kwargs.get("topic", "test"),
+            "summary": "Yeni özet metni.",
+            "findings": ["• Güncel bulgu. (Kaynak: example.com, Güven: %91)"],
+            "sources": [{"title": "Kaynak 1", "url": "https://example.com/report", "reliability_score": 0.91}],
+            "source_count": 1,
+            "research_contract": {
+                "claim_list": [
+                    {
+                        "claim_id": "claim_1",
+                        "text": "Güncel bulgu.",
+                        "source_urls": ["https://example.com/report", "https://example.com/backup"],
+                        "critical": True,
+                        "source_count": 2,
+                    }
+                ],
+                "citation_map": {
+                    "claim_1": [
+                        {"url": "https://example.com/report", "title": "Kaynak 1", "reliability_score": 0.91},
+                        {"url": "https://example.com/backup", "title": "Kaynak 2", "reliability_score": 0.87},
+                    ]
+                },
+                "critical_claim_ids": ["claim_1"],
+                "conflicts": [],
+                "uncertainty_log": [],
+            },
+            "quality_summary": {
+                "claim_coverage": 1.0,
+                "critical_claim_coverage": 1.0,
+                "uncertainty_count": 0,
+                "conflict_count": 0,
+                "status": "pass",
+            },
+            "report_paths": [],
+        }
+
+    async def _fake_write_word(path=None, **kwargs):
+        p = Path(str(path))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"docx")
+        return {"success": True, "path": str(p)}
+
+    research_mod = importlib.import_module("tools.research_tools.advanced_research")
+    word_mod = importlib.import_module("tools.office_tools.word_tools")
+    monkeypatch.setattr(research_mod, "advanced_research", _fake_research)
+    monkeypatch.setattr(word_mod, "write_word", _fake_write_word)
+
+    result = await research_document_delivery(
+        topic="Fourier Denklem",
+        brief="bunu daha kısa yap",
+        output_dir=str(tmp_path),
+        include_word=True,
+        include_excel=False,
+        include_pdf=False,
+        previous_claim_map_path=str(previous_path),
+        revision_request="bunu daha kısa yap",
+    )
+
+    assert result.get("success") is True
+    revision_summary_path = Path(str(result.get("revision_summary_path", "")))
+    assert revision_summary_path.exists()
+    revision_summary = revision_summary_path.read_text(encoding="utf-8")
+    assert "Revision request: bunu daha kısa yap" in revision_summary
+    assert "Critical claim coverage: 0.50 -> 1.00" in revision_summary
+
+
+@pytest.mark.asyncio
+async def test_research_document_delivery_preserves_untargeted_sections_from_previous_claim_map(monkeypatch, tmp_path):
+    monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
+
+    previous_claim_map = {
+        "document_profile": "executive",
+        "citation_mode": "inline",
+        "used_claim_ids": ["claim_1", "claim_2"],
+        "quality_summary": {"claim_coverage": 1.0, "critical_claim_coverage": 1.0, "uncertainty_count": 0},
+        "sections": [
+            {"title": "Kısa Özet", "paragraphs": [{"text": "Eski özet", "claim_ids": ["claim_1"]}]},
+            {"title": "Temel Bulgular", "paragraphs": [{"text": "Eski bulgu", "claim_ids": ["claim_2"]}]},
+        ],
+    }
+    previous_path = tmp_path / "claim_map.json"
+    previous_path.write_text(json.dumps(previous_claim_map, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    async def _fake_research(**kwargs):
+        return {
+            "success": True,
+            "topic": kwargs.get("topic", "test"),
+            "summary": "Yeni özet.",
+            "findings": ["• Yeni bulgu. (Kaynak: example.com, Güven: %91)"],
+            "sources": [{"title": "Kaynak 1", "url": "https://example.com/report", "reliability_score": 0.91}],
+            "source_count": 1,
+            "research_contract": {
+                "claim_list": [
+                    {"claim_id": "claim_1", "text": "Yeni özet claim", "source_urls": ["https://example.com/report"], "critical": False},
+                    {"claim_id": "claim_2", "text": "Yeni bulgu claim", "source_urls": ["https://example.com/report"], "critical": False},
+                ],
+                "citation_map": {"claim_1": [{"url": "https://example.com/report", "title": "Kaynak 1"}], "claim_2": [{"url": "https://example.com/report", "title": "Kaynak 1"}]},
+                "critical_claim_ids": [],
+                "conflicts": [],
+                "uncertainty_log": [],
+            },
+            "quality_summary": {"claim_coverage": 1.0, "critical_claim_coverage": 1.0, "uncertainty_count": 0, "status": "pass"},
+            "report_paths": [],
+        }
+
+    async def _fake_write_word(path=None, **kwargs):
+        p = Path(str(path))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"docx")
+        return {"success": True, "path": str(p)}
+
+    research_mod = importlib.import_module("tools.research_tools.advanced_research")
+    word_mod = importlib.import_module("tools.office_tools.word_tools")
+    monkeypatch.setattr(research_mod, "advanced_research", _fake_research)
+    monkeypatch.setattr(word_mod, "write_word", _fake_write_word)
+
+    result = await research_document_delivery(
+        topic="Fourier Denklem",
+        brief="yalnızca özeti güncelle",
+        output_dir=str(tmp_path),
+        include_word=True,
+        include_excel=False,
+        previous_claim_map_path=str(previous_path),
+        revision_request="yalnızca özeti güncelle",
+        target_sections=["Kısa Özet"],
+    )
+
+    claim_map = json.loads(Path(str(result.get("claim_map_path", ""))).read_text(encoding="utf-8"))
+    section_map = {str(item.get("title") or ""): item for item in claim_map.get("sections", [])}
+    assert section_map["Kısa Özet"]["paragraphs"][0]["text"] != "Eski özet"
+    assert section_map["Temel Bulgular"]["paragraphs"][0]["text"] == "Eski bulgu"
 
 
 def test_advanced_research_math_query_decomposition_enriches_queries():

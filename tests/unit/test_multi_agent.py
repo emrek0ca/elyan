@@ -56,3 +56,48 @@ def test_orchestrator_builds_deterministic_fallback_payload():
     assert "execution_plan" in payload
     assert payload["artifact_map"]["artifacts"]
     assert payload["execution_plan"][0]["action"] == "create_folder"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_warmup_attaches_subagent_quality_summary(monkeypatch):
+    class _DummyManager:
+        def __init__(self, *args, **kwargs):
+            _ = (args, kwargs)
+
+        async def spawn_parallel(self, jobs, timeout=90):
+            _ = (jobs, timeout)
+            return [
+                type(
+                    "Result",
+                    (),
+                    {
+                        "status": "partial",
+                        "notes": ["research_warmup"],
+                        "result": {
+                            "quality_summary": {
+                                "claim_coverage": 1.0,
+                                "critical_claim_coverage": 0.5,
+                                "uncertainty_count": 2,
+                            },
+                            "claim_map_path": "/tmp/claim_map.json",
+                            "revision_summary_path": "/tmp/revision_summary.md",
+                        },
+                    },
+                )()
+            ]
+
+    class _DummyTask:
+        def __init__(self, **kwargs):
+            self.payload = kwargs
+
+    monkeypatch.setattr("core.sub_agent.SubAgentManager", _DummyManager)
+    monkeypatch.setattr("core.sub_agent.SubAgentTask", _DummyTask)
+
+    orch = AgentOrchestrator(object())
+    plan = [{"id": "step_1", "owner": "researcher", "action": "research_document_delivery", "params": {"topic": "AI"}}]
+    await orch._warm_up_parallel_sub_agents(plan, "AI raporu hazırla")
+
+    meta = plan[0].get("_sub_agent", {})
+    assert meta.get("status") == "partial"
+    assert meta.get("quality_summary", {}).get("critical_claim_coverage") == 0.5
+    assert meta.get("claim_map_path") == "/tmp/claim_map.json"

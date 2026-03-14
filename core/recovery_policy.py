@@ -63,7 +63,11 @@ def select_recovery_strategy(
         failed_research_gates = [str(x).strip().lower() for x in list(((r.get("research_gate") or {}) if isinstance(r.get("research_gate"), dict) else {}).get("failed") or []) if str(x).strip()]
         research_repair_steps = [str(x).strip() for x in list(r.get("research_repair_steps") or []) if str(x).strip()]
         if failed_research_gates and research_repair_steps:
-            if any(item in {"sources", "claim_mapping", "unknowns"} or item.startswith("payload:") for item in failed_research_gates):
+            if any(
+                item in {"sources", "claim_mapping", "unknowns", "claim_coverage", "critical_claim_coverage", "uncertainty_section"}
+                or item.startswith("payload:")
+                for item in failed_research_gates
+            ):
                 return {
                     "kind": "research_revision_plan",
                     "stop_retry": False,

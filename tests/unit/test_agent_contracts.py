@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from core.pipeline import PipelineContext, StageVerify
-from core.contracts.execution_result import coerce_execution_result
+from core.contracts.execution_result import coerce_execution_result, collect_artifacts
 from core.contracts.tool_result import coerce_tool_result
 from core.pipeline_upgrade.contracts import (
     assign_model_roles,
@@ -32,6 +32,7 @@ def _sample_research_payload() -> dict:
                 "text": "Fourier analizi periyodik sinyalleri frekans bileşenlerine ayırır.",
                 "source_urls": ["https://example.edu/a", "https://example.org/b"],
                 "critical": True,
+                "source_count": 2,
                 "confidence": 0.8,
             }
         ],
@@ -44,6 +45,11 @@ def _sample_research_payload() -> dict:
         "critical_claim_ids": ["claim_1"],
         "conflicts": [],
         "uncertainty_log": [],
+        "quality_summary": {
+            "claim_coverage": 1.0,
+            "critical_claim_coverage": 1.0,
+            "uncertainty_count": 0,
+        },
     }
 
 
@@ -79,6 +85,15 @@ def test_validate_research_payload_rejects_missing_dual_source_for_critical_clai
     assert "critical_sources:claim_1" in errors
 
 
+def test_collect_artifacts_includes_report_paths():
+    artifacts = collect_artifacts(
+        {"report_paths": ["/tmp/report.md"], "success": True},
+        tool="advanced_research",
+    )
+    assert artifacts
+    assert artifacts[0].path == "/tmp/report.md"
+
+
 def test_verify_research_gates_fails_without_structured_payload():
     result = verify_research_gates(
         final_response="Iddia var. Belirsizlik de var.",
@@ -87,6 +102,18 @@ def test_verify_research_gates_fails_without_structured_payload():
     )
     assert result["ok"] is False
     assert any(item.startswith("payload:") for item in result["failed"])
+
+
+def test_verify_research_gates_surfaces_critical_claim_coverage():
+    payload = _sample_research_payload()
+    payload["quality_summary"]["critical_claim_coverage"] = 0.5
+    result = verify_research_gates(
+        final_response="İddialar ve belirsizlikler paylaşıldı.",
+        source_urls=["https://example.edu/a", "https://example.org/b"],
+        research_payload=payload,
+    )
+    assert result["ok"] is False
+    assert "critical_claim_coverage" in result["failed"]
 
 
 @pytest.mark.asyncio
@@ -247,6 +274,8 @@ def test_build_research_contract_payload_generates_claims_and_citations():
     assert payload["claim_list"]
     assert payload["citation_map"]["claim_1"]
     assert payload["query_decomposition"]["queries"]
+    assert payload["claim_list"][0]["source_count"] >= 1
+    assert "domain" in payload["citation_map"]["claim_1"][0]
 
 
 @pytest.mark.asyncio

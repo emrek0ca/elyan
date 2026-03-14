@@ -1,0 +1,13 @@
+{
+  "run_id": "run_84109f1b5f0d",
+  "written_at": 1773424826.05284,
+  "status": "success",
+  "text_summary": "Üzgünüm, \n\nAylık token sınırına ulaştın (100000 token). Devam etmek için Pro plana geçebilirsin.",
+  "errors": [],
+  "artifact_manifest": [],
+  "metadata": {
+    "manifest_path": "/Users/emrekoca/Desktop/bot/.elyan/proofs/run_84109f1b5f0d/manifest.json",
+    "action": "",
+    "job_type": "communication"
+  }
+}

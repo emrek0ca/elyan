@@ -1,0 +1,12 @@
+{
+  "run_id": "run_ed72faab3243",
+  "written_at": 1773486282.5198562,
+  "status": "task_recorded",
+  "user_input": "Arkaplanda",
+  "task_spec": {},
+  "task_state": {},
+  "metadata": {
+    "channel": "cli",
+    "reason": "short_ambiguous_input"
+  }
+}

@@ -7,6 +7,7 @@ from core.pipeline import (
     StageExecute,
     StageRoute,
     StageVerify,
+    _extract_research_payload,
     _build_assist_mode_preview,
     _build_low_confidence_actionable_clarification,
     _job_type_from_action,
@@ -254,6 +255,46 @@ async def test_stage_execute_team_mode_partial_falls_back_to_orchestrator(monkey
     assert any(str(e).startswith("team_mode_incomplete:") for e in out.errors)
     assert any(d.get("mode") == "team_mode" and d.get("selected") is True for d in decisions)
     assert any(d.get("mode") == "team_mode" and d.get("selected") is False for d in decisions)
+
+
+@pytest.mark.asyncio
+async def test_stage_execute_team_mode_attaches_team_telemetry(monkeypatch):
+    class _FakeTeam:
+        def __init__(self, *args, **kwargs):
+            _ = (args, kwargs)
+
+        async def execute_project(self, brief):
+            _ = brief
+            return SimpleNamespace(
+                status="success",
+                summary="Team mode tamamlandı",
+                outputs=[],
+                telemetry={
+                    "research_tasks": 1,
+                    "avg_claim_coverage": 1.0,
+                    "avg_critical_claim_coverage": 1.0,
+                    "max_uncertainty_count": 0,
+                },
+            )
+
+    monkeypatch.setattr("core.sub_agent.team.AgentTeam", _FakeTeam)
+
+    ctx = PipelineContext(user_input="araştırma görevi", user_id="u1", channel="cli")
+    ctx.job_type = "research"
+    ctx.intent = {"action": "research_document_delivery", "params": {"topic": "Fourier"}}
+    ctx.action = "research_document_delivery"
+    ctx.complexity = 0.97
+    ctx.team_mode_forced = True
+    ctx.multi_agent_recommended = True
+    ctx.capability_confidence = 0.95
+    ctx.capability_plan = {"orchestration_mode": "multi_agent"}
+    ctx.plan = [{"id": "subtask_1", "action": "research_document_delivery"}]
+
+    stage = StageExecute()
+    out = await stage.run(ctx, _DummyAgent())
+
+    assert out.telemetry.get("team_mode", {}).get("avg_claim_coverage") == 1.0
+    assert out.capability_plan.get("team_mode_telemetry", {}).get("research_tasks") == 1
 
 
 @pytest.mark.asyncio
@@ -591,7 +632,25 @@ async def test_stage_verify_research_contract_appends_summary_sections():
     ctx = PipelineContext(user_input="yapay zeka trendlerini araştır", user_id="u1", channel="cli")
     ctx.action = "advanced_research"
     ctx.final_response = "Araştırma tamamlandı."
-    ctx.tool_results = [{"sources": [{"url": "https://example.com/report"}]}]
+    ctx.tool_results = [
+        {
+            "sources": [{"url": "https://example.com/report"}],
+            "result": {
+                "research_contract": {
+                    "claim_list": [{"claim_id": "c1"}],
+                    "citation_map": {"c1": [{"url": "https://example.com/report"}]},
+                    "critical_claim_ids": ["c1"],
+                    "uncertainty_log": [],
+                    "conflicts": [],
+                },
+                "quality_summary": {
+                    "claim_coverage": 1.0,
+                    "critical_claim_coverage": 0.5,
+                    "uncertainty_count": 2,
+                },
+            },
+        }
+    ]
 
     out = await StageVerify().run(ctx, _DummyAgent())
 
@@ -601,3 +660,32 @@ async def test_stage_verify_research_contract_appends_summary_sections():
     assert "Araştırma kalite özeti" in out.final_response
     assert "https://example.com/report" in out.final_response
     assert "Güven skoru" in out.final_response
+    assert "Kritik claim coverage" in out.final_response
+
+
+def test_extract_research_payload_keeps_quality_summary_from_nested_result():
+    payload = _extract_research_payload(
+        [
+            {
+                "task": "research",
+                "result": {
+                    "research_contract": {
+                        "claim_list": [{"claim_id": "c1"}],
+                        "citation_map": {"c1": [{"url": "https://example.com"}]},
+                        "critical_claim_ids": ["c1"],
+                        "uncertainty_log": [],
+                        "conflicts": [],
+                    },
+                    "quality_summary": {
+                        "claim_coverage": 1.0,
+                        "critical_claim_coverage": 0.5,
+                        "uncertainty_count": 2,
+                    },
+                    "claim_map_path": "/tmp/claim_map.json",
+                },
+            }
+        ]
+    )
+    assert isinstance(payload, dict)
+    assert payload.get("quality_summary", {}).get("critical_claim_coverage") == 0.5
+    assert payload.get("claim_map_path") == "/tmp/claim_map.json"

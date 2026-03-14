@@ -1,0 +1,66 @@
+{
+  "frontmost_app": "Safari",
+  "active_window": {
+    "title": "Upload Dialog",
+    "bounds": {
+      "x": 0,
+      "y": 0,
+      "width": 1280,
+      "height": 800
+    }
+  },
+  "screenshot_path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-374/test_production_benchmark_runn0/screen5/screen_before_1773425037364.png",
+  "elements": [
+    {
+      "label": "Safari",
+      "role": "frontmost_app",
+      "source": "window_metadata",
+      "confidence": 0.99
+    },
+    {
+      "label": "Upload Dialog",
+      "role": "window_title",
+      "source": "window_metadata",
+      "confidence": 0.95
+    },
+    {
+      "label": "Open",
+      "role": "button",
+      "x": 320,
+      "y": 92,
+      "width": 80,
+      "height": 28,
+      "frontmost_app": "Safari",
+      "window_title": "Upload Dialog",
+      "source": "accessibility",
+      "confidence": 0.92
+    }
+  ],
+  "clickable_targets": [
+    {
+      "label": "Open",
+      "role": "button",
+      "x": 320,
+      "y": 92,
+      "width": 80,
+      "height": 28,
+      "frontmost_app": "Safari",
+      "window_title": "Upload Dialog",
+      "source": "accessibility",
+      "confidence": 0.92
+    }
+  ],
+  "text_fields": [],
+  "summary": "Frontmost app: Safari. Window: Upload Dialog. Native dialog acik. Open gorunuyor. OCR: Open",
+  "fallback_order": [
+    "accessibility_and_window_metadata",
+    "vision_detection",
+    "ocr",
+    "last_known_ui_target_cache"
+  ],
+  "source_counts": {
+    "window_metadata": 2,
+    "accessibility": 1
+  },
+  "confidence": 0.953
+}

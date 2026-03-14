@@ -126,14 +126,27 @@ def verify_research_gates(*, final_response: str, source_urls: list[str], resear
     text = str(final_response or "")
     low = text.lower()
     has_claim_map = "claim" in low or "iddia" in low
-    has_unknowns = "unknown" in low or "bilinmeyen" in low or "belirs" in low
+    has_unknowns = any(token in low for token in ("unknown", "bilinmeyen", "belirs", "risk", "sınırlılık", "sinirlilik"))
     has_sources = bool(source_urls)
+    quality_summary = research_payload.get("quality_summary") if isinstance(research_payload, dict) and isinstance(research_payload.get("quality_summary"), dict) else {}
+    claim_list = research_payload.get("claim_list") if isinstance(research_payload, dict) and isinstance(research_payload.get("claim_list"), list) else []
+    critical_ids = set(research_payload.get("critical_claim_ids") or []) if isinstance(research_payload, dict) else set()
+
+    claim_coverage = float(quality_summary.get("claim_coverage", 0.0) or 0.0) if quality_summary else (1.0 if claim_list else 0.0)
+    critical_claim_coverage = float(quality_summary.get("critical_claim_coverage", 0.0) or 0.0) if quality_summary else 0.0
+    uncertainty_count = int(quality_summary.get("uncertainty_count", 0) or 0) if quality_summary else 0
     failed = []
     if not has_sources:
         failed.append("sources")
     if not has_claim_map:
         failed.append("claim_mapping")
     if not has_unknowns:
+        failed.append("uncertainty_section")
+    if claim_list and claim_coverage <= 0.0:
+        failed.append("claim_coverage")
+    if critical_ids and critical_claim_coverage < 1.0:
+        failed.append("critical_claim_coverage")
+    if research_payload and uncertainty_count <= 0 and not has_unknowns:
         failed.append("unknowns")
     payload_ok, payload_errors = validate_research_payload(research_payload)
     if not payload_ok:
@@ -143,6 +156,9 @@ def verify_research_gates(*, final_response: str, source_urls: list[str], resear
         "failed": failed,
         "source_count": len(source_urls),
         "payload_ok": payload_ok,
+        "claim_coverage": round(claim_coverage, 2),
+        "critical_claim_coverage": round(critical_claim_coverage, 2),
+        "uncertainty_count": uncertainty_count,
     }
 
 

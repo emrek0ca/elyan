@@ -1,0 +1,15 @@
+{
+  "run_id": "run_c0f5bb27d2ef",
+  "started_at": 1773425041.091019,
+  "completed_at": 1773425041.1394,
+  "status": "success",
+  "error": "",
+  "steps": [],
+  "artifacts": [],
+  "metadata": {
+    "action": "",
+    "job_type": "communication",
+    "channel": "cli",
+    "user_id": "local"
+  }
+}

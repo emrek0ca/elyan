@@ -157,7 +157,7 @@ def collect_artifacts(payload: Any, *, tool: str = "", source: str = "execution"
     if isinstance(proof, dict):
         _append_candidate(candidates, proof.get("screenshot"), tool=tool, source=source, source_result=source_result)
 
-    for key in ("paths", "files", "artifacts", "outputs"):
+    for key in ("paths", "files", "artifacts", "outputs", "report_paths", "supporting_artifacts"):
         value = payload.get(key)
         if isinstance(value, list):
             for item in value:
@@ -215,6 +215,17 @@ def collect_evidence(payload: Any) -> List[Dict[str, Any]]:
     citation_map = payload.get("citation_map")
     if isinstance(citation_map, dict) and citation_map:
         evidence.append({"type": "citation_map", "entries": len(citation_map)})
+
+    quality_summary = payload.get("quality_summary")
+    if isinstance(quality_summary, dict) and quality_summary:
+        evidence.append(
+            {
+                "type": "quality_summary",
+                "claim_coverage": float(quality_summary.get("claim_coverage", 0.0) or 0.0),
+                "critical_claim_coverage": float(quality_summary.get("critical_claim_coverage", 0.0) or 0.0),
+                "uncertainty_count": int(quality_summary.get("uncertainty_count", 0) or 0),
+            }
+        )
 
     source_urls = payload.get("source_urls")
     if isinstance(source_urls, list) and source_urls:

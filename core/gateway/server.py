@@ -2686,6 +2686,18 @@ class ElyanGatewayServer:
             error_code = ""
             duration_ms = 0
             artifacts = 0
+            claim_coverage = 0.0
+            critical_claim_coverage = 0.0
+            uncertainty_count = 0
+            conflict_count = 0
+            manual_review_claim_count = 0
+            quality_status = ""
+            claim_map_path = ""
+            revision_summary_path = ""
+            team_quality_avg = 0.0
+            team_research_claim_coverage = 0.0
+            team_research_critical_claim_coverage = 0.0
+            team_research_uncertainty_count = 0
 
             if evidence_path.exists():
                 try:
@@ -2717,6 +2729,45 @@ class ElyanGatewayServer:
                                 duration_ms = int(meta.get("duration_ms", 0) or 0)
                             except Exception:
                                 duration_ms = 0
+                        try:
+                            claim_coverage = float(meta.get("claim_coverage", 0.0) or 0.0)
+                        except Exception:
+                            claim_coverage = 0.0
+                        try:
+                            critical_claim_coverage = float(meta.get("critical_claim_coverage", 0.0) or 0.0)
+                        except Exception:
+                            critical_claim_coverage = 0.0
+                        try:
+                            uncertainty_count = int(meta.get("uncertainty_count", 0) or 0)
+                        except Exception:
+                            uncertainty_count = 0
+                        try:
+                            conflict_count = int(meta.get("conflict_count", 0) or 0)
+                        except Exception:
+                            conflict_count = 0
+                        try:
+                            manual_review_claim_count = int(meta.get("manual_review_claim_count", 0) or 0)
+                        except Exception:
+                            manual_review_claim_count = 0
+                        quality_status = str(meta.get("quality_status", "") or "")
+                        claim_map_path = str(meta.get("claim_map_path", "") or "")
+                        revision_summary_path = str(meta.get("revision_summary_path", "") or "")
+                        try:
+                            team_quality_avg = float(meta.get("team_quality_avg", 0.0) or 0.0)
+                        except Exception:
+                            team_quality_avg = 0.0
+                        try:
+                            team_research_claim_coverage = float(meta.get("team_research_claim_coverage", 0.0) or 0.0)
+                        except Exception:
+                            team_research_claim_coverage = 0.0
+                        try:
+                            team_research_critical_claim_coverage = float(meta.get("team_research_critical_claim_coverage", 0.0) or 0.0)
+                        except Exception:
+                            team_research_critical_claim_coverage = 0.0
+                        try:
+                            team_research_uncertainty_count = int(meta.get("team_research_uncertainty_count", 0) or 0)
+                        except Exception:
+                            team_research_uncertainty_count = 0
                     steps = ev.get("steps", []) if isinstance(ev, dict) else []
                     if isinstance(steps, list):
                         total_step_duration = 0
@@ -2750,6 +2801,18 @@ class ElyanGatewayServer:
                     "duration_ms": duration_ms,
                     "error_code": error_code,
                     "artifacts": artifacts,
+                    "claim_coverage": round(claim_coverage, 2),
+                    "critical_claim_coverage": round(critical_claim_coverage, 2),
+                    "uncertainty_count": uncertainty_count,
+                    "conflict_count": conflict_count,
+                    "manual_review_claim_count": manual_review_claim_count,
+                    "quality_status": quality_status,
+                    "claim_map_path": claim_map_path,
+                    "revision_summary_path": revision_summary_path,
+                    "team_quality_avg": round(team_quality_avg, 2),
+                    "team_research_claim_coverage": round(team_research_claim_coverage, 2),
+                    "team_research_critical_claim_coverage": round(team_research_critical_claim_coverage, 2),
+                    "team_research_uncertainty_count": team_research_uncertainty_count,
                     "summary_path": str(summary_path),
                     "evidence_path": str(evidence_path),
                     "created_at": int(mtime_by_name.get(run_dir.name, 0)),

@@ -1,0 +1,192 @@
+{
+  "run_id": "run_69cd43fe478c",
+  "user_input": "bunu duvar kağıdı yap",
+  "task_spec": {},
+  "metadata": {
+    "action": "set_wallpaper",
+    "job_type": "communication",
+    "capability_domain": "general",
+    "workflow_id": "",
+    "hybrid_model": {},
+    "channel": "telegram",
+    "user_id": "local",
+    "status": "success"
+  },
+  "task_state": {
+    "task_id": "task_fa55f9906e",
+    "objective": "bunu duvar kağıdı yap",
+    "context": {
+      "user_input": "bunu duvar kağıdı yap",
+      "channel": "telegram",
+      "user_id": "local",
+      "attachments": [
+        "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-371/test_attachment_wallpaper_flow0/dog.jpg"
+      ],
+      "action": "set_wallpaper",
+      "job_type": "communication",
+      "capability_domain": "general",
+      "workflow_id": "",
+      "hybrid_model": {}
+    },
+    "subtasks": [],
+    "artifacts": [
+      {
+        "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-371/test_attachment_wallpaper_flow0/dog.jpg",
+        "name": "dog.jpg",
+        "type": "image",
+        "mime": "",
+        "size_bytes": 10,
+        "sha256": "a8eb701c6f567b08661c2604364dd595455b811d2759d2029b465935b561c86b",
+        "tool": "set_wallpaper",
+        "source": "tool",
+        "source_result": {
+          "success": true,
+          "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-371/test_attachment_wallpaper_flow0/dog.jpg",
+          "tool": "set_wallpaper",
+          "params": {
+            "image_path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-371/test_attachment_wallpaper_flow0/dog.jpg",
+            "search_query": "setwallpaper bunu duvar kağıdı"
+          },
+          "status": "success",
+          "message": "",
+          "artifacts": [
+            {
+              "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-371/test_attachment_wallpaper_flow0/dog.jpg",
+              "type": "image",
+              "name": "dog.jpg",
+              "mime": "",
+              "size_bytes": 0,
+              "sha256": "",
+              "tool": "set_wallpaper",
+              "source": "agent_kernel_execute",
+              "source_result": {
+                "success": true,
+                "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-371/test_attachment_wallpaper_flow0/dog.jpg",
+                "tool": "set_wallpaper",
+                "params": {
+                  "image_path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-371/test_attachment_wallpaper_flow0/dog.jpg",
+                  "search_query": "setwallpaper bunu duvar kağıdı"
+                }
+              }
+            }
+          ],
+          "artifact_manifest": [
+            {
+              "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-371/test_attachment_wallpaper_flow0/dog.jpg",
+              "type": "image",
+              "name": "dog.jpg",
+              "mime": "",
+              "size_bytes": 0,
+              "sha256": "",
+              "tool": "set_wallpaper",
+              "source": "agent_kernel_execute",
+              "source_result": {
+                "success": true,
+                "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-371/test_attachment_wallpaper_flow0/dog.jpg",
+                "tool": "set_wallpaper",
+                "params": {
+                  "image_path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-371/test_attachment_wallpaper_flow0/dog.jpg",
+                  "search_query": "setwallpaper bunu duvar kağıdı"
+                }
+              }
+            }
+          ],
+          "evidence": [],
+          "errors": [],
+          "metrics": {
+            "tool_name": "set_wallpaper",
+            "wrapper_source": "agent_kernel_execute",
+            "raw_type": "dict",
+            "agent_source": "agent_kernel_execute"
+          },
+          "data": {},
+          "_tool_result": {
+            "status": "success",
+            "message": "",
+            "artifacts": [
+              {
+                "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-371/test_attachment_wallpaper_flow0/dog.jpg",
+                "type": "image",
+                "name": "dog.jpg",
+                "mime": "",
+                "size_bytes": 0,
+                "sha256": "",
+                "tool": "set_wallpaper",
+                "source": "agent_kernel_execute",
+                "source_result": {
+                  "success": true,
+                  "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-371/test_attachment_wallpaper_flow0/dog.jpg",
+                  "tool": "set_wallpaper",
+                  "params": {
+                    "image_path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-371/test_attachment_wallpaper_flow0/dog.jpg",
+                    "search_query": "setwallpaper bunu duvar kağıdı"
+                  }
+                }
+              }
+            ],
+            "evidence": [],
+            "data": {},
+            "errors": [],
+            "metrics": {},
+            "raw": null,
+            "tool": "set_wallpaper",
+            "source": "agent_kernel_execute",
+            "raw_type": "dict"
+          },
+          "verified": true,
+          "size_bytes": 10,
+          "sha256": "a8eb701c6f567b08661c2604364dd595455b811d2759d2029b465935b561c86b",
+          "_proof": {
+            "screenshot": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-371/test_attachment_wallpaper_flow0/dog.jpg"
+          }
+        },
+        "evidence": {
+          "path": "/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-371/test_attachment_wallpaper_flow0/dog.jpg",
+          "exists": true,
+          "size_bytes": 10,
+          "sha256": "a8eb701c6f567b08661c2604364dd595455b811d2759d2029b465935b561c86b"
+        }
+      }
+    ],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773424825.606143,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773424825.650707,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773424825.6637099,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773424825.683037,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 1,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1773424825.693362,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "set_wallpaper",
+          "job_type": "communication"
+        }
+      }
+    ],
+    "created_at": 1773424825.606132,
+    "updated_at": 1773424825.693362
+  },
+  "written_at": 1773424825.7025988
+}

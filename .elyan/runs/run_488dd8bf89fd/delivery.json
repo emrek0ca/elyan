@@ -1,0 +1,13 @@
+{
+  "run_id": "run_488dd8bf89fd",
+  "written_at": 1773425040.804211,
+  "status": "success",
+  "text_summary": "ok",
+  "errors": [],
+  "artifact_manifest": [],
+  "metadata": {
+    "manifest_path": "/Users/emrekoca/Desktop/bot/.elyan/proofs/run_488dd8bf89fd/manifest.json",
+    "action": "chat",
+    "job_type": "communication"
+  }
+}

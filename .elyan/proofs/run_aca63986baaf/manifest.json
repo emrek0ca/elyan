@@ -1,0 +1,15 @@
+{
+  "run_id": "run_aca63986baaf",
+  "started_at": 1773424827.088923,
+  "completed_at": 1773424827.132294,
+  "status": "success",
+  "error": "",
+  "steps": [],
+  "artifacts": [],
+  "metadata": {
+    "action": "",
+    "job_type": "communication",
+    "channel": "cli",
+    "user_id": "local"
+  }
+}

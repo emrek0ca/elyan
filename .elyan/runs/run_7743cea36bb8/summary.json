@@ -1,0 +1,73 @@
+{
+  "run_id": "run_7743cea36bb8",
+  "written_at": 1773424826.7334678,
+  "status": "success",
+  "user_input": "bilgisayarın şarjı kaç",
+  "task_spec": {},
+  "task_state": {
+    "task_id": "task_95b2f3580f",
+    "objective": "bilgisayarın şarjı kaç",
+    "context": {
+      "user_input": "bilgisayarın şarjı kaç",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "",
+      "job_type": "communication",
+      "capability_domain": "general",
+      "workflow_id": "",
+      "hybrid_model": {}
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773424826.67067,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773424826.690762,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773424826.7013571,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773424826.713639,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1773424826.723861,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "",
+          "job_type": "communication"
+        }
+      }
+    ],
+    "created_at": 1773424826.67067,
+    "updated_at": 1773424826.723861
+  },
+  "metadata": {
+    "action": "",
+    "job_type": "communication",
+    "capability_domain": "general",
+    "workflow_id": "",
+    "hybrid_model": {},
+    "channel": "cli",
+    "user_id": "local",
+    "status": "success"
+  }
+}

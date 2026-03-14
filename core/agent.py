@@ -1294,11 +1294,48 @@ class Agent:
                 metadata={"artifact_count": len(list(ledger.artifacts or [])), "error_count": len(list(ctx.errors or []))},
             )
             task_brain.save_task(task)
+            research_metrics: dict[str, Any] = {}
+            for item in reversed(list(getattr(ctx, "tool_results", []) or [])):
+                payload = item if isinstance(item, dict) else {}
+                candidate = payload.get("result") if isinstance(payload.get("result"), dict) else payload
+                if not isinstance(candidate, dict):
+                    continue
+                quality_summary = candidate.get("quality_summary")
+                if not isinstance(quality_summary, dict) or not quality_summary:
+                    continue
+                research_metrics = {
+                    "claim_coverage": float(quality_summary.get("claim_coverage", 0.0) or 0.0),
+                    "critical_claim_coverage": float(quality_summary.get("critical_claim_coverage", 0.0) or 0.0),
+                    "uncertainty_count": int(quality_summary.get("uncertainty_count", 0) or 0),
+                    "conflict_count": int(quality_summary.get("conflict_count", 0) or 0),
+                    "manual_review_claim_count": int(quality_summary.get("manual_review_claim_count", 0) or 0),
+                    "quality_status": str(quality_summary.get("status") or ""),
+                }
+                claim_map_path = str(candidate.get("claim_map_path") or "").strip()
+                revision_summary_path = str(candidate.get("revision_summary_path") or "").strip()
+                if claim_map_path:
+                    research_metrics["claim_map_path"] = claim_map_path
+                if revision_summary_path:
+                    research_metrics["revision_summary_path"] = revision_summary_path
+                break
+            team_telemetry = ctx.telemetry.get("team_mode") if isinstance(getattr(ctx, "telemetry", None), dict) and isinstance(ctx.telemetry.get("team_mode"), dict) else {}
+            if team_telemetry:
+                research_metrics.update(
+                    {
+                        "team_completed": int(team_telemetry.get("completed", 0) or 0),
+                        "team_failed": int(team_telemetry.get("failed", 0) or 0),
+                        "team_quality_avg": float(team_telemetry.get("quality_avg", 0.0) or 0.0),
+                        "team_research_tasks": int(team_telemetry.get("research_tasks", 0) or 0),
+                        "team_research_claim_coverage": float(team_telemetry.get("avg_claim_coverage", 0.0) or 0.0),
+                        "team_research_critical_claim_coverage": float(team_telemetry.get("avg_critical_claim_coverage", 0.0) or 0.0),
+                        "team_research_uncertainty_count": int(team_telemetry.get("max_uncertainty_count", 0) or 0),
+                    }
+                )
             run_store.write_evidence(
                 manifest_path=manifest,
                 steps=[s.to_dict() for s in ledger.steps],
                 artifacts=list(ledger.artifacts),
-                metadata={"status": status, "errors": list(ctx.errors or [])},
+                metadata={"status": status, "errors": list(ctx.errors or []), **research_metrics},
             )
             final_state = "completed" if status == "success" else ("partial" if status == "partial" else "failed")
             task.transition(
@@ -1327,7 +1364,7 @@ class Agent:
                 response_text=str(ctx.final_response or ""),
                 error="; ".join(str(e) for e in (ctx.errors or []) if str(e).strip()),
                 artifacts=list(ledger.artifacts),
-                metadata={"manifest_path": manifest, "action": ctx.action, "job_type": ctx.job_type},
+                metadata={"manifest_path": manifest, "action": ctx.action, "job_type": ctx.job_type, **research_metrics},
             )
             logs_path = run_store.write_logs(lines=[str(e) for e in (ctx.errors or []) if str(e).strip()])
             refs: list[AttachmentRef] = []
@@ -1539,7 +1576,7 @@ class Agent:
             if bool(response_cfg.get("share_attachments_default", False)):
                 action = str(getattr(ctx, "action", "") or "").strip().lower()
                 # Varsayılan paylaşım açık olsa bile sadece doğal kanıt odaklı aksiyonlarda otomatik gönder.
-                if action in {"set_wallpaper", "take_screenshot", "analyze_screen", "screen_workflow", "research_document_delivery"}:
+                if action in {"set_wallpaper", "take_screenshot", "analyze_screen", "screen_workflow", "research_document_delivery", "advanced_research"}:
                     return True
             if bool(response_cfg.get("share_manifest_default", False)) and self._user_requested_artifact_details(user_input):
                 return True
@@ -1824,6 +1861,11 @@ class Agent:
         resolved_tool = self._resolve_tool_name(mapped_tool)
         if resolved_tool:
             mapped_tool = resolved_tool
+        if mapped_tool == "advanced_research" and self._should_upgrade_research_to_delivery(
+            f"{step_name} {user_input}",
+            clean_params,
+        ):
+            mapped_tool = "research_document_delivery"
         clean_params = self._normalize_param_aliases(mapped_tool, clean_params)
         start = time.perf_counter()
         success = False
@@ -3490,6 +3532,52 @@ class Agent:
         return f"~/Desktop/{stem}{suffix}"
 
     @staticmethod
+    def _find_followup_claim_map_path(last_path: str) -> str:
+        raw_last = str(last_path or "").strip()
+        if not raw_last:
+            return ""
+        base = Path(raw_last).expanduser()
+        candidates = []
+        if base.is_dir():
+            candidates.append(base / "claim_map.json")
+        else:
+            candidates.append(base.parent / "claim_map.json")
+        if base.parent.name.endswith("_research_delivery"):
+            candidates.append(base.parent / "claim_map.json")
+        for candidate in candidates:
+            try:
+                if candidate.exists() and candidate.is_file():
+                    return str(candidate)
+            except Exception:
+                continue
+        return ""
+
+    @staticmethod
+    def _followup_document_profile_from_text(text: str) -> str:
+        low = str(text or "").lower()
+        if any(marker in low for marker in ("daha kısa", "daha kisa", "kısalt", "kisalt", "briefing")):
+            return "briefing"
+        if any(marker in low for marker in ("akademik", "literatür", "literatur", "atıf", "atif", "analitik", "analytical")):
+            return "analytical"
+        return "executive"
+
+    @staticmethod
+    def _followup_target_sections(text: str) -> list[str]:
+        low = str(text or "").lower()
+        sections: list[str] = []
+        if any(marker in low for marker in ("yalnızca özet", "yalnizca ozet", "sadece özet", "sadece ozet", "özeti güncelle", "ozeti guncelle")):
+            sections.append("Kısa Özet")
+        if any(marker in low for marker in ("yalnızca sonuç", "yalnizca sonuc", "sadece sonuç", "sadece sonuc", "sonucu güncelle", "sonucu guncelle")):
+            sections.append("Kısa Özet")
+        if any(marker in low for marker in ("yalnızca bulgu", "yalnizca bulgu", "yalnızca bulgular", "yalnizca bulgular", "bulguları güncelle", "bulgulari guncelle")):
+            sections.append("Temel Bulgular")
+        if any(marker in low for marker in ("yalnızca risk", "yalnizca risk", "riskleri güncelle", "riskleri guncelle")):
+            sections.append("Açık Riskler")
+        if any(marker in low for marker in ("yalnızca belirsizlik", "yalnizca belirsizlik", "belirsizlikleri güncelle", "belirsizlikleri guncelle")):
+            sections.append("Belirsizlikler")
+        return sections
+
+    @staticmethod
     def _has_revision_markers(user_input: str) -> bool:
         low = str(user_input or "").lower()
         if not low:
@@ -3516,6 +3604,18 @@ class Agent:
             "pdf yap",
             "pdf'e",
             "pdf olarak",
+            "yalnızca özeti",
+            "yalnizca ozeti",
+            "yalnızca bulguları",
+            "yalnizca bulgulari",
+            "yalnızca sonucu",
+            "yalnizca sonucu",
+            "özeti güncelle",
+            "ozeti guncelle",
+            "bulguları güncelle",
+            "bulgulari guncelle",
+            "sonucu güncelle",
+            "sonucu guncelle",
         )
         return any(marker in low for marker in markers)
 
@@ -3649,6 +3749,7 @@ class Agent:
 
         content_seed = recent_research_text or recent_assistant_text
         topic_seed = recent_user_text or recent_assistant_text or text
+        claim_map_path = self._find_followup_claim_map_path(last_path)
 
         retry_markers = (
             "tekrar dene",
@@ -3675,6 +3776,47 @@ class Agent:
                 "params": {"limit": 30},
                 "reply": "Son başarısız görev daha sıkı ayarlarla tekrar deneniyor...",
             }
+
+        pdf_requested = any(marker in low for marker in ("pdf yap", "pdf'e", "pdf olarak"))
+        research_revision_ready = bool(
+            revision_marked
+            and (recent_research_text or claim_map_path or last_action == "research_document_delivery")
+        )
+        if research_revision_ready:
+            topic = self._sanitize_research_topic(
+                self._extract_topic(topic_seed, topic_seed),
+                user_input=topic_seed,
+                step_name=text,
+            )
+            if topic and topic != "genel konu":
+                combined_low = f"{low} {str(topic_seed).lower()}"
+                is_academic = any(marker in combined_low for marker in academic_markers)
+                output_dir = str(Path(last_path).expanduser().parent) if last_path else "~/Desktop"
+                return {
+                    "action": "research_document_delivery",
+                    "params": {
+                        "topic": topic,
+                        "brief": recent_user_text or text,
+                        "depth": "expert" if professional_marked or is_academic else "comprehensive",
+                        "audience": "academic" if is_academic else "executive",
+                        "language": "tr",
+                        "output_dir": output_dir,
+                        "include_word": True,
+                        "include_excel": False,
+                        "include_pdf": pdf_requested,
+                        "include_report": True,
+                        "source_policy": "academic" if is_academic else "trusted",
+                        "min_reliability": 0.78 if is_academic else 0.65,
+                        "citation_style": "apa7" if is_academic else "none",
+                        "include_bibliography": True if is_academic or claim_map_path else False,
+                        "document_profile": self._followup_document_profile_from_text(text),
+                        "citation_mode": "inline",
+                        "previous_claim_map_path": claim_map_path,
+                        "revision_request": text,
+                        "target_sections": self._followup_target_sections(text),
+                    },
+                    "reply": "Önceki araştırma belgesi kanıt bağları korunarak revize ediliyor...",
+                }
 
         if any(marker in low for marker in research_markers) and (
             references_context
@@ -3959,6 +4101,20 @@ class Agent:
         if Agent._is_creative_writing_request(user_input):
             return True
         return False
+
+    @staticmethod
+    def _should_upgrade_research_to_delivery(user_input: str, params: Optional[dict[str, Any]] = None) -> bool:
+        low = str(user_input or "").lower()
+        payload = params if isinstance(params, dict) else {}
+        if any(bool(payload.get(key)) for key in ("include_word", "include_pdf", "include_excel", "include_latex", "deliver_copy")):
+            return True
+        doc_markers = (
+            "belge", "doküman", "dokuman", "rapor", "word", "docx", "pdf", "excel", "xlsx", "dosya",
+        )
+        deliver_markers = (
+            "gönder", "gonder", "paylaş", "paylas", "ilet", "kopya",
+        )
+        return any(marker in low for marker in doc_markers) and any(marker in low for marker in deliver_markers)
 
     @staticmethod
     def _is_creative_writing_request(text: str) -> bool:
@@ -4357,13 +4513,25 @@ class Agent:
                 contract_engine = get_contract_engine()
                 spec = contract_engine.create_spec(mapped or tool_name, params, user_input)
                 if spec:
+                    quality_summary = result.get("quality_summary")
+                    if isinstance(quality_summary, dict) and quality_summary:
+                        spec.research_quality = dict(quality_summary)
                     verification = contract_engine.verify(spec)
-                    result["_contract_verified"] = verification.get("all_passed", True)
-                    if not verification.get("all_passed", True):
-                        failed = [a for a in verification.get("artifacts", []) if not a.get("passed")]
+                    result["_contract_verified"] = verification.get("passed", True)
+                    if not verification.get("passed", True):
+                        failed = [a for a in verification.get("artifact_results", []) if not a.get("passed")]
                         if failed:
-                            issues = "; ".join(f.get("issues", [f"artifact not met"])[0] if f.get("issues") else "criterion not met" for f in failed)
+                            issues = "; ".join(
+                                f.get("hints", [f"artifact not met"])[0] if f.get("hints") else "criterion not met"
+                                for f in failed
+                            )
                             result.setdefault("verification_warning", f"Teslimat kriteri karşılanmadı: {issues}")
+                        research_checks = [item for item in verification.get("research_checks", []) if not item.get("passed")]
+                        if research_checks:
+                            issues = "; ".join(str(item.get("name") or "research_check") for item in research_checks)
+                            prefix = str(result.get("verification_warning") or "").strip()
+                            detail = f"Araştırma kalite kriteri karşılanmadı: {issues}"
+                            result["verification_warning"] = f"{prefix} | {detail}".strip(" |")
                         repair = contract_engine.repair_actions(spec, verification)
                         if repair:
                             result["_repair_actions"] = repair
@@ -10387,6 +10555,19 @@ class Agent:
             flags=_re.IGNORECASE,
         )
         cleaned = _re.sub(r"\b(?:kopyala\w*|copy|clipboard|pano(?:ya)?)\b", " ", cleaned, flags=_re.IGNORECASE)
+        cleaned = _re.sub(
+            r"\bresmi kaynak(?:lar(?:a|la|dan)?)?(?:\s+oncelik\s+ver(?:erek|ilerek|in|ilsin)?|\s+öncelik\s+ver(?:erek|ilerek|in|ilsin)?|\s+ile)?\b",
+            " ",
+            cleaned,
+            flags=_re.IGNORECASE,
+        )
+        cleaned = _re.sub(
+            r"\b(?:dosya(?:yi|yı)?|belge(?:yi)?|rapor(?:u)?)\s+(?:gonder|gönder|paylas|paylaş|ilet)\b",
+            " ",
+            cleaned,
+            flags=_re.IGNORECASE,
+        )
+        cleaned = _re.sub(r"\b(?:öncelik vererek|oncelik vererek)\b", " ", cleaned, flags=_re.IGNORECASE)
 
         cleaned = _re.sub(r"\s+", " ", cleaned).strip(" .,:;-")
         if len(cleaned) < 2:
@@ -10428,6 +10609,16 @@ class Agent:
                 "bakanlik",
                 ".gov",
                 "kurum sitesi",
+                "yasa",
+                "yasası",
+                "yasasi",
+                "kanun",
+                "mevzuat",
+                "regülasyon",
+                "regulasyon",
+                "uyum",
+                "compliance",
+                "ai act",
             )
         ):
             return "official"
@@ -11151,6 +11342,7 @@ class Agent:
         elif tool_name == "research_document_delivery":
             topic = clean.get("topic") or clean.get("query") or self._extract_topic(user_input, step_name)
             topic = self._sanitize_research_topic(topic, user_input=user_input, step_name=step_name)
+            low = f"{step_name} {user_input}".lower()
             depth = str(clean.get("depth", "comprehensive") or "comprehensive").strip().lower()
             depth_map = {
                 "quick": "quick",
@@ -11161,7 +11353,6 @@ class Agent:
                 "detailed": "comprehensive",
             }
             if depth not in depth_map:
-                low = f"{step_name} {user_input}".lower()
                 if any(k in low for k in ("hızlı", "hizli", "kısa", "kisa", "quick")):
                     depth = "quick"
                 elif any(k in low for k in ("uzman", "expert", "derin", "derinlemesine")):
@@ -11194,21 +11385,31 @@ class Agent:
                 if depth in {"quick", "standard"}:
                     depth = "comprehensive"
 
+            wants_pdf = any(k in low for k in ("pdf",))
+            wants_latex = any(k in low for k in ("latex", "tex"))
+            wants_excel = any(k in low for k in ("excel", "xlsx", "tablo", "csv"))
+            explicit_word = any(k in low for k in ("word", "docx", "doküman", "dokuman"))
+            generic_doc = any(k in low for k in ("belge", "rapor", "dosya"))
             include_word = clean.get("include_word")
             if include_word is None:
+                include_word = explicit_word or (generic_doc and not wants_excel and not wants_pdf and not wants_latex)
+            if not include_word and not wants_excel and not wants_pdf and not wants_latex:
                 include_word = True
             include_excel = clean.get("include_excel")
             if include_excel is None:
-                include_excel = False
+                include_excel = wants_excel
             include_pdf = clean.get("include_pdf")
             if include_pdf is None:
-                include_pdf = False
+                include_pdf = wants_pdf
             include_latex = clean.get("include_latex")
             if include_latex is None:
-                include_latex = False
+                include_latex = wants_latex
             include_report = clean.get("include_report")
             if include_report is None:
                 include_report = True
+            deliver_copy = clean.get("deliver_copy")
+            if deliver_copy is None:
+                deliver_copy = any(k in low for k in ("gönder", "gonder", "paylaş", "paylas", "ilet", "kopya"))
 
             clean = {
                 "topic": topic,
@@ -11224,9 +11425,11 @@ class Agent:
                 "include_report": bool(include_report),
                 "source_policy": source_policy,
                 "min_reliability": min_rel_value,
-                "deliver_copy": bool(clean.get("deliver_copy", False)),
+                "deliver_copy": bool(deliver_copy),
                 "citation_style": str(clean.get("citation_style") or ("apa7" if academic_mode else "none")).strip().lower(),
-                "include_bibliography": bool(clean.get("include_bibliography", academic_mode)),
+                "citation_mode": str(clean.get("citation_mode") or "inline").strip().lower(),
+                "document_profile": str(clean.get("document_profile") or ("analytical" if academic_mode else "executive")).strip().lower(),
+                "include_bibliography": bool(clean.get("include_bibliography", True)),
             }
         elif tool_name == "generate_document_pack":
             topic = self._sanitize_research_topic(
@@ -11479,10 +11682,45 @@ class Agent:
                     meta.append(f"Kaynak: {source_count}")
                 if finding_count is not None:
                     meta.append(f"Bulgu: {finding_count}")
+                if result.get("critical_claim_coverage") is not None:
+                    try:
+                        meta.append(f"Kritik claim: %{int(round(float(result.get('critical_claim_coverage', 0.0) or 0.0) * 100))}")
+                    except Exception:
+                        pass
+                if result.get("uncertainty_count") is not None:
+                    meta.append(f"Belirsizlik: {int(result.get('uncertainty_count', 0) or 0)}")
                 if meta:
                     line += "\n" + " | ".join(meta)
                 if len(clean_outputs) > 1:
                     line += f"\nEk çıktı: {len(clean_outputs) - 1}"
+                return line
+        report_paths = result.get("report_paths")
+        if isinstance(report_paths, list) and report_paths:
+            clean_reports = [str(item).strip() for item in report_paths if str(item).strip()]
+            if clean_reports:
+                primary = clean_reports[0]
+                line = f"Araştırma notu hazır: {primary}"
+                source_count = result.get("source_count")
+                finding_count = result.get("finding_count")
+                quality_summary = result.get("quality_summary") if isinstance(result.get("quality_summary"), dict) else {}
+                meta = []
+                if source_count is not None:
+                    meta.append(f"Kaynak: {source_count}")
+                if finding_count is not None:
+                    meta.append(f"Bulgu: {finding_count}")
+                critical_coverage = result.get("critical_claim_coverage", quality_summary.get("critical_claim_coverage"))
+                if critical_coverage is not None:
+                    try:
+                        meta.append(f"Kritik claim: %{int(round(float(critical_coverage or 0.0) * 100))}")
+                    except Exception:
+                        pass
+                uncertainty_count = result.get("uncertainty_count", quality_summary.get("uncertainty_count"))
+                if uncertainty_count is not None:
+                    meta.append(f"Belirsizlik: {int(uncertainty_count or 0)}")
+                if meta:
+                    line += "\n" + " | ".join(meta)
+                if len(clean_reports) > 1:
+                    line += f"\nEk rapor: {len(clean_reports) - 1}"
                 return line
         if delivery_dir and isinstance(result.get("path"), str):
             return f"Araştırma çıktısı hazır: {str(result.get('path') or '').strip()}"

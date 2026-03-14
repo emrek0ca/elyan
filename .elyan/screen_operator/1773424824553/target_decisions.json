@@ -1,0 +1,155 @@
+[
+  {
+    "query": "continue",
+    "action_kind": "click",
+    "preferred_roles": [
+      "button",
+      "checkbox",
+      "link",
+      "menu_item",
+      "radio",
+      "tab"
+    ],
+    "role_hints": [
+      "button"
+    ],
+    "require_coords": true,
+    "current_context": {
+      "frontmost_app": "Safari",
+      "active_window": "Start"
+    },
+    "chosen": {
+      "label": "Continue",
+      "role": "button",
+      "source": "vision",
+      "score": 290.0,
+      "has_coords": true,
+      "frontmost_app": "safari",
+      "window_title": "start",
+      "reasons": [
+        {
+          "code": "confidence",
+          "points": 70.0,
+          "details": {
+            "confidence": 0.7
+          }
+        },
+        {
+          "code": "source_priority",
+          "points": 14.0,
+          "details": {
+            "source": "vision"
+          }
+        },
+        {
+          "code": "bounded_target",
+          "points": 18.0,
+          "details": {}
+        },
+        {
+          "code": "role_hint_match",
+          "points": 46.0,
+          "details": {
+            "role": "button"
+          }
+        },
+        {
+          "code": "button_like_role",
+          "points": 12.0,
+          "details": {
+            "role": "button"
+          }
+        },
+        {
+          "code": "label_exact_match",
+          "points": 96.0,
+          "details": {}
+        },
+        {
+          "code": "frontmost_app_context",
+          "points": 16.0,
+          "details": {
+            "item_app": "safari",
+            "current_app": "safari"
+          }
+        },
+        {
+          "code": "active_window_context",
+          "points": 18.0,
+          "details": {
+            "item_window": "start",
+            "current_window": "start"
+          }
+        }
+      ]
+    },
+    "candidates": [
+      {
+        "label": "Continue",
+        "role": "button",
+        "source": "vision",
+        "score": 290.0,
+        "has_coords": true,
+        "frontmost_app": "safari",
+        "window_title": "start",
+        "reasons": [
+          {
+            "code": "confidence",
+            "points": 70.0,
+            "details": {
+              "confidence": 0.7
+            }
+          },
+          {
+            "code": "source_priority",
+            "points": 14.0,
+            "details": {
+              "source": "vision"
+            }
+          },
+          {
+            "code": "bounded_target",
+            "points": 18.0,
+            "details": {}
+          },
+          {
+            "code": "role_hint_match",
+            "points": 46.0,
+            "details": {
+              "role": "button"
+            }
+          },
+          {
+            "code": "button_like_role",
+            "points": 12.0,
+            "details": {
+              "role": "button"
+            }
+          },
+          {
+            "code": "label_exact_match",
+            "points": 96.0,
+            "details": {}
+          },
+          {
+            "code": "frontmost_app_context",
+            "points": 16.0,
+            "details": {
+              "item_app": "safari",
+              "current_app": "safari"
+            }
+          },
+          {
+            "code": "active_window_context",
+            "points": 18.0,
+            "details": {
+              "item_window": "start",
+              "current_window": "start"
+            }
+          }
+        ]
+      }
+    ],
+    "rejected": []
+  }
+]

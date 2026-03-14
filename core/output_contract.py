@@ -50,6 +50,10 @@ class DeliverableSpec:
     artifacts: List[ArtifactSpec] = field(default_factory=list)
     done_criteria: List[str] = field(default_factory=list)       # Metin açıklama
     minimum_content_summary: str = ""    # Beklenen içerik özeti
+    research_quality: dict[str, Any] = field(default_factory=dict)
+    require_claim_coverage: float = 0.0
+    require_critical_claim_support: bool = False
+    require_uncertainty_section: bool = False
     created_at: float = field(default_factory=time.time)
 
     def add_file(
@@ -207,6 +211,29 @@ class ContractVerifier:
         for r in results:
             all_hints.extend(r.repair_hints)
 
+        research_checks: list[dict[str, Any]] = []
+        quality = spec.research_quality if isinstance(spec.research_quality, dict) else {}
+        if spec.require_claim_coverage > 0:
+            actual = float(quality.get("claim_coverage", 0.0) or 0.0)
+            passed = actual >= float(spec.require_claim_coverage)
+            research_checks.append({"name": "claim_coverage", "passed": passed, "detail": f"{actual:.2f} >= {spec.require_claim_coverage:.2f}"})
+            if not passed:
+                all_hints.append(f"Claim coverage yetersiz: {actual:.2f}")
+        if spec.require_critical_claim_support:
+            actual = float(quality.get("critical_claim_coverage", 0.0) or 0.0)
+            passed = actual >= 1.0
+            research_checks.append({"name": "critical_claim_support", "passed": passed, "detail": f"{actual:.2f} >= 1.00"})
+            if not passed:
+                all_hints.append("Kritik claim coverage eksik.")
+        if spec.require_uncertainty_section:
+            uncertainty_present = bool(int(quality.get("uncertainty_count", 0) or 0) >= 0 and quality.get("uncertainty_section_present", True))
+            research_checks.append({"name": "uncertainty_section", "passed": uncertainty_present, "detail": str(quality.get("uncertainty_count", 0) or 0)})
+            if not uncertainty_present:
+                all_hints.append("Belirsizlikler bölümü eksik.")
+
+        if research_checks and not all(item.get("passed") for item in research_checks):
+            all_passed = False
+
         return {
             "passed": all_passed,
             "score": round(avg_score, 2),
@@ -220,6 +247,7 @@ class ContractVerifier:
                 }
                 for r in results
             ],
+            "research_checks": research_checks,
             "repair_hints": all_hints[:10],
         }
 
@@ -381,6 +409,9 @@ class ContractFactory:
         if action in ("research_document_delivery",):
             spec.minimum_content_summary = "Araştırma + belge paketi"
             spec.done_criteria.append("Araştırma tamamlandı ve belgeler üretildi.")
+            spec.require_claim_coverage = 1.0
+            spec.require_critical_claim_support = True
+            spec.require_uncertainty_section = True
             return spec
 
         return None

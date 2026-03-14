@@ -1,0 +1,17 @@
+[
+  {
+    "step": 1,
+    "action": "submit",
+    "params": {
+      "url": "",
+      "selector": "#q",
+      "text": ""
+    },
+    "result": {
+      "success": true,
+      "selector": "#q",
+      "key": "Enter",
+      "dom_available": true
+    }
+  }
+]

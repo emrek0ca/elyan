@@ -1,0 +1,158 @@
+[
+  {
+    "query": "search",
+    "action_kind": "type_focus",
+    "preferred_roles": [
+      "combo_box",
+      "editable_text",
+      "input",
+      "search_field",
+      "text_field"
+    ],
+    "role_hints": [
+      "combo_box",
+      "editable_text",
+      "input",
+      "search_field",
+      "text_field"
+    ],
+    "require_coords": true,
+    "current_context": {
+      "frontmost_app": "Safari",
+      "active_window": "Search"
+    },
+    "chosen": {
+      "label": "Search field",
+      "role": "text_field",
+      "source": "accessibility",
+      "score": 302.0,
+      "has_coords": true,
+      "frontmost_app": "safari",
+      "window_title": "search",
+      "reasons": [
+        {
+          "code": "confidence",
+          "points": 92.0,
+          "details": {
+            "confidence": 0.92
+          }
+        },
+        {
+          "code": "source_priority",
+          "points": 18.0,
+          "details": {
+            "source": "accessibility"
+          }
+        },
+        {
+          "code": "bounded_target",
+          "points": 18.0,
+          "details": {}
+        },
+        {
+          "code": "role_hint_match",
+          "points": 46.0,
+          "details": {
+            "role": "text_field"
+          }
+        },
+        {
+          "code": "text_field_role",
+          "points": 20.0,
+          "details": {
+            "role": "text_field"
+          }
+        },
+        {
+          "code": "label_contains_query",
+          "points": 74.0,
+          "details": {}
+        },
+        {
+          "code": "frontmost_app_context",
+          "points": 16.0,
+          "details": {
+            "item_app": "safari",
+            "current_app": "safari"
+          }
+        },
+        {
+          "code": "active_window_context",
+          "points": 18.0,
+          "details": {
+            "item_window": "search",
+            "current_window": "search"
+          }
+        }
+      ]
+    },
+    "candidates": [
+      {
+        "label": "Search field",
+        "role": "text_field",
+        "source": "accessibility",
+        "score": 302.0,
+        "has_coords": true,
+        "frontmost_app": "safari",
+        "window_title": "search",
+        "reasons": [
+          {
+            "code": "confidence",
+            "points": 92.0,
+            "details": {
+              "confidence": 0.92
+            }
+          },
+          {
+            "code": "source_priority",
+            "points": 18.0,
+            "details": {
+              "source": "accessibility"
+            }
+          },
+          {
+            "code": "bounded_target",
+            "points": 18.0,
+            "details": {}
+          },
+          {
+            "code": "role_hint_match",
+            "points": 46.0,
+            "details": {
+              "role": "text_field"
+            }
+          },
+          {
+            "code": "text_field_role",
+            "points": 20.0,
+            "details": {
+              "role": "text_field"
+            }
+          },
+          {
+            "code": "label_contains_query",
+            "points": 74.0,
+            "details": {}
+          },
+          {
+            "code": "frontmost_app_context",
+            "points": 16.0,
+            "details": {
+              "item_app": "safari",
+              "current_app": "safari"
+            }
+          },
+          {
+            "code": "active_window_context",
+            "points": 18.0,
+            "details": {
+              "item_window": "search",
+              "current_window": "search"
+            }
+          }
+        ]
+      }
+    ],
+    "rejected": []
+  }
+]

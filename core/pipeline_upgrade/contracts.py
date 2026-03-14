@@ -24,6 +24,9 @@ class ResearchClaim(BaseModel):
     source_urls: list[str] = Field(default_factory=list)
     critical: bool = False
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    source_count: int = Field(default=0, ge=0)
+    needs_manual_review: bool = False
+    missing_independent_source: bool = False
 
 
 class ResearchPayload(BaseModel):
@@ -130,8 +133,24 @@ def validate_research_payload(payload: dict[str, Any] | None) -> tuple[bool, lis
             errors.append(f"citation_map:{claim.claim_id}")
         if not claim.source_urls:
             errors.append(f"claim_sources:{claim.claim_id}")
+        if claim.source_count and claim.source_count != len(set(claim.source_urls)):
+            errors.append(f"source_count:{claim.claim_id}")
     critical_ids = set(parsed.critical_claim_ids or [c.claim_id for c in parsed.claim_list if c.critical])
     for claim in parsed.claim_list:
         if claim.claim_id in critical_ids and len(set(claim.source_urls)) < 2:
             errors.append(f"critical_sources:{claim.claim_id}")
+        if claim.missing_independent_source and len(set(claim.source_urls)) >= 2:
+            errors.append(f"independent_source_flag:{claim.claim_id}")
+    quality_summary = payload.get("quality_summary") if isinstance(payload, dict) else {}
+    if isinstance(quality_summary, dict) and quality_summary:
+        try:
+            claim_coverage = float(quality_summary.get("claim_coverage", 0.0) or 0.0)
+            critical_claim_coverage = float(quality_summary.get("critical_claim_coverage", 0.0) or 0.0)
+        except Exception:
+            claim_coverage = 0.0
+            critical_claim_coverage = 0.0
+        if parsed.claim_list and claim_coverage <= 0.0:
+            errors.append("quality_summary:claim_coverage")
+        if critical_ids and critical_claim_coverage <= 0.0:
+            errors.append("quality_summary:critical_claim_coverage")
     return not errors, errors

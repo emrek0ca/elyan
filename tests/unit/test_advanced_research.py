@@ -84,12 +84,19 @@ def test_generate_summary_is_structured():
         "• Aşılama ve parazit kontrolü, bulaşıcı hastalık riskini düşürür (Kaynak: akc.org).",
     ]
     text = asyncio.run(ar._generate_summary("köpekler", findings, sources))
-    assert "Yönetici Özeti:" in text
-    assert "Araştırma Konusu: köpekler" in text
-    assert "Ana Bulgular (kanıt odaklı)" in text
-    assert "Kanıt Matrisi (ilk 5 kaynak):" in text
-    assert "Operasyonel Öneriler:" in text
-    assert "Sınırlılıklar:" in text
+    assert "Kısa Özet:" in text
+    assert "'köpekler' için 2 kaynak incelendi" in text
+    assert "Karar için öne çıkan bulgular:" in text
+    assert "Önerilen referans seti:" in text
+    assert "Kanıt Matrisi" not in text
+    assert "Operasyonel Öneriler" not in text
+    assert "Önerilen Devam Adımı" not in text
+
+
+def test_compact_finding_text_strips_date_and_percent_noise():
+    text = ar._compact_finding_text("% 0 24 Oca 2026 by Örnek Yazar AB Yapay Zeka Yasası şirketler için yeni uyum yükümlülükleri getiriyor.")
+    assert text.startswith("AB Yapay Zeka Yasası")
+    assert "24 Oca 2026 by" not in text
 
 
 def test_extract_findings_filters_noise():
@@ -170,6 +177,48 @@ def test_apply_source_policy_prefers_academic_domains():
     urls = [x["url"] for x in out]
     assert any("mit.edu" in u for u in urls)
     assert any("arxiv.org" in u for u in urls)
+
+
+def test_apply_source_policy_official_keeps_strict_matches_when_enough_exist():
+    raw = [
+        {"url": "https://www.tcmb.gov.tr/a", "title": "TCMB", "snippet": "x", "_rank_score": 0.9},
+        {"url": "https://data.tuik.gov.tr/b", "title": "TUIK", "snippet": "x", "_rank_score": 0.88},
+        {"url": "https://academia.edu/c", "title": "Academia", "snippet": "x", "_rank_score": 0.95},
+    ]
+    out = ar._apply_source_policy(raw, "official", target_sources=3)
+    urls = [x["url"] for x in out]
+    assert any("tcmb.gov.tr" in u for u in urls)
+    assert any("tuik.gov.tr" in u for u in urls)
+    assert all("academia.edu" not in u for u in urls)
+
+
+def test_build_query_decomposition_for_economy_includes_official_queries():
+    plan = ar._build_query_decomposition("Türkiye ekonomisinin son 10 yılı")
+    joined = " | ".join(plan["queries"]).lower()
+    assert "tuik" in joined
+    assert "tcmb" in joined
+    assert "world bank" in joined
+
+
+def test_extract_findings_skips_boilerplate_study_aim_sentence():
+    sources = [
+        ar.ResearchSource(
+            url="https://tcmb.gov.tr/report",
+            title="TCMB Raporu",
+            snippet="",
+            reliability_score=0.9,
+            content=(
+                "Bu çalışmanın amacı Türkiye ekonomisinin genel bir özetini sunmaktır. "
+                "Son on yılda enflasyon ve büyüme görünümü para politikası kararlarını doğrudan etkilemiştir. "
+                "TCMB verileri fiyat istikrarı ve finansal istikrar dengesine işaret eder."
+            ),
+            fetched=True,
+        ),
+    ]
+    findings = asyncio.run(ar._extract_findings(sources, "Türkiye ekonomisinin son 10 yılı", max_findings=3))
+    joined = "\n".join(findings).lower()
+    assert "bu çalışmanın amacı" not in joined
+    assert "enflasyon" in joined or "büyüme" in joined
 
 
 def test_apply_min_reliability_filters_weak_sources():

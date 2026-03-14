@@ -1,0 +1,1 @@
+Frontmost app: Safari. Window: Dialog. Confirm butonu degismiyor. OCR: Confirm

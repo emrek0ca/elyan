@@ -177,6 +177,11 @@ function renderRuns(payload) {
     if (value < 1000) return `${Math.round(value)}ms`;
     return `${(value / 1000).toFixed(1)}s`;
   };
+  const fmtRatio = (value) => {
+    const ratio = Number(value || 0);
+    if (!Number.isFinite(ratio) || ratio <= 0) return "-";
+    return `${Math.round(ratio * 100)}%`;
+  };
   els.runs.innerHTML = rows.length
     ? rows.slice(0, 12).map((run) => {
         const id = h(run?.run_id || run?.id || "-");
@@ -186,7 +191,29 @@ function renderRuns(payload) {
         const duration = fmtDuration(run?.duration_ms);
         const action = h(run?.action || "-");
         const artifacts = Number(run?.artifacts || 0);
-        return `<li><strong>${id}</strong><div class="meta">status: ${status}${err}</div><div class="meta">action: ${action} | duration: ${duration} | error_code: ${errorCode} | artifacts: ${artifacts}</div></li>`;
+        const qualityStatus = String(run?.quality_status || "").trim();
+        const claimCoverage = fmtRatio(run?.claim_coverage);
+        const criticalClaimCoverage = fmtRatio(run?.critical_claim_coverage);
+        const uncertaintyCount = Number(run?.uncertainty_count || 0);
+        const conflictCount = Number(run?.conflict_count || 0);
+        const manualReviewCount = Number(run?.manual_review_claim_count || 0);
+        const teamQualityAvg = Number(run?.team_quality_avg || 0);
+        const teamClaimCoverage = fmtRatio(run?.team_research_claim_coverage);
+        const teamCriticalCoverage = fmtRatio(run?.team_research_critical_claim_coverage);
+        const teamUncertaintyCount = Number(run?.team_research_uncertainty_count || 0);
+        const qualityBits = [];
+        if (qualityStatus) qualityBits.push(`quality: ${h(qualityStatus)}`);
+        if (claimCoverage !== "-") qualityBits.push(`claim coverage: ${h(claimCoverage)}`);
+        if (criticalClaimCoverage !== "-") qualityBits.push(`critical claim: ${h(criticalClaimCoverage)}`);
+        if (qualityStatus || uncertaintyCount > 0) qualityBits.push(`uncertainty: ${h(String(uncertaintyCount))}`);
+        if (conflictCount > 0) qualityBits.push(`conflicts: ${h(String(conflictCount))}`);
+        if (manualReviewCount > 0) qualityBits.push(`manual review: ${h(String(manualReviewCount))}`);
+        if (teamQualityAvg > 0) qualityBits.push(`team q: ${h(teamQualityAvg.toFixed(2))}`);
+        if (teamClaimCoverage !== "-") qualityBits.push(`team claim: ${h(teamClaimCoverage)}`);
+        if (teamCriticalCoverage !== "-") qualityBits.push(`team critical: ${h(teamCriticalCoverage)}`);
+        if (teamUncertaintyCount > 0) qualityBits.push(`team uncertainty: ${h(String(teamUncertaintyCount))}`);
+        const qualityLine = qualityBits.length ? `<div class="meta">${qualityBits.join(" | ")}</div>` : "";
+        return `<li><strong>${id}</strong><div class="meta">status: ${status}${err}</div><div class="meta">action: ${action} | duration: ${duration} | error_code: ${errorCode} | artifacts: ${artifacts}</div>${qualityLine}</li>`;
       }).join("")
     : "<li>Run verisi yok.</li>";
 }

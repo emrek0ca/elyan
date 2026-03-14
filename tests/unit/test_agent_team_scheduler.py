@@ -51,3 +51,16 @@ async def test_agent_team_build_tasks_from_numbered_brief_when_planner_empty(mon
     assert tasks[0].action in {"create_folder", "write_file", "list_files", "chat"}
     assert all(str(t.objective or "").strip() for t in tasks[:3])
     assert all(isinstance(t.success_criteria, list) and len(t.success_criteria) >= 1 for t in tasks[:3])
+
+
+def test_agent_team_derive_gates_for_research_delivery_revision():
+    team = AgentTeam(_DummyAgent(), TeamConfig())
+    gates = team._derive_gates(
+        "researcher",
+        "research_document_delivery",
+        {"previous_claim_map_path": "/tmp/claim_map.json", "revision_request": "yalnızca özeti güncelle"},
+    )
+    assert "research_contract_complete" in gates
+    assert "claim_map_present" in gates
+    assert "uncertainty_section_present" in gates
+    assert "revision_summary_present" in gates

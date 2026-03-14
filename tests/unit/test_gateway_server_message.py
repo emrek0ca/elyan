@@ -527,6 +527,18 @@ async def test_handle_recent_runs_extracts_error_code_and_duration(monkeypatch, 
                 "metadata": {
                     "status": "failed",
                     "errors": [{"error_code": "WRITE_POSTCHECK_FAILED"}],
+                    "claim_coverage": 1.0,
+                    "critical_claim_coverage": 0.5,
+                    "uncertainty_count": 2,
+                    "conflict_count": 1,
+                    "manual_review_claim_count": 3,
+                    "claim_map_path": "/tmp/claim_map.json",
+                    "revision_summary_path": "/tmp/revision_summary.md",
+                    "team_quality_avg": 0.82,
+                    "team_research_claim_coverage": 1.0,
+                    "team_research_critical_claim_coverage": 0.5,
+                    "team_research_uncertainty_count": 2,
+                    "quality_status": "partial",
                 },
                 "steps": [{"duration_ms": 120}, {"duration_ms": 80}],
                 "artifacts": [{"path": "/tmp/a"}],
@@ -546,6 +558,18 @@ async def test_handle_recent_runs_extracts_error_code_and_duration(monkeypatch, 
     assert run["error_code"] == "WRITE_POSTCHECK_FAILED"
     assert run["duration_ms"] == 200
     assert run["action"] == "write_excel"
+    assert run["claim_coverage"] == 1.0
+    assert run["critical_claim_coverage"] == 0.5
+    assert run["uncertainty_count"] == 2
+    assert run["conflict_count"] == 1
+    assert run["manual_review_claim_count"] == 3
+    assert run["claim_map_path"] == "/tmp/claim_map.json"
+    assert run["revision_summary_path"] == "/tmp/revision_summary.md"
+    assert run["team_quality_avg"] == 0.82
+    assert run["team_research_claim_coverage"] == 1.0
+    assert run["team_research_critical_claim_coverage"] == 0.5
+    assert run["team_research_uncertainty_count"] == 2
+    assert run["quality_status"] == "partial"
 
 
 @pytest.mark.asyncio

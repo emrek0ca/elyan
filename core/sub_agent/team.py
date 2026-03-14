@@ -42,6 +42,7 @@ class TeamResult:
     summary: str
     outputs: List[Dict[str, Any]] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
+    telemetry: Dict[str, Any] = field(default_factory=dict)
 
 
 class AgentTeam:
@@ -137,6 +138,27 @@ class AgentTeam:
             gates.extend(["has_content"])
 
         a = str(action or "").strip()
+        low_action = a.lower()
+        if low_action in {"advanced_research", "deep_research"}:
+            gates.extend(
+                [
+                    "research_contract_complete",
+                    "claim_coverage_full",
+                    "critical_claim_support",
+                ]
+            )
+        elif low_action == "research_document_delivery":
+            gates.extend(
+                [
+                    "research_contract_complete",
+                    "claim_coverage_full",
+                    "critical_claim_support",
+                    "claim_map_present",
+                    "uncertainty_section_present",
+                ]
+            )
+            if str((params or {}).get("previous_claim_map_path") or "").strip() or str((params or {}).get("revision_request") or "").strip():
+                gates.append("revision_summary_present")
         if a in {"write_file", "take_screenshot", "write_word", "write_excel"}:
             gates.extend(["file_exists", "file_not_empty"])
 
@@ -149,6 +171,31 @@ class AgentTeam:
             gates.append("valid_python")
         gates.append("tool_success")
         return self._dedupe(gates)
+
+    @staticmethod
+    def _extract_research_telemetry(result_payload: Any) -> Dict[str, Any]:
+        payload = dict(result_payload) if isinstance(result_payload, dict) else {}
+        quality = payload.get("quality_summary") if isinstance(payload.get("quality_summary"), dict) else {}
+        if not quality and not any(payload.get(k) for k in ("research_contract", "claim_map_path", "revision_summary_path")):
+            return {}
+        telemetry: Dict[str, Any] = {}
+        for key in (
+            "claim_coverage",
+            "critical_claim_coverage",
+            "uncertainty_count",
+            "conflict_count",
+            "manual_review_claim_count",
+            "status",
+        ):
+            if key in quality:
+                telemetry[key] = quality.get(key)
+        for key in ("claim_map_path", "revision_summary_path"):
+            value = str(payload.get(key) or "").strip()
+            if value:
+                telemetry[key] = value
+        if isinstance(payload.get("research_contract"), dict):
+            telemetry["research_contract_present"] = True
+        return telemetry
 
     def _derive_success_contract(
         self,
@@ -346,6 +393,7 @@ class AgentTeam:
                         "objective": str(task.objective or ""),
                         "success_criteria": list(task.success_criteria or []),
                         "validation": {"passed": True, "failed_gates": []},
+                        "research_telemetry": self._extract_research_telemetry(result.result),
                     }
                 )
                 continue
@@ -380,6 +428,7 @@ class AgentTeam:
                         "objective": str(task.objective or ""),
                         "success_criteria": list(task.success_criteria or []),
                         "validation": {"passed": False, "failed_gates": list(validation.failed_gates)},
+                        "research_telemetry": self._extract_research_telemetry(result.result),
                     }
                 )
                 continue
@@ -417,6 +466,7 @@ class AgentTeam:
                     "objective": str(task.objective or ""),
                     "success_criteria": list(task.success_criteria or []),
                     "validation": {"passed": False, "failed_gates": list(validation.failed_gates)},
+                    "research_telemetry": self._extract_research_telemetry(result.result),
                 }
             )
         return outputs
@@ -490,6 +540,52 @@ class AgentTeam:
             if status == "success" and quality_avg < 0.7:
                 status = "partial"
                 notes.append("completion_gate: quality_avg_below_threshold")
+        research_rows = [o.get("research_telemetry", {}) for o in outputs if isinstance(o.get("research_telemetry"), dict) and o.get("research_telemetry")]
+        telemetry: Dict[str, Any] = {
+            "completed": len(completed),
+            "failed": len(failed),
+            "quality_avg": quality_avg if quality_values else 0.0,
+        }
+        if research_rows:
+            claim_coverages = [float(row.get("claim_coverage", 0.0) or 0.0) for row in research_rows if row.get("claim_coverage") is not None]
+            critical_coverages = [float(row.get("critical_claim_coverage", 0.0) or 0.0) for row in research_rows if row.get("critical_claim_coverage") is not None]
+            uncertainty_counts = [int(row.get("uncertainty_count", 0) or 0) for row in research_rows]
+            failed_research_gates = sorted(
+                {
+                    gate
+                    for output in outputs
+                    if isinstance(output, dict)
+                    for gate in list(((output.get("validation") or {}).get("failed_gates") or []))
+                    if gate in {
+                        "research_contract_complete",
+                        "claim_coverage_full",
+                        "critical_claim_support",
+                        "uncertainty_section_present",
+                        "claim_map_present",
+                        "revision_summary_present",
+                    }
+                }
+            )
+            telemetry.update(
+                {
+                    "research_tasks": len(research_rows),
+                    "avg_claim_coverage": round(sum(claim_coverages) / max(1, len(claim_coverages)), 2) if claim_coverages else 0.0,
+                    "avg_critical_claim_coverage": round(sum(critical_coverages) / max(1, len(critical_coverages)), 2) if critical_coverages else 0.0,
+                    "max_uncertainty_count": max(uncertainty_counts) if uncertainty_counts else 0,
+                    "failed_research_gates": failed_research_gates,
+                    "claim_map_outputs": sum(1 for row in research_rows if str(row.get("claim_map_path") or "").strip()),
+                    "revision_artifacts": sum(1 for row in research_rows if str(row.get("revision_summary_path") or "").strip()),
+                }
+            )
+            notes.append(
+                "research_quality: "
+                f"claim={telemetry['avg_claim_coverage']:.2f} "
+                f"critical={telemetry['avg_critical_claim_coverage']:.2f} "
+                f"uncertainty_max={telemetry['max_uncertainty_count']}"
+            )
+            if status == "success" and failed_research_gates:
+                status = "partial"
+                notes.append("completion_gate: research_gates_failed")
         # Pull a compact message digest for final lead summary.
         digest = []
         for _ in range(20):
@@ -500,7 +596,13 @@ class AgentTeam:
         if digest:
             notes.append("messages: " + " | ".join(digest[:8]))
         logger.info(summary)
-        return TeamResult(status=status, summary=summary, outputs=outputs, notes=notes)
+        if research_rows:
+            summary += (
+                f" | research_claim={telemetry.get('avg_claim_coverage', 0.0):.2f}"
+                f" critical={telemetry.get('avg_critical_claim_coverage', 0.0):.2f}"
+                f" uncertainty_max={int(telemetry.get('max_uncertainty_count', 0) or 0)}"
+            )
+        return TeamResult(status=status, summary=summary, outputs=outputs, notes=notes, telemetry=telemetry)
 
 
 __all__ = ["TeamConfig", "TeamResult", "AgentTeam"]

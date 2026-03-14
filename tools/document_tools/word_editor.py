@@ -1,6 +1,6 @@
 """
 Word Dosyası Düzenleyici - Word Editor
-Replace, add_paragraph, add_heading, format_text operasyonları
+Replace, add_paragraph, add_heading, format_text ve section-level revizyon operasyonları
 """
 
 import shutil
@@ -23,6 +23,139 @@ from utils.logger import get_logger
 logger = get_logger("word_editor")
 
 
+SECTION_TITLES = {
+    "kısa özet": "Kısa Özet",
+    "kisa ozet": "Kısa Özet",
+    "özet": "Kısa Özet",
+    "ozet": "Kısa Özet",
+    "temel bulgular": "Temel Bulgular",
+    "bulgular": "Temel Bulgular",
+    "sonuç": "Sonuç",
+    "sonuc": "Sonuç",
+    "açık riskler": "Açık Riskler",
+    "acik riskler": "Açık Riskler",
+    "riskler": "Açık Riskler",
+    "belirsizlikler": "Belirsizlikler",
+    "kaynakça": "Kaynakça",
+    "kaynaklar": "Kaynakça",
+}
+
+
+def _normalize_section_name(value: str) -> str:
+    raw = str(value or "").strip().lower().rstrip(":")
+    return SECTION_TITLES.get(raw, str(value or "").strip())
+
+
+def _paragraph_is_section_heading(paragraph) -> bool:
+    text = str(paragraph.text or "").strip()
+    if not text:
+        return False
+    style_name = str(getattr(paragraph.style, "name", "") or "").lower()
+    if style_name.startswith("heading"):
+        return True
+    normalized = _normalize_section_name(text)
+    return normalized in set(SECTION_TITLES.values())
+
+
+def _find_section_range(doc, section_name: str) -> tuple[int, int] | None:
+    target = _normalize_section_name(section_name)
+    if not target:
+        return None
+    start = None
+    end = len(doc.paragraphs)
+    for idx, paragraph in enumerate(doc.paragraphs):
+        current = _normalize_section_name(paragraph.text)
+        if current == target:
+            start = idx
+            break
+    if start is None:
+        return None
+    for idx in range(start + 1, len(doc.paragraphs)):
+        if _paragraph_is_section_heading(doc.paragraphs[idx]):
+            end = idx
+            break
+    return start, end
+
+
+def _delete_paragraph(paragraph) -> None:
+    element = paragraph._element
+    element.getparent().remove(element)
+
+
+def _insert_paragraph_after(paragraph, text: str = "", style: str | None = None):
+    new_para = paragraph.insert_paragraph_before(text)
+    paragraph._p.addnext(new_para._p)
+    if style:
+        try:
+            new_para.style = style
+        except KeyError:
+            pass
+    return new_para
+
+
+def _replace_section_content(
+    doc,
+    section_name: str,
+    paragraphs: list[str],
+    *,
+    replace_heading: bool = False,
+    heading_override: str = "",
+) -> dict[str, Any]:
+    section_range = _find_section_range(doc, section_name)
+    normalized_name = _normalize_section_name(section_name)
+    final_heading = str(heading_override or normalized_name).strip() or normalized_name
+    if section_range is None:
+        heading = doc.add_heading(final_heading, level=1)
+        anchor = heading
+        created = True
+    else:
+        start, end = section_range
+        heading_para = doc.paragraphs[start]
+        if replace_heading:
+            heading_para.text = final_heading
+        for idx in range(end - 1, start, -1):
+            _delete_paragraph(doc.paragraphs[idx])
+        anchor = heading_para
+        created = False
+
+    inserted = 0
+    last_para = anchor
+    for item in [str(p or "").strip() for p in paragraphs if str(p or "").strip()]:
+        last_para = _insert_paragraph_after(last_para, item)
+        inserted += 1
+    if inserted == 0:
+        last_para = _insert_paragraph_after(last_para, "")
+        inserted = 1
+    return {"section": final_heading, "created": created, "paragraphs_written": inserted}
+
+
+def _build_revision_summary(changes: list[dict[str, Any]]) -> str:
+    section_changes: list[str] = []
+    generic_changes: list[str] = []
+    for change in list(changes or []):
+        if not isinstance(change, dict):
+            continue
+        change_type = str(change.get("type") or "").strip()
+        section = str(change.get("section") or "").strip()
+        if section:
+            section_changes.append(f"{section}: {change_type}")
+        elif change_type:
+            generic_changes.append(change_type)
+    lines = ["Revision Summary", ""]
+    if section_changes:
+        lines.append("Section updates:")
+        for item in section_changes:
+            lines.append(f"- {item}")
+    if generic_changes:
+        lines.append("")
+        lines.append("Other operations:")
+        for item in generic_changes:
+            lines.append(f"- {item}")
+    if len(lines) == 2:
+        lines.append("No notable changes recorded.")
+    return "\n".join(lines).strip() + "\n"
+
+
 async def edit_word_document(
     path: str,
     operations: list[dict],
@@ -41,6 +174,10 @@ async def edit_word_document(
             - {"type": "format_text", "find": str, "bold": bool, "italic": bool, "underline": bool}
             - {"type": "add_table", "rows": int, "cols": int, "data": list[list]}
             - {"type": "delete_paragraph", "index": int}
+            - {"type": "rewrite_section", "section": str, "content": str | list[str]}
+            - {"type": "replace_section", "section": str, "content": str | list[str], "heading": str | None}
+            - {"type": "append_risk_note", "text": str}
+            - {"type": "generate_revision_summary"}
         create_backup: Yedek oluştur
 
     Returns:
@@ -66,6 +203,7 @@ async def edit_word_document(
             return {"success": False, "error": "Dosya çok büyük (max 50MB)"}
 
         # Create backup
+        backup_path = None
         if create_backup:
             backup_path = resolved_path.with_suffix(
                 f".backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}{resolved_path.suffix}"
@@ -76,6 +214,7 @@ async def edit_word_document(
         # Open document
         doc = Document(str(resolved_path))
         changes_made = []
+        revision_summary_requested = False
 
         # Apply operations
         for i, op in enumerate(operations):
@@ -250,8 +389,7 @@ async def edit_word_document(
 
                 if 0 <= index < len(doc.paragraphs):
                     para = doc.paragraphs[index]
-                    p = para._element
-                    p.getparent().remove(p)
+                    _delete_paragraph(para)
                     changes_made.append({
                         "op": i+1,
                         "type": "delete_paragraph",
@@ -264,6 +402,63 @@ async def edit_word_document(
                         "error": f"Geçersiz paragraf indeksi: {index}"
                     })
 
+            elif op_type in {"rewrite_section", "replace_section"}:
+                section = str(op.get("section") or op.get("heading") or "").strip()
+                if not section:
+                    changes_made.append({"op": i+1, "type": op_type, "error": "section parametresi gerekli"})
+                    continue
+                raw_content = op.get("content")
+                if isinstance(raw_content, list):
+                    section_paragraphs = [str(item or "").strip() for item in raw_content if str(item or "").strip()]
+                else:
+                    section_paragraphs = [item.strip() for item in str(raw_content or "").split("\n\n") if item.strip()]
+                heading = str(op.get("heading") or section).strip() or section
+                result = _replace_section_content(
+                    doc,
+                    section,
+                    section_paragraphs,
+                    replace_heading=bool(op_type == "replace_section"),
+                    heading_override=heading if op_type == "replace_section" else "",
+                )
+                changes_made.append(
+                    {
+                        "op": i + 1,
+                        "type": op_type,
+                        "section": result.get("section"),
+                        "created": bool(result.get("created")),
+                        "paragraphs_written": int(result.get("paragraphs_written", 0) or 0),
+                    }
+                )
+
+            elif op_type == "append_risk_note":
+                note = str(op.get("text") or "").strip()
+                if not note:
+                    changes_made.append({"op": i+1, "type": op_type, "error": "text parametresi gerekli"})
+                    continue
+                section_range = _find_section_range(doc, "Açık Riskler")
+                created = False
+                if section_range is None:
+                    heading = doc.add_heading("Açık Riskler", level=1)
+                    anchor = heading
+                    created = True
+                else:
+                    start, end = section_range
+                    anchor = doc.paragraphs[end - 1] if end - 1 >= start else doc.paragraphs[start]
+                _insert_paragraph_after(anchor, note)
+                changes_made.append(
+                    {
+                        "op": i + 1,
+                        "type": op_type,
+                        "section": "Açık Riskler",
+                        "created": created,
+                        "paragraphs_written": 1,
+                    }
+                )
+
+            elif op_type == "generate_revision_summary":
+                revision_summary_requested = True
+                changes_made.append({"op": i + 1, "type": op_type, "status": "queued"})
+
             else:
                 changes_made.append({
                     "op": i+1,
@@ -273,6 +468,13 @@ async def edit_word_document(
 
         # Save document
         doc.save(str(resolved_path))
+        revision_summary = _build_revision_summary(changes_made) if revision_summary_requested else ""
+        artifacts: list[str] = [str(resolved_path)]
+        revision_summary_path = None
+        if revision_summary_requested:
+            revision_summary_path = resolved_path.with_suffix(".revision_summary.md")
+            revision_summary_path.write_text(revision_summary, encoding="utf-8")
+            artifacts.append(str(revision_summary_path))
 
         logger.info(f"Word dosyası düzenlendi: {resolved_path.name} - {len(changes_made)} operasyon")
 
@@ -282,6 +484,10 @@ async def edit_word_document(
             "filename": resolved_path.name,
             "changes": changes_made,
             "backup_created": create_backup,
+            "backup_path": str(backup_path) if backup_path else "",
+            "revision_summary": revision_summary,
+            "revision_summary_path": str(revision_summary_path) if revision_summary_path else "",
+            "artifacts": artifacts,
             "message": f"Word dosyası düzenlendi: {len(changes_made)} operasyon uygulandı"
         }
 

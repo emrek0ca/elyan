@@ -53,3 +53,47 @@ async def test_validator_artifact_or_content_gate_accepts_artifact():
     verdict = await validator.validate(result, ["artifact_or_content"])
 
     assert verdict.passed is True
+
+
+@pytest.mark.asyncio
+async def test_validator_research_quality_gates_accept_complete_payload(tmp_path):
+    claim_map = tmp_path / "claim_map.json"
+    claim_map.write_text("{}", encoding="utf-8")
+    revision = tmp_path / "revision_summary.md"
+    revision.write_text("# ok\n", encoding="utf-8")
+
+    validator = SubAgentValidator()
+    result = SubAgentResult(
+        status="success",
+        result={
+            "success": True,
+            "research_contract": {
+                "claim_list": [],
+                "citation_map": {},
+                "critical_claim_ids": [],
+                "uncertainty_log": [],
+                "conflicts": [],
+            },
+            "quality_summary": {
+                "claim_coverage": 1.0,
+                "critical_claim_coverage": 1.0,
+                "uncertainty_section_present": True,
+            },
+            "claim_map_path": str(claim_map),
+            "revision_summary_path": str(revision),
+        },
+        artifacts=[str(claim_map), str(revision)],
+    )
+    verdict = await validator.validate(
+        result,
+        [
+            "research_contract_complete",
+            "claim_coverage_full",
+            "critical_claim_support",
+            "uncertainty_section_present",
+            "claim_map_present",
+            "revision_summary_present",
+        ],
+    )
+
+    assert verdict.passed is True

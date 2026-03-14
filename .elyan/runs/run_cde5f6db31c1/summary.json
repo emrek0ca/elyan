@@ -1,0 +1,98 @@
+{
+  "run_id": "run_cde5f6db31c1",
+  "written_at": 1773425029.553684,
+  "status": "partial",
+  "user_input": "word dosyası oluştur ve içine köpek araştırmasını yaz",
+  "task_spec": {},
+  "task_state": {
+    "task_id": "task_64e60c7edd",
+    "objective": "word dosyası oluştur ve içine köpek araştırmasını yaz",
+    "context": {
+      "user_input": "word dosyası oluştur ve içine köpek araştırmasını yaz",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "action": "multi_task",
+      "job_type": "file_operations",
+      "capability_domain": "research",
+      "workflow_id": "research_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "chat",
+        "description": "word dosyası oluştur"
+      },
+      {
+        "id": "subtask_2",
+        "action": "write_file",
+        "description": "içine köpek araştırmasını yaz"
+      }
+    ],
+    "artifacts": [],
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1773425029.359877,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1773425029.382358,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1773425029.393256,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1773425029.524752,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 3
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1773425029.5404968,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "multi_task",
+          "job_type": "file_operations"
+        }
+      }
+    ],
+    "created_at": 1773425029.3598762,
+    "updated_at": 1773425029.5404968
+  },
+  "metadata": {
+    "action": "multi_task",
+    "job_type": "file_operations",
+    "capability_domain": "research",
+    "workflow_id": "research_workflow",
+    "hybrid_model": {
+      "role": "inference",
+      "routing_role": "router",
+      "critic_role": "critic",
+      "tool_first": false,
+      "prefer_local": true,
+      "tier": "balanced"
+    },
+    "channel": "cli",
+    "user_id": "local",
+    "status": "partial"
+  }
+}

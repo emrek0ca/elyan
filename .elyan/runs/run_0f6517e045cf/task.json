@@ -1,0 +1,11 @@
+{
+  "run_id": "run_0f6517e045cf",
+  "user_input": "Arkaplanda",
+  "task_spec": {},
+  "metadata": {
+    "channel": "cli",
+    "reason": "short_ambiguous_input"
+  },
+  "task_state": {},
+  "written_at": 1773425027.2833421
+}
