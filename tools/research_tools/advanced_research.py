@@ -463,6 +463,62 @@ def _extract_research_passages(text: str, topic_terms: list[str], domain: str = 
     return picked
 
 
+def _is_low_value_topic_sentence(sentence: str, topic: str) -> bool:
+    low = _normalize_text(sentence).lower()
+    topic_low = _normalize_text(topic).lower()
+    if not low:
+        return True
+    hard_blocked = (
+        "java script gerekli",
+        "javascript gerekli",
+        "you need to enable java script",
+        "you need to enable javascript",
+        "bu web sitesini kullanabilmek",
+        "bu web sitesini kullanmak icin",
+        "merkezi ankara",
+        "devlet kurumudur",
+        "gosterge seti kullanicilara",
+        "gösterge seti kullanıcılara",
+    )
+    if any(token in low for token in hard_blocked):
+        return True
+    if any(hint in topic_low for hint in _ECONOMY_TOPIC_HINTS):
+        has_time_horizon = bool(
+            re.search(r"\b(?:son\s+\d+\s+y[ıi]l|last\s+\d+\s+years?|\d+\s+y[ıi]l(?:ı|i|lik)?)\b", topic_low)
+        )
+        has_time_marker = bool(re.search(r"\b(?:19|20)\d{2}\b", low)) or any(
+            token in low
+            for token in ("yıl", "yil", "yıllık", "yillik", "çeyrek", "ceyrek", "dönem", "donem", "aylık", "aylik", "son ")
+        )
+        has_macro_marker = any(
+            token in low
+            for token in (
+                "enflasyon",
+                "buyume",
+                "büyüme",
+                "issizlik",
+                "işsizlik",
+                "gsyh",
+                "gdp",
+                "ihracat",
+                "ithalat",
+                "cari",
+                "faiz",
+                "sanayi",
+                "uretim",
+                "üretim",
+                "ticaret",
+                "rezerv",
+                "kur",
+            )
+        )
+        if has_time_horizon and not has_time_marker:
+            return True
+        if re.search(r"\b(?:son|son\s+\d+|10\s+yıl|10\s+yil)\b", topic_low) and not (has_time_marker or has_macro_marker):
+            return True
+    return False
+
+
 def _search_result_score(item: dict[str, Any], rank_index: int, total: int) -> float:
     url = str(item.get("url", "") or "").strip()
     title = _normalize_text(item.get("title", ""))
@@ -623,24 +679,27 @@ def _build_research_quality_summary(
 def _build_query_decomposition(topic: str) -> dict[str, Any]:
     clean = _normalize_text(topic)
     low = clean.lower()
-    if any(hint in low for hint in _MATH_TOPIC_HINTS):
+    is_math = any(hint in low for hint in _MATH_TOPIC_HINTS)
+    is_economy = any(hint in low for hint in _ECONOMY_TOPIC_HINTS)
+    if is_math:
         facets = ["definition", "formula", "proof", "applications", "pdf lecture notes", "university notes"]
-    elif any(hint in low for hint in _ECONOMY_TOPIC_HINTS):
+    elif is_economy:
         facets = ["gsyh", "enflasyon", "issizlik", "buyume", "dis ticaret", "resmi veri"]
     else:
         facets = ["definition", "history", "applications", "examples", "key claims"]
     base_terms = [token for token in _tokenize_topic(clean)[:6]]
     queries = [clean]
-    for facet in facets:
-        queries.append(f"{clean} {facet}")
-    if any(hint in low for hint in _ECONOMY_TOPIC_HINTS):
+    if is_economy:
         queries.extend(
             [
-                f"{clean} tuik",
-                f"{clean} tcmb",
+                f"{clean} tuik istatistik",
+                f"{clean} tcmb rapor",
+                f"{clean} hazine ekonomi sunumu",
                 f"{clean} world bank oecd imf",
             ]
         )
+    for facet in facets:
+        queries.append(f"{clean} {facet}")
     if base_terms:
         queries.extend([f"{clean} {' '.join(base_terms[:2])}", f"{clean} source pdf"])
     deduped = list(dict.fromkeys([item for item in queries if item]))
@@ -1538,6 +1597,8 @@ async def _extract_findings(
                 continue
             if len(clean) < 35:
                 continue
+            if _is_low_value_topic_sentence(clean, topic):
+                continue
             if not re.search(r"[a-zA-ZğüşöçıİĞÜŞÖÇ]{8,}", clean):
                 continue
             key = clean[:90].lower()
@@ -1578,6 +1639,8 @@ async def _extract_findings(
             if _is_noise_sentence(snippet):
                 continue
             snippet = _compact_finding_text(snippet)
+            if _is_low_value_topic_sentence(snippet, topic):
+                continue
             key = snippet[:90].lower()
             if key in seen_keys:
                 continue

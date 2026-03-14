@@ -221,6 +221,26 @@ def test_extract_findings_skips_boilerplate_study_aim_sentence():
     assert "enflasyon" in joined or "büyüme" in joined
 
 
+def test_extract_findings_for_time_horizon_skips_timeless_institution_description():
+    sources = [
+        ar.ResearchSource(
+            url="https://www.tcmb.gov.tr/report",
+            title="TCMB",
+            snippet="",
+            reliability_score=0.9,
+            content=(
+                "Türkiye Cumhuriyet Merkez Bankası, ülkemizde para ve kur politikalarının yönetilmesinden sorumlu kurumdur. "
+                "2022 ve 2023 yıllarında enflasyon görünümü para politikası kararlarını belirgin biçimde etkilemiştir."
+            ),
+            fetched=True,
+        ),
+    ]
+    findings = asyncio.run(ar._extract_findings(sources, "Türkiye ekonomisinin son 10 yılı", max_findings=3))
+    joined = "\n".join(findings).lower()
+    assert "sorumlu kurumdur" not in joined
+    assert "2022" in joined or "2023" in joined
+
+
 def test_apply_min_reliability_filters_weak_sources():
     sources = [
         ar.ResearchSource(url="https://a.com", title="A", snippet="", reliability_score=0.9),

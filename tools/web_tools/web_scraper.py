@@ -6,6 +6,8 @@ from typing import Any
 from urllib.parse import urlparse
 from utils.logger import get_logger
 
+from .smart_fetch import smart_fetch_page
+
 logger = get_logger("web.scraper")
 
 # Security: Blocked URL patterns
@@ -52,7 +54,9 @@ def _is_safe_url(url: str) -> tuple[bool, str]:
 async def fetch_page(
     url: str,
     extract_content: bool = True,
-    max_length: int = MAX_CONTENT_LENGTH
+    max_length: int = MAX_CONTENT_LENGTH,
+    source_policy: str = "balanced",
+    prefer_browser: bool = False,
 ) -> dict[str, Any]:
     """Fetch a web page and optionally extract main content
 
@@ -71,58 +75,15 @@ async def fetch_page(
         if url.startswith("http://"):
             url = url.replace("http://", "https://", 1)
 
-        try:
-            import aiohttp
-        except ImportError:
-            return {"success": False, "error": "aiohttp kurulu değil. 'pip install aiohttp' çalıştırın."}
-
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
-        }
-
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)) as session:
-            async with session.get(url, headers=headers, allow_redirects=True) as response:
-                if response.status != 200:
-                    return {
-                        "success": False,
-                        "error": f"HTTP hatası: {response.status}",
-                        "status_code": response.status
-                    }
-
-                content_type = response.headers.get("Content-Type", "")
-                if "text/html" not in content_type and "text/plain" not in content_type:
-                    return {
-                        "success": False,
-                        "error": f"Desteklenmeyen içerik türü: {content_type}"
-                    }
-
-                html = await response.text()
-
-        # Extract content if requested
-        if extract_content:
-            result = await extract_text(html, url)
-            if result.get("success"):
-                text = result.get("text", "")[:max_length]
-                return {
-                    "success": True,
-                    "url": url,
-                    "title": result.get("title", ""),
-                    "content": text,
-                    "length": len(text),
-                    "truncated": len(result.get("text", "")) > max_length
-                }
-            else:
-                return result
-        else:
-            return {
-                "success": True,
-                "url": url,
-                "html": html[:max_length],
-                "length": len(html),
-                "truncated": len(html) > max_length
-            }
+        result = await smart_fetch_page(
+            url,
+            extract_content=extract_content,
+            max_length=max_length,
+            source_policy=source_policy,
+            prefer_browser=prefer_browser,
+        )
+        if result.get("success"):
+            return result
 
     except asyncio.TimeoutError:
         return {"success": False, "error": "Zaman aşımı - sayfa yanıt vermedi"}

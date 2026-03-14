@@ -1,0 +1,276 @@
+"""Unified document rendering for sectioned content."""
+
+from __future__ import annotations
+
+import html
+import io
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from utils.logger import get_logger
+
+logger = get_logger("document.output_renderer")
+
+
+@dataclass
+class DocumentParagraph:
+    text: str
+    claim_ids: list[str] = field(default_factory=list)
+
+
+@dataclass
+class DocumentSection:
+    title: str
+    paragraphs: list[DocumentParagraph] = field(default_factory=list)
+
+
+@dataclass
+class SectionedDocument:
+    title: str
+    sections: list[DocumentSection] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_plain_text(self) -> str:
+        lines = [self.title]
+        for section in list(self.sections or []):
+            heading = str(section.title or "").strip()
+            if not heading:
+                continue
+            lines.extend(["", heading])
+            for paragraph in list(section.paragraphs or []):
+                text = str(paragraph.text or "").strip()
+                if text:
+                    lines.extend(["", text])
+        return "\n".join(lines).strip()
+
+
+class UnsupportedFormat(ValueError):
+    pass
+
+
+class BaseRenderer:
+    async def render_to_path(self, document: SectionedDocument, path: str) -> dict[str, Any]:
+        raise NotImplementedError
+
+
+class MarkdownRenderer(BaseRenderer):
+    async def render_to_path(self, document: SectionedDocument, path: str) -> dict[str, Any]:
+        target = Path(path).expanduser().resolve()
+        lines = [f"# {document.title}"]
+        if document.metadata:
+            lines.extend(["", "## Metadata", ""])
+            for key, value in list(document.metadata.items())[:20]:
+                lines.append(f"- {key}: {value}")
+        for section in list(document.sections or []):
+            lines.extend(["", f"## {section.title}", ""])
+            for paragraph in list(section.paragraphs or []):
+                text = str(paragraph.text or "").strip()
+                if text:
+                    lines.append(text)
+                    lines.append("")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+        return {"success": True, "path": str(target), "format": "md"}
+
+
+class HtmlRenderer(BaseRenderer):
+    async def render_to_path(self, document: SectionedDocument, path: str) -> dict[str, Any]:
+        target = Path(path).expanduser().resolve()
+        body = [f"<h1>{html.escape(document.title)}</h1>"]
+        for section in list(document.sections or []):
+            body.append(f"<section><h2>{html.escape(section.title)}</h2>")
+            for paragraph in list(section.paragraphs or []):
+                body.append(f"<p>{html.escape(str(paragraph.text or '').strip())}</p>")
+            body.append("</section>")
+        payload = (
+            "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+            f"<title>{html.escape(document.title)}</title></head><body>"
+            + "".join(body)
+            + "</body></html>"
+        )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(payload, encoding="utf-8")
+        return {"success": True, "path": str(target), "format": "html"}
+
+
+class DocxRenderer(BaseRenderer):
+    async def render_to_path(self, document: SectionedDocument, path: str) -> dict[str, Any]:
+        from tools.office_tools.word_tools import write_word
+
+        paragraphs: list[str] = []
+        for section in list(document.sections or []):
+            paragraphs.append(str(section.title or "").strip())
+            for paragraph in list(section.paragraphs or []):
+                text = str(paragraph.text or "").strip()
+                if text:
+                    paragraphs.append(text)
+        return await write_word(path=str(path), title=document.title, paragraphs=paragraphs)
+
+
+class XlsxRenderer(BaseRenderer):
+    async def render_to_path(self, document: SectionedDocument, path: str) -> dict[str, Any]:
+        from tools.office_tools.excel_tools import write_excel
+
+        rows: list[dict[str, Any]] = []
+        for section in list(document.sections or []):
+            for paragraph in list(section.paragraphs or []):
+                rows.append(
+                    {
+                        "Section": str(section.title or "").strip(),
+                        "Paragraph": str(paragraph.text or "").strip(),
+                        "Claims": ", ".join(str(item).strip() for item in list(paragraph.claim_ids or []) if str(item).strip()),
+                    }
+                )
+        if not rows:
+            rows.append({"Section": "Document", "Paragraph": document.title, "Claims": ""})
+        return await write_excel(
+            path=str(path),
+            data=rows,
+            headers=["Section", "Paragraph", "Claims"],
+            sheet_name="Document",
+        )
+
+
+class PdfRenderer(BaseRenderer):
+    async def render_to_path(self, document: SectionedDocument, path: str) -> dict[str, Any]:
+        try:
+            from reportlab.lib.pagesizes import A4
+            from reportlab.pdfgen import canvas
+        except Exception as exc:
+            return {"success": False, "error": f"reportlab unavailable: {exc}"}
+
+        target = Path(path).expanduser().resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        text = document.to_plain_text()
+        lines = [line for line in text.splitlines()]
+        c = canvas.Canvas(str(target), pagesize=A4)
+        width, height = A4
+        x = 50
+        y = height - 50
+        c.setTitle(document.title)
+        c.setFont("Helvetica-Bold", 16)
+        c.drawString(x, y, document.title[:110])
+        y -= 28
+        c.setFont("Helvetica", 11)
+        for line in lines[1:]:
+            wrapped = line or " "
+            while len(wrapped) > 100:
+                part = wrapped[:100]
+                c.drawString(x, y, part)
+                y -= 16
+                wrapped = wrapped[100:]
+                if y < 60:
+                    c.showPage()
+                    c.setFont("Helvetica", 11)
+                    y = height - 50
+            c.drawString(x, y, wrapped[:100])
+            y -= 16
+            if y < 60:
+                c.showPage()
+                c.setFont("Helvetica", 11)
+                y = height - 50
+        c.save()
+        return {"success": True, "path": str(target), "format": "pdf"}
+
+
+class PptxRenderer(BaseRenderer):
+    async def render_to_path(self, document: SectionedDocument, path: str) -> dict[str, Any]:
+        try:
+            from pptx import Presentation
+        except Exception as exc:
+            return {"success": False, "error": f"python-pptx unavailable: {exc}"}
+
+        target = Path(path).expanduser().resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        prs = Presentation()
+        title_slide = prs.slides.add_slide(prs.slide_layouts[0])
+        title_slide.shapes.title.text = document.title
+        subtitle = title_slide.placeholders[1] if len(title_slide.placeholders) > 1 else None
+        if subtitle is not None:
+            subtitle.text = "Generated by Elyan"
+        for section in list(document.sections or []):
+            slide = prs.slides.add_slide(prs.slide_layouts[1])
+            slide.shapes.title.text = str(section.title or "").strip()
+            body = slide.placeholders[1].text_frame
+            body.clear()
+            for index, paragraph in enumerate(list(section.paragraphs or [])):
+                p = body.paragraphs[0] if index == 0 else body.add_paragraph()
+                p.text = str(paragraph.text or "").strip()
+        prs.save(str(target))
+        return {"success": True, "path": str(target), "format": "pptx"}
+
+
+class DocumentRenderer:
+    RENDERERS = {
+        "docx": DocxRenderer,
+        "pdf": PdfRenderer,
+        "xlsx": XlsxRenderer,
+        "md": MarkdownRenderer,
+        "html": HtmlRenderer,
+        "pptx": PptxRenderer,
+    }
+
+    def get_renderer(self, fmt: str) -> BaseRenderer:
+        clean = str(fmt or "").strip().lower()
+        renderer_cls = self.RENDERERS.get(clean)
+        if renderer_cls is None:
+            raise UnsupportedFormat(clean)
+        return renderer_cls()
+
+    async def render_to_path(self, document: SectionedDocument, fmt: str, path: str) -> dict[str, Any]:
+        renderer = self.get_renderer(fmt)
+        return await renderer.render_to_path(document, path)
+
+
+def sections_to_sectioned_document(
+    *,
+    title: str,
+    sections: list[dict[str, Any]],
+    metadata: dict[str, Any] | None = None,
+) -> SectionedDocument:
+    rows: list[DocumentSection] = []
+    for section in list(sections or []):
+        if not isinstance(section, dict):
+            continue
+        title_text = str(section.get("title") or "").strip()
+        paragraphs = []
+        for paragraph in list(section.get("paragraphs") or []):
+            if isinstance(paragraph, dict):
+                paragraphs.append(
+                    DocumentParagraph(
+                        text=str(paragraph.get("text") or "").strip(),
+                        claim_ids=[str(item).strip() for item in list(paragraph.get("claim_ids") or []) if str(item).strip()],
+                    )
+                )
+            elif str(paragraph or "").strip():
+                paragraphs.append(DocumentParagraph(text=str(paragraph).strip()))
+        rows.append(DocumentSection(title=title_text, paragraphs=paragraphs))
+    return SectionedDocument(title=str(title or "").strip(), sections=rows, metadata=dict(metadata or {}))
+
+
+def sectioned_document_json(document: SectionedDocument) -> str:
+    payload = {
+        "title": document.title,
+        "metadata": dict(document.metadata or {}),
+        "sections": [
+            {
+                "title": section.title,
+                "paragraphs": [{"text": paragraph.text, "claim_ids": list(paragraph.claim_ids or [])} for paragraph in section.paragraphs],
+            }
+            for section in list(document.sections or [])
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+__all__ = [
+    "DocumentParagraph",
+    "DocumentRenderer",
+    "DocumentSection",
+    "SectionedDocument",
+    "UnsupportedFormat",
+    "sectioned_document_json",
+    "sections_to_sectioned_document",
+]
