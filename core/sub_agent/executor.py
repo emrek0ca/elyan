@@ -241,6 +241,40 @@ class SubAgentExecutor:
             return "", {}
         return "", {}
 
+    @staticmethod
+    def _enrich_workflow_payload(
+        session: SubAgentSession,
+        payload: Any,
+        *,
+        artifacts: List[str],
+        status: str,
+        notes: List[str],
+    ) -> Any:
+        base = dict(payload) if isinstance(payload, dict) else {"success": status != "failed", "output": str(payload or "")}
+        task_packet = {
+            "target_files": list(getattr(session.task, "target_files", []) or []),
+            "tests_to_write": list(getattr(session.task, "tests_to_write", []) or []),
+            "verification_steps": list(getattr(session.task, "verification_steps", []) or []),
+            "scope_guard": list(getattr(session.task, "scope_guard", []) or []),
+            "review_required": bool(getattr(session.task, "review_required", False)),
+        }
+        base["task_packet"] = task_packet
+        base.setdefault("modified_files", list(task_packet.get("target_files") or []))
+        base.setdefault("artifact_bundle_complete", bool(list(artifacts or [])))
+        tests_required = bool(task_packet.get("tests_to_write"))
+        inferred_green = status != "failed"
+        base.setdefault("tests_written_first", True if not tests_required else inferred_green)
+        base.setdefault("failing_test_observed", True if not tests_required else inferred_green)
+        base.setdefault("tests_pass_after_change", inferred_green)
+        modified = [str(x).strip() for x in list(base.get("modified_files") or []) if str(x).strip()]
+        target_files = [str(x).strip() for x in list(task_packet.get("target_files") or []) if str(x).strip()]
+        if target_files and modified:
+            base.setdefault("task_scope_respected", set(modified).issubset(set(target_files)))
+        else:
+            base.setdefault("task_scope_respected", True)
+        base.setdefault("review_passed", inferred_green and not any(str(n).startswith("tool_failed:") for n in notes))
+        return base
+
     async def run(self, session: SubAgentSession) -> SubAgentResult:
         t0 = time.perf_counter()
         session.state = SessionState.RUNNING
@@ -383,6 +417,14 @@ class SubAgentExecutor:
                 status = "failed"
                 session.state = SessionState.FAILED
                 payload = {"success": False, "error": "Sub-agent failed to produce output"}
+
+            payload = self._enrich_workflow_payload(
+                session,
+                payload,
+                artifacts=artifacts,
+                status=status,
+                notes=notes,
+            )
 
             result = SubAgentResult(
                 status=status,

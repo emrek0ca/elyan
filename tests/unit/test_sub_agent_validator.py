@@ -97,3 +97,60 @@ async def test_validator_research_quality_gates_accept_complete_payload(tmp_path
     )
 
     assert verdict.passed is True
+
+
+@pytest.mark.asyncio
+async def test_validator_workflow_execution_gates_accept_complete_payload():
+    validator = SubAgentValidator()
+    result = SubAgentResult(
+        status="success",
+        result={
+            "success": True,
+            "tests_written_first": True,
+            "failing_test_observed": True,
+            "tests_pass_after_change": True,
+            "task_scope_respected": True,
+            "review_passed": True,
+            "artifact_bundle_complete": True,
+        },
+        artifacts=["/tmp/proof.txt"],
+    )
+    verdict = await validator.validate(
+        result,
+        [
+            "tests_written_first",
+            "failing_test_observed",
+            "tests_pass_after_change",
+            "task_scope_respected",
+            "review_passed",
+            "artifact_bundle_complete",
+        ],
+    )
+
+    assert verdict.passed is True
+
+
+@pytest.mark.asyncio
+async def test_validator_workflow_execution_gates_fail_when_red_green_missing():
+    validator = SubAgentValidator()
+    result = SubAgentResult(
+        status="partial",
+        result={
+            "success": True,
+            "tests_written_first": False,
+            "failing_test_observed": False,
+            "tests_pass_after_change": True,
+            "task_scope_respected": True,
+            "review_passed": True,
+            "artifact_bundle_complete": True,
+        },
+        artifacts=["/tmp/proof.txt"],
+    )
+    verdict = await validator.validate(
+        result,
+        ["tests_written_first", "failing_test_observed", "tests_pass_after_change"],
+    )
+
+    assert verdict.passed is False
+    assert "tests_written_first" in verdict.failed_gates
+    assert "failing_test_observed" in verdict.failed_gates

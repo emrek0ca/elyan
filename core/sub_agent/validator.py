@@ -85,6 +85,38 @@ class SubAgentValidator:
                 pass
         return any(str(item).endswith("revision_summary.md") or str(item).endswith(".revision_summary.md") for item in list(artifacts or []))
 
+    @staticmethod
+    def _gate_tests_written_first(result_payload: Any) -> bool:
+        payload = SubAgentValidator._payload_dict(result_payload)
+        return bool(payload.get("tests_written_first", False))
+
+    @staticmethod
+    def _gate_failing_test_observed(result_payload: Any) -> bool:
+        payload = SubAgentValidator._payload_dict(result_payload)
+        return bool(payload.get("failing_test_observed", False))
+
+    @staticmethod
+    def _gate_tests_pass_after_change(result_payload: Any) -> bool:
+        payload = SubAgentValidator._payload_dict(result_payload)
+        return bool(payload.get("tests_pass_after_change", False))
+
+    @staticmethod
+    def _gate_task_scope_respected(result_payload: Any) -> bool:
+        payload = SubAgentValidator._payload_dict(result_payload)
+        return bool(payload.get("task_scope_respected", False))
+
+    @staticmethod
+    def _gate_review_passed(result_payload: Any) -> bool:
+        payload = SubAgentValidator._payload_dict(result_payload)
+        return bool(payload.get("review_passed", False))
+
+    @staticmethod
+    def _gate_artifact_bundle_complete(result_payload: Any, artifacts: List[str]) -> bool:
+        payload = SubAgentValidator._payload_dict(result_payload)
+        if "artifact_bundle_complete" in payload:
+            return bool(payload.get("artifact_bundle_complete"))
+        return bool(list(artifacts or []))
+
     def _gate_file_exists(self, path: str) -> bool:
         return Path(path).expanduser().exists()
 
@@ -164,6 +196,18 @@ class SubAgentValidator:
                     ok = self._gate_claim_map_present(result.result, artifacts)
                 elif g == "revision_summary_present":
                     ok = self._gate_revision_summary_present(result.result, artifacts)
+                elif g == "tests_written_first":
+                    ok = self._gate_tests_written_first(result.result)
+                elif g == "failing_test_observed":
+                    ok = self._gate_failing_test_observed(result.result)
+                elif g == "tests_pass_after_change":
+                    ok = self._gate_tests_pass_after_change(result.result)
+                elif g == "task_scope_respected":
+                    ok = self._gate_task_scope_respected(result.result)
+                elif g == "review_passed":
+                    ok = self._gate_review_passed(result.result)
+                elif g == "artifact_bundle_complete":
+                    ok = self._gate_artifact_bundle_complete(result.result, artifacts)
                 elif g == "artifact_paths_nonempty":
                     ok = bool(artifacts)
                 elif g == "artifact_or_content":

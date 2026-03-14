@@ -12,6 +12,7 @@ class RuntimePolicy:
     name: str = "custom"
     flags: Dict[str, Any] = field(default_factory=dict)
     capability: Dict[str, Any] = field(default_factory=dict)
+    workflow: Dict[str, Any] = field(default_factory=dict)
     planning: Dict[str, Any] = field(default_factory=dict)
     execution: Dict[str, Any] = field(default_factory=dict)
     nlu: Dict[str, Any] = field(default_factory=dict)
@@ -126,6 +127,20 @@ class RuntimePolicyResolver:
                 "min_confidence_override": float(
                     elyan_config.get("agent.capability_router.min_confidence_override", 0.5) or 0.5
                 ),
+            },
+            workflow={
+                "profile": str(elyan_config.get("agent.workflow_profile", "default") or "default"),
+                "allowed_domains": self._as_list(
+                    elyan_config.get(
+                        "agent.superpowers.allowed_domains",
+                        ["code", "debug", "api_integration", "full_stack_delivery"],
+                    ),
+                    ["code", "debug", "api_integration", "full_stack_delivery"],
+                ),
+                "require_explicit_approval": bool(
+                    elyan_config.get("agent.superpowers.require_explicit_approval", True)
+                ),
+                "workspace_policy": str(elyan_config.get("agent.superpowers.workspace_policy", "auto") or "auto"),
             },
             planning={
                 "use_llm": bool(elyan_config.get("agent.planning.use_llm", True)),

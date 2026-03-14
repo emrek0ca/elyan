@@ -178,6 +178,28 @@ class RunStore:
 
         meta = metadata or {}
         if isinstance(meta, dict):
+            if str(meta.get("workflow_profile") or "").strip():
+                lines.append(f"- Workflow profile: {str(meta.get('workflow_profile') or '').strip()}")
+            if str(meta.get("workflow_phase") or "").strip():
+                lines.append(f"- Workflow phase: {str(meta.get('workflow_phase') or '').strip()}")
+            if str(meta.get("approval_status") or "").strip():
+                lines.append(f"- Approval status: {str(meta.get('approval_status') or '').strip()}")
+            if str(meta.get("plan_progress") or "").strip():
+                lines.append(f"- Plan progress: {str(meta.get('plan_progress') or '').strip()}")
+            if str(meta.get("review_status") or "").strip():
+                lines.append(f"- Review status: {str(meta.get('review_status') or '').strip()}")
+            if str(meta.get("workspace_mode") or "").strip():
+                lines.append(f"- Workspace mode: {str(meta.get('workspace_mode') or '').strip()}")
+            if str(meta.get("design_artifact_path") or "").strip():
+                lines.append(f"- Design artifact: {str(meta.get('design_artifact_path') or '').strip()}")
+            if str(meta.get("plan_artifact_path") or "").strip():
+                lines.append(f"- Plan artifact: {str(meta.get('plan_artifact_path') or '').strip()}")
+            if str(meta.get("review_artifact_path") or "").strip():
+                lines.append(f"- Review artifact: {str(meta.get('review_artifact_path') or '').strip()}")
+            if str(meta.get("workspace_report_path") or "").strip():
+                lines.append(f"- Workspace report: {str(meta.get('workspace_report_path') or '').strip()}")
+            if str(meta.get("finish_branch_report_path") or "").strip():
+                lines.append(f"- Finish branch report: {str(meta.get('finish_branch_report_path') or '').strip()}")
             if "claim_coverage" in meta:
                 lines.append(f"- Claim coverage: {float(meta.get('claim_coverage', 0.0) or 0.0):.2f}")
             if "critical_claim_coverage" in meta:

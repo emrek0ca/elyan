@@ -40,6 +40,9 @@ beautifulsoup4>=4.12.0
 lxml>=4.9.0
 matplotlib>=3.7.0
 Pillow>=10.0.0
+numpy>=1.26.0
+scikit-learn>=1.4.0
+sentence-transformers>=3.0.0
 groq>=0.11.0
 google-generativeai>=0.8.0
 
@@ -48,6 +51,7 @@ python-docx>=1.1.0
 openpyxl>=3.1.0
 pdfplumber>=0.10.0
 pypdf>=3.0.0
+python-pptx>=1.0.0
 reportlab>=4.0.0
 
 # Scheduling
@@ -71,8 +75,8 @@ psutil>=5.9.0                              # Already present, shared
 # pyttsx3>=2.90
 # pydub>=0.25.0
 
-# Optional: Browser Automation (uncomment if needed)
-# playwright>=1.40.0
+# Browser Automation
+playwright>=1.40.0
 
 # Testing / Development
 pytest>=8.0.0

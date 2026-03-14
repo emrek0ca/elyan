@@ -302,3 +302,87 @@ def test_advanced_research_returns_policy_metadata(monkeypatch, tmp_path: Path):
     assert out["source_policy"] == "academic"
     assert out["min_reliability"] == 0.8
     assert "source_policy_stats" in out
+
+
+def test_evaluate_source_returns_fetch_metadata(monkeypatch):
+    async def _fake_fetch_page(url, extract_content=True, source_policy="balanced", prefer_browser=False):
+        _ = (url, extract_content, source_policy, prefer_browser)
+        return {
+            "success": True,
+            "title": "TCMB",
+            "content": "TCMB raporu enflasyon ve büyüme görünümünü değerlendirir. 2024 yılında fiyat istikrarı vurgulanmıştır.",
+            "render_mode": "browser",
+            "text_density": 0.21,
+            "length": 1400,
+            "status_code": 200,
+        }
+
+    monkeypatch.setattr("tools.web_tools.fetch_page", _fake_fetch_page)
+
+    result = asyncio.run(ar.evaluate_source("https://www.tcmb.gov.tr/report"))
+    assert result["success"] is True
+    assert result["fetch_mode"] == "browser"
+    assert result["fetch_metadata"]["text_density"] == 0.21
+
+
+def test_advanced_research_includes_structured_data_payload(monkeypatch, tmp_path: Path):
+    ar._research_tasks.clear()
+    monkeypatch.setattr(ar, "RESEARCH_REPORT_DIR", tmp_path)
+    monkeypatch.setattr(ar, "_last_research_result", None)
+    monkeypatch.setattr(ar, "_last_research_topic", None)
+
+    async def _fake_search(query: str, num_results: int, language: str):
+        _ = (query, num_results, language)
+        return [{"url": "https://www.tcmb.gov.tr/report", "title": "TCMB", "snippet": "Makro görünüm", "_rank_score": 0.88}]
+
+    async def _fake_eval(url: str, criteria=None):
+        _ = criteria
+        return {
+            "success": True,
+            "url": url,
+            "domain": "tcmb.gov.tr",
+            "reliability_score": 0.9,
+            "content_preview": "TCMB raporu son yıllardaki enflasyon görünümünü özetler.",
+            "fetch_mode": "browser",
+            "fetch_metadata": {"render_mode": "browser"},
+        }
+
+    async def _fake_summary(_topic, _findings, _sources, **kwargs):
+        _ = kwargs
+        return "Ekonomi özeti"
+
+    async def _fake_fetch_and_summarize(self, topic, years=None, indicators=None):
+        _ = (self, topic, years, indicators)
+        return {
+            "sources": [
+                {
+                    "url": "https://api.worldbank.org/v2/country/TUR/indicator/FP.CPI.TOTL.ZG",
+                    "title": "Enflasyon - WORLDBANK",
+                    "snippet": "Enflasyon serisi 2021-2024 döneminde aşağı yönlü seyretti.",
+                    "reliability_score": 0.96,
+                    "source_type": "structured_data",
+                }
+            ],
+            "findings": ["Enflasyon serisi 2021-2024 döneminde aşağı yönlü seyretti."],
+            "series": [{"indicator": "inflation"}],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(ar, "_perform_web_search", _fake_search)
+    monkeypatch.setattr(ar, "evaluate_source", _fake_eval)
+    monkeypatch.setattr(ar, "_generate_summary", _fake_summary)
+    monkeypatch.setattr("tools.research_tools.data_agent.TimeSeriesAgent.fetch_and_summarize", _fake_fetch_and_summarize)
+
+    out = asyncio.run(
+        ar.advanced_research(
+            topic="Türkiye ekonomisinin son 10 yılı",
+            depth="quick",
+            include_evaluation=True,
+            generate_report=False,
+            source_policy="official",
+        )
+    )
+    assert out["success"] is True
+    assert "structured_data" in out
+    assert out["structured_data"]["series"]
+    assert any(src.get("source_type") == "structured_data" for src in out["sources"])

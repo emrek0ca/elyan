@@ -267,7 +267,7 @@ async def test_research_document_delivery_returns_only_requested_outputs(monkeyp
     assert any(str(item).endswith("claim_map.json") for item in result.get("supporting_artifacts", []))
     assert str(result.get("claim_map_path", "")).endswith("claim_map.json")
     assert result.get("document_profile") == "executive"
-    assert result.get("citation_mode") == "inline"
+    assert result.get("citation_mode") == "none"
 
 
 @pytest.mark.asyncio
@@ -319,14 +319,16 @@ async def test_research_document_delivery_word_only_stays_single_artifact(monkey
     assert len(outputs) == 1
     assert str(outputs[0]).endswith(".docx")
     assert "Araştırma belgesi hazır:" in str(result.get("message", ""))
-    assert "Kısa Özet" in str(captured.get("content", ""))
-    assert "Temel Bulgular" in str(captured.get("content", ""))
-    assert "Kaynak Güven Özeti" in str(captured.get("content", ""))
-    assert "Açık Riskler" in str(captured.get("content", ""))
-    assert "Belirsizlikler" in str(captured.get("content", ""))
+    assert "Kısa Özet" not in str(captured.get("content", ""))
+    assert "Temel Bulgular" not in str(captured.get("content", ""))
+    assert "Kaynak Güven Özeti" not in str(captured.get("content", ""))
+    assert "Açık Riskler" not in str(captured.get("content", ""))
+    assert "Belirsizlikler" not in str(captured.get("content", ""))
     assert "Operasyonel Öneriler" not in str(captured.get("content", ""))
     assert "BUders" not in str(captured.get("content", ""))
     assert "Denklem 1" not in str(captured.get("content", ""))
+    assert "[Kaynak:" not in str(captured.get("content", ""))
+    assert "Fourier serileri periyodik fonksiyonları" in str(captured.get("content", ""))
 
 
 @pytest.mark.asyncio
@@ -708,7 +710,7 @@ async def test_research_document_delivery_generates_claim_map_and_profile_varian
     claim_map = claim_map_path.read_text(encoding="utf-8")
     assert "\"claim_coverage\": 1.0" in claim_map
     assert "Temel Bulgular" in str(captured.get("content", ""))
-    assert "Kaynak Güven Özeti" in str(captured.get("content", ""))
+    assert "Kaynak Güven Özeti" not in str(captured.get("content", ""))
 
 
 @pytest.mark.asyncio

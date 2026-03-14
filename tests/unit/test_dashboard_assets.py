@@ -69,6 +69,11 @@ def test_dashboard_js_uses_longer_message_timeout_and_friendly_abort_text():
     assert "uncertainty:" in js
     assert "conflicts:" in js
     assert "manual review:" in js
+    assert "workflow:" in js
+    assert "approval:" in js
+    assert "plan:" in js
+    assert "review:" in js
+    assert "workspace:" in js
     assert "team q:" in js
     assert "team claim:" in js
     assert "team critical:" in js

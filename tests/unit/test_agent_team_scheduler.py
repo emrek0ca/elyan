@@ -64,3 +64,38 @@ def test_agent_team_derive_gates_for_research_delivery_revision():
     assert "claim_map_present" in gates
     assert "uncertainty_section_present" in gates
     assert "revision_summary_present" in gates
+
+
+@pytest.mark.asyncio
+async def test_agent_team_builds_task_packets_into_worker_and_review_tasks():
+    team = AgentTeam(_DummyAgent(), TeamConfig())
+    tasks, graph = await team._build_team_tasks(
+        "login bug fix",
+        task_packets=[
+            {
+                "packet_id": "task_1",
+                "title": "Login validation fix",
+                "goal": "Fix login validation",
+                "action": "write_file",
+                "params": {"path": "app/auth.py", "content": "x"},
+                "target_files": ["app/auth.py", "tests/test_auth.py"],
+                "tests_to_write": ["Add failing login validation test"],
+                "verification_steps": ["python -m pytest tests/test_auth.py -q"],
+                "acceptance_checks": ["Validation failure shows message"],
+                "scope_guard": ["app/auth.py", "tests/test_auth.py"],
+                "review_required": True,
+                "handoff_template": "Context: {objective}",
+                "specialist_hint": "backend_architect",
+            }
+        ],
+        workflow_context={"workflow_profile": "superpowers_lite", "workspace_mode": "git_worktree_recommended"},
+    )
+
+    assert graph["stage_count"] == 1
+    assert len(tasks) == 3
+    assert tasks[0].action == "write_file"
+    assert tasks[0].params["_task_packet"]["packet_id"] == "task_1"
+    assert tasks[1].title.endswith("/ Spec Review")
+    assert tasks[2].title.endswith("/ Quality Review")
+    assert "tests_written_first" in tasks[0].gates
+    assert tasks[2].depends_on == [tasks[1].task_id]

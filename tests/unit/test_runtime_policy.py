@@ -140,3 +140,14 @@ def test_runtime_policy_defaults_to_compact_action_responses(monkeypatch):
 
     policy = RuntimePolicyResolver().resolve()
     assert policy.response.get("compact_actions") is True
+
+
+def test_runtime_policy_resolve_includes_workflow_defaults(monkeypatch):
+    monkeypatch.setattr("core.runtime_policy.elyan_config.get", lambda key, default=None: default)
+
+    policy = RuntimePolicyResolver().resolve()
+    workflow = policy.workflow
+    assert workflow.get("profile") == "default"
+    assert workflow.get("allowed_domains") == ["code", "debug", "api_integration", "full_stack_delivery"]
+    assert workflow.get("require_explicit_approval") is True
+    assert workflow.get("workspace_policy") == "auto"

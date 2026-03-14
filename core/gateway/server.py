@@ -2698,6 +2698,16 @@ class ElyanGatewayServer:
             team_research_claim_coverage = 0.0
             team_research_critical_claim_coverage = 0.0
             team_research_uncertainty_count = 0
+            workflow_profile = ""
+            workflow_phase = ""
+            approval_status = ""
+            plan_progress = ""
+            review_status = ""
+            workspace_mode = ""
+            design_artifact_path = ""
+            plan_artifact_path = ""
+            review_artifact_path = ""
+            finish_branch_report_path = ""
 
             if evidence_path.exists():
                 try:
@@ -2768,6 +2778,16 @@ class ElyanGatewayServer:
                             team_research_uncertainty_count = int(meta.get("team_research_uncertainty_count", 0) or 0)
                         except Exception:
                             team_research_uncertainty_count = 0
+                        workflow_profile = str(meta.get("workflow_profile", "") or "")
+                        workflow_phase = str(meta.get("workflow_phase", "") or "")
+                        approval_status = str(meta.get("approval_status", "") or "")
+                        plan_progress = str(meta.get("plan_progress", "") or "")
+                        review_status = str(meta.get("review_status", "") or "")
+                        workspace_mode = str(meta.get("workspace_mode", "") or "")
+                        design_artifact_path = str(meta.get("design_artifact_path", "") or "")
+                        plan_artifact_path = str(meta.get("plan_artifact_path", "") or "")
+                        review_artifact_path = str(meta.get("review_artifact_path", "") or "")
+                        finish_branch_report_path = str(meta.get("finish_branch_report_path", "") or "")
                     steps = ev.get("steps", []) if isinstance(ev, dict) else []
                     if isinstance(steps, list):
                         total_step_duration = 0
@@ -2790,6 +2810,16 @@ class ElyanGatewayServer:
                     meta = task.get("metadata", {}) if isinstance(task, dict) else {}
                     if isinstance(meta, dict):
                         action = str(meta.get("action", "") or "")
+                        workflow_profile = workflow_profile or str(meta.get("workflow_profile", "") or "")
+                        workflow_phase = workflow_phase or str(meta.get("workflow_phase", "") or "")
+                        approval_status = approval_status or str(meta.get("approval_status", "") or "")
+                        plan_progress = plan_progress or str(meta.get("plan_progress", "") or "")
+                        review_status = review_status or str(meta.get("review_status", "") or "")
+                        workspace_mode = workspace_mode or str(meta.get("workspace_mode", "") or "")
+                        design_artifact_path = design_artifact_path or str(meta.get("design_artifact_path", "") or "")
+                        plan_artifact_path = plan_artifact_path or str(meta.get("plan_artifact_path", "") or "")
+                        review_artifact_path = review_artifact_path or str(meta.get("review_artifact_path", "") or "")
+                        finish_branch_report_path = finish_branch_report_path or str(meta.get("finish_branch_report_path", "") or "")
                 except Exception:
                     pass
 
@@ -2813,6 +2843,16 @@ class ElyanGatewayServer:
                     "team_research_claim_coverage": round(team_research_claim_coverage, 2),
                     "team_research_critical_claim_coverage": round(team_research_critical_claim_coverage, 2),
                     "team_research_uncertainty_count": team_research_uncertainty_count,
+                    "workflow_profile": workflow_profile,
+                    "workflow_phase": workflow_phase,
+                    "approval_status": approval_status,
+                    "plan_progress": plan_progress,
+                    "review_status": review_status,
+                    "workspace_mode": workspace_mode,
+                    "design_artifact_path": design_artifact_path,
+                    "plan_artifact_path": plan_artifact_path,
+                    "review_artifact_path": review_artifact_path,
+                    "finish_branch_report_path": finish_branch_report_path,
                     "summary_path": str(summary_path),
                     "evidence_path": str(evidence_path),
                     "created_at": int(mtime_by_name.get(run_dir.name, 0)),

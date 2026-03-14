@@ -6,6 +6,13 @@ Metin ve Word düzenleme, PDF/Word birleştirme
 from .text_editor import edit_text_file, batch_edit_text
 from .word_editor import edit_word_document
 from .document_merger import merge_documents, merge_pdfs, merge_word_documents
+from .output_renderer import (
+    DocumentParagraph,
+    DocumentRenderer,
+    DocumentSection,
+    SectionedDocument,
+    sections_to_sectioned_document,
+)
 
 __all__ = [
     "edit_text_file",
@@ -13,5 +20,10 @@ __all__ = [
     "edit_word_document",
     "merge_documents",
     "merge_pdfs",
-    "merge_word_documents"
+    "merge_word_documents",
+    "DocumentParagraph",
+    "DocumentRenderer",
+    "DocumentSection",
+    "SectionedDocument",
+    "sections_to_sectioned_document",
 ]

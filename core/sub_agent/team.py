@@ -169,6 +169,13 @@ class AgentTeam:
             gates.append("valid_html")
         elif path.endswith(".py"):
             gates.append("valid_python")
+        task_packet = (params or {}).get("_task_packet") if isinstance((params or {}).get("_task_packet"), dict) else {}
+        if task_packet:
+            gates.extend(["task_scope_respected", "artifact_bundle_complete"])
+            if bool(task_packet.get("review_required", False)):
+                gates.append("review_passed")
+            if isinstance(task_packet.get("tests_to_write"), list) and task_packet.get("tests_to_write"):
+                gates.extend(["tests_written_first", "failing_test_observed", "tests_pass_after_change"])
         gates.append("tool_success")
         return self._dedupe(gates)
 
@@ -236,6 +243,102 @@ class AgentTeam:
         return objective, self._dedupe(criteria)
 
     @staticmethod
+    def _team_specialist_from_hint(hint: str) -> str:
+        low = str(hint or "").strip().lower()
+        if any(tok in low for tok in ("devops", "ops", "infra")):
+            return "ops"
+        if any(tok in low for tok in ("qa", "reality", "evidence", "checker")):
+            return "qa"
+        if any(tok in low for tok in ("research", "trend", "feedback")):
+            return "researcher"
+        if any(tok in low for tok in ("summary", "communicator", "report")):
+            return "communicator"
+        return "builder"
+
+    def _team_tasks_from_packets(
+        self,
+        brief: str,
+        task_packets: List[Dict[str, Any]],
+        workflow_context: Dict[str, Any] | None = None,
+    ) -> List[TeamTask]:
+        workflow = dict(workflow_context or {})
+        tasks: List[TeamTask] = []
+        for idx, packet in enumerate(list(task_packets or []), start=1):
+            if not isinstance(packet, dict):
+                continue
+            action = str(packet.get("action") or "chat").strip() or "chat"
+            title = str(packet.get("title") or packet.get("goal") or f"Task {idx}").strip() or f"Task {idx}"
+            specialist = self._team_specialist_from_hint(packet.get("specialist_hint") or "")
+            params = dict(packet.get("params") or {}) if isinstance(packet.get("params"), dict) else {}
+            params["_task_packet"] = dict(packet)
+            if workflow:
+                params["_workflow_context"] = dict(workflow)
+            gates = self._derive_gates(specialist, action, params)
+            objective, success_criteria = self._derive_success_contract(
+                brief=brief,
+                title=title,
+                specialist=specialist,
+                action=action,
+                params=params,
+            )
+            worker = TeamTask(
+                title=title,
+                specialist=specialist,
+                action=action,
+                params=params,
+                objective=objective,
+                success_criteria=success_criteria,
+                gates=gates,
+                depends_on=[tasks[-1].task_id] if tasks else [],
+                max_retries=max(0, int(self.config.max_retries_per_task or 0)),
+            )
+            tasks.append(worker)
+
+            # NEXUS-style two-stage review loop: spec compliance then code quality.
+            review_params = {
+                "message": (
+                    f"Spec compliance review for {title}. "
+                    f"Scope guard: {', '.join(str(x) for x in list(packet.get('scope_guard') or [])[:6])}. "
+                    f"Acceptance: {', '.join(str(x) for x in list(packet.get('acceptance_checks') or [])[:6])}."
+                ),
+                "_task_packet": dict(packet),
+            }
+            spec_review = TeamTask(
+                title=f"{title} / Spec Review",
+                specialist="qa",
+                action="chat",
+                params=review_params,
+                objective=f"{title} için plan uyumunu denetle",
+                success_criteria=["Spec compliance review yaz", "Açık risk varsa belirt"],
+                gates=["has_content", "review_passed", "tool_success"],
+                depends_on=[worker.task_id],
+                max_retries=0,
+            )
+            tasks.append(spec_review)
+
+            quality_params = {
+                "message": (
+                    f"Code quality review for {title}. "
+                    f"Tests: {', '.join(str(x) for x in list(packet.get('tests_to_write') or [])[:4]) or 'N/A'}. "
+                    f"Verification: {', '.join(str(x) for x in list(packet.get('verification_steps') or [])[:4]) or 'N/A'}."
+                ),
+                "_task_packet": dict(packet),
+            }
+            quality_review = TeamTask(
+                title=f"{title} / Quality Review",
+                specialist="qa",
+                action="chat",
+                params=quality_params,
+                objective=f"{title} için code quality review üret",
+                success_criteria=["Code quality review yaz", "Regresyon riski varsa belirt"],
+                gates=["has_content", "review_passed", "tool_success"],
+                depends_on=[spec_review.task_id],
+                max_retries=0,
+            )
+            tasks.append(quality_review)
+        return tasks
+
+    @staticmethod
     def _quality_score(*, status: str, failed_gates: List[str], retry_count: int) -> float:
         score = 1.0
         s = str(status or "").strip().lower()
@@ -247,7 +350,16 @@ class AgentTeam:
         score -= min(0.25, 0.08 * int(retry_count or 0))
         return round(max(0.0, min(1.0, score)), 2)
 
-    async def _build_team_tasks(self, brief: str) -> Tuple[List[TeamTask], Dict[str, Any]]:
+    async def _build_team_tasks(
+        self,
+        brief: str,
+        *,
+        task_packets: List[Dict[str, Any]] | None = None,
+        workflow_context: Dict[str, Any] | None = None,
+    ) -> Tuple[List[TeamTask], Dict[str, Any]]:
+        if task_packets:
+            graph = {"stage_count": len(task_packets), "workflow": dict(workflow_context or {})}
+            return self._team_tasks_from_packets(brief, list(task_packets or []), workflow_context=workflow_context), graph
         graph: Dict[str, Any] = {}
         try:
             graph = get_goal_graph_planner().build(brief)
@@ -341,6 +453,7 @@ class AgentTeam:
             picked.append(task)
             payload = dict(task.params or {})
             payload.setdefault("_lead_summary", lead_summary)
+            task_packet = payload.get("_task_packet") if isinstance(payload.get("_task_packet"), dict) else {}
             to_run.append(
                 (
                     task.specialist,
@@ -354,6 +467,18 @@ class AgentTeam:
                         domain=task.specialist,
                         dependencies=list(task.depends_on or []),
                         gates=list(task.gates or []),
+                        target_files=list(task_packet.get("target_files") or []),
+                        tests_to_write=list(task_packet.get("tests_to_write") or []),
+                        verification_steps=list(task_packet.get("verification_steps") or []),
+                        scope_guard=list(task_packet.get("scope_guard") or []),
+                        review_required=bool(task_packet.get("review_required", False)),
+                        handoff_template=str(task_packet.get("handoff_template") or ""),
+                        context={
+                            "lead_summary": str(lead_summary or ""),
+                            "workflow_context": dict(payload.get("_workflow_context") or {})
+                            if isinstance(payload.get("_workflow_context"), dict)
+                            else {},
+                        },
                     ),
                 )
             )
@@ -471,24 +596,43 @@ class AgentTeam:
             )
         return outputs
 
-    async def execute_project(self, brief: str) -> TeamResult:
+    async def execute_project(
+        self,
+        brief: str,
+        task_packets: List[Dict[str, Any]] | None = None,
+        workflow_context: Dict[str, Any] | None = None,
+    ) -> TeamResult:
         manager = SubAgentManager(
             self.agent,
             parent_session_id="team",
             tool_scopes=DEFAULT_TOOL_SCOPES,
         )
+        workflow = dict(workflow_context or {})
 
         lead_task = SubAgentTask(
             name="Lead Plan",
             action="chat",
-            params={"message": f"Görevi kısa planla, bağımlılıkları ve riskleri belirt: {brief}"},
+            params={
+                "message": (
+                    f"Görevi kısa planla, bağımlılıkları ve riskleri belirt: {brief}. "
+                    f"Workflow={workflow.get('workflow_profile') or 'default'} "
+                    f"Workspace={workflow.get('workspace_mode') or '-'}"
+                )
+            },
             description=brief,
             domain="planning",
         )
         lead_result = await manager.spawn_and_wait("lead", lead_task, timeout=min(120, self.config.timeout_s))
         lead_summary = str(lead_result.result or "")
 
-        tasks, graph = await self._build_team_tasks(brief)
+        try:
+            tasks, graph = await self._build_team_tasks(
+                brief,
+                task_packets=list(task_packets or []),
+                workflow_context=workflow,
+            )
+        except TypeError:
+            tasks, graph = await self._build_team_tasks(brief)
         for t in tasks:
             await self.board.post_task(t)
 
@@ -540,11 +684,23 @@ class AgentTeam:
             if status == "success" and quality_avg < 0.7:
                 status = "partial"
                 notes.append("completion_gate: quality_avg_below_threshold")
+        task_packet_count = len(list(task_packets or []))
+        packet_progress_total = task_packet_count or len(final_tasks)
+        packet_progress_completed = min(len(completed), packet_progress_total)
+        review_status = "passed" if status == "success" else "blocked" if failed else "pending"
         research_rows = [o.get("research_telemetry", {}) for o in outputs if isinstance(o.get("research_telemetry"), dict) and o.get("research_telemetry")]
         telemetry: Dict[str, Any] = {
             "completed": len(completed),
             "failed": len(failed),
             "quality_avg": quality_avg if quality_values else 0.0,
+            "workflow_profile": str(workflow.get("workflow_profile") or ""),
+            "workflow_id": str(workflow.get("workflow_id") or ""),
+            "workspace_mode": str(workflow.get("workspace_mode") or ""),
+            "approval_status": str(workflow.get("approval_status") or ""),
+            "plan_progress_completed": int(packet_progress_completed),
+            "plan_progress_total": int(packet_progress_total),
+            "plan_progress": f"{int(packet_progress_completed)}/{int(packet_progress_total)}",
+            "review_status": review_status,
         }
         if research_rows:
             claim_coverages = [float(row.get("claim_coverage", 0.0) or 0.0) for row in research_rows if row.get("claim_coverage") is not None]
@@ -601,6 +757,12 @@ class AgentTeam:
                 f" | research_claim={telemetry.get('avg_claim_coverage', 0.0):.2f}"
                 f" critical={telemetry.get('avg_critical_claim_coverage', 0.0):.2f}"
                 f" uncertainty_max={int(telemetry.get('max_uncertainty_count', 0) or 0)}"
+            )
+        if telemetry.get("plan_progress"):
+            summary += (
+                f" | workflow={telemetry.get('workflow_profile') or '-'}"
+                f" plan={telemetry.get('plan_progress')}"
+                f" review={telemetry.get('review_status') or '-'}"
             )
         return TeamResult(status=status, summary=summary, outputs=outputs, notes=notes, telemetry=telemetry)
 

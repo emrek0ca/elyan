@@ -70,6 +70,12 @@ from core.channel_delivery import channel_delivery_bridge
 from core.smart_notifications import get_smart_notifications, NotificationCategory, NotificationPriority
 from core.gateway.response import UnifiedResponse
 from core.runtime_policy import get_runtime_policy_resolver
+from core.process_profiles import (
+    PREAPPROVAL_BLOCKED_TOOLS,
+    approval_granted,
+    artifact_entry,
+    normalize_workflow_profile,
+)
 from core.repair.state_machine import classify_error, RepairStateMachine
 from core.repair.error_codes import PLAN_ERROR, TOOL_ERROR, ENV_ERROR, VALIDATION_ERROR
 from core.compat.legacy_tool_wrappers import normalize_legacy_tool_payload
@@ -296,6 +302,7 @@ class Agent:
         self._last_tool_confirmation: dict[str, Any] = {"key": "", "ts": 0.0}
         self._away_notifier_registered = False
         self._task_suggestion_cache: dict[str, float] = {}
+        self._workflow_sessions: dict[str, dict[str, Any]] = {}
         self._nlu_model_a = None
         self._nlu_model_a_path: str = ""
         self._nlu_model_a_mtime: float = 0.0
@@ -356,6 +363,40 @@ class Agent:
             self.llm = candidate
             return True
         return False
+
+    @staticmethod
+    def _workflow_session_key(user_id: str, channel: str) -> str:
+        return f"{str(user_id or 'local').strip() or 'local'}::{str(channel or 'cli').strip() or 'cli'}"
+
+    def _get_workflow_session(self, user_id: str, channel: str) -> dict[str, Any]:
+        return dict(self._workflow_sessions.get(self._workflow_session_key(user_id, channel), {}) or {})
+
+    def _store_workflow_session(self, user_id: str, channel: str, payload: dict[str, Any]) -> None:
+        key = self._workflow_session_key(user_id, channel)
+        current = dict(self._workflow_sessions.get(key, {}) or {})
+        current.update({str(k): v for k, v in dict(payload or {}).items()})
+        current["updated_at"] = time.time()
+        self._workflow_sessions[key] = current
+
+    def _clear_workflow_session(self, user_id: str, channel: str) -> None:
+        self._workflow_sessions.pop(self._workflow_session_key(user_id, channel), None)
+
+    def _resolve_pending_workflow_session(self, user_input: str, user_id: str, channel: str) -> dict[str, Any]:
+        session = self._get_workflow_session(user_id, channel)
+        if not session:
+            return {}
+        phase = str(session.get("workflow_phase") or "").strip().lower()
+        profile = normalize_workflow_profile(session.get("workflow_profile"))
+        if profile == "default":
+            return {}
+        if phase in {"finished", "closed"}:
+            return {}
+        if approval_granted(user_input) and phase in {"brainstorming", "design_ready"}:
+            session["approval_status"] = "approved"
+            session["workflow_phase"] = "approved"
+            self._store_workflow_session(user_id, channel, session)
+            return session
+        return session
 
     @staticmethod
     def _sanitize_chat_reply(text: Any) -> str:
@@ -1019,6 +1060,7 @@ class Agent:
 
         uid = str(self.current_user_id or "local")
         raw_attachments, resolved_paths = self._normalize_inbound_attachments(attachments)
+        pending_workflow = self._resolve_pending_workflow_session(user_input, uid, str(channel or "cli"))
         away_task_command = await self._handle_away_task_command(user_input, user_id=uid)
         if away_task_command is not None:
             return away_task_command
@@ -1075,7 +1117,9 @@ class Agent:
                     "mode": "background",
                 },
             )
-        effective_user_input = self._runtime_normalize_user_input(user_input)
+        effective_user_input = self._runtime_normalize_user_input(
+            str(pending_workflow.get("objective") or user_input) if pending_workflow and approval_granted(user_input) else user_input
+        )
         task = task_brain.create_task(
             objective=user_input,
             user_input=user_input,
@@ -1113,6 +1157,7 @@ class Agent:
         ctx.runtime_policy = {
             "name": runtime_policy.name,
             "capability": dict(runtime_policy.capability),
+            "workflow": dict(getattr(runtime_policy, "workflow", {}) or {}),
             "planning": dict(runtime_policy.planning),
             "execution": dict(runtime_policy.execution),
             "nlu": dict(runtime_policy.nlu),
@@ -1122,8 +1167,15 @@ class Agent:
             "tools": dict(runtime_policy.tools),
             "response": dict(runtime_policy.response),
             "security": dict(runtime_policy.security),
-            "metadata": {"channel": str(channel or "cli"), "user_id": uid},
+            "metadata": {
+                "channel": str(channel or "cli"),
+                "user_id": uid,
+                "run_id": run_id,
+                "run_dir": str(run_store.base_dir),
+            },
         }
+        if pending_workflow:
+            ctx.runtime_policy["metadata"]["workflow_session"] = dict(pending_workflow)
         try:
             profile = self.user_profile.profile_summary(uid)
         except Exception:
@@ -1287,6 +1339,30 @@ class Agent:
                         item["evidence"] = evidence
                     adapted.append(item)
                 ledger.artifacts = adapted
+            workflow_artifacts = dict(getattr(ctx, "workflow_artifacts", {}) or {})
+            if workflow_artifacts:
+                existing_paths = {
+                    str(item.get("path") or "").strip()
+                    for item in list(ledger.artifacts or [])
+                    if isinstance(item, dict) and str(item.get("path") or "").strip()
+                }
+                for key, path in workflow_artifacts.items():
+                    path_str = str(path or "").strip()
+                    if not path_str or path_str in existing_paths:
+                        continue
+                    artifact_type = "workflow_artifact"
+                    if path_str.endswith(".json"):
+                        artifact_type = "json"
+                    elif path_str.endswith(".md"):
+                        artifact_type = "document"
+                    ledger.artifacts.append(
+                        artifact_entry(
+                            path_str,
+                            artifact_type=artifact_type,
+                            tool=f"workflow_profile:{str(key or '').strip() or 'artifact'}",
+                        )
+                    )
+                    existing_paths.add(path_str)
             task.register_artifacts(list(ledger.artifacts))
             task.transition(
                 "verifying",
@@ -1331,17 +1407,54 @@ class Agent:
                         "team_research_uncertainty_count": int(team_telemetry.get("max_uncertainty_count", 0) or 0),
                     }
                 )
+            workflow_metrics: dict[str, Any] = {}
+            if str(getattr(ctx, "workflow_profile", "default") or "default") != "default":
+                workflow_metrics = {
+                    "workflow_profile": str(getattr(ctx, "workflow_profile", "default") or "default"),
+                    "workflow_phase": str(getattr(ctx, "workflow_phase", "") or ""),
+                    "approval_status": str(getattr(ctx, "approval_status", "") or ""),
+                    "workspace_mode": str(getattr(ctx, "workspace_mode", "") or ""),
+                    "review_status": str(
+                        team_telemetry.get("review_status")
+                        or getattr(ctx, "approval_status", "")
+                        or ""
+                    ),
+                }
+                task_packets = list(getattr(ctx, "task_packets", []) or [])
+                plan_completed = int(team_telemetry.get("plan_progress_completed", 0) or 0)
+                plan_total = int(team_telemetry.get("plan_progress_total", len(task_packets)) or len(task_packets) or 0)
+                if plan_total > 0:
+                    workflow_metrics["plan_progress"] = str(
+                        team_telemetry.get("plan_progress") or f"{plan_completed}/{plan_total}"
+                    )
+                for key in (
+                    "design_artifact_path",
+                    "plan_artifact_path",
+                    "plan_json_artifact_path",
+                    "review_artifact_path",
+                    "workspace_report_path",
+                    "baseline_check_path",
+                    "finish_branch_report_path",
+                ):
+                    value = str((workflow_artifacts or {}).get(key) or "").strip()
+                    if value:
+                        workflow_metrics[key] = value
             run_store.write_evidence(
                 manifest_path=manifest,
                 steps=[s.to_dict() for s in ledger.steps],
                 artifacts=list(ledger.artifacts),
-                metadata={"status": status, "errors": list(ctx.errors or []), **research_metrics},
+                metadata={"status": status, "errors": list(ctx.errors or []), **research_metrics, **workflow_metrics},
             )
             final_state = "completed" if status == "success" else ("partial" if status == "partial" else "failed")
             task.transition(
                 final_state,
                 note="response_ready",
-                metadata={"status": status, "action": str(ctx.action or ""), "job_type": str(ctx.job_type or "")},
+                metadata={
+                    "status": status,
+                    "action": str(ctx.action or ""),
+                    "job_type": str(ctx.job_type or ""),
+                    **workflow_metrics,
+                },
             )
             task_brain.save_task(task)
             run_store.write_task(
@@ -1356,6 +1469,7 @@ class Agent:
                     "channel": ctx.channel,
                     "user_id": ctx.user_id,
                     "status": status,
+                    **workflow_metrics,
                 },
                 task_state=task.to_dict(),
             )
@@ -1364,7 +1478,7 @@ class Agent:
                 response_text=str(ctx.final_response or ""),
                 error="; ".join(str(e) for e in (ctx.errors or []) if str(e).strip()),
                 artifacts=list(ledger.artifacts),
-                metadata={"manifest_path": manifest, "action": ctx.action, "job_type": ctx.job_type, **research_metrics},
+                metadata={"manifest_path": manifest, "action": ctx.action, "job_type": ctx.job_type, **research_metrics, **workflow_metrics},
             )
             logs_path = run_store.write_logs(lines=[str(e) for e in (ctx.errors or []) if str(e).strip()])
             refs: list[AttachmentRef] = []
@@ -1414,6 +1528,7 @@ class Agent:
                     "model_name": str(getattr(ctx, "model", "") or ""),
                     "hybrid_model": dict(getattr(ctx, "hybrid_model", {}) or {}),
                     "share_manifest": bool(share_manifest),
+                    **workflow_metrics,
                 },
             )
         except Exception as exc:
@@ -1893,10 +2008,43 @@ class Agent:
         uid = str(self.current_user_id or "").strip()
         runtime_policy = self._current_runtime_policy()
         runtime_meta = runtime_policy.get("metadata", {}) if isinstance(runtime_policy.get("metadata"), dict) else {}
+        workflow_cfg = runtime_policy.get("workflow", {}) if isinstance(runtime_policy.get("workflow"), dict) else {}
+        workflow_session = runtime_meta.get("workflow_session", {}) if isinstance(runtime_meta.get("workflow_session"), dict) else {}
         runtime_uid = str(runtime_meta.get("user_id") or "").strip()
         if not uid or uid.lower() in {"local", "none", "null", "0"}:
             uid = runtime_uid or uid or "local"
         channel = str(runtime_meta.get("channel", "") or runtime_meta.get("channel_type", "") or "").strip()
+        workflow_profile = normalize_workflow_profile(
+            runtime_meta.get("workflow_profile") or workflow_cfg.get("profile") or workflow_session.get("workflow_profile")
+        )
+        workflow_phase = str(
+            runtime_meta.get("workflow_phase")
+            or workflow_session.get("workflow_phase")
+            or "intake"
+        ).strip().lower()
+        workflow_domain = str(
+            runtime_meta.get("capability_domain")
+            or workflow_session.get("capability_domain")
+            or ""
+        ).strip().lower()
+        approval_required_for_workflow = bool(workflow_cfg.get("require_explicit_approval", True))
+        allowed_workflow_domains = {
+            str(x or "").strip().lower()
+            for x in list(workflow_cfg.get("allowed_domains") or [])
+            if str(x or "").strip()
+        }
+        if (
+            workflow_profile != "default"
+            and approval_required_for_workflow
+            and workflow_phase not in {"approved", "plan_ready", "executing", "finished"}
+            and (not allowed_workflow_domains or workflow_domain in allowed_workflow_domains)
+            and mapped_tool in PREAPPROVAL_BLOCKED_TOOLS
+        ):
+            return {
+                "success": False,
+                "error": "Superpowers workflow aktif: bu araç explicit approval olmadan çalıştırılamaz.",
+                "error_code": "WORKFLOW_APPROVAL_REQUIRED",
+            }
 
         # Optional strict typed-tool gate (non-breaking by default).
         typed_tools_strict = False
@@ -3699,8 +3847,6 @@ class Agent:
         references_context = self._references_prior_context(text)
         short_followup = len(text.split()) <= 9
         revision_marked = self._has_revision_markers(text)
-        if not references_context and not short_followup and not revision_marked:
-            return None
 
         explicit_tokens = self._extract_path_like_tokens(text)
         explicit_file_ref = any(Path(str(tok).strip()).suffix for tok in explicit_tokens if str(tok).strip())
@@ -3746,6 +3892,21 @@ class Agent:
             "kaynakça",
             "kaynakca",
         )
+        standalone_research_request = (
+            any(marker in low for marker in research_markers)
+            and (
+                "hakkında" in low
+                or "hakkinda" in low
+                or " için " in f" {low} "
+                or " icin " in f" {low} "
+                or len(text.split()) >= 5
+            )
+        )
+        standalone_document_request = any(marker in low for marker in doc_markers) and len(text.split()) >= 4
+        standalone_academic_request = any(marker in low for marker in academic_markers) and len(text.split()) >= 4
+        if not references_context and not revision_marked:
+            if not short_followup or standalone_research_request or standalone_document_request or standalone_academic_request:
+                return None
 
         content_seed = recent_research_text or recent_assistant_text
         topic_seed = recent_user_text or recent_assistant_text or text
@@ -4115,6 +4276,77 @@ class Agent:
             "gönder", "gonder", "paylaş", "paylas", "ilet", "kopya",
         )
         return any(marker in low for marker in doc_markers) and any(marker in low for marker in deliver_markers)
+
+    def _collapse_research_document_intent(self, user_input: str, tasks: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        low = str(user_input or "").lower()
+        if not isinstance(tasks, list) or len(tasks) < 2:
+            return None
+
+        research_actions = {"research", "advanced_research", "research_document_delivery"}
+        has_research = False
+        include_word = False
+        include_excel = False
+        include_pdf = any(token in low for token in ("pdf", "pdf yap", "pdf olarak"))
+        deliver_copy = any(token in low for token in ("gönder", "gonder", "paylaş", "paylas", "ilet"))
+
+        for task in list(tasks or []):
+            if not isinstance(task, dict):
+                continue
+            action = str(task.get("action") or "").strip().lower()
+            mapped = ACTION_TO_TOOL.get(action, action)
+            if action in research_actions or mapped in {"advanced_research", "research_document_delivery"}:
+                has_research = True
+            if action in {"create_word_document", "write_word"} or mapped == "write_word":
+                include_word = True
+            if action in {"create_excel", "write_excel"} or mapped == "write_excel":
+                include_excel = True
+
+        doc_requested = include_word or include_excel or include_pdf or self._should_upgrade_research_to_delivery(user_input)
+        if not has_research or not doc_requested:
+            return None
+
+        topic = self._sanitize_research_topic(
+            self._extract_topic(user_input, user_input),
+            user_input=user_input,
+            step_name=user_input,
+        )
+        if not topic or topic == "genel konu":
+            return None
+
+        source_policy = self._infer_research_source_policy(user_input) or "trusted"
+        min_reliability = self._infer_research_min_reliability(user_input, source_policy=source_policy)
+        try:
+            min_rel_value = float(min_reliability if min_reliability is not None else 0.62)
+        except Exception:
+            min_rel_value = 0.62
+        if min_rel_value > 1.0:
+            min_rel_value = min_rel_value / 100.0
+        min_rel_value = max(0.0, min(1.0, min_rel_value))
+        academic_mode = source_policy == "academic"
+
+        if not include_word and not include_excel and not include_pdf:
+            include_word = True
+        return {
+            "action": "research_document_delivery",
+            "params": {
+                "topic": topic,
+                "brief": user_input,
+                "depth": "expert" if academic_mode else "comprehensive",
+                "audience": "academic" if academic_mode else "executive",
+                "language": "tr",
+                "output_dir": "~/Desktop",
+                "include_word": include_word,
+                "include_excel": include_excel,
+                "include_pdf": include_pdf,
+                "include_report": True,
+                "source_policy": source_policy,
+                "min_reliability": min_rel_value,
+                "citation_style": "apa7" if academic_mode else "none",
+                "include_bibliography": bool(academic_mode),
+                "deliver_copy": deliver_copy,
+            },
+            "reply": "Araştırma belgesi hazırlanıyor...",
+        }
 
     @staticmethod
     def _is_creative_writing_request(text: str) -> bool:
@@ -5497,7 +5729,7 @@ class Agent:
             )
 
         save_intent = self._infer_save_intent(text)
-        save_match = _re.search(r"\b(?:kaydet|yaz)\b", low)
+        save_match = _re.search(r"\b(?:kaydet|yaz|oluştur|olustur|hazırla|hazirla)\b", low)
         if save_intent and save_match:
             detected.append(
                 (
@@ -5550,6 +5782,9 @@ class Agent:
 
         if len(tasks) < 2:
             return None
+        collapsed = self._collapse_research_document_intent(user_input, tasks)
+        if isinstance(collapsed, dict):
+            return collapsed
         return {
             "action": "multi_task",
             "tasks": tasks,
@@ -5841,6 +6076,9 @@ class Agent:
 
         if len(tasks) < 2:
             return None
+        collapsed = self._collapse_research_document_intent(user_input, tasks)
+        if isinstance(collapsed, dict):
+            return collapsed
         payload = {
             "action": "multi_task",
             "tasks": self._normalize_browser_media_tasks(tasks, user_input=user_input),
@@ -8730,6 +8968,8 @@ class Agent:
         save_markers = (
             "kaydet", "dosya olarak", "bunu kaydet", "masaüstüne kaydet",
             "masaustune kaydet", "word olarak", "excel olarak",
+            "word dosyası oluştur", "word dosyasi olustur", "belge oluştur", "belge olustur",
+            "rapor oluştur", "rapor olustur", "excel dosyası oluştur", "excel dosyasi olustur",
         )
         if not any(m in text for m in save_markers):
             return None
@@ -8755,7 +8995,8 @@ class Agent:
             "kopyala",
         )
         chain_markers = (" ve ", " sonra ", " ardından ", " ardindan ", "adım", "adim", "1)", "2)")
-        if any(m in text for m in multi_action_markers) and any(m in text for m in chain_markers):
+        doc_save_hint = any(k in text for k in ("word", "docx", "belge", "rapor", "excel", "xlsx", "tablo", "sheet"))
+        if any(m in text for m in multi_action_markers) and any(m in text for m in chain_markers) and not doc_save_hint:
             return None
 
         if any(k in text for k in ("word", "docx", "belge", "rapor")):
@@ -10843,10 +11084,10 @@ class Agent:
                 content = clean.get("text") or clean.get("body") or clean.get("message") or inline_content or ""
             if not isinstance(content, str) or not content.strip():
                 if any(tok in user_input.lower() for tok in ("bunu", "dosya olarak", "kaydet", "masaüst")):
-                    content = self._get_recent_research_text()
+                    content = self._get_recent_assistant_text(user_input)
             if not isinstance(content, str) or not content.strip():
                 if any(tok in user_input.lower() for tok in ("bunu", "dosya olarak", "kaydet", "masaüst")):
-                    content = self._get_recent_assistant_text(user_input)
+                    content = self._get_recent_research_text()
             if not isinstance(content, str) or not content.strip():
                 topic_guess = self._extract_topic(user_input, step_name)
                 if topic_guess and topic_guess != "genel konu":
@@ -10876,9 +11117,10 @@ class Agent:
             if not isinstance(content, str) or not content.strip():
                 content = clean.get("text") or clean.get("body") or clean.get("message") or inline_content or ""
             if not isinstance(content, str) or not content.strip():
-                content = self._get_recent_research_text()
+                if any(tok in user_input.lower() for tok in ("bunu", "dosya olarak", "kaydet", "masaüst")):
+                    content = self._get_recent_assistant_text(user_input)
             if not isinstance(content, str) or not content.strip():
-                content = self._get_recent_assistant_text(user_input)
+                content = self._get_recent_research_text()
             if not isinstance(content, str) or not content.strip():
                 topic = self._extract_topic(user_input, step_name)
                 content = topic if topic and topic != "genel konu" else "İçerik belirtilmedi."

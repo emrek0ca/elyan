@@ -29,6 +29,12 @@ class SubAgentTask:
     domain: str = "general"
     context: Dict[str, Any] = field(default_factory=dict)
     gates: List[str] = field(default_factory=list)
+    target_files: List[str] = field(default_factory=list)
+    tests_to_write: List[str] = field(default_factory=list)
+    verification_steps: List[str] = field(default_factory=list)
+    scope_guard: List[str] = field(default_factory=list)
+    review_required: bool = False
+    handoff_template: str = ""
 
 
 @dataclass

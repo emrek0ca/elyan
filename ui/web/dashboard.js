@@ -201,7 +201,18 @@ function renderRuns(payload) {
         const teamClaimCoverage = fmtRatio(run?.team_research_claim_coverage);
         const teamCriticalCoverage = fmtRatio(run?.team_research_critical_claim_coverage);
         const teamUncertaintyCount = Number(run?.team_research_uncertainty_count || 0);
+        const workflowProfile = String(run?.workflow_profile || "").trim();
+        const workflowPhase = String(run?.workflow_phase || "").trim();
+        const approvalStatus = String(run?.approval_status || "").trim();
+        const planProgress = String(run?.plan_progress || "").trim();
+        const reviewStatus = String(run?.review_status || "").trim();
+        const workspaceMode = String(run?.workspace_mode || "").trim();
         const qualityBits = [];
+        if (workflowProfile || workflowPhase) qualityBits.push(`workflow: ${h([workflowProfile, workflowPhase].filter(Boolean).join("/"))}`);
+        if (approvalStatus) qualityBits.push(`approval: ${h(approvalStatus)}`);
+        if (planProgress) qualityBits.push(`plan: ${h(planProgress)}`);
+        if (reviewStatus) qualityBits.push(`review: ${h(reviewStatus)}`);
+        if (workspaceMode) qualityBits.push(`workspace: ${h(workspaceMode)}`);
         if (qualityStatus) qualityBits.push(`quality: ${h(qualityStatus)}`);
         if (claimCoverage !== "-") qualityBits.push(`claim coverage: ${h(claimCoverage)}`);
         if (criticalClaimCoverage !== "-") qualityBits.push(`critical claim: ${h(criticalClaimCoverage)}`);

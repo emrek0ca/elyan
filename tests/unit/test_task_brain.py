@@ -107,6 +107,41 @@ def test_run_store_summary_includes_research_quality_metrics(tmp_path, monkeypat
     assert "- Team research uncertainty count: 2" in summary
 
 
+def test_run_store_summary_includes_workflow_metrics(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.evidence.run_store.resolve_runs_root", lambda: tmp_path / "runs")
+    store = RunStore("run_workflow_metrics_001")
+    summary_path = store.write_summary(
+        status="partial",
+        response_text="workflow blocked",
+        artifacts=[],
+        metadata={
+            "workflow_profile": "superpowers_lite",
+            "workflow_phase": "design_ready",
+            "approval_status": "pending",
+            "plan_progress": "0/3",
+            "review_status": "pending",
+            "workspace_mode": "git_worktree_recommended",
+            "design_artifact_path": "/tmp/design.md",
+            "plan_artifact_path": "/tmp/implementation_plan.md",
+            "review_artifact_path": "/tmp/review_report.md",
+            "workspace_report_path": "/tmp/workspace_report.json",
+            "finish_branch_report_path": "/tmp/finish_branch_report.md",
+        },
+    )
+    summary = Path(summary_path).read_text(encoding="utf-8")
+    assert "- Workflow profile: superpowers_lite" in summary
+    assert "- Workflow phase: design_ready" in summary
+    assert "- Approval status: pending" in summary
+    assert "- Plan progress: 0/3" in summary
+    assert "- Review status: pending" in summary
+    assert "- Workspace mode: git_worktree_recommended" in summary
+    assert "- Design artifact: /tmp/design.md" in summary
+    assert "- Plan artifact: /tmp/implementation_plan.md" in summary
+    assert "- Review artifact: /tmp/review_report.md" in summary
+    assert "- Workspace report: /tmp/workspace_report.json" in summary
+    assert "- Finish branch report: /tmp/finish_branch_report.md" in summary
+
+
 def test_run_store_emits_capability_selected_event(tmp_path, monkeypatch):
     monkeypatch.setattr("core.evidence.run_store.resolve_runs_root", lambda: tmp_path / "runs")
     store = RunStore("run_capability_selected_001")

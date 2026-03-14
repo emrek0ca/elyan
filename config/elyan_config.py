@@ -25,6 +25,12 @@ def _default_config() -> AppConfig:
             language="tr",
             response_style={"friendly": True, "mode": "friendly", "share_manifest_default": False},
             runtime_policy={"preset": "balanced"},
+            workflow_profile="default",
+            superpowers={
+                "allowed_domains": ["code", "debug", "api_integration", "full_stack_delivery"],
+                "require_explicit_approval": True,
+                "workspace_policy": "auto",
+            },
             capability_router={"enabled": True, "min_confidence_override": 0.5},
             planning={"use_llm": True, "max_subtasks": 10},
             nlu={

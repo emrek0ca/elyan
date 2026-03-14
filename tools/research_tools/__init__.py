@@ -23,6 +23,9 @@ from .deep_research_engine import (
     get_research_engine,
     deep_research
 )
+from .data_agent import TimeSeriesAgent
+from .research_orchestrator import ResearchCritic, ResearchOrchestrator, ResearchPlanner, WebResearchAgent
+from .semantic_retrieval import SemanticRetriever
 
 __all__ = [
     "advanced_research",
@@ -39,5 +42,11 @@ __all__ = [
     "Finding",
     "ResearchResult",
     "get_research_engine",
-    "deep_research"
+    "deep_research",
+    "TimeSeriesAgent",
+    "ResearchPlanner",
+    "WebResearchAgent",
+    "ResearchCritic",
+    "ResearchOrchestrator",
+    "SemanticRetriever",
 ]

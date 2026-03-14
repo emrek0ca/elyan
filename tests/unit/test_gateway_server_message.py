@@ -527,6 +527,16 @@ async def test_handle_recent_runs_extracts_error_code_and_duration(monkeypatch, 
                 "metadata": {
                     "status": "failed",
                     "errors": [{"error_code": "WRITE_POSTCHECK_FAILED"}],
+                    "workflow_profile": "superpowers_lite",
+                    "workflow_phase": "executing",
+                    "approval_status": "review_blocked",
+                    "plan_progress": "2/3",
+                    "review_status": "blocked",
+                    "workspace_mode": "git_worktree_recommended",
+                    "design_artifact_path": "/tmp/design.md",
+                    "plan_artifact_path": "/tmp/implementation_plan.md",
+                    "review_artifact_path": "/tmp/review_report.md",
+                    "finish_branch_report_path": "/tmp/finish_branch_report.md",
                     "claim_coverage": 1.0,
                     "critical_claim_coverage": 0.5,
                     "uncertainty_count": 2,
@@ -570,6 +580,16 @@ async def test_handle_recent_runs_extracts_error_code_and_duration(monkeypatch, 
     assert run["team_research_critical_claim_coverage"] == 0.5
     assert run["team_research_uncertainty_count"] == 2
     assert run["quality_status"] == "partial"
+    assert run["workflow_profile"] == "superpowers_lite"
+    assert run["workflow_phase"] == "executing"
+    assert run["approval_status"] == "review_blocked"
+    assert run["plan_progress"] == "2/3"
+    assert run["review_status"] == "blocked"
+    assert run["workspace_mode"] == "git_worktree_recommended"
+    assert run["design_artifact_path"] == "/tmp/design.md"
+    assert run["plan_artifact_path"] == "/tmp/implementation_plan.md"
+    assert run["review_artifact_path"] == "/tmp/review_report.md"
+    assert run["finish_branch_report_path"] == "/tmp/finish_branch_report.md"
 
 
 @pytest.mark.asyncio

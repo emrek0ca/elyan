@@ -298,6 +298,70 @@ async def test_stage_execute_team_mode_attaches_team_telemetry(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_stage_execute_superpowers_brainstorms_before_code_changes(tmp_path):
+    ctx = PipelineContext(user_input="login bug fix", user_id="u1", channel="cli")
+    ctx.action = "write_file"
+    ctx.job_type = "code_project"
+    ctx.capability_domain = "code"
+    ctx.workflow_id = "coding_workflow"
+    ctx.workflow_profile = "superpowers_lite"
+    ctx.requires_design_phase = True
+    ctx.approval_status = "pending"
+    ctx.runtime_policy = {
+        "workflow": {
+            "profile": "superpowers_lite",
+            "allowed_domains": ["code", "debug", "api_integration", "full_stack_delivery"],
+            "require_explicit_approval": True,
+            "workspace_policy": "auto",
+        },
+        "metadata": {"run_dir": str(tmp_path / "run")},
+    }
+
+    out = await StageExecute().run(ctx, _DummyAgent())
+
+    assert "Superpowers workflow aktif" in out.final_response
+    assert out.action == "chat"
+    assert (tmp_path / "run" / "artifacts" / "design.md").exists()
+
+
+@pytest.mark.asyncio
+async def test_stage_execute_superpowers_strict_blocks_without_worktree(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "core.pipeline.inspect_workspace",
+        lambda **kwargs: {
+            "workspace_mode": "strict_worktree_required",
+            "isolated_workspace": str(tmp_path / "workspace"),
+            "workspace_report_path": str(tmp_path / "run" / "artifacts" / "workspace_report.json"),
+            "baseline_check_path": str(tmp_path / "run" / "artifacts" / "baseline_check.md"),
+        },
+    )
+
+    ctx = PipelineContext(user_input="api refactor", user_id="u1", channel="cli")
+    ctx.action = "write_file"
+    ctx.job_type = "code_project"
+    ctx.capability_domain = "full_stack_delivery"
+    ctx.workflow_id = "coding_workflow"
+    ctx.workflow_profile = "superpowers_strict"
+    ctx.requires_design_phase = True
+    ctx.approval_status = "approved"
+    ctx.plan = [{"id": "task_1", "title": "Refactor API", "action": "write_file", "params": {"path": "app/api.py"}}]
+    ctx.runtime_policy = {
+        "workflow": {
+            "profile": "superpowers_strict",
+            "allowed_domains": ["code", "debug", "api_integration", "full_stack_delivery"],
+            "require_explicit_approval": True,
+            "workspace_policy": "require_worktree",
+        },
+        "metadata": {"run_dir": str(tmp_path / "run")},
+    }
+
+    out = await StageExecute().run(ctx, _DummyAgent())
+
+    assert "worktree zorunlu" in out.final_response.lower()
+    assert "workflow:worktree_required" in out.errors
+
+
+@pytest.mark.asyncio
 async def test_stage_execute_team_mode_respects_runtime_policy_parallel_override(monkeypatch):
     captured = {}
     decisions = []

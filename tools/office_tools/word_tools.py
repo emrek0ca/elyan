@@ -147,26 +147,72 @@ async def write_word(
 
         try:
             from docx import Document
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
             from docx.shared import Inches, Pt
         except ImportError:
             return {"success": False, "error": "python-docx kurulu değil. 'pip install python-docx' çalıştırın."}
 
         def _write():
             doc = Document()
+            try:
+                for section in doc.sections:
+                    section.top_margin = Inches(0.8)
+                    section.bottom_margin = Inches(0.8)
+                    section.left_margin = Inches(0.85)
+                    section.right_margin = Inches(0.85)
+            except Exception:
+                pass
+
+            try:
+                normal_style = doc.styles["Normal"]
+                normal_style.font.name = "Aptos"
+                normal_style.font.size = Pt(11)
+            except Exception:
+                pass
+
+            heading_markers = {
+                "Kısa Özet",
+                "Temel Bulgular",
+                "Kaynak Güven Özeti",
+                "Açık Riskler",
+                "Belirsizlikler",
+                "Kaynakça",
+                "İçerik",
+            }
 
             # Add title if provided
             if title:
-                doc.add_heading(title, 0)
+                title_p = doc.add_paragraph()
+                title_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                run = title_p.add_run(str(title).strip())
+                run.bold = True
+                run.font.size = Pt(18)
+                title_p.paragraph_format.space_after = Pt(18)
 
             # Add content
             if paragraph_items:
                 for para in paragraph_items:
-                    doc.add_paragraph(para)
+                    para_text = str(para or "").strip()
+                    if not para_text:
+                        continue
+                    if para_text in heading_markers:
+                        heading = doc.add_paragraph()
+                        heading_run = heading.add_run(para_text)
+                        heading_run.bold = True
+                        heading_run.font.size = Pt(13)
+                        heading.paragraph_format.space_before = Pt(10)
+                        heading.paragraph_format.space_after = Pt(6)
+                    else:
+                        body = doc.add_paragraph()
+                        body.add_run(para_text)
+                        body.paragraph_format.space_after = Pt(8)
             elif content_text:
                 # Split by double newlines for paragraphs
                 for para in content_text.split("\n\n"):
                     if para.strip():
-                        doc.add_paragraph(para.strip())
+                        body = doc.add_paragraph()
+                        body.add_run(para.strip())
+                        body.paragraph_format.space_after = Pt(8)
 
             # Create parent directory if needed
             file_path.parent.mkdir(parents=True, exist_ok=True)

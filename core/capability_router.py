@@ -25,6 +25,9 @@ class CapabilityPlan:
     suggested_job_type: str = "communication"
     multi_agent_recommended: bool = False
     orchestration_mode: str = "single_agent"
+    workflow_profile_applicable: bool = False
+    requires_design_phase: bool = False
+    requires_worktree: bool = False
 
 
 class CapabilityRouter:
@@ -382,6 +385,9 @@ class CapabilityRouter:
             suggested_job_type=suggested_job_type,
             multi_agent_recommended=multi_agent_recommended,
             orchestration_mode="multi_agent" if multi_agent_recommended else "single_agent",
+            workflow_profile_applicable=best_domain in {"code", "api_integration", "full_stack_delivery"},
+            requires_design_phase=best_domain in {"code", "api_integration", "full_stack_delivery"},
+            requires_worktree=best_domain == "full_stack_delivery",
         )
 
 

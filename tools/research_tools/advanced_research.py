@@ -15,6 +15,14 @@ from dataclasses import dataclass, field
 from urllib.parse import urlparse
 from utils.logger import get_logger
 
+from .research_orchestrator import (
+    ResearchCritic,
+    ResearchOrchestrator,
+    ResearchPlanner,
+    WebResearchAgent,
+)
+from .semantic_retrieval import SemanticRetriever
+
 logger = get_logger("advanced_research")
 
 # Global cache for last research topic (used by report generation)
@@ -168,6 +176,8 @@ _OFFICIAL_INSTITUTION_HINTS = (
 )
 
 _SOURCE_POLICIES = {"balanced", "trusted", "academic", "official"}
+_SEMANTIC_RETRIEVER = SemanticRetriever()
+_RESEARCH_CRITIC = ResearchCritic()
 
 
 def _normalize_text(value: Any) -> str:
@@ -519,6 +529,35 @@ def _is_low_value_topic_sentence(sentence: str, topic: str) -> bool:
     return False
 
 
+def _semantic_reorder_findings(
+    topic: str,
+    candidates: list[tuple[float, str, str, float]],
+    *,
+    top_k: int,
+) -> list[tuple[float, str, str, float]]:
+    if not candidates:
+        return []
+    passages = [item[1] for item in candidates if str(item[1] or "").strip()]
+    if not passages:
+        return list(candidates)
+    ranked = _SEMANTIC_RETRIEVER.rank_passages(
+        topic,
+        passages,
+        top_k=max(top_k * 2, min(len(passages), 12)),
+        candidate_pool=max(len(passages), top_k * 3),
+    )
+    if not ranked:
+        return list(candidates)
+    semantic_scores = {row.text: float(row.score) for row in ranked}
+    rescored: list[tuple[float, str, str, float]] = []
+    for score, clean, domain, source_rel in candidates:
+        semantic_bonus = semantic_scores.get(clean, 0.0)
+        merged_score = (float(score) * 0.45) + (semantic_bonus * 0.55)
+        rescored.append((merged_score, clean, domain, source_rel))
+    rescored.sort(key=lambda item: item[0], reverse=True)
+    return rescored
+
+
 def _search_result_score(item: dict[str, Any], rank_index: int, total: int) -> float:
     url = str(item.get("url", "") or "").strip()
     title = _normalize_text(item.get("title", ""))
@@ -827,6 +866,9 @@ class ResearchSource:
     fetched: bool = False
     error: str | None = None
     fetched_at: str = ""
+    source_type: str = "web"
+    fetch_mode: str = ""
+    fetch_metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         domain = _domain_from_url(self.url)
@@ -839,6 +881,9 @@ class ResearchSource:
             "error": self.error,
             "domain": domain,
             "fetched_at": self.fetched_at,
+            "source_type": self.source_type,
+            "fetch_mode": self.fetch_mode,
+            "fetch_metadata": dict(self.fetch_metadata or {}),
         }
 
 
@@ -1034,13 +1079,28 @@ async def advanced_research(
         logger.info(f"Araştırma başlatıldı: {topic} ({research_depth.value})")
 
         try:
-            # Step 1: Web search for sources
+            # Step 1: Planner + web/data orchestration
             result.progress = 10
-            # Pull larger pool and then filter by source policy.
-            search_pool_size = max(target_sources * 2, target_sources + 4)
-            search_results = await _perform_topic_web_search(topic, search_pool_size, language)
-            search_results = _apply_source_policy(search_results, source_policy, target_sources=target_sources)
+            planner = ResearchPlanner(query_builder=_build_query_decomposition)
+            web_agent = WebResearchAgent(
+                search_fn=_perform_web_search,
+                evaluate_fn=evaluate_source,
+                policy_filter_fn=_apply_source_policy,
+                evaluation_concurrency=int(eval_concurrency_map.get(research_depth, 4)),
+            )
+            orchestrator = ResearchOrchestrator(planner=planner, web_agent=web_agent)
+            orchestration = await orchestrator.run(
+                topic=topic,
+                depth=research_depth.value,
+                language=language,
+                source_policy=source_policy,
+                target_sources=target_sources,
+                include_evaluation=include_evaluation,
+                evaluation_cap=int(eval_cap_map.get(research_depth, target_sources)),
+            )
+            search_results = list(orchestration.get("sources") or [])
             policy_stats = _source_policy_stats(search_results, source_policy)
+            structured_data = orchestration.get("structured_data") if isinstance(orchestration.get("structured_data"), dict) else {}
 
             if not search_results:
                 result.status = "failed"
@@ -1060,51 +1120,30 @@ async def advanced_research(
                         "snippet": ""
                     })
 
+            search_results = sorted(
+                list(search_results or []),
+                key=lambda item: float(item.get("reliability_score", item.get("_rank_score", 0.0)) or 0.0),
+                reverse=True,
+            )
+
             # Create source objects
             for sr in search_results[:target_sources]:
                 source = ResearchSource(
                     url=sr.get("url", ""),
                     title=sr.get("title", ""),
                     snippet=sr.get("snippet", ""),
-                    reliability_score=float(sr.get("_rank_score", 0.5) or 0.5),
+                    reliability_score=float(sr.get("reliability_score", sr.get("_rank_score", 0.5)) or 0.5),
+                    content=str(sr.get("content_preview") or ""),
+                    fetched=bool(sr.get("fetched", False)),
+                    error=str(sr.get("error") or "") or None,
+                    fetched_at=str(sr.get("fetched_at") or ""),
+                    source_type=str(sr.get("source_type") or "web"),
+                    fetch_mode=str(sr.get("fetch_mode") or ""),
+                    fetch_metadata=dict(sr.get("fetch_metadata") or {}),
                 )
                 result.sources.append(source)
 
-            result.progress = 30
-
-            # Step 2: Fetch and evaluate sources (CONCURRENT for speed)
-            if include_evaluation:
-                timeout_s = int(eval_timeout_map.get(research_depth, 10))
-                eval_cap = int(eval_cap_map.get(research_depth, target_sources))
-                sources_to_eval = result.sources[:eval_cap]
-
-                async def _evaluate_with_timeout(source):
-                    try:
-                        # Per-source timeout is adaptive by depth.
-                        eval_result = await asyncio.wait_for(
-                            evaluate_source(source.url),
-                            timeout=timeout_s
-                        )
-                        if eval_result.get("success"):
-                            source.reliability_score = eval_result.get("reliability_score", 0.5)
-                            source.content = eval_result.get("content_preview", "")
-                            source.fetched = True
-                            source.fetched_at = datetime.now().isoformat()
-                        else:
-                            source.error = eval_result.get("error")
-                    except asyncio.TimeoutError:
-                        source.error = "Timeout"
-                    except Exception as e:
-                        source.error = str(e)
-
-                # Run evaluations concurrently with adaptive limits per depth.
-                semaphore = asyncio.Semaphore(int(eval_concurrency_map.get(research_depth, 3)))
-                async def _with_semaphore(source):
-                    async with semaphore:
-                        await _evaluate_with_timeout(source)
-
-                await asyncio.gather(*[_with_semaphore(s) for s in sources_to_eval], return_exceptions=True)
-                result.progress = 70
+            result.progress = 70 if include_evaluation else 40
 
             # Filter weakest sources after scoring, but keep enough context.
             result.sources = _apply_min_reliability(result.sources, min_reliability=min_reliability, keep_at_least=2)
@@ -1112,6 +1151,16 @@ async def advanced_research(
             # Step 3: Extract findings
             result.progress = 75
             result.findings = await _extract_findings(result.sources, topic, max_findings=max_findings)
+            for structured_source in list(structured_data.get("sources") or [])[:4]:
+                clean = _normalize_text(structured_source.get("snippet") or "")
+                domain = _domain_from_url(str(structured_source.get("url") or ""))
+                rel_pct = int(round(float(structured_source.get("reliability_score", 0.96) or 0.96) * 100))
+                if clean and all(clean[:70].lower() not in item.lower() for item in result.findings):
+                    label = f"• {clean}"
+                    if domain:
+                        label += f" (Kaynak: {domain}, Güven: %{rel_pct})"
+                    result.findings.append(label)
+            result.findings = result.findings[: max_findings]
 
             # Step 4: Generate summary
             result.progress = 90
@@ -1133,6 +1182,14 @@ async def advanced_research(
                 min_reliability=min_reliability,
                 source_policy_stats=policy_stats,
             )
+            critique = _RESEARCH_CRITIC.evaluate(
+                quality_summary=quality_summary,
+                research_contract=research_contract,
+            )
+            if critique.issues:
+                quality_summary["critic_issues"] = list(critique.issues)
+            if isinstance(structured_data.get("warnings"), list) and structured_data.get("warnings"):
+                quality_summary["structured_data_warnings"] = list(structured_data.get("warnings") or [])[:6]
             result.research_contract = research_contract
             result.quality_summary = quality_summary
             result.source_policy_stats = policy_stats
@@ -1147,6 +1204,7 @@ async def advanced_research(
                 "summary": result.summary,
                 "research_contract": research_contract,
                 "quality_summary": quality_summary,
+                "structured_data": structured_data,
                 "depth": research_depth.value,
                 "source_policy": source_policy,
                 "min_reliability": min_reliability,
@@ -1226,6 +1284,7 @@ async def advanced_research(
                     "quality": quality,
                     "quality_summary": quality_summary,
                     "research_contract": research_contract,
+                    "structured_data": structured_data,
                     "source_policy": source_policy,
                     "min_reliability": min_reliability,
                     "source_policy_stats": policy_stats,
@@ -1255,6 +1314,7 @@ async def advanced_research(
                 "quality": quality,
                 "quality_summary": quality_summary,
                 "research_contract": research_contract,
+                "structured_data": structured_data,
                 "report_paths": report_paths,
                 "message": message
             }
@@ -1355,12 +1415,23 @@ async def evaluate_source(
                 score -= 0.15
                 factors.append({"name": "Low-value source hint", "value": True, "weight": -0.15})
 
+        fetch_mode = ""
+        fetch_metadata: dict[str, Any] = {}
+        fetched_at = ""
+
         # Try to fetch content preview
         content_preview = ""
         if criteria.get("check_content", True):
             try:
                 from tools.web_tools import fetch_page
-                fetch_result = await fetch_page(url, extract_content=True)
+                prefer_browser = _matches_policy_domain(domain, "official")
+                policy = "official" if prefer_browser else "trusted"
+                fetch_result = await fetch_page(
+                    url,
+                    extract_content=True,
+                    source_policy=policy,
+                    prefer_browser=prefer_browser,
+                )
                 if fetch_result.get("success"):
                     content = _normalize_text(fetch_result.get("content", ""))
                     title_terms = _tokenize_topic(str(fetch_result.get("title", "")))
@@ -1393,6 +1464,17 @@ async def evaluate_source(
                     if noise_hits >= 4:
                         score -= 0.07
                         factors.append({"name": "High noise content", "value": noise_hits, "weight": -0.07})
+                    fetch_mode = str(fetch_result.get("render_mode") or "static")
+                    fetched_at = datetime.now().isoformat()
+                    fetch_metadata = {
+                        "render_mode": fetch_mode,
+                        "text_density": fetch_result.get("text_density"),
+                        "length": fetch_result.get("length"),
+                        "status_code": fetch_result.get("status_code"),
+                    }
+                    if fetch_mode == "browser":
+                        score += 0.04
+                        factors.append({"name": "Browser render fallback", "value": True, "weight": 0.04})
             except Exception as e:
                 factors.append({"name": "Content fetch", "value": False, "error": str(e)})
 
@@ -1416,7 +1498,10 @@ async def evaluate_source(
             "reliability_score": round(reliability_score, 2),
             "reliability_level": level,
             "factors": factors,
-            "content_preview": content_preview
+            "content_preview": content_preview,
+            "fetch_mode": fetch_mode,
+            "fetch_metadata": fetch_metadata,
+            "fetched_at": fetched_at,
         }
 
     except Exception as e:
@@ -1613,7 +1698,7 @@ async def _extract_findings(
             candidates.append((max(0.0, composite), clean, domain, source_rel))
 
     if candidates:
-        candidates.sort(key=lambda x: x[0], reverse=True)
+        candidates = _semantic_reorder_findings(topic, candidates, top_k=max(3, int(max_findings or 10)))
         domain_counts: dict[str, int] = {}
         findings.clear()
         for score, clean, domain, source_rel in candidates:

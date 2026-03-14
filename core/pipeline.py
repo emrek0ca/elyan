@@ -51,6 +51,22 @@ from core.pipeline_upgrade import (
 from core.workspace_contract import ensure_workspace_contract
 from core.hybrid_model_policy import build_hybrid_model_plan
 from core.verifier import evaluate_runtime_capability
+from core.process_profiles import (
+    approval_granted,
+    artifact_entry,
+    build_task_packets,
+    get_process_profile,
+    infer_nexus_mode,
+    inspect_workspace,
+    normalize_workflow_profile,
+    profile_applicable,
+    render_design_markdown,
+    render_finish_branch_report,
+    render_plan_markdown,
+    render_review_report,
+    write_json_artifact,
+    write_text_artifact,
+)
 from core.failure_classification import classify_failure_class
 from core.recovery_policy import select_recovery_strategy
 from core.telemetry.runtime_trace import ensure_runtime_trace, update_runtime_trace
@@ -1227,6 +1243,186 @@ async def _try_llm_intent_rescue(ctx, agent, *, min_confidence: float = 0.62) ->
     return True
 
 
+def _run_dir(ctx: Any) -> str:
+    policy = getattr(ctx, "runtime_policy", {}) if isinstance(getattr(ctx, "runtime_policy", {}), dict) else {}
+    metadata = policy.get("metadata", {}) if isinstance(policy.get("metadata"), dict) else {}
+    value = str(metadata.get("run_dir") or "").strip()
+    if value:
+        return value
+    return str(Path.home() / ".elyan" / "runs" / f"pipeline-{int(time.time())}")
+
+
+def _workflow_policy_snapshot(ctx: Any) -> Dict[str, Any]:
+    policy = getattr(ctx, "runtime_policy", {}) if isinstance(getattr(ctx, "runtime_policy", {}), dict) else {}
+    workflow_cfg = policy.get("workflow", {}) if isinstance(policy.get("workflow"), dict) else {}
+    metadata = policy.get("metadata", {}) if isinstance(policy.get("metadata"), dict) else {}
+    workflow_session = metadata.get("workflow_session", {}) if isinstance(metadata.get("workflow_session"), dict) else {}
+    return {
+        "profile": normalize_workflow_profile(metadata.get("workflow_profile") or workflow_cfg.get("profile")),
+        "allowed_domains": list(workflow_cfg.get("allowed_domains") or []),
+        "require_explicit_approval": bool(workflow_cfg.get("require_explicit_approval", True)),
+        "workspace_policy": str(workflow_cfg.get("workspace_policy") or "auto"),
+        "session": workflow_session,
+    }
+
+
+def _sync_workflow_metadata(ctx: Any) -> None:
+    policy = getattr(ctx, "runtime_policy", {}) if isinstance(getattr(ctx, "runtime_policy", {}), dict) else {}
+    metadata = policy.get("metadata", {}) if isinstance(policy.get("metadata"), dict) else {}
+    metadata["workflow_profile"] = str(getattr(ctx, "workflow_profile", "") or "")
+    metadata["workflow_phase"] = str(getattr(ctx, "workflow_phase", "") or "")
+    metadata["approval_status"] = str(getattr(ctx, "approval_status", "") or "")
+    metadata["capability_domain"] = str(getattr(ctx, "capability_domain", "") or "")
+    metadata["workflow_id"] = str(getattr(ctx, "workflow_id", "") or "")
+    if getattr(ctx, "workflow_session_id", ""):
+        metadata["workflow_session_id"] = str(ctx.workflow_session_id)
+    if isinstance(getattr(ctx, "workflow_artifacts", {}), dict) and ctx.workflow_artifacts:
+        metadata["workflow_artifacts"] = dict(ctx.workflow_artifacts)
+    policy["metadata"] = metadata
+    ctx.runtime_policy = policy
+
+
+def _apply_workflow_profile(ctx: Any) -> None:
+    snapshot = _workflow_policy_snapshot(ctx)
+    profile = str(snapshot.get("profile") or "default")
+    session = snapshot.get("session") if isinstance(snapshot.get("session"), dict) else {}
+    if session and approval_granted(getattr(ctx, "user_input", "")):
+        ctx.user_input = str(session.get("objective") or ctx.user_input)
+        ctx.workflow_session_id = str(session.get("session_id") or "")
+        ctx.approval_status = "approved"
+        ctx.workflow_phase = "approved"
+    allowed_domains = snapshot.get("allowed_domains") if isinstance(snapshot.get("allowed_domains"), list) else []
+    ctx.workflow_profile = profile
+    ctx.requires_design_phase = profile_applicable(profile, getattr(ctx, "capability_domain", ""), allowed_domains)
+    ctx.requires_worktree = bool(
+        getattr(ctx, "capability_plan", {}).get("requires_worktree")
+        if isinstance(getattr(ctx, "capability_plan", {}), dict)
+        else False
+    )
+    if ctx.requires_design_phase and ctx.approval_status == "not_required":
+        ctx.approval_status = "pending"
+    if ctx.requires_design_phase and ctx.workflow_phase == "intake":
+        ctx.workflow_phase = "brainstorming"
+    _sync_workflow_metadata(ctx)
+
+
+def _persist_workflow_artifact(ctx: Any, *, key: str, path: str) -> None:
+    path_str = str(path or "").strip()
+    if not path_str:
+        return
+    if not isinstance(getattr(ctx, "workflow_artifacts", {}), dict):
+        ctx.workflow_artifacts = {}
+    ctx.workflow_artifacts[str(key)] = path_str
+    _sync_workflow_metadata(ctx)
+
+
+def _ensure_design_artifact(ctx: Any) -> str:
+    existing = str((getattr(ctx, "workflow_artifacts", {}) or {}).get("design_artifact_path") or "").strip()
+    if existing:
+        return existing
+    nexus_mode = infer_nexus_mode(
+        complexity=float(getattr(ctx, "complexity", 0.0) or 0.0),
+        goal_stage_count=int(getattr(ctx, "goal_stage_count", 1) or 1),
+        plan_length=len(list(getattr(ctx, "plan", []) or [])),
+    )
+    design_md = render_design_markdown(
+        objective=str(getattr(ctx, "user_input", "") or ""),
+        domain=str(getattr(ctx, "capability_domain", "general") or "general"),
+        workflow_profile=str(getattr(ctx, "workflow_profile", "default") or "default"),
+        workflow_id=str(getattr(ctx, "workflow_id", "") or ""),
+        nexus_mode=nexus_mode,
+        capability_plan=dict(getattr(ctx, "capability_plan", {}) or {}),
+    )
+    path = write_text_artifact(_run_dir(ctx), "artifacts/design.md", design_md)
+    _persist_workflow_artifact(ctx, key="design_artifact_path", path=path)
+    return path
+
+
+def _ensure_plan_and_workspace_artifacts(ctx: Any) -> None:
+    if not getattr(ctx, "requires_design_phase", False):
+        return
+    nexus_mode = infer_nexus_mode(
+        complexity=float(getattr(ctx, "complexity", 0.0) or 0.0),
+        goal_stage_count=int(getattr(ctx, "goal_stage_count", 1) or 1),
+        plan_length=len(list(getattr(ctx, "plan", []) or [])),
+    )
+    process_profile = get_process_profile(str(getattr(ctx, "workflow_profile", "default") or "default"), nexus_mode=nexus_mode)
+    packets = build_task_packets(
+        objective=str(getattr(ctx, "user_input", "") or ""),
+        plan=list(getattr(ctx, "plan", []) or []),
+        workflow_id=str(getattr(ctx, "workflow_id", "") or ""),
+        nexus_mode=process_profile.nexus_mode,
+    )
+    ctx.task_packets = [packet.to_dict() for packet in packets]
+    plan_md = render_plan_markdown(
+        objective=str(getattr(ctx, "user_input", "") or ""),
+        packets=packets,
+        nexus_mode=process_profile.nexus_mode,
+    )
+    plan_md_path = write_text_artifact(_run_dir(ctx), "artifacts/implementation_plan.md", plan_md)
+    plan_json_path = write_json_artifact(
+        _run_dir(ctx),
+        "artifacts/implementation_plan.json",
+        {
+            "workflow_profile": process_profile.id,
+            "nexus_mode": process_profile.nexus_mode,
+            "task_packets": [packet.to_dict() for packet in packets],
+        },
+    )
+    workspace_info = inspect_workspace(
+        current_dir=str(Path.cwd()),
+        profile=str(getattr(ctx, "workflow_profile", "default") or "default"),
+        run_dir=_run_dir(ctx),
+    )
+    ctx.workspace_mode = str(workspace_info.get("workspace_mode") or "")
+    ctx.workspace_path = str(workspace_info.get("isolated_workspace") or getattr(ctx, "workspace_path", ""))
+    _persist_workflow_artifact(ctx, key="plan_artifact_path", path=plan_md_path)
+    _persist_workflow_artifact(ctx, key="plan_json_artifact_path", path=plan_json_path)
+    _persist_workflow_artifact(ctx, key="workspace_report_path", path=str(workspace_info.get("workspace_report_path") or ""))
+    _persist_workflow_artifact(ctx, key="baseline_check_path", path=str(workspace_info.get("baseline_check_path") or ""))
+
+
+def _ensure_review_artifact(ctx: Any) -> str:
+    existing = str((getattr(ctx, "workflow_artifacts", {}) or {}).get("review_artifact_path") or "").strip()
+    if existing:
+        return existing
+    report = render_review_report(
+        outputs=[row for row in list(getattr(ctx, "tool_results", []) or []) if isinstance(row, dict)],
+        notes=list(((getattr(ctx, "telemetry", {}) if isinstance(getattr(ctx, "telemetry", {}), dict) else {}).get("review_notes", [])) or []),
+        review_status=str(getattr(ctx, "approval_status", "") or "pending"),
+    )
+    path = write_text_artifact(_run_dir(ctx), "artifacts/review_report.md", report)
+    _persist_workflow_artifact(ctx, key="review_artifact_path", path=path)
+    return path
+
+
+def _ensure_finish_branch_artifact(ctx: Any) -> str:
+    existing = str((getattr(ctx, "workflow_artifacts", {}) or {}).get("finish_branch_report_path") or "").strip()
+    if existing:
+        return existing
+    report = render_finish_branch_report(
+        workflow_profile=str(getattr(ctx, "workflow_profile", "default") or "default"),
+        workspace_mode=str(getattr(ctx, "workspace_mode", "") or ""),
+        verified=bool(getattr(ctx, "verified", False) and not getattr(ctx, "delivery_blocked", False)),
+        errors=list(getattr(ctx, "errors", []) or []),
+    )
+    path = write_text_artifact(_run_dir(ctx), "artifacts/finish_branch_report.md", report)
+    _persist_workflow_artifact(ctx, key="finish_branch_report_path", path=path)
+    return path
+
+
+def _workflow_brainstorm_response(ctx: Any) -> str:
+    design_path = _ensure_design_artifact(ctx)
+    ctx.workflow_phase = "design_ready"
+    _sync_workflow_metadata(ctx)
+    return (
+        "Superpowers workflow aktif. Kod yazmadan önce tasarımı netleştiriyorum.\n"
+        "Design artifact oluşturuldu ve approval bekleniyor.\n"
+        f"- design: {design_path}\n"
+        "Devam etmek için `onay`, `go`, `uygula`, `implement`, veya `devam et` yaz."
+    )
+
+
 @dataclass
 class PipelineContext:
     """Pipeline boyunca taşınan paylaşımlı bağlam."""
@@ -1258,6 +1454,14 @@ class PipelineContext:
     capability_plan: Dict[str, Any] = field(default_factory=dict)
     workflow_id: str = ""
     capability_primary_action: str = ""
+    workflow_profile: str = "default"
+    workflow_phase: str = "intake"
+    approval_status: str = "not_required"
+    requires_design_phase: bool = False
+    requires_worktree: bool = False
+    workflow_artifacts: Dict[str, str] = field(default_factory=dict)
+    workflow_session_id: str = ""
+    workspace_mode: str = ""
     preferred_tools: List[str] = field(default_factory=list)
     multi_agent_recommended: bool = False
     goal_graph: Dict[str, Any] = field(default_factory=dict)
@@ -1286,6 +1490,7 @@ class PipelineContext:
 
     # Stage 3: Plan
     plan: List[Dict] = field(default_factory=list)
+    task_packets: List[Dict[str, Any]] = field(default_factory=list)
     skeleton_plan: List[Dict[str, Any]] = field(default_factory=list)
     step_specs: List[Dict[str, Any]] = field(default_factory=list)
     plan_cache_hit: bool = False
@@ -1646,6 +1851,9 @@ class StageRoute(PipelineStage):
                         "complexity_tier": str(getattr(cap_plan, "complexity_tier", "low") or "low"),
                         "suggested_job_type": str(getattr(cap_plan, "suggested_job_type", "communication") or "communication"),
                         "orchestration_mode": str(getattr(cap_plan, "orchestration_mode", "single_agent") or "single_agent"),
+                        "workflow_profile_applicable": bool(getattr(cap_plan, "workflow_profile_applicable", False)),
+                        "requires_design_phase": bool(getattr(cap_plan, "requires_design_phase", False)),
+                        "requires_worktree": bool(getattr(cap_plan, "requires_worktree", False)),
                         "preferred_tools": list(ctx.preferred_tools),
                     }
                     ctx.workflow_id = str(getattr(cap_plan, "workflow_id", "") or "")
@@ -2173,6 +2381,23 @@ class StageRoute(PipelineStage):
         except Exception:
             pass
 
+        try:
+            _apply_workflow_profile(ctx)
+            if getattr(ctx, "requires_design_phase", False):
+                session = {}
+                if callable(getattr(agent, "_get_workflow_session", None)):
+                    session = agent._get_workflow_session(ctx.user_id, ctx.channel)
+                if session:
+                    ctx.workflow_session_id = str(session.get("session_id") or ctx.workflow_session_id or "")
+                    if not approval_granted(ctx.user_input):
+                        ctx.approval_status = str(session.get("approval_status") or ctx.approval_status or "pending")
+                        ctx.workflow_phase = str(session.get("workflow_phase") or ctx.workflow_phase or "brainstorming")
+                elif not ctx.workflow_session_id:
+                    ctx.workflow_session_id = f"wf_{int(time.time() * 1000)}"
+                _sync_workflow_metadata(ctx)
+        except Exception as workflow_exc:
+            logger.debug(f"Workflow profile setup skipped: {workflow_exc}")
+
         ctx.stage_timings["route"] = time.time() - t0
         return ctx
 
@@ -2183,6 +2408,15 @@ class StagePlan(PipelineStage):
 
     async def run(self, ctx: PipelineContext, agent) -> PipelineContext:
         t0 = time.time()
+        if getattr(ctx, "requires_design_phase", False) and str(getattr(ctx, "approval_status", "") or "").lower() != "approved":
+            ctx.phase_records["plan"] = {
+                "phase": "Plan",
+                "skipped": True,
+                "reason": "approval_missing",
+                "workflow_profile": str(getattr(ctx, "workflow_profile", "default") or "default"),
+            }
+            ctx.stage_timings["plan"] = time.time() - t0
+            return ctx
         if not ctx.needs_planning:
             ctx.stage_timings["plan"] = 0
             return ctx
@@ -2315,6 +2549,14 @@ class StagePlan(PipelineStage):
         except Exception as phase_exc:
             logger.debug(f"Plan phase record skipped: {phase_exc}")
 
+        try:
+            if getattr(ctx, "requires_design_phase", False) and str(getattr(ctx, "approval_status", "") or "").lower() == "approved":
+                _ensure_plan_and_workspace_artifacts(ctx)
+                ctx.workflow_phase = "plan_ready"
+                _sync_workflow_metadata(ctx)
+        except Exception as workflow_exc:
+            logger.debug(f"Workflow plan artifact generation skipped: {workflow_exc}")
+
         ctx.stage_timings["plan"] = time.time() - t0
         return ctx
 
@@ -2334,6 +2576,49 @@ class StageExecute(PipelineStage):
             exec_mode = _resolve_execution_mode(ctx)
             if isinstance(ctx.telemetry, dict):
                 ctx.telemetry["execution_mode"] = exec_mode
+
+            try:
+                if getattr(ctx, "requires_design_phase", False):
+                    if str(getattr(ctx, "approval_status", "") or "").lower() != "approved":
+                        ctx.final_response = _workflow_brainstorm_response(ctx)
+                        ctx.intent = {"action": "chat", "params": {"mode": "workflow_brainstorm"}}
+                        ctx.action = "chat"
+                        ctx.job_type = "communication"
+                        if callable(getattr(agent, "_store_workflow_session", None)):
+                            agent._store_workflow_session(
+                                ctx.user_id,
+                                ctx.channel,
+                                {
+                                    "session_id": str(ctx.workflow_session_id or f"wf_{int(time.time() * 1000)}"),
+                                    "objective": str(ctx.user_input or ""),
+                                    "workflow_profile": str(ctx.workflow_profile or "default"),
+                                    "workflow_phase": "design_ready",
+                                    "approval_status": "pending",
+                                    "workflow_id": str(ctx.workflow_id or ""),
+                                    "capability_domain": str(ctx.capability_domain or ""),
+                                    "design_artifact_path": str((ctx.workflow_artifacts or {}).get("design_artifact_path") or ""),
+                                },
+                            )
+                        ctx.stage_timings["execute"] = time.time() - t0
+                        return ctx
+                    _ensure_plan_and_workspace_artifacts(ctx)
+                    ctx.workflow_phase = "executing"
+                    _sync_workflow_metadata(ctx)
+                    if str(ctx.workflow_profile or "") == "superpowers_strict" and str(ctx.workspace_mode or "") == "strict_worktree_required":
+                        ctx.final_response = (
+                            "Superpowers strict profilinde worktree zorunlu. "
+                            "Workspace report hazır; worktree hazırlanmadan execution başlamadı."
+                        )
+                        ctx.intent = {"action": "chat", "params": {"mode": "workflow_blocked", "reason": "worktree_required"}}
+                        ctx.action = "chat"
+                        ctx.job_type = "communication"
+                        ctx.errors.append("workflow:worktree_required")
+                        ctx.delivery_blocked = True
+                        ctx.stage_timings["execute"] = time.time() - t0
+                        return ctx
+                    ctx.team_mode_forced = True
+            except Exception as workflow_exc:
+                logger.debug(f"Workflow execution preflight skipped: {workflow_exc}")
 
             # Conversation Brain boundary:
             # - chat mode: actionable commands are understood but not executed.
@@ -2771,7 +3056,19 @@ class StageExecute(PipelineStage):
                                 max_retries_per_task=team_max_retries_per_task,
                             ),
                         )
-                        team_result = await team.execute_project(ctx.user_input)
+                        team_kwargs = {
+                            "task_packets": list(getattr(ctx, "task_packets", []) or []),
+                            "workflow_context": {
+                                "workflow_profile": str(getattr(ctx, "workflow_profile", "default") or "default"),
+                                "workflow_id": str(getattr(ctx, "workflow_id", "") or ""),
+                                "workspace_mode": str(getattr(ctx, "workspace_mode", "") or ""),
+                                "approval_status": str(getattr(ctx, "approval_status", "") or ""),
+                            },
+                        }
+                        try:
+                            team_result = await team.execute_project(ctx.user_input, **team_kwargs)
+                        except TypeError:
+                            team_result = await team.execute_project(ctx.user_input)
                         team_status = str(getattr(team_result, "status", "success") or "success").lower()
                         summary = str(getattr(team_result, "summary", "") or "")
                         team_telemetry = dict(getattr(team_result, "telemetry", {}) or {})
@@ -2788,6 +3085,28 @@ class StageExecute(PipelineStage):
                         outputs = list(getattr(team_result, "outputs", []) or [])
                         if outputs:
                             ctx.tool_results.extend(outputs)
+                        if getattr(ctx, "requires_design_phase", False):
+                            ctx.approval_status = "review_passed" if team_status == "success" else "review_blocked"
+                            _ensure_review_artifact(ctx)
+                            _sync_workflow_metadata(ctx)
+                            if callable(getattr(agent, "_store_workflow_session", None)):
+                                agent._store_workflow_session(
+                                    ctx.user_id,
+                                    ctx.channel,
+                                    {
+                                        "session_id": str(ctx.workflow_session_id or f"wf_{int(time.time() * 1000)}"),
+                                        "objective": str(ctx.user_input or ""),
+                                        "workflow_profile": str(ctx.workflow_profile or "default"),
+                                        "workflow_phase": "executing" if team_status == "success" else "review_blocked",
+                                        "approval_status": str(ctx.approval_status or ""),
+                                        "workflow_id": str(ctx.workflow_id or ""),
+                                        "capability_domain": str(ctx.capability_domain or ""),
+                                        "design_artifact_path": str((ctx.workflow_artifacts or {}).get("design_artifact_path") or ""),
+                                        "plan_artifact_path": str((ctx.workflow_artifacts or {}).get("plan_artifact_path") or ""),
+                                        "review_artifact_path": str((ctx.workflow_artifacts or {}).get("review_artifact_path") or ""),
+                                        "workspace_mode": str(ctx.workspace_mode or ""),
+                                    },
+                                )
                         if team_status == "success":
                             if action_lock.is_locked:
                                 action_lock.unlock()
@@ -3750,6 +4069,10 @@ class StageDeliver(PipelineStage):
 
         try:
             final_status = "success" if ctx.verified and not ctx.delivery_blocked else "blocked" if ctx.delivery_blocked else "partial"
+            if getattr(ctx, "requires_design_phase", False):
+                _ensure_finish_branch_artifact(ctx)
+                ctx.workflow_phase = "finished" if final_status == "success" else str(getattr(ctx, "workflow_phase", "") or "review_blocked")
+                _sync_workflow_metadata(ctx)
             update_runtime_trace(
                 ctx,
                 tool_calls=list(ctx.tool_calls or []),
@@ -3763,6 +4086,14 @@ class StageDeliver(PipelineStage):
                 "evidence_valid": bool(ctx.evidence_valid),
                 "final_status": final_status,
             }
+        except Exception:
+            pass
+
+        try:
+            if getattr(ctx, "requires_design_phase", False) and final_status == "success":
+                clear = getattr(agent, "_clear_workflow_session", None)
+                if callable(clear):
+                    clear(ctx.user_id, ctx.channel)
         except Exception:
             pass
 

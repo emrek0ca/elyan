@@ -36,9 +36,8 @@ class SectionedDocument:
         lines = [self.title]
         for section in list(self.sections or []):
             heading = str(section.title or "").strip()
-            if not heading:
-                continue
-            lines.extend(["", heading])
+            if heading:
+                lines.extend(["", heading])
             for paragraph in list(section.paragraphs or []):
                 text = str(paragraph.text or "").strip()
                 if text:
@@ -59,12 +58,10 @@ class MarkdownRenderer(BaseRenderer):
     async def render_to_path(self, document: SectionedDocument, path: str) -> dict[str, Any]:
         target = Path(path).expanduser().resolve()
         lines = [f"# {document.title}"]
-        if document.metadata:
-            lines.extend(["", "## Metadata", ""])
-            for key, value in list(document.metadata.items())[:20]:
-                lines.append(f"- {key}: {value}")
         for section in list(document.sections or []):
-            lines.extend(["", f"## {section.title}", ""])
+            heading = str(section.title or "").strip()
+            if heading:
+                lines.extend(["", f"## {heading}", ""])
             for paragraph in list(section.paragraphs or []):
                 text = str(paragraph.text or "").strip()
                 if text:
@@ -80,13 +77,22 @@ class HtmlRenderer(BaseRenderer):
         target = Path(path).expanduser().resolve()
         body = [f"<h1>{html.escape(document.title)}</h1>"]
         for section in list(document.sections or []):
-            body.append(f"<section><h2>{html.escape(section.title)}</h2>")
+            heading = str(section.title or "").strip()
+            body.append("<section>")
+            if heading:
+                body.append(f"<h2>{html.escape(heading)}</h2>")
             for paragraph in list(section.paragraphs or []):
                 body.append(f"<p>{html.escape(str(paragraph.text or '').strip())}</p>")
             body.append("</section>")
         payload = (
             "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
-            f"<title>{html.escape(document.title)}</title></head><body>"
+            f"<title>{html.escape(document.title)}</title>"
+            "<style>"
+            "body{font-family:Georgia,'Times New Roman',serif;background:#ffffff;color:#111827;max-width:760px;margin:40px auto;padding:0 24px;line-height:1.65;}"
+            "h1{font-size:30px;margin:0 0 24px;color:#0f172a;}"
+            "h2{font-size:18px;margin:28px 0 10px;color:#1e3a8a;}"
+            "p{margin:0 0 14px;}"
+            "</style></head><body>"
             + "".join(body)
             + "</body></html>"
         )
@@ -106,7 +112,12 @@ class DocxRenderer(BaseRenderer):
                 text = str(paragraph.text or "").strip()
                 if text:
                     paragraphs.append(text)
-        return await write_word(path=str(path), title=document.title, paragraphs=paragraphs)
+        return await write_word(
+            path=str(path),
+            title=document.title,
+            content=document.to_plain_text(),
+            paragraphs=paragraphs,
+        )
 
 
 class XlsxRenderer(BaseRenderer):
@@ -114,64 +125,82 @@ class XlsxRenderer(BaseRenderer):
         from tools.office_tools.excel_tools import write_excel
 
         rows: list[dict[str, Any]] = []
+        rows.append({"Content": document.title})
         for section in list(document.sections or []):
+            heading = str(section.title or "").strip()
+            if heading:
+                rows.append({"Content": heading})
             for paragraph in list(section.paragraphs or []):
-                rows.append(
-                    {
-                        "Section": str(section.title or "").strip(),
-                        "Paragraph": str(paragraph.text or "").strip(),
-                        "Claims": ", ".join(str(item).strip() for item in list(paragraph.claim_ids or []) if str(item).strip()),
-                    }
-                )
+                text = str(paragraph.text or "").strip()
+                if text:
+                    rows.append({"Content": text})
         if not rows:
-            rows.append({"Section": "Document", "Paragraph": document.title, "Claims": ""})
+            rows.append({"Content": document.title})
         return await write_excel(
             path=str(path),
             data=rows,
-            headers=["Section", "Paragraph", "Claims"],
-            sheet_name="Document",
+            headers=["Content"],
+            sheet_name="Content",
         )
 
 
 class PdfRenderer(BaseRenderer):
     async def render_to_path(self, document: SectionedDocument, path: str) -> dict[str, Any]:
         try:
+            from reportlab.lib.colors import HexColor
+            from reportlab.lib.enums import TA_LEFT
             from reportlab.lib.pagesizes import A4
-            from reportlab.pdfgen import canvas
+            from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+            from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
         except Exception as exc:
             return {"success": False, "error": f"reportlab unavailable: {exc}"}
 
         target = Path(path).expanduser().resolve()
         target.parent.mkdir(parents=True, exist_ok=True)
-        text = document.to_plain_text()
-        lines = [line for line in text.splitlines()]
-        c = canvas.Canvas(str(target), pagesize=A4)
-        width, height = A4
-        x = 50
-        y = height - 50
-        c.setTitle(document.title)
-        c.setFont("Helvetica-Bold", 16)
-        c.drawString(x, y, document.title[:110])
-        y -= 28
-        c.setFont("Helvetica", 11)
-        for line in lines[1:]:
-            wrapped = line or " "
-            while len(wrapped) > 100:
-                part = wrapped[:100]
-                c.drawString(x, y, part)
-                y -= 16
-                wrapped = wrapped[100:]
-                if y < 60:
-                    c.showPage()
-                    c.setFont("Helvetica", 11)
-                    y = height - 50
-            c.drawString(x, y, wrapped[:100])
-            y -= 16
-            if y < 60:
-                c.showPage()
-                c.setFont("Helvetica", 11)
-                y = height - 50
-        c.save()
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            "elyan_title",
+            parent=styles["Title"],
+            fontName="Helvetica-Bold",
+            fontSize=19,
+            leading=24,
+            textColor=HexColor("#0f172a"),
+            alignment=TA_LEFT,
+            spaceAfter=20,
+        )
+        heading_style = ParagraphStyle(
+            "elyan_heading",
+            parent=styles["Heading2"],
+            fontName="Helvetica-Bold",
+            fontSize=13,
+            leading=17,
+            textColor=HexColor("#1e3a8a"),
+            spaceBefore=12,
+            spaceAfter=8,
+        )
+        body_style = ParagraphStyle(
+            "elyan_body",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=10.5,
+            leading=15,
+            textColor=HexColor("#111827"),
+            spaceAfter=10,
+        )
+        story: list[Any] = [Paragraph(html.escape(document.title), title_style), Spacer(1, 8)]
+        for section in list(document.sections or []):
+            heading = str(section.title or "").strip()
+            if heading:
+                story.append(Paragraph(html.escape(heading), heading_style))
+            for paragraph in list(section.paragraphs or []):
+                text = str(paragraph.text or "").strip()
+                if text:
+                    story.append(Paragraph(html.escape(text), body_style))
+        if len(story) <= 2:
+            story.append(Paragraph(html.escape(document.to_plain_text()), body_style))
+        doc = SimpleDocTemplate(str(target), pagesize=A4, leftMargin=48, rightMargin=48, topMargin=54, bottomMargin=54)
+        doc.title = document.title
+        doc.build(story)
         return {"success": True, "path": str(target), "format": "pdf"}
 
 

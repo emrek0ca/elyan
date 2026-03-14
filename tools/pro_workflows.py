@@ -14,6 +14,7 @@ import unicodedata
 from urllib.parse import urlparse
 
 from security.validator import validate_path
+from tools.document_tools.output_renderer import DocumentRenderer, sections_to_sectioned_document
 from utils.logger import get_logger
 
 logger = get_logger("tools.pro_workflows")
@@ -82,12 +83,14 @@ def _strip_research_meta_lines(text: str) -> str:
         return ""
     blocked_patterns = (
         r"^\s*Yönetici Özeti:?\s*$",
+        r"^\s*Kısa Özet:?\s*$",
         r"^\s*Ana Bulgular.*$",
         r"^\s*Kanıt Matrisi.*$",
         r"^\s*Araştırma Konusu:.*$",
         r"^\s*Kapsam:.*$",
         r"^\s*Kaynak Profili:.*$",
         r"^\s*Kaynak Politikası:.*$",
+        r"^\s*Önerilen referans seti:.*$",
         r"^\s*Not:.*$",
         r"^\s*Öne Çıkan Alan Adları:.*$",
         r"^\s*Operasyonel Öneriler:.*$",
@@ -121,6 +124,11 @@ def _is_low_value_research_statement(text: str) -> bool:
         "videosudur",
         "bu ders",
         "buders",
+        "guncelleme tarihi",
+        "güncelleme tarihi",
+        " yazar ",
+        "author ",
+        "referans seti",
         "ornek soru",
         "örnek soru",
         "sekil",
@@ -395,7 +403,7 @@ def _build_research_document_sections(
         if not isinstance(claim, dict):
             continue
         claim_id = str(claim.get("claim_id") or "").strip()
-        text = _clean_research_sentence(str(claim.get("text") or "").strip())
+        text = _strip_research_annotation(str(claim.get("text") or "").strip())
         if not text:
             continue
         citation_note = _claim_reference_label(claim_id, citation_map.get(claim_id, []), citation_mode)
@@ -406,7 +414,7 @@ def _build_research_document_sections(
             }
         )
     if not finding_paragraphs:
-        for idx, finding in enumerate(findings, start=1):
+        for idx, finding in enumerate(_select_research_document_findings(findings, topic=topic, limit=6), start=1):
             clean = _strip_research_annotation(finding)
             if clean:
                 finding_paragraphs.append({"text": clean, "claim_ids": [f"claim_{idx}"]})
@@ -446,7 +454,8 @@ def _build_research_document_sections(
         clean = _clean_research_sentence(str(item or "").strip())
         if clean:
             match = re.search(r"(claim_\d+)", clean)
-            uncertainty_paragraphs.append({"text": clean, "claim_ids": [match.group(1)] if match else []})
+            display = re.sub(r"^\s*claim_\d+\s*:\s*", "", clean, flags=re.IGNORECASE).strip()
+            uncertainty_paragraphs.append({"text": display or clean, "claim_ids": [match.group(1)] if match else []})
     if not uncertainty_paragraphs:
         uncertainty_paragraphs.append({"text": "Belirgin belirsizlik kaydı oluşmadı; bu bölüm izlenebilirlik için korunur.", "claim_ids": []})
     sections.append({"title": "Belirsizlikler", "paragraphs": uncertainty_paragraphs})
@@ -470,13 +479,156 @@ def _build_research_document_sections(
     return sections
 
 
+def _is_generic_document_paragraph(text: str) -> bool:
+    clean = _clean_research_sentence(text)
+    if not clean:
+        return True
+    low = _normalize_text(clean)
+    generic_prefixes = (
+        "toplam ",
+        "claim coverage ",
+        "kritik claim coverage ",
+    )
+    generic_exact = {
+        _normalize_text("Metin, karar vermeyi kolaylaştıracak netlikte ve kısa tutulmuştur."),
+        _normalize_text("Metin, iddiaların kaynağını ve güven düzeyini görünür tutacak şekilde biraz daha ayrıntılı düzenlenmiştir."),
+        _normalize_text("Metin, hızlı durum değerlendirmesi için kısa ve yönlendirici kalacak şekilde sıkıştırılmıştır."),
+        _normalize_text("Doğrudan bağlanabilir bulgu üretilemedi."),
+        _normalize_text("Belirgin çelişki bulunmadı; yine de kritik sayısal ifadeler manuel teyit gerektirebilir."),
+        _normalize_text("Belirgin belirsizlik kaydı oluşmadı; bu bölüm izlenebilirlik için korunur."),
+        _normalize_text("Bazı kritik iddialar ikinci bağımsız kaynakla doğrulanamadı; sonuçlar dikkatle kullanılmalıdır."),
+    }
+    if low in generic_exact:
+        return True
+    if any(low.startswith(prefix) for prefix in generic_prefixes):
+        return True
+    return False
+
+
+def _renderable_research_document_sections(
+    *,
+    sections: list[dict[str, Any]],
+    profile: str,
+    brief: str,
+    include_bibliography: bool,
+) -> list[dict[str, Any]]:
+    normalized_profile = _normalize_document_profile(profile)
+    low_brief = _normalize_text(brief)
+    explicit_detail = any(
+        marker in low_brief
+        for marker in (
+            "risk",
+            "uyari",
+            "uyarı",
+            "belirsizlik",
+            "kaynakca",
+            "kaynakça",
+            "citation",
+            "atif",
+            "atıf",
+            "analitik",
+            "analytical",
+        )
+    )
+    preferred_titles = {"Kısa Özet", "Temel Bulgular"}
+    if normalized_profile == "analytical" or explicit_detail:
+        preferred_titles.update({"Kaynak Güven Özeti", "Açık Riskler", "Belirsizlikler"})
+    elif normalized_profile == "briefing" and ("risk" in low_brief or "uyari" in low_brief or "uyarı" in low_brief):
+        preferred_titles.add("Açık Riskler")
+    if include_bibliography and (normalized_profile == "analytical" or explicit_detail):
+        preferred_titles.add("Kaynakça")
+
+    render_sections: list[dict[str, Any]] = []
+    for section in list(sections or []):
+        if not isinstance(section, dict):
+            continue
+        title = _clean_research_sentence(str(section.get("title") or "").strip())
+        if not title or title not in preferred_titles:
+            continue
+        paragraphs: list[dict[str, Any]] = []
+        for paragraph in list(section.get("paragraphs") or []):
+            if isinstance(paragraph, dict):
+                text = _clean_research_sentence(str(paragraph.get("text") or "").strip())
+                claim_ids = [str(item).strip() for item in list(paragraph.get("claim_ids") or []) if str(item).strip()]
+            else:
+                text = _clean_research_sentence(str(paragraph or "").strip())
+                claim_ids = []
+            if not text or _is_generic_document_paragraph(text):
+                continue
+            paragraphs.append({"text": text, "claim_ids": claim_ids})
+        if paragraphs:
+            render_sections.append({"title": title, "paragraphs": paragraphs})
+
+    if not render_sections:
+        fallback_texts: list[str] = []
+        for section in list(sections or []):
+            if not isinstance(section, dict):
+                continue
+            for paragraph in list(section.get("paragraphs") or []):
+                text = _clean_research_sentence(str((paragraph.get("text") if isinstance(paragraph, dict) else paragraph) or "").strip())
+                if text and not _is_generic_document_paragraph(text):
+                    fallback_texts.append(text)
+        if fallback_texts:
+            render_sections = [
+                {
+                    "title": "İçerik",
+                    "paragraphs": [{"text": text, "claim_ids": []} for text in fallback_texts[:8]],
+                }
+            ]
+
+    return render_sections
+
+
+def _content_only_research_sections(
+    *,
+    topic: str,
+    summary: str,
+    findings: list[str],
+    llm_body: str = "",
+) -> list[dict[str, Any]]:
+    paragraphs: list[str] = []
+
+    if llm_body and _research_body_seems_relevant(topic, llm_body):
+        paragraphs.extend(_extract_plain_paragraphs(llm_body))
+    else:
+        intro = _strip_research_meta_lines(_extract_report_summary(summary, findings, topic))
+        intro_rows = _extract_plain_paragraphs(intro)
+        if intro_rows:
+            paragraphs.append(intro_rows[0])
+        elif intro:
+            paragraphs.append(_clean_research_sentence(intro))
+        paragraphs.extend(_select_research_document_findings(findings, topic=topic, limit=4))
+
+    cleaned_rows: list[str] = []
+    seen: set[str] = set()
+    for paragraph in paragraphs:
+        clean = _strip_research_annotation(paragraph)
+        if not clean or _is_generic_document_paragraph(clean) or _is_low_value_research_statement(clean):
+            continue
+        key = _normalize_text(clean)
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned_rows.append(clean)
+
+    if not cleaned_rows:
+        fallback = _strip_research_meta_lines(summary) or f"{topic} başlığı için yeterli kalitede araştırma özeti üretilemedi."
+        cleaned_rows = _extract_plain_paragraphs(fallback) or [_clean_research_sentence(fallback)]
+
+    return [
+        {
+            "title": "",
+            "paragraphs": [{"text": row, "claim_ids": []} for row in cleaned_rows[:6] if row],
+        }
+    ]
+
+
 def _sections_to_document_text(title: str, sections: list[dict[str, Any]]) -> str:
     lines = [title]
     for section in list(sections or []):
         heading = _clean_research_sentence(str(section.get("title") or "").strip())
-        if not heading:
-            continue
-        lines.extend(["", heading])
+        if heading:
+            lines.extend(["", heading])
         for paragraph in list(section.get("paragraphs") or []):
             if isinstance(paragraph, dict):
                 text = _clean_research_sentence(str(paragraph.get("text") or "").strip())
@@ -663,11 +815,11 @@ def _topic_terms(topic: str) -> list[str]:
 
 def _research_body_seems_relevant(topic: str, body: str) -> bool:
     text = str(body or "").strip()
-    if len(text) < 280:
+    if len(text) < 180:
         return False
     terms = _topic_terms(topic)
     if not terms:
-        return len(text) >= 280
+        return len(text) >= 180
     matches = sum(1 for token in set(terms) if token in text.lower())
     return matches >= max(1, min(2, len(set(terms))))
 
@@ -690,7 +842,7 @@ def _should_use_llm_research_body(
         return False
     if str(quality_summary.get("status") or "").strip().lower() != "pass":
         return False
-    if len(list(findings or [])) < 3:
+    if len(list(findings or [])) < 2:
         return False
     if len(list(sources or [])) < 3:
         return False
@@ -791,7 +943,26 @@ def _build_latex_document(title: str, paragraphs: list[str]) -> str:
     )
 
 
-def _select_research_document_findings(findings: list[str], *, limit: int = 5) -> list[str]:
+def _topic_stems(topic: str) -> list[str]:
+    stems: list[str] = []
+    for token in _topic_terms(topic):
+        norm = _normalize_text(token).strip()
+        if len(norm) < 3:
+            continue
+        stem = norm[:5] if len(norm) > 5 else norm
+        if stem and stem not in stems:
+            stems.append(stem)
+    return stems
+
+
+def _finding_topic_match_score(topic: str, text: str) -> int:
+    low = _normalize_text(text)
+    if not low:
+        return 0
+    return sum(1 for stem in _topic_stems(topic) if stem and stem in low)
+
+
+def _select_research_document_findings(findings: list[str], *, topic: str = "", limit: int = 5) -> list[str]:
     selected: list[str] = []
     seen_findings: set[str] = set()
     for item in findings:
@@ -803,15 +974,28 @@ def _select_research_document_findings(findings: list[str], *, limit: int = 5) -
             continue
         seen_findings.add(key)
         selected.append(clean)
-        if len(selected) >= limit:
-            break
-    return selected
+    if not topic:
+        return selected[:limit]
+
+    scored = [(item, _finding_topic_match_score(topic, item)) for item in selected]
+    stems = _topic_stems(topic)
+    strong_threshold = min(2, len(stems)) if stems else 1
+    strong = [item for item, score in scored if score >= strong_threshold]
+    if len(strong) >= min(2, limit):
+        return strong[:limit]
+
+    medium = [item for item, score in scored if score >= 1]
+    if medium:
+        return medium[:limit]
+    return selected[:limit]
 
 
 def _extract_report_summary(summary: str, findings: list[str], topic: str) -> str:
     blocked_exact = {
         "yonetici ozeti",
         "yonetici ozeti:",
+        "kisa ozet",
+        "kisa ozet:",
         "ana bulgular (kanit odakli):",
         "ana bulgular",
         "kanit matrisi (ilk 5 kaynak):",
@@ -823,6 +1007,7 @@ def _extract_report_summary(summary: str, findings: list[str], topic: str) -> st
         "kapsam:",
         "kaynak profili:",
         "kaynak politikasi:",
+        "onerilen referans seti:",
         "not:",
         "one cikan alan adlari:",
         "onerilen devam adimi:",
@@ -896,6 +1081,47 @@ def _normalize_document_instruction(text: str) -> str:
     if sum(1 for marker in command_markers if marker in low) >= 2:
         return ""
     return value
+
+
+def _brief_requests_reference_detail(brief: str, profile: str) -> bool:
+    low = _normalize_text(brief)
+    if _normalize_document_profile(profile) == "analytical":
+        return True
+    markers = (
+        "kaynakca",
+        "kaynakça",
+        "kaynak",
+        "citation",
+        "cite",
+        "atif",
+        "atıf",
+        "bibliography",
+        "reference",
+        "dipnot",
+        "footnote",
+    )
+    return any(marker in low for marker in markers)
+
+
+def _brief_requests_structured_sections(brief: str, profile: str) -> bool:
+    low = _normalize_text(brief)
+    if _normalize_document_profile(profile) == "analytical":
+        return True
+    markers = (
+        "risk",
+        "uyari",
+        "uyarı",
+        "belirsizlik",
+        "analitik",
+        "analytical",
+        "briefing",
+        "kaynakca",
+        "kaynakça",
+        "citation",
+        "atif",
+        "atıf",
+    )
+    return any(marker in low for marker in markers)
 
 
 def _infer_requested_document_formats(
@@ -1048,7 +1274,7 @@ def _build_research_word_content(
     avg_reliability: float,
     include_bibliography: bool,
 ) -> str:
-    clean_findings = _select_research_document_findings(findings, limit=5)
+    clean_findings = _select_research_document_findings(findings, topic=topic, limit=5)
 
     intro = _strip_research_meta_lines(_extract_report_summary(summary, clean_findings, topic))
     if not intro:
@@ -3401,6 +3627,9 @@ async def research_document_delivery(
         )
         document_profile = _normalize_document_profile(document_profile, audience=audience)
         include_bibliography = bool(include_bibliography)
+        if not _brief_requests_reference_detail(brief, document_profile) and citation_mode == "inline":
+            citation_mode = "none"
+            include_bibliography = False
 
         try:
             min_rel = float(min_reliability)
@@ -3412,8 +3641,6 @@ async def research_document_delivery(
 
         try:
             from tools.research_tools.advanced_research import advanced_research
-            from tools.office_tools.word_tools import write_word
-            from tools.office_tools.excel_tools import write_excel
         except Exception as exc:
             return {"success": False, "error": f"Gerekli araştırma/ofis modülleri yüklenemedi: {exc}"}
 
@@ -3440,7 +3667,7 @@ async def research_document_delivery(
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
         findings = [str(x).strip() for x in (research_result.get("findings") or []) if str(x).strip()]
-        cleaned_document_findings = _select_research_document_findings(findings, limit=6)
+        cleaned_document_findings = _select_research_document_findings(findings, topic=topic_clean, limit=6)
         summary = str(research_result.get("summary") or "").strip()
         sources = research_result.get("sources") if isinstance(research_result.get("sources"), list) else []
         research_contract = research_result.get("research_contract") if isinstance(research_result.get("research_contract"), dict) else {}
@@ -3500,19 +3727,17 @@ async def research_document_delivery(
             sources=filtered_sources or sources,
             language=language,
         )
-        summary_seed = (
-            llm_body
-            if _should_use_llm_research_body(
-                topic=topic_clean,
-                llm_body=llm_body,
-                quality_summary=quality_summary,
-                source_policy_stats=source_policy_stats,
-                source_policy=policy,
-                findings=cleaned_document_findings or findings,
-                sources=filtered_sources or sources,
-            )
-            else summary
+        llm_body_allowed = _should_use_llm_research_body(
+            topic=topic_clean,
+            llm_body=llm_body,
+            quality_summary=quality_summary,
+            source_policy_stats=source_policy_stats,
+            source_policy=policy,
+            findings=cleaned_document_findings or findings,
+            sources=filtered_sources or sources,
         )
+        summary_seed = llm_body if llm_body_allowed else summary
+        content_only_render = not _brief_requests_structured_sections(brief, document_profile)
 
         sections = _build_research_document_sections(
             topic=topic_clean,
@@ -3530,7 +3755,22 @@ async def research_document_delivery(
             current_sections=sections,
             target_sections=list(target_sections or []),
         )
-        research_body = _sections_to_document_text(f"Araştırma Raporu - {topic_clean}", sections)
+        if content_only_render:
+            render_sections = _content_only_research_sections(
+                topic=topic_clean,
+                summary=summary_seed or summary,
+                findings=cleaned_document_findings or findings,
+                llm_body=llm_body if llm_body_allowed else "",
+            )
+        else:
+            render_sections = _renderable_research_document_sections(
+                sections=sections,
+                profile=document_profile,
+                brief=brief,
+                include_bibliography=include_bibliography,
+            )
+        document_title = _clean_research_sentence(str(topic_clean or "").strip()) or str(topic_clean or "").strip() or "Araştırma"
+        research_body = _sections_to_document_text(document_title, render_sections)
         if len(research_body) < 280:
             heuristic_body = _build_research_word_content(
                 topic=topic_clean,
@@ -3546,7 +3786,7 @@ async def research_document_delivery(
                 avg_reliability=avg_reliability,
                 include_bibliography=include_bibliography,
             )
-            fallback_body = llm_body or heuristic_body
+            fallback_body = (llm_body if llm_body_allowed else "") or heuristic_body
             fallback_sections = _build_research_document_sections(
                 topic=topic_clean,
                 brief=brief,
@@ -3559,11 +3799,42 @@ async def research_document_delivery(
                 include_bibliography=include_bibliography,
             )
             if fallback_sections:
-                sections = fallback_sections
-                research_body = _sections_to_document_text(f"Araştırma Raporu - {topic_clean}", sections)
+                if content_only_render:
+                    fallback_render_sections = _content_only_research_sections(
+                        topic=topic_clean,
+                        summary=fallback_body or summary,
+                        findings=cleaned_document_findings or findings,
+                        llm_body=llm_body if llm_body_allowed else "",
+                    )
+                else:
+                    fallback_render_sections = _renderable_research_document_sections(
+                        sections=fallback_sections,
+                        profile=document_profile,
+                        brief=brief,
+                        include_bibliography=include_bibliography,
+                    )
+                if fallback_render_sections:
+                    render_sections = fallback_render_sections
+                research_body = _sections_to_document_text(document_title, render_sections)
             else:
                 research_body = fallback_body
         research_paragraphs = _extract_plain_paragraphs(research_body)
+        if not render_sections and research_paragraphs:
+            render_sections = [{"title": "", "paragraphs": [{"text": para, "claim_ids": []} for para in research_paragraphs]}]
+        sectioned_document = sections_to_sectioned_document(
+            title=document_title,
+            sections=render_sections,
+            metadata={
+                "topic": topic_clean,
+                "audience": audience,
+                "depth": normalized_depth,
+                "source_policy": policy,
+                "claim_coverage": round(float(quality_summary.get("claim_coverage", 0.0) or 0.0), 2),
+                "critical_claim_coverage": round(float(quality_summary.get("critical_claim_coverage", 0.0) or 0.0), 2),
+                "uncertainty_count": int(quality_summary.get("uncertainty_count", 0) or 0),
+            },
+        )
+        renderer = DocumentRenderer()
 
         claim_map_payload = _build_claim_map_artifact(
             topic=topic_clean,
@@ -3599,11 +3870,7 @@ async def research_document_delivery(
 
         if include_pdf:
             pdf_path = delivery_dir / "RESEARCH_DELIVERY.pdf"
-            pdf_result = _write_simple_pdf(
-                str(pdf_path),
-                f"Araştırma Raporu - {topic_clean}",
-                research_body,
-            )
+            pdf_result = await renderer.render_to_path(sectioned_document, "pdf", str(pdf_path))
             if isinstance(pdf_result, dict) and pdf_result.get("success") and pdf_result.get("path"):
                 outputs.append(str(pdf_result["path"]))
             else:
@@ -3611,11 +3878,7 @@ async def research_document_delivery(
 
         if include_word:
             word_path = delivery_dir / "RESEARCH_DELIVERY.docx"
-            word_result = await write_word(
-                path=str(word_path),
-                title=f"Araştırma Raporu - {topic_clean}",
-                content=research_body,
-            )
+            word_result = await renderer.render_to_path(sectioned_document, "docx", str(word_path))
             if isinstance(word_result, dict) and word_result.get("success") and word_result.get("path"):
                 outputs.append(str(word_result["path"]))
             else:
@@ -3631,38 +3894,7 @@ async def research_document_delivery(
 
         if include_excel:
             excel_path = delivery_dir / "RESEARCH_DELIVERY.xlsx"
-            rows: list[dict[str, Any]] = []
-            for idx, item in enumerate(cleaned_document_findings or findings, start=1):
-                rows.append(
-                    {
-                        "Tip": "Finding",
-                        "No": idx,
-                        "Metin": _strip_research_annotation(item)[:1000],
-                        "Kaynak": "",
-                        "Guvenilirlik": "",
-                    }
-                )
-            for idx, src in enumerate(sources[:40], start=1):
-                if not isinstance(src, dict):
-                    continue
-                rows.append(
-                    {
-                        "Tip": "Source",
-                        "No": idx,
-                        "Metin": str(src.get("title") or "").strip()[:400],
-                        "Kaynak": str(src.get("url") or "").strip()[:400],
-                        "Guvenilirlik": str(src.get("reliability_score") or ""),
-                    }
-                )
-            if not rows:
-                rows.append({"Tip": "Summary", "No": 1, "Metin": summary[:1000], "Kaynak": "", "Guvenilirlik": ""})
-
-            excel_result = await write_excel(
-                path=str(excel_path),
-                data=rows,
-                headers=["Tip", "No", "Metin", "Kaynak", "Guvenilirlik"],
-                sheet_name="Research",
-            )
+            excel_result = await renderer.render_to_path(sectioned_document, "xlsx", str(excel_path))
             if isinstance(excel_result, dict) and excel_result.get("success") and excel_result.get("path"):
                 outputs.append(str(excel_result["path"]))
             else:
@@ -3670,26 +3902,11 @@ async def research_document_delivery(
 
         if not include_word and not include_excel and not include_pdf and not include_latex:
             report_md = delivery_dir / "RESEARCH_DELIVERY.md"
-            report_md.write_text(
-                "\n".join(
-                    [
-                        f"# Araştırma Raporu - {topic_clean}",
-                        "",
-                        f"- Tarih: {now_str}",
-                        f"- Hedef kitle: {audience}",
-                        f"- Derinlik: {normalized_depth}",
-                        f"- Kaynak politikası: {policy}",
-                        f"- Min güvenilirlik: {min_rel:.2f}",
-                        f"- Claim coverage: {claim_coverage:.2f}",
-                        f"- Critical claim coverage: {critical_claim_coverage:.2f}",
-                        f"- Uncertainty count: {uncertainty_count}",
-                        "",
-                        research_body,
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            outputs.append(str(report_md))
+            md_result = await renderer.render_to_path(sectioned_document, "md", str(report_md))
+            if isinstance(md_result, dict) and md_result.get("success") and md_result.get("path"):
+                outputs.append(str(md_result["path"]))
+            else:
+                warnings.append(str((md_result or {}).get("error") or "markdown generation failed"))
 
         if deliver_copy:
             for report_path in research_result.get("report_paths", []) if isinstance(research_result.get("report_paths"), list) else []:

@@ -214,6 +214,55 @@ def test_agent_execute_tool_upgrades_advanced_research_to_delivery_when_document
     assert captured["deliver_copy"] is True
 
 
+def test_agent_infer_multi_task_collapses_research_plus_word_into_delivery():
+    agent = Agent()
+    intent = agent._infer_dense_multi_task_intent("köpeklerin üremesini araştır ve word dosyası oluştur")
+    assert isinstance(intent, dict)
+    assert intent.get("action") == "research_document_delivery"
+    params = intent.get("params", {})
+    assert params.get("include_word") is True
+    assert "köpeklerin" in str(params.get("topic", ""))
+
+
+def test_agent_execute_tool_blocks_mutation_before_superpowers_approval(monkeypatch):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+    monkeypatch.setattr(
+        Agent,
+        "_current_runtime_policy",
+        staticmethod(
+            lambda: {
+                "metadata": {
+                    "workflow_profile": "superpowers_lite",
+                    "workflow_phase": "brainstorming",
+                    "capability_domain": "code",
+                    "user_id": "u1",
+                    "channel": "cli",
+                },
+                "workflow": {
+                    "profile": "superpowers_lite",
+                    "allowed_domains": ["code", "debug", "api_integration", "full_stack_delivery"],
+                    "require_explicit_approval": True,
+                    "workspace_policy": "auto",
+                },
+            }
+        ),
+    )
+
+    result = asyncio.run(
+        agent._execute_tool(
+            "write_file",
+            {"path": "/tmp/demo.txt", "content": "hello"},
+            user_input="login bug fix",
+            step_name="Dosya yaz",
+        )
+    )
+
+    assert result["success"] is False
+    assert result["error_code"] == "WORKFLOW_APPROVAL_REQUIRED"
+
+
 def test_task_engine_bridge_loads_legacy_engine():
     from core.task_engine import get_task_engine
 

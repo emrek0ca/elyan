@@ -34,11 +34,15 @@ setup(
         "beautifulsoup4>=4.12.0",
         "lxml>=4.9.0",
         "Pillow>=10.0.0",
+        "numpy>=1.26.0",
+        "scikit-learn>=1.4.0",
+        "sentence-transformers>=3.0.0",
         # Office
         "python-docx>=1.1.0",
         "openpyxl>=3.1.0",
         "pdfplumber>=0.10.0",
         "pypdf>=3.0.0",
+        "python-pptx>=1.0.0",
         "reportlab>=4.0.0",
         # Scheduling
         "apscheduler>=3.10.0",
@@ -60,6 +64,11 @@ setup(
         ],
         "browser": [
             "playwright>=1.40.0",
+        ],
+        "research": [
+            "numpy>=1.26.0",
+            "scikit-learn>=1.4.0",
+            "sentence-transformers>=3.0.0",
         ],
         "dev": [
             "pytest>=8.0.0",
