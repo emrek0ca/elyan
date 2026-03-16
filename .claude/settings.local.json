@@ -82,7 +82,9 @@
       "Bash(elyan version:*)",
       "Bash(timeout 5 elyan health:*)",
       "Bash(lsof:*)",
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "Bash(npx --version)",
+      "Bash(npm --version)"
     ]
   }
 }

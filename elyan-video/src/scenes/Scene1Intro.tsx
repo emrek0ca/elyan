@@ -1,203 +1,85 @@
 import React from "react";
 import {
-  AbsoluteFill,
-  Img,
-  useCurrentFrame,
-  useVideoConfig,
-  spring,
-  interpolate,
-  staticFile,
+  AbsoluteFill, Img, useCurrentFrame, useVideoConfig,
+  spring, interpolate, staticFile,
 } from "remotion";
 import { loadFont } from "@remotion/google-fonts/Inter";
-import { Particles, GlowOrb } from "../components/AnimatedText";
+import { Particles, CinematicGrid, ImpactText, AnimatedText, VFX, ReflectiveGlass, LiquidBlob, AnamorphicFlare } from "../components/AnimatedText";
 
 const { fontFamily } = loadFont();
 
-/**
- * Scene 1 — Intro / Logo Reveal (0–5s, 150 frames)
- *
- * Premium effects:
- * - Particle field background
- * - Concentric rings expand outward
- * - Robot scales from 0 with elastic spring + continuous float
- * - "ELYAN" letters animate individually (per-char stagger)
- * - Tagline blur-reveals after title
- * - Soft glow orbs in background
- */
 export const Scene1Intro: React.FC = () => {
   const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
+  const { fps, width, height } = useVideoConfig();
+  const timeScale = fps / 30;
+  const scale = width / 1080;
 
-  // Robot entrance: scale from 0 -> 1 with overshoot spring
-  const robotScale = spring({
-    frame,
-    fps,
-    from: 0,
-    to: 1,
-    config: { stiffness: 60, damping: 12 },
-  });
-
-  // Continuous floating
-  const floatY = Math.sin(frame * 0.07) * 12;
-  const floatRotate = Math.sin(frame * 0.04) * 2;
-
-  // Robot opacity
-  const robotOpacity = interpolate(frame, [0, 20], [0, 1], {
-    extrapolateRight: "clamp",
-  });
-
-  // Concentric rings
-  const rings = [0, 1, 2].map((i) => {
-    const ringFrame = Math.max(0, frame - 10 - i * 8);
-    const ringScale = spring({
-      frame: ringFrame,
-      fps,
-      from: 0.3,
-      to: 1 + i * 0.3,
-      config: { stiffness: 40, damping: 20 },
-    });
-    const ringOpacity = interpolate(ringFrame, [0, 15, 40], [0, 0.15, 0], {
-      extrapolateRight: "clamp",
-    });
-    return { scale: ringScale, opacity: ringOpacity };
-  });
-
-  // Per-character animation for "ELYAN"
-  const title = "ELYAN";
-  const titleChars = title.split("").map((char, i) => {
-    const charDelay = 30 + i * 5;
-    const charFrame = Math.max(0, frame - charDelay);
-    const y = spring({
-      frame: charFrame,
-      fps,
-      from: 80,
-      to: 0,
-      config: { stiffness: 100, damping: 13 },
-    });
-    const opacity = interpolate(charFrame, [0, 10], [0, 1], {
-      extrapolateRight: "clamp",
-    });
-    const rotate = spring({
-      frame: charFrame,
-      fps,
-      from: -15,
-      to: 0,
-      config: { stiffness: 80, damping: 14 },
-    });
-    return { char, y, opacity, rotate };
-  });
-
-  // Tagline blur-in
-  const tagFrame = Math.max(0, frame - 60);
-  const tagOpacity = interpolate(tagFrame, [0, 20], [0, 1], {
-    extrapolateRight: "clamp",
-  });
-  const tagBlur = interpolate(tagFrame, [0, 20], [20, 0], {
-    extrapolateRight: "clamp",
-  });
-  const tagY = spring({
-    frame: tagFrame,
-    fps,
-    from: 30,
-    to: 0,
-    config: { stiffness: 70, damping: 18 },
-  });
+  const entrance = spring({ frame, fps, config: { stiffness: 60, damping: 20 } });
+  const moveUp = spring({ frame: Math.max(0, frame - 150 * timeScale), fps, config: { stiffness: 50, damping: 22 } });
 
   return (
-    <AbsoluteFill
-      style={{
-        background: "#FFFFFF",
-        overflow: "hidden",
-        fontFamily,
-      }}
-    >
-      {/* Ambient particles */}
-      <Particles count={40} color="#0A0A0A" speed={0.8} />
+    <VFX>
+      <AbsoluteFill style={{ overflow: "hidden", fontFamily }}>
+        <CinematicGrid opacity={0.015} />
+        <Particles count={100} colors={["#0071E3", "#0A0A0A"]} speed={0.6} />
+        
+        <AnamorphicFlare y={45} color="#0071E3" opacity={0.25} width={1500 * scale} />
+        <AnamorphicFlare y={85} color="#0A0A0A" opacity={0.1} width={800 * scale} />
 
-      {/* Glow orbs */}
-      <GlowOrb x={540} y={700} size={500} color="rgba(120,120,255,0.04)" />
-      <GlowOrb x={300} y={1200} size={350} color="rgba(0,0,0,0.03)" pulseSpeed={0.02} />
+        <LiquidBlob x={100} y={300} size={800} color="#0071E3" opacity={0.1} z={-250} />
+        <LiquidBlob x={900} y={1600} size={900} color="#0A0A0A" opacity={0.08} z={-350} />
 
-      {/* Concentric expanding rings */}
-      {rings.map((ring, i) => (
-        <div
-          key={i}
-          style={{
-            position: "absolute",
-            left: "50%",
-            top: "42%",
-            width: 300,
-            height: 300,
-            marginLeft: -150,
-            marginTop: -150,
-            borderRadius: "50%",
-            border: "1.5px solid #0A0A0A",
-            transform: `scale(${ring.scale})`,
-            opacity: ring.opacity,
-          }}
-        />
-      ))}
+        <AbsoluteFill style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: `0 ${60 * scale}px` }}>
+          
+          <div style={{
+            transform: `
+              translateY(${(1 - entrance) * (150 * scale) - moveUp * (500 * scale)}px) 
+              translateZ(${entrance * (250 * scale)}px)
+              rotateX(${moveUp * -5}deg)
+            `,
+            opacity: entrance,
+            textAlign: "center"
+          }}>
+            <AnimatedText delay={20 * timeScale} animation="perChar" fontSize={30} fontWeight={400} color="#6E6E73" letterSpacing={14} textTransform="uppercase">
+              GELECEK BURADA
+            </AnimatedText>
+            
+            <div style={{ height: 35 * scale }} />
+            
+            <ImpactText delay={45 * timeScale} fontSize={150} letterSpacing={10} color="#0A0A0A">
+              ELYAN
+            </ImpactText>
+            
+            <div style={{ height: 45 * scale }} />
+            
+            <AnimatedText delay={90 * timeScale} animation="perChar" fontSize={28} fontWeight={600} color="#0071E3" letterSpacing={18} textTransform="uppercase">
+              YAPAY ZEKA OPERATÖRÜ
+            </AnimatedText>
+          </div>
 
-      {/* Center content */}
-      <AbsoluteFill
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        {/* Robot */}
-        <div
-          style={{
-            transform: `scale(${robotScale}) translateY(${floatY}px) rotate(${floatRotate}deg)`,
-            opacity: robotOpacity,
-            marginBottom: 40,
-            filter: `drop-shadow(0 20px 40px rgba(0,0,0,0.08))`,
-          }}
-        >
-          <Img
-            src={staticFile("elyanRobot.png")}
-            style={{ width: 280, height: "auto", objectFit: "contain" }}
-          />
-        </div>
+          <div style={{
+            position: "absolute", bottom: -250 * scale,
+            transform: `
+              translateY(${(1 - moveUp) * (1000 * scale)}px) 
+              translateZ(${500 * scale}px)
+              rotateY(${interpolate(moveUp, [0, 1], [30, 0])}deg)
+              rotateX(${interpolate(moveUp, [0, 1], [15, 0])}deg)
+            `,
+            opacity: moveUp,
+          }}>
+            <ReflectiveGlass style={{ width: 600 * scale, borderRadius: 140 * scale, overflow: "hidden", boxShadow: `0 ${60 * scale}px ${140 * scale}px rgba(0,0,0,0.15)` }}>
+              <Img src={staticFile("elyanRobot.png")} style={{ width: "100%", height: "auto" }} />
+            </ReflectiveGlass>
+          </div>
 
-        {/* Per-character title */}
-        <div style={{ display: "flex", gap: 4, marginBottom: 16 }}>
-          {titleChars.map((c, i) => (
-            <span
-              key={i}
-              style={{
-                fontSize: 96,
-                fontWeight: 900,
-                color: "#0A0A0A",
-                letterSpacing: -2,
-                display: "inline-block",
-                transform: `translateY(${c.y}px) rotate(${c.rotate}deg)`,
-                opacity: c.opacity,
-              }}
-            >
-              {c.char}
-            </span>
-          ))}
-        </div>
-
-        {/* Tagline with blur reveal */}
-        <div
-          style={{
-            fontSize: 30,
-            fontWeight: 500,
-            color: "#6E6E73",
-            opacity: tagOpacity,
-            filter: `blur(${tagBlur}px)`,
-            transform: `translateY(${tagY}px)`,
-            letterSpacing: 4,
-            textTransform: "uppercase",
-          }}
-        >
-          AI & Automation Agents
-        </div>
+          <svg width={width} height={height} style={{ position: "absolute", zIndex: -1, opacity: 0.12, pointerEvents: "none" }}>
+            <path 
+              d={`M${width/2},${height} C${width/2 + Math.sin(frame * 0.02) * (400 * scale)},${height * 0.72} ${width/2 - Math.cos(frame * 0.02) * (400 * scale)},${height * 0.26} ${width/2},0`} 
+              stroke="#0071E3" strokeWidth={3 * scale} fill="none" 
+            />
+          </svg>
+        </AbsoluteFill>
       </AbsoluteFill>
-    </AbsoluteFill>
+    </VFX>
   );
 };

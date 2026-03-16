@@ -1,163 +1,109 @@
 import React from "react";
 import {
-  AbsoluteFill,
-  Img,
-  useCurrentFrame,
-  useVideoConfig,
-  spring,
-  interpolate,
-  staticFile,
+  AbsoluteFill, useCurrentFrame, useVideoConfig,
+  spring, interpolate,
 } from "remotion";
 import { loadFont } from "@remotion/google-fonts/Inter";
-import { Particles, GlowOrb } from "../components/AnimatedText";
+import { CinematicGrid, ImpactText, AnimatedText, VFX, ReflectiveGlass, Particles, LiquidBlob, AnamorphicFlare } from "../components/AnimatedText";
 
 const { fontFamily } = loadFont();
 
-/**
- * Scene 2 — Problem Statement (5–12s, 210 frames)
- *
- * Premium effects:
- * - Horizontal scan line wipe transition
- * - Robot shrinks and moves to corner with trail effect
- * - Kinetic typography: each word pops with different timing
- * - Background grid pattern fades in
- * - Accent line draws beneath text
- */
 export const Scene2Problem: React.FC = () => {
   const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
+  const { fps, width, height } = useVideoConfig();
+  const timeScale = fps / 30;
+  const scale = width / 1080;
 
-  // Scan line wipe entry
-  const wipeProgress = interpolate(frame, [0, 20], [0, 100], {
-    extrapolateRight: "clamp",
-  });
-
-  // Background grid
-  const gridOpacity = interpolate(frame, [10, 40], [0, 0.03], {
-    extrapolateRight: "clamp",
-  });
-
-  // Robot slides to top-right, shrinks
-  const robotX = spring({ frame, fps, from: 0, to: 380, config: { stiffness: 50, damping: 22 } });
-  const robotY = spring({ frame, fps, from: 0, to: -700, config: { stiffness: 50, damping: 22 } });
-  const robotScale = spring({ frame, fps, from: 1, to: 0.25, config: { stiffness: 50, damping: 22 } });
-  const robotOpacity = interpolate(frame, [0, 10, 30], [1, 1, 0.6], { extrapolateRight: "clamp" });
-
-  // Word-by-word kinetic typography
-  const words1 = ["İş", "süreçleriniz"];
-  const words2 = ["otomatikleşsin."];
-
-  const renderWord = (word: string, index: number, lineOffset: number) => {
-    const wordDelay = 30 + lineOffset + index * 10;
-    const f = Math.max(0, frame - wordDelay);
-
-    const y = spring({ frame: f, fps, from: 80, to: 0, config: { stiffness: 120, damping: 13 } });
-    const scale = spring({ frame: f, fps, from: 0.7, to: 1, config: { stiffness: 100, damping: 12 } });
-    const opacity = interpolate(f, [0, 8], [0, 1], { extrapolateRight: "clamp" });
-    const blur = interpolate(f, [0, 12], [8, 0], { extrapolateRight: "clamp" });
-
-    return (
-      <span
-        key={`${lineOffset}-${index}`}
-        style={{
-          display: "inline-block",
-          transform: `translateY(${y}px) scale(${scale})`,
-          opacity,
-          filter: `blur(${blur}px)`,
-          marginRight: 16,
-        }}
-      >
-        {word}
-      </span>
-    );
-  };
-
-  // Accent underline draws in
-  const lineWidth = interpolate(frame, [70, 100], [0, 400], {
-    extrapolateRight: "clamp",
-    extrapolateLeft: "clamp",
-  });
-  const lineOpacity = interpolate(frame, [70, 85], [0, 1], {
-    extrapolateRight: "clamp",
-    extrapolateLeft: "clamp",
-  });
+  const cards = [
+    { title: "VERİ ANALİZİ", delay: 15 * timeScale, color: "#0071E3" },
+    { title: "İŞ AKIŞI", delay: 45 * timeScale, color: "#0A0A0A" },
+    { title: "OTOMASYON", delay: 75 * timeScale, color: "#0071E3" },
+  ];
 
   return (
-    <AbsoluteFill
-      style={{
-        background: "#FFFFFF",
-        overflow: "hidden",
-        fontFamily,
-        clipPath: `inset(0 0 ${100 - wipeProgress}% 0)`,
-      }}
-    >
-      {/* Grid pattern background */}
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          opacity: gridOpacity,
-          backgroundImage: `
-            linear-gradient(#0A0A0A 1px, transparent 1px),
-            linear-gradient(90deg, #0A0A0A 1px, transparent 1px)
-          `,
-          backgroundSize: "60px 60px",
-        }}
-      />
+    <VFX>
+      <AbsoluteFill style={{ overflow: "hidden", fontFamily }}>
+        <CinematicGrid opacity={0.015} />
+        <Particles count={90} colors={["#0071E3", "#0A0A0A"]} speed={0.5} />
 
-      <Particles count={20} color="#0A0A0A" speed={0.5} />
-      <GlowOrb x={540} y={960} size={600} color="rgba(0,0,0,0.02)" />
+        <AnamorphicFlare y={10} color="#0071E3" opacity={0.3} width={1800 * scale} />
+        <AnamorphicFlare y={92} color="#0A0A0A" opacity={0.15} width={1200 * scale} />
 
-      {/* Robot moving to corner */}
-      <div
-        style={{
-          position: "absolute",
-          left: "50%",
-          top: "50%",
-          transform: `translate(${robotX}px, ${robotY}px) scale(${robotScale})`,
-          opacity: robotOpacity,
-          marginLeft: -40,
-          marginTop: -40,
-        }}
-      >
-        <Img src={staticFile("elyanRobot.png")} style={{ width: 80, height: "auto" }} />
-      </div>
+        <LiquidBlob x={100} y={1500} size={700} color="#0071E3" opacity={0.1} z={-200} />
+        <LiquidBlob x={900} y={300} size={800} color="#0A0A0A" opacity={0.08} z={-300} />
 
-      {/* Kinetic text */}
-      <AbsoluteFill
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: "0 60px",
-        }}
-      >
-        <div
-          style={{
-            fontSize: 72,
-            fontWeight: 900,
-            color: "#0A0A0A",
-            lineHeight: 1.15,
-            textAlign: "center",
-          }}
-        >
-          <div>{words1.map((w, i) => renderWord(w, i, 0))}</div>
-          <div style={{ marginTop: 8 }}>{words2.map((w, i) => renderWord(w, i, 15))}</div>
-        </div>
+        <AbsoluteFill style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: `0 ${80 * scale}px` }}>
+          
+          <div style={{ position: "absolute", top: 180 * scale, zIndex: 100, textAlign: "center" }}>
+            <ImpactText delay={5 * timeScale} fontSize={90} letterSpacing={6} color="#0A0A0A">
+              SADECE BİR
+            </ImpactText>
+            <ImpactText delay={15 * timeScale} fontSize={90} letterSpacing={6} color="#0A0A0A">
+              SOHBET DEĞİL.
+            </ImpactText>
+            <div style={{ height: 25 * scale }} />
+            <div style={{ display: "flex", justifyContent: "center" }}>
+              <AnimatedText delay={40 * timeScale} animation="perChar" fontSize={30} fontWeight={400} color="#6E6E73" letterSpacing={10} textTransform="uppercase">
+                Tam Kapsamlı AI Operasyon Sistemi
+              </AnimatedText>
+            </div>
+          </div>
 
-        {/* Accent line */}
-        <div
-          style={{
-            width: lineWidth,
-            height: 4,
-            background: "#0A0A0A",
-            borderRadius: 2,
-            marginTop: 32,
-            opacity: lineOpacity,
-          }}
-        />
+          <div style={{
+            position: "relative", width: "100%", height: "100%",
+            perspective: 2500 * scale,
+            transformStyle: "preserve-3d",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}>
+            {cards.map((card, i) => {
+              const f = Math.max(0, frame - card.delay);
+              const entrance = spring({ frame: f, fps, config: { stiffness: 110, damping: 25 } });
+              const opacity = interpolate(f, [0, 20], [0, 1]);
+              const float = Math.sin(frame * 0.04 + i) * (20 * scale);
+
+              return (
+                <div key={i} style={{
+                  position: "absolute",
+                  transform: `
+                    translateY(${(-220 * scale + i * 300 * scale) + float}px) 
+                    translateZ(${(1 - entrance) * (-1800 * scale) + (150 * scale - i * 80 * scale)}px)
+                    rotateX(${interpolate(entrance, [0, 1], [-20, 0])}deg)
+                    rotateY(${interpolate(entrance, [0, 1], [15, 0])}deg)
+                  `,
+                  opacity,
+                  transformStyle: "preserve-3d",
+                }}>
+                  <ReflectiveGlass depth={40} style={{
+                    padding: `${40 * scale}px ${60 * scale}px`,
+                    borderRadius: 55 * scale,
+                    width: 480 * scale, height: 250 * scale,
+                    display: "flex", flexDirection: "column", justifyContent: "space-between",
+                    background: "rgba(255, 255, 255, 0.9)",
+                    border: `${2 * scale}px solid rgba(255,255,255,1)`,
+                    boxShadow: `0 ${60 * scale}px ${120 * scale}px rgba(0,0,0,0.15)`,
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 20 * scale }}>
+                      <div style={{ width: 14 * scale, height: 14 * scale, borderRadius: "50%", background: card.color, boxShadow: `0 0 ${15 * scale}px ${card.color}` }} />
+                      <div style={{ fontSize: 32, fontWeight: 800, color: "#1D1D1F", letterSpacing: 5 * scale, textTransform: "uppercase" }}>
+                        {card.title}
+                      </div>
+                    </div>
+                    
+                    <div style={{ height: 6 * scale, width: "100%", background: "rgba(0,0,0,0.06)", borderRadius: 3 * scale, overflow: "hidden" }}>
+                        <div style={{ width: `${entrance * 80}%`, height: "100%", background: card.color, opacity: 0.6 }} />
+                    </div>
+                    
+                    <div style={{ display: "flex", flexDirection: "column", gap: 15 * scale }}>
+                      <div style={{ height: 16 * scale, width: "100%", background: "rgba(0,0,0,0.04)", borderRadius: 5 * scale }} />
+                      <div style={{ height: 16 * scale, width: "65%", background: "rgba(0,0,0,0.04)", borderRadius: 5 * scale }} />
+                    </div>
+                  </ReflectiveGlass>
+                </div>
+              );
+            })}
+          </div>
+        </AbsoluteFill>
       </AbsoluteFill>
-    </AbsoluteFill>
+    </VFX>
   );
 };
