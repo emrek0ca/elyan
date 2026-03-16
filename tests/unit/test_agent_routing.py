@@ -1907,6 +1907,28 @@ def test_agent_prepare_write_clipboard_uses_recent_assistant_text_when_missing()
     assert "Köpekler hakkında kısa özet" in params.get("text", "")
 
 
+def test_agent_hydrate_write_clipboard_uses_first_search_result():
+    agent = Agent()
+    params = agent._hydrate_task_params_from_previous(
+        "write_clipboard",
+        {"text": ""},
+        "",
+        {
+            "success": True,
+            "results": [
+                {
+                    "title": "Tarkan - Vikipedi",
+                    "url": "https://tr.wikipedia.org/wiki/Tarkan",
+                    "snippet": "Türk şarkıcı ve besteci.",
+                }
+            ],
+        },
+    )
+    text = str(params.get("text") or "")
+    assert "Tarkan - Vikipedi" in text
+    assert "https://tr.wikipedia.org/wiki/Tarkan" in text
+
+
 def test_agent_prepare_set_volume_supports_mute_intent():
     agent = Agent()
     params = agent._prepare_tool_params(
@@ -2146,6 +2168,68 @@ def test_agent_run_direct_intent_compacts_multi_task_output_when_policy_enabled(
     response = asyncio.run(agent._run_direct_intent(intent, "safari aç sonra yeni sekme aç", "inference", []))
     assert response.startswith("✅ 2 adım tamamlandı")
     assert "[1]" not in response
+
+
+def test_agent_run_direct_intent_search_then_copy_hydrates_clipboard(monkeypatch):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+    monkeypatch.setattr(
+        Agent,
+        "_current_runtime_policy",
+        staticmethod(lambda: {"response": {"compact_actions": True}}),
+    )
+
+    captured: dict[str, str] = {}
+
+    async def _fake_open_app(app_name=None):
+        return {"success": True, "app_name": app_name or "Google Chrome", "message": "ok", "verified": True}
+
+    async def _fake_open_url(url=None, browser=None):
+        return {"success": True, "url": url, "browser": browser, "message": "ok"}
+
+    async def _fake_web_search(query=None, num_results=5, language="tr"):
+        _ = (num_results, language)
+        return {
+            "success": True,
+            "query": query,
+            "results": [
+                {
+                    "title": "Tarkan - Vikipedi",
+                    "url": "https://tr.wikipedia.org/wiki/Tarkan",
+                    "snippet": "Türk şarkıcı ve besteci.",
+                }
+            ],
+        }
+
+    async def _fake_write_clipboard(text=""):
+        captured["text"] = str(text or "")
+        return {"success": True, "message": "copied"}
+
+    monkeypatch.setattr(
+        "core.agent.AVAILABLE_TOOLS",
+        {
+            "open_app": _fake_open_app,
+            "open_url": _fake_open_url,
+            "web_search": _fake_web_search,
+            "write_clipboard": _fake_write_clipboard,
+        },
+    )
+
+    intent = {
+        "action": "multi_task",
+        "tasks": [
+            {"id": "task_1", "action": "open_app", "params": {"app_name": "Google Chrome"}, "description": "Chrome aç"},
+            {"id": "task_2", "action": "open_url", "params": {"url": "https://www.google.com/search?q=tarkan", "browser": "Google Chrome"}, "depends_on": ["task_1"], "description": "Ara"},
+            {"id": "task_3", "action": "web_search", "params": {"query": "tarkan", "num_results": 5}, "depends_on": ["task_2"], "description": "Sonuçları çek"},
+            {"id": "task_4", "action": "write_clipboard", "params": {"text": ""}, "depends_on": ["task_3"], "description": "İlk sonucu kopyala"},
+        ],
+    }
+
+    response = asyncio.run(agent._run_direct_intent(intent, "chrome dan tarkan arat ve en üsttekini kopyala", "inference", []))
+    assert response.startswith("✅ 4 adım tamamlandı")
+    assert "Tarkan - Vikipedi" in captured.get("text", "")
+    assert "https://tr.wikipedia.org/wiki/Tarkan" in captured.get("text", "")
 
 
 def test_agent_process_executes_numbered_plan_steps(monkeypatch, tmp_path):
@@ -2696,14 +2780,14 @@ def test_agent_infer_general_tool_intent_api_health_get_save():
     agent = Agent()
     intent = agent._infer_general_tool_intent(
         "https://httpbin.org/get için health check yap, sonra GET at, sonucu "
-        "~/Desktop/elyan-test/api/result.json ve summary.md kaydet."
+        "~/Desktop/elyan-test/api/result.json ve summary.txt kaydet."
     )
     assert intent is not None
     assert intent.get("action") == "api_health_get_save"
     params = intent.get("params", {})
     assert params.get("url") == "https://httpbin.org/get"
     assert str(params.get("result_path", "")).endswith("result.json")
-    assert str(params.get("summary_path", "")).endswith("summary.md")
+    assert str(params.get("summary_path", "")).endswith("summary.txt")
 
 
 def test_agent_infer_general_tool_intent_wallpaper_uses_last_attachment_for_pronoun(tmp_path):
@@ -2724,7 +2808,7 @@ def test_agent_run_direct_intent_api_health_get_save_executes_chain(monkeypatch,
     agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
 
     result_path = tmp_path / "result.json"
-    summary_path = tmp_path / "summary.md"
+    summary_path = tmp_path / "summary.txt"
     calls = []
 
     async def _fake_execute_tool(tool_name, params, **kwargs):
@@ -2782,7 +2866,7 @@ def test_agent_run_direct_intent_uses_runtime_task_spec_when_available(monkeypat
     agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
 
     result_path = tmp_path / "result.json"
-    summary_path = tmp_path / "summary.md"
+    summary_path = tmp_path / "summary.txt"
     calls = []
 
     async def _fake_execute_tool(tool_name, params, **kwargs):

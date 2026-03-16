@@ -529,6 +529,10 @@ async def test_handle_recent_runs_extracts_error_code_and_duration(monkeypatch, 
                     "errors": [{"error_code": "WRITE_POSTCHECK_FAILED"}],
                     "workflow_profile": "superpowers_lite",
                     "workflow_phase": "executing",
+                    "execution_route": "micro_orchestration",
+                    "autonomy_mode": "yari_otonom",
+                    "autonomy_policy": "balanced",
+                    "orchestration_decision_path": ["intent_parsed", "direct_intent", "simple_browser_or_app"],
                     "approval_status": "review_blocked",
                     "plan_progress": "2/3",
                     "review_status": "blocked",
@@ -543,8 +547,13 @@ async def test_handle_recent_runs_extracts_error_code_and_duration(monkeypatch, 
                     "conflict_count": 1,
                     "manual_review_claim_count": 3,
                     "claim_map_path": "/tmp/claim_map.json",
-                    "revision_summary_path": "/tmp/revision_summary.md",
+                    "revision_summary_path": "/tmp/revision_summary.txt",
                     "team_quality_avg": 0.82,
+                    "team_parallel_waves": 2,
+                    "team_max_wave_size": 2,
+                    "team_parallelizable_packets": 2,
+                    "team_serial_packets": 1,
+                    "team_ownership_conflicts": 1,
                     "team_research_claim_coverage": 1.0,
                     "team_research_critical_claim_coverage": 0.5,
                     "team_research_uncertainty_count": 2,
@@ -574,7 +583,7 @@ async def test_handle_recent_runs_extracts_error_code_and_duration(monkeypatch, 
     assert run["conflict_count"] == 1
     assert run["manual_review_claim_count"] == 3
     assert run["claim_map_path"] == "/tmp/claim_map.json"
-    assert run["revision_summary_path"] == "/tmp/revision_summary.md"
+    assert run["revision_summary_path"] == "/tmp/revision_summary.txt"
     assert run["team_quality_avg"] == 0.82
     assert run["team_research_claim_coverage"] == 1.0
     assert run["team_research_critical_claim_coverage"] == 0.5
@@ -582,6 +591,10 @@ async def test_handle_recent_runs_extracts_error_code_and_duration(monkeypatch, 
     assert run["quality_status"] == "partial"
     assert run["workflow_profile"] == "superpowers_lite"
     assert run["workflow_phase"] == "executing"
+    assert run["execution_route"] == "micro_orchestration"
+    assert run["autonomy_mode"] == "yari_otonom"
+    assert run["autonomy_policy"] == "balanced"
+    assert run["orchestration_decision_path"] == ["intent_parsed", "direct_intent", "simple_browser_or_app"]
     assert run["approval_status"] == "review_blocked"
     assert run["plan_progress"] == "2/3"
     assert run["review_status"] == "blocked"
@@ -590,6 +603,11 @@ async def test_handle_recent_runs_extracts_error_code_and_duration(monkeypatch, 
     assert run["plan_artifact_path"] == "/tmp/implementation_plan.md"
     assert run["review_artifact_path"] == "/tmp/review_report.md"
     assert run["finish_branch_report_path"] == "/tmp/finish_branch_report.md"
+    assert run["team_parallel_waves"] == 2
+    assert run["team_max_wave_size"] == 2
+    assert run["team_parallelizable_packets"] == 2
+    assert run["team_serial_packets"] == 1
+    assert run["team_ownership_conflicts"] == 1
 
 
 @pytest.mark.asyncio

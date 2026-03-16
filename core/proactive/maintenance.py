@@ -9,7 +9,9 @@ import shutil
 import time
 from pathlib import Path
 from typing import Any, Dict, List
+
 from config.elyan_config import elyan_config
+from core.artifact_retention import prune_elyan_artifacts
 from core.storage_paths import resolve_elyan_data_dir, resolve_proofs_root
 from utils.logger import get_logger
 
@@ -38,6 +40,7 @@ class MaintenanceEngine:
         retention_days = max(1, min(60, retention_days))
         results["inbox_cleanup"] = await self.cleanup_inbox(max_age_days=retention_days)
         results["proofs_cleanup"] = await self.cleanup_proofs(max_age_days=retention_days)
+        results["artifact_cleanup"] = await self.cleanup_artifacts()
         
         total_freed = sum(r.get("freed_mb", 0) for r in results.values())
         return {
@@ -112,6 +115,9 @@ class MaintenanceEngine:
 
     async def cleanup_proofs(self, max_age_days: int = 7) -> Dict[str, Any]:
         return await self._cleanup_path_tree(self.proofs_dir, max_age_days=max_age_days)
+
+    async def cleanup_artifacts(self) -> Dict[str, Any]:
+        return prune_elyan_artifacts()
 
     async def _cleanup_path_tree(self, root: Path, max_age_days: int = 7) -> Dict[str, Any]:
         if not root.exists():

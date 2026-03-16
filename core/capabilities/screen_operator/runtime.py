@@ -9,9 +9,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+from core.confidence import coerce_confidence
 from core.contracts.failure_taxonomy import FailureCode
 from core.contracts.verification_result import VerificationCheck, VerificationResult
 from core.storage_paths import resolve_elyan_data_dir
+from core.text_artifacts import preferred_text_path
 
 from .services import ScreenOperatorServices, default_screen_operator_services
 
@@ -39,6 +41,10 @@ _ROLE_HINT_PATTERNS: list[tuple[set[str], tuple[str, ...]]] = [
 
 def _normalize_text(value: Any) -> str:
     return " ".join(str(value or "").strip().lower().split())
+
+
+def _coerce_confidence(value: Any, default: float = 0.0) -> float:
+    return coerce_confidence(value, default)
 
 
 def _extract_quoted_text(text: str) -> str:
@@ -193,7 +199,7 @@ def _build_ui_state(
                 "label": str(item.get("text") or "").strip(),
                 "role": "ocr_text",
                 "source": "ocr",
-                "confidence": max(0.0, min(float(item.get("confidence") or 0.5), 1.0)),
+                "confidence": _coerce_confidence(item.get("confidence"), 0.5),
                 "frontmost_app": frontmost_app,
                 "window_title": window_title,
             }
@@ -220,7 +226,7 @@ def _build_ui_state(
     for item in elements:
         source = str(item.get("source") or "unknown")
         source_counts[source] = int(source_counts.get(source, 0)) + 1
-    confidence_values = [float(item.get("confidence") or 0.0) for item in elements]
+    confidence_values = [_coerce_confidence(item.get("confidence"), 0.0) for item in elements]
     return {
         "frontmost_app": frontmost_app,
         "active_window": {"title": window_title, "bounds": dict(metadata.get("bounds") or {})},
@@ -286,7 +292,7 @@ def _score_target(
     label = str(item.get("label") or item.get("text") or "").strip()
     role = _normalize_text(item.get("role") or item.get("kind") or "unknown")
     source = _normalize_text(item.get("source") or "unknown")
-    confidence = float(item.get("confidence") or 0.0)
+    confidence = _coerce_confidence(item.get("confidence"), 0.0)
     current_app = _normalize_text(ui_state.get("frontmost_app") or "")
     current_window = _normalize_text(((ui_state.get("active_window") if isinstance(ui_state.get("active_window"), dict) else {}) or {}).get("title") or "")
     item_app = _normalize_text(item.get("frontmost_app") or "")
@@ -429,7 +435,13 @@ def _choose_target(
         if score <= 0:
             continue
         candidates.append((score, item, trace))
-    candidates.sort(key=lambda row: (-row[0], _SOURCE_PRIORITY.get(_normalize_text(row[1].get("source")), 99), -float(row[1].get("confidence") or 0.0)))
+    candidates.sort(
+        key=lambda row: (
+            -row[0],
+            _SOURCE_PRIORITY.get(_normalize_text(row[1].get("source")), 99),
+            -_coerce_confidence(row[1].get("confidence"), 0.0),
+        )
+    )
     ordered = [item for _score, item, _trace in candidates]
     traces = [trace for _score, _item, trace in candidates]
     decision_trace = {
@@ -806,7 +818,7 @@ def _remember_target(
     existing_meta = _cache_meta(existing)
     row = _annotate_element_context(item, frontmost_app=frontmost_app, window_title=window_title)
     row["source"] = "cache"
-    row["confidence"] = max(float(row.get("confidence") or 0.0), 0.35)
+    row["confidence"] = max(_coerce_confidence(row.get("confidence"), 0.0), 0.35)
     meta = {
         "seen_count": max(0, int(existing_meta.get("seen_count") or 0)) + 1,
         "last_seen_at": now,
@@ -860,7 +872,7 @@ def _materialize_artifacts(
         shutil.copyfile(after_path, target)
         manifest["after"] = str(target)
     ui_path = root / "ui_state.json"
-    summary_path = root / "screen_summary.md"
+    summary_path = preferred_text_path(root / "screen_summary.txt")
     action_path = root / "action_log.json"
     target_path = root / "target_decisions.json"
     _write_json(ui_path, ui_state)

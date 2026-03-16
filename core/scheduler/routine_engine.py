@@ -971,7 +971,7 @@ class RoutineEngine:
         day = datetime.now().strftime("%Y%m%d")
         slug = _safe_slug(routine.get("name", "routine"))
         out_dir = self._default_report_output_dir(day)
-        return str(out_dir / f"{slug}_summary.md")
+        return str(out_dir / f"{slug}_summary.txt")
 
     def _default_report_output_dir(self, day: str) -> Path:
         candidates = [

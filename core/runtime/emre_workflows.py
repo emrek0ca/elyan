@@ -419,13 +419,13 @@ async def run_emre_workflow_pack(
     }
 
     workflow_json = root / "workflow_report.json"
-    workflow_md = root / "workflow_report.md"
+    workflow_txt = root / "workflow_report.txt"
     dashboard_json = root / "dashboard.json"
-    dashboard_md = root / "dashboard.md"
+    dashboard_txt = root / "dashboard.txt"
     _write_json(workflow_json, {"summary": summary, "workflow_rows": workflow_rows})
-    _write_text(workflow_md, _workflow_report_markdown(workflow_rows, pass_count=summary["pass_count"], total=summary["total"]))
+    _write_text(workflow_txt, _workflow_report_markdown(workflow_rows, pass_count=summary["pass_count"], total=summary["total"]))
     _write_json(dashboard_json, summary)
-    _write_text(dashboard_md, _workflow_dashboard_markdown(summary))
+    _write_text(dashboard_txt, _workflow_dashboard_markdown(summary))
 
     return {
         "success": bool(benchmark_report.get("success")),
@@ -437,9 +437,9 @@ async def run_emre_workflow_pack(
         "artifacts": list(benchmark_report.get("artifacts") or [])
         + [
             {"path": str(workflow_json), "type": "json"},
-            {"path": str(workflow_md), "type": "text"},
+            {"path": str(workflow_txt), "type": "text"},
             {"path": str(dashboard_json), "type": "json"},
-            {"path": str(dashboard_md), "type": "text"},
+            {"path": str(dashboard_txt), "type": "text"},
         ],
     }
 

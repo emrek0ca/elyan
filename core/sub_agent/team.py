@@ -255,6 +255,106 @@ class AgentTeam:
             return "communicator"
         return "builder"
 
+    @staticmethod
+    def _explicit_packet_dependencies(packet: Dict[str, Any]) -> List[str]:
+        deps = packet.get("depends_on_packets")
+        if deps is None:
+            deps = packet.get("depends_on")
+        if deps is None:
+            deps = packet.get("packet_dependencies")
+        if isinstance(deps, str):
+            deps = [deps]
+        if not isinstance(deps, list):
+            return []
+        return [str(item).strip() for item in deps if str(item).strip()]
+
+    @staticmethod
+    def _is_read_only_packet(packet: Dict[str, Any]) -> bool:
+        action = str(packet.get("action") or "chat").strip().lower()
+        return action in {"read_file", "list_files", "search_files", "web_search", "advanced_research", "analyze_document", "chat"}
+
+    @staticmethod
+    def _packet_conflicts(current_packet: Dict[str, Any], prior_packet: Dict[str, Any]) -> bool:
+        current_targets = {str(item).strip() for item in list(current_packet.get("target_files") or []) if str(item).strip()}
+        prior_targets = {str(item).strip() for item in list(prior_packet.get("target_files") or []) if str(item).strip()}
+        if current_targets and prior_targets and current_targets.intersection(prior_targets):
+            return True
+        current_read_only = AgentTeam._is_read_only_packet(current_packet)
+        prior_read_only = AgentTeam._is_read_only_packet(prior_packet)
+        if current_read_only and prior_read_only:
+            return False
+        if not current_targets or not prior_targets:
+            return not (current_read_only and prior_read_only)
+        return False
+
+    @staticmethod
+    def _packet_scope(packet: Dict[str, Any]) -> List[str]:
+        scope = [
+            str(item).strip()
+            for item in list(packet.get("target_files") or packet.get("scope_guard") or [])
+            if str(item).strip()
+        ]
+        return list(dict.fromkeys(scope))
+
+    def _summarize_packet_execution_plan(self, task_packets: List[Dict[str, Any]]) -> Dict[str, Any]:
+        packets = [dict(packet) for packet in list(task_packets or []) if isinstance(packet, dict)]
+        if not packets:
+            return {
+                "packet_count": 0,
+                "parallel_waves": 0,
+                "max_wave_size": 0,
+                "parallelizable_packets": 0,
+                "serial_packets": 0,
+                "ownership_conflicts": 0,
+                "specialist_assignments": {},
+                "wave_map": {},
+            }
+
+        wave_by_packet: Dict[str, int] = {}
+        packets_by_id: Dict[str, Dict[str, Any]] = {}
+        waves: List[List[str]] = []
+        conflict_pairs: set[tuple[str, str]] = set()
+        specialist_assignments: Dict[str, int] = {}
+
+        for idx, packet in enumerate(packets, start=1):
+            packet_id = str(packet.get("packet_id") or f"packet_{idx}").strip() or f"packet_{idx}"
+            packets_by_id[packet_id] = packet
+            specialist = self._team_specialist_from_hint(packet.get("specialist_hint") or "")
+            specialist_assignments[specialist] = int(specialist_assignments.get(specialist, 0) or 0) + 1
+
+            deps = [dep for dep in self._explicit_packet_dependencies(packet) if dep]
+            min_wave = 0
+            for dep in deps:
+                if dep in wave_by_packet:
+                    min_wave = max(min_wave, int(wave_by_packet[dep]) + 1)
+
+            assigned_wave = None
+            for wave_idx in range(min_wave, len(waves)):
+                existing_ids = list(waves[wave_idx])
+                if all(not self._packet_conflicts(packet, packets_by_id[existing_id]) for existing_id in existing_ids):
+                    assigned_wave = wave_idx
+                    break
+                for existing_id in existing_ids:
+                    if self._packet_conflicts(packet, packets_by_id[existing_id]):
+                        conflict_pairs.add(tuple(sorted((packet_id, existing_id))))
+            if assigned_wave is None:
+                assigned_wave = len(waves)
+                waves.append([])
+            waves[assigned_wave].append(packet_id)
+            wave_by_packet[packet_id] = assigned_wave
+
+        packets_in_parallel_waves = sum(len(wave) for wave in waves if len(wave) > 1)
+        return {
+            "packet_count": len(packets),
+            "parallel_waves": len(waves),
+            "max_wave_size": max((len(wave) for wave in waves), default=0),
+            "parallelizable_packets": int(packets_in_parallel_waves),
+            "serial_packets": max(0, len(packets) - int(packets_in_parallel_waves)),
+            "ownership_conflicts": len(conflict_pairs),
+            "specialist_assignments": specialist_assignments,
+            "wave_map": {packet_id: int(wave_idx + 1) for packet_id, wave_idx in wave_by_packet.items()},
+        }
+
     def _team_tasks_from_packets(
         self,
         brief: str,
@@ -263,6 +363,8 @@ class AgentTeam:
     ) -> List[TeamTask]:
         workflow = dict(workflow_context or {})
         tasks: List[TeamTask] = []
+        packet_completion_barriers: Dict[str, str] = {}
+        prior_packets: List[Dict[str, Any]] = []
         for idx, packet in enumerate(list(task_packets or []), start=1):
             if not isinstance(packet, dict):
                 continue
@@ -273,6 +375,14 @@ class AgentTeam:
             params["_task_packet"] = dict(packet)
             if workflow:
                 params["_workflow_context"] = dict(workflow)
+            params["_coordination_contract"] = {
+                "main_agent_role": "contract_owner",
+                "sub_agent_role": "scoped_executor",
+                "packet_id": str(packet.get("packet_id") or f"packet_{idx}"),
+                "specialist": specialist,
+                "write_scope": self._packet_scope(packet),
+                "review_required": bool(packet.get("review_required", False)),
+            }
             gates = self._derive_gates(specialist, action, params)
             objective, success_criteria = self._derive_success_contract(
                 brief=brief,
@@ -281,6 +391,21 @@ class AgentTeam:
                 action=action,
                 params=params,
             )
+            worker_dependencies: List[str] = []
+            for dep in self._explicit_packet_dependencies(packet):
+                barrier = packet_completion_barriers.get(dep)
+                if barrier:
+                    worker_dependencies.append(barrier)
+            if not worker_dependencies:
+                for prior_packet in prior_packets:
+                    prior_id = str(prior_packet.get("packet_id") or "").strip()
+                    if not prior_id:
+                        continue
+                    if not self._packet_conflicts(packet, prior_packet):
+                        continue
+                    barrier = packet_completion_barriers.get(prior_id)
+                    if barrier:
+                        worker_dependencies.append(barrier)
             worker = TeamTask(
                 title=title,
                 specialist=specialist,
@@ -289,7 +414,7 @@ class AgentTeam:
                 objective=objective,
                 success_criteria=success_criteria,
                 gates=gates,
-                depends_on=[tasks[-1].task_id] if tasks else [],
+                depends_on=self._dedupe(worker_dependencies),
                 max_retries=max(0, int(self.config.max_retries_per_task or 0)),
             )
             tasks.append(worker)
@@ -336,6 +461,9 @@ class AgentTeam:
                 max_retries=0,
             )
             tasks.append(quality_review)
+            packet_id = str(packet.get("packet_id") or "").strip() or f"packet_{idx}"
+            packet_completion_barriers[packet_id] = quality_review.task_id
+            prior_packets.append(dict(packet))
         return tasks
 
     @staticmethod
@@ -624,6 +752,7 @@ class AgentTeam:
         )
         lead_result = await manager.spawn_and_wait("lead", lead_task, timeout=min(120, self.config.timeout_s))
         lead_summary = str(lead_result.result or "")
+        packet_plan_summary = self._summarize_packet_execution_plan(list(task_packets or []))
 
         try:
             tasks, graph = await self._build_team_tasks(
@@ -701,6 +830,16 @@ class AgentTeam:
             "plan_progress_total": int(packet_progress_total),
             "plan_progress": f"{int(packet_progress_completed)}/{int(packet_progress_total)}",
             "review_status": review_status,
+            "main_agent_role": "contract_owner",
+            "sub_agent_role": "scoped_executor",
+            "packet_count": int(packet_plan_summary.get("packet_count", 0) or 0),
+            "parallel_waves": int(packet_plan_summary.get("parallel_waves", 0) or 0),
+            "max_wave_size": int(packet_plan_summary.get("max_wave_size", 0) or 0),
+            "parallelizable_packets": int(packet_plan_summary.get("parallelizable_packets", 0) or 0),
+            "serial_packets": int(packet_plan_summary.get("serial_packets", 0) or 0),
+            "ownership_conflicts": int(packet_plan_summary.get("ownership_conflicts", 0) or 0),
+            "specialist_assignments": dict(packet_plan_summary.get("specialist_assignments") or {}),
+            "packet_wave_map": dict(packet_plan_summary.get("wave_map") or {}),
         }
         if research_rows:
             claim_coverages = [float(row.get("claim_coverage", 0.0) or 0.0) for row in research_rows if row.get("claim_coverage") is not None]
@@ -763,6 +902,12 @@ class AgentTeam:
                 f" | workflow={telemetry.get('workflow_profile') or '-'}"
                 f" plan={telemetry.get('plan_progress')}"
                 f" review={telemetry.get('review_status') or '-'}"
+            )
+        if telemetry.get("packet_count"):
+            summary += (
+                f" | packets={int(telemetry.get('packet_count') or 0)}"
+                f" waves={int(telemetry.get('parallel_waves') or 0)}"
+                f" conflicts={int(telemetry.get('ownership_conflicts') or 0)}"
             )
         return TeamResult(status=status, summary=summary, outputs=outputs, notes=notes, telemetry=telemetry)
 

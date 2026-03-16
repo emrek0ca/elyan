@@ -395,7 +395,7 @@ async def test_subagent_manager_injects_default_objective_and_success_criteria(m
     manager = SubAgentManager(agent=SimpleNamespace(), parent_session_id="root")
     task = SubAgentTask(name="Research", description="Kaynaklari topla")
 
-    monkeypatch.setattr(manager, "_build_workspace", lambda *args, **kwargs: ("/tmp/subagent", "/tmp/subagent/MEMORY.md"))
+    monkeypatch.setattr(manager, "_build_workspace", lambda *args, **kwargs: ("/tmp/subagent", "/tmp/subagent/MEMORY.txt"))
 
     def _fake_create_task(coro, name=None):
         coro.close()

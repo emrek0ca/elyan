@@ -1,1 +1,0 @@
-Frontmost app: Safari. Window: Search. Search penceresi acik. OCR: Search

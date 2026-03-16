@@ -1,16 +1,21 @@
 import json
 import logging
 from typing import List, Dict, Any
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+
+from core.storage_paths import resolve_elyan_data_dir
+from core.text_artifacts import existing_text_path, preferred_text_path
 from utils.logger import get_logger
 
 logger = get_logger("semantic_memory")
 
 class SemanticMemory:
     def __init__(self):
-        self.memory_path = Path.home() / ".elyan" / "memory" / "history.md"
-        self.patterns_path = Path.home() / ".elyan" / "memory" / "patterns.md"
+        memory_dir = resolve_elyan_data_dir() / "memory"
+        memory_dir.mkdir(parents=True, exist_ok=True)
+        self.memory_path = preferred_text_path(memory_dir / "history.txt")
+        self.patterns_path = preferred_text_path(memory_dir / "patterns.txt")
 
     async def add_entry(self, user_id: str, content: str, metadata: Dict[str, Any] = None):
         """Add a new entry to the semantic memory."""
@@ -23,6 +28,7 @@ class SemanticMemory:
         }
         
         try:
+            self.patterns_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.patterns_path, "a", encoding="utf-8") as f:
                 f.write(f"\n### Entry: {timestamp}\n- User: {user_id}\n- Content: {content}\n- Metadata: {json.dumps(metadata)}\n")
         except Exception as e:
@@ -30,11 +36,12 @@ class SemanticMemory:
 
     async def search(self, user_id: str, query: str, limit: int = 5) -> List[Dict]:
         """Search for relevant entries in semantic memory."""
-        if not self.patterns_path.exists():
+        source_path = existing_text_path(self.patterns_path)
+        if not source_path.exists():
             return []
             
         try:
-            content = self.patterns_path.read_text(encoding="utf-8")
+            content = source_path.read_text(encoding="utf-8")
             entries = []
             parts = content.split("### Entry:")
             for p in parts[1:]:

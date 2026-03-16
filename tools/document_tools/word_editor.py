@@ -472,7 +472,7 @@ async def edit_word_document(
         artifacts: list[str] = [str(resolved_path)]
         revision_summary_path = None
         if revision_summary_requested:
-            revision_summary_path = resolved_path.with_suffix(".revision_summary.md")
+            revision_summary_path = resolved_path.with_suffix(".revision_summary.txt")
             revision_summary_path.write_text(revision_summary, encoding="utf-8")
             artifacts.append(str(revision_summary_path))
 

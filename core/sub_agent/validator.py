@@ -83,7 +83,13 @@ class SubAgentValidator:
                     return True
             except Exception:
                 pass
-        return any(str(item).endswith("revision_summary.md") or str(item).endswith(".revision_summary.md") for item in list(artifacts or []))
+        return any(
+            str(item).endswith("revision_summary.txt")
+            or str(item).endswith(".revision_summary.txt")
+            or str(item).endswith("revision_summary.md")
+            or str(item).endswith(".revision_summary.md")
+            for item in list(artifacts or [])
+        )
 
     @staticmethod
     def _gate_tests_written_first(result_payload: Any) -> bool:

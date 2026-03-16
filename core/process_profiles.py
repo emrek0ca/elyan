@@ -5,8 +5,10 @@ import re
 import subprocess
 import time
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List
+
+from core.text_artifacts import write_json_artifact, write_text_artifact
 
 
 CODING_SUPERPOWERS_DOMAINS = frozenset({"code", "debug", "api_integration", "full_stack_delivery"})
@@ -136,28 +138,28 @@ def default_phase_specs() -> List[PhaseSpec]:
     return [
         PhaseSpec(
             phase="brainstorming",
-            required_artifacts=["design.md"],
+            required_artifacts=["design.txt"],
             allowed_tools=["read_file", "list_files", "search_files", "web_search", "chat"],
             exit_conditions=["design_artifact_created", "explicit_approval_pending"],
             blockers=["approval_missing"],
         ),
         PhaseSpec(
             phase="approved",
-            required_artifacts=["implementation_plan.md", "implementation_plan.json", "workspace_report.json", "baseline_check.md"],
+            required_artifacts=["implementation_plan.txt", "implementation_plan.json", "workspace_report.json", "baseline_check.txt"],
             allowed_tools=["read_file", "list_files", "search_files", "chat"],
             exit_conditions=["task_packets_ready", "workspace_prepared"],
             blockers=[],
         ),
         PhaseSpec(
             phase="executing",
-            required_artifacts=["review_report.md"],
+            required_artifacts=["review_report.txt"],
             allowed_tools=["run_safe_command", "write_file", "read_file", "list_files", "chat"],
             exit_conditions=["review_passed"],
             blockers=["review_failed", "red_test_missing"],
         ),
         PhaseSpec(
             phase="finished",
-            required_artifacts=["finish_branch_report.md"],
+            required_artifacts=["finish_branch_report.txt"],
             allowed_tools=["chat", "read_file", "list_files"],
             exit_conditions=["finish_report_written"],
             blockers=[],
@@ -214,6 +216,30 @@ def _extract_target_files(step: Dict[str, Any]) -> List[str]:
     return deduped
 
 
+def _sanitize_target_files(target_files: Iterable[str]) -> List[str]:
+    sanitized: List[str] = []
+    seen: set[str] = set()
+    for raw in list(target_files or []):
+        text = str(raw or "").strip().replace("\\", "/")
+        if not text or "://" in text:
+            continue
+        try:
+            path = PurePosixPath(text)
+        except Exception:
+            continue
+        if path.is_absolute():
+            continue
+        parts = [part for part in path.parts if part not in {"", "."}]
+        if not parts or any(part == ".." for part in parts):
+            continue
+        normalized = "/".join(parts)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        sanitized.append(normalized)
+    return sanitized
+
+
 def _task_kind(action: str) -> str:
     low = str(action or "").strip().lower()
     if low in READ_ONLY_TASK_ACTIONS:
@@ -240,7 +266,7 @@ def build_task_packets(
             continue
         title = str(step.get("title") or step.get("description") or f"Task {idx}").strip() or f"Task {idx}"
         action = str(step.get("action") or "chat").strip().lower()
-        target_files = _extract_target_files(step)
+        target_files = _sanitize_target_files(_extract_target_files(step))
         kind = _task_kind(action)
         read_only = kind == "read-only"
         tests_to_write = []
@@ -542,8 +568,7 @@ def inspect_workspace(*, current_dir: str, profile: str, run_dir: str) -> Dict[s
         "",
     ]
     baseline_text.extend(f"- {key}: {value}" for key, value in baseline_commands.items())
-    baseline_path = workspace_dir / "baseline_check.md"
-    baseline_path.write_text("\n".join(baseline_text).strip() + "\n", encoding="utf-8")
+    baseline_path = Path(write_text_artifact(workspace_dir, "baseline_check.md", "\n".join(baseline_text).strip() + "\n"))
 
     report = {
         "workspace_mode": mode,
@@ -562,21 +587,6 @@ def inspect_workspace(*, current_dir: str, profile: str, run_dir: str) -> Dict[s
         "workspace_report_path": str(report_path),
         "baseline_check_path": str(baseline_path),
     }
-
-
-def write_text_artifact(run_dir: str, relative_path: str, content: str) -> str:
-    target = Path(str(run_dir or ".")).expanduser().resolve() / relative_path
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(str(content or ""), encoding="utf-8")
-    return str(target)
-
-
-def write_json_artifact(run_dir: str, relative_path: str, payload: Dict[str, Any]) -> str:
-    target = Path(str(run_dir or ".")).expanduser().resolve() / relative_path
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    return str(target)
-
 
 def artifact_entry(path: str, *, artifact_type: str = "document", tool: str = "workflow_profile") -> Dict[str, Any]:
     target = Path(str(path or "")).expanduser()

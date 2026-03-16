@@ -64,7 +64,7 @@ async def test_sub_agent_session_creates_isolated_workspace_contract(tmp_path):
     assert session.workspace_path
     ws = Path(session.workspace_path)
     assert ws.exists()
-    for name in ("AGENTS.md", "SOUL.md", "TOOLS.md", "MEMORY.md"):
+    for name in ("AGENTS.txt", "SOUL.txt", "TOOLS.txt", "MEMORY.txt"):
         assert (ws / name).exists()
 
     result = await mgr.get_result(run_id, timeout=10)

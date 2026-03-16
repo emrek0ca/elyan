@@ -9,7 +9,7 @@ _CONTROL_MODES = {"control", "inspect_and_control"}
 def build_screen_operator_contract(*, action: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     clean = dict(params or {})
     mode = str(clean.get("mode") or "inspect").strip().lower() or "inspect"
-    required_artifacts = ["before.png", "ui_state.json", "screen_summary.md"]
+    required_artifacts = ["before.png", "ui_state.json", "screen_summary.txt"]
     if mode in _CONTROL_MODES:
         required_artifacts.extend(["after.png", "action_log.json"])
     return {

@@ -1,1 +1,0 @@
-Frontmost app: Finder. Window: Open A Done. Open A tamamlandi. OCR: Done

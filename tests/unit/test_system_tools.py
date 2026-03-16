@@ -44,6 +44,11 @@ async def test_open_app_reports_frontmost_verification(monkeypatch):
     assert (result.get("data") or {}).get("app_name") == "Safari"
 
 
+def test_normalize_text_for_match_handles_turkish_characters():
+    normalized = system_tools._normalize_text_for_match("Safari'yi Aç")
+    assert normalized == "safari'yi ac"
+
+
 @pytest.mark.asyncio
 async def test_key_combo_target_app_mismatch_returns_failure(monkeypatch):
     async def _fake_osascript(script: str):

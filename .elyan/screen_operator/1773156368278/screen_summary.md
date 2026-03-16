@@ -1,1 +1,0 @@
-Frontmost app: Safari. Window: Search. Safari arama penceresi acildi. OCR: Search

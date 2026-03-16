@@ -1,1 +1,0 @@
-Frontmost app: Finder. Window: Desktop. Desktop. OCR: Desktop

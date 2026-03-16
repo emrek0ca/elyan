@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from config.elyan_config import elyan_config
 from core.skills.catalog import get_builtin_skill_catalog, get_builtin_workflow_catalog
 from core.task_executor import TaskExecutor
+from core.text_artifacts import DEFAULT_SAVE_MARKERS, default_summary_path
 from tools import AVAILABLE_TOOLS
 from utils.logger import get_logger
 
@@ -463,7 +464,7 @@ class SkillManager:
         if not result_path:
             result_path = str(Path.home() / "Desktop" / "elyan-test" / "api" / "result.json")
         if not summary_path:
-            summary_path = str(Path(result_path).with_name("summary.md"))
+            summary_path = default_summary_path(result_path)
         return result_path, summary_path
 
     def resolve_workflow_intent(
@@ -508,7 +509,7 @@ class SkillManager:
         if "api_health_get_save" in enabled_workflows:
             api_url = self._extract_first_url(text)
             health_markers = ("health check", "healthcheck", "sağlık kontrol", "saglik kontrol", "api check")
-            save_markers = ("kaydet", "save", "result.json", "summary.md")
+            save_markers = DEFAULT_SAVE_MARKERS
             wants_health = any(k in low for k in health_markers)
             wants_save = any(k in low for k in save_markers)
             if api_url and wants_health and wants_save:

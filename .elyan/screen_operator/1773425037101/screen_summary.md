@@ -1,1 +1,0 @@
-Frontmost app: Safari. Window: Open Dialog. Native dialog acik ama Open hedefi yok.

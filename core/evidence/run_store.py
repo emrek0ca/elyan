@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from core.storage_paths import resolve_runs_root
+from core.text_artifacts import existing_text_path, write_text_artifact
 from core.telemetry.events import TelemetryEvent
 from core.telemetry.metrics import sample_runtime_metrics
 from core.telemetry.run_store import TelemetryRunStore
@@ -19,6 +20,12 @@ class RunStore:
         self.base_dir = (resolve_runs_root() / self.run_id).expanduser()
         self.base_dir.mkdir(parents=True, exist_ok=True)
         (self.base_dir / "artifacts").mkdir(parents=True, exist_ok=True)
+        try:
+            from core.artifact_retention import maybe_prune_elyan_artifacts
+
+            maybe_prune_elyan_artifacts()
+        except Exception:
+            pass
         self.telemetry_store = TelemetryRunStore(self.run_id, base_dir=self.base_dir)
         self._capability_selected_emitted = False
         self._plan_created_emitted = False
@@ -182,6 +189,17 @@ class RunStore:
                 lines.append(f"- Workflow profile: {str(meta.get('workflow_profile') or '').strip()}")
             if str(meta.get("workflow_phase") or "").strip():
                 lines.append(f"- Workflow phase: {str(meta.get('workflow_phase') or '').strip()}")
+            if str(meta.get("execution_route") or "").strip():
+                lines.append(f"- Execution route: {str(meta.get('execution_route') or '').strip()}")
+            if str(meta.get("autonomy_mode") or "").strip():
+                lines.append(f"- Autonomy mode: {str(meta.get('autonomy_mode') or '').strip()}")
+            if str(meta.get("autonomy_policy") or "").strip():
+                lines.append(f"- Autonomy policy: {str(meta.get('autonomy_policy') or '').strip()}")
+            if isinstance(meta.get("orchestration_decision_path"), list) and meta.get("orchestration_decision_path"):
+                lines.append(
+                    "- Decision path: "
+                    + " > ".join(str(item).strip() for item in list(meta.get("orchestration_decision_path") or []) if str(item).strip())
+                )
             if str(meta.get("approval_status") or "").strip():
                 lines.append(f"- Approval status: {str(meta.get('approval_status') or '').strip()}")
             if str(meta.get("plan_progress") or "").strip():
@@ -218,6 +236,16 @@ class RunStore:
                 lines.append(f"- Revision summary: {str(meta.get('revision_summary_path') or '').strip()}")
             if "team_quality_avg" in meta:
                 lines.append(f"- Team quality avg: {float(meta.get('team_quality_avg', 0.0) or 0.0):.2f}")
+            if "team_parallel_waves" in meta:
+                lines.append(f"- Team parallel waves: {int(meta.get('team_parallel_waves', 0) or 0)}")
+            if "team_max_wave_size" in meta:
+                lines.append(f"- Team max wave size: {int(meta.get('team_max_wave_size', 0) or 0)}")
+            if "team_parallelizable_packets" in meta:
+                lines.append(f"- Team parallelizable packets: {int(meta.get('team_parallelizable_packets', 0) or 0)}")
+            if "team_serial_packets" in meta:
+                lines.append(f"- Team serial packets: {int(meta.get('team_serial_packets', 0) or 0)}")
+            if "team_ownership_conflicts" in meta:
+                lines.append(f"- Team ownership conflicts: {int(meta.get('team_ownership_conflicts', 0) or 0)}")
             if "team_research_claim_coverage" in meta:
                 lines.append(
                     f"- Team research claim coverage: {float(meta.get('team_research_claim_coverage', 0.0) or 0.0):.2f}"
@@ -231,8 +259,7 @@ class RunStore:
         if meta:
             lines.extend(["", "## Metadata", "", "```json", json.dumps(meta, ensure_ascii=False, indent=2, default=str), "```"])
 
-        out = self.base_dir / "summary.md"
-        out.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+        out = Path(write_text_artifact(self.base_dir, "summary.txt", "\n".join(lines).strip() + "\n"))
         self.telemetry_store.write_delivery(
             {
                 "status": str(status or ""),
@@ -299,7 +326,7 @@ class RunStore:
     @classmethod
     def find_latest_failed_task(cls, limit: int = 30) -> Dict[str, Any]:
         for run_dir in cls.list_recent_run_dirs(limit=limit):
-            summary = run_dir / "summary.md"
+            summary = existing_text_path(run_dir / "summary.txt")
             if not summary.exists():
                 continue
             try:

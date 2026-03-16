@@ -10,6 +10,7 @@ from typing import Any
 from core.contracts.failure_taxonomy import RETRYABLE_FAILURE_CODES
 from core.runtime.scenarios import OperatorScenarioRunner, _extract_target_decisions
 from core.storage_paths import resolve_elyan_data_dir
+from core.text_artifacts import preferred_text_path
 
 
 def _default_tasks_root() -> Path:
@@ -75,7 +76,7 @@ class OperatorTaskRuntime(OperatorScenarioRunner):
             "latest_observation": root / "latest_observation.json",
             "plan": root / "plan.json",
             "planning_trace": root / "planning_trace.json",
-            "summary": root / "task_summary.md",
+            "summary": preferred_text_path(root / "task_summary.txt"),
             "screenshots": root / "screenshots",
         }
 

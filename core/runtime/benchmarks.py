@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from core.storage_paths import resolve_elyan_data_dir
+from core.text_artifacts import preferred_text_path
 
 
 def _default_reports_root() -> Path:
@@ -134,11 +135,11 @@ async def run_production_benchmarks(
     }
 
     summary_json = root / "summary.json"
-    summary_md = root / "summary.md"
+    summary_txt = preferred_text_path(root / "summary.txt")
     dashboard_json = root / "dashboard.json"
-    dashboard_md = root / "dashboard.md"
+    dashboard_txt = preferred_text_path(root / "dashboard.txt")
     _write_json(summary_json, summary)
-    _write_text(summary_md, _summary_markdown(rows, pass_count=pass_count, total=total))
+    _write_text(summary_txt, _summary_markdown(rows, pass_count=pass_count, total=total))
     _write_json(
         dashboard_json,
         {
@@ -159,7 +160,7 @@ async def run_production_benchmarks(
             ],
         },
     )
-    _write_text(dashboard_md, _dashboard_markdown(summary))
+    _write_text(dashboard_txt, _dashboard_markdown(summary))
 
     return {
         "success": bool(pass_count == total if total else False),
@@ -168,9 +169,9 @@ async def run_production_benchmarks(
         "summary": summary,
         "artifacts": [
             {"path": str(summary_json), "type": "json"},
-            {"path": str(summary_md), "type": "text"},
+            {"path": str(summary_txt), "type": "text"},
             {"path": str(dashboard_json), "type": "json"},
-            {"path": str(dashboard_md), "type": "text"},
+            {"path": str(dashboard_txt), "type": "text"},
         ],
     }
 

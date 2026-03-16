@@ -11,11 +11,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from core.confidence import coerce_confidence
 from tools.vision_tools import analyze_image
 
 
 AsyncDictCallable = Callable[..., Awaitable[dict[str, Any]]]
 
+
+def _coerce_confidence(value: Any, default: float = 0.0) -> float:
+    return coerce_confidence(value, default)
 
 @dataclass(frozen=True)
 class ScreenOperatorServices:
@@ -242,7 +246,7 @@ async def _default_ocr(image_path: str) -> dict[str, Any]:
             "y": int(float(row.get("top") or 0)),
             "width": int(float(row.get("width") or 0)),
             "height": int(float(row.get("height") or 0)),
-            "confidence": max(0.0, min(float(conf or 0.0) / 100.0, 1.0)),
+            "confidence": coerce_confidence(conf, 0.0),
             "source": "ocr",
         }
         lines.append(entry)
@@ -280,7 +284,7 @@ async def _default_vision(image_path: str, prompt: str) -> dict[str, Any]:
             row = {
                 "label": str(item.get("label") or item.get("text") or "").strip(),
                 "role": str(item.get("role") or item.get("kind") or "unknown").strip().lower() or "unknown",
-                "confidence": max(0.0, min(float(item.get("confidence") or 0.45), 1.0)),
+                "confidence": coerce_confidence(item.get("confidence"), 0.45),
                 "source": "vision",
             }
             for key in ("x", "y", "width", "height"):

@@ -8,13 +8,13 @@ import shutil
 import unicodedata
 from pathlib import Path
 from typing import Any, Optional, Dict, List
+from core.confidence import coerce_confidence
 from core.registry import tool
 from utils.logger import get_logger
 import urllib.parse
 import urllib.request
 
 logger = get_logger("system_tools")
-
 
 def _tool_error_payload(error: str, *, retryable: bool = False, **extra: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
@@ -1291,7 +1291,7 @@ def _append_ui_element(elements: list[dict[str, Any]], seen: set[tuple[str, str]
     item: dict[str, Any] = {
         "label": clean_label[:120],
         "kind": str(kind or "unknown").strip().lower() or "unknown",
-        "confidence": max(0.0, min(float(confidence or 0.0), 1.0)),
+        "confidence": coerce_confidence(confidence, 0.0),
     }
     if x is not None and y is not None:
         item["x"] = int(x)
@@ -2438,7 +2438,7 @@ def _compat_ui_state_from_analysis(analysis: dict[str, Any]) -> dict[str, Any]:
         "summary": summary,
         "fallback_order": ["compat_analysis_bridge"],
         "source_counts": source_counts,
-        "confidence": float(ui_map.get("confidence") or (0.8 if analysis.get("success") else 0.0)),
+        "confidence": coerce_confidence(ui_map.get("confidence"), 0.8 if analysis.get("success") else 0.0),
     }
 
 

@@ -1,1 +1,0 @@
-Frontmost app: Safari. Window: Upload Dialog. Native dialog acik ama Open hedefi yok.

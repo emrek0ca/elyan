@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_FILES = ("AGENTS.md", "SOUL.md", "TOOLS.md", "MEMORY.md")
+DEFAULT_FILES = ("AGENTS.txt", "SOUL.txt", "TOOLS.txt", "MEMORY.txt")
 
 
 def _write_if_missing(path: Path, content: str) -> None:
@@ -41,10 +41,10 @@ def ensure_workspace_contract(
     memory_md = "# MEMORY\n\n" + json.dumps(meta, ensure_ascii=False, indent=2) + "\n"
 
     mapping = {
-        "AGENTS.md": agents_md,
-        "SOUL.md": soul_md,
-        "TOOLS.md": tools_md,
-        "MEMORY.md": memory_md,
+        "AGENTS.txt": agents_md,
+        "SOUL.txt": soul_md,
+        "TOOLS.txt": tools_md,
+        "MEMORY.txt": memory_md,
     }
     for name, content in mapping.items():
         _write_if_missing(base / name, content)

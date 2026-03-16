@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "elyan"
 dynamic = ["version"]
 description = "Elyan AGI Framework — Autonomous, Omni-Platform, Zero-Trust AI Agent"
-readme = "README.md"
+readme = "PROGRESS.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
 authors = [

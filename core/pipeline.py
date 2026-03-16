@@ -407,6 +407,77 @@ def _looks_simple_app_control_command(text: str) -> bool:
     return bool(re.search(r"[\"']([^\"']{2,40})[\"']\s*(aç|ac|kapat|open|close|focus|odaklan)", low))
 
 
+def _is_simple_browser_or_app_intent(intent: Any) -> bool:
+    if not isinstance(intent, dict):
+        return False
+    action = _normalize_action(intent.get("action"))
+    if action in {"open_app", "open_url", "close_app"}:
+        return True
+    if action != "multi_task":
+        return False
+    tasks = intent.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        return False
+    allowed_actions = {"open_app", "open_url", "close_app"}
+    normalized_actions = []
+    for task in tasks:
+        if not isinstance(task, dict):
+            return False
+        task_action = _normalize_action(task.get("action"))
+        if task_action not in allowed_actions:
+            return False
+        normalized_actions.append(task_action)
+    return "open_url" in normalized_actions and len(normalized_actions) <= 3
+
+
+def _resolve_runtime_autonomy_mode(ctx: Any) -> tuple[str, str]:
+    policy = getattr(ctx, "runtime_policy", {}) if isinstance(getattr(ctx, "runtime_policy", {}), dict) else {}
+    metadata = policy.get("metadata", {}) if isinstance(policy.get("metadata"), dict) else {}
+    raw = str(
+        metadata.get("autonomy_mode")
+        or metadata.get("autonomy")
+        or policy.get("name")
+        or ((policy.get("execution") or {}).get("mode") if isinstance(policy.get("execution"), dict) else "")
+        or ""
+    ).strip().lower()
+    if raw in {"full", "full-autonomy", "full_autonomy", "tam_otonom", "tam-otonom"}:
+        return "tam_otonom", raw or "full-autonomy"
+    if raw in {"chat", "manual", "operator_onayli", "operator-onayli"}:
+        return "operator_onayli", raw or "chat"
+    if raw:
+        return "yari_otonom", raw
+    return "yari_otonom", "balanced"
+
+
+def _set_execution_trace(
+    ctx: Any,
+    *,
+    route: str,
+    decision_path: List[str] | None = None,
+    details: Dict[str, Any] | None = None,
+) -> None:
+    route_name = str(route or "").strip() or "single_agent"
+    logical_mode, raw_mode = _resolve_runtime_autonomy_mode(ctx)
+    path = [str(x).strip() for x in list(decision_path or []) if str(x).strip()]
+    ctx.execution_route = route_name
+    ctx.autonomy_mode = logical_mode
+    ctx.autonomy_policy = raw_mode
+    ctx.orchestration_decision_path = path
+    if not isinstance(getattr(ctx, "telemetry", None), dict):
+        ctx.telemetry = {}
+    trace = {
+        "route": route_name,
+        "autonomy_mode": logical_mode,
+        "autonomy_policy": raw_mode,
+        "decision_path": list(path),
+    }
+    if isinstance(details, dict) and details:
+        trace["details"] = dict(details)
+    ctx.telemetry["execution_trace"] = trace
+    if isinstance(getattr(ctx, "capability_plan", None), dict):
+        ctx.capability_plan["execution_trace"] = trace
+
+
 def _resolve_model_a_policy(ctx: Any) -> tuple[bool, str, float, list[str]]:
     enabled = True
     model_path = str(Path.home() / ".elyan" / "models" / "nlu" / "baseline_intent_model.json")
@@ -1274,6 +1345,10 @@ def _sync_workflow_metadata(ctx: Any) -> None:
     metadata["approval_status"] = str(getattr(ctx, "approval_status", "") or "")
     metadata["capability_domain"] = str(getattr(ctx, "capability_domain", "") or "")
     metadata["workflow_id"] = str(getattr(ctx, "workflow_id", "") or "")
+    metadata["execution_route"] = str(getattr(ctx, "execution_route", "") or "")
+    metadata["autonomy_mode"] = str(getattr(ctx, "autonomy_mode", "") or "")
+    metadata["autonomy_policy"] = str(getattr(ctx, "autonomy_policy", "") or "")
+    metadata["orchestration_decision_path"] = list(getattr(ctx, "orchestration_decision_path", []) or [])
     if getattr(ctx, "workflow_session_id", ""):
         metadata["workflow_session_id"] = str(ctx.workflow_session_id)
     if isinstance(getattr(ctx, "workflow_artifacts", {}), dict) and ctx.workflow_artifacts:
@@ -1333,7 +1408,7 @@ def _ensure_design_artifact(ctx: Any) -> str:
         nexus_mode=nexus_mode,
         capability_plan=dict(getattr(ctx, "capability_plan", {}) or {}),
     )
-    path = write_text_artifact(_run_dir(ctx), "artifacts/design.md", design_md)
+    path = write_text_artifact(_run_dir(ctx), "artifacts/design.txt", design_md)
     _persist_workflow_artifact(ctx, key="design_artifact_path", path=path)
     return path
 
@@ -1359,7 +1434,7 @@ def _ensure_plan_and_workspace_artifacts(ctx: Any) -> None:
         packets=packets,
         nexus_mode=process_profile.nexus_mode,
     )
-    plan_md_path = write_text_artifact(_run_dir(ctx), "artifacts/implementation_plan.md", plan_md)
+    plan_md_path = write_text_artifact(_run_dir(ctx), "artifacts/implementation_plan.txt", plan_md)
     plan_json_path = write_json_artifact(
         _run_dir(ctx),
         "artifacts/implementation_plan.json",
@@ -1391,7 +1466,7 @@ def _ensure_review_artifact(ctx: Any) -> str:
         notes=list(((getattr(ctx, "telemetry", {}) if isinstance(getattr(ctx, "telemetry", {}), dict) else {}).get("review_notes", [])) or []),
         review_status=str(getattr(ctx, "approval_status", "") or "pending"),
     )
-    path = write_text_artifact(_run_dir(ctx), "artifacts/review_report.md", report)
+    path = write_text_artifact(_run_dir(ctx), "artifacts/review_report.txt", report)
     _persist_workflow_artifact(ctx, key="review_artifact_path", path=path)
     return path
 
@@ -1406,7 +1481,7 @@ def _ensure_finish_branch_artifact(ctx: Any) -> str:
         verified=bool(getattr(ctx, "verified", False) and not getattr(ctx, "delivery_blocked", False)),
         errors=list(getattr(ctx, "errors", []) or []),
     )
-    path = write_text_artifact(_run_dir(ctx), "artifacts/finish_branch_report.md", report)
+    path = write_text_artifact(_run_dir(ctx), "artifacts/finish_branch_report.txt", report)
     _persist_workflow_artifact(ctx, key="finish_branch_report_path", path=path)
     return path
 
@@ -1457,6 +1532,10 @@ class PipelineContext:
     workflow_profile: str = "default"
     workflow_phase: str = "intake"
     approval_status: str = "not_required"
+    execution_route: str = ""
+    autonomy_mode: str = ""
+    autonomy_policy: str = ""
+    orchestration_decision_path: List[str] = field(default_factory=list)
     requires_design_phase: bool = False
     requires_worktree: bool = False
     workflow_artifacts: Dict[str, str] = field(default_factory=dict)
@@ -2729,6 +2808,19 @@ class StageExecute(PipelineStage):
             # 2. Direct Intent Execution (Deterministic Tools)
             if hasattr(agent, '_should_run_direct_intent') and agent._should_run_direct_intent(ctx.intent, ctx.user_input):
                 logger.info(f"Direct intent path for action: {ctx.action}")
+                micro_route = "direct_intent"
+                micro_path = ["intent_parsed", "direct_intent"]
+                if _is_simple_browser_or_app_intent(ctx.intent):
+                    micro_route = "micro_orchestration"
+                    micro_path.append("simple_browser_or_app")
+                    current_action = _normalize_action((ctx.intent or {}).get("action"))
+                    if current_action == "multi_task":
+                        micro_path.append("deterministic_sequence")
+                    elif current_action == "open_url":
+                        micro_path.append("direct_browser_open")
+                    else:
+                        micro_path.append("direct_app_control")
+                _set_execution_trace(ctx, route=micro_route, decision_path=micro_path)
                 try:
                     agent._last_direct_intent_payload = None
                 except Exception:
@@ -2818,6 +2910,17 @@ class StageExecute(PipelineStage):
                                 action_lock.unlock()
                             ctx.stage_timings["execute"] = time.time() - t0
                             return ctx
+                        if _is_simple_browser_or_app_intent(ctx.intent):
+                            logger.warning(
+                                "Simple browser/app direct intent failed; blocking orchestrator fallback for action=%s.",
+                                ctx.action,
+                            )
+                            ctx.errors.append(f"direct_intent_failed:{ctx.action}")
+                            ctx.final_response += str(direct_text or "")
+                            if action_lock.is_locked:
+                                action_lock.unlock()
+                            ctx.stage_timings["execute"] = time.time() - t0
+                            return ctx
                         screen_actions = {"screen_workflow", "analyze_screen", "take_screenshot", "vision_operator_loop", "operator_mission_control", "computer_use"}
                         if _normalize_action(ctx.action) in screen_actions:
                             logger.warning("Direct intent screen/operator result failed; preserving workflow boundary.")
@@ -2855,6 +2958,8 @@ class StageExecute(PipelineStage):
                 (ctx.job_type != "communication" and ctx.action not in {"chat", "unknown", ""})
                 or (ctx.needs_planning and ctx.goal_stage_count >= 3)
             )
+            if _is_simple_browser_or_app_intent(ctx.intent):
+                should_use_orchestrated_execution = False
             if should_use_orchestrated_execution:
                 # Expert tasks (extreme complexity) bypass standard CDG for Multi-Agent Orchestration
                 multi_agent_enabled = True
@@ -3041,6 +3146,18 @@ class StageExecute(PipelineStage):
                         "reason": decision_reason,
                         **telemetry_meta,
                     }
+                _set_execution_trace(
+                    ctx,
+                    route=selected_mode,
+                    decision_path=[
+                        "intent_parsed",
+                        f"capability:{str(ctx.capability_domain or 'general')}",
+                        f"complexity:{round(float(ctx.complexity or 0.0), 2)}",
+                        f"decision:{decision_reason}",
+                        f"mode:{selected_mode}",
+                    ],
+                    details=telemetry_meta,
+                )
                 if should_use_team:
                     try:
                         from core.sub_agent.team import AgentTeam, TeamConfig

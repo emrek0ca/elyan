@@ -1,1 +1,0 @@
-Frontmost app: Finder. Window: Finder. Finder acik. OCR: Finder

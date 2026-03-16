@@ -3864,7 +3864,7 @@ async def research_document_delivery(
                 current_claim_map=claim_map_payload,
                 revision_request=revision_request,
             )
-            revision_summary_path = delivery_dir / "revision_summary.md"
+            revision_summary_path = delivery_dir / "revision_summary.txt"
             revision_summary_path.write_text(revision_summary, encoding="utf-8")
             supporting_artifacts.append(str(revision_summary_path))
 

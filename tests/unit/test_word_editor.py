@@ -30,7 +30,7 @@ async def test_edit_word_document_supports_section_level_revision(tmp_path, monk
 
     assert result.get("success") is True
     assert Path(str(result.get("revision_summary_path", ""))).exists()
-    assert any(str(item).endswith(".revision_summary.md") for item in result.get("artifacts", []))
+    assert any(str(item).endswith(".revision_summary.txt") for item in result.get("artifacts", []))
 
     updated = docx.Document(str(doc_path))
     text = "\n".join(paragraph.text for paragraph in updated.paragraphs if paragraph.text.strip())

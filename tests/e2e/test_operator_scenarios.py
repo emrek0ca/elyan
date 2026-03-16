@@ -345,7 +345,7 @@ async def test_operator_scenario_runs_open_app_type_and_click_sequence(tmp_path:
     assert screen.click_events[-1] == (360, 106)
     task_state_path = next(item["path"] for item in result["artifacts"] if str(item["path"]).endswith("task_state.json"))
     verification_path = next(item["path"] for item in result["artifacts"] if str(item["path"]).endswith("verification.json"))
-    summary_path = next(item["path"] for item in result["artifacts"] if str(item["path"]).endswith("scenario_summary.md"))
+    summary_path = next(item["path"] for item in result["artifacts"] if str(item["path"]).endswith("scenario_summary.txt"))
     target_path = next(item["path"] for item in result["artifacts"] if str(item["path"]).endswith("target_decisions.json"))
     assert json.loads(Path(task_state_path).read_text(encoding="utf-8"))["desktop_live_state"]["frontmost_app"] == "Safari"
     assert json.loads(Path(verification_path).read_text(encoding="utf-8"))["status"] == "success"

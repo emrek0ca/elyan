@@ -33,7 +33,9 @@ from core.runtime import (
     load_latest_benchmark_summary,
     run_emre_workflow_preset,
 )
+from core.confidence import coerce_confidence
 from core.storage_paths import resolve_elyan_data_dir, resolve_runs_root
+from core.text_artifacts import existing_text_path
 from core.version import APP_VERSION
 from core.compliance.audit_trail import audit_trail
 from config.elyan_config import elyan_config
@@ -2680,7 +2682,7 @@ class ElyanGatewayServer:
         for run_dir in run_dirs[:limit]:
             evidence_path = run_dir / "evidence.json"
             task_path = run_dir / "task.json"
-            summary_path = run_dir / "summary.md"
+            summary_path = existing_text_path(run_dir / "summary.txt")
             status = "unknown"
             action = ""
             error_code = ""
@@ -2700,6 +2702,10 @@ class ElyanGatewayServer:
             team_research_uncertainty_count = 0
             workflow_profile = ""
             workflow_phase = ""
+            execution_route = ""
+            autonomy_mode = ""
+            autonomy_policy = ""
+            orchestration_decision_path = []
             approval_status = ""
             plan_progress = ""
             review_status = ""
@@ -2708,6 +2714,11 @@ class ElyanGatewayServer:
             plan_artifact_path = ""
             review_artifact_path = ""
             finish_branch_report_path = ""
+            team_parallel_waves = 0
+            team_max_wave_size = 0
+            team_parallelizable_packets = 0
+            team_serial_packets = 0
+            team_ownership_conflicts = 0
 
             if evidence_path.exists():
                 try:
@@ -2762,10 +2773,34 @@ class ElyanGatewayServer:
                         quality_status = str(meta.get("quality_status", "") or "")
                         claim_map_path = str(meta.get("claim_map_path", "") or "")
                         revision_summary_path = str(meta.get("revision_summary_path", "") or "")
+                        execution_route = str(meta.get("execution_route", "") or "")
+                        autonomy_mode = str(meta.get("autonomy_mode", "") or "")
+                        autonomy_policy = str(meta.get("autonomy_policy", "") or "")
+                        orchestration_decision_path = list(meta.get("orchestration_decision_path") or []) if isinstance(meta.get("orchestration_decision_path"), list) else []
                         try:
                             team_quality_avg = float(meta.get("team_quality_avg", 0.0) or 0.0)
                         except Exception:
                             team_quality_avg = 0.0
+                        try:
+                            team_parallel_waves = int(meta.get("team_parallel_waves", 0) or 0)
+                        except Exception:
+                            team_parallel_waves = 0
+                        try:
+                            team_max_wave_size = int(meta.get("team_max_wave_size", 0) or 0)
+                        except Exception:
+                            team_max_wave_size = 0
+                        try:
+                            team_parallelizable_packets = int(meta.get("team_parallelizable_packets", 0) or 0)
+                        except Exception:
+                            team_parallelizable_packets = 0
+                        try:
+                            team_serial_packets = int(meta.get("team_serial_packets", 0) or 0)
+                        except Exception:
+                            team_serial_packets = 0
+                        try:
+                            team_ownership_conflicts = int(meta.get("team_ownership_conflicts", 0) or 0)
+                        except Exception:
+                            team_ownership_conflicts = 0
                         try:
                             team_research_claim_coverage = float(meta.get("team_research_claim_coverage", 0.0) or 0.0)
                         except Exception:
@@ -2812,6 +2847,11 @@ class ElyanGatewayServer:
                         action = str(meta.get("action", "") or "")
                         workflow_profile = workflow_profile or str(meta.get("workflow_profile", "") or "")
                         workflow_phase = workflow_phase or str(meta.get("workflow_phase", "") or "")
+                        execution_route = execution_route or str(meta.get("execution_route", "") or "")
+                        autonomy_mode = autonomy_mode or str(meta.get("autonomy_mode", "") or "")
+                        autonomy_policy = autonomy_policy or str(meta.get("autonomy_policy", "") or "")
+                        if not orchestration_decision_path and isinstance(meta.get("orchestration_decision_path"), list):
+                            orchestration_decision_path = list(meta.get("orchestration_decision_path") or [])
                         approval_status = approval_status or str(meta.get("approval_status", "") or "")
                         plan_progress = plan_progress or str(meta.get("plan_progress", "") or "")
                         review_status = review_status or str(meta.get("review_status", "") or "")
@@ -2845,6 +2885,10 @@ class ElyanGatewayServer:
                     "team_research_uncertainty_count": team_research_uncertainty_count,
                     "workflow_profile": workflow_profile,
                     "workflow_phase": workflow_phase,
+                    "execution_route": execution_route,
+                    "autonomy_mode": autonomy_mode,
+                    "autonomy_policy": autonomy_policy,
+                    "orchestration_decision_path": orchestration_decision_path,
                     "approval_status": approval_status,
                     "plan_progress": plan_progress,
                     "review_status": review_status,
@@ -2853,6 +2897,11 @@ class ElyanGatewayServer:
                     "plan_artifact_path": plan_artifact_path,
                     "review_artifact_path": review_artifact_path,
                     "finish_branch_report_path": finish_branch_report_path,
+                    "team_parallel_waves": team_parallel_waves,
+                    "team_max_wave_size": team_max_wave_size,
+                    "team_parallelizable_packets": team_parallelizable_packets,
+                    "team_serial_packets": team_serial_packets,
+                    "team_ownership_conflicts": team_ownership_conflicts,
                     "summary_path": str(summary_path),
                     "evidence_path": str(evidence_path),
                     "created_at": int(mtime_by_name.get(run_dir.name, 0)),
@@ -2972,7 +3021,7 @@ class ElyanGatewayServer:
             suggestion = routine_engine.suggest_from_text(raw)
             expr = str(suggestion.get("expression", "")).strip()
             schedule_from_parser = bool(expr and expr != "0 9 * * *")
-            confidence = float(suggestion.get("confidence", 0.0) or 0.0)
+            confidence = coerce_confidence(suggestion.get("confidence", 0.0), 0.0)
         except Exception:
             suggestion = {}
 

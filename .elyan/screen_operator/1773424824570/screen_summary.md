@@ -1,1 +1,0 @@
-Frontmost app: Safari. Window: Shipping. Dogru continue adimi acildi. OCR: Shipping

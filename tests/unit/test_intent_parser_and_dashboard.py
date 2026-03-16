@@ -169,6 +169,47 @@ def test_multi_task_split_handles_then_connector():
     assert tasks[1].get("action") in {"research", "web_search", "research_document_delivery"}
 
 
+def test_browser_target_open_routes_to_multi_task_with_wikipedia_search():
+    parser = IntentParser()
+    result = parser.parse("safariden wikipedia einstein aç")
+    assert result.get("action") == "multi_task"
+    tasks = result.get("tasks", [])
+    assert len(tasks) == 2
+    assert tasks[0].get("action") == "open_app"
+    assert tasks[0].get("params", {}).get("app_name") == "Safari"
+    assert tasks[1].get("action") == "open_url"
+    assert tasks[1].get("params", {}).get("browser") == "Safari"
+    assert "wikipedia.org" in str(tasks[1].get("params", {}).get("url", ""))
+    assert "einstein" in str(tasks[1].get("params", {}).get("url", "")).lower()
+
+
+def test_browser_target_open_routes_youtube_query_through_requested_browser():
+    parser = IntentParser()
+    result = parser.parse("chrome dan youtube tarkan aç")
+    assert result.get("action") == "multi_task"
+    tasks = result.get("tasks", [])
+    assert len(tasks) == 2
+    assert tasks[0].get("action") == "open_app"
+    assert tasks[0].get("params", {}).get("app_name") == "Google Chrome"
+    assert tasks[1].get("action") == "open_url"
+    assert tasks[1].get("params", {}).get("browser") == "Google Chrome"
+    assert "youtube.com/results" in str(tasks[1].get("params", {}).get("url", ""))
+    assert "tarkan" in str(tasks[1].get("params", {}).get("url", "")).lower()
+
+
+def test_browser_search_and_copy_first_result_builds_four_step_plan():
+    parser = IntentParser()
+    result = parser.parse("chrome dan tarkan arat ve en üsttekini kopyala")
+    assert result.get("action") == "multi_task"
+    tasks = result.get("tasks", [])
+    assert len(tasks) == 4
+    assert tasks[0].get("action") == "open_app"
+    assert tasks[1].get("action") == "open_url"
+    assert tasks[2].get("action") == "web_search"
+    assert tasks[3].get("action") == "write_clipboard"
+    assert tasks[3].get("depends_on") == ["task_3"]
+
+
 def test_research_parser_infers_academic_policy():
     parser = IntentParser()
     result = parser.parse("köpek sağlığı hakkında akademik kaynaklarla araştırma yap, güvenilirlik en az %80")

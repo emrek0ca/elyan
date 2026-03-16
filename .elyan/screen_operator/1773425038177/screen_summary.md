@@ -1,1 +1,0 @@
-Frontmost app: Safari. Window: Dialog. Dialog acik. Confirm butonu gorunuyor. OCR: Confirm

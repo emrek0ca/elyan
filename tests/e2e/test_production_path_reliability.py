@@ -994,4 +994,4 @@ async def test_production_benchmark_runner_persists_summary_and_exact_rows(tmp_p
     for artifact in report["artifacts"]:
         assert Path(str(artifact["path"])).exists()
     artifact_names = {Path(str(artifact["path"])).name for artifact in report["artifacts"]}
-    assert {"summary.json", "summary.md", "dashboard.json", "dashboard.md"} <= artifact_names
+    assert {"summary.json", "summary.txt", "dashboard.json", "dashboard.txt"} <= artifact_names

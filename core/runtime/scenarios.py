@@ -12,6 +12,7 @@ from core.contracts.verification_result import VerificationCheck, VerificationRe
 from core.runtime.hosts import DesktopHost, get_desktop_host
 from core.storage_paths import resolve_elyan_data_dir
 from core.task_executor import TaskExecutor
+from core.text_artifacts import preferred_text_path
 from tools import AVAILABLE_TOOLS
 
 SystemToolRunner = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -489,7 +490,7 @@ class OperatorScenarioRunner:
         target_decisions_path = root / "target_decisions.json"
         verification_path = root / "verification.json"
         task_state_path = root / "task_state.json"
-        summary_path = root / "scenario_summary.md"
+        summary_path = preferred_text_path(root / "scenario_summary.txt")
         ui_state_path = root / "ui_state_snapshots.json"
         browser_state_path = root / "browser_state_snapshots.json"
 

@@ -99,3 +99,103 @@ async def test_agent_team_builds_task_packets_into_worker_and_review_tasks():
     assert tasks[2].title.endswith("/ Quality Review")
     assert "tests_written_first" in tasks[0].gates
     assert tasks[2].depends_on == [tasks[1].task_id]
+
+
+@pytest.mark.asyncio
+async def test_agent_team_allows_parallel_packets_when_target_files_do_not_conflict():
+    team = AgentTeam(_DummyAgent(), TeamConfig())
+    tasks, graph = await team._build_team_tasks(
+        "parallel coding work",
+        task_packets=[
+            {
+                "packet_id": "task_a",
+                "title": "Auth patch",
+                "action": "write_file",
+                "params": {"path": "app/auth.py"},
+                "target_files": ["app/auth.py", "tests/test_auth.py"],
+                "review_required": True,
+                "specialist_hint": "backend_architect",
+            },
+            {
+                "packet_id": "task_b",
+                "title": "Billing patch",
+                "action": "write_file",
+                "params": {"path": "app/billing.py"},
+                "target_files": ["app/billing.py", "tests/test_billing.py"],
+                "review_required": True,
+                "specialist_hint": "backend_architect",
+            },
+        ],
+        workflow_context={"workflow_profile": "superpowers_lite"},
+    )
+
+    assert graph["stage_count"] == 2
+    assert len(tasks) == 6
+    assert tasks[0].depends_on == []
+    assert tasks[3].depends_on == []
+
+
+@pytest.mark.asyncio
+async def test_agent_team_serializes_packets_when_target_files_conflict():
+    team = AgentTeam(_DummyAgent(), TeamConfig())
+    tasks, _graph = await team._build_team_tasks(
+        "conflicting coding work",
+        task_packets=[
+            {
+                "packet_id": "task_a",
+                "title": "Auth patch",
+                "action": "write_file",
+                "params": {"path": "app/auth.py"},
+                "target_files": ["app/auth.py", "tests/test_auth.py"],
+                "review_required": True,
+                "specialist_hint": "backend_architect",
+            },
+            {
+                "packet_id": "task_b",
+                "title": "Auth follow-up",
+                "action": "write_file",
+                "params": {"path": "app/auth.py"},
+                "target_files": ["app/auth.py"],
+                "review_required": True,
+                "specialist_hint": "backend_architect",
+            },
+        ],
+        workflow_context={"workflow_profile": "superpowers_lite"},
+    )
+
+    first_quality_review = tasks[2]
+    second_worker = tasks[3]
+    assert second_worker.depends_on == [first_quality_review.task_id]
+
+
+def test_agent_team_summarizes_packet_parallelism_and_conflicts():
+    team = AgentTeam(_DummyAgent(), TeamConfig())
+    summary = team._summarize_packet_execution_plan(
+        [
+            {
+                "packet_id": "task_a",
+                "title": "Auth patch",
+                "target_files": ["app/auth.py"],
+                "specialist_hint": "backend_architect",
+            },
+            {
+                "packet_id": "task_b",
+                "title": "Billing patch",
+                "target_files": ["app/billing.py"],
+                "specialist_hint": "backend_architect",
+            },
+            {
+                "packet_id": "task_c",
+                "title": "Auth follow-up",
+                "target_files": ["app/auth.py"],
+                "specialist_hint": "backend_architect",
+            },
+        ]
+    )
+
+    assert summary["packet_count"] == 3
+    assert summary["parallel_waves"] >= 2
+    assert summary["max_wave_size"] >= 2
+    assert summary["parallelizable_packets"] >= 2
+    assert summary["ownership_conflicts"] == 1
+    assert summary["specialist_assignments"]["builder"] == 3

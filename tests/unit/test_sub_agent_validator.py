@@ -59,7 +59,7 @@ async def test_validator_artifact_or_content_gate_accepts_artifact():
 async def test_validator_research_quality_gates_accept_complete_payload(tmp_path):
     claim_map = tmp_path / "claim_map.json"
     claim_map.write_text("{}", encoding="utf-8")
-    revision = tmp_path / "revision_summary.md"
+    revision = tmp_path / "revision_summary.txt"
     revision.write_text("# ok\n", encoding="utf-8")
 
     validator = SubAgentValidator()

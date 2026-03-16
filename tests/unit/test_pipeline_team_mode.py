@@ -202,6 +202,64 @@ async def test_stage_execute_direct_policy_block_skips_fallback_paths():
 
 
 @pytest.mark.asyncio
+async def test_stage_execute_simple_browser_direct_failure_skips_orchestrator(monkeypatch):
+    orchestrator_calls = {"count": 0}
+
+    class _BrowserFailAgent(_DummyAgent):
+        def __init__(self):
+            super().__init__()
+            self._last_direct_intent_payload = {
+                "action": "multi_task",
+                "success": False,
+                "failed_step": {"action": "open_url"},
+            }
+
+        def _should_run_direct_intent(self, intent, user_input):
+            _ = (intent, user_input)
+            return True
+
+        async def _run_direct_intent(self, *args, **kwargs):
+            _ = (args, kwargs)
+            return "Hata: Safari'de URL açılamadı."
+
+    class _ExplodingOrchestrator:
+        def __init__(self, *args, **kwargs):
+            _ = (args, kwargs)
+
+        async def manage_flow(self, plan, original_input):
+            _ = (plan, original_input)
+            orchestrator_calls["count"] += 1
+            return "unexpected"
+
+    monkeypatch.setattr("core.multi_agent.orchestrator.AgentOrchestrator", _ExplodingOrchestrator)
+
+    ctx = PipelineContext(user_input="safariden kedi videosu aç", user_id="u1", channel="cli")
+    ctx.job_type = "system_automation"
+    ctx.intent = {
+        "action": "multi_task",
+        "tasks": [
+            {"id": "task_1", "action": "open_app", "params": {"app_name": "Safari"}},
+            {"id": "task_2", "action": "open_url", "params": {"url": "https://www.youtube.com/results?search_query=kedi+videosu", "browser": "Safari"}},
+        ],
+    }
+    ctx.action = "multi_task"
+    ctx.complexity = 0.99
+    ctx.team_mode_forced = True
+    ctx.multi_agent_recommended = True
+    ctx.capability_confidence = 0.95
+    ctx.capability_plan = {"orchestration_mode": "multi_agent"}
+    ctx.plan = [{"id": "subtask_1", "action": "open_url"}]
+
+    out = await StageExecute().run(ctx, _BrowserFailAgent())
+
+    assert "URL açılamadı" in out.final_response
+    assert orchestrator_calls["count"] == 0
+    assert any(str(err).startswith("direct_intent_failed:multi_task") for err in out.errors)
+    assert out.telemetry.get("execution_trace", {}).get("route") == "micro_orchestration"
+    assert out.telemetry.get("execution_trace", {}).get("decision_path", [])[-1] == "deterministic_sequence"
+
+
+@pytest.mark.asyncio
 async def test_stage_execute_team_mode_partial_falls_back_to_orchestrator(monkeypatch):
     decisions = []
 
@@ -321,7 +379,7 @@ async def test_stage_execute_superpowers_brainstorms_before_code_changes(tmp_pat
 
     assert "Superpowers workflow aktif" in out.final_response
     assert out.action == "chat"
-    assert (tmp_path / "run" / "artifacts" / "design.md").exists()
+    assert (tmp_path / "run" / "artifacts" / "design.txt").exists()
 
 
 @pytest.mark.asyncio
@@ -332,7 +390,7 @@ async def test_stage_execute_superpowers_strict_blocks_without_worktree(monkeypa
             "workspace_mode": "strict_worktree_required",
             "isolated_workspace": str(tmp_path / "workspace"),
             "workspace_report_path": str(tmp_path / "run" / "artifacts" / "workspace_report.json"),
-            "baseline_check_path": str(tmp_path / "run" / "artifacts" / "baseline_check.md"),
+            "baseline_check_path": str(tmp_path / "run" / "artifacts" / "baseline_check.txt"),
         },
     )
 

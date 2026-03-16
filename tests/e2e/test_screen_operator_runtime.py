@@ -160,7 +160,7 @@ async def test_screen_operator_inspect_returns_ui_state_and_artifacts(tmp_path: 
     assert result["success"] is True
     assert result["ui_state"]["frontmost_app"] == "Cursor"
     assert any(str(item["path"]).endswith("ui_state.json") for item in result["artifacts"])
-    assert any(str(item["path"]).endswith("screen_summary.md") for item in result["artifacts"])
+    assert any(str(item["path"]).endswith("screen_summary.txt") for item in result["artifacts"])
     assert result["screenshots"]
 
 

@@ -6,6 +6,7 @@ import uuid
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from core.storage_paths import resolve_elyan_data_dir
+from core.text_artifacts import existing_text_path
 from core.workspace_contract import ensure_workspace_contract
 
 from .executor import SubAgentExecutor
@@ -51,7 +52,7 @@ class SubAgentManager:
             allowed_tools=list(allowed_tools),
             metadata={"parent_session": self.parent_session_id, "specialist": specialist_key, "run_id": run_id},
         )
-        memory_path = contract_files.get("MEMORY.md", str((base / "MEMORY.md").resolve()))
+        memory_path = contract_files.get("MEMORY.txt", str(existing_text_path(base / "MEMORY.md").resolve()))
         return str(base), str(memory_path)
 
     async def spawn(self, specialist_key: str, task: SubAgentTask, tools=None) -> str:

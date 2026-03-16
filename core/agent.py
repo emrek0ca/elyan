@@ -38,6 +38,7 @@ from core.tool_request import get_tool_request_log
 from core.subscription import subscription_manager
 from core.quota import quota_manager
 from core.evidence_gate import evidence_gate
+from core.text_artifacts import DEFAULT_SAVE_MARKERS, default_summary_path
 from core.job_templates import detect_job_type, get_template
 from core.pipeline import PipelineContext
 from core.cdg_engine import cdg_engine
@@ -1405,9 +1406,22 @@ class Agent:
                         "team_research_claim_coverage": float(team_telemetry.get("avg_claim_coverage", 0.0) or 0.0),
                         "team_research_critical_claim_coverage": float(team_telemetry.get("avg_critical_claim_coverage", 0.0) or 0.0),
                         "team_research_uncertainty_count": int(team_telemetry.get("max_uncertainty_count", 0) or 0),
+                        "team_parallel_waves": int(team_telemetry.get("parallel_waves", 0) or 0),
+                        "team_max_wave_size": int(team_telemetry.get("max_wave_size", 0) or 0),
+                        "team_parallelizable_packets": int(team_telemetry.get("parallelizable_packets", 0) or 0),
+                        "team_serial_packets": int(team_telemetry.get("serial_packets", 0) or 0),
+                        "team_ownership_conflicts": int(team_telemetry.get("ownership_conflicts", 0) or 0),
                     }
                 )
             workflow_metrics: dict[str, Any] = {}
+            execution_metrics: dict[str, Any] = {}
+            if str(getattr(ctx, "execution_route", "") or "").strip():
+                execution_metrics = {
+                    "execution_route": str(getattr(ctx, "execution_route", "") or ""),
+                    "autonomy_mode": str(getattr(ctx, "autonomy_mode", "") or ""),
+                    "autonomy_policy": str(getattr(ctx, "autonomy_policy", "") or ""),
+                    "orchestration_decision_path": list(getattr(ctx, "orchestration_decision_path", []) or []),
+                }
             if str(getattr(ctx, "workflow_profile", "default") or "default") != "default":
                 workflow_metrics = {
                     "workflow_profile": str(getattr(ctx, "workflow_profile", "default") or "default"),
@@ -1443,7 +1457,7 @@ class Agent:
                 manifest_path=manifest,
                 steps=[s.to_dict() for s in ledger.steps],
                 artifacts=list(ledger.artifacts),
-                metadata={"status": status, "errors": list(ctx.errors or []), **research_metrics, **workflow_metrics},
+                metadata={"status": status, "errors": list(ctx.errors or []), **research_metrics, **workflow_metrics, **execution_metrics},
             )
             final_state = "completed" if status == "success" else ("partial" if status == "partial" else "failed")
             task.transition(
@@ -1469,6 +1483,7 @@ class Agent:
                     "channel": ctx.channel,
                     "user_id": ctx.user_id,
                     "status": status,
+                    **execution_metrics,
                     **workflow_metrics,
                 },
                 task_state=task.to_dict(),
@@ -1478,7 +1493,7 @@ class Agent:
                 response_text=str(ctx.final_response or ""),
                 error="; ".join(str(e) for e in (ctx.errors or []) if str(e).strip()),
                 artifacts=list(ledger.artifacts),
-                metadata={"manifest_path": manifest, "action": ctx.action, "job_type": ctx.job_type, **research_metrics, **workflow_metrics},
+                metadata={"manifest_path": manifest, "action": ctx.action, "job_type": ctx.job_type, **research_metrics, **workflow_metrics, **execution_metrics},
             )
             logs_path = run_store.write_logs(lines=[str(e) for e in (ctx.errors or []) if str(e).strip()])
             refs: list[AttachmentRef] = []
@@ -5040,7 +5055,7 @@ class Agent:
         if not result_path:
             result_path = str(Path.home() / "Desktop" / "elyan-test" / "api" / "result.json")
         if not summary_path:
-            summary_path = str(Path(result_path).with_name("summary.md"))
+            summary_path = default_summary_path(result_path)
         return result_path, summary_path
 
     @staticmethod
@@ -6671,7 +6686,7 @@ class Agent:
         method = str(params.get("method") or "GET").strip().upper() or "GET"
         result_dir = str(Path("~/Desktop/elyan-test/api").expanduser())
         result_json = str(Path(result_dir) / "result.json")
-        result_summary = str(Path(result_dir) / "summary.md")
+        result_summary = str(Path(result_dir) / "summary.txt")
 
         steps: list[dict[str, Any]] = [
             {
@@ -8234,7 +8249,7 @@ class Agent:
                 " get ", "get at", "get isteği", "get istegi", "istek at", "request at",
                 "http get", "get request",
             )
-            save_markers = ("kaydet", "save", "result.json", "summary.md", "dosyaya yaz")
+            save_markers = DEFAULT_SAVE_MARKERS
             wants_health = any(k in low for k in health_markers)
             wants_get = any(k in f" {low} " for k in get_markers) or "httpbin.org/get" in low
             wants_save = any(k in low for k in save_markers)
@@ -9886,7 +9901,9 @@ class Agent:
             pending: dict[str, dict[str, Any]] = {str(s["id"]): s for s in indexed_steps}
             completed: set[str] = set()
             step_outputs: dict[str, str] = {}
+            step_results_raw: dict[str, Any] = {}
             latest_output_text = ""
+            latest_output_result: Any = {}
             detailed_outputs: list[str] = []
             step_rows: list[dict[str, Any]] = []
             failed_row: dict[str, Any] | None = None
@@ -9916,19 +9933,25 @@ class Agent:
                 return cleaned if cleaned else "adım başarısız"
 
             async def _run_step(step: dict[str, Any]) -> dict[str, Any]:
-                nonlocal latest_output_text
+                nonlocal latest_output_text, latest_output_result
                 step_action = str(step.get("action") or "").strip()
                 step_desc = str(step.get("description") or f"Adım {step.get('idx')}")
                 params = dict(step.get("params") or {}) if isinstance(step.get("params"), dict) else {}
                 deps = [str(x).strip() for x in step.get("depends_on", []) if str(x).strip()]
                 dep_text = ""
+                dep_result: Any = {}
                 for dep_id in deps:
                     candidate = str(step_outputs.get(dep_id) or "").strip()
                     if candidate:
                         dep_text = candidate
+                    candidate_result = step_results_raw.get(dep_id)
+                    if candidate_result not in (None, "", {}):
+                        dep_result = candidate_result
                 if not dep_text:
                     dep_text = latest_output_text
-                params = self._hydrate_task_params_from_previous(step_action, params, dep_text)
+                if dep_result in (None, "", {}):
+                    dep_result = latest_output_result
+                params = self._hydrate_task_params_from_previous(step_action, params, dep_text, dep_result)
 
                 attempts = default_attempts
                 retries = step.get("retries") if isinstance(step.get("retries"), dict) else {}
@@ -9987,6 +10010,8 @@ class Agent:
                 success = not bool(reason)
                 if success and last_text:
                     latest_output_text = last_text
+                if success and last_result not in (None, ""):
+                    latest_output_result = last_result
                 if success:
                     failure_class = ""
                 return {
@@ -10058,6 +10083,7 @@ class Agent:
                         text = str(row.get("text") or "").strip()
                         if text:
                             step_outputs[sid] = text
+                        step_results_raw[sid] = row.get("result")
                         if not compact_mode:
                             detailed_outputs.append(f"[{row.get('idx')}] {row.get('description')}\n{text}")
                         continue
@@ -10253,7 +10279,7 @@ class Agent:
 
             method = str(params.get("method") or "GET").strip().upper() or "GET"
             result_path = str(params.get("result_path") or "~/Desktop/elyan-test/api/result.json").strip()
-            summary_path = str(params.get("summary_path") or Path(result_path).with_name("summary.md")).strip()
+            summary_path = str(params.get("summary_path") or default_summary_path(result_path)).strip()
 
             health_res = await self._execute_tool(
                 "api_health_check",
@@ -10315,7 +10341,7 @@ class Agent:
                 self._format_result_text(write_json_res),
                 self._format_result_text(write_summary_res),
                 f"Hash (result.json): {json_sha}" if json_sha else "",
-                f"Hash (summary.md): {summary_sha}" if summary_sha else "",
+                f"Hash (summary.txt): {summary_sha}" if summary_sha else "",
             ]
             return "\n".join(line for line in lines if isinstance(line, str) and line.strip())
 
@@ -10492,13 +10518,44 @@ class Agent:
                 return idx
         return None
 
-    def _hydrate_task_params_from_previous(self, action: str, params: dict, previous_output: str) -> dict:
+    @staticmethod
+    def _extract_clipboard_text_from_result(result: Any) -> str:
+        if not isinstance(result, dict):
+            return ""
+
+        results = result.get("results")
+        if isinstance(results, list) and results:
+            first = results[0] if isinstance(results[0], dict) else {}
+            title = str(first.get("title") or "").strip()
+            url = str(first.get("url") or first.get("href") or "").strip()
+            snippet = str(first.get("snippet") or "").strip()
+            parts = [part for part in (title, url, snippet) if part]
+            if parts:
+                return "\n".join(parts)
+
+        links = result.get("links")
+        if isinstance(links, list) and links:
+            first = links[0] if isinstance(links[0], dict) else {}
+            label = str(first.get("text") or first.get("title") or "").strip()
+            href = str(first.get("href") or first.get("url") or "").strip()
+            parts = [part for part in (label, href) if part]
+            if parts:
+                return "\n".join(parts)
+
+        for key in ("summary", "answer", "text", "message"):
+            value = str(result.get(key) or "").strip()
+            if value:
+                return value
+        return ""
+
+    def _hydrate_task_params_from_previous(self, action: str, params: dict, previous_output: str, previous_result: Any = None) -> dict:
         clean = dict(params or {})
         prev = str(previous_output or "").strip()
-        if not prev:
+        mapped = ACTION_TO_TOOL.get(str(action or "").strip(), str(action or "").strip())
+
+        if not prev and mapped != "write_clipboard":
             return clean
 
-        mapped = ACTION_TO_TOOL.get(str(action or "").strip(), str(action or "").strip())
         if mapped in {"write_file", "write_word"}:
             content = clean.get("content") or clean.get("text") or clean.get("body") or clean.get("message")
             if not (isinstance(content, str) and content.strip()):
@@ -10513,6 +10570,14 @@ class Agent:
                     rows.append({"Veri": item[:500]})
             clean["data"] = rows[:200] if rows else [{"Veri": prev[:1000]}]
             clean.setdefault("headers", ["Veri"])
+            return clean
+
+        if mapped == "write_clipboard":
+            text_value = str(clean.get("text") or clean.get("content") or "").strip()
+            if not text_value:
+                text_value = self._extract_clipboard_text_from_result(previous_result) or prev
+            if text_value:
+                clean["text"] = text_value[:30000]
             return clean
 
         return clean

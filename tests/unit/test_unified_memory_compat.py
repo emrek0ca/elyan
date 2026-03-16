@@ -79,7 +79,7 @@ def test_unified_memory_fallback_stats_and_top_users(monkeypatch, tmp_path: Path
 
     conv_db = fake_home / ".config" / "cdacs-bot" / "conversation.db"
     episodic_db = fake_home / ".elyan" / "memory" / "episodic.db"
-    patterns = fake_home / ".elyan" / "memory" / "patterns.md"
+    patterns = fake_home / ".elyan" / "memory" / "patterns.txt"
     patterns.parent.mkdir(parents=True, exist_ok=True)
     patterns.write_text("### Entry: 1\nx\n### Entry: 2\ny\n", encoding="utf-8")
 

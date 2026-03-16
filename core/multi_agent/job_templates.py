@@ -61,7 +61,7 @@ TEMPLATES = {
     "generic": JobTemplate(
         id="generic",
         name="General Multi-Step Delivery",
-        mandatory_artifacts=["summary.md"],
+        mandatory_artifacts=["summary.txt"],
         allowed_tools=["write_file", "read_file", "web_search", "run_safe_command"],
         verification_steps=["static"]
     ),

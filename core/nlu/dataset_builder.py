@@ -5,6 +5,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+from core.confidence import coerce_confidence
+from core.text_artifacts import existing_text_path
+
 
 @dataclass
 class NLUExample:
@@ -33,7 +36,7 @@ def _safe_load_json(path: Path) -> Dict[str, Any]:
 
 
 def _parse_run_status(run_dir: Path) -> str:
-    summary = run_dir / "summary.md"
+    summary = existing_text_path(run_dir / "summary.txt")
     if not summary.exists():
         return ""
     try:
@@ -140,11 +143,7 @@ def _build_example(
                 sval = str(row or "").strip()
                 if sval:
                     success_criteria.append(sval)
-    confidence_raw = task_spec.get("confidence")
-    try:
-        confidence = float(confidence_raw)
-    except Exception:
-        confidence = 0.0
+    confidence = coerce_confidence(task_spec.get("confidence"), 0.0)
     return NLUExample(
         text=utterance,
         intent=intent,

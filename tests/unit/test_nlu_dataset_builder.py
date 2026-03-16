@@ -116,3 +116,33 @@ def test_export_nlu_dataset_jsonl_writes_rows(tmp_path: Path):
     payload = json.loads(content[0])
     assert payload["text"] == "not yaz"
     assert payload["intent"] == "filesystem_batch"
+
+
+def test_build_nlu_dataset_from_runs_supports_summary_txt_and_label_confidence(tmp_path: Path):
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir(parents=True, exist_ok=True)
+    run_dir = runs_root / "run_3"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "task.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run_3",
+                "user_input": "ekrana bak",
+                "task_spec": {
+                    "intent": "screen_workflow",
+                    "confidence": "High",
+                    "steps": [{"id": "step_1", "action": "take_screenshot", "params": {}}],
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "summary.txt").write_text("- Status: failed\n", encoding="utf-8")
+
+    rows = build_nlu_dataset_from_runs(runs_root, limit=10, include_synthetic=False)
+
+    assert len(rows) == 1
+    assert rows[0].status == "failed"
+    assert rows[0].confidence == 0.82

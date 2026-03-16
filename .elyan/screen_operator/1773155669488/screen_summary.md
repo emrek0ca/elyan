@@ -1,1 +1,0 @@
-Frontmost app: Safari. Window: Done. Done ekran acildi. OCR: Done

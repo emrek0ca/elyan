@@ -11,7 +11,9 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
 from core.storage_paths import resolve_elyan_data_dir
+from core.text_artifacts import existing_text_path
 from utils.logger import get_logger
 
 logger = get_logger("unified_memory")
@@ -192,7 +194,7 @@ class UnifiedMemory:
         episodic_db = resolve_elyan_data_dir() / "memory" / "episodic.db"
         episodic_count = self._safe_sqlite_count(episodic_db, "SELECT COUNT(*) FROM events")
 
-        semantic_patterns = resolve_elyan_data_dir() / "memory" / "patterns.md"
+        semantic_patterns = existing_text_path(resolve_elyan_data_dir() / "memory" / "patterns.txt")
         semantic_count = 0
         try:
             if semantic_patterns.exists():

@@ -52,7 +52,7 @@ def test_resolve_workflow_intent_api_health_get_save(monkeypatch):
 
     text = (
         "https://httpbin.org/get için health check yap, sonra GET at, "
-        "sonucu ~/Desktop/elyan-test/api/result.json ve summary.md kaydet."
+        "sonucu ~/Desktop/elyan-test/api/result.json ve summary.txt kaydet."
     )
     intent = mgr.resolve_workflow_intent(text, attachments=[], file_context={})
     assert intent is not None
@@ -60,4 +60,4 @@ def test_resolve_workflow_intent_api_health_get_save(monkeypatch):
     assert intent["_workflow_id"] == "api_health_get_save"
     assert intent["params"]["url"] == "https://httpbin.org/get"
     assert Path(intent["params"]["result_path"]).as_posix().endswith("/Desktop/elyan-test/api/result.json")
-    assert Path(intent["params"]["summary_path"]).name == "summary.md"
+    assert Path(intent["params"]["summary_path"]).name == "summary.txt"

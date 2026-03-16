@@ -45,6 +45,44 @@ def _looks_like_image_search_request(text: str) -> bool:
 
 class AppParser(BaseParser):
 
+    def _infer_browser_app(self, text: str, text_norm: str) -> str:
+        candidates = (
+            ("google chrome", "Google Chrome"),
+            ("chrome", "Google Chrome"),
+            ("krom", "Google Chrome"),
+            ("firefox", "Firefox"),
+            ("arc", "Arc"),
+            ("safari", "Safari"),
+            ("tarayıcı", "Safari"),
+            ("tarayici", "Safari"),
+            ("browser", "Safari"),
+        )
+        low = str(text or "").lower()
+        norm = str(text_norm or "")
+        for alias, app_name in candidates:
+            alias_norm = self._normalize(alias)
+            if alias in low or alias_norm in norm:
+                return app_name
+        return ""
+
+    def _browser_request_payload(self, text: str, text_norm: str) -> str:
+        norm = str(text_norm or self._normalize(str(text or "").lower()))
+        payload = re.sub(r"([0-9a-zçğıöşü]+)'([0-9a-zçğıöşü]+)", r"\1 \2", norm, flags=re.IGNORECASE)
+        cleanup_tokens = {
+            "safari", "safariyi", "safariden", "safaride", "safariye", "safariya",
+            "chrome", "chromedan", "chromede", "chromeye", "krom", "kromdan", "kromda", "kroma",
+            "firefox", "firefoxda", "firefoxdan",
+            "arc", "arcda", "arcdan",
+            "tarayici", "tarayicida", "tarayicidan", "tarayiciya",
+            "tarayıcı", "tarayıcıda", "tarayıcıdan", "tarayıcıya",
+            "browser", "browserda", "browserdan", "browsera",
+            "ac", "aç", "open", "git", "gir", "goto", "go", "to",
+            "den", "dan", "de", "da", "ye", "ya", "a", "e",
+            "ve", "sonra", "ardindan", "ardından", "ile", "icin", "için",
+            "lütfen", "lutfen",
+        }
+        return " ".join(part for part in payload.split() if part not in cleanup_tokens).strip(" ,.;:-")
+
     def _parse_browser_tab_control(self, text: str, text_norm: str, original: str) -> dict | None:
         low = str(text or "").lower()
         norm = text_norm or self._normalize(low)
@@ -128,6 +166,12 @@ class AppParser(BaseParser):
         query_hints = ("ara", "arat", "search", "için", "icin", "hakkında", "hakkinda")
         if any(k in text for k in browser_aliases) and any(k in text for k in content_hints) and any(k in text for k in query_hints):
             return None
+        if any(k in text for k in browser_aliases):
+            payload = self._browser_request_payload(text, text_norm)
+            if len(payload.split()) >= 2 or any(
+                marker in payload for marker in ("wikipedia", "vikipedi", "wiki", "youtube", "yt", "google", "github", "reddit", "gmail")
+            ):
+                return None
         wants_research = any(k in text for k in ["araştır", "arastir", "araştırma", "arastirma", "research", "incele", "inceleme"])
 
         def _alias_match(raw_alias: str) -> bool:
@@ -267,8 +311,12 @@ class AppParser(BaseParser):
                     stripped = " ".join(stripped.split())
                     has_topic_marker = ("icin" in text_norm) or ("hakkinda" in text_norm)
                     has_content_intent = any(k in text_norm for k in ("resim", "gorsel", "foto", "image", "video", "haber", "news", "makale"))
+                    browser_context = bool(self._infer_browser_app(text, text_norm))
+                    remaining = self._browser_request_payload(stripped, stripped)
                     # If command carries extra topic/query words, let browser_search handle it.
                     if has_topic_marker and (len(stripped.split()) >= 1 or has_content_intent):
+                        continue
+                    if browser_context and remaining:
                         continue
                     return {"action": "open_url", "params": {"url": url},
                             "reply": f"{alias.capitalize()} açılıyor..."}
@@ -285,12 +333,17 @@ class AppParser(BaseParser):
             "browser", "browsers", "webde", "internette",
         )
         browser_context = any(k in lower for k in browser_context_tokens)
+        target_browser = self._infer_browser_app(text, text_norm) or "Safari"
+        browser_payload = self._browser_request_payload(text, text_norm)
         images_mode = _looks_like_image_search_request(lower)
         info_mode = any(k in lower for k in ("video", "haber", "makale", "article", "news"))
         research_mode = any(k in lower for k in ("araştır", "arastir", "araştırma", "arastirma", "research", "incele", "inceleme"))
         has_open_verb = bool(re.search(r"\b(aç|ac)\b", lower))
         has_topic_marker = ("için" in lower) or ("icin" in lower) or ("hakkında" in lower) or ("hakkinda" in lower)
-        implicit_browser_search = browser_context and has_open_verb and (images_mode or info_mode or has_topic_marker)
+        site_mode = any(marker in browser_payload for marker in ("wikipedia", "vikipedi", "wiki", "youtube", "yt", "google", "github", "reddit", "gmail"))
+        implicit_browser_search = browser_context and has_open_verb and (
+            images_mode or info_mode or has_topic_marker or site_mode or len(browser_payload.split()) >= 2
+        )
 
         if not has_search_verb and not implicit_browser_search:
             return None
@@ -338,6 +391,18 @@ class AppParser(BaseParser):
         query = " ".join(p for p in (query or "").replace(".", " ").split() if p not in cleanup_tokens).strip(" ,.;:-")
         if len(query) < 2:
             return None
+        copy_top_result = any(
+            marker in lower
+            for marker in (
+                "en üsttekini kopyala",
+                "en usttekini kopyala",
+                "ilk sonucu kopyala",
+                "ilk sonucu panoya kopyala",
+                "ilkini kopyala",
+                "en üstteki sonucu kopyala",
+                "en ustteki sonucu kopyala",
+            )
+        )
 
         if research_mode and implicit_browser_search:
             topic = re.sub(
@@ -348,15 +413,15 @@ class AppParser(BaseParser):
             )
             topic = " ".join(topic.split()).strip() or query
 
-            wants_safari = "safari" in text or "safari" in text_norm
+            wants_browser_open = browser_context
             tasks = []
-            if wants_safari:
+            if wants_browser_open:
                 tasks.append(
                     {
                         "id": "task_1",
                         "action": "open_app",
-                        "params": {"app_name": "Safari"},
-                        "description": "Safari'yi aç",
+                        "params": {"app_name": target_browser},
+                        "description": f"{target_browser} aç",
                     }
                 )
             tasks.append(
@@ -365,31 +430,92 @@ class AppParser(BaseParser):
                     "action": "research",
                     "params": {"topic": topic, "depth": "standard"},
                     "description": f"Arastirma: {topic}",
-                    "depends_on": ["task_1"] if wants_safari else [],
+                    "depends_on": ["task_1"] if wants_browser_open else [],
                 }
             )
-            if wants_safari:
-                return {"action": "multi_task", "tasks": tasks, "reply": f"Safari aciliyor ve '{topic}' arastiriliyor..."}
+            if wants_browser_open:
+                return {"action": "multi_task", "tasks": tasks, "reply": f"{target_browser} açılıyor ve '{topic}' araştırılıyor..."}
             return {"action": "research", "params": {"topic": topic, "depth": "standard"}, "reply": f"'{topic}' arastiriliyor..."}
 
-        if images_mode:
+        video_mode = any(
+            marker in lower
+            for marker in (
+                "video",
+                "videosu",
+                "videosunu",
+                "videoları",
+                "videolari",
+                "izle",
+                "oynat",
+                "play",
+            )
+        )
+
+        wiki_mode = any(marker in query for marker in ("wikipedia", "vikipedi", "wiki"))
+        youtube_mode = video_mode or any(marker in query for marker in ("youtube", "yt"))
+
+        if wiki_mode:
+            wiki_query = re.sub(r"\b(wikipedia|vikipedi|wiki)\b", " ", query, flags=re.IGNORECASE)
+            wiki_query = " ".join(wiki_query.split()).strip()
+            if wiki_query:
+                url = f"https://tr.wikipedia.org/wiki/Special:Search?search={quote_plus(wiki_query)}"
+            else:
+                url = "https://tr.wikipedia.org"
+        elif images_mode:
             url = f"https://www.google.com/search?tbm=isch&q={quote_plus(query)}"
+        elif youtube_mode:
+            yt_query = re.sub(r"\b(youtube|yt)\b", " ", query, flags=re.IGNORECASE)
+            yt_query = " ".join(yt_query.split()).strip()
+            if yt_query:
+                url = f"https://www.youtube.com/results?search_query={quote_plus(yt_query)}"
+            else:
+                url = "https://www.youtube.com"
         else:
             url = f"https://www.google.com/search?q={quote_plus(query)}"
 
-        wants_safari = "safari" in text or "safari" in text_norm
+        wants_browser_open = browser_context
         tasks = []
-        if wants_safari:
-            tasks.append({"id": "task_1", "action": "open_app", "params": {"app_name": "Safari"},
-                          "description": "Safari'yi aç"})
+        if wants_browser_open:
+            tasks.append({"id": "task_1", "action": "open_app", "params": {"app_name": target_browser},
+                          "description": f"{target_browser} aç"})
         open_url_params = {"url": url}
-        if wants_safari:
-            open_url_params["browser"] = "Safari"
+        if wants_browser_open:
+            open_url_params["browser"] = target_browser
         tasks.append({"id": "task_2", "action": "open_url", "params": open_url_params,
-                      "description": f"Arama: {query}",
-                      "depends_on": ["task_1"] if wants_safari else []})
-        if wants_safari:
-            return {"action": "multi_task", "tasks": tasks, "reply": f"Safari'de '{query}' aranıyor..."}
+                      "description": f"{'Video araması' if youtube_mode else 'Arama'}: {query}",
+                      "depends_on": ["task_1"] if wants_browser_open else []})
+        if copy_top_result and not wiki_mode and not youtube_mode:
+            search_dep = str(tasks[-1].get("id") or "task_2")
+            tasks.append(
+                {
+                    "id": "task_3",
+                    "action": "web_search",
+                    "params": {"query": query, "num_results": 5},
+                    "description": f"Arama sonuçlarını çıkar: {query}",
+                    "depends_on": [search_dep] if search_dep else [],
+                }
+            )
+            tasks.append(
+                {
+                    "id": "task_4",
+                    "action": "write_clipboard",
+                    "params": {"text": ""},
+                    "description": "İlk sonucu panoya kopyala",
+                    "depends_on": ["task_3"],
+                }
+            )
+        if wants_browser_open:
+            if copy_top_result and not wiki_mode and not youtube_mode:
+                return {"action": "multi_task", "tasks": tasks, "reply": f"{target_browser}'de '{query}' aranıyor ve ilk sonuç panoya kopyalanıyor..."}
+            if wiki_mode:
+                return {"action": "multi_task", "tasks": tasks, "reply": f"{target_browser}'de Wikipedia için '{query}' açılıyor..."}
+            if youtube_mode:
+                return {"action": "multi_task", "tasks": tasks, "reply": f"{target_browser}'de '{query}' videosu açılıyor..."}
+            return {"action": "multi_task", "tasks": tasks, "reply": f"{target_browser}'de '{query}' aranıyor..."}
+        if copy_top_result and not wiki_mode and not youtube_mode:
+            return {"action": "multi_task", "tasks": tasks, "reply": f"Tarayıcıda '{query}' aranıyor ve ilk sonuç panoya kopyalanıyor..."}
+        if youtube_mode:
+            return {"action": "open_url", "params": open_url_params, "reply": f"Tarayıcıda '{query}' videosu açılıyor..."}
         return {"action": "open_url", "params": open_url_params, "reply": f"Tarayıcıda '{query}' aranıyor..."}
 
     # ── YouTube ───────────────────────────────────────────────────────────────
@@ -415,9 +541,29 @@ class AppParser(BaseParser):
         if query.lower() in {"youtube", "yt"}:
             query = ""
         base = "https://www.youtube.com"
+        target_browser = self._infer_browser_app(text, text_norm)
         if query:
-            return {"action": "open_url", "params": {"url": f"{base}/results?search_query={quote_plus(query)}"},
+            url = f"{base}/results?search_query={quote_plus(query)}"
+            if target_browser:
+                return {
+                    "action": "multi_task",
+                    "tasks": [
+                        {"id": "task_1", "action": "open_app", "params": {"app_name": target_browser}, "description": f"{target_browser} aç"},
+                        {"id": "task_2", "action": "open_url", "params": {"url": url, "browser": target_browser}, "description": f"YouTube'da '{query}' aç", "depends_on": ["task_1"]},
+                    ],
+                    "reply": f"{target_browser}'de YouTube için '{query}' açılıyor...",
+                }
+            return {"action": "open_url", "params": {"url": url},
                     "reply": f"YouTube'da '{query}' açılıyor..."}
+        if target_browser:
+            return {
+                "action": "multi_task",
+                "tasks": [
+                    {"id": "task_1", "action": "open_app", "params": {"app_name": target_browser}, "description": f"{target_browser} aç"},
+                    {"id": "task_2", "action": "open_url", "params": {"url": base, "browser": target_browser}, "description": "YouTube'u aç", "depends_on": ["task_1"]},
+                ],
+                "reply": f"{target_browser}'de YouTube açılıyor...",
+            }
         return {"action": "open_url", "params": {"url": base}, "reply": "YouTube açılıyor..."}
 
     # ── Random Image ──────────────────────────────────────────────────────────

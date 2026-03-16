@@ -1,1 +1,0 @@
-Frontmost app: Safari. Window: Results. Search button tiklandi ve sonuc ekranina gecildi. OCR: Results

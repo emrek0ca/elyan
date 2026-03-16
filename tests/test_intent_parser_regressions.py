@@ -184,6 +184,21 @@ def test_browser_news_request_with_topic_does_not_collapse_to_news_home():
     assert "news.google.com" not in url
 
 
+def test_browser_video_request_prefers_youtube_search():
+    parser = IntentParser()
+    result = parser.parse("safariden kedi videosu aç")
+    assert result is not None
+    assert result.get("action") == "multi_task"
+    tasks = result.get("tasks", [])
+    open_step = next((t for t in tasks if t.get("action") == "open_url"), {})
+    url = str(open_step.get("params", {}).get("url", ""))
+    assert "youtube.com/results" in url
+    parsed_q = parse_qs(urlparse(url).query).get("search_query", [""])[0]
+    query = unquote_plus(parsed_q).lower()
+    assert "kedi" in query
+    assert "video" in query
+
+
 def test_youtube_query_cleanup_removes_connector_words():
     parser = IntentParser()
     result = parser.parse("youtube aç ve özlem özdil şarkısı aç")

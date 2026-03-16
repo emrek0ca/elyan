@@ -80,7 +80,7 @@ async def test_orchestrator_warmup_attaches_subagent_quality_summary(monkeypatch
                                 "uncertainty_count": 2,
                             },
                             "claim_map_path": "/tmp/claim_map.json",
-                            "revision_summary_path": "/tmp/revision_summary.md",
+                            "revision_summary_path": "/tmp/revision_summary.txt",
                         },
                     },
                 )()

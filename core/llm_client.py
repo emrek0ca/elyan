@@ -304,10 +304,29 @@ class LLMClient:
         )
         return final
 
-    async def generate(self, prompt: str, system_prompt: str = None, model_config: dict = None, role: str = "inference", history: list = None, user_id: str = "local", temperature: float = None, strict_model_config: bool = False, disable_collaboration: bool = False) -> str:
+    async def generate(
+        self,
+        prompt: str,
+        system_prompt: str = None,
+        model_config: dict = None,
+        role: str = "inference",
+        history: list = None,
+        user_id: str = "local",
+        temperature: float = None,
+        strict_model_config: bool = False,
+        disable_collaboration: bool = False,
+        model: str | None = None,
+    ) -> str:
         from core.llm.token_budget import token_budget
         from core.resilience.circuit_breaker import resilience_manager
         from core.llm.quality_gate import quality_gate
+
+        if model:
+            merged_model_config = dict(model_config or {})
+            if not merged_model_config.get("model"):
+                merged_model_config["model"] = str(model)
+            model_config = merged_model_config
+            strict_model_config = True
 
         # 1. Budget Check
         if not token_budget.is_within_budget(user_id):

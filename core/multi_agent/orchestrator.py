@@ -728,7 +728,7 @@ class AgentOrchestrator:
         template = get_template(template_id)
         mandatory = list(getattr(template, "mandatory_artifacts", []) or [])
         if not mandatory:
-            mandatory = ["summary.md"]
+            mandatory = ["summary.txt"]
 
         workspace = Path(str(workspace_dir or "~/Desktop/elyan-fallback")).expanduser()
         steps: List[Dict[str, Any]] = [

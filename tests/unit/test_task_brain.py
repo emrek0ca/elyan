@@ -86,7 +86,7 @@ def test_run_store_summary_includes_research_quality_metrics(tmp_path, monkeypat
             "conflict_count": 1,
             "manual_review_claim_count": 3,
             "claim_map_path": "/tmp/claim_map.json",
-            "revision_summary_path": "/tmp/revision_summary.md",
+            "revision_summary_path": "/tmp/revision_summary.txt",
             "team_quality_avg": 0.82,
             "team_research_claim_coverage": 1.0,
             "team_research_critical_claim_coverage": 0.5,
@@ -100,7 +100,7 @@ def test_run_store_summary_includes_research_quality_metrics(tmp_path, monkeypat
     assert "- Conflict count: 1" in summary
     assert "- Manual review claims: 3" in summary
     assert "- Claim map: /tmp/claim_map.json" in summary
-    assert "- Revision summary: /tmp/revision_summary.md" in summary
+    assert "- Revision summary: /tmp/revision_summary.txt" in summary
     assert "- Team quality avg: 0.82" in summary
     assert "- Team research claim coverage: 1.00" in summary
     assert "- Team research critical coverage: 0.50" in summary

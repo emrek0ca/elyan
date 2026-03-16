@@ -1,1 +1,0 @@
-Frontmost app: Safari. Window: Results. Results sayfasi acildi. OCR: Results
