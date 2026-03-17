@@ -308,3 +308,13 @@ class SubscriptionManager:
             "invoices": len(invoices),
             "features": self.get_features(user_id),
         }
+
+
+_subscription_manager: Optional[SubscriptionManager] = None
+
+
+def get_subscription_manager() -> SubscriptionManager:
+    global _subscription_manager
+    if _subscription_manager is None:
+        _subscription_manager = SubscriptionManager()
+    return _subscription_manager

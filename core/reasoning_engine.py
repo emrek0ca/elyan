@@ -470,3 +470,13 @@ class ReasoningEngine:
         for child in node.children:
             count += ReasoningEngine._count_nodes(child)
         return count
+
+
+_reasoning_engine: Optional[ReasoningEngine] = None
+
+
+def get_reasoning_engine() -> ReasoningEngine:
+    global _reasoning_engine
+    if _reasoning_engine is None:
+        _reasoning_engine = ReasoningEngine()
+    return _reasoning_engine

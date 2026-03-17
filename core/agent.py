@@ -308,7 +308,62 @@ class Agent:
         self._nlu_model_a_path: str = ""
         self._nlu_model_a_mtime: float = 0.0
         self._nlu_model_a_load_error: str = ""
+        # ── Phase 6-10 module integration (graceful fallback) ──
+        self._init_phase6_10_modules()
         self._register_away_notifier()
+
+    def _init_phase6_10_modules(self) -> None:
+        """Initialize Phase 6-10 modules with graceful fallback."""
+        try:
+            from core.telemetry_system import get_telemetry_system
+            self.telemetry = get_telemetry_system()
+        except Exception:
+            self.telemetry = None
+        try:
+            from core.api_gateway import get_api_gateway
+            self.api_gateway = get_api_gateway()
+        except Exception:
+            self.api_gateway = None
+        try:
+            from core.nlp.turkish_nlp import get_turkish_nlp
+            self.turkish_nlp = get_turkish_nlp()
+        except Exception:
+            self.turkish_nlp = None
+        try:
+            from core.reasoning_engine import get_reasoning_engine
+            self.reasoning = get_reasoning_engine()
+        except Exception:
+            self.reasoning = None
+        try:
+            from core.multi_agent_v2 import get_multi_agent_orchestrator
+            self.multi_agent_v2 = get_multi_agent_orchestrator()
+        except Exception:
+            self.multi_agent_v2 = None
+        try:
+            from core.billing.subscription import get_subscription_manager
+            self.billing = get_subscription_manager()
+        except Exception:
+            self.billing = None
+        try:
+            from core.plugins.plugin_system import get_plugin_manager
+            self.plugin_manager = get_plugin_manager()
+        except Exception:
+            self.plugin_manager = None
+        try:
+            from core.integrations.integration_sdk import get_integration_hub
+            self.integrations = get_integration_hub()
+        except Exception:
+            self.integrations = None
+        try:
+            from core.i18n.multi_language import get_multi_language_engine
+            self.multi_language = get_multi_language_engine()
+        except Exception:
+            self.multi_language = None
+        try:
+            from core.compliance_v2.compliance import get_compliance_engine
+            self.compliance = get_compliance_engine()
+        except Exception:
+            self.compliance = None
 
     def _register_away_notifier(self) -> None:
         if self._away_notifier_registered:
@@ -1193,6 +1248,20 @@ class Agent:
             response_cfg["compact_actions"] = False
         response_cfg.setdefault("share_attachments_default", True)
         ctx.runtime_policy["response"] = response_cfg
+        # ── Phase 6-10: Pre-pipeline hooks ──
+        _trace_ctx = None
+        if self.telemetry:
+            try:
+                _trace_ctx = self.telemetry.start_request(uid, effective_user_input[:100])
+            except Exception:
+                _trace_ctx = None
+        if self.multi_language:
+            try:
+                _lang_detection = self.multi_language.process(effective_user_input)
+                ctx.runtime_policy["metadata"]["detected_language"] = _lang_detection.get("detected_language", "en")
+                ctx.runtime_policy["metadata"]["text_direction"] = _lang_detection.get("text_direction", "ltr")
+            except Exception:
+                pass
         if autonomy_mode in {"full", "full-autonomy", "tam_otonom", "tam-otonom"}:
             ctx.runtime_policy["name"] = "full-autonomy"
             sec_cfg = ctx.runtime_policy.get("security", {}) if isinstance(ctx.runtime_policy.get("security"), dict) else {}
@@ -1260,6 +1329,33 @@ class Agent:
                 status = "partial"
             elif ctx.errors:
                 status = "failed"
+            # ── Phase 6-10: Post-pipeline hooks ──
+            _elapsed_ms = (time.perf_counter() - started_at) * 1000
+            if self.telemetry and _trace_ctx:
+                try:
+                    self.telemetry.end_request(
+                        _trace_ctx["trace_id"], _trace_ctx["span_id"],
+                        status="ok" if status == "success" else "error",
+                        latency_ms=_elapsed_ms,
+                    )
+                except Exception:
+                    pass
+            if self.billing:
+                try:
+                    from core.billing.subscription import UsageType
+                    self.billing.usage.record(uid, UsageType.API_REQUEST, 1)
+                except Exception:
+                    pass
+            if self.compliance:
+                try:
+                    from core.compliance_v2.compliance import ComplianceFramework, AuditSeverity
+                    self.compliance.auditor.log_event(
+                        ComplianceFramework.SOC2, AuditSeverity.INFO,
+                        "request", f"Processed: {ctx.action or 'chat'} ({status})",
+                        user_id=uid,
+                    )
+                except Exception:
+                    pass
             manifest = ledger.write_manifest(
                 status=status,
                 error="; ".join(str(e) for e in (ctx.errors or []) if str(e).strip()),

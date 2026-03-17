@@ -471,3 +471,13 @@ class MultiAgentOrchestrator:
             "unresolved_conflicts": len(self.conflict_resolver.get_unresolved()),
             "active_plans": len([p for p in self.planner.list_plans() if p.status != "completed"]),
         }
+
+
+_orchestrator: Optional[MultiAgentOrchestrator] = None
+
+
+def get_multi_agent_orchestrator() -> MultiAgentOrchestrator:
+    global _orchestrator
+    if _orchestrator is None:
+        _orchestrator = MultiAgentOrchestrator()
+    return _orchestrator

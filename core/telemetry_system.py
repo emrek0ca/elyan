@@ -379,3 +379,13 @@ class TelemetrySystem:
             "errors_last_hour": errors,
             "active_traces": len(self.tracer._active_spans),
         }
+
+
+_telemetry_system: Optional[TelemetrySystem] = None
+
+
+def get_telemetry_system() -> TelemetrySystem:
+    global _telemetry_system
+    if _telemetry_system is None:
+        _telemetry_system = TelemetrySystem()
+    return _telemetry_system

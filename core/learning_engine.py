@@ -480,3 +480,13 @@ class LearningEngine:
             "interaction_count": len(self.interaction_history),
             "exported_at": datetime.now().isoformat()
         }
+
+
+_learning_engine: Optional[LearningEngine] = None
+
+
+def get_learning_engine(user_id: str = "default") -> LearningEngine:
+    global _learning_engine
+    if _learning_engine is None:
+        _learning_engine = LearningEngine(user_id=user_id)
+    return _learning_engine

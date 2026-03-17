@@ -635,3 +635,13 @@ class TurkishNLPEngine:
 
     def compute_similarity(self, text1: str, text2: str) -> float:
         return self.similarity.similarity(text1, text2)
+
+
+_turkish_nlp: Optional[TurkishNLPEngine] = None
+
+
+def get_turkish_nlp() -> TurkishNLPEngine:
+    global _turkish_nlp
+    if _turkish_nlp is None:
+        _turkish_nlp = TurkishNLPEngine()
+    return _turkish_nlp

@@ -541,3 +541,13 @@ class ComplianceEngine:
             ),
             "processing_records": len(self.dpo._processing_records),
         }
+
+
+_compliance_engine: Optional[ComplianceEngine] = None
+
+
+def get_compliance_engine() -> ComplianceEngine:
+    global _compliance_engine
+    if _compliance_engine is None:
+        _compliance_engine = ComplianceEngine()
+    return _compliance_engine

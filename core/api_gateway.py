@@ -477,3 +477,13 @@ class APIGateway:
             "webhook_endpoints": len(self.webhook_manager._endpoints),
             "valid_webhook_events": WebhookManager.VALID_EVENTS,
         }
+
+
+_api_gateway: Optional[APIGateway] = None
+
+
+def get_api_gateway() -> APIGateway:
+    global _api_gateway
+    if _api_gateway is None:
+        _api_gateway = APIGateway()
+    return _api_gateway

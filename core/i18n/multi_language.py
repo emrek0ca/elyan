@@ -300,3 +300,13 @@ class MultiLanguageEngine:
             target_language=target,
         )
         return self.translator.translate(request)
+
+
+_multi_language_engine: Optional[MultiLanguageEngine] = None
+
+
+def get_multi_language_engine() -> MultiLanguageEngine:
+    global _multi_language_engine
+    if _multi_language_engine is None:
+        _multi_language_engine = MultiLanguageEngine()
+    return _multi_language_engine

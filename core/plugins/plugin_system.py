@@ -355,3 +355,13 @@ class RBACManager:
 
     def list_roles(self) -> Dict[str, Set[str]]:
         return dict(self._all_roles)
+
+
+_plugin_manager: Optional[PluginManager] = None
+
+
+def get_plugin_manager() -> PluginManager:
+    global _plugin_manager
+    if _plugin_manager is None:
+        _plugin_manager = PluginManager()
+    return _plugin_manager

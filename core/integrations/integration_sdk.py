@@ -361,3 +361,13 @@ class IntegrationHub:
             name: intg.get_status()
             for name, intg in self._integrations.items()
         }
+
+
+_integration_hub: Optional[IntegrationHub] = None
+
+
+def get_integration_hub() -> IntegrationHub:
+    global _integration_hub
+    if _integration_hub is None:
+        _integration_hub = IntegrationHub()
+    return _integration_hub
