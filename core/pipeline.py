@@ -3526,8 +3526,10 @@ class StageExecute(PipelineStage):
                         agent._ensure_llm()
 
                     try:
+                        # Pass context_intelligence specialized prompt as system_prompt
+                        _effective_sys_prompt = ctx.specialized_prompt if ctx.specialized_prompt else None
                         chat_resp = await with_timeout(
-                            agent.llm.generate(full_prompt, role=ctx.role, user_id=ctx.user_id),
+                            agent.llm.generate(full_prompt, system_prompt=_effective_sys_prompt, role=ctx.role, user_id=ctx.user_id),
                             seconds=LLM_TIMEOUT,
                             fallback="LLM timeout.",
                             context="pipeline_execute_chat"

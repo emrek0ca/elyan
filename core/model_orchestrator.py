@@ -353,7 +353,9 @@ class ModelOrchestrator:
                 continue
             role_match = True
             score = 0
-            pref_bonus_allowed = role_name in {"router", "inference"} or pref_rank <= 1
+            # Neural router preference bonus only for "router" role (fast local).
+            # For inference/code/etc., rely on _priority_for_role quality ordering.
+            pref_bonus_allowed = role_name == "router" or pref_rank <= 1
             if pref_provider and provider == pref_provider and pref_bonus_allowed:
                 score += 100
             if pref_model and str(entry.get("model") or "").strip().lower() == pref_model and pref_bonus_allowed:
@@ -436,10 +438,10 @@ class ModelOrchestrator:
 
         role_name = str(role or "inference").strip().lower() or "inference"
         priority = self._priority_for_role(role_name)
-        if role_name == "inference":
-            priority = [self.active_provider] + [provider for provider in priority if provider != self.active_provider]
-        elif self.active_provider not in priority:
-            priority.insert(0, self.active_provider)
+        # Only prepend active_provider for "router" role (fast local classification).
+        # For all other roles, trust the quality-optimised priority list.
+        if role_name == "router" and self.active_provider not in priority[:1]:
+            priority = [self.active_provider] + [p for p in priority if p != self.active_provider]
         excluded = {self._normalize_provider(item) for item in (exclude or set())}
         for provider in priority:
             provider_name = self._normalize_provider(provider)
@@ -453,14 +455,25 @@ class ModelOrchestrator:
 
     @staticmethod
     def _priority_for_role(role: str) -> List[str]:
+        """Return provider priority order for a given role.
+
+        Groq (free, llama-3.3-70b, fast) and Google Gemini (free, good Turkish)
+        are prioritised for quality.  Ollama (local, small) is kept as a fast
+        router and last-resort fallback.
+        """
         role_name = str(role or "inference").strip().lower()
-        if role_name in {"router", "inference"}:
-            return ["ollama", "groq", "openai", "google", "anthropic"]
+        if role_name == "router":
+            # Router needs speed — local first, then cloud
+            return ["ollama", "groq", "google", "openai", "anthropic"]
         if role_name in {"code", "code_worker"}:
-            return ["anthropic", "openai", "groq", "google", "ollama"]
+            return ["groq", "google", "anthropic", "openai", "ollama"]
         if role_name in {"reasoning", "research_worker", "worker", "critic", "planning", "qa"}:
-            return ["anthropic", "openai", "google", "groq", "ollama"]
-        return ["groq", "openai", "anthropic", "google", "ollama"]
+            return ["groq", "google", "anthropic", "openai", "ollama"]
+        if role_name == "creative":
+            # Gemini excels at Turkish creative content
+            return ["google", "groq", "anthropic", "openai", "ollama"]
+        # inference / default — quality first
+        return ["groq", "google", "openai", "anthropic", "ollama"]
 
     def add_provider(self, p_type: str, api_key: str, model: str = None):
         provider = self._normalize_provider(p_type)

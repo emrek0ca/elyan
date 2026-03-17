@@ -107,19 +107,63 @@ class NeuralRoleMapper:
 
     def detect_role(self, prompt: str) -> str:
         p = prompt.lower()
-        
-        # 1. Code Detection
-        if any(kw in p for kw in ["kod", "yazılım", "python", "javascript", "react", "debug", "html"]):
+
+        # 1. Code Detection (40+ keywords — TR + EN)
+        _CODE_KW = {
+            # Turkish
+            "kod", "kodla", "yazılım", "fonksiyon", "sınıf", "değişken",
+            "hata ayıkla", "api", "endpoint", "veritabanı", "sql", "docker",
+            "git", "deploy", "test yaz", "refactor", "web sitesi", "uygulama yap",
+            "script", "program", "algoritma", "kütüphane", "framework",
+            "component", "hesap makinesi", "sunucu", "server", "terminal",
+            "komut", "paket", "modul", "import", "class", "def ",
+            # English
+            "python", "javascript", "typescript", "react", "vue", "angular",
+            "node", "java", "golang", "rust", "c++", "swift", "kotlin",
+            "html", "css", "tailwind", "sass", "webpack", "vite",
+            "backend", "frontend", "fullstack", "debug", "compile", "build",
+            "function", "variable", "array", "database", "schema", "migration",
+            "regex", "async", "await", "promise", "callback",
+        }
+        if any(kw in p for kw in _CODE_KW):
             return "code"
-            
-        # 2. Reasoning Detection (Complex planning)
-        if any(kw in p for kw in ["planla", "tasarla", "analiz et", "neden", "mimari", "strateji"]):
-            return "reasoning"
-            
-        # 3. Creative Detection
-        if any(kw in p for kw in ["hikaye", "şiir", "blog", "yaratıcı", "fikir", "slogan"]):
+
+        # 2. Creative Detection (check BEFORE reasoning because "tasarla" overlaps)
+        _CREATIVE_KW = {
+            # Turkish
+            "hikaye", "şiir", "blog", "yaratıcı", "fikir", "slogan",
+            "tasarım", "tasarla", "logo", "renk", "içerik", "başlık", "metin",
+            "kampanya", "senaryo", "roman", "makale", "kompozisyon",
+            "şarkı", "poster", "video", "sunum", "reklam", "illüstrasyon",
+            # English
+            "story", "poem", "creative", "design", "branding",
+        }
+        if any(kw in p for kw in _CREATIVE_KW):
             return "creative"
-            
+
+        # 3. Reasoning Detection (25+ keywords)
+        _REASONING_KW = {
+            # Turkish
+            "planla", "analiz et", "analiz", "neden", "mimari",
+            "strateji", "karşılaştır", "değerlendir", "avantaj", "dezavantaj",
+            "fark", "öncelik", "kritik", "çözüm", "adım adım", "plan",
+            "risk", "maliyet", "nasıl çalışır", "açıkla", "sebep",
+            "mantık", "karar", "optimiz",
+            # English
+            "compare", "evaluate", "pros cons", "step by step",
+            "architecture", "explain why", "trade-off", "benchmark",
+        }
+        if any(kw in p for kw in _REASONING_KW):
+            return "reasoning"
+
+        # 4. Complexity heuristic: long prompts or multi-step instructions
+        #    likely need a stronger model via "reasoning" role
+        word_count = len(p.split())
+        _MULTI_STEP = {"önce", "sonra", "ardından", "adım 1", "adım 2",
+                       "ilk olarak", "ikinci olarak", "first", "then", "next"}
+        if word_count > 35 or any(ms in p for ms in _MULTI_STEP):
+            return "reasoning"
+
         # Default to fast inference
         return "inference"
 

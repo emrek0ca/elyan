@@ -115,6 +115,59 @@ class LLMClient:
             + lang_clause
         )
 
+    def _resolve_role_system_prompt(self, role: str) -> str:
+        """Return a role-optimised system prompt.
+
+        Falls back to the generic _resolve_system_prompt() for unknown roles.
+        """
+        _role = str(role or "inference").strip().lower()
+
+        _base_identity = (
+            "Sen Elyan, son derece zeki ve yetenekli bir dijital asistansın. "
+            "Kullanıcıyla her zaman profesyonel, samimi ve çözüm odaklı iletişim kur. "
+            "Yanıtları varsayılan olarak Türkçe ver, kullanıcı başka dil isterse o dilde yanıtla.\n\n"
+        )
+
+        if _role in ("code", "code_worker"):
+            return (
+                _base_identity
+                + "SEN UZMAN BİR YAZILIM MÜHENDİSİSİN.\n"
+                "KURALLAR:\n"
+                "1. Her zaman TAM, ÇALIŞIR, production-ready kod yaz. İskelet veya placeholder ASLA KULLANMA.\n"
+                "2. Kod bloklarında dili belirt (```python, ```html vb.).\n"
+                "3. Hata yönetimi (try/except, error boundaries) ekle.\n"
+                "4. Modern best practice kullan: tip güvenliği, modülerlik, anlamlı isimlendirme.\n"
+                "5. Gerekiyorsa dosya yapısını açıkla, her dosyayı tam içerikle ver.\n"
+                "6. Kısa açıklama + tam kod ver. Gereksiz laf kalabalığı yapma.\n"
+                "7. Kullanıcının dilini anla — Türkçe istekler Türkçe açıklamayla, İngilizce istekler İngilizce.\n"
+            )
+
+        if _role in ("reasoning", "planning", "critic", "qa"):
+            return (
+                _base_identity
+                + "SEN ANALİTİK BİR DÜŞÜNÜRSÜN.\n"
+                "KURALLAR:\n"
+                "1. Adım adım düşün, her adımda mantığını açıkla.\n"
+                "2. Artıları ve eksileri listele, karşılaştırmalı değerlendir.\n"
+                "3. Varsayımları açıkça belirt, belirsizlikleri işaretle.\n"
+                "4. Sonuçta net bir öneri veya karar sun.\n"
+                "5. Karmaşık konuları basit, anlaşılır dille açıkla.\n"
+            )
+
+        if _role == "creative":
+            return (
+                _base_identity
+                + "SEN YARATICI BİR İÇERİK ÜRETICISISIN.\n"
+                "KURALLAR:\n"
+                "1. Özgün, etkileyici ve akılda kalıcı içerik üret.\n"
+                "2. Türk kültürel bağlamını dikkate al.\n"
+                "3. Dil zenginliğini kullan — canlı, görsel ve duygusal ifadeler.\n"
+                "4. Format ve yapıyı içerik türüne göre ayarla (blog, hikaye, senaryo vb.).\n"
+            )
+
+        # inference / default — concise chat
+        return self._resolve_system_prompt()
+
     async def check_model(self) -> bool:
         """Hızlı kontrol: En az bir sağlayıcı var mı?"""
         return len(self.orchestrator.providers) > 0
@@ -332,15 +385,27 @@ class LLMClient:
         if not token_budget.is_within_budget(user_id):
             return "Hata: Günlük LLM bütçesi aşıldı. Lütfen daha sonra deneyin."
 
-        # cost_guard: cap temperature and token budget
+        # cost_guard: role-aware temperature and token budget caps
         _temp = temperature
         _max_tokens = None
         if self.cost_guard:
-            if _temp is not None and _temp > 0.35:
-                _temp = 0.35
+            _role = str(role or "inference").strip().lower()
+            _cg_limits = {
+                "code":      (0.4,  4096),
+                "code_worker": (0.4, 4096),
+                "reasoning": (0.3,  2048),
+                "planning":  (0.3,  2048),
+                "critic":    (0.3,  2048),
+                "qa":        (0.3,  2048),
+                "creative":  (0.7,  1500),
+                "router":    (0.2,  320),
+            }
+            _cg_temp_cap, _cg_max_tok = _cg_limits.get(_role, (0.5, 800))
+            if _temp is not None and _temp > _cg_temp_cap:
+                _temp = _cg_temp_cap
             elif _temp is None:
-                _temp = 0.3
-            _max_tokens = 320
+                _temp = _cg_temp_cap
+            _max_tokens = _cg_max_tok
 
         # Test/compat path: honor instance-level monkeypatches for router shortcut.
         _patched = self.__dict__.get("_call_any_provider")
@@ -352,9 +417,9 @@ class LLMClient:
                 max_tokens=_max_tokens,
             )
 
-        # Strong system instruction
+        # Strong system instruction — role-aware prompt selection
         if not system_prompt:
-            system_prompt = self._resolve_system_prompt()
+            system_prompt = self._resolve_role_system_prompt(role)
 
         if not disable_collaboration and not model_config and self._collaboration_enabled_for_role(prompt, role):
             return await self.generate_collaborative(
@@ -373,13 +438,18 @@ class LLMClient:
         allow_cloud_fallback = bool(elyan_config.get("security.kvkk.allowCloudFallback", True))
         external_providers = {"openai", "groq", "gemini", "google", "anthropic"}
 
+        # local_first only applies to "router" role (fast classification).
+        # All other roles (inference, code, reasoning, creative) use the best
+        # available provider including cloud for maximum quality.
+        local_first_effective = local_first and role in ("router",)
+
         # Retry Loop with Exponential Backoff and Provider Switching
         retry_attempts = 3
         backoff = 1.0
-        
+
         # Get providers to try
         cfg_seed = self._resolve_explicit_model_config(model_config, role) if (model_config and strict_model_config) else (model_config or self.orchestrator.get_best_available(role))
-        if local_first and not (model_config and strict_model_config):
+        if local_first_effective and not (model_config and strict_model_config):
             try:
                 local_cfg = self.orchestrator.get_best_available(role, exclude=external_providers)
             except Exception:
