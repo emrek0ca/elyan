@@ -1,996 +1,439 @@
 """
-Learning Engine - Elyan's Adaptive Intelligence System
-
-Kullanıcı davranışlarını öğrenir, tercihlerini kaydeder ve zamanla adapte olur.
-
-Features:
-1. User Preference Learning - Tercihler
-2. Pattern Recognition - Sık kullanılan komutlar
-3. Success/Failure Tracking - Başarı oranları
-4. Context Awareness - Bağlam anlama
-5. Predictive Suggestions - Tahminler
-6. Auto-optimization - Kendini geliştirme
-
-Database Schema:
-- user_interactions: Her etkileşim
-- learned_patterns: Öğrenilen pattern'ler
-- user_preferences: Kullanıcı tercihleri
-- success_metrics: Başarı metrikleri
-- context_history: Bağlam geçmişi
+Learning Engine - User-specific model fine-tuning and personalization
+Provides pattern extraction, personalization metrics, confidence scoring
 """
 
 import json
-import time
 import sqlite3
-import re
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
-from datetime import datetime, timedelta
-from dataclasses import dataclass, asdict
-from collections import Counter, defaultdict
-import asyncio
+from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
+from collections import defaultdict, Counter
+import logging
 
-from utils.logger import get_logger
-
-logger = get_logger("learning_engine")
+logger = logging.getLogger(__name__)
 
 
-@dataclass
-class Interaction:
-    """Single user interaction record"""
-    timestamp: float
-    user_id: str
-    input_text: str
-    intent: str
-    action: str
-    success: bool
-    duration_ms: int
-    context: Dict[str, Any]
-    feedback: Optional[str] = None
+class LearningMetrics:
+    """Track learning metrics for a user"""
+
+    def __init__(self):
+        self.total_interactions = 0
+        self.successful_interactions = 0
+        self.failed_interactions = 0
+        self.tool_usage_count = defaultdict(int)
+        self.tool_success_rate = defaultdict(lambda: {"success": 0, "total": 0})
+        self.pattern_frequency = defaultdict(int)
+        self.user_confidence = 0.0
+        self.learning_velocity = 0.0
+
+    def update(self, tool: str, success: bool, duration: float):
+        """Update metrics with new interaction"""
+        self.total_interactions += 1
+        self.tool_usage_count[tool] += 1
+
+        if success:
+            self.successful_interactions += 1
+            self.tool_success_rate[tool]["success"] += 1
+        else:
+            self.failed_interactions += 1
+
+        self.tool_success_rate[tool]["total"] += 1
+
+        # Calculate confidence based on success rate
+        if self.total_interactions > 0:
+            self.user_confidence = self.successful_interactions / self.total_interactions
+
+        # Learning velocity: improvement rate
+        if self.total_interactions > 10:
+            recent_success = self.successful_interactions / self.total_interactions
+            self.learning_velocity = recent_success - 0.5  # Base: 50%
+
+    def get_success_rate(self, tool: str) -> float:
+        """Get success rate for specific tool"""
+        stats = self.tool_success_rate[tool]
+        if stats["total"] == 0:
+            return 0.0
+        return stats["success"] / stats["total"]
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary"""
+        return {
+            "total_interactions": self.total_interactions,
+            "successful_interactions": self.successful_interactions,
+            "failed_interactions": self.failed_interactions,
+            "overall_success_rate": self.user_confidence,
+            "learning_velocity": self.learning_velocity,
+            "tool_usage": dict(self.tool_usage_count),
+            "tool_success_rates": {
+                tool: self.get_success_rate(tool)
+                for tool in self.tool_usage_count.keys()
+            }
+        }
 
 
-@dataclass
-class LearnedPattern:
-    """Pattern learned from user behavior"""
-    pattern: str
-    intent: str
-    action: str
-    frequency: int
-    success_rate: float
-    avg_duration_ms: int
-    last_used: float
-    confidence: float
+class Pattern:
+    """Represents a learned pattern"""
 
+    def __init__(self, pattern_id: str, tool: str, params: Dict, success_count: int = 0):
+        self.pattern_id = pattern_id
+        self.tool = tool
+        self.params = params
+        self.success_count = success_count
+        self.failure_count = 0
+        self.last_used = datetime.now().isoformat()
+        self.confidence = 0.0
+        self.frequency = 0
 
-@dataclass
-class UserPreference:
-    """User preference"""
-    key: str
-    value: Any
-    learned_from: str  # "explicit" or "implicit"
-    confidence: float
-    last_updated: float
+    def record_success(self):
+        """Record successful usage"""
+        self.success_count += 1
+        self._update_confidence()
+
+    def record_failure(self):
+        """Record failed usage"""
+        self.failure_count += 1
+        self._update_confidence()
+
+    def _update_confidence(self):
+        """Update confidence score"""
+        total = self.success_count + self.failure_count
+        if total > 0:
+            self.confidence = self.success_count / total
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary"""
+        return {
+            "pattern_id": self.pattern_id,
+            "tool": self.tool,
+            "params": self.params,
+            "success_count": self.success_count,
+            "failure_count": self.failure_count,
+            "confidence": self.confidence,
+            "frequency": self.frequency,
+            "last_used": self.last_used
+        }
 
 
 class LearningEngine:
-    """
-    Adaptive learning system that improves over time.
-    """
+    """Main learning engine for personalization"""
 
-    def __init__(self, db_path: Optional[Path] = None):
-        if db_path is None:
-            db_path = Path.home() / ".elyan" / "learning.db"
+    def __init__(self, user_id: str, storage_path: str = ".elyan/learning"):
+        self.user_id = user_id
+        self.storage_path = Path(storage_path)
+        self.storage_path.mkdir(parents=True, exist_ok=True)
 
-        self.db_path = db_path
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.metrics = LearningMetrics()
+        self.patterns: Dict[str, Pattern] = {}
+        self.interaction_history: List[Dict] = []
+        self.preferences: Dict[str, Any] = {}
+        self.coding_style: Dict[str, Any] = {}
 
-        # In-memory caches for speed
-        self._pattern_cache: Dict[str, LearnedPattern] = {}
-        self._preference_cache: Dict[str, UserPreference] = {}
-        self._context_window: List[Interaction] = []
-        self._quick_patterns: Dict[str, str] = {}  # Fast lookup
-        self._skill_memory_cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self.db_path = self.storage_path / f"{user_id}_learning.db"
+        self._init_db()
+        self._load_data()
 
-        self._initialize_database()
-        self._load_caches()
+    def _init_db(self):
+        """Initialize SQLite database"""
+        try:
+            conn = sqlite3.connect(str(self.db_path))
+            cursor = conn.cursor()
 
-        logger.info(f"Learning engine initialized: {self.db_path}")
-
-    def _initialize_database(self):
-        """Create database tables"""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
+            # Create tables
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS interactions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp REAL NOT NULL,
-                    user_id TEXT NOT NULL,
-                    input_text TEXT NOT NULL,
-                    intent TEXT,
-                    action TEXT,
-                    success INTEGER NOT NULL,
-                    duration_ms INTEGER,
-                    context TEXT,
-                    feedback TEXT
+                    id INTEGER PRIMARY KEY,
+                    tool TEXT,
+                    input_params TEXT,
+                    output TEXT,
+                    success BOOLEAN,
+                    duration REAL,
+                    timestamp TEXT
                 )
             """)
 
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_user_time ON interactions (user_id, timestamp)
-            """)
-
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_intent ON interactions (intent)
-            """)
-
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS learned_patterns (
-                    pattern TEXT PRIMARY KEY,
-                    intent TEXT NOT NULL,
-                    action TEXT NOT NULL,
-                    frequency INTEGER DEFAULT 1,
-                    success_rate REAL DEFAULT 1.0,
-                    avg_duration_ms INTEGER,
-                    last_used REAL NOT NULL,
-                    confidence REAL DEFAULT 0.5
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS patterns (
+                    pattern_id TEXT PRIMARY KEY,
+                    tool TEXT,
+                    params TEXT,
+                    success_count INTEGER,
+                    failure_count INTEGER,
+                    confidence REAL,
+                    frequency INTEGER
                 )
             """)
 
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS user_preferences (
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS preferences (
                     key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    learned_from TEXT NOT NULL,
-                    confidence REAL DEFAULT 0.5,
-                    last_updated REAL NOT NULL
-                )
-            """)
-
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS success_metrics (
-                    action TEXT PRIMARY KEY,
-                    total_executions INTEGER DEFAULT 0,
-                    successful_executions INTEGER DEFAULT 0,
-                    avg_duration_ms INTEGER DEFAULT 0,
-                    last_execution REAL
-                )
-            """)
-
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS skill_memory (
-                    domain TEXT NOT NULL,
-                    pattern TEXT NOT NULL,
-                    preferred_tools TEXT,
-                    preferred_output TEXT,
-                    quality_focus TEXT,
-                    success_count INTEGER DEFAULT 0,
-                    failure_count INTEGER DEFAULT 0,
-                    avg_quality REAL DEFAULT 0.0,
-                    last_used REAL NOT NULL,
-                    PRIMARY KEY (domain, pattern)
+                    value TEXT
                 )
             """)
 
             conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"Failed to initialize DB: {e}")
 
-    def _load_caches(self):
-        """Load frequently used data into memory"""
-        with sqlite3.connect(self.db_path) as conn:
-            # Load learned patterns
-            cursor = conn.execute("""
-                SELECT * FROM learned_patterns
-                ORDER BY frequency DESC, confidence DESC
-                LIMIT 100
-            """)
+    def _load_data(self):
+        """Load learning data from database"""
+        try:
+            conn = sqlite3.connect(str(self.db_path))
+            cursor = conn.cursor()
 
-            for row in cursor:
-                pattern = LearnedPattern(
-                    pattern=row[0],
-                    intent=row[1],
-                    action=row[2],
-                    frequency=row[3],
-                    success_rate=row[4],
-                    avg_duration_ms=row[5],
-                    last_used=row[6],
-                    confidence=row[7]
+            # Load patterns
+            cursor.execute("SELECT * FROM patterns")
+            for row in cursor.fetchall():
+                pattern = Pattern(
+                    pattern_id=row[0],
+                    tool=row[1],
+                    params=json.loads(row[2]),
+                    success_count=row[3]
                 )
-                self._pattern_cache[row[0]] = pattern
-                self._quick_patterns[row[0].lower()] = row[2]
+                pattern.failure_count = row[4]
+                pattern.confidence = row[5]
+                pattern.frequency = row[6]
+                self.patterns[pattern.pattern_id] = pattern
 
             # Load preferences
-            cursor = conn.execute("SELECT * FROM user_preferences")
-            for row in cursor:
-                pref = UserPreference(
-                    key=row[0],
-                    value=json.loads(row[1]),
-                    learned_from=row[2],
-                    confidence=row[3],
-                    last_updated=row[4]
-                )
-                self._preference_cache[row[0]] = pref
+            cursor.execute("SELECT * FROM preferences")
+            for key, value in cursor.fetchall():
+                self.preferences[key] = json.loads(value)
 
-            # Load skill memory rows
-            cursor = conn.execute("""
-                SELECT domain, pattern, preferred_tools, preferred_output, quality_focus,
-                       success_count, failure_count, avg_quality, last_used
-                FROM skill_memory
-                ORDER BY (success_count - failure_count) DESC, avg_quality DESC, last_used DESC
-                LIMIT 200
-            """)
-            for row in cursor:
-                key = (str(row[0] or "general"), str(row[1] or ""))
-                self._skill_memory_cache[key] = {
-                    "domain": key[0],
-                    "pattern": key[1],
-                    "preferred_tools": json.loads(row[2]) if row[2] else [],
-                    "preferred_output": str(row[3] or ""),
-                    "quality_focus": json.loads(row[4]) if row[4] else [],
-                    "success_count": int(row[5] or 0),
-                    "failure_count": int(row[6] or 0),
-                    "avg_quality": float(row[7] or 0.0),
-                    "last_used": float(row[8] or 0.0),
-                }
-        logger.info(
-            f"Loaded {len(self._pattern_cache)} patterns, {len(self._preference_cache)} preferences, "
-            f"{len(self._skill_memory_cache)} skill memories"
-        )
-
-    async def record_interaction(
-        self,
-        user_id: str,
-        input_text: str,
-        intent: str,
-        action: str,
-        success: bool,
-        duration_ms: int,
-        context: Optional[Dict] = None,
-        feedback: Optional[str] = None
-    ):
-        """Record user interaction for learning"""
-        interaction = Interaction(
-            timestamp=time.time(),
-            user_id=user_id,
-            input_text=input_text,
-            intent=intent,
-            action=action,
-            success=success,
-            duration_ms=duration_ms,
-            context=context or {},
-            feedback=feedback
-        )
-
-        # Store in context window (last 10 interactions)
-        self._context_window.append(interaction)
-        if len(self._context_window) > 10:
-            self._context_window.pop(0)
-
-        # Async database insert
-        asyncio.create_task(self._store_interaction(interaction))
-
-        # Learn from this interaction
-        await self._learn_from_interaction(interaction)
-
-    async def _store_interaction(self, interaction: Interaction):
-        """Store interaction in database"""
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute("""
-                    INSERT INTO interactions
-                    (timestamp, user_id, input_text, intent, action, success, duration_ms, context, feedback)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    interaction.timestamp,
-                    interaction.user_id,
-                    interaction.input_text,
-                    interaction.intent,
-                    interaction.action,
-                    1 if interaction.success else 0,
-                    interaction.duration_ms,
-                    json.dumps(interaction.context),
-                    interaction.feedback
-                ))
-                conn.commit()
+            conn.close()
+            logger.info(f"Loaded {len(self.patterns)} patterns for user {self.user_id}")
         except Exception as e:
-            logger.error(f"Failed to store interaction: {e}")
+            logger.error(f"Failed to load data: {e}")
 
-    async def _learn_from_interaction(self, interaction: Interaction):
-        """Learn patterns and preferences from interaction.
-        
-        POLICY: Sadece kanıtlı başarılardan öğren.
-        - Başarılı → pattern oluştur veya güçlendir
-        - Başarısız → mevcut pattern'ın güvenini düşür, yeni pattern oluşturma
-        - confidence < 0.3 → pattern'ı sil (yanlış öğrenmeyi kes)
-        """
-        pattern_key = interaction.input_text.lower().strip()
+    def record_interaction(self, tool: str, input_params: Dict, output: Any,
+                          success: bool, duration: float) -> str:
+        """Record user interaction"""
+        try:
+            # Update metrics
+            self.metrics.update(tool, success, duration)
 
-        if pattern_key in self._pattern_cache:
-            # Update existing pattern
-            pattern = self._pattern_cache[pattern_key]
+            # Create interaction record
+            interaction = {
+                "tool": tool,
+                "input_params": input_params,
+                "output": output,
+                "success": success,
+                "duration": duration,
+                "timestamp": datetime.now().isoformat()
+            }
+            self.interaction_history.append(interaction)
+
+            # Save to database
+            conn = sqlite3.connect(str(self.db_path))
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO interactions (tool, input_params, output, success, duration, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                tool,
+                json.dumps(input_params),
+                json.dumps(output) if isinstance(output, (dict, list)) else str(output),
+                success,
+                duration,
+                interaction["timestamp"]
+            ))
+            conn.commit()
+            conn.close()
+
+            # Extract and update patterns
+            self._extract_patterns(tool, input_params, output, success)
+
+            return f"Interaction recorded: {tool} ({'success' if success else 'failed'})"
+        except Exception as e:
+            logger.error(f"Failed to record interaction: {e}")
+            return f"Error recording interaction: {e}"
+
+    def _extract_patterns(self, tool: str, params: Dict, output: Any, success: bool):
+        """Extract patterns from successful interactions"""
+        try:
+            # Create pattern ID from tool and key params
+            param_hash = hash(json.dumps(params, sort_keys=True, default=str))
+            pattern_id = f"{tool}_{param_hash}"
+
+            if pattern_id not in self.patterns:
+                self.patterns[pattern_id] = Pattern(pattern_id, tool, params)
+
+            pattern = self.patterns[pattern_id]
             pattern.frequency += 1
-            pattern.last_used = interaction.timestamp
 
-            if interaction.success:
-                # Başarı → güven artır
-                new_success = 1.0
-                pattern.success_rate = (pattern.success_rate * 0.9) + (new_success * 0.1)
-                pattern.confidence = min(1.0, pattern.confidence + 0.05)
+            if success:
+                pattern.record_success()
             else:
-                # Başarısız → güven DÜŞÜR
-                new_success = 0.0
-                pattern.success_rate = (pattern.success_rate * 0.9) + (new_success * 0.1)
-                pattern.confidence = max(0.0, pattern.confidence - 0.1)
+                pattern.record_failure()
 
-            # Update avg duration
-            pattern.avg_duration_ms = int(
-                (pattern.avg_duration_ms * 0.9) + (interaction.duration_ms * 0.1)
-            )
-
-            # PRUNE: confidence çok düşükse pattern'ı sil
-            if pattern.confidence < 0.3:
-                logger.info(f"Pruning low-confidence pattern: '{pattern_key}' (conf={pattern.confidence:.2f})")
-                del self._pattern_cache[pattern_key]
-                self._quick_patterns.pop(pattern_key, None)
-                asyncio.create_task(self._delete_pattern(pattern_key))
-                return
-
-        elif interaction.success:
-            # SADECE BAŞARILI etkileşimlerden yeni pattern oluştur
-            pattern = LearnedPattern(
-                pattern=pattern_key,
-                intent=interaction.intent,
-                action=interaction.action,
-                frequency=1,
-                success_rate=1.0,
-                avg_duration_ms=interaction.duration_ms,
-                last_used=interaction.timestamp,
-                confidence=0.5
-            )
-            self._pattern_cache[pattern_key] = pattern
-            self._quick_patterns[pattern_key] = interaction.action
-        else:
-            # Başarısız + yeni pattern → KAYDETME (yanlış öğrenmeyi engelle)
-            logger.debug(f"Skipping pattern creation for failed interaction: '{pattern_key[:50]}'")
-            return
-
-        # 2. Update success metrics
-        await self._update_success_metrics(interaction)
-
-        # 3. Learn preferences (if any signals) — sadece explicit tercihler
-        if interaction.success:
-            await self._learn_preferences(interaction)
-
-        # 4. Persist to database (async)
-        asyncio.create_task(self._persist_learned_pattern(pattern))
-
-    async def _update_success_metrics(self, interaction: Interaction):
-        """Update success metrics for action"""
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute("""
-                    INSERT INTO success_metrics (action, total_executions, successful_executions, avg_duration_ms, last_execution)
-                    VALUES (?, 1, ?, ?, ?)
-                    ON CONFLICT(action) DO UPDATE SET
-                        total_executions = total_executions + 1,
-                        successful_executions = successful_executions + excluded.successful_executions,
-                        avg_duration_ms = (avg_duration_ms * 9 + excluded.avg_duration_ms) / 10,
-                        last_execution = excluded.last_execution
-                """, (
-                    interaction.action,
-                    1 if interaction.success else 0,
-                    interaction.duration_ms,
-                    interaction.timestamp
-                ))
-                conn.commit()
+            # Save to database
+            self._save_pattern(pattern)
         except Exception as e:
-            logger.error(f"Failed to update metrics: {e}")
+            logger.error(f"Failed to extract patterns: {e}")
 
-    async def _learn_preferences(self, interaction: Interaction):
-        """Implicitly learn user preferences"""
-        # Example: If user frequently uses certain tools, prefer them
-        # Example: If user prefers short/long responses
-        # Example: Time of day preferences
-
-        # Time preference
-        hour = datetime.fromtimestamp(interaction.timestamp).hour
-        time_key = f"active_hours_{hour}"
-
-        if time_key in self._preference_cache:
-            pref = self._preference_cache[time_key]
-            pref.value = pref.value + 1
-            pref.confidence = min(1.0, pref.confidence + 0.01)
-            pref.last_updated = interaction.timestamp
-        else:
-            pref = UserPreference(
-                key=time_key,
-                value=1,
-                learned_from="implicit",
-                confidence=0.1,
-                last_updated=interaction.timestamp
-            )
-            self._preference_cache[time_key] = pref
-
-        # Explicit preference signals in user text.
-        explicit_prefs = self._detect_preferences(interaction.input_text)
-        for pref_key, pref_value, confidence, learned_from in explicit_prefs:
-            self._upsert_preference(
-                key=pref_key,
-                value=pref_value,
-                learned_from=learned_from,
-                confidence=confidence,
-                timestamp=interaction.timestamp,
-            )
-
-    @staticmethod
-    def _normalize(text: str) -> str:
-        return " ".join(str(text or "").lower().strip().split())
-
-    def _detect_preferences(self, text: str) -> List[Tuple[str, Any, float, str]]:
-        t = self._normalize(text)
-        if not t:
-            return []
-
-        explicit_markers = [
-            "bundan sonra",
-            "artık",
-            "tercihim",
-            "lütfen",
-            "her zaman",
-        ]
-        is_explicit = any(m in t for m in explicit_markers)
-        base_conf = 0.6 if is_explicit else 0.45
-
-        prefs: List[Tuple[str, Any, float, str]] = []
-
-        # Length preference
-        if any(k in t for k in ["kısa", "kisa", "özet", "ozet", "özetle", "kısa tut"]):
-            prefs.append(("response_length", "short", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
-        if any(k in t for k in ["detaylı", "detayli", "uzun", "tüm detay", "tum detay"]):
-            prefs.append(("response_length", "detailed", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
-
-        # Tone preference
-        if any(k in t for k in ["resmi", "kurumsal"]):
-            prefs.append(("communication_tone", "formal", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
-        if any(k in t for k in ["samimi", "sıcak", "sicak"]):
-            prefs.append(("communication_tone", "friendly", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
-        if "profesyonel" in t:
-            prefs.append(("communication_tone", "professional_friendly", base_conf + 0.05, "explicit" if is_explicit else "implicit"))
-
-        # Language preference
-        if any(k in t for k in ["ingilizce", "english"]):
-            prefs.append(("preferred_language", "en", base_conf + 0.15, "explicit" if is_explicit else "implicit"))
-        if any(k in t for k in ["türkçe", "turkce"]):
-            prefs.append(("preferred_language", "tr", base_conf + 0.15, "explicit" if is_explicit else "implicit"))
-
-        # Format style
-        if "adım adım" in t or "adim adim" in t:
-            prefs.append(("format_style", "steps", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
-        if "madde madde" in t:
-            prefs.append(("format_style", "bullets", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
-        if "tablo" in t:
-            prefs.append(("format_style", "table", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
-
-        # Code inclusion
-        if any(k in t for k in ["kodsuz", "kod istemiyorum", "kod olmasın"]):
-            prefs.append(("include_code", False, base_conf + 0.2, "explicit" if is_explicit else "implicit"))
-        if any(k in t for k in ["kod yaz", "kodu ver", "kodla", "code"]):
-            prefs.append(("include_code", True, base_conf + 0.15, "explicit" if is_explicit else "implicit"))
-
-        # Output format preference
-        if any(k in t for k in ["pdf", "docx", "word", "markdown", "md", "json", "csv", "yaml", "excel"]):
-            if "pdf" in t:
-                prefs.append(("preferred_output", "pdf", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
-            elif "docx" in t or "word" in t:
-                prefs.append(("preferred_output", "docx", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
-            elif "json" in t:
-                prefs.append(("preferred_output", "json", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
-            elif "csv" in t or "excel" in t:
-                prefs.append(("preferred_output", "csv", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
-            elif "yaml" in t:
-                prefs.append(("preferred_output", "yaml", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
-            elif "markdown" in t or "md" in t:
-                prefs.append(("preferred_output", "markdown", base_conf + 0.1, "explicit" if is_explicit else "implicit"))
-
-        # User alias preference
-        alias_match = re.search(
-            r"\bbana\s+([a-z0-9çğıöşü _-]{2,24})\s+(de|diye hitap et|diye seslen|olarak hitap et)\b",
-            t,
-        )
-        if alias_match:
-            alias = alias_match.group(1).strip()
-            if alias:
-                prefs.append(("user_alias", alias, 0.75, "explicit"))
-
-        return prefs
-
-    def _upsert_preference(
-        self,
-        *,
-        key: str,
-        value: Any,
-        learned_from: str,
-        confidence: float,
-        timestamp: float,
-    ) -> None:
-        pref = self._preference_cache.get(key)
-        if pref:
-            pref.value = value
-            pref.learned_from = learned_from
-            pref.confidence = max(pref.confidence, float(confidence))
-            pref.last_updated = timestamp
-        else:
-            pref = UserPreference(
-                key=key,
-                value=value,
-                learned_from=learned_from,
-                confidence=float(confidence),
-                last_updated=timestamp,
-            )
-            self._preference_cache[key] = pref
-        asyncio.create_task(self._persist_preference(pref))
-
-    async def _persist_preference(self, pref: UserPreference):
+    def _save_pattern(self, pattern: Pattern):
+        """Save pattern to database"""
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute(
-                    """
-                    INSERT INTO user_preferences (key, value, learned_from, confidence, last_updated)
-                    VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(key) DO UPDATE SET
-                        value=excluded.value,
-                        learned_from=excluded.learned_from,
-                        confidence=excluded.confidence,
-                        last_updated=excluded.last_updated
-                    """,
-                    (
-                        pref.key,
-                        json.dumps(pref.value, ensure_ascii=False),
-                        pref.learned_from,
-                        float(pref.confidence),
-                        float(pref.last_updated),
-                    ),
-                )
-                conn.commit()
+            conn = sqlite3.connect(str(self.db_path))
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO patterns
+                (pattern_id, tool, params, success_count, failure_count, confidence, frequency)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                pattern.pattern_id,
+                pattern.tool,
+                json.dumps(pattern.params),
+                pattern.success_count,
+                pattern.failure_count,
+                pattern.confidence,
+                pattern.frequency
+            ))
+            conn.commit()
+            conn.close()
         except Exception as e:
-            logger.error(f"Failed to persist preference: {e}")
+            logger.error(f"Failed to save pattern: {e}")
 
-    def get_preference(self, key: str, min_confidence: float = 0.6) -> Optional[Any]:
-        pref = self._preference_cache.get(key)
-        if not pref:
-            return None
-        if float(pref.confidence or 0.0) < float(min_confidence):
-            return None
-        return pref.value
-
-    def get_preferences(self, min_confidence: float = 0.6) -> Dict[str, Any]:
-        prefs: Dict[str, Any] = {}
-        for key, pref in self._preference_cache.items():
-            if float(pref.confidence or 0.0) >= float(min_confidence):
-                prefs[key] = pref.value
-        return prefs
-
-    async def _persist_learned_pattern(self, pattern: LearnedPattern):
-        """Persist pattern to database"""
+    def analyze_patterns(self) -> Dict[str, Any]:
+        """Analyze all learned patterns"""
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute("""
-                    INSERT OR REPLACE INTO learned_patterns
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    pattern.pattern,
-                    pattern.intent,
-                    pattern.action,
-                    pattern.frequency,
-                    pattern.success_rate,
-                    pattern.avg_duration_ms,
-                    pattern.last_used,
-                    pattern.confidence
-                ))
-                conn.commit()
-        except Exception as e:
-            logger.error(f"Failed to persist pattern: {e}")
+            if not self.patterns:
+                return {"status": "No patterns learned yet"}
 
-    async def _delete_pattern(self, pattern_key: str):
-        """Delete a low-confidence pattern from database."""
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute("DELETE FROM learned_patterns WHERE pattern = ?", (pattern_key,))
-                conn.commit()
-        except Exception as e:
-            logger.error(f"Failed to delete pattern: {e}")
+            # Find most used tools
+            tool_frequency = Counter()
+            tool_success = defaultdict(lambda: {"success": 0, "total": 0})
 
-    def quick_match(self, input_text: str) -> Optional[str]:
-        """
-        Ultra-fast pattern matching using learned patterns.
-        Returns action directly if confident match found.
-        """
-        key = input_text.lower().strip()
+            for pattern in self.patterns.values():
+                tool_frequency[pattern.tool] += pattern.frequency
+                if pattern.confidence > 0.5:
+                    tool_success[pattern.tool]["success"] += 1
+                tool_success[pattern.tool]["total"] += 1
 
-        # Exact match
-        if key in self._quick_patterns:
-            pattern = self._pattern_cache.get(key)
-            if pattern and pattern.confidence > 0.7:
-                logger.info(f"Quick match: '{input_text}' -> {pattern.action}")
-                return pattern.action
-
-        # Fuzzy match (contains)
-        for pattern_key, action in self._quick_patterns.items():
-            if pattern_key in key or key in pattern_key:
-                pattern = self._pattern_cache.get(pattern_key)
-                if pattern and pattern.confidence > 0.6:
-                    logger.info(f"Fuzzy match: '{input_text}' -> {action}")
-                    return action
-
-        return None
-
-    def get_suggestions(self, context: Optional[Dict] = None) -> List[str]:
-        """Get predictive suggestions based on context and history"""
-        suggestions = []
-
-        # Recent patterns
-        recent_patterns = sorted(
-            self._pattern_cache.values(),
-            key=lambda p: (p.last_used, p.frequency),
-            reverse=True
-        )[:5]
-
-        for pattern in recent_patterns:
-            if pattern.success_rate > 0.7:
-                suggestions.append(pattern.pattern)
-
-        return suggestions
-
-    def get_stats(self) -> Dict[str, Any]:
-        """Get learning statistics"""
-        total_patterns = len(self._pattern_cache)
-        high_confidence = sum(1 for p in self._pattern_cache.values() if p.confidence > 0.7)
-
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute("SELECT COUNT(*) FROM interactions")
-            total_interactions = cursor.fetchone()[0]
-
-            cursor = conn.execute("SELECT COUNT(*) FROM interactions WHERE success = 1")
-            successful = cursor.fetchone()[0]
-
-        success_rate = successful / total_interactions if total_interactions > 0 else 0
-
-        return {
-            "total_patterns": total_patterns,
-            "high_confidence_patterns": high_confidence,
-            "total_interactions": total_interactions,
-            "success_rate": success_rate,
-            "preferences": len(self._preference_cache),
-            "skill_memories": len(self._skill_memory_cache),
-        }
-
-    @staticmethod
-    def _signature(input_text: str) -> str:
-        words = [w.strip(".,:;!?()[]{}\"'").lower() for w in str(input_text or "").split()]
-        words = [w for w in words if len(w) >= 3]
-        return " ".join(words[:8])
-
-    async def record_outcome(
-        self,
-        *,
-        domain: str,
-        input_text: str,
-        execution_requirements: Optional[Dict[str, Any]] = None,
-        tool_actions: Optional[List[str]] = None,
-        success: bool,
-        quality_score: float,
-        publish_ready: bool,
-    ):
-        req = execution_requirements or {}
-        signature = self._signature(input_text)
-        if not signature:
-            return
-        domain_key = str(domain or "general")
-        key = (domain_key, signature)
-        current = self._skill_memory_cache.get(key, {
-            "domain": domain_key,
-            "pattern": signature,
-            "preferred_tools": [],
-            "preferred_output": "",
-            "quality_focus": [],
-            "success_count": 0,
-            "failure_count": 0,
-            "avg_quality": 0.0,
-            "last_used": 0.0,
-        })
-        if success and publish_ready:
-            current["success_count"] = int(current.get("success_count", 0)) + 1
-        elif not success:
-            current["failure_count"] = int(current.get("failure_count", 0)) + 1
-            # POLICY: Başarısız işlerden skill memory güncelleme
-            # Sadece failure count artır, preference güncelleme
-            current["last_used"] = time.time()
-            self._skill_memory_cache[key] = current
-            return  # ← Başarısız → tool/quality preference YAZMA
-
-        prev_quality = float(current.get("avg_quality", 0.0))
-        if prev_quality <= 0:
-            current["avg_quality"] = float(quality_score)
-        else:
-            current["avg_quality"] = round((prev_quality * 0.8) + (float(quality_score) * 0.2), 2)
-
-        if req.get("preferred_output"):
-            current["preferred_output"] = str(req.get("preferred_output"))
-        tools = tool_actions or req.get("preferred_tools", [])
-        if isinstance(tools, list) and tools:
-            uniq = []
-            for tool in tools:
-                tool_s = str(tool or "").strip()
-                if tool_s and tool_s not in uniq:
-                    uniq.append(tool_s)
-            current["preferred_tools"] = uniq[:6]
-        focus = req.get("quality_checklist", [])
-        if isinstance(focus, list) and focus:
-            current["quality_focus"] = [str(x) for x in focus[:6]]
-        current["last_used"] = time.time()
-        self._skill_memory_cache[key] = current
-
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute(
-                    """
-                    INSERT INTO skill_memory (
-                        domain, pattern, preferred_tools, preferred_output, quality_focus,
-                        success_count, failure_count, avg_quality, last_used
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(domain, pattern) DO UPDATE SET
-                        preferred_tools=excluded.preferred_tools,
-                        preferred_output=excluded.preferred_output,
-                        quality_focus=excluded.quality_focus,
-                        success_count=excluded.success_count,
-                        failure_count=excluded.failure_count,
-                        avg_quality=excluded.avg_quality,
-                        last_used=excluded.last_used
-                    """,
-                    (
-                        domain_key,
-                        signature,
-                        json.dumps(current.get("preferred_tools", [])),
-                        str(current.get("preferred_output", "")),
-                        json.dumps(current.get("quality_focus", [])),
-                        int(current.get("success_count", 0)),
-                        int(current.get("failure_count", 0)),
-                        float(current.get("avg_quality", 0.0)),
-                        float(current.get("last_used", 0.0)),
-                    ),
-                )
-                conn.commit()
-        except Exception as e:
-            logger.error(f"Failed to persist skill memory: {e}")
-
-    def get_execution_hints(self, input_text: str, domain: str) -> Dict[str, Any]:
-        signature = self._signature(input_text)
-        domain_key = str(domain or "general")
-        if not signature:
-            return {}
-
-        candidates: List[Dict[str, Any]] = []
-        for (row_domain, row_pattern), row in self._skill_memory_cache.items():
-            if row_domain != domain_key:
-                continue
-            if signature == row_pattern or signature in row_pattern or row_pattern in signature:
-                candidates.append(row)
-        if not candidates:
-            return {}
-
-        def row_score(row: Dict[str, Any]) -> float:
-            success = float(row.get("success_count", 0))
-            failure = float(row.get("failure_count", 0))
-            ratio = success / max(1.0, success + failure)
-            return (ratio * 0.55) + (float(row.get("avg_quality", 0.0)) / 100.0 * 0.35) + (min(1.0, success / 5.0) * 0.10)
-
-        best = sorted(candidates, key=row_score, reverse=True)[0]
-        confidence = round(min(0.95, row_score(best)), 2)
-        if confidence < 0.45:
-            return {}
-
-        return {
-            "preferred_output": best.get("preferred_output", ""),
-            "preferred_tools_boost": best.get("preferred_tools", [])[:4],
-            "quality_focus": best.get("quality_focus", [])[:4],
-            "confidence": confidence,
-        }
-
-    def check_approval_confidence(self, action: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Check if an action with these specific params has been approved before.
-        Strict check: exact param match required for auto-approval.
-        """
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                # Fetch recent approvals for this action
-                cursor = conn.execute("""
-                    SELECT context FROM interactions 
-                    WHERE action = ? AND intent = 'security_approval' AND success = 1
-                    AND timestamp > ?
-                    ORDER BY timestamp DESC
-                    LIMIT 50
-                """, (action, time.time() - (30 * 86400)))
-                
-                rows = cursor.fetchall()
-                
-            match_count = 0
-            # Normalize params for comparison (sort keys, ignore transient like '_retry_attempted')
-            # But wait, params might contain dynamic paths.
-            # For V1, we stick to exact match of relevant keys.
-            
-            clean_current = {k: v for k, v in params.items() if not k.startswith("_")}
-            current_json = json.dumps(clean_current, sort_keys=True)
-
-            for (context_json,) in rows:
-                try:
-                    ctx = json.loads(context_json)
-                    hist_params = ctx.get("params", {})
-                    clean_hist = {k: v for k, v in hist_params.items() if not k.startswith("_")}
-                    
-                    if json.dumps(clean_hist, sort_keys=True) == current_json:
-                        match_count += 1
-                except Exception:
-                    continue
-
-            if match_count >= 1:
-                return {
-                    "auto_approve": True,
-                    "confidence": 1.0,
-                    "reason": f"Exact match approved {match_count} times previously."
-                }
+            # Find most reliable patterns
+            reliable_patterns = [
+                p for p in self.patterns.values()
+                if p.confidence > 0.75 and p.frequency > 2
+            ]
+            reliable_patterns.sort(key=lambda p: p.confidence, reverse=True)
 
             return {
-                "auto_approve": False,
-                "confidence": 0.0,
-                "reason": "No exact prior approval found."
+                "total_patterns": len(self.patterns),
+                "most_used_tools": dict(tool_frequency.most_common(5)),
+                "tool_success_rates": {
+                    tool: stats["success"] / stats["total"] if stats["total"] > 0 else 0
+                    for tool, stats in tool_success.items()
+                },
+                "reliable_patterns": [p.to_dict() for p in reliable_patterns[:5]],
+                "learning_confidence": self.metrics.user_confidence,
+                "learning_velocity": self.metrics.learning_velocity
             }
-
         except Exception as e:
-            logger.error(f"Approval check failed: {e}")
-            return {"auto_approve": False, "confidence": 0.0, "reason": "Error"}
+            logger.error(f"Failed to analyze patterns: {e}")
+            return {"error": str(e)}
 
-    def generate_smart_hint(self, last_error: Optional[str] = None) -> Optional[str]:
-        """
-        Generate a context-aware hint based on recent errors or usage patterns.
-        """
-        # 1. Handle explicit last error (immediate feedback)
-        if last_error:
-            err = str(last_error).lower()
-            if "no such file" in err or "not found" in err:
-                return "Dosyayı bulamıyor musun? 'list_files' ile mevcut dizine göz atabilir veya 'search_files' ile arama yapabilirsin."
-            if "permission denied" in err or "access denied" in err:
-                return "Erişim hatası aldın. Dosya izinlerini kontrol etmeyi veya farklı bir klasör kullanmayı dene."
-            if "timeout" in err or "timed out" in err:
-                return "İşlem zaman aşımına uğradı. Görevi daha küçük parçalara bölerek tekrar deneyebilirsin."
-            if "connection" in err or "nodename" in err:
-                return "Bağlantı veya DNS sorunu var gibi. İnternet bağlantını ve API ayarlarını kontrol et."
-            if "rate limit" in err:
-                return "Çok hızlı gidiyorsun! Model kota sınırına takıldı. Biraz bekleyip tekrar dene."
-            
-            # If we don't recognize the error, fall through to database analysis
-
-        # 2. Database-backed Analysis (Context Awareness)
+    def get_recommendations(self, task_type: str = None, limit: int = 5) -> List[Dict]:
+        """Get recommendations based on learned patterns"""
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                # Query last 10 interactions for the current user (simplified as we don't have user_id here easily, using global recent)
-                cursor = conn.execute("""
-                    SELECT input_text, action, success, timestamp 
-                    FROM interactions 
-                    ORDER BY timestamp DESC LIMIT 10
-                """)
-                recent = cursor.fetchall()
+            # Filter patterns by confidence and relevance
+            candidates = [
+                p for p in self.patterns.values()
+                if p.confidence > 0.6 and p.frequency > 1
+            ]
+
+            # Sort by confidence and frequency
+            candidates.sort(
+                key=lambda p: (p.confidence, p.frequency),
+                reverse=True
+            )
+
+            recommendations = []
+            for pattern in candidates[:limit]:
+                recommendations.append({
+                    "tool": pattern.tool,
+                    "suggested_params": pattern.params,
+                    "confidence": pattern.confidence,
+                    "frequency": pattern.frequency,
+                    "success_rate": self.metrics.get_success_rate(pattern.tool)
+                })
+
+            return recommendations
         except Exception as e:
-            logger.debug(f"Hint database query failed: {e}")
-            recent = []
+            logger.error(f"Failed to get recommendations: {e}")
+            return []
 
-        if not recent:
-            return None
-
-        # Analyze recent failures
-        failures = [r for r in recent if not r[2]]
-        if len(failures) >= 3:
-            # Check if it's the same action failing
-            failing_actions = Counter([f[1] for f in failures])
-            most_common_fail = failing_actions.most_common(1)[0]
-            if most_common_fail[1] >= 2:
-                action = most_common_fail[0]
-                if "research" in str(action):
-                    return "Araştırma (research) adımı sıkça hata veriyor. Daha spesifik anahtar kelimeler kullanmayı dene."
-                if "write" in str(action) or "file" in str(action):
-                    return "Dosya işlemlerinde sorun yaşıyorsun. Dosya yolunun tam ve doğru olduğundan emin ol."
-            
-            return "Son zamanlarda birkaç hata aldın. Karmaşık istekleri adım adım (örn: önce ara, sonra yaz) yapmayı deneyebilirsin."
-
-        # Analyze repetitive usage (Discovery)
-        actions = Counter([r[1] for r in recent])
-        most_common_action = actions.most_common(1)[0]
-        if most_common_action[1] >= 5:
-            action = most_common_action[0]
-            if action == "chat":
-                return "Sadece sohbet ediyoruz! 'masaüstünde ne var' veya 'ekran görüntüsü al' gibi komutlarla yeteneklerimi keşfedebilirsin."
-            if action in ("list_files", "get_system_info"):
-                return "Sürekli sistem bilgisi alıyorsun. 'araştırma raporu hazırla' gibi daha kompleks görevler verebilirsin."
-
-        # 3. Fallback to random discovery tips
-        import random
-        tips = [
-            "İnternetten derinlemesine araştırma yapmak için 'research' komutunu kullanabilirsin.",
-            "Tekrar eden işlerin var mı? 'Bu işlemi rutin haline getir' diyerek otomatize edebilirsin.",
-            "Bir konuyu anlamadıysan 'bunu açıkla' diyerek detaylı bilgi isteyebilirsin.",
-            "Ekran görüntüsü alıp analiz etmek için 'ekrana bak' diyebilirsin.",
-            "Uzun metinleri özetlemek için dosyayı verip 'özetle' demen yeterli.",
-            "Dosyalarını düzenlemek için 'masaüstünü düzenle' diyebilirsin.",
-            "Excel veya Word dosyaları oluşturmak için 'raporu excel olarak hazırla' demen yeterli.",
-        ]
-        
-        # Only show hint 25% of the time for success/discovery to avoid annoyance
-        if random.random() < 0.25:
-            return random.choice(tips)
-        
-        return None
-
-    def self_review(self, window_days: int = 14) -> Dict[str, Any]:
-        cutoff = time.time() - (max(1, int(window_days)) * 86400)
-        recommendations: List[str] = []
+    def evaluate_confidence(self, pattern_id: str) -> float:
+        """Evaluate confidence for a specific pattern"""
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                rows = conn.execute(
-                    """
-                    SELECT action, total_executions, successful_executions, avg_duration_ms
-                    FROM success_metrics
-                    ORDER BY total_executions DESC
-                    LIMIT 15
-                    """
-                ).fetchall()
-                for action, total_exec, successful_exec, avg_duration in rows:
-                    total = int(total_exec or 0)
-                    if total < 5:
-                        continue
-                    success_rate = (int(successful_exec or 0) / max(1, total)) * 100.0
-                    if success_rate < 65.0:
-                        recommendations.append(
-                            f"{action}: başarı oranı düşük ({success_rate:.0f}%), plan doğrulamasını güçlendir."
-                        )
-                    if int(avg_duration or 0) > 30000:
-                        recommendations.append(
-                            f"{action}: ortalama süre yüksek ({int(avg_duration)}ms), kompakt plan veya cache öner."
-                        )
-
-                skill_rows = conn.execute(
-                    """
-                    SELECT domain, pattern, success_count, failure_count, avg_quality
-                    FROM skill_memory
-                    WHERE last_used >= ?
-                    ORDER BY (success_count - failure_count) ASC, avg_quality ASC
-                    LIMIT 10
-                    """,
-                    (cutoff,),
-                ).fetchall()
-                for domain, pattern, success_count, failure_count, avg_quality in skill_rows:
-                    if int(failure_count or 0) > int(success_count or 0):
-                        recommendations.append(
-                            f"{domain}: '{pattern}' için başarısızlık yüksek, fallback stratejisi güncelle."
-                        )
-                    if float(avg_quality or 0.0) < 70.0:
-                        recommendations.append(
-                            f"{domain}: kalite ortalaması düşük ({float(avg_quality):.1f}), checklist kapsamını artır."
-                        )
+            if pattern_id in self.patterns:
+                return self.patterns[pattern_id].confidence
+            return 0.0
         except Exception as e:
-            logger.error(f"Self-review failed: {e}")
+            logger.error(f"Failed to evaluate confidence: {e}")
+            return 0.0
 
+    def update_user_model(self):
+        """Update overall user model"""
+        try:
+            # Calculate overall metrics
+            patterns_analysis = self.analyze_patterns()
+
+            self.preferences.update({
+                "preferred_tools": patterns_analysis.get("most_used_tools", {}),
+                "learning_confidence": self.metrics.user_confidence,
+                "learning_velocity": self.metrics.learning_velocity,
+                "total_patterns": patterns_analysis.get("total_patterns", 0),
+                "last_updated": datetime.now().isoformat()
+            })
+
+            # Save preferences
+            self._save_preferences()
+
+            return {
+                "status": "User model updated",
+                "metrics": self.metrics.to_dict(),
+                "preferences": self.preferences
+            }
+        except Exception as e:
+            logger.error(f"Failed to update user model: {e}")
+            return {"error": str(e)}
+
+    def _save_preferences(self):
+        """Save preferences to database"""
+        try:
+            conn = sqlite3.connect(str(self.db_path))
+            cursor = conn.cursor()
+
+            for key, value in self.preferences.items():
+                cursor.execute("""
+                    INSERT OR REPLACE INTO preferences (key, value)
+                    VALUES (?, ?)
+                """, (key, json.dumps(value)))
+
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"Failed to save preferences: {e}")
+
+    def get_user_profile(self) -> Dict[str, Any]:
+        """Get complete user profile"""
         return {
-            "window_days": window_days,
-            "recommendations": recommendations[:10],
-            "count": min(10, len(recommendations)),
+            "user_id": self.user_id,
+            "metrics": self.metrics.to_dict(),
+            "patterns_count": len(self.patterns),
+            "preferences": self.preferences,
+            "interaction_history_size": len(self.interaction_history),
+            "analysis": self.analyze_patterns()
         }
 
-
-# Singleton instance
-_learning_engine: Optional[LearningEngine] = None
-
-
-def get_learning_engine() -> LearningEngine:
-    """Get singleton learning engine instance"""
-    global _learning_engine
-    if _learning_engine is None:
-        _learning_engine = LearningEngine()
-    return _learning_engine
+    def export_learning(self) -> Dict[str, Any]:
+        """Export all learning data"""
+        return {
+            "user_id": self.user_id,
+            "metrics": self.metrics.to_dict(),
+            "patterns": [p.to_dict() for p in self.patterns.values()],
+            "preferences": self.preferences,
+            "interaction_count": len(self.interaction_history),
+            "exported_at": datetime.now().isoformat()
+        }
