@@ -364,6 +364,13 @@ class Agent:
             self.compliance = get_compliance_engine()
         except Exception:
             self.compliance = None
+        try:
+            from core.multi_llm_engine import get_multi_llm_engine
+            self.multi_llm = get_multi_llm_engine()
+            from core.model_orchestrator import model_orchestrator
+            self.multi_llm.initialize(model_orchestrator)
+        except Exception:
+            self.multi_llm = None
 
     def _register_away_notifier(self) -> None:
         if self._away_notifier_registered:
@@ -418,6 +425,14 @@ class Agent:
         if candidate is not None:
             self.llm = candidate
             return True
+        # Last resort: create LLMClient directly
+        try:
+            from core.llm_client import LLMClient
+            self.llm = LLMClient()
+            logger.info("LLM client created via _ensure_llm fallback")
+            return True
+        except Exception as exc:
+            logger.error(f"_ensure_llm fallback failed: {exc}")
         return False
 
     @staticmethod
@@ -1093,6 +1108,10 @@ class Agent:
         run_id = f"run_{uuid.uuid4().hex[:12]}"
         ledger = ExecutionLedger(run_id=run_id)
         run_store = RunStore(run_id=run_id)
+
+        # Ensure LLM is available (safety net for callers that skip initialize())
+        if self.llm is None:
+            self._ensure_llm()
 
         # Legacy compat: short ambiguous inputs should return clarification instead of planner/LLM errors.
         clar = self._handle_short_ambiguous_input(user_input)

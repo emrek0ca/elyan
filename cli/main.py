@@ -193,6 +193,7 @@ def _run_chat_session(initial_prompt: str = "") -> int:
 
     async def _chat() -> int:
         agent = Agent()
+        await agent.initialize()
         print("Elyan chat hazir. Cikmak icin 'exit' veya 'quit' yaz.")
         first = str(initial_prompt or "").strip()
         if first:

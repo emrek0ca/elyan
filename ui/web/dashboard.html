@@ -217,6 +217,56 @@
           </div>
         </article>
       </section>
+
+      <!-- Live Multi-LLM Metrics Panel -->
+      <section class="grid" style="margin-top:1rem">
+        <article class="card" style="grid-column:1/-1">
+          <div class="card-head">
+            <div>
+              <h2>Canli Model Performansi</h2>
+              <p class="muted">Tum modellerin gercek zamanli durumu, yukleri ve metrikleri.</p>
+            </div>
+            <button class="btn" id="llm-refresh-btn" type="button">Yenile</button>
+          </div>
+          <div class="summary-grid" id="llm-summary-grid">
+            <div class="summary-box"><div class="k">Toplam Model</div><div class="v" id="llm-total-models">-</div></div>
+            <div class="summary-box"><div class="k">Aktif</div><div class="v" id="llm-available-models">-</div></div>
+            <div class="summary-box"><div class="k">Toplam Cagri</div><div class="v" id="llm-total-calls">-</div></div>
+            <div class="summary-box"><div class="k">Basari Orani</div><div class="v" id="llm-success-rate">-</div></div>
+          </div>
+          <div class="llm-slots-container" id="llm-slots-container" style="margin-top:.75rem">
+            <!-- Dynamically filled by JS -->
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <div>
+              <h2>Race Mode</h2>
+              <p class="muted">Ayni promptu birden fazla modelde es zamanli calistir, en hizlisini sec.</p>
+            </div>
+          </div>
+          <div class="model-form">
+            <textarea id="race-prompt-input" rows="3" placeholder="Test promptu girin..." style="width:100%;resize:vertical;font-family:inherit;padding:.5rem;border-radius:6px;border:1px solid var(--border)"></textarea>
+            <div style="display:flex;gap:.5rem;align-items:center;margin-top:.5rem">
+              <label style="font-size:.85rem">Max model:</label>
+              <input id="race-max-models" type="number" min="2" max="5" value="3" style="width:60px" />
+              <button class="btn primary" id="race-run-btn" type="button">Race Baslat</button>
+            </div>
+          </div>
+          <div id="race-results" style="margin-top:.75rem"></div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <div>
+              <h2>Son Istekler</h2>
+              <p class="muted">En son LLM istekleri ve sonuclari.</p>
+            </div>
+          </div>
+          <ul class="list compact-list" id="llm-recent-requests"></ul>
+        </article>
+      </section>
     </section>
 
     <section class="tab-panel" data-panel="profile">

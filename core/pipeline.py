@@ -3520,7 +3520,11 @@ class StageExecute(PipelineStage):
                     prompt_parts.append(f"User: {ctx.user_input}")
                     
                     full_prompt = "\n\n".join(prompt_parts)
-                    
+
+                    # Ensure LLM is available (lazy init safety net)
+                    if agent.llm is None:
+                        agent._ensure_llm()
+
                     try:
                         chat_resp = await with_timeout(
                             agent.llm.generate(full_prompt, role=ctx.role, user_id=ctx.user_id),

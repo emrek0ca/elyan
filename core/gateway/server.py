@@ -817,6 +817,13 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/skills/workflows', self.handle_skill_workflows)
         self.app.router.add_post('/api/skills/workflows/toggle', self.handle_skill_workflow_toggle)
 
+        # ── Multi-LLM Engine API ──────────────────────────────────────────────
+        self.app.router.add_get('/api/llm/live', self.handle_llm_live_metrics)
+        self.app.router.add_post('/api/llm/toggle', self.handle_llm_toggle_model)
+        self.app.router.add_post('/api/llm/priority', self.handle_llm_set_priority)
+        self.app.router.add_post('/api/llm/reset-circuit', self.handle_llm_reset_circuit)
+        self.app.router.add_post('/api/llm/race', self.handle_llm_race)
+
         # ── Dashboard & Web UI ────────────────────────────────────────────────
         self.app.router.add_get('/', self.handle_dashboard_page)
         self.app.router.add_get('/product', self.handle_dashboard_page)
@@ -2633,6 +2640,121 @@ class ElyanGatewayServer:
                 "orchestration": orchestration,
                 "pipeline_jobs": pipeline_jobs,
                 "uptime_s": int(time.time() - _start_time)
+            })
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+    # ── Multi-LLM Engine API ─────────────────────────────────────────────────
+    def _get_multi_llm_engine(self):
+        try:
+            from core.multi_llm_engine import get_multi_llm_engine
+            engine = get_multi_llm_engine()
+            if not engine._initialized:
+                from core.model_orchestrator import model_orchestrator
+                engine.initialize(model_orchestrator)
+            return engine
+        except Exception:
+            return None
+
+    async def handle_llm_live_metrics(self, request):
+        """GET /api/llm/live — Live metrics for all model slots."""
+        engine = self._get_multi_llm_engine()
+        if not engine:
+            return web.json_response({"ok": False, "error": "engine_unavailable"}, status=500)
+        try:
+            metrics = engine.get_live_metrics()
+            # Merge orchestrator health report
+            from core.model_orchestrator import model_orchestrator
+            metrics["health_report"] = model_orchestrator.get_health_report()
+            return web.json_response({"ok": True, **metrics})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+    async def handle_llm_toggle_model(self, request):
+        """POST /api/llm/toggle — Enable/disable a model slot."""
+        engine = self._get_multi_llm_engine()
+        if not engine:
+            return web.json_response({"ok": False, "error": "engine_unavailable"}, status=500)
+        try:
+            body = await request.json()
+            slot_id = str(body.get("slot_id", ""))
+            enabled = bool(body.get("enabled", True))
+            ok = engine.toggle_model(slot_id, enabled)
+            return web.json_response({"ok": ok, "slot_id": slot_id, "enabled": enabled})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
+
+    async def handle_llm_set_priority(self, request):
+        """POST /api/llm/priority — Set model priority."""
+        engine = self._get_multi_llm_engine()
+        if not engine:
+            return web.json_response({"ok": False, "error": "engine_unavailable"}, status=500)
+        try:
+            body = await request.json()
+            slot_id = str(body.get("slot_id", ""))
+            priority = int(body.get("priority", 50))
+            ok = engine.set_model_priority(slot_id, priority)
+            return web.json_response({"ok": ok, "slot_id": slot_id, "priority": priority})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
+
+    async def handle_llm_reset_circuit(self, request):
+        """POST /api/llm/reset-circuit — Reset circuit breaker for a model."""
+        engine = self._get_multi_llm_engine()
+        if not engine:
+            return web.json_response({"ok": False, "error": "engine_unavailable"}, status=500)
+        try:
+            body = await request.json()
+            slot_id = str(body.get("slot_id", ""))
+            ok = engine.reset_circuit_breaker(slot_id)
+            return web.json_response({"ok": ok, "slot_id": slot_id})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
+
+    async def handle_llm_race(self, request):
+        """POST /api/llm/race — Run race mode: same prompt on N models."""
+        engine = self._get_multi_llm_engine()
+        if not engine:
+            return web.json_response({"ok": False, "error": "engine_unavailable"}, status=500)
+        try:
+            body = await request.json()
+            prompt = str(body.get("prompt", "")).strip()
+            if not prompt:
+                return web.json_response({"ok": False, "error": "prompt required"}, status=400)
+            max_models = int(body.get("max_models", 3))
+            role = str(body.get("role", "inference"))
+
+            llm_client = getattr(self.agent, "llm", None)
+            if llm_client is None:
+                self.agent._ensure_llm()
+                llm_client = getattr(self.agent, "llm", None)
+            if llm_client is None:
+                return web.json_response({"ok": False, "error": "llm_client_unavailable"}, status=500)
+
+            result = await engine.race(
+                llm_client, prompt, role=role, max_models=max_models
+            )
+
+            return web.json_response({
+                "ok": True,
+                "request_id": result.request_id,
+                "winner": {
+                    "provider": result.winner.provider,
+                    "model": result.winner.model,
+                    "latency_ms": round(result.winner.latency_ms, 1),
+                    "response_preview": result.winner.response[:300],
+                    "tokens": result.winner.tokens_used,
+                } if result.winner else None,
+                "all_results": [
+                    {
+                        "provider": r.provider, "model": r.model,
+                        "success": r.success, "latency_ms": round(r.latency_ms, 1),
+                        "tokens": r.tokens_used,
+                        "response_preview": r.response[:200] if r.success else r.error[:200],
+                    }
+                    for r in result.all_results
+                ],
+                "total_time_ms": result.total_time_ms,
             })
         except Exception as e:
             return web.json_response({"ok": False, "error": str(e)}, status=500)

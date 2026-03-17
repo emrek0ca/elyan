@@ -566,3 +566,10 @@ textarea {
     font-size: 20px;
   }
 }
+
+/* ── Multi-LLM Engine Slots ──────────────────────────────── */
+.llm-slot.slot-ok { border-left: 3px solid var(--ok) !important; }
+.llm-slot.slot-disabled { border-left: 3px solid var(--muted) !important; opacity: .6; }
+.llm-slot.circuit-open { border-left: 3px solid var(--err) !important; background: rgba(180,35,24,.05) !important; }
+.llm-slots-container { max-height: 400px; overflow-y: auto; }
+#race-results { max-height: 300px; overflow-y: auto; }

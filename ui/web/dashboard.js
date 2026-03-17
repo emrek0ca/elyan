@@ -1117,3 +1117,132 @@ addChat("Elyan hazir. Komut verebilirsin.", "bot");
 loadAll();
 connectWs();
 setInterval(loadAll, 30000);
+
+// ─── Multi-LLM Live Metrics ──────────────────────────────────────────────
+
+async function loadLLMLiveMetrics() {
+  try {
+    const resp = await fetch("/api/llm/live");
+    const data = await resp.json();
+    if (!data.ok) return;
+
+    const s = data.summary || {};
+    const el = (id) => document.getElementById(id);
+    if (el("llm-total-models")) el("llm-total-models").textContent = s.total_models || 0;
+    if (el("llm-available-models")) el("llm-available-models").textContent = s.available_models || 0;
+    if (el("llm-total-calls")) el("llm-total-calls").textContent = s.total_calls || 0;
+    if (el("llm-success-rate")) el("llm-success-rate").textContent = (s.overall_success_rate || 100) + "%";
+
+    // Model slots
+    const container = el("llm-slots-container");
+    if (container && data.models) {
+      container.innerHTML = data.models.map(m => {
+        const statusClass = m.circuit_open ? "circuit-open" : (m.enabled ? "slot-ok" : "slot-disabled");
+        const statusLabel = m.circuit_open ? "CIRCUIT OPEN" : (m.enabled ? "Aktif" : "Devre Disi");
+        return `<div class="llm-slot ${statusClass}" style="display:flex;justify-content:space-between;align-items:center;padding:.5rem .75rem;border:1px solid var(--border);border-radius:8px;margin-bottom:.4rem;background:var(--card-bg)">
+          <div style="flex:1">
+            <strong>${m.provider}/${m.model}</strong>
+            <span style="margin-left:.5rem;font-size:.75rem;opacity:.7">${statusLabel}</span>
+          </div>
+          <div style="display:flex;gap:1rem;font-size:.85rem;align-items:center">
+            <span title="Basari Orani">✓ ${m.success_rate}%</span>
+            <span title="Ort. Gecikme">⏱ ${m.avg_latency_ms}ms</span>
+            <span title="Yuk">${m.current_load}/${m.max_concurrent}</span>
+            <span title="Toplam Cagri">${m.total_calls} cagri</span>
+            <button class="btn" style="font-size:.75rem;padding:2px 8px" onclick="toggleLLMModel('${m.id}',${!m.enabled})">${m.enabled ? "Kapat" : "Ac"}</button>
+            ${m.circuit_open ? '<button class="btn" style="font-size:.75rem;padding:2px 8px" onclick="resetLLMCircuit(\'' + m.id + '\')">Reset</button>' : ""}
+          </div>
+        </div>`;
+      }).join("");
+    }
+
+    // Recent requests
+    const reqList = el("llm-recent-requests");
+    if (reqList && data.recent_requests) {
+      reqList.innerHTML = data.recent_requests.slice(-10).reverse().map(r => {
+        return `<li class="li"><span class="tag">${r.strategy || "single"}</span> ${r.winner || "—"} <span class="muted">${r.latency_ms}ms</span></li>`;
+      }).join("") || "<li class='li muted'>Henuz istek yok</li>";
+    }
+  } catch (e) {
+    console.warn("LLM metrics load error:", e);
+  }
+}
+
+async function toggleLLMModel(slotId, enabled) {
+  try {
+    await fetch("/api/llm/toggle", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({slot_id: slotId, enabled})
+    });
+    loadLLMLiveMetrics();
+  } catch (e) { console.warn(e); }
+}
+
+async function resetLLMCircuit(slotId) {
+  try {
+    await fetch("/api/llm/reset-circuit", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({slot_id: slotId})
+    });
+    loadLLMLiveMetrics();
+  } catch (e) { console.warn(e); }
+}
+
+// ─── Race Mode ────────────────────────────────────────────────────────────
+
+document.getElementById("race-run-btn")?.addEventListener("click", async () => {
+  const prompt = document.getElementById("race-prompt-input")?.value?.trim();
+  if (!prompt) return;
+  const maxModels = parseInt(document.getElementById("race-max-models")?.value || "3", 10);
+  const resultsEl = document.getElementById("race-results");
+  if (resultsEl) resultsEl.innerHTML = '<p class="muted">Race devam ediyor...</p>';
+
+  try {
+    const resp = await fetch("/api/llm/race", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({prompt, max_models: maxModels, role: "inference"})
+    });
+    const data = await resp.json();
+    if (!data.ok) {
+      if (resultsEl) resultsEl.innerHTML = `<p style="color:var(--danger)">Hata: ${data.error}</p>`;
+      return;
+    }
+
+    let html = "";
+    if (data.winner) {
+      html += `<div style="padding:.5rem;border:2px solid var(--accent);border-radius:8px;margin-bottom:.5rem">
+        <strong>🏆 Kazanan:</strong> ${data.winner.provider}/${data.winner.model}
+        <span class="muted">(${data.winner.latency_ms}ms, ${data.winner.tokens} token)</span>
+        <p style="margin-top:.25rem;font-size:.85rem">${data.winner.response_preview}</p>
+      </div>`;
+    }
+    if (data.all_results && data.all_results.length > 0) {
+      html += `<div style="font-size:.85rem"><strong>Tum Sonuclar:</strong> (toplam ${data.total_time_ms}ms)</div>`;
+      html += data.all_results.map(r => {
+        const icon = r.success ? "✅" : "❌";
+        return `<div style="padding:.25rem .5rem;font-size:.85rem">${icon} ${r.provider}/${r.model} — ${r.latency_ms}ms ${r.success ? "" : "(" + r.response_preview + ")"}</div>`;
+      }).join("");
+    }
+    if (resultsEl) resultsEl.innerHTML = html || "<p class='muted'>Sonuc yok</p>";
+    loadLLMLiveMetrics();
+  } catch (e) {
+    if (resultsEl) resultsEl.innerHTML = `<p style="color:var(--danger)">Hata: ${e.message}</p>`;
+  }
+});
+
+// ─── LLM Refresh Button ──────────────────────────────────────────────────
+document.getElementById("llm-refresh-btn")?.addEventListener("click", loadLLMLiveMetrics);
+
+// Auto-load LLM metrics when models tab is active
+const origActivateTab = activateTab;
+activateTab = function(name) {
+  origActivateTab(name);
+  if (name === "models") loadLLMLiveMetrics();
+};
+
+// Initial load if models tab
+loadLLMLiveMetrics();
+setInterval(loadLLMLiveMetrics, 15000);
