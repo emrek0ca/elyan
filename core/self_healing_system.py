@@ -3,7 +3,7 @@ Self-Healing System - Automatic error detection and recovery
 """
 
 import logging
-from typing import Dict, List, Optional, Callable, Tuple
+from typing import Dict, List, Optional, Callable, Tuple, Any
 from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime
@@ -47,7 +47,7 @@ class SelfHealingSystem:
         self.recovery_handlers[error_type] = handler
         logger.info(f"Registered handler for {error_type}")
 
-    def detect_error(self, context: Dict, output: any) -> Optional[Dict]:
+    def detect_error(self, context: Dict, output: Any) -> Optional[Dict]:
         """Detect if error occurred"""
         errors = {
             "timeout": self._check_timeout(context),
@@ -64,7 +64,7 @@ class SelfHealingSystem:
         """Check for timeout errors"""
         return context.get("duration", 0) > context.get("timeout", float('inf'))
 
-    def _check_invalid_output(self, output: any) -> bool:
+    def _check_invalid_output(self, output: Any) -> bool:
         """Check for invalid output"""
         if output is None:
             return True
@@ -76,7 +76,7 @@ class SelfHealingSystem:
         """Check for performance issues"""
         return context.get("duration", 0) > 5.0  # 5 second threshold
 
-    def _check_validation(self, output: any) -> bool:
+    def _check_validation(self, output: Any) -> bool:
         """Check for validation errors"""
         if isinstance(output, dict):
             if "validation_error" in output:

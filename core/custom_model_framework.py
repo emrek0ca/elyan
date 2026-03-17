@@ -6,6 +6,7 @@ Supports PEFT, QLoRA, and model serving infrastructure
 import json
 import logging
 import time
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field, asdict
@@ -14,6 +15,13 @@ from enum import Enum
 import threading
 
 logger = logging.getLogger(__name__)
+
+def _validate_model_id(model_id: str) -> bool:
+    """Validate model_id to prevent path traversal and injection attacks"""
+    # Allow only alphanumeric, underscore, hyphen. Max 50 chars
+    if not re.match(r'^[a-zA-Z0-9_-]{1,50}$', model_id):
+        raise ValueError(f"Invalid model_id: {model_id}. Must match pattern [a-zA-Z0-9_-]{{1,50}}")
+    return True
 
 
 class ModelType(Enum):
@@ -243,6 +251,9 @@ class ModelRegistry:
 
     def register_model(self, metadata: ModelMetadata, version_path: Path):
         """Register a new model version"""
+        # Validate model_id to prevent path traversal
+        _validate_model_id(metadata.model_id)
+
         with self.lock:
             model_version = ModelVersion(
                 metadata.model_id,

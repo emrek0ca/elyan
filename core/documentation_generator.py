@@ -6,6 +6,7 @@ Supports Markdown, HTML, and PDF output formats
 import json
 import logging
 import inspect
+from html import escape
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Callable
 from dataclasses import dataclass, asdict
@@ -271,43 +272,32 @@ class HTMLGenerator:
 
     @staticmethod
     def generate_html(title: str, markdown_content: str) -> str:
-        """Convert markdown to HTML and wrap in template"""
-        # Simple markdown to HTML conversion
+        """Convert markdown to HTML and wrap in template - safely escaping content"""
+        # Security: Always escape user content first to prevent XSS
+        safe_title = escape(title)
+
+        # Use basic safe markdown conversion
+        # This is a simplified version - for production, use 'markdown' or 'mistune' library
         content = markdown_content
-        content = content.replace("<", "&lt;").replace(">", "&gt;")
 
-        # Convert headers
+        # Escape HTML entities FIRST
+        content = escape(content)
+
+        # Then apply safe conversions (content is now HTML-escaped)
+        # Replace escaped versions of code markers back
+        content = content.replace("&lt;code&gt;", "<code>")
+        content = content.replace("&lt;/code&gt;", "</code>")
+        content = content.replace("&lt;pre&gt;", "<pre>")
+        content = content.replace("&lt;/pre&gt;", "</pre>")
+
+        # Safe header conversion (after escaping)
+        import re
         for i in range(6, 0, -1):
-            content = content.replace(f"{'#' * i} ", f"<h{i}>").replace("\n", f"</h{i}>\n", 1)
-
-        # Convert code blocks
-        content = content.replace("```json\n", "<pre><code>")
-        content = content.replace("```bash\n", "<pre><code>")
-        content = content.replace("```python\n", "<pre><code>")
-        content = content.replace("```\n", "</code></pre>\n")
-
-        # Convert inline code
-        content = content.replace("`", "<code>", 1)
-        content = content.replace("`", "</code>", 1)
-
-        # Convert tables (basic)
-        lines = content.split("\n")
-        in_table = False
-        for i, line in enumerate(lines):
-            if "|" in line and not in_table:
-                lines[i] = f"<table>\n<tr><td>{line}</td></tr>"
-                in_table = True
-            elif "|" in line and in_table:
-                lines[i] = f"<tr><td>{line}</td></tr>"
-            elif in_table and line.strip() == "":
-                lines[i] = "</table>"
-                in_table = False
-
-        content = "\n".join(lines)
-        content = content.replace("\n\n", "<p>")
+            pattern = f"^{'#' * i} (.+)$"
+            content = re.sub(pattern, f"<h{i}>\\1</h{i}>", content, flags=re.MULTILINE)
 
         return HTMLGenerator.HTML_TEMPLATE.format(
-            title=title,
+            title=safe_title,
             content=content,
             timestamp=datetime.now().isoformat()
         )

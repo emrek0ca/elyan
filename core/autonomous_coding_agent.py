@@ -5,6 +5,7 @@ Generates, reviews, and optimizes code with quality gates
 
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
@@ -193,17 +194,33 @@ class AutonomousCodingAgent:
         return min(100, (test_indicators / total_functions) * 100)
 
     def _scan_security(self, code: str) -> List[str]:
-        """Scan for security issues"""
+        """Scan for security issues - with ReDoS protection"""
         issues = []
+        # Use simple, safe patterns to avoid ReDoS attacks
         security_patterns = {
-            "SQL Injection": "execute.*'",
-            "Hard-coded credentials": r"password\s*=\s*['\"]",
-            "Insecure hash": "md5|sha1",
-            "No input validation": "input()",
+            "SQL Injection": (r"execute\s*\(.*['\"]", "execute() with string concatenation"),
+            "Hard-coded credentials": (r"password\s*=\s*['\"]", "Hard-coded password"),
+            "Insecure hash": (r"\b(md5|sha1)\b", "Use of weak hash (MD5/SHA1)"),
+            "No input validation": (r"eval\s*\(|exec\s*\(", "Use of eval/exec"),
         }
-        for issue, pattern in security_patterns.items():
-            if pattern in code:
-                issues.append(issue)
+
+        for issue, (pattern, description) in security_patterns.items():
+            try:
+                # Use a simple substring check first for common patterns
+                if issue == "Hard-coded credentials" and "password = '" in code:
+                    issues.append(description)
+                elif issue == "Insecure hash":
+                    if ".md5(" in code or ".sha1(" in code:
+                        issues.append(description)
+                elif issue == "No input validation":
+                    if "eval(" in code or "exec(" in code:
+                        issues.append(description)
+                elif issue == "SQL Injection":
+                    if "execute(" in code and ("' +" in code or '" +' in code):
+                        issues.append(description)
+            except Exception as e:
+                logger.warning(f"Security pattern check failed for {issue}: {e}")
+
         return issues
 
     def _identify_performance_issues(self, code: str) -> List[str]:

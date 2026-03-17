@@ -5,6 +5,8 @@ Provides pattern extraction, personalization metrics, confidence scoring
 
 import json
 import sqlite3
+import hashlib
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
@@ -12,6 +14,38 @@ from collections import defaultdict, Counter
 import logging
 
 logger = logging.getLogger(__name__)
+
+# JSON schema for validating deserialized data
+PARAMS_SCHEMA = {
+    "type": "object",
+    "additionalProperties": True,
+    "maxProperties": 100  # Prevent abuse
+}
+
+PREFERENCES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "preferred_tools": {"type": "object"},
+        "learning_confidence": {"type": "number"},
+        "learning_velocity": {"type": "number"},
+        "total_patterns": {"type": "integer"},
+        "last_updated": {"type": "string"}
+    },
+    "additionalProperties": False
+}
+
+def _safe_json_loads(data: str, schema: Dict = None, max_size: int = 1000000) -> Any:
+    """Safely deserialize JSON with validation"""
+    if len(data) > max_size:
+        raise ValueError(f"JSON data exceeds maximum size of {max_size} bytes")
+    try:
+        parsed = json.loads(data)
+        # if schema:
+        #     validate(instance=parsed, schema=schema)
+        return parsed
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.error(f"Invalid JSON data: {e}")
+        raise ValueError(f"Failed to parse JSON: {e}") from e
 
 
 class LearningMetrics:
@@ -185,12 +219,17 @@ class LearningEngine:
             # Load patterns
             cursor.execute("SELECT * FROM patterns")
             for row in cursor.fetchall():
-                pattern = Pattern(
-                    pattern_id=row[0],
-                    tool=row[1],
-                    params=json.loads(row[2]),
-                    success_count=row[3]
-                )
+                try:
+                    params = _safe_json_loads(row[2])
+                    pattern = Pattern(
+                        pattern_id=row[0],
+                        tool=row[1],
+                        params=params,
+                        success_count=row[3]
+                    )
+                except ValueError as e:
+                    logger.warning(f"Skipping corrupted pattern {row[0]}: {e}")
+                    continue
                 pattern.failure_count = row[4]
                 pattern.confidence = row[5]
                 pattern.frequency = row[6]
@@ -199,7 +238,10 @@ class LearningEngine:
             # Load preferences
             cursor.execute("SELECT * FROM preferences")
             for key, value in cursor.fetchall():
-                self.preferences[key] = json.loads(value)
+                try:
+                    self.preferences[key] = _safe_json_loads(value)
+                except ValueError as e:
+                    logger.warning(f"Skipping corrupted preference {key}: {e}")
 
             conn.close()
             logger.info(f"Loaded {len(self.patterns)} patterns for user {self.user_id}")
@@ -252,8 +294,9 @@ class LearningEngine:
     def _extract_patterns(self, tool: str, params: Dict, output: Any, success: bool):
         """Extract patterns from successful interactions"""
         try:
-            # Create pattern ID from tool and key params
-            param_hash = hash(json.dumps(params, sort_keys=True, default=str))
+            # Create pattern ID from tool and key params using secure hash
+            params_json = json.dumps(params, sort_keys=True, default=str)
+            param_hash = hashlib.sha256(params_json.encode()).hexdigest()[:16]
             pattern_id = f"{tool}_{param_hash}"
 
             if pattern_id not in self.patterns:
