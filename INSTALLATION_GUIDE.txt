@@ -1,0 +1,536 @@
+================================================================================
+                    ELYAN v1.0.0 - INSTALLATION GUIDE
+                        One-Command Setup System
+================================================================================
+
+PROJECT: Elyan - Autonomous Coding Assistant with Turkish-First NLU
+VERSION: 1.0.0
+STATUS: PRODUCTION READY
+DATE: 2026-03-17
+
+================================================================================
+                        QUICK START (1 COMMAND)
+================================================================================
+
+METHOD 1: Online Installation (Recommended)
+────────────────────────────────────────────
+bash <(curl -s https://raw.githubusercontent.com/emrek0ca/bot/main/setup_elyan.sh)
+
+
+METHOD 2: Local Installation
+────────────────────────────────────────────
+Download setup_elyan.sh and run:
+bash setup_elyan.sh
+
+
+METHOD 3: Advanced Options
+────────────────────────────────────────────
+bash setup_elyan.sh --clean              # Fresh install (remove previous)
+bash setup_elyan.sh --skip-venv          # Use system Python
+bash setup_elyan.sh --install-extras     # Add voice + extra channels
+bash setup_elyan.sh --help               # Show all options
+
+
+================================================================================
+                        SYSTEM REQUIREMENTS
+================================================================================
+
+Minimum Requirements:
+├─ OS: macOS 10.15+, Ubuntu 18.04+, or Windows 10+ (WSL2)
+├─ Python: 3.9 or later
+├─ Git: Latest version
+├─ Memory: 4GB RAM
+├─ Disk: 2GB free space
+└─ Internet: Required for setup
+
+Installation Verifies:
+✓ Python 3.9+ installed
+✓ Git available
+✓ Required directories writable
+✓ Network connectivity
+
+
+================================================================================
+                        WHAT GETS INSTALLED
+================================================================================
+
+Location: ~/.elyan/ (2GB total)
+├─ repo/                   # Elyan source code (git repository)
+├─ venv/                   # Python virtual environment
+├─ config/
+│  └─ elyan.yaml          # Configuration file
+├─ data/
+│  ├─ learning/           # User learning data (SQLite)
+│  ├─ knowledge/          # Knowledge base
+│  └─ cache/              # Cached responses
+├─ logs/                  # Application logs
+├─ activate.sh            # Environment activation script
+└─ elyan                  # CLI command wrapper
+
+
+Dependencies Installed:
+├─ Core: pydantic, httpx, python-dotenv, requests, aiohttp
+├─ AI/ML: groq, google-generativeai, sentence-transformers, scikit-learn
+├─ Phase 5: jsonschema, markdown, mistune, prometheus-client, pyyaml
+├─ Documents: python-docx, openpyxl, pdfplumber, pypdf
+├─ Testing: pytest, pytest-asyncio (143+ tests)
+└─ Optional: voice, extra channels (if --install-extras)
+
+
+================================================================================
+                        INSTALLATION STEPS
+================================================================================
+
+Step 1: Run Setup Script
+────────────────────────────────────────────
+bash setup_elyan.sh
+
+The script will:
+✓ Check system requirements
+✓ Create directories
+✓ Clone repository
+✓ Create virtual environment
+✓ Install dependencies
+✓ Generate configuration
+✓ Verify installation
+✓ Run tests (optional)
+✓ Create shortcuts
+
+
+Step 2: Configure API Keys
+────────────────────────────────────────────
+Choose one or more LLM providers:
+
+A. Groq (Free, Fastest) - RECOMMENDED
+   1. Visit: https://console.groq.com
+   2. Sign up (free)
+   3. Get API key
+   4. Run: export GROQ_API_KEY='gsk_...'
+
+B. Google Gemini (Free)
+   1. Visit: https://makersuite.google.com/app/apikey
+   2. Create API key
+   3. Run: export GOOGLE_API_KEY='AIza...'
+
+C. Claude/Anthropic
+   1. Visit: https://console.anthropic.com
+   2. Create API key
+   3. Run: export ANTHROPIC_API_KEY='sk-ant-...'
+
+D. OpenAI (GPT-4)
+   1. Visit: https://platform.openai.com/api-keys
+   2. Create API key
+   3. Run: export OPENAI_API_KEY='sk-...'
+
+
+Persistent Setup (Recommended):
+Create ~/.elyan/.env file:
+
+cat > ~/.elyan/.env << 'EOF'
+GROQ_API_KEY=gsk_...
+GOOGLE_API_KEY=AIza...
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...
+EOF
+
+Then add to ~/.bashrc or ~/.zshrc:
+source ~/.elyan/.env
+
+
+Step 3: Activate Environment
+────────────────────────────────────────────
+source ~/.elyan/activate.sh
+
+You should see:
+"Elyan environment activated"
+
+
+Step 4: Verify Installation
+────────────────────────────────────────────
+Run tests:
+python3 -m pytest tests/ -v
+
+Expected output:
+143 passed in 4.8s ✅
+
+Verify core modules:
+python3 -c "from core.learning_engine import LearningEngine; print('✓ Learning')"
+python3 -c "from core.autonomous_coding_agent import AutonomousCodingAgent; print('✓ Coding')"
+python3 -c "from core.production_monitor import ProductionMonitor; print('✓ Monitor')"
+
+
+Step 5: Configure Settings (Optional)
+────────────────────────────────────────────
+Edit ~/.elyan/config/elyan.yaml
+
+Example configuration:
+
+app:
+  name: Elyan
+  version: "1.0.0"
+  debug: false
+
+llm:
+  provider: groq              # or gemini, claude, gpt4
+  model: llama-3.3-70b-versatile
+  temperature: 0.7
+  max_tokens: 4000
+
+learning:
+  enabled: true
+  persistence: sqlite
+  storage_path: ~/.elyan/data/learning
+
+security:
+  enable_audit_logging: true
+  require_https: false
+
+
+================================================================================
+                        FIRST USE
+================================================================================
+
+Option A: Command Line Interface
+────────────────────────────────────────────
+elyan --help
+elyan status
+elyan run "write a python function to check if a number is prime"
+
+
+Option B: Python Interactive
+────────────────────────────────────────────
+python3 << 'EOF'
+from core.learning_engine import LearningEngine
+from core.autonomous_coding_agent import AutonomousCodingAgent
+
+# Initialize learning engine
+engine = LearningEngine("user_001")
+
+# Initialize coding agent
+coder = AutonomousCodingAgent()
+
+# Generate code
+code = coder.generate_code("prime number checker")
+print(code)
+
+# Record interaction for learning
+engine.record_interaction(
+    "autonomous_coding",
+    {"task": "prime checker"},
+    code,
+    success=True,
+    duration=0.5
+)
+
+# Get recommendations
+recommendations = engine.get_recommendations()
+print(recommendations)
+EOF
+
+
+Option C: Using the Agent
+────────────────────────────────────────────
+cd ~/.elyan/repo
+python3 -m core.agent
+
+This starts the interactive agent that can:
+- Generate code
+- Learn from interactions
+- Provide recommendations
+- Answer questions
+- Execute tasks
+
+
+================================================================================
+                        TROUBLESHOOTING
+================================================================================
+
+Problem: "Command not found: Python 3.9+"
+Solution:
+  1. Check version: python3 --version
+  2. Install from: https://www.python.org/downloads/
+  3. Or use: brew install python@3.11 (macOS)
+  4. Or use: apt-get install python3.11 (Ubuntu)
+
+
+Problem: "Virtual environment not found"
+Solution:
+  bash setup_elyan.sh --clean
+
+
+Problem: "Git not found"
+Solution:
+  macOS: brew install git
+  Ubuntu: apt-get install git
+  Windows: https://git-scm.com/download/win
+
+
+Problem: "API key not recognized"
+Solution:
+  # Verify it's set
+  echo $GROQ_API_KEY
+
+  # Set it
+  export GROQ_API_KEY='gsk_...'
+
+  # Or add to ~/.elyan/.env and source it
+
+
+Problem: "Tests failing"
+Solution:
+  1. Check API keys are set
+  2. Check internet connection
+  3. Run: pip install -r requirements.txt
+  4. Run: python3 -m pytest tests/test_weeks1112_modules.py -v
+
+
+Problem: "Permission denied on /usr/local/bin/elyan"
+Solution:
+  sudo ln -s ~/.elyan/elyan /usr/local/bin/elyan
+
+  Or just use full path:
+  ~/.elyan/elyan --help
+
+
+Problem: "Out of disk space"
+Solution:
+  # Clear cache
+  rm -rf ~/.elyan/data/cache/*
+
+  # Check disk usage
+  du -sh ~/.elyan/
+
+
+================================================================================
+                        COMMON COMMANDS
+================================================================================
+
+Environment:
+source ~/.elyan/activate.sh              # Activate
+deactivate                               # Deactivate
+ls ~/.elyan/                             # View structure
+
+
+Running:
+elyan --help                             # Show help
+elyan status                             # Check status
+python3 -m pytest tests/ -v              # Run tests
+python3 -m core.agent                    # Start agent
+
+
+Configuration:
+cat ~/.elyan/config/elyan.yaml           # View config
+nano ~/.elyan/config/elyan.yaml          # Edit config
+source ~/.elyan/.env                     # Load API keys
+
+
+Logging:
+tail -f ~/.elyan/logs/elyan.log          # View logs
+tail -50 ~/.elyan/logs/elyan.log         # Last 50 lines
+cat ~/.elyan/setup.log                   # Installation log
+
+
+Maintenance:
+rm -rf ~/.elyan/data/cache/*             # Clear cache
+rm -rf ~/.elyan/logs/*                   # Clear logs
+pip install -r requirements.txt          # Update deps
+cd ~/.elyan/repo && git pull             # Update Elyan
+
+
+Updates:
+cd ~/.elyan/repo
+git fetch origin main
+git pull origin main
+pip install -r requirements.txt
+
+
+================================================================================
+                        PERFORMANCE TIPS
+================================================================================
+
+For Speed:
+- Use Groq provider (fastest)
+- Reduce max_tokens to 2000
+- Enable caching
+- Use lower temperature (0.5)
+
+For Accuracy:
+- Use Claude or GPT-4
+- Increase max_tokens to 4000
+- Disable streaming
+- Use higher temperature (0.8)
+
+For Cost:
+- Use Gemini (best value)
+- Use smaller models
+- Enable token optimization
+- Batch requests
+
+For Learning:
+- Enable episodic memory
+- Enable semantic knowledge base
+- Record all interactions
+- Review recommendations regularly
+
+
+================================================================================
+                        SECURITY BEST PRACTICES
+================================================================================
+
+1. NEVER commit API keys to git:
+   Add ~/.elyan/.env to .gitignore
+
+2. Use environment variables:
+   export GROQ_API_KEY='...'
+   # Not: hardcoded in config
+
+3. Rotate API keys regularly:
+   # Monthly for production
+
+4. Monitor usage:
+   tail -f ~/.elyan/logs/elyan.log
+
+5. Enable audit logging:
+   security:
+     enable_audit_logging: true
+
+6. Use HTTPS in production:
+   security:
+     require_https: true
+
+7. Backup learning data:
+   cp -r ~/.elyan/data ~/.elyan/data.backup
+
+8. Update regularly:
+   cd ~/.elyan/repo && git pull origin main
+
+
+================================================================================
+                        UNINSTALLATION
+================================================================================
+
+If you want to remove Elyan completely:
+
+rm -rf ~/.elyan
+
+This removes:
+- Installation directory
+- Virtual environment
+- Configuration files
+- Learning data
+- All logs
+- Cache
+
+Data will be lost! Backup if needed:
+cp -r ~/.elyan ~/.elyan.backup
+
+
+================================================================================
+                        SUPPORT & COMMUNITY
+================================================================================
+
+GitHub: https://github.com/emrek0ca/bot
+Issues: https://github.com/emrek0ca/bot/issues
+Discussions: https://github.com/emrek0ca/bot/discussions
+Documentation: https://github.com/emrek0ca/bot/wiki
+
+Getting Help:
+1. Check logs: ~/.elyan/logs/
+2. Search GitHub issues
+3. Check documentation
+4. Create GitHub issue with:
+   - Your OS and Python version
+   - Error message
+   - Steps to reproduce
+   - Logs (paste relevant parts)
+
+
+================================================================================
+                        NEXT STEPS
+================================================================================
+
+After Installation:
+
+1. Read Documentation:
+   cat ~/.elyan/repo/docs/README.md
+
+2. Explore Examples:
+   ls ~/.elyan/repo/examples/
+
+3. Run Tests:
+   python3 -m pytest tests/ -v
+
+4. Configure Settings:
+   nano ~/.elyan/config/elyan.yaml
+
+5. Start Using Elyan:
+   python3 -m core.agent
+
+6. Enable Learning:
+   See ~/elyan/repo/docs/learning_system.md
+
+7. Join Community:
+   Star on GitHub ⭐
+   Follow for updates
+
+
+================================================================================
+                        SYSTEM INFO
+================================================================================
+
+Installation Checklist:
+✓ Python 3.9+
+✓ Git installed
+✓ 2GB free disk space
+✓ Internet connection
+✓ API key (at least one)
+✓ Proper file permissions
+
+Post-Installation:
+✓ ~/.elyan/repo/ - Repository
+✓ ~/.elyan/venv/ - Virtual environment
+✓ ~/.elyan/config/ - Configuration
+✓ ~/.elyan/data/ - User data
+✓ ~/.elyan/logs/ - Application logs
+✓ /usr/local/bin/elyan - CLI symlink (if possible)
+
+Environment Variables (Optional):
+GROQ_API_KEY        - Groq API key
+GOOGLE_API_KEY      - Google Gemini API key
+ANTHROPIC_API_KEY   - Claude API key
+OPENAI_API_KEY      - GPT-4 API key
+ELYAN_DEBUG         - Enable debug mode
+ELYAN_LOG_LEVEL     - Log level (DEBUG, INFO, WARNING, ERROR)
+
+
+================================================================================
+                        VERSION INFO
+================================================================================
+
+Elyan Version: 1.0.0
+Release Date: 2026-03-17
+Status: Production Ready
+Security: Audit Complete (15/15 fixes)
+Tests: 143/143 passing (100%)
+Support: Community + GitHub
+
+Included Components:
+- OpenClaw: Autonomous code generation
+- Jarvis: Smart assistant
+- Learning System: User personalization
+- Production Monitor: Real-time metrics
+- Rate Limiter: API protection
+- Custom Models: Fine-tuning support
+- Documentation Generator: Auto docs
+
+
+================================================================================
+
+That's it! Elyan is now installed and ready to use.
+
+For more information: https://github.com/emrek0ca/bot
+Questions? Create an issue on GitHub!
+
+Enjoy using Elyan! 🚀
+
+================================================================================
