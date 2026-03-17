@@ -27,12 +27,14 @@ class TestEpisodicMemory:
 
     def test_end_episode(self):
         mem = EpisodicMemory()
+        initial_count = len(mem.episodes)  # May have episodes from previous runs
         episode_id = mem.start_episode()
         mem.record_action("action1", {}, True)
         ended_id = mem.end_episode(["learning1"])
         assert ended_id == episode_id
         assert mem.current_episode is None
-        assert len(mem.episodes) == 1
+        # Should have exactly one more episode than before
+        assert len(mem.episodes) == initial_count + 1
 
     def test_recall_episodes(self):
         mem = EpisodicMemory()
