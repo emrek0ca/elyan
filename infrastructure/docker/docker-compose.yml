@@ -1,0 +1,117 @@
+version: "3.9"
+
+services:
+  elyan:
+    build:
+      context: ../../
+      dockerfile: infrastructure/docker/Dockerfile
+    container_name: elyan-app
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    env_file:
+      - ../../.env
+    environment:
+      - ELYAN_ENV=production
+      - ELYAN_LOG_LEVEL=INFO
+      - ELYAN_METRICS_PORT=9090
+      - ELYAN_API_PORT=8080
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://elyan:elyan@postgres:5432/elyan
+    volumes:
+      - elyan-data:/data/elyan
+      - elyan-logs:/data/elyan/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - elyan-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  redis:
+    image: redis:7-alpine
+    container_name: elyan-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - elyan-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: elyan-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: elyan
+      POSTGRES_USER: elyan
+      POSTGRES_PASSWORD: elyan
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - elyan-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U elyan -d elyan"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: elyan-prometheus
+    restart: unless-stopped
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - elyan-net
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: elyan-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: elyan-admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - elyan-net
+
+volumes:
+  elyan-data:
+  elyan-logs:
+  redis-data:
+  postgres-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  elyan-net:
+    driver: bridge
