@@ -260,7 +260,25 @@ def setup():
                 _warn(f"Atlandı. Sonra: export {env_key}=sk-xxx")
     else:
         _step(4, "Yerel Model — API key gerekmez")
-        _ok("Ollama ayarlandı")
+        if not local_models:
+            click.echo(click.style("      💡 Ollama'da henüz model yok. İndirilsin mi?", fg="yellow"))
+            want_pull = click.confirm(
+                click.style(f"      '{model_name}' indirilsin mi?", fg="blue"),
+                default=True
+            )
+            if want_pull:
+                click.echo(f"      ⏳ '{model_name}' indiriliyor (birkaç dakika sürebilir)...")
+                try:
+                    subprocess.run(["ollama", "pull", model_name], check=True, timeout=600)
+                    _ok(f"Model '{model_name}' indirildi")
+                except subprocess.TimeoutExpired:
+                    _warn("İndirme zaman aşımına uğradı. Terminalde 'ollama pull " + model_name + "' dene.")
+                except Exception as e:
+                    _warn(f"İndirme hatası: {e}. Terminalde 'ollama pull {model_name}' dene.")
+            else:
+                _warn(f"Sonra: ollama pull {model_name}")
+        else:
+            _ok("Ollama ayarlandı")
 
     # ── Step 5: Telegram ──
     _step(5, "Telegram Bağlantısı (opsiyonel)")
@@ -349,9 +367,25 @@ def setup():
         "language": lang,
     }
 
-    # Merge API keys
+    # Merge API keys and register with orchestrator
     if "api_keys" in cfg:
         full_cfg["api_keys"] = cfg["api_keys"]
+        # Register keys with model_orchestrator for immediate use
+        try:
+            from core.model_orchestrator import model_orchestrator
+            for prov, key in cfg["api_keys"].items():
+                if key:
+                    model_orchestrator.add_provider(prov, key)
+                    logger.info(f"Registered provider: {prov}")
+        except Exception as e:
+            logger.debug(f"Orchestrator registration deferred: {e}")
+
+    # Mark setup complete for LLM setup manager
+    try:
+        from core.llm_setup import get_llm_setup
+        get_llm_setup().mark_setup_complete()
+    except Exception:
+        pass
 
     _save(full_cfg)
     _ok(f"Config: {CFG_FILE}")

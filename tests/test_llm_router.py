@@ -107,8 +107,10 @@ def test_generate_cost_guard_caps_temperature_and_tokens():
         return captured
 
     captured = asyncio.run(run_case())
-    assert captured["temp"] <= 0.35
-    assert captured["max_tokens"] == 320
+    # Role-based cost_guard: default (inference) caps at temp=0.5, max_tokens=800
+    # Router caps at temp=0.2, max_tokens=320; code caps at temp=0.4, max_tokens=4096
+    assert captured["temp"] <= 0.5
+    assert captured["max_tokens"] == 800
 
 
 def test_chat_cost_guard_uses_short_token_budget():

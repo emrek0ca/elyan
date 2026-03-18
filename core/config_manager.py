@@ -61,7 +61,7 @@ class ConfigManager:
         self.feature_flags: Dict[str, FeatureFlag] = {}
         self.config_file = HOME_DIR / ".elyan" / "dynamic_config.json"
         self.flags_file = HOME_DIR / ".elyan" / "feature_flags.json"
-        self.env_prefix = "WIQO_"
+        self.env_prefix = "elyan_"
 
         # Change listeners
         self.listeners: List[Callable[[str, Any, Any], None]] = []

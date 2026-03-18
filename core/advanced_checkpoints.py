@@ -1,5 +1,5 @@
 """
-Advanced Checkpoint & Recovery System for Wiqo Bot
+Advanced Checkpoint & Recovery System for elyan Bot
 ===================================================
 Enables recovery from any checkpoint in a complex task execution,
 with minimal memory overhead and fast resume capability.
@@ -62,7 +62,7 @@ class CheckpointMetadata:
 class CheckpointStore:
     """Manages checkpoint storage and retrieval."""
 
-    def __init__(self, db_path: str = "~/.wiqo/checkpoints.db"):
+    def __init__(self, db_path: str = "~/.elyan/checkpoints.db"):
         self.db_path = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.db_path = str(self.db_path)
@@ -473,7 +473,7 @@ class ExecutionRecovery:
 class CheckpointManager:
     """High-level manager for checkpointing and recovery."""
 
-    def __init__(self, db_path: str = "~/.wiqo/checkpoints.db"):
+    def __init__(self, db_path: str = "~/.elyan/checkpoints.db"):
         self.store = CheckpointStore(db_path)
         self.recovery = ExecutionRecovery(self.store)
         self.auto_checkpoint_interval = 30.0  # seconds

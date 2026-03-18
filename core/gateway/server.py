@@ -88,8 +88,8 @@ def _ensure_admin_access_token() -> str:
     generated = secrets.token_urlsafe(24)
     try:
         elyan_config.set("gateway.admin.token", generated)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to persist admin token: {e}. A new token will be generated on next startup.")
     return generated
 
 
@@ -817,12 +817,33 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/skills/workflows', self.handle_skill_workflows)
         self.app.router.add_post('/api/skills/workflows/toggle', self.handle_skill_workflow_toggle)
 
+        # ── Skill Marketplace API ─────────────────────────────────────────────
+        self.app.router.add_get('/api/marketplace/browse', self.handle_marketplace_browse)
+        self.app.router.add_get('/api/marketplace/search', self.handle_marketplace_search)
+        self.app.router.add_get('/api/marketplace/categories', self.handle_marketplace_categories)
+        self.app.router.add_post('/api/marketplace/install', self.handle_marketplace_install)
+        self.app.router.add_post('/api/marketplace/review', self.handle_marketplace_review)
+        self.app.router.add_post('/api/marketplace/export', self.handle_marketplace_export)
+
         # ── Multi-LLM Engine API ──────────────────────────────────────────────
         self.app.router.add_get('/api/llm/live', self.handle_llm_live_metrics)
         self.app.router.add_post('/api/llm/toggle', self.handle_llm_toggle_model)
         self.app.router.add_post('/api/llm/priority', self.handle_llm_set_priority)
         self.app.router.add_post('/api/llm/reset-circuit', self.handle_llm_reset_circuit)
         self.app.router.add_post('/api/llm/race', self.handle_llm_race)
+        self.app.router.add_post('/api/llm/provider-key', self.handle_llm_provider_key)
+        self.app.router.add_get('/api/llm/ollama-models', self.handle_llm_ollama_models)
+        self.app.router.add_post('/api/llm/ollama-pull', self.handle_llm_ollama_pull)
+
+        # ── LLM Setup Manager API ────────────────────────────────────────────
+        self.app.router.add_get('/api/llm/setup/status', self.handle_llm_setup_status)
+        self.app.router.add_get('/api/llm/setup/health', self.handle_llm_setup_health)
+        self.app.router.add_post('/api/llm/setup/save-key', self.handle_llm_setup_save_key)
+        self.app.router.add_post('/api/llm/setup/remove-key', self.handle_llm_setup_remove_key)
+        self.app.router.add_get('/api/llm/setup/ollama', self.handle_llm_setup_ollama)
+        self.app.router.add_post('/api/llm/setup/ollama-pull', self.handle_llm_setup_ollama_pull)
+        self.app.router.add_post('/api/llm/setup/ollama-delete', self.handle_llm_setup_ollama_delete)
+        self.app.router.add_get('/api/llm/setup/recommend', self.handle_llm_setup_recommend)
 
         # ── Dashboard & Web UI ────────────────────────────────────────────────
         self.app.router.add_get('/', self.handle_dashboard_page)
@@ -902,7 +923,9 @@ class ElyanGatewayServer:
         asset_path = (base / filename).resolve()
         if asset_path.parent != base or not asset_path.exists() or not asset_path.is_file():
             return web.Response(text="Asset file not found", status=404)
-        return web.FileResponse(asset_path)
+        resp = web.FileResponse(asset_path)
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return resp
 
     # ── Config ────────────────────────────────────────────────────────────────
     async def handle_get_config(self, request):
@@ -2666,6 +2689,45 @@ class ElyanGatewayServer:
             # Merge orchestrator health report
             from core.model_orchestrator import model_orchestrator
             metrics["health_report"] = model_orchestrator.get_health_report()
+
+            # Provider key status for dashboard provider cards
+            import os
+            key_map = {
+                "groq": "GROQ_API_KEY", "google": "GOOGLE_API_KEY",
+                "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
+                "deepseek": "DEEPSEEK_API_KEY", "mistral": "MISTRAL_API_KEY",
+                "cohere": "COHERE_API_KEY", "together": "TOGETHER_API_KEY",
+                "perplexity": "PERPLEXITY_API_KEY", "xai": "XAI_API_KEY",
+            }
+            provider_keys = {}
+            orch_providers = model_orchestrator.providers or {}
+            for prov, env_name in key_map.items():
+                has_env = bool(os.environ.get(env_name, ""))
+                has_orch = prov in orch_providers and bool(orch_providers[prov].get("apiKey"))
+                provider_keys[prov] = {"configured": has_env or has_orch}
+            provider_keys["ollama"] = {"configured": True}
+            metrics["provider_keys"] = provider_keys
+
+            # Role assignments
+            try:
+                role_assignments = {}
+                for role in ["inference", "code", "reasoning", "creative", "router"]:
+                    best = model_orchestrator.get_best_available(role)
+                    if best and isinstance(best, dict):
+                        role_assignments[role] = {
+                            "provider": best.get("provider") or best.get("type") or "-",
+                            "model": best.get("model") or "-",
+                        }
+                fallback = getattr(model_orchestrator, "fallback_config", None)
+                if fallback and isinstance(fallback, dict):
+                    role_assignments["fallback"] = {
+                        "provider": fallback.get("provider") or fallback.get("type") or "-",
+                        "model": fallback.get("model") or "-",
+                    }
+                metrics["role_assignments"] = role_assignments
+            except Exception:
+                metrics["role_assignments"] = {}
+
             return web.json_response({"ok": True, **metrics})
         except Exception as e:
             return web.json_response({"ok": False, "error": str(e)}, status=500)
@@ -2756,6 +2818,91 @@ class ElyanGatewayServer:
                 ],
                 "total_time_ms": result.total_time_ms,
             })
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+    async def handle_llm_provider_key(self, request):
+        """POST /api/llm/provider-key — Save an API key for a provider."""
+        try:
+            body = await request.json()
+            provider = str(body.get("provider", "")).strip().lower()
+            api_key = str(body.get("api_key", "")).strip()
+            if not provider or not api_key:
+                return web.json_response({"ok": False, "error": "provider and api_key required"}, status=400)
+
+            key_map = {
+                "groq": "GROQ_API_KEY",
+                "google": "GOOGLE_API_KEY",
+                "openai": "OPENAI_API_KEY",
+                "anthropic": "ANTHROPIC_API_KEY",
+                "deepseek": "DEEPSEEK_API_KEY",
+                "mistral": "MISTRAL_API_KEY",
+                "cohere": "COHERE_API_KEY",
+                "together": "TOGETHER_API_KEY",
+                "perplexity": "PERPLEXITY_API_KEY",
+                "xai": "XAI_API_KEY",
+            }
+            env_name = key_map.get(provider)
+            if not env_name:
+                return web.json_response({"ok": False, "error": f"unknown provider: {provider}"}, status=400)
+
+            # Save to environment
+            import os
+            os.environ[env_name] = api_key
+
+            # Try to save to keychain
+            try:
+                from security.keychain import keychain_set
+                keychain_set(env_name, api_key)
+            except Exception:
+                pass
+
+            # Notify model orchestrator
+            try:
+                from core.model_orchestrator import model_orchestrator
+                model_orchestrator._provider_keys[provider] = True
+            except Exception:
+                pass
+
+            return web.json_response({"ok": True, "provider": provider})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+    async def handle_llm_ollama_models(self, request):
+        """GET /api/llm/ollama-models — List locally available Ollama models."""
+        try:
+            import aiohttp
+            ollama_url = "http://localhost:11434/api/tags"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(ollama_url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status != 200:
+                        return web.json_response({"ok": False, "error": "ollama not reachable"}, status=502)
+                    data = await resp.json()
+                    models = []
+                    for m in data.get("models", []):
+                        name = m.get("name", "")
+                        size_bytes = m.get("size", 0)
+                        size_str = f"{size_bytes / (1024**3):.1f}GB" if size_bytes > 0 else ""
+                        models.append({"name": name, "size": size_str})
+                    return web.json_response({"ok": True, "models": models})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+    async def handle_llm_ollama_pull(self, request):
+        """POST /api/llm/ollama-pull — Pull an Ollama model."""
+        try:
+            body = await request.json()
+            model = str(body.get("model", "")).strip()
+            if not model:
+                return web.json_response({"ok": False, "error": "model required"}, status=400)
+            import aiohttp
+            ollama_url = "http://localhost:11434/api/pull"
+            async with aiohttp.ClientSession() as session:
+                async with session.post(ollama_url, json={"name": model}, timeout=aiohttp.ClientTimeout(total=300)) as resp:
+                    if resp.status != 200:
+                        err_text = await resp.text()
+                        return web.json_response({"ok": False, "error": f"pull failed: {err_text[:200]}"}, status=502)
+                    return web.json_response({"ok": True, "model": model})
         except Exception as e:
             return web.json_response({"ok": False, "error": str(e)}, status=500)
 
@@ -4374,6 +4521,151 @@ class ElyanGatewayServer:
         push_activity("workflow_toggle", "dashboard", f"{workflow_id}: {'on' if enabled else 'off'}", success=ok)
         return web.json_response({"ok": ok, "message": msg, "workflow": info}, status=200 if ok else 400)
 
+    # ── Marketplace Handlers ────────────────────────────────────────────────
+    async def handle_marketplace_browse(self, request):
+        from core.skills.marketplace import get_marketplace
+        mp = get_marketplace()
+        category = request.rel_url.query.get("category", "")
+        query = request.rel_url.query.get("q", "")
+        sort_by = request.rel_url.query.get("sort", "rating")
+        listings = await mp.browse(category=category, query=query, sort_by=sort_by)
+        return web.json_response({"ok": True, "listings": listings, "total": len(listings)})
+
+    async def handle_marketplace_search(self, request):
+        from core.skills.marketplace import get_marketplace
+        mp = get_marketplace()
+        q = request.rel_url.query.get("q", "")
+        results = await mp.search(q)
+        return web.json_response({"ok": True, "results": results, "total": len(results)})
+
+    async def handle_marketplace_categories(self, request):
+        from core.skills.marketplace import get_marketplace
+        mp = get_marketplace()
+        categories = await mp.get_categories()
+        return web.json_response({"ok": True, "categories": categories})
+
+    async def handle_marketplace_install(self, request):
+        from core.skills.marketplace import get_marketplace
+        mp = get_marketplace()
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        url = str(data.get("url", "")).strip()
+        if url:
+            ok, msg, warnings = await mp.install_from_url(url)
+        elif isinstance(data.get("package"), dict):
+            ok, msg, warnings = await mp.install_from_dict(data["package"])
+        else:
+            return web.json_response({"ok": False, "error": "url or package required"}, status=400)
+        return web.json_response({"ok": ok, "message": msg, "warnings": warnings}, status=200 if ok else 400)
+
+    async def handle_marketplace_review(self, request):
+        from core.skills.marketplace import get_marketplace
+        mp = get_marketplace()
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        skill_name = str(data.get("skill", "")).strip()
+        rating = int(data.get("rating", 0))
+        comment = str(data.get("comment", ""))
+        if not skill_name or not (1 <= rating <= 5):
+            return web.json_response({"ok": False, "error": "skill and rating (1-5) required"}, status=400)
+        mp.add_review(skill_name, rating, comment)
+        avg = mp.get_average_rating(skill_name)
+        return web.json_response({"ok": True, "average_rating": avg})
+
+    async def handle_marketplace_export(self, request):
+        from core.skills.marketplace import get_marketplace
+        mp = get_marketplace()
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        name = str(data.get("name", "")).strip()
+        if not name:
+            return web.json_response({"ok": False, "error": "name required"}, status=400)
+        ok, msg = mp.export_skill(name)
+        return web.json_response({"ok": ok, "message": msg}, status=200 if ok else 400)
+
+    # ── LLM Setup Manager Handlers ───────────────────────────────────────────
+    async def handle_llm_setup_status(self, request):
+        from core.llm_setup import get_llm_setup
+        setup = get_llm_setup()
+        statuses = await setup.get_all_provider_status()
+        return web.json_response({"ok": True, "providers": statuses, "first_run": setup.is_first_run()})
+
+    async def handle_llm_setup_health(self, request):
+        from core.llm_setup import get_llm_setup
+        setup = get_llm_setup()
+        health = await setup.quick_health()
+        return web.json_response({"ok": True, **health})
+
+    async def handle_llm_setup_save_key(self, request):
+        from core.llm_setup import get_llm_setup
+        setup = get_llm_setup()
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        provider = str(data.get("provider", "")).strip()
+        api_key = str(data.get("api_key", "") or "").strip()
+        if not provider:
+            return web.json_response({"ok": False, "error": "provider required"}, status=400)
+        if provider != "ollama" and not api_key:
+            return web.json_response({"ok": False, "error": "api_key required"}, status=400)
+        result = await setup.save_api_key(provider, api_key)
+        return web.json_response({"ok": result.get("success", False), **result})
+
+    async def handle_llm_setup_remove_key(self, request):
+        from core.llm_setup import get_llm_setup
+        setup = get_llm_setup()
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        provider = str(data.get("provider", "")).strip()
+        result = await setup.remove_api_key(provider)
+        return web.json_response({"ok": result.get("success", False), **result})
+
+    async def handle_llm_setup_ollama(self, request):
+        from core.llm_setup import get_llm_setup
+        setup = get_llm_setup()
+        status = await setup.ollama_status()
+        return web.json_response({"ok": True, **status})
+
+    async def handle_llm_setup_ollama_pull(self, request):
+        from core.llm_setup import get_llm_setup
+        setup = get_llm_setup()
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        model = str(data.get("model", "")).strip()
+        if not model:
+            return web.json_response({"ok": False, "error": "model required"}, status=400)
+        result = await setup.ollama_pull_model(model)
+        return web.json_response({"ok": result.get("success", False), **result})
+
+    async def handle_llm_setup_ollama_delete(self, request):
+        from core.llm_setup import get_llm_setup
+        setup = get_llm_setup()
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        model = str(data.get("model", "")).strip()
+        if not model:
+            return web.json_response({"ok": False, "error": "model required"}, status=400)
+        result = await setup.ollama_delete_model(model)
+        return web.json_response({"ok": result.get("success", False), **result})
+
+    async def handle_llm_setup_recommend(self, request):
+        from core.llm_setup import get_llm_setup
+        setup = get_llm_setup()
+        return web.json_response({"ok": True, **setup.get_setup_recommendation()})
+
     # ── WebSocket: Dashboard push (new) ───────────────────────────────────────
     async def handle_dashboard_ws(self, request):
         ws = web.WebSocketResponse(heartbeat=30)
@@ -4403,7 +4695,7 @@ class ElyanGatewayServer:
             from pathlib import Path
             audit_path = resolve_elyan_data_dir() / "audit.db"
             if not audit_path.exists():
-                audit_path = Path(".wiqo_audit/audit.db")
+                audit_path = Path(".elyan_audit/audit.db")
             if audit_path.exists():
                 conn = sqlite3.connect(audit_path)
                 conn.row_factory = sqlite3.Row

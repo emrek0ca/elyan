@@ -1,5 +1,5 @@
 """
-Parallel Task Executor for Wiqo Bot
+Parallel Task Executor for elyan Bot
 ====================================
 Executes independent tasks concurrently with dependency awareness,
 resource management, and comprehensive progress tracking.

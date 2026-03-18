@@ -3,11 +3,60 @@ Analytics Engine - Real-time metrics and business intelligence
 """
 
 import logging
-from typing import Dict, List, Any
+from dataclasses import dataclass, field
+from typing import Dict, List, Any, Optional
 from collections import defaultdict
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ExecutionMetric:
+    """Metric for a single execution step."""
+    name: str
+    duration: float = 0.0
+    success: bool = True
+    tokens_used: int = 0
+    cost: float = 0.0
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ToolAnalytic:
+    """Analytics for tool usage."""
+    tool_name: str
+    call_count: int = 0
+    success_count: int = 0
+    total_duration: float = 0.0
+    avg_duration: float = 0.0
+    error_rate: float = 0.0
+
+
+@dataclass
+class UserAnalytic:
+    """Analytics for user interactions."""
+    user_id: str
+    message_count: int = 0
+    session_count: int = 0
+    avg_response_time: float = 0.0
+    satisfaction_score: float = 0.0
+    top_intents: List[str] = field(default_factory=list)
+
+
+@dataclass
+class LLMMetric:
+    """Metric for LLM provider usage."""
+    provider: str
+    model: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cost: float = 0.0
+    latency_ms: float = 0.0
+    success: bool = True
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
 
 class AnalyticsEngine:
@@ -84,3 +133,15 @@ class AnalyticsEngine:
             "total_operations": total_ops,
             "avg_duration": sum(e["duration"] for e in self.events if "duration" in e) / total_ops if total_ops > 0 else 0
         }
+
+
+# Singleton instance
+_analytics_engine: Optional[AnalyticsEngine] = None
+
+
+def get_analytics_engine() -> AnalyticsEngine:
+    """Get or create the singleton AnalyticsEngine instance."""
+    global _analytics_engine
+    if _analytics_engine is None:
+        _analytics_engine = AnalyticsEngine()
+    return _analytics_engine

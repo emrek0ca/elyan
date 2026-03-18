@@ -175,7 +175,7 @@ def _default_config() -> AppConfig:
                 "enabled": ["wallpaper_with_proof", "api_health_get_save"],
             },
         },
-        subscriptions={"enabled": True, "default_tier": "free"},
+        subscriptions={"enabled": False, "default_tier": "free"},
         monthly_budget_usd=20.0,
         cost_limit_usd=50.0,
     )

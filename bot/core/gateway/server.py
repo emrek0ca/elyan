@@ -1702,7 +1702,7 @@ class ElyanGatewayServer:
             from pathlib import Path
             audit_path = Path.home() / ".elyan" / "audit.db"
             if not audit_path.exists():
-                audit_path = Path(".wiqo_audit/audit.db")
+                audit_path = Path(".elyan_audit/audit.db")
             if audit_path.exists():
                 conn = sqlite3.connect(audit_path)
                 conn.row_factory = sqlite3.Row

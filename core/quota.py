@@ -111,8 +111,12 @@ class QuotaManager:
         # If monetization is not enabled, everyone is allowed.
         if not elyan_config.config.subscriptions.enabled:
             return {"allowed": True, "reason": "subscriptions_disabled"}
-            
+
         uid = str(user_id or "local")
+
+        # Local/CLI users are unlimited — quota only applies to external channel users
+        if uid in ("local", "cli", "system", "test_user", ""):
+            return {"allowed": True, "reason": "local_user_unlimited"}
         tier = subscription_manager.get_user_tier(uid)
         limits = subscription_manager.get_tier_limits(tier)
         

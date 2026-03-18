@@ -16,29 +16,8 @@ class GenericToolOutput(BaseModel):
     path: str | None = None
 
 
-class WriteFileInput(BaseModel):
-    path: str
-    content: str
-
-
-class WriteFileOutput(BaseModel):
-    success: bool
-    path: str
-    size: int | None = None
-    bytes_written: int | None = None
-    sha256: str | None = None
-    preview_200_chars: str | None = None
-
-
-class WebScaffoldOutput(BaseModel):
-    success: bool
-    path: str
-    files_created: list[str] = []
-    bytes_written: int | None = None
-
-
 _TOOL_INPUT_SCHEMAS: dict[str, type[BaseModel]] = {
-    "write_file": WriteFileInput,
+    "write_file": GenericToolInput,
     "edit_text_file": GenericToolInput,
     "run_safe_command": GenericToolInput,
     "take_screenshot": GenericToolInput,
@@ -46,11 +25,10 @@ _TOOL_INPUT_SCHEMAS: dict[str, type[BaseModel]] = {
 }
 
 _TOOL_OUTPUT_SCHEMAS: dict[str, type[BaseModel]] = {
-    "write_file": WriteFileOutput,
+    "write_file": GenericToolOutput,
     "edit_text_file": GenericToolOutput,
     "take_screenshot": GenericToolOutput,
     "http_request": GenericToolOutput,
-    "create_web_project_scaffold": WebScaffoldOutput,
 }
 
 
@@ -96,34 +74,21 @@ def detect_artifact_mismatch(*, expected_extensions: list[str], produced_paths: 
 
 
 def collect_paths_from_tool_results(tool_results: list[dict[str, Any]]) -> list[str]:
-    def _walk(payload: Any, out: list[str], *, depth: int = 0) -> None:
-        if depth > 4 or not isinstance(payload, dict):
-            return
-        for key in ("path", "file_path", "output_path", "delivery_dir"):
-            val = payload.get(key)
-            if isinstance(val, str) and val.strip():
-                out.append(val.strip())
-        for key in ("outputs", "artifacts", "report_paths", "files_created"):
-            val = payload.get(key)
-            if isinstance(val, list):
-                for item in val:
-                    if isinstance(item, str) and item.strip():
-                        out.append(item.strip())
-                    elif isinstance(item, dict):
-                        path_val = item.get("path")
-                        if isinstance(path_val, str) and path_val.strip():
-                            out.append(path_val.strip())
-        for key in ("result", "raw"):
-            nested = payload.get(key)
-            if isinstance(nested, dict) and nested is not payload:
-                _walk(nested, out, depth=depth + 1)
-
     paths: list[str] = []
     for row in tool_results or []:
         if not isinstance(row, dict):
             continue
-        _walk(row, paths)
-    return list(dict.fromkeys(paths))
+        for key in ("path", "file_path", "output_path"):
+            val = row.get(key)
+            if isinstance(val, str) and val.strip():
+                paths.append(val.strip())
+        result = row.get("result")
+        if isinstance(result, dict):
+            for key in ("path", "file_path", "output_path"):
+                val = result.get(key)
+                if isinstance(val, str) and val.strip():
+                    paths.append(val.strip())
+    return paths
 
 
 def decide_orchestration_policy(

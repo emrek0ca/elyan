@@ -11,7 +11,7 @@ async def test_delivery_state_machine_flow():
     project_name = f"test_proj_{int(asyncio.get_event_loop().time())}"
     
     # Test project creation
-    res = await engine.create_project(project_name, "python_cli", {"welcome_msg": "Test!"})
+    res = await engine.create_project(project_name, description="A test CLI app", template_type="python_cli", data={"welcome_msg": "Test!"})
     assert res["success"] is True
     assert "path" in res
     

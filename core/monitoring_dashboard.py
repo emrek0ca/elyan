@@ -1,5 +1,5 @@
 """
-Monitoring Dashboard for Wiqo Bot Production
+Monitoring Dashboard for elyan Bot Production
 =============================================
 Real-time metrics display, performance tracking, and analytics.
 
@@ -149,7 +149,7 @@ class MetricsCollector:
 class MetricsStore:
     """Stores metrics history."""
 
-    def __init__(self, db_path: str = "~/.wiqo/metrics.db"):
+    def __init__(self, db_path: str = "~/.elyan/metrics.db"):
         self.db_path = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.db_path = str(self.db_path)
@@ -302,7 +302,7 @@ class MetricsStore:
 class MonitoringDashboard:
     """Main monitoring dashboard."""
 
-    def __init__(self, db_path: str = "~/.wiqo/metrics.db"):
+    def __init__(self, db_path: str = "~/.elyan/metrics.db"):
         self.collector = MetricsCollector()
         self.store = MetricsStore(db_path)
         self.collection_interval = 60  # seconds

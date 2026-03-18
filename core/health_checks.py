@@ -1,5 +1,5 @@
 """
-Health Check System for Wiqo Bot Production
+Health Check System for elyan Bot Production
 =============================================
 Monitors system health and provides diagnostic information.
 

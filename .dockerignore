@@ -20,8 +20,8 @@ build/
 logs/
 *.log
 *.jsonl
-.wiqo/
-.wiqo_audit/
+.elyan/
+.elyan_audit/
 
 # Git
 .git/
@@ -40,7 +40,7 @@ roadmap.txt
 roadmap.md
 CLAUDE.md
 SESSION_HANDOFF.md
-WIQO_MASTER.md
+elyan_MASTER.md
 ELYAN_MASTER.md
 text.txt
 build_ml.sh

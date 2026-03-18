@@ -56,13 +56,13 @@ class ThemeColors:
 
 
 # Elyan Professional Palette (Apple-Style)
-WIQO_TURQUOISE = "#ADDBE3"
-WIQO_STEEL = "#7196A2"
-WIQO_SLATE = "#517079"
-WIQO_CHARCOAL = "#252F33"
-WIQO_BLACK = "#090E0F"
-WIQO_PURE_WHITE = "#FFFFFF"
-WIQO_OFF_WHITE = "#F5F5F7" # Apple style off-white
+elyan_TURQUOISE = "#ADDBE3"
+elyan_STEEL = "#7196A2"
+elyan_SLATE = "#517079"
+elyan_CHARCOAL = "#252F33"
+elyan_BLACK = "#090E0F"
+elyan_PURE_WHITE = "#FFFFFF"
+elyan_OFF_WHITE = "#F5F5F7" # Apple style off-white
 
 
 # Predefined themes
@@ -169,22 +169,22 @@ ROSE_THEME = ThemeColors(
     border_focus="#f43f5e"
 )
 
-WIQO_WHITE = ThemeColors(
-    primary=WIQO_STEEL,
-    primary_hover=WIQO_SLATE,
-    primary_light=WIQO_TURQUOISE,
-    bg_primary=WIQO_PURE_WHITE,
-    bg_secondary=WIQO_OFF_WHITE,
+elyan_WHITE = ThemeColors(
+    primary=elyan_STEEL,
+    primary_hover=elyan_SLATE,
+    primary_light=elyan_TURQUOISE,
+    bg_primary=elyan_PURE_WHITE,
+    bg_secondary=elyan_OFF_WHITE,
     bg_tertiary="#E5E5EA",
-    bg_card=WIQO_PURE_WHITE,
-    bg_hover=WIQO_OFF_WHITE,
-    text_primary=WIQO_BLACK,
-    text_secondary=WIQO_CHARCOAL,
+    bg_card=elyan_PURE_WHITE,
+    bg_hover=elyan_OFF_WHITE,
+    text_primary=elyan_BLACK,
+    text_secondary=elyan_CHARCOAL,
     text_muted="#8E8E93",
-    text_accent=WIQO_STEEL,
+    text_accent=elyan_STEEL,
     border="#D1D1D6",
     border_light="#E5E5EA",
-    border_focus=WIQO_TURQUOISE,
+    border_focus=elyan_TURQUOISE,
     success="#34C759", # Apple Green
     success_bg="#EBF9EE",
     warning="#FF9500", # Apple Orange
@@ -221,7 +221,7 @@ FUTURE_LIGHT = ThemeColors(
 
 
 THEMES: Dict[str, ThemeColors] = {
-    "elyan": WIQO_WHITE,
+    "elyan": elyan_WHITE,
     "dark": DARK_THEME,
     "light": LIGHT_THEME,
     "midnight": MIDNIGHT_THEME,

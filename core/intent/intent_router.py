@@ -31,7 +31,7 @@ _user_memory: Optional[UserIntentMemory] = None
 _metrics: Optional[IntentMetricsTracker] = None
 
 
-def initialize_router(llm_orchestrator=None, db_path: str = "~/.wiqo/intent_memory.db") -> None:
+def initialize_router(llm_orchestrator=None, db_path: str = "~/.elyan/intent_memory.db") -> None:
     """Initialize intent router components."""
     global _fast_matcher, _semantic_classifier, _deep_reasoner, _user_memory, _metrics
 

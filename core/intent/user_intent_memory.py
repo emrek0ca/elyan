@@ -20,7 +20,7 @@ logger = get_logger("user_intent_memory")
 class UserIntentMemory:
     """Persistent user-specific intent memory."""
 
-    def __init__(self, db_path: str = "~/.wiqo/intent_memory.db"):
+    def __init__(self, db_path: str = "~/.elyan/intent_memory.db"):
         self.db_path = os.path.expanduser(db_path)
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()

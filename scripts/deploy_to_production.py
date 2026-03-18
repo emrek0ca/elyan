@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Production Deployment Pipeline for Wiqo Bot
+Production Deployment Pipeline for elyan Bot
 ============================================
 Handles pre-deployment validation, database migrations, configuration,
 health checks, and gradual rollout with rollback capability.
@@ -324,7 +324,7 @@ class RolloutStep(DeploymentStep):
 class DeploymentState:
     """Tracks deployment state for rollback capability."""
 
-    def __init__(self, state_file: str = "~/.wiqo/deployment_state.json"):
+    def __init__(self, state_file: str = "~/.elyan/deployment_state.json"):
         self.state_file = Path(state_file).expanduser()
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -426,8 +426,8 @@ class Deployer:
 async def deploy_production(
     version: str,
     environment: str = "production",
-    db_path: str = "~/.wiqo/bot.db",
-    log_dir: str = "~/.wiqo/logs"
+    db_path: str = "~/.elyan/bot.db",
+    log_dir: str = "~/.elyan/logs"
 ) -> Tuple[bool, Dict[str, Any]]:
     """
     Deploy to production with full validation and rollout.
@@ -485,12 +485,12 @@ async def deploy_production(
 
 def main():
     """CLI entry point."""
-    parser = argparse.ArgumentParser(description="Deploy Wiqo Bot to production")
+    parser = argparse.ArgumentParser(description="Deploy elyan Bot to production")
     parser.add_argument("--version", required=True, help="Version to deploy")
     parser.add_argument("--environment", default="production",
                        choices=["development", "staging", "production"])
-    parser.add_argument("--db-path", default="~/.wiqo/bot.db")
-    parser.add_argument("--log-dir", default="~/.wiqo/logs")
+    parser.add_argument("--db-path", default="~/.elyan/bot.db")
+    parser.add_argument("--log-dir", default="~/.elyan/logs")
 
     args = parser.parse_args()
 
@@ -502,7 +502,7 @@ def main():
     ))
 
     # Write results to file
-    results_file = Path("~/.wiqo/deployment_results.json").expanduser()
+    results_file = Path("~/.elyan/deployment_results.json").expanduser()
     results_file.parent.mkdir(parents=True, exist_ok=True)
     with open(results_file, "w") as f:
         json.dump(results, f, indent=2)

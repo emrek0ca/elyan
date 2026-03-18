@@ -21,12 +21,9 @@ setup(
         "httpx>=0.28.0",
         "aiohttp>=3.9.0",
         "python-dotenv>=1.0.0",
-        "qasync>=0.27.0",
         # CLI
         "click>=8.1.0",
         "croniter>=2.0.0",
-        # Messaging
-        "python-telegram-bot>=22.0",
         # AI providers
         "groq>=0.11.0",
         "google-generativeai>=0.8.0",
@@ -51,8 +48,13 @@ setup(
         # Security
         "cryptography>=42.0.0",
         "keyring>=25.0.0",
+        # DB
+        "sqlalchemy>=2.0.0",
     ],
     extras_require={
+        "telegram": ["python-telegram-bot>=22.0"],
+        "discord": ["discord.py>=2.3.0"],
+        "slack": ["slack-bolt>=1.18.0"],
         "ui": [
             "PyQt6>=6.6.0",
             "matplotlib>=3.7.0",
@@ -75,6 +77,7 @@ setup(
             "pytest-asyncio>=0.23.0",
             "pytest-cov>=4.0.0",
             "ruff>=0.3.0",
+            "bandit>=1.7.0",
         ],
     },
     entry_points={

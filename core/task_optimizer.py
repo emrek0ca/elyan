@@ -1,5 +1,5 @@
 """
-Task Optimizer for Wiqo Bot
+Task Optimizer for elyan Bot
 ============================
 Analyzes task graphs and suggests optimizations for efficient execution.
 

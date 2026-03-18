@@ -161,7 +161,7 @@ def security_events(severity: str = None, hours: int = 24):
         audit_path = Path.home() / ".elyan" / "audit.db"
         if not audit_path.exists():
             # Proje içindeki fallback
-            audit_path = Path("/Users/emrekoca/Desktop/bot/.wiqo_audit/audit.db")
+            audit_path = Path("/Users/emrekoca/Desktop/bot/.elyan_audit/audit.db")
         if not audit_path.exists():
             print("Denetim veritabanı bulunamadı. Gateway'i başlatın.")
             return

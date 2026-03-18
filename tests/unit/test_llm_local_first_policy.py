@@ -14,6 +14,9 @@ async def test_generate_blocks_cloud_when_local_first_and_no_cloud_fallback(monk
                 return {"type": "none"}
             return {"type": "openai", "model": "gpt-4o"}
 
+        def _normalize_provider(self, provider):
+            return str(provider or "").strip().lower()
+
     client.orchestrator = _Orchestrator()
 
     def _cfg_get(key, default=None):
@@ -28,7 +31,8 @@ async def test_generate_blocks_cloud_when_local_first_and_no_cloud_fallback(monk
     monkeypatch.setattr("core.llm_client.elyan_config.get", _cfg_get)
     monkeypatch.setattr("core.llm.token_budget.token_budget.is_within_budget", lambda user_id: True)
 
-    out = await client.generate("Merhaba", user_id="u1")
+    # local_first only applies to "router" role now (quality-focused design)
+    out = await client.generate("Merhaba", user_id="u1", role="router")
     assert "fallback kapalı" in out.lower()
 
 

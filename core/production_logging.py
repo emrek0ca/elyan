@@ -1,5 +1,5 @@
 """
-Production Logging System for Wiqo Bot
+Production Logging System for elyan Bot
 =====================================
 Structured logging, aggregation readiness, and performance profiling.
 
@@ -192,7 +192,7 @@ class ErrorCategorizer:
 class ProductionLogger:
     """Main production logger with all features."""
 
-    def __init__(self, name: str, log_dir: str = "~/.wiqo/logs"):
+    def __init__(self, name: str, log_dir: str = "~/.elyan/logs"):
         self.name = name
         self.log_dir = Path(log_dir).expanduser()
         self.log_dir.mkdir(parents=True, exist_ok=True)

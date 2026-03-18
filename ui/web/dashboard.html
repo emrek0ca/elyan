@@ -1,426 +1,245 @@
 <!DOCTYPE html>
 <html lang="tr">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Elyan Control Center</title>
-  <link rel="stylesheet" href="/ui/web/dashboard.css" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Elyan Dashboard</title>
+  <style>
+/* ===== INLINE CSS — guarantees styles load even if external CSS fails ===== */
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#f5f6f8;--sf:#ffffff;--sf2:#eef0f2;--bd:#dfe1e5;
+  --tx:#1b1b1f;--tx2:#5f6368;--tx3:#9aa0a6;
+  --blue:#1a73e8;--blue2:#1558b0;
+  --green:#1e8e3e;--yellow:#f9ab00;--red:#d93025;
+  --r:12px;--r2:8px;
+  --sh:0 1px 3px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.04);
+  --sh2:0 4px 12px rgba(0,0,0,.08);
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#111214;--sf:#1e1f23;--sf2:#2a2b30;--bd:#3a3b40;
+  --tx:#e8eaed;--tx2:#9aa0a6;--tx3:#5f6368;
+  --blue:#8ab4f8;--blue2:#aecbfa;
+  --green:#81c995;--yellow:#fdd663;--red:#f28b82;
+  --sh:0 1px 3px rgba(0,0,0,.3);--sh2:0 4px 12px rgba(0,0,0,.3);
+}}
+html{height:100%}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background:var(--bg);color:var(--tx);line-height:1.5;min-height:100%;-webkit-font-smoothing:antialiased}
+
+/* === NAVBAR === */
+.navbar{display:flex;align-items:center;height:56px;background:var(--sf);border-bottom:1px solid var(--bd);padding:0 24px;gap:20px;position:sticky;top:0;z-index:100;box-shadow:var(--sh)}
+.nav-brand{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.nav-logo{width:32px;height:32px;background:linear-gradient(135deg,var(--blue),var(--blue2));border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:16px}
+.nav-brand span{font-size:17px;font-weight:600}
+.nav-tabs{display:flex;gap:4px;margin:0 auto;background:var(--sf2);border-radius:10px;padding:4px}
+.nav-tab{border:none;background:transparent;color:var(--tx2);font-size:13px;font-weight:500;padding:7px 18px;border-radius:8px;cursor:pointer;transition:all .15s ease;white-space:nowrap}
+.nav-tab:hover{color:var(--tx);background:rgba(0,0,0,.04)}
+.nav-tab.active{background:var(--sf);color:var(--blue);box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.nav-right{display:flex;align-items:center;gap:12px;flex-shrink:0}
+.nav-pill{display:flex;align-items:center;gap:6px;padding:5px 12px;background:var(--sf2);border-radius:20px;font-size:12px;font-weight:500;color:var(--tx2)}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--yellow);transition:background .3s}
+.status-dot.ok{background:var(--green)}.status-dot.err{background:var(--red)}
+.nav-btn{border:none;background:transparent;color:var(--tx2);font-size:18px;cursor:pointer;width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:8px;transition:background .15s}
+.nav-btn:hover{background:var(--sf2)}
+
+/* === MAIN === */
+.main{max-width:1200px;margin:0 auto;padding:28px 24px 48px}
+.page{display:none}.page.show{display:block;animation:fadeUp .2s ease}
+@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+/* === PAGE HEADER === */
+.pg-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px}
+.pg-head h2{font-size:24px;font-weight:600;letter-spacing:-.3px}
+.pg-sub{font-size:14px;color:var(--tx2);margin-top:4px}
+
+/* === KPI ROW === */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:24px}
+.kpi-box{background:var(--sf);border:1px solid var(--bd);border-radius:var(--r);padding:20px;box-shadow:var(--sh)}
+.kpi-label{font-size:11px;font-weight:600;color:var(--tx3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
+.kpi-val{font-size:26px;font-weight:700;color:var(--blue)}
+
+/* === GRID / CARD === */
+.cgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px}
+.card{background:var(--sf);border:1px solid var(--bd);border-radius:var(--r);padding:20px;box-shadow:var(--sh);transition:border-color .2s,box-shadow .2s}
+.card:hover{border-color:var(--blue);box-shadow:var(--sh2)}
+.card.dim{opacity:.5}
+.card-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px}
+.card-top h3{font-size:15px;font-weight:600}
+.card-desc{font-size:12px;color:var(--tx2);margin-top:2px}
+.pill{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:12px;font-size:11px;font-weight:600}
+.pill.ok{background:rgba(30,142,62,.1);color:var(--green)}
+.pill.err{background:rgba(217,48,37,.1);color:var(--red)}
+.pill.warn{background:rgba(249,171,0,.1);color:var(--yellow)}
+.pdot{width:6px;height:6px;border-radius:50%;background:currentColor}
+
+/* stat rows */
+.row{display:flex;justify-content:space-between;padding:8px 0;font-size:13px;border-bottom:1px solid var(--bd)}
+.row:last-child{border-bottom:none}
+.row-k{color:var(--tx3)}.row-v{font-weight:600}
+
+/* === BUTTONS === */
+.btn{display:inline-flex;align-items:center;justify-content:center;padding:8px 16px;border:none;border-radius:var(--r2);font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;gap:6px}
+.btn:disabled{opacity:.4;cursor:default}
+.btn-p{background:var(--blue);color:#fff}.btn-p:hover:not(:disabled){background:var(--blue2)}
+.btn-s{background:var(--sf2);color:var(--tx);border:1px solid var(--bd)}.btn-s:hover:not(:disabled){border-color:var(--tx3)}
+.btn-d{background:rgba(217,48,37,.06);color:var(--red);border:1px solid rgba(217,48,37,.2)}.btn-d:hover:not(:disabled){background:rgba(217,48,37,.12)}
+.btn-sm{padding:6px 12px;font-size:12px}
+.btn-row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+
+/* === KEY INPUT === */
+.key-input{display:flex;gap:8px;margin-top:12px}
+.key-input input{flex:1;padding:8px 12px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2);color:var(--tx);font-size:13px;min-width:0}
+.key-input input:focus{outline:none;border-color:var(--blue);background:var(--sf);box-shadow:0 0 0 3px rgba(26,115,232,.12)}
+.key-input input::placeholder{color:var(--tx3)}
+
+/* === OLLAMA BAR === */
+.oll-bar{padding:16px 20px;border-radius:var(--r);font-size:14px;font-weight:500;margin-bottom:20px}
+.oll-bar.on{background:rgba(30,142,62,.06);color:var(--green);border:1px solid rgba(30,142,62,.15)}
+.oll-bar.off{background:rgba(217,48,37,.06);color:var(--red);border:1px solid rgba(217,48,37,.15)}
+.sec-title{font-size:16px;font-weight:600;margin:24px 0 12px}
+
+/* === TABLE (status page) === */
+.stbl{width:100%;border-collapse:collapse;font-size:13px}
+.stbl th{text-align:left;font-weight:600;color:var(--tx3);padding:10px 8px;border-bottom:2px solid var(--bd);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+.stbl td{padding:10px 8px;border-bottom:1px solid var(--bd)}
+.stbl tr:last-child td{border-bottom:none}
+
+/* === SETTINGS === */
+.settings-card{max-width:520px;display:flex;flex-direction:column;gap:20px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field-label{font-size:13px;font-weight:600;color:var(--tx2)}
+.field-hint{font-size:12px;color:var(--tx3)}
+.sel{padding:10px 12px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2);color:var(--tx);font-size:14px;width:100%}
+.sel:focus{outline:none;border-color:var(--blue);background:var(--sf)}
+.toggle-row{display:flex;justify-content:space-between;align-items:center}
+.switch{position:relative;width:44px;height:26px;flex-shrink:0}
+.switch input{opacity:0;width:0;height:0;position:absolute}
+.slider{position:absolute;inset:0;background:var(--bd);border-radius:26px;cursor:pointer;transition:.25s}
+.slider::before{content:'';position:absolute;width:20px;height:20px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.25s;box-shadow:0 1px 3px rgba(0,0,0,.15)}
+.switch input:checked+.slider{background:var(--green)}
+.switch input:checked+.slider::before{transform:translateX(18px)}
+
+/* === TOAST === */
+.toasts{position:fixed;bottom:20px;right:20px;display:flex;flex-direction:column;gap:8px;z-index:9999;pointer-events:none}
+.toast{padding:12px 18px;border-radius:var(--r2);font-size:13px;font-weight:500;color:#fff;pointer-events:auto;animation:tIn .25s ease;box-shadow:0 6px 20px rgba(0,0,0,.15)}
+.toast.ok{background:var(--green)}.toast.err{background:var(--red)}.toast.info{background:var(--blue)}
+@keyframes tIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+/* === RESPONSIVE === */
+@media(max-width:768px){
+  .navbar{flex-wrap:wrap;height:auto;padding:12px 16px;gap:8px}
+  .nav-tabs{order:10;width:100%}
+  .nav-tab{flex:1;text-align:center;padding:7px 8px}
+  .main{padding:16px}
+  .cgrid{grid-template-columns:1fr}
+  .kpis{grid-template-columns:repeat(2,1fr)}
+}
+@media(max-width:480px){
+  .nav-brand span{display:none}
+  .kpis{grid-template-columns:1fr}
+  .settings-card{max-width:100%}
+}
+  </style>
 </head>
 <body>
-  <div class="layout">
-    <header class="topbar">
-      <div class="brand">
-        <div class="logo">E</div>
+
+  <!-- NAVBAR -->
+  <nav class="navbar">
+    <div class="nav-brand">
+      <div class="nav-logo">E</div>
+      <span>Elyan</span>
+    </div>
+    <div class="nav-tabs" id="nav-tabs">
+      <button class="nav-tab active" data-t="llms">LLM'ler</button>
+      <button class="nav-tab" data-t="ollama">Ollama</button>
+      <button class="nav-tab" data-t="status">Durum</button>
+      <button class="nav-tab" data-t="settings">Ayarlar</button>
+    </div>
+    <div class="nav-right">
+      <div class="nav-pill"><span class="status-dot" id="g-dot"></span><span id="g-txt">...</span></div>
+      <button class="nav-btn" id="g-refresh" title="Yenile">&#x21bb;</button>
+    </div>
+  </nav>
+
+  <!-- MAIN CONTENT -->
+  <div class="main">
+
+    <!-- ===== LLM PAGE ===== -->
+    <div class="page show" id="p-llms">
+      <div class="pg-head">
         <div>
-          <h1 class="title">Elyan Control Center</h1>
-          <p class="sub">Model yonetimi, kisisellestirme ve operasyon tek panelde.</p>
+          <h2>LLM Yönetimi</h2>
+          <p class="pg-sub">Provider durumlarını görüntüle, API key ekle veya kaldır.</p>
         </div>
       </div>
-      <div class="topbar-actions">
-        <span id="gateway-pill" class="pill">Gateway: kontrol ediliyor</span>
-        <button class="btn" id="refresh-btn" type="button">Yenile</button>
-      </div>
-    </header>
+      <div class="kpis" id="llm-kpis"></div>
+      <div class="cgrid" id="llm-grid"></div>
+    </div>
 
-    <nav class="tabs" aria-label="Dashboard sections">
-      <button class="tab-btn active" type="button" data-tab="overview">Genel Bakis</button>
-      <button class="tab-btn" type="button" data-tab="models">LLM Yonetimi</button>
-      <button class="tab-btn" type="button" data-tab="profile">Kisisellestirme</button>
-      <button class="tab-btn" type="button" data-tab="ops">Operasyon</button>
-    </nav>
-
-    <section class="tab-panel active" data-panel="overview">
-      <section class="banner">
+    <!-- ===== OLLAMA PAGE ===== -->
+    <div class="page" id="p-ollama">
+      <div class="pg-head">
         <div>
-          <strong id="status-note">Panel hazirlaniyor...</strong>
-          <div id="status-detail" class="banner-meta">Durum, model ve gorev verileri yukleniyor.</div>
+          <h2>Ollama Yönetimi</h2>
+          <p class="pg-sub">Yerel modelleri listele, indir veya kaldır.</p>
         </div>
-        <div id="last-sync">Son senkron: -</div>
-      </section>
+        <button class="btn btn-s" id="oll-refresh">Yenile</button>
+      </div>
+      <div id="oll-bar" class="oll-bar off">Durum kontrol ediliyor...</div>
+      <div class="sec-title">Yüklü Modeller</div>
+      <div class="cgrid" id="oll-installed"></div>
+      <div class="sec-title">Önerilen Modeller</div>
+      <div class="cgrid" id="oll-recommended"></div>
+    </div>
 
-      <section class="grid">
-        <div class="stats">
-          <div class="metric">
-            <div class="k">Aktif Model</div>
-            <div class="v" id="model-value">-</div>
-          </div>
-          <div class="metric">
-            <div class="k">Uptime</div>
-            <div class="v" id="uptime-value">-</div>
-          </div>
-          <div class="metric">
-            <div class="k">Araclar</div>
-            <div class="v" id="tools-value">-</div>
-          </div>
-          <div class="metric">
-            <div class="k">Aktif Kanallar</div>
-            <div class="v" id="channels-value">-</div>
-          </div>
+    <!-- ===== STATUS PAGE ===== -->
+    <div class="page" id="p-status">
+      <div class="pg-head"><div><h2>Sistem Durumu</h2><p class="pg-sub">Tüm provider'ların anlık sağlık durumu</p></div></div>
+      <div class="kpis" id="st-kpis"></div>
+      <div class="card" id="st-table" style="overflow-x:auto"></div>
+    </div>
+
+    <!-- ===== SETTINGS PAGE ===== -->
+    <div class="page" id="p-settings">
+      <div class="pg-head"><div><h2>Ayarlar</h2><p class="pg-sub">Elyan davranışını özelleştirin</p></div></div>
+      <div class="card settings-card">
+        <div class="field">
+          <label class="field-label">Birincil LLM</label>
+          <select class="sel" id="s-primary"></select>
+          <span class="field-hint">Boş bırakılırsa otomatik seçilir</span>
         </div>
+        <div class="field">
+          <label class="field-label">Strateji</label>
+          <select class="sel" id="s-strategy">
+            <option value="fast">Hızlı — En hızlı sonucu döndür</option>
+            <option value="best">En İyi — Kalite odaklı</option>
+            <option value="balanced" selected>Dengeli — Hız ve kalite dengesi</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="field-label">Dil</label>
+          <select class="sel" id="s-lang">
+            <option value="tr">Türkçe</option>
+            <option value="en">English</option>
+          </select>
+        </div>
+        <div class="field toggle-row">
+          <div>
+            <div class="field-label">Yerel Model Önceliği</div>
+            <span class="field-hint">Mümkünse Ollama'yı tercih et</span>
+          </div>
+          <label class="switch"><input type="checkbox" id="s-local"><span class="slider"></span></label>
+        </div>
+        <button class="btn btn-p" id="s-save">Ayarları Kaydet</button>
+      </div>
+    </div>
 
-        <article class="card readiness">
-          <div class="card-head">
-            <div>
-              <h2>Operator Readiness</h2>
-              <p class="muted">Temel runtime, browser ve kanal hazirligi.</p>
-            </div>
-          </div>
-          <ul class="list" id="readiness-list"></ul>
-        </article>
-
-        <article class="card benchmark">
-          <div class="card-head">
-            <div>
-              <h2>Benchmark Health</h2>
-              <p class="muted">Regresyon ve benchmark ozeti.</p>
-            </div>
-          </div>
-          <ul class="list" id="benchmark-summary"></ul>
-        </article>
-
-        <article class="card setup">
-          <div class="card-head">
-            <div>
-              <h2>Setup / Release Readiness</h2>
-              <p class="muted">Calisma ortami ve cikis hazirligi.</p>
-            </div>
-          </div>
-          <ul class="list" id="setup-list"></ul>
-        </article>
-
-        <article class="card release">
-          <div class="card-head">
-            <div>
-              <h2>Release / Health</h2>
-              <p class="muted">Urun giris noktasi ve hizli saglik kontrolu.</p>
-            </div>
-          </div>
-          <ul class="list" id="release-list"></ul>
-        </article>
-
-        <article class="card chat">
-          <div class="card-head">
-            <div>
-              <h2>Direkt Komut</h2>
-              <p class="muted">Dashboard uzerinden tek satir komut calistir.</p>
-            </div>
-          </div>
-          <div class="chat-log" id="chat-log"></div>
-          <div class="chat-row">
-            <input id="chat-input" type="text" placeholder="Komut yaz..." />
-            <button class="btn primary" id="send-btn" type="button">Gonder</button>
-          </div>
-          <div class="quick-actions">
-            <button class="btn" type="button" data-quick-prompt="durum nedir">Durum</button>
-            <button class="btn" type="button" data-quick-prompt="aktif gorevler">Gorevler</button>
-            <button class="btn" type="button" data-quick-prompt="safari ac">Safari</button>
-            <button class="btn" type="button" data-quick-prompt="bugunku calisma durumunu ozetle">Ozet</button>
-          </div>
-        </article>
-
-        <article class="card tasks">
-          <div class="card-head">
-            <div>
-              <h2>Task Center</h2>
-              <p class="muted">Aktif ve son gorevler.</p>
-            </div>
-          </div>
-          <ul class="list" id="task-list"></ul>
-        </article>
-
-        <article class="card channels">
-          <div class="card-head">
-            <div>
-              <h2>Kanallar</h2>
-              <p class="muted">Bagli iletisim kanallari.</p>
-            </div>
-          </div>
-          <ul class="list" id="channel-list"></ul>
-        </article>
-
-        <article class="card runs">
-          <div class="card-head">
-            <div>
-              <h2>Son Kosular</h2>
-              <p class="muted">Son uc task ve workflow kosulari.</p>
-            </div>
-          </div>
-          <ul class="list" id="run-list"></ul>
-        </article>
-      </section>
-    </section>
-
-    <section class="tab-panel" data-panel="models">
-      <section class="grid">
-        <article class="card model-overview">
-          <div class="card-head">
-            <div>
-              <h2>Model Durumu</h2>
-              <p class="muted">Varsayilan, fallback ve provider baglanti ozeti.</p>
-            </div>
-          </div>
-          <div class="summary-grid">
-            <div class="summary-box">
-              <div class="k">Varsayilan</div>
-              <div class="v" id="model-default-summary">-</div>
-            </div>
-            <div class="summary-box">
-              <div class="k">Fallback</div>
-              <div class="v" id="model-fallback-summary">-</div>
-            </div>
-            <div class="summary-box">
-              <div class="k">Router</div>
-              <div class="v" id="model-router-summary">-</div>
-            </div>
-          </div>
-          <ul class="list compact-list" id="model-provider-status"></ul>
-        </article>
-
-        <article class="card model-hub">
-          <div class="card-head">
-            <div>
-              <h2>Model Hub</h2>
-              <p class="muted" id="model-pool-summary">Model havuzu yukleniyor.</p>
-            </div>
-          </div>
-          <div class="model-grid">
-            <div class="model-stack">
-              <div class="model-form">
-                <select id="model-provider-input">
-                  <option value="openai">openai</option>
-                  <option value="anthropic">anthropic</option>
-                  <option value="google">google</option>
-                  <option value="groq">groq</option>
-                  <option value="ollama">ollama</option>
-                </select>
-                <input id="model-name-input" type="text" placeholder="Model adi (orn: gpt-4o)" />
-                <input id="model-alias-input" type="text" placeholder="Kisa etiket (opsiyonel)" />
-                <input id="model-roles-input" type="text" placeholder="Roller (orn: reasoning,code,qa)" />
-                <input id="model-key-input" type="password" placeholder="API key (opsiyonel)" />
-              </div>
-              <div class="preset-actions">
-                <button class="btn primary" id="model-add-btn" type="button">Modeli Ekle / Guncelle</button>
-              </div>
-              <div class="model-collab">
-                <label><input id="collab-enabled-input" type="checkbox" /> Multi-LLM collaboration acik</label>
-                <select id="collab-strategy-input">
-                  <option value="synthesize">synthesize</option>
-                  <option value="round_robin">round_robin</option>
-                  <option value="planner_critic">planner_critic</option>
-                </select>
-                <input id="collab-max-models-input" type="number" min="1" max="5" value="3" />
-                <input id="collab-roles-input" type="text" placeholder="Collab roller (orn: reasoning,planning,code,qa)" />
-                <button class="btn" id="collab-save-btn" type="button">Collab Ayarlarini Kaydet</button>
-              </div>
-            </div>
-            <ul class="list model-registry" id="model-registry-list"></ul>
-          </div>
-        </article>
-      </section>
-
-      <!-- Live Multi-LLM Metrics Panel -->
-      <section class="grid" style="margin-top:1rem">
-        <article class="card" style="grid-column:1/-1">
-          <div class="card-head">
-            <div>
-              <h2>Canli Model Performansi</h2>
-              <p class="muted">Tum modellerin gercek zamanli durumu, yukleri ve metrikleri.</p>
-            </div>
-            <button class="btn" id="llm-refresh-btn" type="button">Yenile</button>
-          </div>
-          <div class="summary-grid" id="llm-summary-grid">
-            <div class="summary-box"><div class="k">Toplam Model</div><div class="v" id="llm-total-models">-</div></div>
-            <div class="summary-box"><div class="k">Aktif</div><div class="v" id="llm-available-models">-</div></div>
-            <div class="summary-box"><div class="k">Toplam Cagri</div><div class="v" id="llm-total-calls">-</div></div>
-            <div class="summary-box"><div class="k">Basari Orani</div><div class="v" id="llm-success-rate">-</div></div>
-          </div>
-          <div class="llm-slots-container" id="llm-slots-container" style="margin-top:.75rem">
-            <!-- Dynamically filled by JS -->
-          </div>
-        </article>
-
-        <article class="card">
-          <div class="card-head">
-            <div>
-              <h2>Race Mode</h2>
-              <p class="muted">Ayni promptu birden fazla modelde es zamanli calistir, en hizlisini sec.</p>
-            </div>
-          </div>
-          <div class="model-form">
-            <textarea id="race-prompt-input" rows="3" placeholder="Test promptu girin..." style="width:100%;resize:vertical;font-family:inherit;padding:.5rem;border-radius:6px;border:1px solid var(--border)"></textarea>
-            <div style="display:flex;gap:.5rem;align-items:center;margin-top:.5rem">
-              <label style="font-size:.85rem">Max model:</label>
-              <input id="race-max-models" type="number" min="2" max="5" value="3" style="width:60px" />
-              <button class="btn primary" id="race-run-btn" type="button">Race Baslat</button>
-            </div>
-          </div>
-          <div id="race-results" style="margin-top:.75rem"></div>
-        </article>
-
-        <article class="card">
-          <div class="card-head">
-            <div>
-              <h2>Son Istekler</h2>
-              <p class="muted">En son LLM istekleri ve sonuclari.</p>
-            </div>
-          </div>
-          <ul class="list compact-list" id="llm-recent-requests"></ul>
-        </article>
-      </section>
-    </section>
-
-    <section class="tab-panel" data-panel="profile">
-      <section class="grid">
-        <article class="card profile-summary-card">
-          <div class="card-head">
-            <div>
-              <h2>Kullanici Profili</h2>
-              <p class="muted">Ogrenilen tercih ve kullanim ozeti.</p>
-            </div>
-          </div>
-          <div id="profile-summary" class="profile-summary">Profil verisi yukleniyor.</div>
-        </article>
-
-        <article class="card profile-editor">
-          <div class="card-head">
-            <div>
-              <h2>Agent Kisisellestirme</h2>
-              <p class="muted">Yanıt stili, dil ve sistem davranisi.</p>
-            </div>
-          </div>
-          <div class="form-grid">
-            <label>
-              <span>Agent Adi</span>
-              <input id="agent-name-input" type="text" placeholder="Elyan" />
-            </label>
-            <label>
-              <span>Dil</span>
-              <select id="agent-language-input">
-                <option value="tr">Turkce</option>
-                <option value="en">English</option>
-              </select>
-            </label>
-            <label>
-              <span>Kisilik</span>
-              <select id="agent-personality-input">
-                <option value="professional">professional</option>
-                <option value="technical">technical</option>
-                <option value="friendly">friendly</option>
-                <option value="concise">concise</option>
-                <option value="creative">creative</option>
-              </select>
-            </label>
-            <label>
-              <span>Yanıt Modu</span>
-              <select id="response-mode-input">
-                <option value="concise">concise</option>
-                <option value="friendly">friendly</option>
-                <option value="formal">formal</option>
-              </select>
-            </label>
-            <label>
-              <span>Yanıt Uzunlugu</span>
-              <select id="response-bias-input">
-                <option value="short">short</option>
-                <option value="medium">medium</option>
-                <option value="detailed">detailed</option>
-              </select>
-            </label>
-            <label class="toggle-field">
-              <input id="profile-local-first-input" type="checkbox" />
-              <span>Yerel model once</span>
-            </label>
-            <label class="toggle-field">
-              <input id="profile-autonomous-input" type="checkbox" />
-              <span>Otonom mod acik</span>
-            </label>
-          </div>
-          <label class="textarea-field">
-            <span>Sistem Promptu</span>
-            <textarea id="system-prompt-input" rows="7" placeholder="Agent davranis rehberi"></textarea>
-          </label>
-          <div class="preset-actions">
-            <button class="btn primary" id="profile-save-btn" type="button">Profili Kaydet</button>
-          </div>
-        </article>
-      </section>
-    </section>
-
-    <section class="tab-panel" data-panel="ops">
-      <section class="grid">
-        <article class="card workflows">
-          <div class="card-head">
-            <div>
-              <h2>Preset Workflows</h2>
-              <p class="muted">Onceden tanimli operator akislari.</p>
-            </div>
-          </div>
-          <div class="preset-list" id="workflow-preset-list"></div>
-        </article>
-
-        <article class="card workflow-report-card">
-          <div class="card-head">
-            <div>
-              <h2>Task Report</h2>
-              <p class="muted">Son workflow veya gorev cikti ozeti.</p>
-            </div>
-          </div>
-          <div id="workflow-report" class="report-panel">Henuz preset workflow calistirilmadi.</div>
-        </article>
-
-        <article class="card module-health">
-          <div class="card-head">
-            <div>
-              <h2>Agent Modules Health</h2>
-              <p class="muted" id="module-health-summary">Module health yukleniyor.</p>
-            </div>
-          </div>
-          <ul class="list" id="module-health-list"></ul>
-        </article>
-
-        <article class="card onboarding">
-          <div class="card-head">
-            <div>
-              <h2>Onboarding / Quickstart</h2>
-              <p class="muted">Ilk kullanim ve hizli demo adimlari.</p>
-            </div>
-          </div>
-          <ul class="list" id="onboarding-list"></ul>
-        </article>
-
-        <article class="card activity">
-          <div class="card-head">
-            <div>
-              <h2>Canli Aktivite</h2>
-              <p class="muted">Gateway ve task olay akisi.</p>
-            </div>
-          </div>
-          <ul class="list" id="activity-list"></ul>
-        </article>
-
-        <article class="card tool-stream">
-          <div class="card-head">
-            <div>
-              <h2>Tool Event Stream</h2>
-              <p class="muted">Tool bazli calisma izi.</p>
-            </div>
-          </div>
-          <ul class="list" id="tool-event-list"></ul>
-        </article>
-
-        <article class="card evidence">
-          <div class="card-head">
-            <div>
-              <h2>Kanit Paneli</h2>
-              <p class="muted">Artifact ve kanit kayitlari.</p>
-            </div>
-          </div>
-          <ul class="list" id="evidence-list"></ul>
-        </article>
-      </section>
-    </section>
   </div>
 
-  <script src="/ui/web/dashboard.js"></script>
+  <!-- TOASTS -->
+  <div class="toasts" id="toasts"></div>
+
+  <!-- JS — loaded after DOM -->
+  <script src="/ui/web/dashboard.js?v=20260318"></script>
 </body>
 </html>

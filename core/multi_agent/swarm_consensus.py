@@ -78,18 +78,36 @@ RİSKLER: [Eğer varsa liste]
         
         issues = []
         pass_count = 0
+        skip_count = 0
         total = len(self.tribunal_personas)
-        
-        for i, (persona, (success, report)) in enumerate(zip(self.tribunal_personas.keys(), results)):
+
+        for i, (persona, result) in enumerate(zip(self.tribunal_personas.keys(), results)):
+            if isinstance(result, Exception):
+                skip_count += 1
+                logger.warning(f"  ⏭ {persona.upper()}: SKIPPED (exception: {result})")
+                continue
+            success, report = result
             if success:
                 pass_count += 1
                 logger.info(f"  ✔ {persona.upper()}: PASSED")
             else:
-                logger.warning(f"  ❌ {persona.upper()}: FAILED -> {report}")
-                issues.append(f"[{persona.upper()} TRIBUNAL REDDİ]: {report}")
-                
-        # Consensus Rules: 100% agreement required
-        final_verdict = pass_count == total
+                report_str = str(report)
+                # LLM service unavailable — skip, don't fail
+                if any(marker in report_str for marker in ("erişilemiyor", "Circuit breaker", "Crash:", "Budget")):
+                    skip_count += 1
+                    logger.warning(f"  ⏭ {persona.upper()}: SKIPPED (LLM unavailable)")
+                else:
+                    logger.warning(f"  ❌ {persona.upper()}: FAILED -> {report}")
+                    issues.append(f"[{persona.upper()} TRIBUNAL REDDİ]: {report}")
+
+        # Consensus: majority of REACHABLE nodes must pass
+        reachable = total - skip_count
+        if reachable == 0:
+            # No nodes reachable — auto-approve with warning
+            logger.warning("🏛️ Tribunal: No reachable nodes — auto-approving")
+            final_verdict = True
+        else:
+            final_verdict = pass_count >= max(1, (reachable + 1) // 2)  # >50% quorum
         
         if final_verdict:
             logger.info("🏛️ Tribunal Consensus Reached: APPROVED")

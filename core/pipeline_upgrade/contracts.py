@@ -154,3 +154,90 @@ def validate_research_payload(payload: dict[str, Any] | None) -> tuple[bool, lis
         if critical_ids and critical_claim_coverage <= 0.0:
             errors.append("quality_summary:critical_claim_coverage")
     return not errors, errors
+
+
+def verify_taskspec_contract(
+    task_spec: dict[str, Any] | None = None,
+    job_type: str = "",
+    final_response: str = "",
+    tool_results: list[dict[str, Any]] | None = None,
+    produced_paths: list[str] | None = None,
+) -> dict[str, Any]:
+    """Verify task specification contract against produced outputs."""
+    result: dict[str, Any] = {"ok": True, "failed_gates": [], "warnings": []}
+    tool_results = tool_results or []
+    produced_paths = produced_paths or []
+
+    if not task_spec:
+        return result
+
+    # Check required artifacts
+    required = task_spec.get("required_artifacts", [])
+    for artifact in required:
+        artifact_type = str(artifact.get("type", "") if isinstance(artifact, dict) else artifact)
+        if artifact_type == "file" and not produced_paths:
+            result["failed_gates"].append(f"missing_artifact:{artifact_type}")
+            result["ok"] = False
+
+    # Check success criteria
+    success_criteria = task_spec.get("success_criteria", [])
+    for criterion in success_criteria:
+        crit_str = str(criterion)
+        if "file" in crit_str.lower() and not produced_paths:
+            result["failed_gates"].append(f"unmet_criterion:{crit_str[:50]}")
+            result["ok"] = False
+
+    return result
+
+
+def build_reflexion_hint(
+    verification_payload: dict[str, Any] | None = None,
+    job_type: str = "",
+) -> str:
+    """Build a reflexion hint from verification failures to guide retry."""
+    if not verification_payload:
+        return ""
+
+    failed = verification_payload.get("failed_gates", [])
+    if not failed:
+        return ""
+
+    hints = []
+    for gate in failed[:3]:
+        gate_str = str(gate)
+        if "missing_artifact" in gate_str:
+            hints.append("Beklenen dosya/çıktı üretilemedi — dosya oluşturma adımını kontrol et.")
+        elif "unmet_criterion" in gate_str:
+            hints.append(f"Başarı kriteri karşılanmadı: {gate_str}")
+        else:
+            hints.append(f"Doğrulama hatası: {gate_str}")
+
+    return " | ".join(hints) if hints else ""
+
+
+def build_critic_review_prompt(
+    job_type: str = "",
+    final_response: str = "",
+    qa_results: dict[str, Any] | list | None = None,
+    errors: list[str] | None = None,
+) -> str:
+    """Build a critic review prompt for LLM quality assessment."""
+    errors = errors or []
+    if not final_response or not final_response.strip():
+        return ""
+
+    # Only trigger critic for complex jobs with potential issues
+    if not errors and not qa_results:
+        return ""
+
+    error_section = ""
+    if errors:
+        error_section = f"\nHatalar:\n" + "\n".join(f"- {e}" for e in errors[:5])
+
+    return (
+        f"Aşağıdaki yanıtı kalite açısından değerlendir.\n"
+        f"Görev tipi: {job_type}\n"
+        f"Yanıt:\n{final_response[:2000]}\n"
+        f"{error_section}\n\n"
+        f"Kısa bir değerlendirme yap: yanıt yeterli mi, eksik bir şey var mı?"
+    )

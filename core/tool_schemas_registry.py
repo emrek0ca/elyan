@@ -279,6 +279,18 @@ class SchemaRegistry:
         ))
 
         self.register(ToolSchema(
+            name="vision_automate",
+            description="Vision-guided automation: analyze screen and perform UI actions autonomously",
+            parameters={
+                "goal": ParameterSchema("goal", ParameterType.STRING, True, "What to achieve on screen"),
+                "max_steps": ParameterSchema("max_steps", ParameterType.INTEGER, False, "Max automation steps", min_value=1, max_value=10),
+            },
+            timeout_seconds=60,
+            risk_level="high",
+            requires_approval=True,
+        ))
+
+        self.register(ToolSchema(
             name="lock_screen",
             description="Lock screen",
             parameters={},

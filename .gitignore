@@ -36,6 +36,8 @@ wheels/
 .env
 .env.local
 .env.*.local
+bot/.env
+**/.env
 
 # Logs
 logs/
@@ -48,6 +50,7 @@ htmlcov/
 
 # Project specific
 .elyan_audit/
-.elyan_audit/
 *.db
 *.sqlite
+node_modules/
+elyan-video/node_modules/

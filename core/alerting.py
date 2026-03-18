@@ -1,5 +1,5 @@
 """
-Alerting System for Wiqo Bot Production
+Alerting System for elyan Bot Production
 ========================================
 Real-time alerts for critical issues with multiple notification channels.
 
@@ -87,7 +87,7 @@ class Alert:
 class AlertStore:
     """Stores alert history and state."""
 
-    def __init__(self, db_path: str = "~/.wiqo/alerts.db"):
+    def __init__(self, db_path: str = "~/.elyan/alerts.db"):
         self.db_path = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.db_path = str(self.db_path)
@@ -390,7 +390,7 @@ class SlackNotifier(AlertNotifier):
                                 "short": True
                             }
                         ],
-                        "footer": "Wiqo Bot",
+                        "footer": "elyan Bot",
                         "ts": int(alert.timestamp)
                     }
                 ]
@@ -407,7 +407,7 @@ class SlackNotifier(AlertNotifier):
 class AlertManager:
     """Manages alerts and notifications."""
 
-    def __init__(self, db_path: str = "~/.wiqo/alerts.db"):
+    def __init__(self, db_path: str = "~/.elyan/alerts.db"):
         self.store = AlertStore(db_path)
         self.notifiers: Dict[str, AlertNotifier] = {}
         self.thresholds: Dict[str, AlertThreshold] = {}

@@ -38,7 +38,11 @@ def _lazy_load_tool(tool_name: str):
                      "close_app", "shutdown_system", "restart_system", "sleep_system", "lock_screen",
                      "set_volume", "send_notification", "kill_process",
                      "get_process_info", "run_safe_command", "get_installed_apps", "get_display_info",
-                     "open_project_in_ide", "record_screen", "get_weather", "run_code"]:
+                     "open_project_in_ide", "record_screen", "get_weather", "run_code", "vision_automate"]:
+        if tool_name == "vision_automate":
+            from core.vision_automation import vision_automate
+            _loaded_tools["vision_automate"] = vision_automate
+            return _loaded_tools["vision_automate"]
         if tool_name == "record_screen":
             from .screen_recorder import record_screen
             _loaded_tools["record_screen"] = record_screen
@@ -497,7 +501,7 @@ class LazyToolDict(dict):
             "move_file", "copy_file", "rename_file", "create_folder",
             # System Tools
             "get_system_info", "get_battery_status", "run_command", "run_safe_command", "open_app", "open_url",
-            "get_running_apps", "take_screenshot", "analyze_screen", "screen_workflow", "vision_operator_loop", "operator_mission_control", "computer_use", "capture_region", "read_clipboard", "write_clipboard",
+            "get_running_apps", "take_screenshot", "analyze_screen", "screen_workflow", "vision_operator_loop", "operator_mission_control", "computer_use", "capture_region", "read_clipboard", "write_clipboard", "vision_automate",
             "close_app", "shutdown_system", "restart_system", "sleep_system", "lock_screen",
             "set_volume", "send_notification", "kill_process", "get_process_info",
             "get_installed_apps", "get_display_info", "open_project_in_ide", "record_screen",

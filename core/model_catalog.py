@@ -7,6 +7,12 @@ DEFAULT_PROVIDER_MODELS = {
     "google": "gemini-2.0-flash",
     "groq": "llama-3.3-70b-versatile",
     "ollama": "llama3.1:8b",
+    "deepseek": "deepseek-chat",
+    "mistral": "mistral-large-latest",
+    "together": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    "cohere": "command-r-plus",
+    "perplexity": "sonar-pro",
+    "xai": "grok-2",
 }
 
 QWEN_LIGHT_OLLAMA_MODEL = "qwen3:0.6b"

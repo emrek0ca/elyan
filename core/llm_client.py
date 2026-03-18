@@ -577,7 +577,24 @@ class LLMClient:
                 else:
                     break
 
-        return f"Hata: Yapay zeka servislerine şu an erişilemiyor. (Son hata: {last_error})"
+        # Graceful fallback — try Ollama as last resort if not already tried
+        if "ollama" not in visited_providers:
+            try:
+                logger.info("Last resort: trying Ollama...")
+                ollama_cfg = {"type": "ollama", "model": "llama3.2:3b"}
+                response = await self._call_ollama(prompt, system_prompt or "", ollama_cfg, user_id=user_id)
+                if response:
+                    return response
+            except Exception as ollama_err:
+                last_error = f"Ollama: {ollama_err}"
+
+        # Final graceful message — never crash
+        logger.warning(f"All providers failed. Last error: {last_error}")
+        return (
+            "Şu an yapay zeka servislerine erişilemiyor.\n"
+            "Çözüm: Dashboard → LLM sekmesinden provider ayarla "
+            "veya terminalde 'elyan setup' komutunu çalıştır."
+        )
 
     async def stream_generate(self, prompt: str, system_prompt: str = None, model_config: dict = None, role: str = "inference"):
         """Streaming version of generate."""
@@ -606,27 +623,66 @@ class LLMClient:
             yield await self.generate(prompt, system_prompt, model_config, role)
 
     async def _call_ollama(self, prompt: str, system_prompt: str, cfg: dict, user_id: str = "local") -> str:
-        model = cfg.get("model", "llama3.1:8b")
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post("http://localhost:11434/api/generate", json={
-                "model": model,
-                "prompt": prompt,
-                "system": system_prompt,
-                "stream": False
-            })
-            data = resp.json()
-            content = data.get("response", "")
-            # Estimate tokens for Ollama (rough 1 token = 4 chars)
-            prompt_tokens = len(prompt + system_prompt) // 4
-            completion_tokens = len(content) // 4
-            self.pricing_tracker.record_usage(
-                provider="ollama",
-                model=model,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                user_id=user_id
-            )
-            return content
+        model = cfg.get("model", "llama3.2:3b")
+        endpoint = cfg.get("endpoint") or "http://localhost:11434"
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                resp = await client.post(f"{endpoint}/api/generate", json={
+                    "model": model,
+                    "prompt": prompt,
+                    "system": system_prompt or "",
+                    "stream": False
+                })
+                data = resp.json()
+
+                # Model not found — try to auto-detect an available model
+                if data.get("error") and "not found" in str(data.get("error", "")).lower():
+                    logger.warning(f"Ollama model '{model}' not found, auto-detecting...")
+                    available = await self._ollama_detect_model(endpoint)
+                    if available:
+                        logger.info(f"Ollama auto-detected model: {available}")
+                        resp2 = await client.post(f"{endpoint}/api/generate", json={
+                            "model": available,
+                            "prompt": prompt,
+                            "system": system_prompt or "",
+                            "stream": False
+                        })
+                        data = resp2.json()
+                    else:
+                        raise RuntimeError(f"Ollama'da hiç model yüklü değil. 'ollama pull llama3.2:3b' komutu ile model indir.")
+
+                content = data.get("response", "")
+                # Estimate tokens for Ollama (rough 1 token = 4 chars)
+                prompt_tokens = len(prompt + (system_prompt or "")) // 4
+                completion_tokens = len(content) // 4
+                self.pricing_tracker.record_usage(
+                    provider="ollama",
+                    model=model,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    user_id=user_id
+                )
+                return content
+        except httpx.ConnectError:
+            raise RuntimeError("Ollama çalışmıyor. 'ollama serve' komutu ile başlat.")
+
+    async def _ollama_detect_model(self, endpoint: str = "http://localhost:11434") -> str:
+        """Detect best available Ollama model."""
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{endpoint}/api/tags")
+                if resp.status_code == 200:
+                    models = resp.json().get("models", [])
+                    if models:
+                        # Prefer larger models
+                        names = [m.get("name", "") for m in models]
+                        for preferred in ["llama3.1:8b", "mistral:latest", "llama3.2:3b", "qwen2.5-coder:7b"]:
+                            if preferred in names:
+                                return preferred
+                        return names[0]  # Fallback to first available
+        except Exception:
+            pass
+        return ""
 
     async def _call_openai(self, prompt: str, system_prompt: str, cfg: dict, history: list = None, user_id: str = "local") -> str:
         from openai import AsyncOpenAI
@@ -641,11 +697,11 @@ class LLMClient:
                 b = h.get("bot_response", "")
                 if isinstance(b, str) and b.startswith('{'):
                     try: b = json.loads(b).get("message", "")
-                    except: pass
+                    except (json.JSONDecodeError, AttributeError): pass
                 elif isinstance(b, dict):
                     b = b.get("message", "")
                 messages.append({"role": "assistant", "content": b})
-                
+
         messages.append({"role": "user", "content": prompt})
         model = cfg.get("model", "gpt-4o")
         resp = await client.chat.completions.create(model=model, messages=messages)
@@ -672,7 +728,7 @@ class LLMClient:
                 b = h.get("bot_response", "")
                 if isinstance(b, str) and b.startswith('{'):
                     try: b = json.loads(b).get("message", "")
-                    except: pass
+                    except (json.JSONDecodeError, AttributeError): pass
                 elif isinstance(b, dict):
                     b = b.get("message", "")
                 messages.append({"role": "assistant", "content": b})
@@ -697,8 +753,10 @@ class LLMClient:
 
     async def _call_gemini(self, prompt: str, system_prompt: str, cfg: dict, history: list = None, user_id: str = "local") -> str:
         model = cfg.get("model", "gemini-2.0-flash")
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={cfg.get('apiKey')}"
-        
+        api_key = cfg.get('apiKey', '')
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
+
         contents = []
         if history:
             for h in history[-5:]:
@@ -706,7 +764,7 @@ class LLMClient:
                 b = h.get("bot_response", "")
                 if isinstance(b, str) and b.startswith('{'):
                     try: b = json.loads(b).get("message", "")
-                    except: pass
+                    except (json.JSONDecodeError, AttributeError): pass
                 elif isinstance(b, dict):
                     b = b.get("message", "")
                 contents.append({"role": "model", "parts": [{"text": b}]})
@@ -722,7 +780,7 @@ class LLMClient:
             data["system_instruction"] = {"parts": [{"text": system_prompt}]}
 
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(url, json=data)
+            resp = await client.post(url, headers=headers, json=data)
             payload = resp.json()
 
             if isinstance(payload, dict) and payload.get("error"):
@@ -799,6 +857,105 @@ class LLMClient:
                 )
             return content
 
+    async def _call_deepseek(self, prompt: str, system_prompt: str, cfg: dict, history: list = None, user_id: str = "local") -> str:
+        """DeepSeek API — OpenAI-compatible endpoint."""
+        model = cfg.get("model", "deepseek-chat")
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        if history:
+            for h_item in history[-5:]:
+                messages.append({"role": "user", "content": h_item.get("user_message", "")})
+                b = h_item.get("bot_response", "")
+                if isinstance(b, dict):
+                    b = b.get("message", "")
+                messages.append({"role": "assistant", "content": b})
+        messages.append({"role": "user", "content": prompt})
+        headers = {
+            "Authorization": f"Bearer {cfg.get('apiKey', '')}",
+            "Content-Type": "application/json",
+        }
+        body = {"model": model, "messages": messages, "max_tokens": cfg.get("max_tokens", 2048)}
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            resp = await client.post("https://api.deepseek.com/chat/completions", headers=headers, json=body)
+            data = resp.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            usage = data.get("usage") or {}
+            if usage:
+                self.pricing_tracker.record_usage(
+                    provider="deepseek", model=model,
+                    prompt_tokens=usage.get("prompt_tokens", 0),
+                    completion_tokens=usage.get("completion_tokens", 0),
+                    user_id=user_id,
+                )
+            return content
+
+    async def _call_mistral(self, prompt: str, system_prompt: str, cfg: dict, history: list = None, user_id: str = "local") -> str:
+        """Mistral API — OpenAI-compatible endpoint."""
+        model = cfg.get("model", "mistral-large-latest")
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        if history:
+            for h_item in history[-5:]:
+                messages.append({"role": "user", "content": h_item.get("user_message", "")})
+                b = h_item.get("bot_response", "")
+                if isinstance(b, dict):
+                    b = b.get("message", "")
+                messages.append({"role": "assistant", "content": b})
+        messages.append({"role": "user", "content": prompt})
+        headers = {
+            "Authorization": f"Bearer {cfg.get('apiKey', '')}",
+            "Content-Type": "application/json",
+        }
+        body = {"model": model, "messages": messages, "max_tokens": cfg.get("max_tokens", 2048)}
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            resp = await client.post("https://api.mistral.ai/v1/chat/completions", headers=headers, json=body)
+            data = resp.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            usage = data.get("usage") or {}
+            if usage:
+                self.pricing_tracker.record_usage(
+                    provider="mistral", model=model,
+                    prompt_tokens=usage.get("prompt_tokens", 0),
+                    completion_tokens=usage.get("completion_tokens", 0),
+                    user_id=user_id,
+                )
+            return content
+
+    async def _call_together(self, prompt: str, system_prompt: str, cfg: dict, history: list = None, user_id: str = "local") -> str:
+        """Together AI API — OpenAI-compatible endpoint."""
+        model = cfg.get("model", "meta-llama/Llama-3.3-70B-Instruct-Turbo")
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        if history:
+            for h_item in history[-5:]:
+                messages.append({"role": "user", "content": h_item.get("user_message", "")})
+                b = h_item.get("bot_response", "")
+                if isinstance(b, dict):
+                    b = b.get("message", "")
+                messages.append({"role": "assistant", "content": b})
+        messages.append({"role": "user", "content": prompt})
+        headers = {
+            "Authorization": f"Bearer {cfg.get('apiKey', '')}",
+            "Content-Type": "application/json",
+        }
+        body = {"model": model, "messages": messages, "max_tokens": cfg.get("max_tokens", 2048)}
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            resp = await client.post("https://api.together.xyz/v1/chat/completions", headers=headers, json=body)
+            data = resp.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            usage = data.get("usage") or {}
+            if usage:
+                self.pricing_tracker.record_usage(
+                    provider="together", model=model,
+                    prompt_tokens=usage.get("prompt_tokens", 0),
+                    completion_tokens=usage.get("completion_tokens", 0),
+                    user_id=user_id,
+                )
+            return content
+
     async def process(self, user_message: str, user_id: Optional[int] = None) -> dict[str, Any]:
         """Ana işleme fonksiyonu - önce cache, sonra intent parser, sonra LLM"""
         cached = self.cache.get(user_message)
@@ -816,10 +973,13 @@ class LLMClient:
         text = await self.generate(user_message, role=role)
         if text.strip().startswith('{'):
             try: return json.loads(text)
-            except: pass
+            except (json.JSONDecodeError, ValueError):
+                logger.debug("LLM returned non-JSON text starting with '{', using as chat response")
         return {"action": "chat", "message": text}
 
-    async def close(self): pass
+    async def close(self):
+        """Clean up resources."""
+        logger.debug("LLMClient closing")
 
     # ── Router & Fallback API ─────────────────────────────────────────────────
 
@@ -854,6 +1014,12 @@ class LLMClient:
             return (bool(provider_cfg.get("apiKey")), "anthropic_api_key_missing" if not provider_cfg.get("apiKey") else "ok")
         if provider_name == "ollama":
             return True, "ok"
+        if provider_name == "deepseek":
+            return (bool(provider_cfg.get("apiKey")), "deepseek_api_key_missing" if not provider_cfg.get("apiKey") else "ok")
+        if provider_name == "mistral":
+            return (bool(provider_cfg.get("apiKey")), "mistral_api_key_missing" if not provider_cfg.get("apiKey") else "ok")
+        if provider_name == "together":
+            return (bool(provider_cfg.get("apiKey")), "together_api_key_missing" if not provider_cfg.get("apiKey") else "ok")
         return False, "unknown_provider"
 
     def _is_provider_available(self, provider: str) -> bool:
@@ -872,16 +1038,23 @@ class LLMClient:
         ready, reason = self._provider_runtime_ready(provider, cfg)
         if not ready:
             raise RuntimeError(f"provider_unavailable:{reason}")
+        sys_prompt = self._resolve_system_prompt()
         if provider_name == "ollama":
-            return await self._call_ollama(prompt, self._resolve_system_prompt(), cfg)
+            return await self._call_ollama(prompt, sys_prompt, cfg)
         elif provider_name == "openai":
-            return await self._call_openai(prompt, self._resolve_system_prompt(), cfg)
+            return await self._call_openai(prompt, sys_prompt, cfg)
         elif provider_name == "groq":
-            return await self._call_groq(prompt, self._resolve_system_prompt(), cfg)
+            return await self._call_groq(prompt, sys_prompt, cfg)
         elif provider_name == "anthropic":
-            return await self._call_anthropic(prompt, self._resolve_system_prompt(), cfg)
+            return await self._call_anthropic(prompt, sys_prompt, cfg)
         elif provider_name in ("gemini", "google"):
-            return await self._call_gemini(prompt, self._resolve_system_prompt(), cfg)
+            return await self._call_gemini(prompt, sys_prompt, cfg)
+        elif provider_name == "deepseek":
+            return await self._call_deepseek(prompt, sys_prompt, cfg)
+        elif provider_name == "mistral":
+            return await self._call_mistral(prompt, sys_prompt, cfg)
+        elif provider_name == "together":
+            return await self._call_together(prompt, sys_prompt, cfg)
         raise ValueError(f"Unknown provider: {provider}")
 
     async def _call_any_provider(self, prompt: str, user_message: str = "",
@@ -901,7 +1074,19 @@ class LLMClient:
             except Exception as exc:
                 reason = "timeout" if "timeout" in str(exc).lower() else str(exc)[:80]
                 self._router_trace.append({"provider": provider, "status": "failed", "reason": reason})
-        return "Üzgünüm, tüm sağlayıcılar yanıt vermedi."
+        # Last resort: try Ollama directly
+        if "ollama" not in [t.get("provider") for t in self._router_trace]:
+            try:
+                result = await self._call_provider("ollama", prompt, user_message, temp, max_tokens)
+                self._router_trace.append({"provider": "ollama", "status": "success (last_resort)"})
+                return result
+            except Exception:
+                pass
+        return (
+            "Şu an yapay zeka servislerine erişilemiyor.\n"
+            "Çözüm: Dashboard → LLM sekmesinden provider ayarla "
+            "veya terminalde 'elyan setup' komutunu çalıştır."
+        )
 
     def get_last_router_trace(self) -> list:
         """Son router denemesinin izini döner."""

@@ -1604,6 +1604,11 @@ class PipelineContext:
     team_mode_forced: bool = False
     runtime_policy: Dict[str, Any] = field(default_factory=dict)
 
+    # Agentic Loop (self-correction)
+    correction_context: str = ""
+    correction_iteration: int = 0
+    agentic_loop_result: Dict[str, Any] = field(default_factory=dict)
+
     # Metadata
     started_at: float = field(default_factory=time.time)
     telemetry: Dict[str, Any] = field(default_factory=dict)
@@ -1819,6 +1824,17 @@ class StageRoute(PipelineStage):
             ctx.reasoning_budget = route.get("reasoning_budget", "low")
         except Exception as e:
             ctx.errors.append(f"route: {e}")
+
+        # Learning Engine: inject user preferences into context
+        try:
+            if hasattr(agent, "get_learning_context"):
+                learning_ctx = agent.get_learning_context(limit=5)
+                if learning_ctx:
+                    existing = str(ctx.specialized_prompt or "")
+                    ctx.specialized_prompt = f"{existing}\n\n{learning_ctx}" if existing else learning_ctx
+                    logger.debug("Learning context injected into pipeline")
+        except Exception as e:
+            logger.debug(f"Learning context injection skipped: {e}")
 
         # Cognitive parsing: goal graph + constraints for complex instructions.
         try:

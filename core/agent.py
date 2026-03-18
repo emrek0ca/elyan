@@ -1081,17 +1081,25 @@ class Agent:
         metadata: dict | None = None,
     ) -> str:
         """
-        Backward-compatible text API.
+        Backward-compatible text API. Never throws — always returns a user-friendly string.
         """
-        envelope = await self.process_envelope(
-            user_input=user_input,
-            notify=notify,
-            attachments=attachments,
-            channel=channel,
-            metadata=metadata,
-        )
-        status_prefix = action_lock.get_status_prefix()
-        return status_prefix + str(envelope.text or "")
+        try:
+            envelope = await self.process_envelope(
+                user_input=user_input,
+                notify=notify,
+                attachments=attachments,
+                channel=channel,
+                metadata=metadata,
+            )
+            status_prefix = action_lock.get_status_prefix()
+            return status_prefix + str(envelope.text or "")
+        except Exception as critical_err:
+            logger.error(f"Critical error in process(): {critical_err}", exc_info=True)
+            return (
+                "Bir hata oluştu ama Elyan çalışmaya devam ediyor.\n"
+                f"Hata: {str(critical_err)[:200]}\n"
+                "LLM ayarları için: Dashboard → LLM sekmesi veya 'elyan setup' komutu."
+            )
 
     async def process_envelope(
         self,
@@ -1325,6 +1333,13 @@ class Agent:
             task.transition("executing", note="pipeline_started")
             task_brain.save_task(task)
             ctx = await _pipeline_mod.pipeline_runner.run(ctx, agent=self)
+
+            # Agentic Loop: self-correction cycle for complex tasks
+            try:
+                from core.agentic_loop import run_agentic_loop
+                ctx = await run_agentic_loop(ctx, agent=self)
+            except Exception as _loop_err:
+                logger.debug(f"Agentic loop skipped: {_loop_err}")
 
             if ctx.action:
                 self._last_action = ctx.action
@@ -9286,19 +9301,47 @@ class Agent:
         context: Optional[dict[str, Any]] = None,
     ) -> None:
         try:
-            uid = str(self.current_user_id or "0")
             intent_name = str(action or "chat")
-            await self.learning.record_interaction(
-                user_id=uid,
-                input_text=user_input,
-                intent=intent_name,
-                action=intent_name,
+            self.learning.record_interaction(
+                tool=intent_name,
+                input_params={"user_input": str(user_input or "")[:500]},
+                output=context or {},
                 success=bool(success),
-                duration_ms=max(0, int(duration_ms)),
-                context=context or {},
+                duration=max(0, duration_ms) / 1000.0,
             )
         except Exception as exc:
             logger.debug(f"learning record failed: {exc}")
+
+    def get_learning_context(self, limit: int = 5) -> str:
+        """
+        Get learning context string for LLM prompt injection.
+        Returns user's top patterns and preferences as a compact string.
+        """
+        try:
+            recommendations = self.learning.get_recommendations(limit=limit)
+            if not recommendations:
+                return ""
+
+            lines = ["[Kullanıcı Tercihleri - Önceki Etkileşimlerden Öğrenilen]"]
+            for rec in recommendations:
+                tool = rec.get("tool", "")
+                conf = rec.get("confidence", 0)
+                freq = rec.get("frequency", 0)
+                sr = rec.get("success_rate", 0)
+                if conf > 0.7:
+                    lines.append(f"- {tool}: güven={conf:.0%}, kullanım={freq}x, başarı={sr:.0%}")
+
+            prefs = self.learning.preferences or {}
+            preferred_tools = prefs.get("preferred_tools", {})
+            if preferred_tools:
+                top3 = sorted(preferred_tools.items(), key=lambda x: x[1], reverse=True)[:3]
+                tools_str = ", ".join(f"{t[0]}({t[1]}x)" for t in top3)
+                lines.append(f"- En çok kullanılan araçlar: {tools_str}")
+
+            return "\n".join(lines) if len(lines) > 1 else ""
+        except Exception as exc:
+            logger.debug(f"learning context failed: {exc}")
+            return ""
 
     async def _finalize_turn(
         self,

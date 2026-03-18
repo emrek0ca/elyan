@@ -15,7 +15,7 @@ _PROVIDER_ALIASES = {
     "api": "google",
     "local": "ollama",
 }
-_KNOWN_PROVIDERS = ("openai", "anthropic", "google", "groq", "ollama")
+_KNOWN_PROVIDERS = ("openai", "anthropic", "google", "groq", "ollama", "deepseek", "mistral", "together", "cohere", "perplexity", "xai")
 _COLLAB_ROLE_DEFAULTS = [
     "reasoning",
     "planning",
@@ -330,7 +330,8 @@ class ModelOrchestrator:
         }
         try:
             preferred = neural_router.get_model_for_role(role_name) or {}
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Neural router preference lookup failed for role '{role_name}': {e}")
             preferred = {}
         pref_provider = self._normalize_provider(preferred.get("provider") or preferred.get("type"))
         pref_model = str(preferred.get("model") or "").strip().lower()
@@ -464,16 +465,16 @@ class ModelOrchestrator:
         role_name = str(role or "inference").strip().lower()
         if role_name == "router":
             # Router needs speed — local first, then cloud
-            return ["ollama", "groq", "google", "openai", "anthropic"]
+            return ["ollama", "groq", "google", "openai", "anthropic", "deepseek", "mistral", "together"]
         if role_name in {"code", "code_worker"}:
-            return ["groq", "google", "anthropic", "openai", "ollama"]
+            return ["groq", "deepseek", "google", "anthropic", "openai", "mistral", "together", "ollama"]
         if role_name in {"reasoning", "research_worker", "worker", "critic", "planning", "qa"}:
-            return ["groq", "google", "anthropic", "openai", "ollama"]
+            return ["groq", "google", "deepseek", "anthropic", "openai", "mistral", "together", "ollama"]
         if role_name == "creative":
             # Gemini excels at Turkish creative content
-            return ["google", "groq", "anthropic", "openai", "ollama"]
+            return ["google", "groq", "anthropic", "openai", "mistral", "together", "deepseek", "ollama"]
         # inference / default — quality first
-        return ["groq", "google", "openai", "anthropic", "ollama"]
+        return ["groq", "google", "openai", "anthropic", "deepseek", "mistral", "together", "ollama"]
 
     def add_provider(self, p_type: str, api_key: str, model: str = None):
         provider = self._normalize_provider(p_type)
