@@ -2,8 +2,10 @@ import asyncio
 import time
 from types import SimpleNamespace
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 from core.agent import Agent, ACTION_TO_TOOL
+from core.fast_response import QuestionType
 from core.intent_parser import IntentParser
 from core.quick_intent import IntentCategory
 
@@ -313,7 +315,7 @@ def test_agent_short_ambiguous_input_returns_clarification_without_llm():
     assert "Arka plan komutu belirsiz" in response
 
 
-def test_agent_process_chat_fallback_when_llm_missing(monkeypatch):
+def test_agent_process_chat_fast_path_when_llm_missing(monkeypatch):
     agent = Agent()
     agent.llm = None
     agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools(), llm=None)
@@ -322,9 +324,93 @@ def test_agent_process_chat_fallback_when_llm_missing(monkeypatch):
     agent.learning = _DummyLearning(quick_match_action=None)
     agent.user_profile = _DummyProfile()
     monkeypatch.setattr(agent, "_should_route_to_llm_chat", lambda *_args, **_kwargs: True)
+    agent._finalize_turn = AsyncMock(return_value=None)
+
+    class _DummyFastLLM:
+        def __init__(self):
+            self.fast_response = SimpleNamespace(
+                get_fast_response=lambda _text: SimpleNamespace(
+                    question_type=QuestionType.GREETING,
+                    answer="Merhaba! Sana nasıl yardımcı olayım?",
+                )
+            )
+
+        async def chat(self, prompt, user_id="local", **kwargs):
+            _ = (prompt, user_id, kwargs)
+            return "ok"
+
+    monkeypatch.setattr(agent, "_ensure_llm", lambda: setattr(agent, "llm", _DummyFastLLM()))
 
     response = asyncio.run(agent.process("Merhaba"))
-    assert "LLM sağlayıcısına şu an erişemiyorum" in response
+    assert response == "Merhaba! Sana nasıl yardımcı olayım?"
+    agent._finalize_turn.assert_awaited_once()
+
+
+def test_agent_process_uses_chat_fast_path_for_greeting(monkeypatch):
+    agent = Agent()
+    chat_mock = AsyncMock(return_value="Merhaba! Sana nasıl yardımcı olabilirim?")
+    agent.llm = SimpleNamespace(
+        chat=chat_mock,
+        fast_response=SimpleNamespace(get_fast_response=lambda _text: None),
+    )
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+    agent.quick_intent = SimpleNamespace(
+        detect=lambda _text: SimpleNamespace(category=IntentCategory.GREETING)
+    )
+    agent.intent_parser = SimpleNamespace(parse=lambda _text: {"action": "chat", "params": {}})
+    agent.learning = _DummyLearning()
+    agent.user_profile = _DummyProfile()
+    agent._resolve_pending_workflow_session = lambda *_args, **_kwargs: {}
+    agent._should_schedule_away_task = lambda *_args, **_kwargs: False
+    agent._handle_away_task_command = AsyncMock(return_value=None)
+    agent._finalize_turn = AsyncMock(return_value=None)
+
+    class _DummyLedger:
+        def __init__(self, run_id):
+            self.run_id = run_id
+
+        def write_manifest(self, **kwargs):
+            _ = kwargs
+            return "/tmp/chat-fast-path-manifest.json"
+
+    class _DummyRunStore:
+        def __init__(self, run_id):
+            self.run_id = run_id
+            self.base_dir = "/tmp"
+
+        def write_task(self, *args, **kwargs):
+            _ = (args, kwargs)
+            return None
+
+        def write_evidence(self, *args, **kwargs):
+            _ = (args, kwargs)
+            return None
+
+        def write_summary(self, *args, **kwargs):
+            _ = (args, kwargs)
+            return None
+
+        def write_logs(self, *args, **kwargs):
+            _ = (args, kwargs)
+            return None
+
+    async def _unexpected_pipeline_run(*_args, **_kwargs):
+        raise AssertionError("pipeline should not run for greeting fast-path")
+
+    def _unexpected_create_task(*_args, **_kwargs):
+        raise AssertionError("task creation should not run for greeting fast-path")
+
+    monkeypatch.setattr("core.agent.ExecutionLedger", _DummyLedger)
+    monkeypatch.setattr("core.agent.RunStore", _DummyRunStore)
+    monkeypatch.setattr("core.agent.pipeline_runner.run", _unexpected_pipeline_run)
+    monkeypatch.setattr("core.agent.task_brain.create_task", _unexpected_create_task)
+
+    response = asyncio.run(agent.process_envelope("Merhaba"))
+
+    assert response.status == "success"
+    assert response.text == "Merhaba! Sana nasıl yardımcı olabilirim?"
+    chat_mock.assert_awaited_once()
+    agent._finalize_turn.assert_awaited_once()
 
 
 def test_agent_prepare_list_files_uses_desktop_fallback_for_missing_home_path(tmp_path, monkeypatch):
@@ -2738,7 +2824,10 @@ def test_agent_finalize_turn_stores_last_turn_context():
 
 def test_agent_information_question_bypasses_planner_when_parser_is_chat():
     agent = Agent()
-    agent.llm = _DummyLLM()
+    agent.llm = SimpleNamespace(
+        chat=AsyncMock(return_value="ok"),
+        fast_response=SimpleNamespace(get_fast_response=lambda _text: None),
+    )
     agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
     agent.quick_intent = _DummyQuickIntentUnknown()
     agent.intent_parser = SimpleNamespace(parse=lambda _text: {"action": "chat", "params": {}})

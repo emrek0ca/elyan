@@ -55,10 +55,82 @@ class LLMClient:
             "10. Cevap yerine eylem gerekiyorsa talimat listesi yazmak yerine aracı çalıştır ve sonuç/kanıtla dön."
         )
 
+    def _role_token_limit(self, role: str) -> int:
+        _role = str(role or "inference").strip().lower()
+        limits = {
+            "chat": 300,
+            "inference": 800,
+            "code": 4096,
+            "code_worker": 4096,
+            "reasoning": 2048,
+            "planning": 2048,
+            "creative": 1500,
+            "router": 320,
+            "critic": 2048,
+            "qa": 2048,
+        }
+        return int(limits.get(_role, 800))
+
+    def _chat_system_prompt(self) -> str:
+        name = str(elyan_config.get("agent.name", "Elyan") or "Elyan").strip() or "Elyan"
+        personality = str(elyan_config.get("agent.personality", "professional") or "professional").strip().lower()
+        language = str(elyan_config.get("agent.language", "tr") or "tr").strip().lower()
+
+        tone_map = {
+            "professional": "Profesyonel ama sıcak kal.",
+            "technical": "Net ve uygulanabilir ol.",
+            "friendly": "Sıcak ve rahat bir ton kullan.",
+            "concise": "Mümkün olduğunca kısa ve net cevap ver.",
+            "creative": "Gerekirse yaratıcı ve canlı ifadeler kullan.",
+        }
+        if language == "en":
+            return (
+                f"You are {name}. "
+                "Reply naturally and briefly. "
+                "Keep it to 2-3 sentences. "
+                "Do not write meta commentary, task plans, Deliverable Spec, Done Criteria, JSON, tables, or code blocks."
+            )
+
+        return (
+            f"Sen {name}. "
+            "Kısa, samimi, doğal ve net Türkçe yanıtlar ver. "
+            "2-3 cümleyi geçme. "
+            "Meta açıklama, görev planı, Deliverable Spec, Done Criteria, JSON, tablo veya kod bloğu yazma. "
+            f"{tone_map.get(personality, tone_map['professional'])}"
+        )
+
     def _sanitize_chat_output(self, text: Any) -> str:
         content = str(text or "").replace("\r\n", "\n").strip()
         if not content:
             return ""
+        try:
+            if content[:1] in {"{", "["}:
+                parsed = json.loads(content)
+                extracted = ""
+                if isinstance(parsed, dict):
+                    for key in ("message", "text", "answer", "response", "reply", "content"):
+                        value = parsed.get(key)
+                        if isinstance(value, str) and value.strip():
+                            extracted = value.strip()
+                            break
+                    if not extracted:
+                        string_values = [
+                            str(value).strip()
+                            for value in parsed.values()
+                            if isinstance(value, str) and str(value).strip()
+                        ]
+                        if string_values:
+                            extracted = string_values[0]
+                elif isinstance(parsed, list):
+                    string_values = [str(item).strip() for item in parsed if isinstance(item, str) and str(item).strip()]
+                    if string_values:
+                        extracted = " ".join(string_values[:2])
+                if extracted:
+                    content = extracted
+        except Exception:
+            pass
+
+        content = re.sub(r"```[\w-]*\n.*?```", "", content, flags=re.DOTALL)
         lines = content.splitlines()
         cleaned: list[str] = []
         skip_prefixes = (
@@ -66,6 +138,17 @@ class LLMClient:
             "done criteria:",
             "başarı kriteri:",
             "success criteria:",
+            "system notu:",
+            "sistem notu:",
+            "analiz ediyorum",
+            "şimdi size",
+            "simdi size",
+            "tabii ki",
+            "elbette",
+            "öncelikle",
+            "oncelikle",
+            "kısaca",
+            "kisaca",
         )
         for line in lines:
             stripped = line.strip()
@@ -76,10 +159,41 @@ class LLMClient:
                 continue
             if lower.startswith(skip_prefixes):
                 continue
+            if stripped.startswith("|") and stripped.endswith("|"):
+                continue
+            if stripped.startswith("{") or stripped.startswith("["):
+                continue
             cleaned.append(stripped)
-        content = "\n".join(cleaned).strip()
-        content = re.sub(r"\n{3,}", "\n\n", content)
-        return content
+
+        paragraphs: list[str] = []
+        for paragraph in re.split(r"\n{2,}", "\n".join(cleaned).strip()):
+            chunk = paragraph.strip()
+            if not chunk:
+                continue
+            chunk = re.sub(r"\s+", " ", chunk)
+            chunk = re.sub(
+                r"^(tabii ki|elbette|şimdi size|simdi size|analiz ediyorum|öncelikle|oncelikle|kısaca|kisaca|sizin için|sizin icin)[,:;\-\s]+",
+                "",
+                chunk,
+                flags=re.IGNORECASE,
+            ).strip()
+            if not chunk:
+                continue
+            sentences = re.split(r"(?<=[.!?])\s+", chunk)
+            deduped: list[str] = []
+            seen: set[str] = set()
+            for sentence in sentences:
+                piece = sentence.strip()
+                if not piece:
+                    continue
+                normalized = re.sub(r"\s+", " ", piece).lower()
+                if normalized in seen:
+                    continue
+                seen.add(normalized)
+                deduped.append(piece)
+            if deduped:
+                paragraphs.append(" ".join(deduped))
+        return "\n\n".join(paragraphs).strip()
 
     def _resolve_system_prompt(self) -> str:
         custom = str(
@@ -385,9 +499,9 @@ class LLMClient:
         if not token_budget.is_within_budget(user_id):
             return "Hata: Günlük LLM bütçesi aşıldı. Lütfen daha sonra deneyin."
 
-        # cost_guard: role-aware temperature and token budget caps
+        # cost_guard: role-aware temperature caps; token limits always apply.
         _temp = temperature
-        _max_tokens = None
+        _max_tokens = self._role_token_limit(role)
         if self.cost_guard:
             _role = str(role or "inference").strip().lower()
             _cg_limits = {
@@ -405,7 +519,7 @@ class LLMClient:
                 _temp = _cg_temp_cap
             elif _temp is None:
                 _temp = _cg_temp_cap
-            _max_tokens = _cg_max_tok
+            _max_tokens = min(_max_tokens, _cg_max_tok)
 
         # Test/compat path: honor instance-level monkeypatches for router shortcut.
         _patched = self.__dict__.get("_call_any_provider")
@@ -625,14 +739,18 @@ class LLMClient:
     async def _call_ollama(self, prompt: str, system_prompt: str, cfg: dict, user_id: str = "local") -> str:
         model = cfg.get("model", "llama3.2:3b")
         endpoint = cfg.get("endpoint") or "http://localhost:11434"
+        max_tokens = cfg.get("max_tokens")
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
-                resp = await client.post(f"{endpoint}/api/generate", json={
+                payload = {
                     "model": model,
                     "prompt": prompt,
                     "system": system_prompt or "",
-                    "stream": False
-                })
+                    "stream": False,
+                }
+                if max_tokens is not None:
+                    payload["options"] = {"num_predict": int(max_tokens)}
+                resp = await client.post(f"{endpoint}/api/generate", json=payload)
                 data = resp.json()
 
                 # Model not found — try to auto-detect an available model
@@ -641,12 +759,15 @@ class LLMClient:
                     available = await self._ollama_detect_model(endpoint)
                     if available:
                         logger.info(f"Ollama auto-detected model: {available}")
-                        resp2 = await client.post(f"{endpoint}/api/generate", json={
+                        payload2 = {
                             "model": available,
                             "prompt": prompt,
                             "system": system_prompt or "",
-                            "stream": False
-                        })
+                            "stream": False,
+                        }
+                        if max_tokens is not None:
+                            payload2["options"] = {"num_predict": int(max_tokens)}
+                        resp2 = await client.post(f"{endpoint}/api/generate", json=payload2)
                         data = resp2.json()
                     else:
                         raise RuntimeError(f"Ollama'da hiç model yüklü değil. 'ollama pull llama3.2:3b' komutu ile model indir.")
@@ -704,7 +825,10 @@ class LLMClient:
 
         messages.append({"role": "user", "content": prompt})
         model = cfg.get("model", "gpt-4o")
-        resp = await client.chat.completions.create(model=model, messages=messages)
+        kwargs = {"model": model, "messages": messages}
+        if cfg.get("max_tokens") is not None:
+            kwargs["max_tokens"] = int(cfg.get("max_tokens"))
+        resp = await client.chat.completions.create(**kwargs)
         content = resp.choices[0].message.content
         usage = resp.usage
         if usage:
@@ -736,8 +860,10 @@ class LLMClient:
         messages.append({"role": "user", "content": prompt})
         model = cfg.get("model", "llama-3.3-70b-versatile")
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post("https://api.groq.com/openai/v1/chat/completions", headers=headers,
-                                    json={"model": model, "messages": messages})
+            body = {"model": model, "messages": messages}
+            if cfg.get("max_tokens") is not None:
+                body["max_tokens"] = int(cfg.get("max_tokens"))
+            resp = await client.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body)
             data = resp.json()
             content = data['choices'][0]['message']['content']
             usage = data.get('usage')
@@ -778,6 +904,8 @@ class LLMClient:
         data = {"contents": contents}
         if system_prompt:
             data["system_instruction"] = {"parts": [{"text": system_prompt}]}
+        if cfg.get("max_tokens") is not None:
+            data["generationConfig"] = {"maxOutputTokens": int(cfg.get("max_tokens"))}
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(url, headers=headers, json=data)
@@ -833,7 +961,7 @@ class LLMClient:
         }
         body = {
             "model": model,
-            "max_tokens": 2048,
+            "max_tokens": int(cfg.get("max_tokens", 2048) or 2048),
             "messages": messages,
         }
         if system_prompt:
@@ -1038,6 +1166,9 @@ class LLMClient:
         ready, reason = self._provider_runtime_ready(provider, cfg)
         if not ready:
             raise RuntimeError(f"provider_unavailable:{reason}")
+        if max_tokens is not None:
+            cfg = dict(cfg)
+            cfg["max_tokens"] = int(max_tokens)
         sys_prompt = self._resolve_system_prompt()
         if provider_name == "ollama":
             return await self._call_ollama(prompt, sys_prompt, cfg)
@@ -1095,14 +1226,14 @@ class LLMClient:
     def get_last_collaboration_trace(self) -> list:
         return list(self._collaboration_trace)
 
-    async def chat(self, text: str, history: list = None, user_id: str = "local") -> str:
+    async def chat(self, text: str, history: list = None, user_id: str = "local", system_prompt: str | None = None) -> str:
         """Kısa sohbet yanıtı üretir. cost_guard açıksa token bütçesini kısıtlar."""
         fast = self.fast_response.get_fast_response(text)
         if fast and fast.question_type == QuestionType.GREETING:
             return self._sanitize_chat_output(fast.answer)
-        max_tokens = 260 if self.cost_guard else None
+        max_tokens = self._role_token_limit("chat")
         temp = 0.3
-        system = self._resolve_system_prompt()
+        system = system_prompt or self._chat_system_prompt()
         prompt = f"{system}\n\nKullanıcı: {text}"
         # If _call_any_provider has been monkey-patched on the instance, use it
         _patched = self.__dict__.get('_call_any_provider')

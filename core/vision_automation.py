@@ -22,6 +22,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from core.cowork_runtime import get_cowork_runtime
 from utils.logger import get_logger
 
 logger = get_logger("vision_automation")
@@ -78,6 +79,7 @@ class VisionAutomationResult:
     total_duration_ms: float = 0.0
     final_state: str = ""
     error: str = ""
+    screen_state: Dict[str, Any] = field(default_factory=dict)
 
 
 class VisionAutomationLoop:
@@ -417,7 +419,20 @@ async def vision_automate(
     except Exception:
         client = None
 
-    result = await run_vision_task(goal=goal, llm_client=client, max_steps=max_steps)
+    screen_state_payload: Dict[str, Any] = {}
+    screen_context = ""
+    try:
+        screen_state = await asyncio.wait_for(
+            get_cowork_runtime().collect_screen_state(goal=goal),
+            timeout=4.0,
+        )
+        screen_state_payload = screen_state.to_dict()
+        screen_context = screen_state.to_prompt_block()
+    except Exception as exc:
+        logger.debug(f"screen state capture skipped: {exc}")
+
+    result = await run_vision_task(goal=goal, llm_client=client, max_steps=max_steps, context=screen_context)
+    result.screen_state = dict(screen_state_payload)
     return {
         "success": result.success,
         "goal": result.goal,
@@ -425,6 +440,7 @@ async def vision_automate(
         "duration_ms": result.total_duration_ms,
         "final_state": result.final_state,
         "error": result.error,
+        "screen_state": dict(result.screen_state or {}),
         "actions": [
             {
                 "step": s.step_number,

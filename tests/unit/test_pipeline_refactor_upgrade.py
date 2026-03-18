@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -17,13 +18,15 @@ from core.pipeline import (
     _should_realign_to_capability,
 )
 from core.pipeline_upgrade.executor import fallback_ladder, diff_only_failed_steps, collect_paths_from_tool_results
+from core.pipeline_upgrade.contracts import (
+    verify_taskspec_contract,
+    build_reflexion_hint,
+    build_critic_review_prompt,
+)
 from core.pipeline_upgrade.verifier import (
     enforce_output_contract,
     verify_code_gates,
     verify_asset_gates,
-    verify_taskspec_contract,
-    build_reflexion_hint,
-    build_critic_review_prompt,
 )
 
 
@@ -218,10 +221,33 @@ async def test_verify_stage_builds_research_recovery_plan():
     assert ctx.qa_results.get("research_recovery_strategy", {}).get("kind") == "research_revision_plan"
     repair_plan = ctx.qa_results.get("research_repair_plan", {})
     assert repair_plan.get("repairable") is True
-    assert "En az 3 güvenilir kaynak ekle" in list(repair_plan.get("steps") or [])
-    assert "Ana iddiaları kaynaklarla eşle" in list(repair_plan.get("steps") or [])
-    assert "Belirsizlikler ve sınırlılıklar bölümü ekle" in list(repair_plan.get("steps") or [])
+    steps = list(repair_plan.get("steps") or [])
+    assert "En az 3 güvenilir kaynak ekle" in steps
+    assert any("payload" in step.lower() for step in steps)
     assert "Research next:" in (ctx.final_response or "")
+
+
+@pytest.mark.asyncio
+async def test_verify_stage_skips_communication_jobs_without_critic_call():
+    critic = AsyncMock(side_effect=AssertionError("critic should not run for communication jobs"))
+
+    class _Agent:
+        def __init__(self):
+            self.llm = SimpleNamespace(generate=critic)
+
+    ctx = PipelineContext(user_input="merhaba", user_id="u1", channel="cli")
+    ctx.job_type = "communication"
+    ctx.final_response = "Merhaba"
+    ctx.llm_response = "Merhaba"
+    ctx.tool_results = []
+
+    ctx = await StageVerify().run(ctx, _Agent())
+
+    assert ctx.verified is True
+    assert ctx.delivery_blocked is False
+    assert ctx.qa_results.get("verify_skipped", {}).get("reason") == "communication"
+    assert ctx.phase_records.get("verify", {}).get("skipped") is True
+    critic.assert_not_awaited()
 
 
 @pytest.mark.asyncio

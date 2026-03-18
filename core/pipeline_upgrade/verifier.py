@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .contracts import validate_research_payload
+
 
 def _iter_nested_strings(value: Any, *, _depth: int = 0):
     if _depth > 4:
@@ -97,9 +99,14 @@ def verify_code_gates(*, final_response: str, produced_paths: list[str], tool_re
     return {"ok": not failed, "failed": failed, "checks": checks}
 
 
-def verify_research_gates(*, final_response: str, source_urls: list[str]) -> dict[str, Any]:
+def verify_research_gates(
+    *,
+    final_response: str,
+    source_urls: list[str],
+    research_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     text = str(final_response or "")
-    low = text.lower()
+    low = text.replace("İ", "I").lower()
     has_claim_map = "claim" in low or "iddia" in low
     has_unknowns = "unknown" in low or "bilinmeyen" in low or "belirs" in low
     has_sources = bool(source_urls)
@@ -110,6 +117,18 @@ def verify_research_gates(*, final_response: str, source_urls: list[str]) -> dic
         failed.append("claim_mapping")
     if not has_unknowns:
         failed.append("unknowns")
+    if research_payload is not None:
+        payload_ok, payload_errors = validate_research_payload(research_payload)
+        if not payload_ok:
+            failed.extend([f"payload:{err}" for err in payload_errors])
+        quality_summary = research_payload.get("quality_summary") if isinstance(research_payload, dict) else {}
+        if isinstance(quality_summary, dict) and quality_summary:
+            try:
+                critical_coverage = float(quality_summary.get("critical_claim_coverage", 0.0) or 0.0)
+            except Exception:
+                critical_coverage = 0.0
+            if critical_coverage < 1.0:
+                failed.append("critical_claim_coverage")
     return {
         "ok": not failed,
         "failed": failed,

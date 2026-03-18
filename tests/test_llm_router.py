@@ -1,4 +1,5 @@
 import asyncio
+from unittest.mock import AsyncMock
 
 import httpx
 
@@ -129,4 +130,34 @@ def test_chat_cost_guard_uses_short_token_budget():
         return captured
 
     captured = asyncio.run(run_case())
-    assert captured["max_tokens"] == 260
+    assert captured["max_tokens"] == 300
+
+
+def test_chat_accepts_custom_system_prompt_and_respects_chat_budget():
+    client = LLMClient()
+
+    async def run_case():
+        patched = AsyncMock(return_value="Özel prompt yanıtı")
+        client._call_any_provider = patched
+        result = await client.chat("bir şey soracağım", system_prompt="Özel prompt")
+        return result, patched
+
+    result, patched = asyncio.run(run_case())
+    assert result == "Özel prompt yanıtı"
+    assert patched.await_count == 1
+    assert patched.await_args.args[0].startswith("Özel prompt\n\nKullanıcı: bir şey soracağım")
+    assert patched.await_args.kwargs["max_tokens"] == 300
+
+
+def test_generate_uses_role_token_budget_without_cost_guard():
+    client = LLMClient()
+
+    async def run_case():
+        patched = AsyncMock(return_value="ok")
+        client._call_any_provider = patched
+        await client.generate("test prompt")
+        return patched
+
+    patched = asyncio.run(run_case())
+    assert patched.await_count == 1
+    assert patched.await_args.kwargs["max_tokens"] == 800

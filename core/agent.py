@@ -70,6 +70,7 @@ from core.away_mode import away_task_registry, background_task_runner, away_comp
 from core.channel_delivery import channel_delivery_bridge
 from core.smart_notifications import get_smart_notifications, NotificationCategory, NotificationPriority
 from core.gateway.response import UnifiedResponse
+from core.cowork_runtime import get_cowork_runtime
 from core.runtime_policy import get_runtime_policy_resolver
 from core.process_profiles import (
     PREAPPROVAL_BLOCKED_TOOLS,
@@ -1132,6 +1133,23 @@ class Agent:
             run_store.write_evidence(manifest_path=manifest, steps=[], artifacts=[], metadata={"status": "partial"})
             run_store.write_summary(status="partial", response_text=clar, artifacts=[], metadata={"manifest_path": manifest})
             run_store.write_logs(lines=["short_ambiguous_input"])
+            try:
+                await self._finalize_turn(
+                    user_input=user_input,
+                    response_text=clar,
+                    action="clarify",
+                    success=False,
+                    started_at=started_at,
+                    context={
+                        "role": "chat",
+                        "job_type": "communication",
+                        "errors": 0,
+                        "run_id": run_id,
+                        "mode": "clarification",
+                    },
+                )
+            except Exception as finalize_exc:
+                logger.debug(f"clarification finalize skipped: {finalize_exc}")
             return AgentResponse(
                 run_id=run_id,
                 text=clar,
@@ -1203,6 +1221,173 @@ class Agent:
         effective_user_input = self._runtime_normalize_user_input(
             str(pending_workflow.get("objective") or user_input) if pending_workflow and approval_granted(user_input) else user_input
         )
+
+        fast_chat_allowed = not (pending_workflow and approval_granted(user_input))
+        quick_intent = None
+        try:
+            quick_intent = self.quick_intent.detect(effective_user_input) if getattr(self, "quick_intent", None) else None
+        except Exception:
+            quick_intent = None
+
+        cowork_runtime = get_cowork_runtime()
+        cowork_session = None
+        try:
+            cowork_session = cowork_runtime.start_session(
+                user_id=uid,
+                channel=str(channel or "cli"),
+                objective=effective_user_input,
+                run_id=run_id,
+                quick_intent=quick_intent,
+                attachments=list(resolved_paths),
+                runtime_policy={"execution": {"skip_verify_for_chat": True}},
+            )
+            cowork_runtime.observe_turn(
+                session_key=cowork_session.session_id,
+                role="user",
+                content=effective_user_input,
+                metadata={
+                    "channel": str(channel or "cli"),
+                    "run_id": run_id,
+                    "attachment_count": len(resolved_paths),
+                },
+            )
+        except Exception as cowork_exc:
+            logger.debug(f"Cowork session bootstrap skipped: {cowork_exc}")
+
+        if fast_chat_allowed and self.llm is not None:
+            session_mode = str(getattr(cowork_session, "mode", "") or "").strip().lower()
+            disable_fast_chat_for_mode = session_mode in {"screen", "browser", "code", "research", "file"}
+            fast_response = None
+            if not disable_fast_chat_for_mode:
+                try:
+                    fast_response = self.llm.fast_response.get_fast_response(effective_user_input) if getattr(self.llm, "fast_response", None) else None
+                except Exception:
+                    fast_response = None
+
+                if fast_response and str(getattr(fast_response, "answer", "") or "").strip():
+                    response_text = self._sanitize_chat_reply(fast_response.answer)
+                    manifest = ledger.write_manifest(
+                        status="success",
+                        metadata={
+                            "channel": channel,
+                            "user_id": uid,
+                            "mode": "chat_fast_path",
+                            "question_type": str(getattr(fast_response, "question_type", "") or ""),
+                            "cowork_session_id": str(getattr(cowork_session, "session_id", "") or ""),
+                        },
+                    )
+                    run_store.write_task(
+                        {},
+                        user_input=effective_user_input,
+                        metadata={"channel": channel, "user_id": uid, "phase": "chat_fast_path"},
+                        task_state={},
+                    )
+                    run_store.write_evidence(
+                        manifest_path=manifest,
+                        steps=[],
+                        artifacts=[],
+                        metadata={"status": "success", "mode": "chat_fast_path"},
+                    )
+                    run_store.write_summary(
+                        status="success",
+                        response_text=response_text,
+                        artifacts=[],
+                        metadata={"manifest_path": manifest, "mode": "chat_fast_path"},
+                    )
+                    run_store.write_logs(lines=["chat_fast_path"])
+                    await self._finalize_turn(
+                        user_input=effective_user_input,
+                        response_text=response_text,
+                        action="chat",
+                        success=True,
+                        started_at=started_at,
+                        context={
+                            "role": "chat",
+                            "job_type": "communication",
+                            "errors": 0,
+                            "run_id": run_id,
+                            "mode": "chat_fast_path",
+                            "cowork_session_id": str(getattr(cowork_session, "session_id", "") or ""),
+                        },
+                    )
+                    return AgentResponse(
+                        run_id=run_id,
+                        text=response_text,
+                        attachments=[],
+                        evidence_manifest_path=manifest,
+                        status="success",
+                        error="",
+                    )
+
+                if self._should_route_to_llm_chat(effective_user_input, None, quick_intent):
+                    chat_text = ""
+                    try:
+                        chat_text = await with_timeout(
+                            self.llm.chat(effective_user_input, user_id=uid),
+                            seconds=5.0,
+                            fallback=self._fallback_chat_without_llm(effective_user_input),
+                            context="agent_fast_chat",
+                        )
+                    except Exception:
+                        chat_text = self._fallback_chat_without_llm(effective_user_input)
+
+                    response_text = self._sanitize_chat_reply(chat_text)
+                    if not response_text.strip():
+                        response_text = self._fallback_chat_without_llm(effective_user_input)
+                    manifest = ledger.write_manifest(
+                        status="success",
+                        metadata={
+                            "channel": channel,
+                            "user_id": uid,
+                            "mode": "chat_fast_path",
+                            "route": "llm_chat",
+                            "cowork_session_id": str(getattr(cowork_session, "session_id", "") or ""),
+                        },
+                    )
+                    run_store.write_task(
+                        {},
+                        user_input=effective_user_input,
+                        metadata={"channel": channel, "user_id": uid, "phase": "chat_fast_path"},
+                        task_state={},
+                    )
+                    run_store.write_evidence(
+                        manifest_path=manifest,
+                        steps=[],
+                        artifacts=[],
+                        metadata={"status": "success", "mode": "chat_fast_path", "route": "llm_chat"},
+                    )
+                    run_store.write_summary(
+                        status="success",
+                        response_text=response_text,
+                        artifacts=[],
+                        metadata={"manifest_path": manifest, "mode": "chat_fast_path", "route": "llm_chat"},
+                    )
+                    run_store.write_logs(lines=["chat_fast_path", "llm_chat"])
+                    await self._finalize_turn(
+                        user_input=effective_user_input,
+                        response_text=response_text,
+                        action="chat",
+                        success=True,
+                        started_at=started_at,
+                        context={
+                            "role": "chat",
+                            "job_type": "communication",
+                            "errors": 0,
+                            "run_id": run_id,
+                            "mode": "chat_fast_path",
+                            "route": "llm_chat",
+                            "cowork_session_id": str(getattr(cowork_session, "session_id", "") or ""),
+                        },
+                    )
+                    return AgentResponse(
+                        run_id=run_id,
+                        text=response_text,
+                        attachments=[],
+                        evidence_manifest_path=manifest,
+                        status="success",
+                        error="",
+                    )
+
         task = task_brain.create_task(
             objective=user_input,
             user_input=user_input,
@@ -1275,6 +1460,51 @@ class Agent:
             response_cfg["compact_actions"] = False
         response_cfg.setdefault("share_attachments_default", True)
         ctx.runtime_policy["response"] = response_cfg
+
+        try:
+            cowork_session = cowork_runtime.start_session(
+                user_id=uid,
+                channel=str(channel or "cli"),
+                objective=effective_user_input,
+                run_id=run_id,
+                quick_intent=quick_intent,
+                attachments=resolved_paths,
+                runtime_policy=ctx.runtime_policy,
+                active_task=task.to_dict() if hasattr(task, "to_dict") else {},
+            )
+            ctx.cowork_session_id = cowork_session.session_id
+            ctx.cowork_mode = str(cowork_session.mode or ctx.cowork_mode or "").strip()
+            ctx.cowork_model = str(cowork_session.selected_model or ctx.cowork_model or "").strip()
+            ctx.memory_policy = dict(cowork_session.memory_policy or {})
+            ctx.verification_policy = dict(cowork_session.verification_policy or {})
+            ctx.runtime_policy["metadata"]["cowork_session_id"] = cowork_session.session_id
+            ctx.runtime_policy["metadata"]["cowork_mode"] = cowork_session.mode
+            ctx.runtime_policy["metadata"]["cowork_model"] = cowork_session.selected_model
+            if ctx.cowork_mode in {"screen", "browser"}:
+                screen_state = await with_timeout(
+                    cowork_runtime.collect_screen_state(goal=effective_user_input, task_state=task.to_dict() if hasattr(task, "to_dict") else {}),
+                    seconds=4.0,
+                    fallback=None,
+                    context="cowork_screen_capture",
+                )
+                if screen_state:
+                    cowork_session.screen_state = screen_state
+                    ctx.screen_state = screen_state.to_dict()
+                    screen_prompt = screen_state.to_prompt_block()
+                    if screen_prompt:
+                        screen_block = f"Screen State:\n{screen_prompt}"
+                        ctx.multimodal_context = f"{ctx.multimodal_context}\n\n{screen_block}".strip() if ctx.multimodal_context else screen_block
+                        if not ctx.context_working_set:
+                            ctx.context_working_set = screen_prompt
+                        ctx.telemetry["screen_state"] = {
+                            "captured": True,
+                            "frontmost_app": screen_state.frontmost_app,
+                            "confidence": screen_state.confidence,
+                        }
+                        ctx.runtime_policy["metadata"]["screen_state_captured"] = True
+        except Exception as cowork_sync_exc:
+            logger.debug(f"Cowork session sync skipped: {cowork_sync_exc}")
+
         # ── Phase 6-10: Pre-pipeline hooks ──
         _trace_ctx = None
         if self.telemetry:
@@ -1355,6 +1585,8 @@ class Agent:
                     "job_type": ctx.job_type,
                     "errors": len(ctx.errors),
                     "run_id": run_id,
+                    "cowork_session_id": str(getattr(ctx, "cowork_session_id", "") or ""),
+                    "cowork_mode": str(getattr(ctx, "cowork_mode", "") or ""),
                 },
             )
 
@@ -9402,6 +9634,27 @@ class Agent:
             duration_ms=duration_ms,
             context=context or {},
         )
+
+        cowork_session_id = str((context or {}).get("cowork_session_id") or "").strip()
+        if cowork_session_id:
+            try:
+                cowork_runtime = get_cowork_runtime()
+                cowork_runtime.finalize_turn(
+                    session_key=cowork_session_id,
+                    response_text=response_text,
+                    success=success,
+                    action=action,
+                    started_at=started_at,
+                    metadata={
+                        "role": str((context or {}).get("role") or ""),
+                        "job_type": str((context or {}).get("job_type") or ""),
+                        "run_id": str((context or {}).get("run_id") or ""),
+                        "mode": str((context or {}).get("cowork_mode") or (context or {}).get("mode") or ""),
+                        "errors": int((context or {}).get("errors", 0) or 0),
+                    },
+                )
+            except Exception as cowork_exc:
+                logger.debug(f"cowork finalize skipped: {cowork_exc}")
 
     @staticmethod
     def _strip_markdown_fence(content: str) -> str:

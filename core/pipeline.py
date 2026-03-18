@@ -1543,6 +1543,11 @@ class PipelineContext:
     workspace_mode: str = ""
     preferred_tools: List[str] = field(default_factory=list)
     multi_agent_recommended: bool = False
+    cowork_session_id: str = ""
+    cowork_mode: str = ""
+    cowork_model: str = ""
+    memory_policy: Dict[str, Any] = field(default_factory=dict)
+    verification_policy: Dict[str, Any] = field(default_factory=dict)
     goal_graph: Dict[str, Any] = field(default_factory=dict)
     goal_stage_count: int = 1
     goal_complexity: float = 0.0
@@ -1566,6 +1571,7 @@ class PipelineContext:
     phase_records: Dict[str, Any] = field(default_factory=dict)
     output_contract_spec: Dict[str, Any] = field(default_factory=dict)
     world_snapshot: Dict[str, Any] = field(default_factory=dict)
+    screen_state: Dict[str, Any] = field(default_factory=dict)
 
     # Stage 3: Plan
     plan: List[Dict] = field(default_factory=list)
@@ -1768,15 +1774,112 @@ class StageRoute(PipelineStage):
             logger.error(f"NL Cron detection error: {e}")
 
         # Phase 17: Unified Memory Retrieval
-        try:
-            from core.memory.unified import memory
-            from core.memory.context_optimizer import context_optimizer
-            
-            ctx.memory_results = await memory.recall(ctx.user_id, ctx.user_input)
-            ctx.memory_context = context_optimizer.optimize(ctx.memory_results, ctx.user_input)
-            logger.info(f"Memory context retrieved ({len(ctx.memory_context)} chars)")
-        except Exception as e:
-            logger.debug(f"Memory retrieval skip: {e}")
+        cowork_session_id = str(getattr(ctx, "cowork_session_id", "") or "").strip()
+        if not cowork_session_id:
+            runtime_meta = ctx.runtime_policy.get("metadata", {}) if isinstance(ctx.runtime_policy.get("metadata"), dict) else {}
+            cowork_session_id = str(runtime_meta.get("cowork_session_id") or "").strip()
+
+        cowork_runtime = None
+        cowork_session = None
+        used_cowork_memory = False
+        if cowork_session_id:
+            try:
+                from core.cowork_runtime import get_cowork_runtime
+
+                cowork_runtime = get_cowork_runtime()
+                cowork_session = cowork_runtime.get_session(cowork_session_id)
+                if cowork_session is not None:
+                    ctx.cowork_session_id = cowork_session.session_id
+                    ctx.cowork_mode = str(cowork_session.mode or ctx.cowork_mode or "").strip()
+                    ctx.cowork_model = str(cowork_session.selected_model or ctx.cowork_model or "").strip()
+            except Exception as cowork_exc:
+                logger.debug(f"Cowork runtime lookup skipped: {cowork_exc}")
+
+        if cowork_runtime and cowork_session:
+            try:
+                memory_bundle = await cowork_runtime.build_memory_context(
+                    session=cowork_session,
+                    user_input=ctx.user_input,
+                    query_limit=5,
+                )
+                ctx.memory_results = dict(memory_bundle.get("memory_results") or {})
+                ctx.memory_context = str(memory_bundle.get("text") or "")
+                ctx.memory_policy = dict(memory_bundle.get("policy") or dict(cowork_session.memory_policy or {}))
+                ctx.verification_policy = dict(cowork_session.verification_policy or {})
+                used_cowork_memory = True
+                if isinstance(ctx.telemetry, dict):
+                    ctx.telemetry["cowork_memory"] = {
+                        "session_id": cowork_session.session_id,
+                        "mode": cowork_session.mode,
+                        "scope": str(memory_bundle.get("memory_scope") or ""),
+                        "topic_shift": bool(memory_bundle.get("topic_shift_detected", False)),
+                        "recent_conversations": len(memory_bundle.get("recent_conversations") or []),
+                        "task_history": len(memory_bundle.get("task_history") or []),
+                        "knowledge": len(memory_bundle.get("knowledge") or []),
+                    }
+                logger.info(f"Cowork memory context retrieved ({len(ctx.memory_context)} chars)")
+            except Exception as cowork_exc:
+                logger.debug(f"Cowork memory routing skipped: {cowork_exc}")
+
+        if not used_cowork_memory:
+            try:
+                from core.memory.unified import memory
+                from core.memory.context_optimizer import context_optimizer
+                
+                ctx.memory_results = await memory.recall(ctx.user_id, ctx.user_input)
+                ctx.memory_context = context_optimizer.optimize(ctx.memory_results, ctx.user_input)
+                logger.info(f"Memory context retrieved ({len(ctx.memory_context)} chars)")
+            except Exception as e:
+                logger.debug(f"Memory retrieval skip: {e}")
+
+        screen_state_payload: Dict[str, Any] = {}
+        screen_state_prompt = ""
+        raw_screen_state = getattr(ctx, "screen_state", {})
+        if isinstance(raw_screen_state, dict) and raw_screen_state:
+            screen_state_payload = dict(raw_screen_state)
+        elif hasattr(raw_screen_state, "to_dict"):
+            try:
+                screen_state_payload = dict(raw_screen_state.to_dict())
+            except Exception:
+                screen_state_payload = {}
+        elif cowork_session and getattr(cowork_session, "screen_state", None) is not None:
+            try:
+                screen_state_payload = dict(cowork_session.screen_state.to_dict())  # type: ignore[union-attr]
+            except Exception:
+                screen_state_payload = {}
+
+        if screen_state_payload:
+            try:
+                from core.cowork_runtime import ScreenState as CoworkScreenState
+
+                screen_state_prompt = CoworkScreenState(**screen_state_payload).to_prompt_block()
+            except Exception:
+                parts = []
+                if screen_state_payload.get("frontmost_app"):
+                    parts.append(f"Frontmost app: {screen_state_payload.get('frontmost_app')}")
+                active_window = screen_state_payload.get("active_window") if isinstance(screen_state_payload.get("active_window"), dict) else {}
+                if isinstance(active_window, dict) and str(active_window.get("title") or "").strip():
+                    parts.append(f"Window: {active_window.get('title')}")
+                if screen_state_payload.get("summary"):
+                    parts.append(f"Summary: {str(screen_state_payload.get('summary'))[:400]}")
+                if screen_state_payload.get("ocr_text"):
+                    parts.append(f"OCR: {str(screen_state_payload.get('ocr_text'))[:300]}")
+                screen_state_prompt = "\n".join(parts).strip()
+
+            if screen_state_prompt:
+                screen_block = f"Screen State:\n{screen_state_prompt}"
+                if ctx.multimodal_context:
+                    ctx.multimodal_context = f"{ctx.multimodal_context}\n\n{screen_block}"
+                else:
+                    ctx.multimodal_context = screen_block
+                if not ctx.context_working_set:
+                    ctx.context_working_set = screen_state_prompt
+                if isinstance(ctx.telemetry, dict):
+                    ctx.telemetry["screen_state"] = {
+                        "captured": True,
+                        "frontmost_app": str(screen_state_payload.get("frontmost_app") or ""),
+                        "confidence": float(screen_state_payload.get("confidence", 0.0) or 0.0),
+                    }
 
         # Upgrade path: deterministic intent score + compact working context.
         if flag_enabled(ctx, "upgrade_intent_hardening", default=False):
@@ -1965,6 +2068,34 @@ class StageRoute(PipelineStage):
             except Exception as e:
                 logger.debug(f"Capability routing skipped: {e}")
 
+        # Tool economics: rank candidate tools by schema risk + historical usage.
+        try:
+            if ctx.preferred_tools:
+                if cowork_runtime is None:
+                    from core.cowork_runtime import get_cowork_runtime
+
+                    cowork_runtime = get_cowork_runtime()
+                ranked_tools = cowork_runtime.rank_tools(list(ctx.preferred_tools), user_input=ctx.user_input)
+                if ranked_tools:
+                    ctx.preferred_tools = [item.tool_name for item in ranked_tools if item.available]
+                    ctx.model_route["tool_rankings"] = [item.to_dict() for item in ranked_tools]
+                    top_tool = ranked_tools[0]
+                    ctx.cowork_model = str(top_tool.model_tier or ctx.cowork_model or "").strip()
+                    if cowork_session_id:
+                        try:
+                            cowork_runtime.update_session(
+                                cowork_session_id,
+                                tool_decision=top_tool,
+                                selected_model=top_tool.model_tier,
+                            )
+                        except Exception as update_exc:
+                            logger.debug(f"Cowork tool decision update skipped: {update_exc}")
+                    if isinstance(ctx.telemetry, dict):
+                        ctx.telemetry["tool_decision"] = top_tool.to_dict()
+                        ctx.telemetry["tool_ranking_count"] = len(ranked_tools)
+        except Exception as tool_exc:
+            logger.debug(f"Tool ranking skipped: {tool_exc}")
+
         if ctx.job_type == "api_integration" and not api_tools_enabled:
             logger.warning("API tools are disabled by policy; routing task to communication fallback.")
             ctx.errors.append("api_tools_disabled")
@@ -1998,6 +2129,10 @@ class StageRoute(PipelineStage):
                     "strategy_count": len(list(ctx.world_snapshot.get("strategy_hints", []) or [])),
                     "experience_hits": len(list(ctx.world_snapshot.get("similar_experiences", []) or [])),
                 }
+            if screen_state_payload:
+                ctx.world_snapshot["screen_state"] = dict(screen_state_payload)
+                if screen_state_prompt:
+                    ctx.world_snapshot["screen_state_summary"] = screen_state_prompt
         except Exception as world_exc:
             logger.debug(f"World model snapshot skipped: {world_exc}")
 
@@ -2554,6 +2689,30 @@ class StagePlan(PipelineStage):
             preferred_tools = list(ctx.preferred_tools or [])
             if not preferred_tools and ctx.job_type != "communication":
                 preferred_tools = list(get_template(ctx.job_type).get("allowed_tools", []) or [])
+            try:
+                if preferred_tools:
+                    from core.cowork_runtime import get_cowork_runtime
+
+                    planner_runtime = get_cowork_runtime()
+                    ranked_tools = planner_runtime.rank_tools(list(preferred_tools), user_input=ctx.user_input)
+                    if ranked_tools:
+                        preferred_tools = [item.tool_name for item in ranked_tools if item.available]
+                        ctx.preferred_tools = list(preferred_tools)
+                        ctx.model_route["planner_tool_rankings"] = [item.to_dict() for item in ranked_tools]
+                        top_tool = ranked_tools[0]
+                        if str(getattr(ctx, "cowork_session_id", "") or "").strip():
+                            try:
+                                planner_runtime.update_session(
+                                    str(ctx.cowork_session_id),
+                                    tool_decision=top_tool,
+                                    selected_model=top_tool.model_tier,
+                                )
+                            except Exception as update_exc:
+                                logger.debug(f"Planner cowork update skipped: {update_exc}")
+                        if isinstance(ctx.telemetry, dict):
+                            ctx.telemetry["planner_tool_decision"] = top_tool.to_dict()
+            except Exception as tool_exc:
+                logger.debug(f"Planner tool ranking skipped: {tool_exc}")
 
             planner_use_llm = bool(elyan_config.get("agent.planning.use_llm", True))
             max_subtasks = int(elyan_config.get("agent.planning.max_subtasks", 10) or 10)
@@ -3499,7 +3658,8 @@ class StageExecute(PipelineStage):
 
             # 4. Standard execution (Reasoning or simple)
             else:
-                if ctx.needs_reasoning:
+                chat_mode = str(getattr(ctx, "job_type", "") or "").strip().lower() == "communication"
+                if ctx.needs_reasoning and not chat_mode:
                     from core.reasoning.chain_of_thought import ReasoningChain
                     reasoner = ReasoningChain(agent)
                     logger.info("ReasoningChain activated for deep thinking loop.")
@@ -3515,12 +3675,16 @@ class StageExecute(PipelineStage):
                     ctx.llm_response = reason_res.final_answer
                 else:
                     logger.debug(f"Executing standard chat route for intent {ctx.action}")
-                    context_prefix = f"[MOD: {ctx.specialized_prompt}]\n\n" if ctx.specialized_prompt else ""
+                    context_prefix = ""
+                    if not chat_mode and ctx.specialized_prompt:
+                        context_prefix = f"[MOD: {ctx.specialized_prompt}]\n\n"
                     
                     # Unified prompt with Memory + Multimodal + Knowledge + User Input
                     prompt_parts = []
                     if context_prefix: prompt_parts.append(context_prefix)
-                    if flag_enabled(ctx, "upgrade_performance_routing", default=False):
+                    if chat_mode:
+                        prompt_parts.append(f"User: {ctx.user_input}")
+                    elif flag_enabled(ctx, "upgrade_performance_routing", default=False):
                         if ctx.context_working_set:
                             prompt_parts.append(f"Working Set:\n{ctx.context_working_set}")
                         elif ctx.memory_context:
@@ -3533,7 +3697,7 @@ class StageExecute(PipelineStage):
                         if ctx.memory_context: prompt_parts.append(f"Memory:\n{ctx.memory_context}")
                         if ctx.multimodal_context: prompt_parts.append(f"Multimodal Context:\n{ctx.multimodal_context}")
                         if ctx.context_docs: prompt_parts.append(f"Knowledge:\n{ctx.context_docs}")
-                    prompt_parts.append(f"User: {ctx.user_input}")
+                        prompt_parts.append(f"User: {ctx.user_input}")
                     
                     full_prompt = "\n\n".join(prompt_parts)
 
@@ -3630,6 +3794,29 @@ class StageVerify(PipelineStage):
 
     async def run(self, ctx: PipelineContext, agent) -> PipelineContext:
         t0 = time.time()
+
+        verification_policy = ctx.verification_policy if isinstance(ctx.verification_policy, dict) else {}
+        skip_reason = "verification_policy" if bool(verification_policy.get("skip_verify", False)) else "communication"
+        if bool(verification_policy.get("skip_verify", False)) or str(getattr(ctx, "job_type", "") or "").strip().lower() == "communication":
+            try:
+                ctx.verified = not bool(ctx.errors)
+                ctx.delivery_blocked = False
+                ctx.qa_results["verify_skipped"] = {
+                    "reason": skip_reason,
+                    "verified": bool(ctx.verified),
+                }
+                ctx.phase_records["verify"] = {
+                    "phase": "Verify",
+                    "skipped": True,
+                    "job_type": "communication",
+                    "skip_reason": skip_reason,
+                    "verified": bool(ctx.verified),
+                    "errors": list(ctx.errors or []),
+                }
+            except Exception:
+                pass
+            ctx.stage_timings["verify"] = time.time() - t0
+            return ctx
         
         # AST-Aware Code Validation (if code was likely produced)
         if ctx.is_code_job and (ctx.llm_response or ctx.final_response):
