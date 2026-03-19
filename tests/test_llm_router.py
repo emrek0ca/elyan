@@ -149,6 +149,31 @@ def test_chat_accepts_custom_system_prompt_and_respects_chat_budget():
     assert patched.await_args.kwargs["max_tokens"] == 300
 
 
+def test_chat_retries_when_first_answer_is_fenced_json():
+    client = LLMClient()
+
+    async def run_case():
+        responses = [
+            "```json\n{\"message\":\"Merhaba\"}\n```",
+            "Sana yardımcı olabilirim.",
+        ]
+        captured = []
+
+        async def fake_call_any_provider(prompt: str, user_message: str = "", temp: float = 0.3, max_tokens=None):
+            captured.append((prompt, temp, max_tokens))
+            return responses.pop(0)
+
+        client._call_any_provider = fake_call_any_provider
+        result = await client.chat("bir şey soracağım")
+        return result, captured
+
+    result, captured = asyncio.run(run_case())
+    assert result == "Sana yardımcı olabilirim."
+    assert len(captured) == 2
+    assert captured[0][2] == 300
+    assert captured[1][2] == 300
+
+
 def test_generate_uses_role_token_budget_without_cost_guard():
     client = LLMClient()
 

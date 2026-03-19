@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 from security.validator import validate_path
 from tools.document_tools.output_renderer import DocumentRenderer, sections_to_sectioned_document
+from tools.office_tools.content_manifest import build_office_content_manifest
 from utils.logger import get_logger
 
 logger = get_logger("tools.pro_workflows")
@@ -531,9 +532,8 @@ def _renderable_research_document_sections(
         )
     )
     preferred_titles = {"Kısa Özet", "Temel Bulgular"}
-    if normalized_profile == "analytical" or explicit_detail:
-        preferred_titles.update({"Kaynak Güven Özeti", "Açık Riskler", "Belirsizlikler"})
-    elif normalized_profile == "briefing" and ("risk" in low_brief or "uyari" in low_brief or "uyarı" in low_brief):
+    preferred_titles.update({"Kaynak Güven Özeti", "Açık Riskler", "Belirsizlikler"})
+    if normalized_profile == "briefing" and ("risk" in low_brief or "uyari" in low_brief or "uyarı" in low_brief):
         preferred_titles.add("Açık Riskler")
     if include_bibliography and (normalized_profile == "analytical" or explicit_detail):
         preferred_titles.add("Kaynakça")
@@ -545,6 +545,7 @@ def _renderable_research_document_sections(
         title = _clean_research_sentence(str(section.get("title") or "").strip())
         if not title or title not in preferred_titles:
             continue
+        allow_generic_paragraphs = title in {"Kaynak Güven Özeti", "Açık Riskler", "Belirsizlikler"}
         paragraphs: list[dict[str, Any]] = []
         for paragraph in list(section.get("paragraphs") or []):
             if isinstance(paragraph, dict):
@@ -553,7 +554,9 @@ def _renderable_research_document_sections(
             else:
                 text = _clean_research_sentence(str(paragraph or "").strip())
                 claim_ids = []
-            if not text or _is_generic_document_paragraph(text):
+            if not text:
+                continue
+            if not allow_generic_paragraphs and _is_generic_document_paragraph(text):
                 continue
             paragraphs.append({"text": text, "claim_ids": claim_ids})
         if paragraphs:
@@ -811,6 +814,61 @@ def _merge_sections_with_previous_claim_map(
 
 def _topic_terms(topic: str) -> list[str]:
     return [token for token in re.findall(r"[a-zA-ZğüşöçıİĞÜŞÖÇ0-9]+", str(topic or "").lower()) if len(token) >= 3]
+
+
+def _sanitize_research_topic(topic: Any, *, user_input: str = "", step_name: str = "") -> str:
+    raw = str(topic or "").strip()
+    if not raw:
+        raw = " ".join(part for part in [step_name, user_input] if part).strip()
+    cleaned = _clean_research_sentence(raw).lower()
+    if not cleaned:
+        cleaned = _clean_research_sentence(user_input or step_name).lower()
+
+    cleaned = re.sub(
+        r"^.*?\b(?:aç|ac|open|başlat|baslat|çalıştır|calistir|launch)\b\s+(?:ve\s+|ardından\s+|sonra\s+)?",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+
+    strip_tokens = (
+        "elyan",
+        "araştırma",
+        "arastirma",
+        "araştır",
+        "arastir",
+        "research",
+        "incele",
+        "hakkında",
+        "hakkinda",
+        "ile ilgili",
+        "bana",
+        "lütfen",
+        "lutfen",
+        "yap",
+        "yapar mısın",
+        "yapar misin",
+        "sadece",
+        "tek bir",
+        "tek sayfa",
+        "word",
+        "docx",
+        "pdf",
+        "excel",
+        "xlsx",
+        "tablo",
+        "rapor",
+        "belge",
+        "dosya",
+        "özet",
+        "ozet",
+        "brief",
+        "summary",
+    )
+    for token in strip_tokens:
+        cleaned = re.sub(rf"\b{re.escape(token)}\b", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .,:;-")
+    return cleaned or _clean_research_sentence(user_input or step_name) or "genel konu"
 
 
 def _research_body_seems_relevant(topic: str, body: str) -> bool:
@@ -1124,6 +1182,33 @@ def _brief_requests_structured_sections(brief: str, profile: str) -> bool:
     return any(marker in low for marker in markers)
 
 
+def _brief_requests_compact_research_report(brief: str, profile: str) -> bool:
+    if _normalize_document_profile(profile) == "briefing":
+        return True
+    low = _normalize_text(brief)
+    if not low:
+        return False
+    markers = (
+        "tek bir",
+        "tek sayfa",
+        "kısa",
+        "kisa",
+        "özet",
+        "ozet",
+        "summary",
+        "brief",
+        "yalın",
+        "yalin",
+        "sade",
+        "minimal",
+        "özetle",
+        "ozetle",
+        "özet rapor",
+        "ozet rapor",
+    )
+    return any(marker in low for marker in markers)
+
+
 def _infer_requested_document_formats(
     topic: str,
     brief: str,
@@ -1147,6 +1232,10 @@ def _infer_requested_document_formats(
                 explicit.append("md")
             elif value in {"txt", "text"} and "txt" not in explicit:
                 explicit.append("txt")
+            elif value in {"html", "htm"} and "html" not in explicit:
+                explicit.append("html")
+            elif value in {"pptx", "ppt", "presentation", "slide", "slides", "deck", "sunum"} and "pptx" not in explicit:
+                explicit.append("pptx")
 
     low = _normalize_text(f"{topic} {brief}")
     marker_map = [
@@ -1163,6 +1252,15 @@ def _infer_requested_document_formats(
         ("md", "md"),
         ("txt", "txt"),
         ("metin", "txt"),
+        ("html", "html"),
+        ("htm", "html"),
+        ("pptx", "pptx"),
+        ("ppt", "pptx"),
+        ("sunum", "pptx"),
+        ("presentation", "pptx"),
+        ("slide", "pptx"),
+        ("slides", "pptx"),
+        ("deck", "pptx"),
     ]
     for marker, fmt in marker_map:
         if marker in low and fmt not in explicit:
@@ -1298,28 +1396,48 @@ def _build_research_word_content(
             line += f" - {url}"
         source_rows.append(line)
 
-    body_paragraphs = [
-        intro,
-        (
-            f"{topic} konusu için temel literatür ve açıklayıcı kaynaklar karşılaştırıldı. "
-            f"Metin, aynı konuyu tekrarlayan dağınık cümleler yerine doğrudan anlaşılabilir bir araştırma özeti sunacak şekilde düzenlendi."
-        ),
-    ]
-    if scope_note and _normalize_text(scope_note) not in _normalize_text(intro):
-        body_paragraphs.append(f"Bu belge şu odakla hazırlandı: {scope_note}.")
-    if clean_findings:
-        body_paragraphs.extend(clean_findings)
-    else:
-        body_paragraphs.append("Doğrudan kullanılabilir bulgu sınırlı kaldığı için ikinci tur kaynak taraması önerilir.")
+    body_paragraphs = []
+    try:
+        from tools.research_tools.document_rag import build_research_narrative
 
-    conclusion = (
-        f"Sonuç olarak {topic.lower()} başlığı, hem temel kavramsal çerçevesi hem de uygulama mantığıyla birlikte okunabilir bir bütün oluşturur."
-        if source_count >= 3
-        else f"Sonuç olarak {topic.lower()} başlığı için çekirdek çerçeve kurulmuştur; daha fazla kaynakla metin genişletilebilir."
-    )
-    body_paragraphs.append(conclusion)
-    if include_bibliography and source_rows:
-        body_paragraphs.append("Kaynakça:\n" + "\n".join(source_rows))
+        body_paragraphs = build_research_narrative(
+            topic=topic,
+            findings=clean_findings,
+            sources=sources,
+            brief=brief,
+            summary=summary,
+            include_bibliography=include_bibliography,
+            max_paragraphs=8,
+        )
+    except Exception as exc:
+        logger.debug("research_narrative_build_failed: %s", exc)
+
+    if not body_paragraphs:
+        body_paragraphs = [
+            intro,
+            (
+                f"{topic} konusu için temel literatür ve açıklayıcı kaynaklar karşılaştırıldı. "
+                f"Metin, aynı konuyu tekrarlayan dağınık cümleler yerine doğrudan anlaşılabilir bir araştırma özeti sunacak şekilde düzenlendi."
+            ),
+        ]
+        if scope_note and _normalize_text(scope_note) not in _normalize_text(intro):
+            body_paragraphs.append(f"Bu belge şu odakla hazırlandı: {scope_note}.")
+        if clean_findings:
+            body_paragraphs.extend(clean_findings)
+        else:
+            body_paragraphs.append("Doğrudan kullanılabilir bulgu sınırlı kaldığı için ikinci tur kaynak taraması önerilir.")
+
+        conclusion = (
+            f"Sonuç olarak {topic.lower()} başlığı, hem temel kavramsal çerçevesi hem de uygulama mantığıyla birlikte okunabilir bir bütün oluşturur."
+            if source_count >= 3
+            else f"Sonuç olarak {topic.lower()} başlığı için çekirdek çerçeve kurulmuştur; daha fazla kaynakla metin genişletilebilir."
+        )
+        body_paragraphs.append(conclusion)
+        if include_bibliography and source_rows:
+            body_paragraphs.append("Kaynakça:\n" + "\n".join(source_rows))
+    elif scope_note and _normalize_text(scope_note) not in _normalize_text(" ".join(body_paragraphs)):
+        body_paragraphs.insert(1, f"Bu belge şu odakla hazırlandı: {scope_note}.")
+
     return "\n\n".join(part for part in body_paragraphs if str(part).strip()).strip()
 
 
@@ -2693,6 +2811,17 @@ def _check_item(check_id: str, title: str, ok: bool, details: str) -> dict[str, 
     }
 
 
+def _detect_web_multi_skeleton(project_dir: Path) -> tuple[bool, str]:
+    root_files = [project_dir / name for name in ("styles.css", "script.js", "main.js", "app.js")]
+    nested_files = [project_dir / "styles" / "main.css", project_dir / "scripts" / "main.js"]
+    root_present = [str(path.relative_to(project_dir)) for path in root_files if path.exists()]
+    nested_present = [str(path.relative_to(project_dir)) for path in nested_files if path.exists()]
+    mixed = bool(root_present and nested_present)
+    if not mixed:
+        return False, ""
+    return True, f"root={', '.join(root_present)}; nested={', '.join(nested_present)}"
+
+
 async def create_web_project_scaffold(
     project_name: str,
     stack: str = "vanilla",
@@ -2710,6 +2839,17 @@ async def create_web_project_scaffold(
 
         slug = _safe_project_slug(project_name)
         project_dir = (base_dir / slug).resolve()
+        if project_dir.exists():
+            existing_entries = [item for item in project_dir.iterdir()]
+            if existing_entries:
+                existing_preview = ", ".join(sorted(item.name for item in existing_entries)[:8])
+                return {
+                    "success": False,
+                    "error": f"Project directory already exists and is not empty: {project_dir}",
+                    "error_code": "PROJECT_DIR_NOT_EMPTY",
+                    "project_dir": str(project_dir),
+                    "existing_entries": existing_preview,
+                }
         project_dir.mkdir(parents=True, exist_ok=True)
 
         # Initial scope: robust static scaffold, can be extended per stack.
@@ -3293,6 +3433,12 @@ async def create_coding_verification_report(
                 checks.append(_check_item("web_html", "index.html present", html.exists(), str(html)))
                 checks.append(_check_item("web_css", "styles/main.css present", css.exists(), str(css)))
                 checks.append(_check_item("web_js", "scripts/main.js present", js.exists(), str(js)))
+                mixed, mixed_details = _detect_web_multi_skeleton(target)
+                checks.append(_check_item("web_layout", "Single scaffold layout", not mixed, mixed_details or "root/nested layout consistent"))
+                smoke = await verify_web_project_smoke_test(str(target))
+                smoke_ok = bool(smoke.get("all_passed", False)) if isinstance(smoke, dict) else False
+                smoke_details = str(smoke.get("message") or "") if isinstance(smoke, dict) else ""
+                checks.append(_check_item("web_smoke", "Web smoke test", smoke_ok, smoke_details or "smoke test çalıştırıldı"))
         else:
             if tech in {"node", "express"}:
                 pkg = target / "package.json"
@@ -3480,42 +3626,75 @@ async def generate_document_pack(
 
         now_str = datetime.now().strftime("%Y-%m-%d")
         requested_formats = _infer_requested_document_formats(topic, brief, preferred_formats=preferred_formats)
-        body_text = _build_plain_document_text(safe_topic, brief or topic, audience=audience)
+        paragraphs = _build_plain_document_paragraphs(safe_topic, brief or topic, audience=audience)
+        body_text = "\n\n".join(paragraphs).strip()
+        document_sections: list[dict[str, Any]] = []
+        if paragraphs:
+            document_sections.append(
+                {
+                    "title": "Kısa Özet",
+                    "paragraphs": [{"text": paragraphs[0], "claim_ids": []}],
+                }
+            )
+            if len(paragraphs) > 1:
+                document_sections.append(
+                    {
+                        "title": "İçerik",
+                        "paragraphs": [{"text": para, "claim_ids": []} for para in paragraphs[1:]],
+                    }
+                )
+        if not document_sections:
+            document_sections = [{"title": "İçerik", "paragraphs": [{"text": body_text or safe_topic, "claim_ids": []}]}]
+
+        manifest = build_office_content_manifest(
+            title=safe_topic,
+            topic=topic,
+            brief=brief or topic,
+            audience=audience,
+            language=language,
+            content_kind="document_pack",
+            document_profile="executive",
+            citation_mode="none",
+            source_policy="trusted",
+            sections=document_sections,
+            notes=[f"Generated: {now_str}"] if now_str else [],
+            metadata={"requested_formats": requested_formats, "stack": "generic_document_pack"},
+        )
+        sectioned_document = sections_to_sectioned_document(
+            title=safe_topic,
+            sections=document_sections,
+            metadata={"office_content_manifest": manifest.to_dict()},
+        )
+        renderer = DocumentRenderer()
+        manifest_path = pack_dir / "office_content_manifest.json"
+        manifest_payload = manifest.to_dict()
+        manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
         outputs: list[str] = []
         warnings: list[str] = []
 
         if "docx" in requested_formats:
-            from tools.office_tools.word_tools import write_word
-
             docx_path = pack_dir / "DOCUMENT.docx"
-            word_result = await write_word(
-                path=str(docx_path),
-                title=safe_topic,
-                content=body_text,
-            )
+            word_result = await renderer.render_to_path(sectioned_document, "docx", str(docx_path))
             if isinstance(word_result, dict) and word_result.get("success") and word_result.get("path"):
                 outputs.append(str(word_result["path"]))
             else:
                 warnings.append(str((word_result or {}).get("error") or "docx generation failed"))
 
         if "xlsx" in requested_formats:
-            from tools.office_tools.excel_tools import write_excel
-
             excel_path = pack_dir / "DOCUMENT.xlsx"
-            excel_result = await write_excel(
-                path=str(excel_path),
-                data=_build_excel_document_payload(safe_topic, brief or topic, audience=audience),
-                headers={
-                    "Ozet": ["Alan", "Deger"],
-                    "Icerik": ["No", "Metin"],
-                },
-                sheet_name="Ozet",
-                multi_sheet=True,
-            )
+            excel_result = await renderer.render_to_path(sectioned_document, "xlsx", str(excel_path))
             if isinstance(excel_result, dict) and excel_result.get("success") and excel_result.get("path"):
                 outputs.append(str(excel_result["path"]))
             else:
                 warnings.append(str((excel_result or {}).get("error") or "excel generation failed"))
+
+        if "pptx" in requested_formats:
+            pptx_path = pack_dir / "DOCUMENT.pptx"
+            pptx_result = await renderer.render_to_path(sectioned_document, "pptx", str(pptx_path))
+            if isinstance(pptx_result, dict) and pptx_result.get("success") and pptx_result.get("path"):
+                outputs.append(str(pptx_result["path"]))
+            else:
+                warnings.append(str((pptx_result or {}).get("error") or "pptx generation failed"))
 
         if "pdf" in requested_formats:
             pdf_path = pack_dir / "DOCUMENT.pdf"
@@ -3528,15 +3707,26 @@ async def generate_document_pack(
         if "tex" in requested_formats:
             tex_path = pack_dir / "DOCUMENT.tex"
             tex_path.write_text(
-                _build_latex_document(safe_topic, _build_plain_document_paragraphs(safe_topic, brief or topic, audience=audience)),
+                _build_latex_document(safe_topic, paragraphs or _build_plain_document_paragraphs(safe_topic, brief or topic, audience=audience)),
                 encoding="utf-8",
             )
             outputs.append(str(tex_path))
 
         if "md" in requested_formats:
             md_path = pack_dir / "DOCUMENT.md"
-            md_path.write_text(f"# {safe_topic}\n\n{body_text}\n", encoding="utf-8")
-            outputs.append(str(md_path))
+            md_result = await renderer.render_to_path(sectioned_document, "md", str(md_path))
+            if isinstance(md_result, dict) and md_result.get("success") and md_result.get("path"):
+                outputs.append(str(md_result["path"]))
+            else:
+                warnings.append(str((md_result or {}).get("error") or "markdown generation failed"))
+
+        if "html" in requested_formats:
+            html_path = pack_dir / "DOCUMENT.html"
+            html_result = await renderer.render_to_path(sectioned_document, "html", str(html_path))
+            if isinstance(html_result, dict) and html_result.get("success") and html_result.get("path"):
+                outputs.append(str(html_result["path"]))
+            else:
+                warnings.append(str((html_result or {}).get("error") or "html generation failed"))
 
         if "txt" in requested_formats:
             txt_path = pack_dir / "DOCUMENT.txt"
@@ -3558,8 +3748,17 @@ async def generate_document_pack(
             "pack_dir": str(pack_dir),
             "path": primary_output,
             "outputs": outputs,
+            "preview": str(manifest.summary.get("preview") or ""),
             "message": f"Belge hazır: {primary_output}",
         }
+        manifest_payload["outputs"] = list(outputs)
+        manifest_payload["supporting_artifacts"] = [str(manifest_path)]
+        manifest_summary = dict(manifest.summary or manifest_payload.get("summary") or {})
+        manifest_summary["outputs"] = list(outputs)
+        manifest_summary["supporting_artifacts"] = [str(manifest_path)]
+        manifest_payload["summary"] = manifest_summary
+        manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        response["office_content_manifest_path"] = str(manifest_path)
         if warnings:
             response["warnings"] = warnings
         return response
@@ -3579,6 +3778,7 @@ async def research_document_delivery(
     include_excel: bool = False,
     include_pdf: bool = False,
     include_latex: bool = False,
+    include_presentation: bool = False,
     include_report: bool = True,
     source_policy: str = "trusted",
     min_reliability: float = 0.62,
@@ -3596,7 +3796,11 @@ async def research_document_delivery(
     and return concrete artifact paths suitable for channel delivery.
     """
     try:
-        topic_clean = str(topic or "").strip()
+        topic_raw = str(topic or "").strip()
+        topic_clean = _sanitize_research_topic(topic_raw, user_input=brief or topic_raw, step_name=brief or topic_raw)
+        if not topic_clean or topic_clean == "genel konu":
+            topic_clean = _extract_topic(brief or topic_raw, topic_raw)
+        topic_clean = str(topic_clean or "").strip()
         if not topic_clean:
             return {"success": False, "error": "Araştırma konusu gerekli."}
 
@@ -3664,6 +3868,8 @@ async def research_document_delivery(
         slug = _safe_project_slug(topic_clean)
         delivery_dir = (base_dir / f"{slug}_research_delivery").resolve()
         delivery_dir.mkdir(parents=True, exist_ok=True)
+        internal_dir = (delivery_dir / ".elyan").resolve()
+        internal_dir.mkdir(parents=True, exist_ok=True)
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
         findings = [str(x).strip() for x in (research_result.get("findings") or []) if str(x).strip()]
@@ -3737,7 +3943,9 @@ async def research_document_delivery(
             sources=filtered_sources or sources,
         )
         summary_seed = llm_body if llm_body_allowed else summary
-        content_only_render = not _brief_requests_structured_sections(brief, document_profile)
+        content_only_render = _brief_requests_compact_research_report(brief, document_profile)
+        if content_only_render and any([include_excel, include_pdf, include_latex, include_presentation]):
+            content_only_render = False
 
         sections = _build_research_document_sections(
             topic=topic_clean,
@@ -3850,7 +4058,7 @@ async def research_document_delivery(
             "depth": normalized_depth,
             "audience": audience,
         }
-        claim_map_path = delivery_dir / "claim_map.json"
+        claim_map_path = internal_dir / "claim_map.json"
         claim_map_path.write_text(json.dumps(claim_map_payload, ensure_ascii=False, indent=2), encoding="utf-8")
         supporting_artifacts.append(str(claim_map_path))
         claim_coverage = float(claim_map_payload.get("claim_coverage", quality_summary.get("claim_coverage", 0.0)) or 0.0)
@@ -3864,9 +4072,43 @@ async def research_document_delivery(
                 current_claim_map=claim_map_payload,
                 revision_request=revision_request,
             )
-            revision_summary_path = delivery_dir / "revision_summary.txt"
+            revision_summary_path = internal_dir / "revision_summary.txt"
             revision_summary_path.write_text(revision_summary, encoding="utf-8")
             supporting_artifacts.append(str(revision_summary_path))
+
+        office_manifest = build_office_content_manifest(
+            title=document_title,
+            topic=topic_clean,
+            brief=brief,
+            audience=audience,
+            language=language,
+            content_kind="research_delivery",
+            document_profile=document_profile,
+            citation_mode=citation_mode,
+            source_policy=policy,
+            sections=sections,
+            sources=filtered_sources or sources,
+            quality_summary=quality_summary,
+            research_contract=research_contract,
+            claim_map=claim_map_payload,
+            outputs=[],
+            supporting_artifacts=supporting_artifacts,
+            notes=[
+                f"Quality status: {str(quality_summary.get('status') or 'unknown')}",
+                "Office manifest created for docx/xlsx/pptx/pdf delivery.",
+            ] + ([revision_summary[:1200]] if revision_summary else []),
+            metadata={
+                "depth": normalized_depth,
+                "include_bibliography": include_bibliography,
+                "deliver_copy": deliver_copy,
+                "include_presentation": include_presentation,
+            },
+        )
+        sectioned_document.metadata["office_content_manifest"] = office_manifest.to_dict()
+        office_manifest_path = internal_dir / "office_content_manifest.json"
+        office_manifest_payload = office_manifest.to_dict()
+        office_manifest_path.write_text(json.dumps(office_manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        supporting_artifacts.append(str(office_manifest_path))
 
         if include_pdf:
             pdf_path = delivery_dir / "RESEARCH_DELIVERY.pdf"
@@ -3900,7 +4142,15 @@ async def research_document_delivery(
             else:
                 warnings.append(str((excel_result or {}).get("error") or "excel generation failed"))
 
-        if not include_word and not include_excel and not include_pdf and not include_latex:
+        if include_presentation:
+            pptx_path = delivery_dir / "RESEARCH_DELIVERY.pptx"
+            pptx_result = await renderer.render_to_path(sectioned_document, "pptx", str(pptx_path))
+            if isinstance(pptx_result, dict) and pptx_result.get("success") and pptx_result.get("path"):
+                outputs.append(str(pptx_result["path"]))
+            else:
+                warnings.append(str((pptx_result or {}).get("error") or "pptx generation failed"))
+
+        if not include_word and not include_excel and not include_pdf and not include_latex and not include_presentation:
             report_md = delivery_dir / "RESEARCH_DELIVERY.md"
             md_result = await renderer.render_to_path(sectioned_document, "md", str(report_md))
             if isinstance(md_result, dict) and md_result.get("success") and md_result.get("path"):
@@ -3944,6 +4194,14 @@ async def research_document_delivery(
             dedup_supporting.append(key)
         supporting_artifacts = dedup_supporting
 
+        office_manifest_payload["outputs"] = list(outputs)
+        office_manifest_payload["supporting_artifacts"] = list(supporting_artifacts)
+        office_manifest_summary = dict(office_manifest.summary or office_manifest_payload.get("summary") or {})
+        office_manifest_summary["outputs"] = list(outputs)
+        office_manifest_summary["supporting_artifacts"] = list(supporting_artifacts)
+        office_manifest_payload["summary"] = office_manifest_summary
+        office_manifest_path.write_text(json.dumps(office_manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
         if not outputs:
             return {
                 "success": False,
@@ -3954,13 +4212,8 @@ async def research_document_delivery(
 
         primary_output = outputs[0]
 
-        message_lines = [f"Araştırma belgesi hazır: {primary_output}"]
         quality_status = str((quality_summary or {}).get("status") or ("partial" if critical_claim_coverage < 1.0 or uncertainty_count > 0 else "pass"))
-        message_lines.append(
-            f"Kalite: {quality_status} | Claim coverage: {claim_coverage:.2f} | Kritik claim coverage: {critical_claim_coverage:.2f} | Belirsizlik: {uncertainty_count}"
-        )
-        if len(outputs) > 1:
-            message_lines.append(f"Ek çıktı sayısı: {len(outputs) - 1}")
+        message = f"Araştırma belgesi hazır: {primary_output}. İstersen bunu genişletip revize edebilirim."
 
         response = {
             "success": True,
@@ -3971,6 +4224,7 @@ async def research_document_delivery(
             "min_reliability": min_rel,
             "citation_style": citation_style,
             "include_bibliography": include_bibliography,
+            "include_presentation": include_presentation,
             "document_profile": document_profile,
             "citation_mode": citation_mode,
             "path": primary_output,
@@ -3978,6 +4232,8 @@ async def research_document_delivery(
             "outputs": outputs,
             "artifacts": outputs + supporting_artifacts,
             "supporting_artifacts": supporting_artifacts,
+            "office_content_manifest_path": str(office_manifest_path),
+            "preview": str(office_manifest.summary.get("preview") or ""),
             "source_count": source_count,
             "finding_count": len(findings),
             "claim_coverage": round(claim_coverage, 2),
@@ -4003,7 +4259,7 @@ async def research_document_delivery(
             "revision_summary_path": str(revision_summary_path) if revision_summary_path else "",
             "research_contract": research_contract,
             "summary": summary,
-            "message": "\n".join(message_lines),
+            "message": message,
         }
         if warnings:
             response["warnings"] = warnings

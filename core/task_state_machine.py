@@ -113,7 +113,7 @@ class TaskStateMachine:
         """Check if state transition is valid."""
         valid_transitions = {
             TaskState.PENDING: {TaskState.RUNNING, TaskState.CANCELLED},
-            TaskState.RUNNING: {TaskState.SUCCESS, TaskState.FAILED, TaskState.CLEANUP},
+            TaskState.RUNNING: {TaskState.SUCCESS, TaskState.FAILED, TaskState.CLEANUP, TaskState.RETRY},
             TaskState.FAILED: {TaskState.RETRY, TaskState.CLEANUP, TaskState.CANCELLED},
             TaskState.RETRY: {TaskState.RUNNING, TaskState.FAILED, TaskState.CLEANUP},
             TaskState.SUCCESS: {TaskState.CLEANUP},

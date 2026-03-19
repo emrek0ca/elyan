@@ -181,3 +181,45 @@ def test_validate_task_spec_invalid_priority_fails():
     ok, errors = validate_task_spec(spec, strict_schema=False)
     assert ok is False
     assert "invalid:priority" in errors
+
+
+def test_validate_task_spec_coding_batch_requires_contract_fields():
+    spec = _base_spec("coding_batch")
+    spec["required_tools"] = ["create_coding_project"]
+    spec["tool_candidates"] = ["create_coding_project"]
+    spec["steps"] = [
+        {
+            "id": "s1",
+            "action": "create_coding_project",
+            "params": {"project_name": "cat-site", "brief": "kedi sitesi"},
+        }
+    ]
+    ok, errors = validate_task_spec(spec, strict_schema=False)
+    assert ok is False
+    assert "missing:execution_mode" in errors
+    assert "missing:repo_snapshot" in errors
+
+
+def test_validate_task_spec_coding_batch_with_contract_fields_ok():
+    spec = _base_spec("coding_batch")
+    spec["required_tools"] = ["create_coding_project"]
+    spec["tool_candidates"] = ["create_coding_project"]
+    spec["steps"] = [
+        {
+            "id": "s1",
+            "action": "create_coding_project",
+            "params": {"project_name": "cat-site", "brief": "kedi sitesi"},
+        }
+    ]
+    spec["execution_mode"] = "contract_first_coding"
+    spec["repo_snapshot"] = {"repo_type": "greenfield", "root_path": "/tmp/demo"}
+    spec["coding_contract"] = {"adapter_id": "vanilla_web"}
+    spec["style_intent"] = {"visual_direction": "editorial_warm"}
+    spec["required_gates"] = ["smoke"]
+    spec["evidence_requirements"] = ["artifact_paths", "gate_results"]
+    spec["allowed_write_paths"] = ["/tmp/demo"]
+    spec["forbidden_write_paths"] = []
+    spec["claim_policy"] = {"require_evidence": True}
+    ok, errors = validate_task_spec(spec, strict_schema=False)
+    assert ok is True
+    assert errors == []

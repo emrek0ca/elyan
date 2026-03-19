@@ -5,7 +5,7 @@ High-level intent domain detection for professional assistant workflows.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 import re
 
@@ -28,6 +28,54 @@ class CapabilityPlan:
     workflow_profile_applicable: bool = False
     requires_design_phase: bool = False
     requires_worktree: bool = False
+    content_kind: str = "task"
+    output_formats: list[str] = field(default_factory=list)
+    style_profile: str = "executive"
+    source_policy: str = "trusted"
+    quality_contract: list[str] = field(default_factory=list)
+    memory_scope: str = "task_routed"
+    preview: str = ""
+    request_contract: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class RequestContract:
+    domain: str
+    objective: str
+    route_mode: str
+    content_kind: str
+    confidence: float = 0.0
+    output_formats: list[str] = field(default_factory=list)
+    output_artifacts: list[str] = field(default_factory=list)
+    style_profile: str = "executive"
+    source_policy: str = "trusted"
+    quality_contract: list[str] = field(default_factory=list)
+    memory_scope: str = "task_routed"
+    evidence_required: bool = True
+    needs_clarification: bool = False
+    clarifying_question: str = ""
+    preview: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "domain": self.domain,
+            "objective": self.objective,
+            "route_mode": self.route_mode,
+            "content_kind": self.content_kind,
+            "confidence": self.confidence,
+            "output_formats": list(self.output_formats or []),
+            "output_artifacts": list(self.output_artifacts or []),
+            "style_profile": self.style_profile,
+            "source_policy": self.source_policy,
+            "quality_contract": list(self.quality_contract or []),
+            "memory_scope": self.memory_scope,
+            "evidence_required": self.evidence_required,
+            "needs_clarification": self.needs_clarification,
+            "clarifying_question": self.clarifying_question,
+            "preview": self.preview,
+            "metadata": dict(self.metadata or {}),
+        }
 
 
 class CapabilityRouter:
@@ -142,7 +190,9 @@ class CapabilityRouter:
         ],
         "document": [
             "belge", "dokuman", "doküman", "docx", "pdf", "rapor", "report",
-            "proposal", "sunum", "presentation", "teklif"
+            "proposal", "sunum", "presentation", "teklif",
+            "layout", "ocr", "vision", "görsel", "gorsel", "table", "tablo",
+            "chart", "grafik", "diagram", "figure", "extract", "çıkar", "cikar",
         ],
         "summarization": [
             "özet", "ozet", "summarize", "tl;dr", "kısalt", "kisalt",
@@ -242,11 +292,28 @@ class CapabilityRouter:
         "document": {
             "objective": "generate_professional_document_bundle",
             "workflow_id": "document_delivery_workflow",
-            "primary_action": "generate_document_pack",
-            "preferred_tools": ["generate_document_pack", "generate_research_document", "generate_report"],
+            "primary_action": "analyze_document_vision",
+            "preferred_tools": [
+                "analyze_document_vision",
+                "extract_tables_from_document",
+                "extract_charts_from_document",
+                "read_pdf",
+                "summarize_document",
+                "generate_document_pack",
+                "generate_research_document",
+                "generate_report",
+            ],
             "output_artifacts": ["docx", "pdf", "executive_summary"],
-            "quality_checklist": ["structure", "language_quality", "professional_tone", "completeness"],
-            "learning_tags": ["documentation", "writing", "delivery"],
+            "quality_checklist": [
+                "structure",
+                "language_quality",
+                "professional_tone",
+                "completeness",
+                "layout_accuracy",
+                "table_integrity",
+                "chart_fidelity",
+            ],
+            "learning_tags": ["documentation", "writing", "delivery", "vision", "tables", "charts"],
         },
         "summarization": {
             "objective": "compress_information_without_losing_signal",
@@ -321,6 +388,277 @@ class CapabilityRouter:
             return True
         return domain in {"full_stack_delivery", "automation"} and confidence >= 0.45
 
+    @staticmethod
+    def _content_kind_from_domain(domain: str, text: str) -> str:
+        low = str(text or "").lower()
+        if domain == "research":
+            return "research_delivery"
+        if domain == "document":
+            if any(marker in low for marker in ("excel", "xlsx", "csv", "tablo", "sheet", "spreadsheet")):
+                return "spreadsheet"
+            if any(marker in low for marker in ("sunum", "presentation", "slide", "slides", "deck", "ppt", "pptx")):
+                return "presentation"
+            if any(marker in low for marker in ("layout", "ocr", "vision", "görsel", "gorsel", "chart", "grafik", "diagram", "figure")):
+                return "document_pack"
+            return "document_pack"
+        if any(marker in low for marker in ("sunum", "presentation", "slide", "slides", "deck", "ppt", "pptx")):
+            return "presentation"
+        if any(marker in low for marker in ("excel", "xlsx", "csv", "tablo", "sheet", "spreadsheet")):
+            return "spreadsheet"
+        if domain == "website":
+            return "web_project"
+        if domain == "code":
+            return "code_project"
+        if domain == "document":
+            return "document_pack"
+        if domain == "summarization":
+            return "summary_pack"
+        if domain == "full_stack_delivery":
+            return "delivery_bundle"
+        return "task"
+
+    @staticmethod
+    def _infer_output_formats(text: str, content_kind: str, domain: str) -> list[str]:
+        low = str(text or "").lower()
+        formats: list[str] = []
+
+        def add(fmt: str) -> None:
+            if fmt and fmt not in formats:
+                formats.append(fmt)
+
+        if content_kind == "presentation":
+            add("pptx")
+            add("md")
+        if content_kind == "spreadsheet":
+            add("xlsx")
+        if content_kind in {"research_delivery", "document_pack", "summary_pack"}:
+            add("docx")
+            if any(marker in low for marker in ("layout", "ocr", "vision", "görsel", "gorsel", "tablo", "table", "grafik", "chart", "diagram", "figure")):
+                add("json")
+            if any(marker in low for marker in ("pdf", "portable document", "pdf olarak")):
+                add("pdf")
+            if any(marker in low for marker in ("html", "htm", "web")):
+                add("html")
+            if any(marker in low for marker in ("markdown", "md")):
+                add("md")
+            if any(marker in low for marker in ("tex", "latex")):
+                add("tex")
+            if any(marker in low for marker in ("ppt", "pptx", "sunum", "presentation", "slide", "slides", "deck")):
+                add("pptx")
+            if any(marker in low for marker in ("excel", "xlsx", "csv", "tablo", "sheet", "spreadsheet")):
+                add("xlsx")
+        elif content_kind == "web_project":
+            add("html")
+            add("md")
+        elif content_kind == "code_project":
+            add("md")
+        if domain == "research" and not formats:
+            add("docx")
+        if domain == "code" and not formats:
+            add("md")
+        return formats or ["docx"]
+
+    @staticmethod
+    def _infer_style_profile(text: str, content_kind: str, domain: str) -> str:
+        low = str(text or "").lower()
+        if content_kind == "presentation":
+            return "presentation"
+        if content_kind == "spreadsheet":
+            return "structured"
+        if domain == "code":
+            return "implementation"
+        if any(marker in low for marker in ("analitik", "analytical", "detaylı", "detayli", "scientific", "bilimsel")):
+            return "analytical"
+        if any(marker in low for marker in ("brief", "kısa", "kisa", "özet", "ozet", "summary")):
+            return "briefing"
+        return "executive"
+
+    @staticmethod
+    def _infer_source_policy(text: str, domain: str, content_kind: str) -> str:
+        low = str(text or "").lower()
+        if any(marker in low for marker in ("resmi", "official", "gov", "mevzuat", "kanun", "regulation", "yönetmelik", "yonetmelik")):
+            return "official"
+        if any(marker in low for marker in ("akademik", "academic", "makale", "journal", "literature", "literatür", "literatur")):
+            return "academic"
+        if domain == "research" or content_kind in {"research_delivery", "document_pack", "presentation"}:
+            return "trusted"
+        return "trusted"
+
+    @staticmethod
+    def _infer_quality_contract(domain: str, content_kind: str) -> list[str]:
+        if content_kind == "research_delivery":
+            return [
+                "source_traceability",
+                "claim_coverage",
+                "critical_claim_coverage",
+                "uncertainty_log",
+                "artifact_manifest",
+            ]
+        if content_kind == "presentation":
+            return [
+                "slide_outline",
+                "message_clarity",
+                "source_traceability",
+                "section_coverage",
+            ]
+        if content_kind == "spreadsheet":
+            return [
+                "sheet_integrity",
+                "table_structure",
+                "header_clarity",
+                "source_traceability",
+            ]
+        if content_kind == "web_project":
+            return [
+                "dom_contract",
+                "responsive_preview",
+                "artifact_evidence",
+            ]
+        if content_kind == "document_pack":
+            return [
+                "structure",
+                "language_quality",
+                "traceability",
+                "layout_accuracy",
+                "table_integrity",
+                "chart_fidelity",
+            ]
+        if domain == "code":
+            return [
+                "repo_truth",
+                "gates",
+                "artifact_evidence",
+            ]
+        return [
+            "structure",
+            "language_quality",
+            "traceability",
+        ]
+
+    @staticmethod
+    def _infer_memory_scope(domain: str, content_kind: str) -> str:
+        if domain == "general":
+            return "profile_only"
+        if content_kind in {"research_delivery", "document_pack", "presentation", "spreadsheet", "web_project", "code_project"}:
+            return "task_routed"
+        return "task_routed"
+
+    @staticmethod
+    def _build_preview(
+        *,
+        domain: str,
+        content_kind: str,
+        output_formats: list[str],
+        style_profile: str,
+        source_policy: str,
+        quality_contract: list[str],
+        confidence: float,
+        needs_clarification: bool,
+    ) -> str:
+        preview_parts = []
+        kind_labels = {
+            "research_delivery": "kaynaklı araştırma belgesi",
+            "presentation": "sunum",
+            "spreadsheet": "excel tablo paketi",
+            "document_pack": "doküman paketi",
+            "web_project": "web projesi",
+            "code_project": "kod teslimi",
+            "delivery_bundle": "uçtan uca teslim paketi",
+            "summary_pack": "özet paketi",
+            "task": "görev",
+        }
+        preview_parts.append(kind_labels.get(content_kind, content_kind.replace("_", " ")))
+        if output_formats:
+            preview_parts.append(f"çıktılar: {', '.join(output_formats[:4])}")
+        if style_profile:
+            preview_parts.append(f"stil: {style_profile}")
+        if source_policy and source_policy != "trusted":
+            preview_parts.append(f"kaynak politikası: {source_policy}")
+        if quality_contract:
+            preview_parts.append(f"kalite: {', '.join(quality_contract[:3])}")
+        if confidence < 0.5 or needs_clarification:
+            preview_parts.append("netleştirme gerekebilir")
+        if domain:
+            preview_parts.append(f"alan: {domain}")
+        return " | ".join(preview_parts)
+
+    def build_request_contract(
+        self,
+        text: str,
+        *,
+        domain: str = "",
+        confidence: float = 0.0,
+        route_mode: str = "",
+        output_artifacts: list[str] | None = None,
+        quality_checklist: list[str] | None = None,
+        quick_intent: Any = None,
+        parsed_intent: dict[str, Any] | None = None,
+        attachments: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> RequestContract:
+        low = str(text or "").lower()
+        resolved_domain = str(domain or "").strip().lower() or self.route(text).domain
+        content_kind = self._content_kind_from_domain(resolved_domain, low)
+        if resolved_domain == "general" and any(marker in low for marker in ("rapor", "report", "docx", "pdf", "sunum", "presentation", "excel", "xlsx")):
+            content_kind = self._content_kind_from_domain("document", low)
+        output_formats = self._infer_output_formats(low, content_kind, resolved_domain)
+        style_profile = self._infer_style_profile(low, content_kind, resolved_domain)
+        source_policy = self._infer_source_policy(low, resolved_domain, content_kind)
+        quality_contract = list(quality_checklist or []) or self._infer_quality_contract(resolved_domain, content_kind)
+        memory_scope = self._infer_memory_scope(resolved_domain, content_kind)
+        evidence_required = resolved_domain not in {"communication"}
+        needs_clarification = bool(confidence < 0.5 and resolved_domain in {"general", "document"})
+        if parsed_intent and isinstance(parsed_intent, dict):
+            intent_action = str(parsed_intent.get("action") or "").strip().lower()
+            if intent_action in {"chat", "answer", "respond"}:
+                evidence_required = False
+        clarifying_question = ""
+        if needs_clarification:
+            if content_kind in {"presentation", "spreadsheet"}:
+                clarifying_question = "Bunu sunum, excel tablo ya da doküman olarak mı hazırlayayım?"
+            elif content_kind in {"research_delivery", "document_pack"}:
+                clarifying_question = "Bunu rapor, özet ya da kaynaklı belge olarak mı hazırlayayım?"
+            else:
+                clarifying_question = "Çıktı biçimini netleştirir misin?"
+        preview = self._build_preview(
+            domain=resolved_domain,
+            content_kind=content_kind,
+            output_formats=output_formats,
+            style_profile=style_profile,
+            source_policy=source_policy,
+            quality_contract=quality_contract,
+            confidence=float(confidence or 0.0),
+            needs_clarification=needs_clarification,
+        )
+        metadata_payload = dict(metadata or {})
+        if attachments:
+            metadata_payload["attachment_count"] = len([item for item in attachments if str(item or "").strip()])
+        if quick_intent is not None:
+            metadata_payload["quick_intent_category"] = str(getattr(quick_intent, "category", "") or "")
+            metadata_payload["quick_intent_confidence"] = float(getattr(quick_intent, "confidence", 0.0) or 0.0)
+        if parsed_intent:
+            metadata_payload["parsed_action"] = str(parsed_intent.get("action") or "")
+        if route_mode:
+            metadata_payload["route_mode"] = str(route_mode)
+        return RequestContract(
+            domain=resolved_domain,
+            objective=" ".join(str(text or "").strip().split()),
+            route_mode=str(route_mode or resolved_domain or "task"),
+            content_kind=content_kind,
+            confidence=float(confidence or 0.0),
+            output_formats=output_formats,
+            output_artifacts=list(output_artifacts or []),
+            style_profile=style_profile,
+            source_policy=source_policy,
+            quality_contract=quality_contract,
+            memory_scope=memory_scope,
+            evidence_required=evidence_required,
+            needs_clarification=needs_clarification,
+            clarifying_question=clarifying_question,
+            preview=preview,
+            metadata=metadata_payload,
+        )
+
     def route(self, text: str) -> CapabilityPlan:
         normalized = str(text or "").lower()
         scores: dict[str, int] = {}
@@ -370,6 +708,15 @@ class CapabilityRouter:
         if multi_step_operator:
             multi_agent_recommended = True
         suggested_job_type = self._DOMAIN_TO_JOB_TYPE.get(best_domain, "communication")
+        request_contract = self.build_request_contract(
+            normalized,
+            domain=best_domain,
+            confidence=float(confidence),
+            route_mode=suggested_job_type,
+            output_artifacts=list(hints.get("output_artifacts") or []),
+            quality_checklist=list(hints.get("quality_checklist") or []),
+            metadata={"workflow_id": str(hints.get("workflow_id") or ""), "primary_action": str(hints.get("primary_action") or "")},
+        )
 
         return CapabilityPlan(
             domain=best_domain,
@@ -388,6 +735,14 @@ class CapabilityRouter:
             workflow_profile_applicable=best_domain in {"code", "api_integration", "full_stack_delivery"},
             requires_design_phase=best_domain in {"code", "api_integration", "full_stack_delivery"},
             requires_worktree=best_domain == "full_stack_delivery",
+            content_kind=request_contract.content_kind,
+            output_formats=list(request_contract.output_formats or []),
+            style_profile=request_contract.style_profile,
+            source_policy=request_contract.source_policy,
+            quality_contract=list(request_contract.quality_contract or []),
+            memory_scope=request_contract.memory_scope,
+            preview=request_contract.preview,
+            request_contract=request_contract.to_dict(),
         )
 
 

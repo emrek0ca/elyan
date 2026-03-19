@@ -120,6 +120,25 @@ async def test_create_web_project_scaffold_builds_warm_portfolio_layout(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_create_web_project_scaffold_blocks_dirty_existing_directory(monkeypatch, tmp_path):
+    monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
+
+    project_dir = tmp_path / "Dirty_Web"
+    project_dir.mkdir(parents=True)
+    (project_dir / "styles.css").write_text("legacy", encoding="utf-8")
+
+    result = await create_web_project_scaffold(
+        project_name="Dirty Web",
+        stack="vanilla",
+        output_dir=str(tmp_path),
+        brief="landing page oluştur",
+    )
+    assert result.get("success") is False
+    assert result.get("error_code") == "PROJECT_DIR_NOT_EMPTY"
+    assert "not empty" in str(result.get("error", "")).lower()
+
+
+@pytest.mark.asyncio
 async def test_create_software_project_pack_node_generates_js_entry(monkeypatch, tmp_path):
     monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
 
@@ -180,7 +199,21 @@ async def test_create_coding_verification_report_scores_project(monkeypatch, tmp
     (project_dir / "scripts").mkdir(parents=True)
 
     (project_dir / "README.md").write_text("# Counter App", encoding="utf-8")
-    (project_dir / "index.html").write_text("<html></html>", encoding="utf-8")
+    (project_dir / "index.html").write_text(
+        """<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8">
+    <link rel="stylesheet" href="./styles/main.css">
+  </head>
+  <body>
+    <main>Counter</main>
+    <script src="./scripts/main.js"></script>
+  </body>
+</html>
+""",
+        encoding="utf-8",
+    )
     (project_dir / "styles" / "main.css").write_text("body{}", encoding="utf-8")
     (project_dir / "scripts" / "main.js").write_text("console.log(1)", encoding="utf-8")
     (project_dir / "docs" / "DELIVERY_PLAN.md").write_text("ok", encoding="utf-8")
@@ -204,6 +237,44 @@ async def test_create_coding_verification_report_scores_project(monkeypatch, tmp
     assert report_path.exists()
     report_text = report_path.read_text(encoding="utf-8")
     assert "Verification Report - Counter App" in report_text
+
+
+@pytest.mark.asyncio
+async def test_create_coding_verification_report_blocks_mixed_web_skeleton(monkeypatch, tmp_path):
+    monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
+    project_dir = tmp_path / "mixed-web"
+    (project_dir / "docs").mkdir(parents=True)
+    (project_dir / "styles").mkdir(parents=True)
+    (project_dir / "scripts").mkdir(parents=True)
+    (project_dir / "tests").mkdir()
+
+    (project_dir / "README.md").write_text("# Mixed Web", encoding="utf-8")
+    (project_dir / "index.html").write_text(
+        '<!doctype html><html><head><link rel="stylesheet" href="./styles/main.css"></head><body><script src="./scripts/main.js"></script></body></html>',
+        encoding="utf-8",
+    )
+    (project_dir / "styles.css").write_text("body{}", encoding="utf-8")
+    (project_dir / "styles" / "main.css").write_text("body{}", encoding="utf-8")
+    (project_dir / "scripts" / "main.js").write_text("console.log(1)", encoding="utf-8")
+    (project_dir / "docs" / "DELIVERY_PLAN.md").write_text("ok", encoding="utf-8")
+    (project_dir / "docs" / "TASK_BACKLOG.md").write_text("ok", encoding="utf-8")
+    (project_dir / "docs" / "ACCEPTANCE_CRITERIA.md").write_text("ok", encoding="utf-8")
+    (project_dir / "docs" / "TEST_STRATEGY.md").write_text("ok", encoding="utf-8")
+    (project_dir / "docs" / "RUNBOOK.md").write_text("ok", encoding="utf-8")
+
+    result = await create_coding_verification_report(
+        project_path=str(project_dir),
+        project_name="Mixed Web",
+        project_kind="website",
+        stack="vanilla",
+        strict=True,
+    )
+
+    assert result.get("success") is True
+    assert result.get("status") == "blocked"
+    failed_ids = {check["id"] for check in result.get("failed_checks", [])}
+    assert "web_layout" in failed_ids
+    assert "web_smoke" not in failed_ids
 
 
 @pytest.mark.asyncio
@@ -332,6 +403,72 @@ async def test_research_document_delivery_word_only_stays_single_artifact(monkey
 
 
 @pytest.mark.asyncio
+async def test_research_document_delivery_defaults_to_structured_report_and_hidden_supporting_artifacts(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
+
+    captured = {}
+
+    async def _fake_research(**kwargs):
+        return {
+            "success": True,
+            "topic": kwargs.get("topic", "PyTorch"),
+            "summary": "PyTorch, derin öğrenme ve otomatik türev alma için geniş kullanılan bir çerçevedir.",
+            "findings": [
+                "• PyTorch dinamik hesaplama grafiği yaklaşımıyla esnek model geliştirmeyi destekler. (Kaynak: pytorch.org, Güven: %94)",
+                "• TorchVision ve TorchText gibi ek paketler görüntü ve metin iş akışlarını hızlandırır. (Kaynak: pytorch.org, Güven: %90)",
+                "• PyPI dağıtımı ve resmi dokümantasyon ekosistemi, kurulum ve örnekleri düzenli tutar. (Kaynak: pypi.org, Güven: %88)",
+            ],
+            "sources": [
+                {"title": "PyTorch Docs", "url": "https://pytorch.org/docs/stable/", "reliability_score": 0.96},
+                {"title": "PyPI", "url": "https://pypi.org/project/torch/", "reliability_score": 0.89},
+            ],
+            "source_count": 2,
+            "report_paths": [],
+        }
+
+    async def _fake_write_word(path=None, **kwargs):
+        captured["paragraphs"] = list(kwargs.get("paragraphs") or [])
+        captured["content"] = str(kwargs.get("content") or "")
+        p = Path(str(path))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"docx")
+        return {"success": True, "path": str(p)}
+
+    research_mod = importlib.import_module("tools.research_tools.advanced_research")
+    word_mod = importlib.import_module("tools.office_tools.word_tools")
+    monkeypatch.setattr(research_mod, "advanced_research", _fake_research)
+    monkeypatch.setattr(word_mod, "write_word", _fake_write_word)
+
+    result = await research_document_delivery(
+        topic="PyTorch",
+        brief="PyTorch hakkında araştırma yapar mısın",
+        depth="comprehensive",
+        output_dir=str(tmp_path),
+        include_word=True,
+        include_excel=False,
+        include_report=True,
+    )
+
+    assert result.get("success") is True
+    assert str(result.get("message", "")).count("\n") == 0
+    assert "İstersen bunu genişletip revize edebilirim." in str(result.get("message", ""))
+    assert "Kısa Özet" in captured.get("paragraphs", [])
+    assert "Temel Bulgular" in captured.get("paragraphs", [])
+    assert "Kaynak Güven Özeti" in captured.get("paragraphs", [])
+    assert "Açık Riskler" in captured.get("paragraphs", [])
+    assert "Belirsizlikler" in captured.get("paragraphs", [])
+    assert len(captured.get("content", "")) >= 200
+    claim_map_path = Path(str(result.get("claim_map_path", "")))
+    manifest_path = Path(str(result.get("office_content_manifest_path", "")))
+    assert claim_map_path.parent.name == ".elyan"
+    assert manifest_path.parent.name == ".elyan"
+    assert all(Path(str(item)).parent.name == ".elyan" for item in result.get("supporting_artifacts", []))
+
+
+@pytest.mark.asyncio
 async def test_research_document_delivery_pdf_only_returns_single_pdf(monkeypatch, tmp_path):
     monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
 
@@ -373,6 +510,69 @@ async def test_research_document_delivery_pdf_only_returns_single_pdf(monkeypatc
     outputs = result.get("outputs", [])
     assert len(outputs) == 1
     assert str(outputs[0]).endswith(".pdf")
+
+
+@pytest.mark.asyncio
+async def test_research_document_delivery_can_emit_presentation_manifest(monkeypatch, tmp_path):
+    monkeypatch.setattr("security.validator.FULL_DISK_ACCESS", True)
+
+    async def _fake_research(**kwargs):
+        return {
+            "success": True,
+            "topic": kwargs.get("topic", "test"),
+            "summary": "Kısa özet.",
+            "findings": [
+                "• Temel bulgu, kaynaklı biçimde aktarılır. (Kaynak: example.com, Güven: %90)",
+                "• İkinci bulgu, sunum anlatımına uygundur. (Kaynak: example.org, Güven: %88)",
+            ],
+            "sources": [
+                {"title": "Kaynak 1", "url": "https://example.com", "reliability_score": 0.9},
+                {"title": "Kaynak 2", "url": "https://example.org", "reliability_score": 0.88},
+            ],
+            "source_count": 2,
+            "quality_summary": {
+                "claim_coverage": 1.0,
+                "critical_claim_coverage": 1.0,
+                "uncertainty_count": 0,
+                "status": "pass",
+            },
+            "report_paths": [],
+        }
+
+    async def _fake_pptx(self, document, path):
+        p = Path(str(path))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"pptx")
+        return {"success": True, "path": str(p), "format": "pptx", "slides": len(getattr(document, "sections", []) or [])}
+
+    research_mod = importlib.import_module("tools.research_tools.advanced_research")
+    pptx_renderer_mod = importlib.import_module("tools.document_tools.output_renderer")
+    monkeypatch.setattr(research_mod, "advanced_research", _fake_research)
+    monkeypatch.setattr(pptx_renderer_mod.PptxRenderer, "render_to_path", _fake_pptx)
+
+    result = await research_document_delivery(
+        topic="Sunum Konusu",
+        brief="bu araştırmayı bir sunum halinde hazırla",
+        depth="comprehensive",
+        output_dir=str(tmp_path),
+        include_word=False,
+        include_excel=False,
+        include_pdf=False,
+        include_latex=False,
+        include_presentation=True,
+        include_report=True,
+    )
+
+    assert result.get("success") is True
+    outputs = result.get("outputs", [])
+    assert len(outputs) == 1
+    assert str(outputs[0]).endswith(".pptx")
+    assert result.get("include_presentation") is True
+    manifest_path = Path(str(result.get("office_content_manifest_path", "")))
+    assert manifest_path.exists()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest.get("content_kind") == "research_delivery"
+    assert manifest.get("summary", {}).get("outputs")
 
 
 @pytest.mark.asyncio
@@ -530,6 +730,7 @@ async def test_research_document_delivery_prefers_llm_synthesis_when_available(m
 
     async def _fake_write_word(path=None, **kwargs):
         captured["content"] = kwargs.get("content", "")
+        captured["paragraphs"] = list(kwargs.get("paragraphs") or [])
         p = Path(str(path))
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(b"docx")
@@ -590,6 +791,7 @@ async def test_research_document_delivery_ignores_llm_synthesis_when_official_re
 
     async def _fake_write_word(path=None, **kwargs):
         captured["content"] = kwargs.get("content", "")
+        captured["paragraphs"] = list(kwargs.get("paragraphs") or [])
         p = Path(str(path))
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(b"docx")
@@ -680,6 +882,7 @@ async def test_research_document_delivery_generates_claim_map_and_profile_varian
 
     async def _fake_write_word(path=None, **kwargs):
         captured["content"] = kwargs.get("content", "")
+        captured["paragraphs"] = list(kwargs.get("paragraphs") or [])
         p = Path(str(path))
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(b"docx")
@@ -709,8 +912,7 @@ async def test_research_document_delivery_generates_claim_map_and_profile_varian
     assert claim_map_path.exists()
     claim_map = claim_map_path.read_text(encoding="utf-8")
     assert "\"claim_coverage\": 1.0" in claim_map
-    assert "Temel Bulgular" in str(captured.get("content", ""))
-    assert "Kaynak Güven Özeti" not in str(captured.get("content", ""))
+    assert len(captured.get("paragraphs", [])) >= 3
 
 
 @pytest.mark.asyncio

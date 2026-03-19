@@ -151,3 +151,17 @@ def test_runtime_policy_resolve_includes_workflow_defaults(monkeypatch):
     assert workflow.get("allowed_domains") == ["code", "debug", "api_integration", "full_stack_delivery"]
     assert workflow.get("require_explicit_approval") is True
     assert workflow.get("workspace_policy") == "auto"
+
+
+def test_runtime_policy_resolve_includes_coding_defaults(monkeypatch):
+    monkeypatch.setattr("core.runtime_policy.elyan_config.get", lambda key, default=None: default)
+
+    policy = RuntimePolicyResolver().resolve()
+
+    assert policy.coding["fail_closed"] is True
+    assert policy.coding["require_repo_truth"] is True
+    assert policy.coding["require_evidence"] is True
+    assert policy.coding["unknown_stack_policy"] == "fail_closed"
+    assert float(policy.coding["cloud_debug_budget"]) == 0.0
+    assert policy.coding["repo_snapshot_cache"] is True
+    assert policy.coding["execute_adapter_gates"] is True

@@ -34,6 +34,7 @@ from core.runtime import (
     run_emre_workflow_preset,
 )
 from core.confidence import coerce_confidence
+from core.mission_control import get_mission_runtime
 from core.storage_paths import resolve_elyan_data_dir, resolve_runs_root
 from core.text_artifacts import existing_text_path
 from core.version import APP_VERSION
@@ -625,6 +626,8 @@ class ElyanGatewayServer:
     def __init__(self, agent):
         self.agent = agent
         self.router = GatewayRouter(agent)
+        self.mission_runtime = get_mission_runtime()
+        self.mission_runtime.subscribe(self._on_mission_event)
         self.app = web.Application(middlewares=[self._cors_middleware, self._api_security_middleware])
         self.webchat_adapter: Optional[object] = None
         self.cron = CronEngine(agent)
@@ -634,11 +637,36 @@ class ElyanGatewayServer:
         self.runner: Optional[web.AppRunner] = None
         self._telemetry_task: Optional[asyncio.Task] = None
 
+    def _on_mission_event(self, payload: dict[str, Any]):
+        mission_id = str(payload.get("mission_id") or "").strip()
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        label = str(event.get("label") or payload.get("event_type") or "mission").strip()
+        status = str(event.get("status") or payload.get("status") or "").strip()
+        detail = f"{mission_id}: {label}"
+        if status:
+            detail += f" ({status})"
+        push_activity("mission", "dashboard", detail[:80], status not in {"failed", "denied"})
+        _schedule_background(_broadcast_event, "mission_event", _sanitize_stream_payload(payload))
+
+    def _mission_store(self):
+        store = getattr(self, "mission_runtime", None)
+        if store is None:
+            store = get_mission_runtime()
+            self.mission_runtime = store
+        return store
+
     def _configured_cors_origins(self) -> set[str]:
         configured = elyan_config.get("gateway.cors.origins", []) or []
         if isinstance(configured, str):
             configured = [item.strip() for item in configured.split(",") if item.strip()]
         normalized: set[str] = set()
+        normalized.update(
+            {
+                "tauri://localhost",
+                "http://tauri.localhost",
+                "https://tauri.localhost",
+            }
+        )
         for raw in configured:
             value = str(raw or "").strip()
             if not value:
@@ -777,6 +805,15 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/tasks', self.handle_tasks)
         self.app.router.add_post('/api/tasks/suggest', self.handle_task_suggest)
         self.app.router.add_post('/api/tasks', self.handle_create_task)
+        self.app.router.add_get('/api/missions/overview', self.handle_missions_overview)
+        self.app.router.add_get('/api/missions/approvals', self.handle_missions_approvals)
+        self.app.router.add_post('/api/missions/approvals/resolve', self.handle_missions_approval_resolve)
+        self.app.router.add_get('/api/missions/skills', self.handle_missions_skills)
+        self.app.router.add_post('/api/missions/skills/save', self.handle_missions_skill_save)
+        self.app.router.add_get('/api/missions/memory', self.handle_missions_memory)
+        self.app.router.add_get('/api/missions', self.handle_missions_list)
+        self.app.router.add_post('/api/missions', self.handle_missions_create)
+        self.app.router.add_get('/api/missions/{mission_id}', self.handle_mission_detail)
         self.app.router.add_get('/api/memory/stats', self.handle_memory_stats)
         self.app.router.add_get('/api/memory/profile', self.handle_get_profile)
         self.app.router.add_get('/api/activity', self.handle_activity_log)
@@ -847,8 +884,8 @@ class ElyanGatewayServer:
 
         # ── Dashboard & Web UI ────────────────────────────────────────────────
         self.app.router.add_get('/', self.handle_dashboard_page)
-        self.app.router.add_get('/product', self.handle_dashboard_page)
         self.app.router.add_get('/dashboard', self.handle_dashboard_page)
+        self.app.router.add_get('/assets/{filename}', self.handle_brand_asset)
         self.app.router.add_get('/healthz', self.handle_product_health)
         self.app.router.add_get('/ops', self.handle_ops_console_page)
         self.app.router.add_get('/ui/web/{filename}', self.handle_web_asset)
@@ -923,6 +960,18 @@ class ElyanGatewayServer:
         asset_path = (base / filename).resolve()
         if asset_path.parent != base or not asset_path.exists() or not asset_path.is_file():
             return web.Response(text="Asset file not found", status=404)
+        resp = web.FileResponse(asset_path)
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return resp
+
+    async def handle_brand_asset(self, request):
+        filename = str(request.match_info.get("filename", "")).strip()
+        if not filename or "/" in filename or "\\" in filename or ".." in filename:
+            return web.Response(text="Invalid asset path", status=400)
+        base = (Path(__file__).resolve().parent.parent.parent / "assets").resolve()
+        asset_path = (base / filename).resolve()
+        if asset_path.parent != base or not asset_path.exists() or not asset_path.is_file():
+            return web.Response(text="Brand asset not found", status=404)
         resp = web.FileResponse(asset_path)
         resp.headers["Cache-Control"] = "no-cache, must-revalidate"
         return resp
@@ -2006,18 +2055,18 @@ class ElyanGatewayServer:
             },
             "release": {
                 "version": str(status_payload.get("version") or ""),
-                "entrypoint": "/product",
-                "entrypoint_aliases": ["/", "/dashboard", "/product"],
+                "entrypoint": "/dashboard",
+                "entrypoint_aliases": ["/", "/dashboard"],
                 "health_endpoint": "/healthz",
                 "health_status": str(status_payload.get("health_status") or ""),
                 "benchmark_green": benchmark_green,
                 "last_sync": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "quickstart_checks": [
                     {"label": "Gateway status", "value": str(status_payload.get("status") or "unknown")},
-                    {"label": "Dashboard entrypoint", "value": "/product"},
+                    {"label": "Dashboard entrypoint", "value": "/dashboard"},
                     {"label": "Health page", "value": "/healthz"},
                     {"label": "CLI quickstart", "value": f"{cli_mod} dashboard"},
-                    {"label": "Product start script", "value": "bash scripts/start_product.sh"},
+                    {"label": "Dashboard start script", "value": "bash scripts/start_product.sh"},
                     {
                         "label": "Production benchmark gate",
                         "value": "python scripts/run_production_path_benchmarks.py --min-pass-count 20 --require-perfect",
@@ -2044,7 +2093,7 @@ class ElyanGatewayServer:
                 "status": "ready" if readiness.get("elyan_ready") else "degraded",
                 "version": str(release.get("version") or ""),
                 "health_status": str(release.get("health_status") or ""),
-                "entrypoint": str(release.get("entrypoint") or "/product"),
+                "entrypoint": str(release.get("entrypoint") or "/dashboard"),
                 "benchmark": benchmark,
                 "readiness": readiness,
             }
@@ -2577,9 +2626,115 @@ class ElyanGatewayServer:
             except Exception as e:
                 return web.json_response({"error": f"routine create failed: {e}"}, status=400)
 
-        asyncio.create_task(self.agent.process(text))
-        push_activity("task_created", "dashboard", text[:60])
-        return web.json_response({"status": "queued", "text": text, "intent": intent})
+        user_id = str(data.get("user_id") or "local").strip() or "local"
+        channel = str(data.get("channel") or "dashboard").strip() or "dashboard"
+        mode = str(data.get("mode") or "Balanced").strip() or "Balanced"
+        attachments = [str(item) for item in list(data.get("attachments") or []) if str(item).strip()]
+        mission = await self._mission_store().create_mission(
+            text,
+            user_id=user_id,
+            channel=channel,
+            mode=mode,
+            attachments=attachments,
+            metadata={"source": "legacy_task_api", "intent": intent},
+            agent=self.agent,
+            auto_start=True,
+        )
+        push_activity("task_created", channel, text[:60])
+        return web.json_response({
+            "ok": True,
+            "status": "mission_created",
+            "text": text,
+            "intent": intent,
+            "mission": mission.to_dict(),
+        })
+
+    async def handle_missions_overview(self, request):
+        user_id = str(request.query.get("user_id", "local") or "local").strip()
+        return web.json_response(self._mission_store().overview(owner=user_id))
+
+    async def handle_missions_list(self, request):
+        user_id = str(request.query.get("user_id", "local") or "local").strip()
+        try:
+            limit = int(request.query.get("limit", 30))
+        except Exception:
+            limit = 30
+        return web.json_response({"ok": True, "missions": self._mission_store().list_missions(owner=user_id, limit=limit)})
+
+    async def handle_mission_detail(self, request):
+        mission_id = str(request.match_info.get("mission_id", "") or "").strip()
+        if not mission_id:
+            return web.json_response({"ok": False, "error": "mission_id required"}, status=400)
+        mission = self._mission_store().get_mission(mission_id)
+        if mission is None:
+            return web.json_response({"ok": False, "error": "mission not found"}, status=404)
+        return web.json_response({"ok": True, "mission": mission.to_dict()})
+
+    async def handle_missions_create(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        goal = str(data.get("goal") or data.get("text") or "").strip()
+        if not goal:
+            return web.json_response({"ok": False, "error": "goal required"}, status=400)
+        user_id = str(data.get("user_id") or "local").strip() or "local"
+        channel = str(data.get("channel") or "dashboard").strip() or "dashboard"
+        mode = str(data.get("mode") or "Balanced").strip() or "Balanced"
+        attachments = [str(item) for item in list(data.get("attachments") or []) if str(item).strip()]
+        mission = await self._mission_store().create_mission(
+            goal,
+            user_id=user_id,
+            channel=channel,
+            mode=mode,
+            attachments=attachments,
+            metadata={"source": "dashboard"},
+            agent=self.agent,
+            auto_start=True,
+        )
+        return web.json_response({"ok": True, "mission": mission.to_dict()})
+
+    async def handle_missions_approvals(self, request):
+        user_id = str(request.query.get("user_id", "local") or "local").strip()
+        return web.json_response({"ok": True, "pending": self._mission_store().pending_approvals(owner=user_id)})
+
+    async def handle_missions_approval_resolve(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        approval_id = str(data.get("id") or data.get("approval_id") or "").strip()
+        if not approval_id:
+            return web.json_response({"ok": False, "error": "approval id required"}, status=400)
+        mission = await self._mission_store().resolve_approval(
+            approval_id,
+            bool(data.get("approved", False)),
+            note=str(data.get("note") or "").strip(),
+            agent=self.agent,
+        )
+        if mission is None:
+            return web.json_response({"ok": False, "error": "approval not found"}, status=404)
+        return web.json_response({"ok": True, "mission": mission.to_dict()})
+
+    async def handle_missions_skills(self, request):
+        return web.json_response({"ok": True, "skills": self._mission_store().list_skills()})
+
+    async def handle_missions_skill_save(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        mission_id = str(data.get("mission_id") or "").strip()
+        if not mission_id:
+            return web.json_response({"ok": False, "error": "mission_id required"}, status=400)
+        recipe = self._mission_store().save_skill(mission_id, name=str(data.get("name") or "").strip())
+        if recipe is None:
+            return web.json_response({"ok": False, "error": "mission not found"}, status=404)
+        return web.json_response({"ok": True, "skill": recipe.to_dict()})
+
+    async def handle_missions_memory(self, request):
+        user_id = str(request.query.get("user_id", "local") or "local").strip()
+        return web.json_response(self._mission_store().memory_snapshot(user_id=user_id))
 
     # ── Memory stats (new) ────────────────────────────────────────────────────
     async def handle_memory_stats(self, request):
@@ -4675,6 +4830,9 @@ class ElyanGatewayServer:
         # Send recent activity on connect
         await ws.send_json({"event": "history", "data": list(reversed(_activity_log[-10:]))})
         await ws.send_json({"event": "tool_history", "data": list(reversed(_tool_event_log[-40:]))})
+        mission_store = self._mission_store()
+        await ws.send_json({"event": "mission_overview", "data": mission_store.overview(owner="local")})
+        await ws.send_json({"event": "mission_list", "data": mission_store.list_missions(owner="local", limit=12)})
         try:
             async for msg in ws:
                 if msg.type == WSMsgType.ERROR:

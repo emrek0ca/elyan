@@ -26,6 +26,19 @@ from .deep_research_engine import (
 from .data_agent import TimeSeriesAgent
 from .research_orchestrator import ResearchCritic, ResearchOrchestrator, ResearchPlanner, WebResearchAgent
 from .semantic_retrieval import SemanticRetriever
+from .document_rag import (
+    DocumentChunkRecord,
+    DocumentRAGEngine,
+    RAGSummaryResult,
+    RetrievedChunk,
+    analyze_document_rag,
+    build_document_rag_index,
+    build_research_narrative,
+    document_rag_qa,
+    get_document_rag_engine,
+    split_text_recursive,
+    summarize_document_rag,
+)
 
 __all__ = [
     "advanced_research",
@@ -49,4 +62,15 @@ __all__ = [
     "ResearchCritic",
     "ResearchOrchestrator",
     "SemanticRetriever",
+    "DocumentChunkRecord",
+    "DocumentRAGEngine",
+    "RAGSummaryResult",
+    "RetrievedChunk",
+    "analyze_document_rag",
+    "build_document_rag_index",
+    "build_research_narrative",
+    "document_rag_qa",
+    "get_document_rag_engine",
+    "split_text_recursive",
+    "summarize_document_rag",
 ]

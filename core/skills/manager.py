@@ -86,6 +86,15 @@ class SkillManager:
     def _set_enabled_workflow_set(self, enabled: set[str]) -> None:
         elyan_config.set("skills.workflows.enabled", sorted(enabled))
 
+    def _disabled_workflow_set(self) -> set[str]:
+        raw = elyan_config.get("skills.workflows.disabled", [])
+        if not isinstance(raw, list):
+            return set()
+        return {str(x).strip() for x in raw if str(x).strip()}
+
+    def _set_disabled_workflow_set(self, disabled: set[str]) -> None:
+        elyan_config.set("skills.workflows.disabled", sorted(disabled))
+
     def _manifest_path(self, name: str) -> Path:
         return self.skills_dir / name / "skill.json"
 
@@ -365,8 +374,13 @@ class SkillManager:
         return {"ok": ok, "checks": checks}
 
     def list_workflows(self, *, enabled_only: bool = False, query: str = "") -> List[Dict[str, Any]]:
-        workflows = get_builtin_workflow_catalog()
+        workflows = dict(get_builtin_workflow_catalog())
+        for item in self._mission_recipe_workflows():
+            wf_id = self._sanitize_name(str(item.get("id") or ""))
+            if wf_id:
+                workflows[wf_id] = item
         enabled = self._enabled_workflow_set()
+        disabled = self._disabled_workflow_set()
         out: List[Dict[str, Any]] = []
         available_tools = self._available_tools_set()
         enabled_skills = {str(s.get("name", "")).strip() for s in self.list_skills(available=False, enabled_only=True)}
@@ -377,8 +391,9 @@ class SkillManager:
             req_skills = [self._sanitize_name(str(s)) for s in raw.get("required_skills", []) if str(s).strip()]
             missing_tools = sorted([t for t in req_tools if t not in available_tools])
             missing_skills = sorted([s for s in req_skills if s and s not in enabled_skills])
-            is_enabled = wf_id in enabled
-            runtime_ready = len(missing_tools) == 0
+            is_mission_recipe = str(raw.get("source") or "") == "mission_recipe"
+            is_enabled = (wf_id not in disabled) if is_mission_recipe else (wf_id in enabled)
+            runtime_ready = bool(raw.get("runtime_ready", True)) and len(missing_tools) == 0
 
             item = {
                 "id": wf_id,
@@ -397,6 +412,10 @@ class SkillManager:
                 "runtime_ready": runtime_ready,
                 "steps": list(raw.get("steps", []) or []),
                 "trigger_markers": list(raw.get("trigger_markers", []) or []),
+                "source_mission_id": str(raw.get("source_mission_id") or ""),
+                "verification_rules": list(raw.get("verification_rules", []) or []),
+                "tool_policy": dict(raw.get("tool_policy", {}) or {}),
+                "output_contract": dict(raw.get("output_contract", {}) or {}),
             }
             out.append(item)
 
@@ -417,15 +436,26 @@ class SkillManager:
     def set_workflow_enabled(self, workflow_id: str, enabled_flag: bool) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
         wid = self._sanitize_name(workflow_id)
         catalog = get_builtin_workflow_catalog()
-        if not wid or wid not in {self._sanitize_name(k) for k in catalog.keys()}:
+        builtin_ids = {self._sanitize_name(k) for k in catalog.keys()}
+        mission_items = {self._sanitize_name(str(item.get("id") or "")): item for item in self._mission_recipe_workflows()}
+        if not wid or (wid not in builtin_ids and wid not in mission_items):
             return False, "Geçersiz workflow id.", None
 
         enabled = self._enabled_workflow_set()
-        if enabled_flag:
-            enabled.add(wid)
+        disabled = self._disabled_workflow_set()
+        if wid in builtin_ids:
+            if enabled_flag:
+                enabled.add(wid)
+                disabled.discard(wid)
+            else:
+                enabled.discard(wid)
         else:
-            enabled.discard(wid)
+            if enabled_flag:
+                disabled.discard(wid)
+            else:
+                disabled.add(wid)
         self._set_enabled_workflow_set(enabled)
+        self._set_disabled_workflow_set(disabled)
 
         info = None
         for item in self.list_workflows():
@@ -433,6 +463,61 @@ class SkillManager:
                 info = item
                 break
         return True, f"'{wid}' {'etkinleştirildi' if enabled_flag else 'devre dışı bırakıldı'}.", info
+
+    def _mission_recipe_workflows(self) -> List[Dict[str, Any]]:
+        try:
+            from core.mission_control import get_mission_runtime
+
+            recipes = get_mission_runtime().list_skills()
+        except Exception as e:
+            logger.debug(f"Mission recipe workflow yüklenemedi: {e}")
+            return []
+
+        items: List[Dict[str, Any]] = []
+        for raw in recipes:
+            recipe_id = self._sanitize_name(str(raw.get("recipe_id") or raw.get("id") or raw.get("name") or ""))
+            if not recipe_id:
+                continue
+            graph = raw.get("task_graph_template") if isinstance(raw.get("task_graph_template"), dict) else {}
+            nodes = list(graph.get("nodes") or [])
+            steps: List[str] = []
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                label = str(
+                    node.get("title")
+                    or node.get("kind")
+                    or node.get("specialist")
+                    or node.get("node_id")
+                    or ""
+                ).strip()
+                if label:
+                    steps.append(label)
+            if not steps:
+                steps = ["Plan", "Execute", "Verify", "Deliver"]
+
+            output_contract = raw.get("output_contract") if isinstance(raw.get("output_contract"), dict) else {}
+            route_mode = str(output_contract.get("route_mode") or "mission").strip() or "mission"
+            items.append({
+                "id": recipe_id,
+                "name": str(raw.get("name") or recipe_id.replace("_", " ").title()),
+                "version": str(raw.get("version") or "1.0.0"),
+                "description": str(raw.get("description") or f"Mission recipe workflow ({route_mode})."),
+                "category": route_mode,
+                "required_skills": [],
+                "required_tools": [],
+                "steps": steps,
+                "trigger_markers": [],
+                "executable": True,
+                "auto_intent": False,
+                "runtime_ready": True,
+                "source": "mission_recipe",
+                "source_mission_id": str(raw.get("source_mission_id") or ""),
+                "verification_rules": list(raw.get("verification_rules") or []),
+                "tool_policy": dict(raw.get("tool_policy") or {}),
+                "output_contract": dict(output_contract),
+            })
+        return items
 
     @staticmethod
     def _extract_first_url(text: str) -> str:

@@ -71,7 +71,16 @@ from core.channel_delivery import channel_delivery_bridge
 from core.smart_notifications import get_smart_notifications, NotificationCategory, NotificationPriority
 from core.gateway.response import UnifiedResponse
 from core.cowork_runtime import get_cowork_runtime
+from core.mission_control import get_mission_runtime
 from core.runtime_policy import get_runtime_policy_resolver
+from core.command_hardening import (
+    blocked_command_reason,
+    build_chat_fallback_message,
+    classify_command_route,
+    requires_screen_state,
+    sanitize_chat_output,
+    screen_state_is_actionable,
+)
 from core.process_profiles import (
     PREAPPROVAL_BLOCKED_TOOLS,
     approval_granted,
@@ -302,6 +311,7 @@ class Agent:
             "ts": 0.0,
         }
         self._last_tool_confirmation: dict[str, Any] = {"key": "", "ts": 0.0}
+        self._last_runtime_task_spec_payload: dict[str, Any] | None = None
         self._away_notifier_registered = False
         self._task_suggestion_cache: dict[str, float] = {}
         self._workflow_sessions: dict[str, dict[str, Any]] = {}
@@ -472,34 +482,7 @@ class Agent:
 
     @staticmethod
     def _sanitize_chat_reply(text: Any) -> str:
-        content = str(text or "").replace("\r\n", "\n").strip()
-        if not content:
-            return ""
-        lines = content.splitlines()
-        cleaned: list[str] = []
-        skip_prefixes = (
-            "deliverable spec:",
-            "done criteria:",
-            "başarı kriteri:",
-            "success criteria:",
-            "sistem notu:",
-            "❌ completion gate failed:",
-            "completion gate failed:",
-        )
-        for line in lines:
-            stripped = line.strip()
-            lower = stripped.lower()
-            if not stripped:
-                if cleaned and cleaned[-1] != "":
-                    cleaned.append("")
-                continue
-            if lower.startswith(skip_prefixes):
-                continue
-            if lower.startswith("- kullanıcının ") or lower.startswith("- kullanıcıya "):
-                continue
-            cleaned.append(stripped)
-        content = "\n".join(cleaned).strip()
-        return _re.sub(r"\n{3,}", "\n\n", content)
+        return sanitize_chat_output(text)
 
     @staticmethod
     def _fast_chat_reply(user_input: str = "") -> str | None:
@@ -531,7 +514,7 @@ class Agent:
         text = str(user_input or "").lower()
         if any(k in text for k in ("durum", "status", "sağlık", "saglik", "health")):
             return "LLM bağlantısı hazır değil. 'elyan models status' ve 'elyan gateway health --json' ile kontrol edebilirsin."
-        return "LLM sağlayıcısına şu an erişemiyorum. Model bağlantısını kontrol edip tekrar dener misin?"
+        return build_chat_fallback_message(language=str(elyan_config.get("agent.language", "tr") or "tr"))
 
     @staticmethod
     def _handle_short_ambiguous_input(user_input: str) -> str | None:
@@ -548,6 +531,81 @@ class Agent:
                 "'gatewayi arka planda başlat', 'rutinleri çalıştır' veya 'durumu göster'."
             )
         return None
+
+    async def _build_controlled_route_response(
+        self,
+        *,
+        ledger: ExecutionLedger,
+        run_store: RunStore,
+        run_id: str,
+        started_at: float,
+        user_input: str,
+        response_text: str,
+        channel: str,
+        uid: str,
+        reason: str,
+        action: str,
+        mode: str,
+        status: str = "partial",
+        success: bool = False,
+        route_decision: dict[str, Any] | None = None,
+    ) -> AgentResponse:
+        manifest = ledger.write_manifest(
+            status=status,
+            metadata={
+                "channel": channel,
+                "user_id": uid,
+                "reason": reason,
+                "mode": mode,
+                "route_decision": dict(route_decision or {}),
+            },
+        )
+        run_store.write_task(
+            {},
+            user_input=user_input,
+            metadata={"channel": channel, "user_id": uid, "reason": reason, "mode": mode},
+            task_state={},
+        )
+        run_store.write_evidence(
+            manifest_path=manifest,
+            steps=[],
+            artifacts=[],
+            metadata={"status": status, "mode": mode, "reason": reason},
+        )
+        run_store.write_summary(
+            status=status,
+            response_text=response_text,
+            artifacts=[],
+            metadata={"manifest_path": manifest, "mode": mode, "reason": reason},
+        )
+        run_store.write_logs(lines=[reason or mode or action])
+        try:
+            await self._finalize_turn(
+                user_input=user_input,
+                response_text=response_text,
+                action=action,
+                success=success,
+                started_at=started_at,
+                context={
+                    "role": "chat",
+                    "job_type": "communication",
+                    "errors": 0,
+                    "run_id": run_id,
+                    "mode": mode,
+                    "route_reason": reason,
+                    "route_decision": dict(route_decision or {}),
+                },
+            )
+        except Exception as finalize_exc:
+            logger.debug(f"controlled route finalize skipped: {finalize_exc}")
+        return AgentResponse(
+            run_id=run_id,
+            text=response_text,
+            attachments=[],
+            evidence_manifest_path=manifest,
+            status=status,
+            error="",
+        )
 
     @staticmethod
     def _should_schedule_away_task(user_input: str, metadata: dict | None = None) -> bool:
@@ -896,6 +954,213 @@ class Agent:
 
         return _handler
 
+    @classmethod
+    def _runtime_metadata(cls) -> dict[str, Any]:
+        policy = cls._current_runtime_policy()
+        meta = policy.get("metadata", {}) if isinstance(policy.get("metadata"), dict) else {}
+        return dict(meta) if isinstance(meta, dict) else {}
+
+    @classmethod
+    def _mission_handoff_blocked(cls, metadata: dict | None = None) -> bool:
+        if isinstance(metadata, dict) and bool(metadata.get("skip_mission_control")):
+            return True
+        runtime_meta = cls._runtime_metadata()
+        return bool(runtime_meta.get("skip_mission_control"))
+
+    def _should_handoff_coding_mission(
+        self,
+        user_input: str,
+        *,
+        route_decision: Any = None,
+        parsed_intent: dict | None = None,
+        metadata: dict | None = None,
+    ) -> bool:
+        if self._mission_handoff_blocked(metadata):
+            return False
+        route_mode = str(getattr(route_decision, "mode", "") or "").strip().lower()
+        if route_mode == "code":
+            return True
+        if isinstance(parsed_intent, dict):
+            action = str(parsed_intent.get("action") or "").strip().lower()
+            if action == "create_coding_project":
+                return True
+        inferred = self._infer_coding_project_intent(user_input)
+        return isinstance(inferred, dict) and str(inferred.get("action") or "").strip().lower() == "create_coding_project"
+
+    async def _run_coding_mission_handoff(
+        self,
+        goal: str,
+        *,
+        user_id: str,
+        channel: str,
+        mode: str = "Balanced",
+        attachments: list[str] | None = None,
+        metadata: dict | None = None,
+    ):
+        runtime = get_mission_runtime()
+        mission = await runtime.create_mission(
+            goal,
+            user_id=str(user_id or "local"),
+            channel=str(channel or "cli"),
+            mode=str(mode or "Balanced") or "Balanced",
+            attachments=[str(item) for item in list(attachments or []) if str(item).strip()],
+            metadata={"source": "agent_coding_handoff", **dict(metadata or {})},
+            agent=self,
+            auto_start=False,
+        )
+        result = await runtime.run_mission(mission.mission_id, agent=self)
+        return result or mission
+
+    def _mission_attachments(self, mission: Any) -> tuple[list[AttachmentRef], str]:
+        refs: list[AttachmentRef] = []
+        manifest_path = ""
+        seen: set[str] = set()
+        for record in list(getattr(mission, "evidence", []) or []):
+            path = str(getattr(record, "path", "") or "").strip()
+            kind = str(getattr(record, "kind", "") or "file").strip()
+            label = str(getattr(record, "label", "") or "").strip()
+            if kind == "manifest" and path and not manifest_path:
+                manifest_path = path
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            refs.append(
+                self._attachment_ref_from_artifact(
+                    {
+                        "path": path,
+                        "type": kind or "file",
+                        "name": label or Path(path).name,
+                        "source": "mission",
+                    }
+                )
+            )
+            if len(refs) >= 8:
+                break
+        return refs, manifest_path
+
+    @staticmethod
+    def _mission_response_text(mission: Any) -> str:
+        status = str(getattr(mission, "status", "") or "queued").strip().lower()
+        deliverable = str(getattr(mission, "deliverable", "") or "").strip()
+        mission_id = str(getattr(mission, "mission_id", "") or "").strip()
+        goal = str(getattr(mission, "goal", "") or "").strip()
+        approvals = [item for item in list(getattr(mission, "approvals", []) or []) if str(getattr(item, "status", "") or "") == "pending"]
+        if status == "waiting_approval":
+            lines = [f"Görev onay bekliyor: {goal or mission_id or 'mission'}"]
+            if mission_id:
+                lines.append(f"Mission ID: {mission_id}")
+            if approvals:
+                lines.append("")
+                lines.append("Bekleyen onaylar:")
+                for item in approvals[:4]:
+                    title = str(getattr(item, "title", "") or getattr(item, "node_id", "") or "approval").strip()
+                    if title:
+                        lines.append(f"- {title}")
+            return "\n".join(lines).strip()
+        if deliverable:
+            return deliverable
+        if status == "completed":
+            return f"Misyon tamamlandı: {goal or mission_id or 'mission'}"
+        if status == "failed":
+            return f"Misyon başarısız oldu: {goal or mission_id or 'mission'}"
+        return f"Misyon kuyruğa alındı: {goal or mission_id or 'mission'}"
+
+    async def _build_mission_handoff_response(
+        self,
+        *,
+        ledger: ExecutionLedger,
+        run_store: RunStore,
+        run_id: str,
+        started_at: float,
+        user_input: str,
+        mission: Any,
+        channel: str,
+        uid: str,
+        route_decision: dict | None = None,
+    ) -> AgentResponse:
+        refs, mission_manifest = self._mission_attachments(mission)
+        response_text = self._mission_response_text(mission)
+        mission_status = str(getattr(mission, "status", "") or "queued").strip().lower()
+        route_mode = str(getattr(mission, "route_mode", "") or "task").strip().lower() or "task"
+        status = "success" if mission_status == "completed" else ("partial" if mission_status == "waiting_approval" else "failed")
+        manifest = ledger.write_manifest(
+            status=status,
+            metadata={
+                "channel": channel,
+                "user_id": uid,
+                "mode": "mission_handoff",
+                "mission_id": str(getattr(mission, "mission_id", "") or ""),
+                "mission_status": mission_status,
+                "route_mode": route_mode,
+                "mission_manifest_path": mission_manifest,
+            },
+        )
+        task_state = {
+            "mission_id": str(getattr(mission, "mission_id", "") or ""),
+            "status": mission_status,
+            "route_mode": route_mode,
+        }
+        artifacts = [ref.to_dict() for ref in refs]
+        run_store.write_task(
+            {},
+            user_input=user_input,
+            metadata={"channel": channel, "user_id": uid, "phase": "mission_handoff", "mission_id": task_state["mission_id"]},
+            task_state=task_state,
+        )
+        run_store.write_evidence(
+            manifest_path=manifest,
+            steps=[],
+            artifacts=artifacts,
+            metadata={"status": status, "mode": "mission_handoff", "mission_id": task_state["mission_id"]},
+        )
+        summary_path = run_store.write_summary(
+            status=status,
+            response_text=response_text,
+            error="" if status != "failed" else response_text,
+            artifacts=artifacts,
+            metadata={
+                "manifest_path": manifest,
+                "mission_id": task_state["mission_id"],
+                "mission_manifest_path": mission_manifest,
+                "route_mode": route_mode,
+            },
+        )
+        run_store.write_logs(lines=["mission_handoff", task_state["mission_id"], mission_status])
+        try:
+            await self._finalize_turn(
+                user_input=user_input,
+                response_text=response_text,
+                action=route_mode or "mission",
+                success=status == "success",
+                started_at=started_at,
+                context={
+                    "role": "mission",
+                    "job_type": route_mode or "task",
+                    "errors": 0 if status != "failed" else 1,
+                    "run_id": run_id,
+                    "mode": "mission_handoff",
+                    "mission_id": task_state["mission_id"],
+                    "route_decision": dict(route_decision or {}),
+                },
+            )
+        except Exception as finalize_exc:
+            logger.debug(f"mission handoff finalize skipped: {finalize_exc}")
+        return AgentResponse(
+            run_id=run_id,
+            text=response_text,
+            attachments=refs,
+            evidence_manifest_path=manifest,
+            status=status,
+            error="" if status != "failed" else response_text,
+            metadata={
+                "mission_id": task_state["mission_id"],
+                "mission_status": mission_status,
+                "route_mode": route_mode,
+                "summary_path": summary_path,
+                "mission_manifest_path": mission_manifest,
+            },
+        )
+
     async def initialize(self) -> bool:
         await self.kernel.initialize()
         self.llm = self.kernel.llm
@@ -1229,7 +1494,91 @@ class Agent:
         except Exception:
             quick_intent = None
 
+        parsed_intent = None
+        if getattr(self, "intent_parser", None):
+            try:
+                parsed_intent = self.intent_parser.parse(effective_user_input)
+            except Exception:
+                parsed_intent = None
+
         cowork_runtime = get_cowork_runtime()
+        route_decision = None
+        route_metadata: dict[str, Any] = {
+            "channel": str(channel or "cli"),
+            "user_id": uid,
+            "run_id": run_id,
+        }
+        if isinstance(metadata, dict):
+            for key in ("tool_name", "capability_domain", "workflow_profile", "workflow_phase"):
+                value = metadata.get(key)
+                if value is not None:
+                    route_metadata[key] = value
+        if pending_workflow:
+            route_metadata["workflow_session"] = dict(pending_workflow)
+        try:
+            route_decision = cowork_runtime.route_command(
+                effective_user_input,
+                quick_intent=quick_intent,
+                parsed_intent=parsed_intent,
+                attachments=list(resolved_paths),
+                capability_domain=str(route_metadata.get("capability_domain") or ""),
+                metadata=route_metadata,
+            )
+        except Exception as route_exc:
+            logger.debug(f"Cowork routing fallback: {route_exc}")
+        request_contract: dict[str, Any] = {}
+        capability_plan = None
+        try:
+            if getattr(self, "capability_router", None):
+                capability_plan = self.capability_router.route(effective_user_input)
+                if capability_plan is not None:
+                    contract = self.capability_router.build_request_contract(
+                        effective_user_input,
+                        domain=str(getattr(capability_plan, "domain", "") or ""),
+                        confidence=float(getattr(capability_plan, "confidence", 0.0) or 0.0),
+                        route_mode=str(getattr(capability_plan, "suggested_job_type", "") or ""),
+                        output_artifacts=list(getattr(capability_plan, "output_artifacts", []) or []),
+                        quality_checklist=list(getattr(capability_plan, "quality_checklist", []) or []),
+                        quick_intent=quick_intent,
+                        parsed_intent=parsed_intent,
+                        attachments=list(resolved_paths),
+                        metadata=route_metadata,
+                    )
+                    request_contract = contract.to_dict()
+        except Exception as contract_exc:
+            logger.debug(f"request contract build skipped: {contract_exc}")
+        if request_contract:
+            route_metadata["request_contract"] = dict(request_contract)
+            route_metadata["request_contract_preview"] = str(request_contract.get("preview") or "")
+            route_metadata["request_content_kind"] = str(request_contract.get("content_kind") or "")
+            route_metadata["request_output_formats"] = list(request_contract.get("output_formats") or [])
+            route_metadata["request_style_profile"] = str(request_contract.get("style_profile") or "")
+            route_metadata["request_source_policy"] = str(request_contract.get("source_policy") or "")
+            route_metadata["request_quality_contract"] = list(request_contract.get("quality_contract") or [])
+        if capability_plan is not None and hasattr(capability_plan, "to_dict"):
+            route_metadata["capability_plan"] = capability_plan.to_dict()
+        if route_decision is not None and getattr(route_decision, "refusal", False):
+            refusal_text = str(
+                getattr(route_decision, "refusal_message", "")
+                or getattr(route_decision, "reason", "")
+                or build_chat_fallback_message(language=str(elyan_config.get("agent.language", "tr") or "tr"))
+            ).strip()
+            return await self._build_controlled_route_response(
+                ledger=ledger,
+                run_store=run_store,
+                run_id=run_id,
+                started_at=started_at,
+                user_input=effective_user_input,
+                response_text=refusal_text,
+                channel=str(channel or "cli"),
+                uid=uid,
+                reason=str(getattr(route_decision, "reason", "") or "route_refusal"),
+                action="refuse",
+                mode=str(getattr(route_decision, "mode", "") or "communication"),
+                status="partial",
+                success=False,
+                route_decision=route_decision.to_dict() if hasattr(route_decision, "to_dict") else {},
+            )
         cowork_session = None
         try:
             cowork_session = cowork_runtime.start_session(
@@ -1240,6 +1589,7 @@ class Agent:
                 quick_intent=quick_intent,
                 attachments=list(resolved_paths),
                 runtime_policy={"execution": {"skip_verify_for_chat": True}},
+                route_decision=route_decision,
             )
             cowork_runtime.observe_turn(
                 session_key=cowork_session.session_id,
@@ -1254,6 +1604,73 @@ class Agent:
         except Exception as cowork_exc:
             logger.debug(f"Cowork session bootstrap skipped: {cowork_exc}")
 
+        route_mode_name = str(getattr(route_decision, "mode", "") or "").strip().lower() if route_decision is not None else ""
+        request_contract_needs_clarification = bool(request_contract.get("needs_clarification")) if isinstance(request_contract, dict) else False
+        request_content_kind = str(request_contract.get("content_kind") or "").strip().lower() if isinstance(request_contract, dict) else ""
+        request_contract_clarification = str(request_contract.get("clarifying_question") or "").strip() if isinstance(request_contract, dict) else ""
+        can_clarify_request = (
+            request_contract_needs_clarification
+            and route_mode_name not in {"communication", "chat"}
+            and request_content_kind in {"web_project", "document_pack", "presentation", "spreadsheet", "research_delivery", "code_project"}
+        )
+        if can_clarify_request:
+            if not request_contract_clarification:
+                request_contract_clarification = "Çıktı biçimini netleştirir misin? Sunum, doküman, excel ya da web sitesi olarak mı hazırlayayım?"
+            clarification_text = request_contract_clarification
+            preview_text = str(request_contract.get("preview") or "").strip() if isinstance(request_contract, dict) else ""
+            if preview_text:
+                clarification_text = f"{clarification_text}\n{preview_text}"
+            route_payload = route_decision.to_dict() if hasattr(route_decision, "to_dict") else {}
+            if isinstance(route_payload, dict) and request_contract:
+                route_payload["request_contract"] = dict(request_contract)
+            return await self._build_controlled_route_response(
+                ledger=ledger,
+                run_store=run_store,
+                run_id=run_id,
+                started_at=started_at,
+                user_input=effective_user_input,
+                response_text=clarification_text,
+                channel=str(channel or "cli"),
+                uid=uid,
+                reason="request_contract_clarify",
+                action="clarify",
+                mode="clarification",
+                status="partial",
+                success=False,
+                route_decision=route_payload,
+            )
+
+        mission_mode = str(
+            ((metadata or {}).get("adaptive_mode") if isinstance(metadata, dict) else "")
+            or ((metadata or {}).get("mode") if isinstance(metadata, dict) else "")
+            or "Balanced"
+        ).strip() or "Balanced"
+        if self._should_handoff_coding_mission(
+            effective_user_input,
+            route_decision=route_decision,
+            parsed_intent=parsed_intent,
+            metadata=metadata,
+        ):
+            mission = await self._run_coding_mission_handoff(
+                effective_user_input,
+                user_id=uid,
+                channel=str(channel or "cli"),
+                mode=mission_mode,
+                attachments=list(resolved_paths),
+                metadata={"route_mode_hint": "code", "source_channel": str(channel or "cli")},
+            )
+            return await self._build_mission_handoff_response(
+                ledger=ledger,
+                run_store=run_store,
+                run_id=run_id,
+                started_at=started_at,
+                user_input=effective_user_input,
+                mission=mission,
+                channel=str(channel or "cli"),
+                uid=uid,
+                route_decision=route_decision.to_dict() if hasattr(route_decision, "to_dict") else {},
+            )
+
         if fast_chat_allowed and self.llm is not None:
             session_mode = str(getattr(cowork_session, "mode", "") or "").strip().lower()
             disable_fast_chat_for_mode = session_mode in {"screen", "browser", "code", "research", "file"}
@@ -1263,6 +1680,15 @@ class Agent:
                     fast_response = self.llm.fast_response.get_fast_response(effective_user_input) if getattr(self.llm, "fast_response", None) else None
                 except Exception:
                     fast_response = None
+
+                route_allows_chat = False
+                if route_decision is not None:
+                    route_allows_chat = (
+                        str(getattr(route_decision, "mode", "") or "").strip().lower() == "communication"
+                        and hasattr(self.llm, "chat")
+                    )
+                else:
+                    route_allows_chat = hasattr(self.llm, "chat") and self._should_route_to_llm_chat(effective_user_input, None, quick_intent)
 
                 if fast_response and str(getattr(fast_response, "answer", "") or "").strip():
                     response_text = self._sanitize_chat_reply(fast_response.answer)
@@ -1319,7 +1745,7 @@ class Agent:
                         error="",
                     )
 
-                if self._should_route_to_llm_chat(effective_user_input, None, quick_intent):
+                if route_allows_chat:
                     chat_text = ""
                     try:
                         chat_text = await with_timeout(
@@ -1435,11 +1861,13 @@ class Agent:
             "tools": dict(runtime_policy.tools),
             "response": dict(runtime_policy.response),
             "security": dict(runtime_policy.security),
+            "coding": dict(getattr(runtime_policy, "coding", {}) or {}),
             "metadata": {
                 "channel": str(channel or "cli"),
                 "user_id": uid,
                 "run_id": run_id,
                 "run_dir": str(run_store.base_dir),
+                "workspace_path": str(Path.cwd()),
             },
         }
         if pending_workflow:
@@ -1480,6 +1908,15 @@ class Agent:
             ctx.runtime_policy["metadata"]["cowork_session_id"] = cowork_session.session_id
             ctx.runtime_policy["metadata"]["cowork_mode"] = cowork_session.mode
             ctx.runtime_policy["metadata"]["cowork_model"] = cowork_session.selected_model
+            if request_contract:
+                ctx.runtime_policy["metadata"]["request_contract"] = dict(request_contract)
+            if capability_plan is not None and hasattr(capability_plan, "to_dict"):
+                ctx.runtime_policy["metadata"]["capability_plan"] = capability_plan.to_dict()
+            if route_decision is not None and hasattr(route_decision, "to_dict"):
+                ctx.telemetry["route_decision"] = route_decision.to_dict()
+                ctx.runtime_policy["metadata"]["route_decision"] = route_decision.to_dict()
+                ctx.runtime_policy["metadata"]["route_mode"] = str(getattr(route_decision, "mode", "") or "")
+                ctx.runtime_policy["metadata"]["route_confidence"] = float(getattr(route_decision, "confidence", 0.0) or 0.0)
             if ctx.cowork_mode in {"screen", "browser"}:
                 screen_state = await with_timeout(
                     cowork_runtime.collect_screen_state(goal=effective_user_input, task_state=task.to_dict() if hasattr(task, "to_dict") else {}),
@@ -1501,6 +1938,9 @@ class Agent:
                             "frontmost_app": screen_state.frontmost_app,
                             "confidence": screen_state.confidence,
                         }
+                        ctx.runtime_policy["metadata"]["screen_state"] = screen_state.to_dict()
+                        ctx.runtime_policy["metadata"]["screen_state_summary"] = screen_prompt
+                        ctx.runtime_policy["metadata"]["screen_state_confidence"] = float(screen_state.confidence or 0.0)
                         ctx.runtime_policy["metadata"]["screen_state_captured"] = True
         except Exception as cowork_sync_exc:
             logger.debug(f"Cowork session sync skipped: {cowork_sync_exc}")
@@ -1587,6 +2027,14 @@ class Agent:
                     "run_id": run_id,
                     "cowork_session_id": str(getattr(ctx, "cowork_session_id", "") or ""),
                     "cowork_mode": str(getattr(ctx, "cowork_mode", "") or ""),
+                    "repo_snapshot_id": str((getattr(ctx, "repo_snapshot", {}) or {}).get("snapshot_id") or ""),
+                    "coding_contract_id": str((getattr(ctx, "coding_contract", {}) or {}).get("contract_id") or ""),
+                    "style_intent": dict(getattr(ctx, "style_intent", {}) or {}),
+                    "gate_state": dict(getattr(ctx, "gate_state", {}) or {}),
+                    "repair_budget": int(getattr(ctx, "repair_budget", 0) or 0),
+                    "model_ladder_trace": list(getattr(ctx, "model_ladder_trace", []) or []),
+                    "evidence_bundle_id": str((getattr(ctx, "evidence_bundle", {}) or {}).get("bundle_id") or ""),
+                    "claim_blocked_reason": str(getattr(ctx, "claim_blocked_reason", "") or ""),
                 },
             )
 
@@ -2404,6 +2852,33 @@ class Agent:
             or workflow_session.get("capability_domain")
             or ""
         ).strip().lower()
+        runtime_meta["user_input"] = str(user_input or "")
+        runtime_meta["tool_name"] = mapped_tool
+
+        if requires_screen_state(mapped_tool):
+            screen_state_payload = runtime_meta.get("screen_state") or runtime_meta.get("screen_state_payload")
+            if not screen_state_payload:
+                try:
+                    screen_state_payload = pipeline.get("screen_state")
+                except Exception:
+                    screen_state_payload = None
+            actionable, screen_reason = screen_state_is_actionable(screen_state_payload)
+            if not actionable:
+                err_text = f"screen_state_required:{screen_reason}"
+                _push_tool_event(
+                    "end",
+                    mapped_tool,
+                    step=step_name,
+                    request_id=str(getattr(_tr_req, "request_id", "") or ""),
+                    success=False,
+                    payload={"error": err_text},
+                )
+                return {
+                    "success": False,
+                    "error": "Ekran durumu yeterli değil. Önce görünür ve etkileşilebilir bir ekran bağlamı üret.",
+                    "error_code": "SCREEN_STATE_UNAVAILABLE",
+                }
+
         approval_required_for_workflow = bool(workflow_cfg.get("require_explicit_approval", True))
         allowed_workflow_domains = {
             str(x or "").strip().lower()
@@ -7192,6 +7667,59 @@ class Agent:
         if mapped in {"api_health_check", "http_request", "graphql_query"}:
             return self._build_api_task_spec(user_input, intent)
 
+        if mapped == "create_coding_project":
+            project_name = str(params.get("project_name") or self._extract_topic(user_input, step_name="")).strip() or "elyan-project"
+            brief = str(params.get("brief") or user_input or "").strip() or project_name
+            output_dir = self._resolve_path_with_desktop_fallback(str(params.get("output_dir") or "~/Desktop"), user_input=user_input)
+            project_path = str(Path(output_dir).expanduser() / project_name)
+            project_params = {
+                "project_name": project_name,
+                "brief": brief,
+                "output_dir": output_dir,
+                "project_kind": str(params.get("project_kind") or "website").strip() or "website",
+                "stack": str(params.get("stack") or "vanilla").strip() or "vanilla",
+                "complexity": str(params.get("complexity") or "advanced").strip() or "advanced",
+                "theme": str(params.get("theme") or "professional").strip() or "professional",
+            }
+            task_spec = {
+                "intent": "coding_batch",
+                "version": TASK_SPEC_SCHEMA_VERSION,
+                "source": "intent_normalizer",
+                "goal": str(user_input or "").strip() or f"{project_name} projesini oluştur",
+                "slots": extract_slots_from_intent({"action": action, "params": project_params}),
+                "constraints": {
+                    "deterministic_defaults": True,
+                    "contract_first_runtime": True,
+                },
+                "context_assumptions": ["repo_truth_required"],
+                "artifacts_expected": [{"path": project_path, "type": "directory", "must_exist": False}],
+                "checks": [{"step_id": "step_1", "checks": [{"type": "tool_success"}]}],
+                "rollback": [],
+                "required_tools": ["create_coding_project"],
+                "tool_candidates": ["create_coding_project"],
+                "risk_level": "low",
+                "timeouts": {"step_timeout_s": 300, "run_timeout_s": 3600},
+                "retries": {"max_attempts": 1},
+                "steps": [
+                    {
+                        "id": "step_1",
+                        "action": "create_coding_project",
+                        "params": project_params,
+                        "depends_on": [],
+                        "checks": [{"type": "tool_success"}],
+                        "description": brief,
+                    }
+                ],
+            }
+            task_spec = coerce_task_spec_standard(
+                task_spec,
+                user_input=user_input,
+                intent_payload=intent,
+                intent_confidence=float(intent.get("confidence", 0.0) or 0.0),
+            )
+            ok, _errors = self._validate_runtime_task_spec(task_spec)
+            return task_spec if ok else None
+
         normalized_params = self._normalize_param_aliases(mapped, dict(params))
 
         if mapped in {"write_file", "read_file", "list_files", "create_folder", "edit_text_file", "edit_word_document", "summarize_document", "analyze_document", "batch_edit_text"}:
@@ -7603,17 +8131,52 @@ class Agent:
         return clean_params, stop_retry, note
 
     async def _run_runtime_task_spec(self, task_spec: dict[str, Any], *, user_input: str) -> str:
+        self._last_runtime_task_spec_payload = None
+        outputs: list[str] = []
+        artifact_paths: list[str] = []
+
+        def _finish_runtime_response(
+            text: str,
+            *,
+            success: bool,
+            error: str = "",
+            error_code: str = "",
+            failure_class: str = "",
+            rollback_performed: bool = False,
+        ) -> str:
+            self._last_runtime_task_spec_payload = {
+                "success": bool(success),
+                "artifact_paths": [p for p in dict.fromkeys(artifact_paths) if p],
+                "outputs": list(outputs),
+                "task_spec": dict(task_spec or {}),
+                "error": str(error or ""),
+                "error_code": str(error_code or ""),
+                "failure_class": str(failure_class or ""),
+                "rollback_performed": bool(rollback_performed),
+                "message": str(text or ""),
+            }
+            return text
+
         ok, errors = self._validate_runtime_task_spec(task_spec)
         if not ok:
             detail = ", ".join(str(x) for x in (errors or [])[:5]) or "invalid_task_spec"
-            return f"Hata kodu: {PLAN_ERROR}\nGeçersiz TaskSpec ({detail})."
+            return _finish_runtime_response(
+                f"Hata kodu: {PLAN_ERROR}\nGeçersiz TaskSpec ({detail}).",
+                success=False,
+                error=f"invalid_task_spec:{detail}",
+                error_code=PLAN_ERROR,
+                failure_class="planning_failure",
+            )
 
         steps = task_spec.get("steps", []) if isinstance(task_spec.get("steps"), list) else []
         if not steps:
-            return f"Hata kodu: {PLAN_ERROR}\nTaskSpec içinde çalıştırılabilir adım bulunamadı."
-
-        outputs: list[str] = []
-        artifact_paths: list[str] = []
+            return _finish_runtime_response(
+                f"Hata kodu: {PLAN_ERROR}\nTaskSpec içinde çalıştırılabilir adım bulunamadı.",
+                success=False,
+                error="no_runnable_steps",
+                error_code=PLAN_ERROR,
+                failure_class="planning_failure",
+            )
         state = create_pipeline_state()
         root_checks: dict[str, list[dict[str, Any]]] = {}
         checks_payload = task_spec.get("checks", []) if isinstance(task_spec.get("checks"), list) else []
@@ -7874,7 +8437,14 @@ class Agent:
             if (time.perf_counter() - run_started) > run_timeout_s:
                 await _run_rollback(f"run_timeout>{run_timeout_s:.1f}s")
                 _emit_terminal_error(ENV_ERROR, f"run_timeout>{run_timeout_s:.1f}s")
-                return "\n\n".join(x for x in outputs if str(x).strip())
+                return _finish_runtime_response(
+                    "\n\n".join(x for x in outputs if str(x).strip()),
+                    success=False,
+                    error=f"run_timeout>{run_timeout_s:.1f}s",
+                    error_code=ENV_ERROR,
+                    failure_class="environment_failure",
+                    rollback_performed=rollback_done,
+                )
             ready: list[tuple[int, str, dict[str, Any]]] = []
             for sid, (idx, step) in pending.items():
                 raw_deps = step.get("depends_on") if step.get("depends_on") is not None else step.get("dependencies")
@@ -7891,7 +8461,14 @@ class Agent:
                     outputs.append(f"[{idx}] {step_desc}\nHata: Bilinmeyen bağımlılık(lar): {', '.join(missing)}")
                     _emit_terminal_error(PLAN_ERROR, "unknown_dependency")
                     await _run_rollback("unknown_dependency")
-                    return "\n\n".join(x for x in outputs if str(x).strip())
+                    return _finish_runtime_response(
+                        "\n\n".join(x for x in outputs if str(x).strip()),
+                        success=False,
+                        error="unknown_dependency",
+                        error_code=PLAN_ERROR,
+                        failure_class="planning_failure",
+                        rollback_performed=rollback_done,
+                    )
                 if all(d in completed for d in deps):
                     ready.append((idx, sid, step))
 
@@ -7899,7 +8476,14 @@ class Agent:
                 outputs.append("Hata: TaskSpec adımlarında döngüsel veya çözülemeyen bağımlılık bulundu.")
                 _emit_terminal_error(PLAN_ERROR, "cyclic_or_unresolved_dependency")
                 await _run_rollback("cyclic_or_unresolved_dependency")
-                return "\n\n".join(x for x in outputs if str(x).strip())
+                return _finish_runtime_response(
+                    "\n\n".join(x for x in outputs if str(x).strip()),
+                    success=False,
+                    error="cyclic_or_unresolved_dependency",
+                    error_code=PLAN_ERROR,
+                    failure_class="planning_failure",
+                    rollback_performed=rollback_done,
+                )
 
             ready.sort(key=lambda x: x[0])
             parallel_candidates: list[tuple[int, str, dict[str, Any]]] = []
@@ -7965,19 +8549,37 @@ class Agent:
                         ok_res, _sid = await _consume_result(res)
                         if not ok_res:
                             await _run_rollback(str(res.get("fail_reason") or "step_failed"))
-                            return "\n\n".join(x for x in outputs if str(x).strip())
+                            return _finish_runtime_response(
+                                "\n\n".join(x for x in outputs if str(x).strip()),
+                                success=False,
+                                error=str(res.get("fail_reason") or "step_failed"),
+                                error_code=str(res.get("fail_code") or TOOL_ERROR),
+                                failure_class=str(res.get("failure_class") or ""),
+                                rollback_performed=rollback_done,
+                            )
 
             for idx, sid, st in sequential_candidates:
                 res = await _run_runtime_step(idx, sid, st)
                 ok_res, _sid = await _consume_result(res)
                 if not ok_res:
                     await _run_rollback(str(res.get("fail_reason") or "step_failed"))
-                    return "\n\n".join(x for x in outputs if str(x).strip())
+                    return _finish_runtime_response(
+                        "\n\n".join(x for x in outputs if str(x).strip()),
+                        success=False,
+                        error=str(res.get("fail_reason") or "step_failed"),
+                        error_code=str(res.get("fail_code") or TOOL_ERROR),
+                        failure_class=str(res.get("failure_class") or ""),
+                        rollback_performed=rollback_done,
+                    )
 
         artifact_paths = [p for p in dict.fromkeys(artifact_paths) if p]
         if artifact_paths:
             outputs.append("Artifact yolları:\n" + "\n".join(f"- {p}" for p in artifact_paths))
-        return "\n\n".join(x for x in outputs if str(x).strip())
+        return _finish_runtime_response(
+            "\n\n".join(x for x in outputs if str(x).strip()),
+            success=True,
+            rollback_performed=rollback_done,
+        )
 
     async def _run_filesystem_task_spec(self, task_spec: dict[str, Any], *, user_input: str) -> str:
         if not self._validate_filesystem_task_spec(task_spec):
@@ -9534,13 +10136,27 @@ class Agent:
     ) -> None:
         try:
             intent_name = str(action or "chat")
-            self.learning.record_interaction(
-                tool=intent_name,
-                input_params={"user_input": str(user_input or "")[:500]},
-                output=context or {},
-                success=bool(success),
-                duration=max(0, duration_ms) / 1000.0,
-            )
+            record_fn = self.learning.record_interaction
+            record_sig = inspect.signature(record_fn)
+            if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in record_sig.parameters.values()):
+                record_result = record_fn(
+                    tool=intent_name,
+                    action=intent_name,
+                    input_params={"user_input": str(user_input or "")[:500]},
+                    output=context or {},
+                    success=bool(success),
+                    duration=max(0, duration_ms) / 1000.0,
+                )
+            else:
+                record_result = record_fn(
+                    intent_name,
+                    {"user_input": str(user_input or "")[:500]},
+                    context or {},
+                    bool(success),
+                    max(0, duration_ms) / 1000.0,
+                )
+            if inspect.isawaitable(record_result):
+                await record_result
         except Exception as exc:
             logger.debug(f"learning record failed: {exc}")
 
@@ -9651,6 +10267,14 @@ class Agent:
                         "run_id": str((context or {}).get("run_id") or ""),
                         "mode": str((context or {}).get("cowork_mode") or (context or {}).get("mode") or ""),
                         "errors": int((context or {}).get("errors", 0) or 0),
+                        "repo_snapshot_id": str((context or {}).get("repo_snapshot_id") or ""),
+                        "coding_contract_id": str((context or {}).get("coding_contract_id") or ""),
+                        "style_intent": dict((context or {}).get("style_intent") or {}),
+                        "gate_state": dict((context or {}).get("gate_state") or {}),
+                        "repair_budget": int((context or {}).get("repair_budget", 0) or 0),
+                        "model_ladder_trace": list((context or {}).get("model_ladder_trace") or []),
+                        "evidence_bundle_id": str((context or {}).get("evidence_bundle_id") or ""),
+                        "claim_blocked_reason": str((context or {}).get("claim_blocked_reason") or ""),
                     },
                 )
             except Exception as cowork_exc:
@@ -10545,6 +11169,26 @@ class Agent:
             return "Hata: Çok adımlı görev tamamlanamadı."
 
         if low_action == "create_coding_project":
+            runtime_meta = self._runtime_metadata()
+            if runtime_meta and not self._mission_handoff_blocked():
+                mission = await self._run_coding_mission_handoff(
+                    user_input,
+                    user_id=str(user_id or runtime_meta.get("user_id") or "local"),
+                    channel=str(runtime_meta.get("channel") or "cli"),
+                    mode=str(runtime_meta.get("adaptive_mode") or runtime_meta.get("mode") or "Balanced"),
+                    attachments=[],
+                    metadata={"route_mode_hint": "code", "source": "direct_intent"},
+                )
+                response_text = self._mission_response_text(mission)
+                self._last_direct_intent_payload = {
+                    "action": "create_coding_project",
+                    "success": str(getattr(mission, "status", "") or "") == "completed",
+                    "mission_id": str(getattr(mission, "mission_id", "") or ""),
+                    "mission_status": str(getattr(mission, "status", "") or ""),
+                    "route_mode": str(getattr(mission, "route_mode", "") or ""),
+                }
+                return response_text
+
             params = intent.get("params", {}) if isinstance(intent.get("params"), dict) else {}
             project_kind = str(params.get("project_kind") or "website").strip().lower()
             project_name = str(params.get("project_name") or self._extract_topic(user_input, step_name="")).strip() or "elyan-project"
@@ -10680,8 +11324,24 @@ class Agent:
                     step_name=f"Projeyi {ide} ile aç",
                 )
                 outputs.append(self._format_result_text(ide_result))
-
-            return "\n".join(x for x in outputs if isinstance(x, str) and x.strip()) or "Kod projesi oluşturuldu."
+            final_text = "\n".join(x for x in outputs if isinstance(x, str) and x.strip()) or "Kod projesi oluşturuldu."
+            self._last_direct_intent_payload = {
+                "action": "create_coding_project",
+                "success": bool(created_path),
+                "project_dir": created_path,
+                "artifact_paths": [created_path] if created_path else [],
+                "message": final_text,
+                "verification": {
+                    "delivery_plan_created": bool(created_path),
+                    "report_generated": bool(created_path),
+                },
+                "style_intent": {
+                    "project_kind": project_kind,
+                    "theme": theme,
+                    "stack": stack,
+                },
+            }
+            return final_text
 
         if low_action == "api_health_get_save":
             url = str(params.get("url") or self._extract_first_url(user_input)).strip()

@@ -71,6 +71,14 @@ from core.failure_classification import classify_failure_class
 from core.recovery_policy import select_recovery_strategy
 from core.telemetry.runtime_trace import ensure_runtime_trace, update_runtime_trace
 from core.spec.task_spec_standard import coerce_task_spec_standard
+from core.coding_runtime import (
+    RepoSnapshot,
+    build_evidence_bundle as build_coding_evidence_bundle,
+    evaluate_coding_gate_state,
+    is_contract_first_coding_candidate,
+    prepare_contract_first_coding,
+    run_adapter_verification_gates,
+)
 
 logger = get_logger("pipeline")
 
@@ -207,6 +215,317 @@ def _build_assist_mode_preview(ctx: Any) -> str:
 
     lines.append("Operator Mode icin `execution_mode=operator` gonder.")
     return "\n".join(lines)
+
+
+def _resolve_workspace_root(ctx: Any) -> str:
+    runtime_policy = ctx.runtime_policy if isinstance(getattr(ctx, "runtime_policy", {}), dict) else {}
+    metadata = runtime_policy.get("metadata", {}) if isinstance(runtime_policy.get("metadata"), dict) else {}
+    for candidate in (
+        metadata.get("workspace_path"),
+        getattr(ctx, "workspace_path", ""),
+        Path.cwd(),
+    ):
+        value = str(candidate or "").strip()
+        if value:
+            return value
+    return str(Path.cwd())
+
+
+def _apply_contract_first_coding_metadata(ctx: Any, prepared: dict[str, Any]) -> None:
+    repo_snapshot = prepared.get("repo_snapshot") if isinstance(prepared.get("repo_snapshot"), dict) else {}
+    coding_contract = prepared.get("coding_contract") if isinstance(prepared.get("coding_contract"), dict) else {}
+    style_intent = prepared.get("style_intent") if isinstance(prepared.get("style_intent"), dict) else {}
+    failure = prepared.get("failure") if isinstance(prepared.get("failure"), dict) else {}
+    task_spec = prepared.get("task_spec") if isinstance(prepared.get("task_spec"), dict) else None
+
+    ctx.repo_snapshot = dict(repo_snapshot)
+    ctx.coding_contract = dict(coding_contract)
+    ctx.style_intent = dict(style_intent)
+    ctx.adapter_id = str(coding_contract.get("execution_adapter") or coding_contract.get("adapter_id") or "")
+    ctx.requires_evidence = True
+    ctx.is_code_job = True
+    ctx.repair_budget = int(coding_contract.get("repair_budget", 0) or 0)
+    ctx.model_ladder_trace = [str(item).strip() for item in list(coding_contract.get("model_ladder_trace") or []) if str(item).strip()]
+    ctx.gate_state = {
+        "required": [str(item).strip().lower() for item in list(coding_contract.get("required_gates") or []) if str(item).strip()],
+        "passed": [],
+        "failed": [],
+        "missing": [str(item).strip().lower() for item in list(coding_contract.get("required_gates") or []) if str(item).strip()],
+        "claim_blocked_reason": "",
+    }
+
+    if isinstance(ctx.runtime_policy, dict):
+        metadata = ctx.runtime_policy.get("metadata", {}) if isinstance(ctx.runtime_policy.get("metadata"), dict) else {}
+        metadata["contract_first_coding"] = True
+        metadata["repo_snapshot_id"] = str(repo_snapshot.get("snapshot_id") or "")
+        metadata["coding_contract_id"] = str(coding_contract.get("contract_id") or "")
+        metadata["adapter_id"] = str(coding_contract.get("execution_adapter") or coding_contract.get("adapter_id") or "")
+        metadata["style_intent"] = dict(style_intent)
+        metadata["style_lock"] = dict(coding_contract.get("style_lock") or {})
+        metadata["allowed_write_paths"] = list(coding_contract.get("allowed_write_paths") or [])
+        metadata["forbidden_write_paths"] = list(coding_contract.get("forbidden_write_paths") or [])
+        metadata["gate_state"] = dict(ctx.gate_state)
+        metadata["model_ladder_trace"] = list(ctx.model_ladder_trace)
+        ctx.runtime_policy["metadata"] = metadata
+
+    if isinstance(ctx.intent, dict) and isinstance(task_spec, dict):
+        ctx.intent["task_spec"] = task_spec
+
+    if failure:
+        code = str(failure.get("code") or "coding_contract_failed").strip()
+        reason = str(failure.get("reason") or "Kod görevi güvenli contract-first runtime ile başlatılamadı.").strip()
+        ctx.claim_blocked_reason = code
+        ctx.errors.append(f"coding_contract:{code}")
+        ctx.delivery_blocked = True
+        ctx.final_response = f"{reason}\nDetay: {', '.join(str(item) for item in list(failure.get('details') or [])[:3])}".strip()
+        if isinstance(ctx.runtime_policy, dict):
+            metadata = ctx.runtime_policy.get("metadata", {}) if isinstance(ctx.runtime_policy.get("metadata"), dict) else {}
+            metadata["unsupported_reason"] = code
+            ctx.runtime_policy["metadata"] = metadata
+    else:
+        try:
+            from core.cowork_runtime import get_cowork_runtime
+
+            if str(getattr(ctx, "cowork_session_id", "") or "").strip():
+                get_cowork_runtime().update_session(
+                    str(ctx.cowork_session_id),
+                    repo_snapshot_id=str(repo_snapshot.get("snapshot_id") or ""),
+                    coding_contract_id=str(coding_contract.get("contract_id") or ""),
+                    adapter_id=str(coding_contract.get("execution_adapter") or coding_contract.get("adapter_id") or ""),
+                    style_intent=dict(style_intent),
+                    gate_state=dict(ctx.gate_state),
+                    repair_budget=int(ctx.repair_budget or 0),
+                    model_ladder_trace=list(ctx.model_ladder_trace or []),
+                )
+        except Exception as exc:
+            logger.debug(f"cowork coding metadata sync skipped: {exc}")
+
+
+def _should_use_contract_first_coding(ctx: Any) -> bool:
+    if not bool(getattr(ctx, "is_code_job", False)):
+        return False
+    contract = getattr(ctx, "coding_contract", {}) if isinstance(getattr(ctx, "coding_contract", {}), dict) else {}
+    if contract:
+        return True
+    return is_contract_first_coding_candidate(
+        getattr(ctx, "action", ""),
+        getattr(ctx, "job_type", ""),
+        getattr(ctx, "user_input", ""),
+    )
+
+
+def _contract_first_project_params(ctx: Any) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    intent = getattr(ctx, "intent", {})
+    if isinstance(intent, dict):
+        inner = intent.get("params")
+        if isinstance(inner, dict):
+            params.update(inner)
+        for key in ("project_name", "project_kind", "stack", "output_dir", "brief", "complexity", "theme", "tech_mode", "coding_standards"):
+            value = intent.get(key)
+            if value is not None and key not in params:
+                params[key] = value
+    ctx_params = getattr(ctx, "params", {})
+    if isinstance(ctx_params, dict):
+        for key, value in ctx_params.items():
+            if value is not None and key not in params:
+                params[key] = value
+    return params
+
+
+def _payload_reports_failure(payload: dict[str, Any], text: str = "") -> bool:
+    combined = " ".join(
+        str(value or "")
+        for value in (
+            payload.get("error"),
+            payload.get("error_code"),
+            payload.get("failure_class"),
+            payload.get("status"),
+            text,
+        )
+    ).lower()
+    if not combined.strip():
+        return bool(payload.get("success") is False)
+    error_markers = (
+        "hata",
+        "error",
+        "failed",
+        "failure",
+        "unsupported",
+        "blocked",
+        "invalid",
+        "missing",
+        "parse error",
+        "unverified",
+        "bozuk",
+    )
+    return bool(payload.get("success") is False or any(marker in combined for marker in error_markers))
+    intent_payload = ctx.intent if isinstance(ctx.intent, dict) else {}
+    params = intent_payload.get("params") if isinstance(intent_payload.get("params"), dict) else {}
+    task_spec = intent_payload.get("task_spec") if isinstance(intent_payload.get("task_spec"), dict) else {}
+    if not params and isinstance(task_spec, dict):
+        for step in list(task_spec.get("steps") or []):
+            if not isinstance(step, dict):
+                continue
+            if str(step.get("action") or "").strip().lower() != "create_coding_project":
+                continue
+            if isinstance(step.get("params"), dict):
+                params = dict(step.get("params") or {})
+                break
+    return dict(params or {})
+
+
+async def _execute_contract_first_greenfield(ctx: Any, agent: Any, contract: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    params = _contract_first_project_params(ctx)
+    build_project = getattr(agent, "_llm_build_project", None)
+    ensure_llm = getattr(agent, "_ensure_llm", None)
+    if not callable(build_project) or (callable(ensure_llm) and not bool(ensure_llm())):
+        reason = "Canonical greenfield üretim doğrulanamadı; legacy scaffold fallback kapalı."
+        return reason, {
+            "success": False,
+            "error": reason,
+            "error_code": "unsupported_or_unverified_generation",
+            "failure_class": "generation_unverified",
+            "adapter_id": str(contract.get("execution_adapter") or contract.get("adapter_id") or ""),
+        }
+
+    adapter_id = str(contract.get("execution_adapter") or contract.get("adapter_id") or "").strip().lower()
+    stack = str(params.get("stack") or "").strip().lower()
+    if not stack:
+        stack = {
+            "vanilla_web": "vanilla",
+            "vite": "react",
+            "react": "react",
+            "next": "nextjs",
+            "python_app": "python",
+            "go_app": "go",
+            "rust_app": "rust",
+            "java_app": "java",
+            "dotnet_app": "dotnet",
+            "php_app": "php",
+        }.get(adapter_id, "vanilla")
+
+    project_kind = str(params.get("project_kind") or "").strip().lower()
+    if not project_kind:
+        project_kind = "website" if adapter_id in {"vanilla_web", "vite", "react", "next"} else "app"
+
+    try:
+        result = await build_project(
+            project_name=str(params.get("project_name") or "elyan-project"),
+            project_kind=project_kind,
+            stack=stack,
+            brief=str(params.get("brief") or ctx.user_input or "").strip(),
+            output_dir=str(params.get("output_dir") or "~/Desktop"),
+            complexity=str(params.get("complexity") or "advanced").strip().lower() or "advanced",
+            theme=str(params.get("theme") or (ctx.style_intent or {}).get("visual_direction") or "professional").strip(),
+            tech_mode=str(params.get("tech_mode") or "stable").strip().lower() or "stable",
+            coding_standards=str(params.get("coding_standards") or "clean_code").strip().lower() or "clean_code",
+            quality_gates=params.get("quality_gates") if isinstance(params.get("quality_gates"), dict) else None,
+        )
+    except Exception as exc:
+        reason = f"Canonical greenfield üretim hata verdi: {exc}"
+        return reason, {
+            "success": False,
+            "error": reason,
+            "error_code": "unsupported_or_unverified_generation",
+            "failure_class": "generation_unverified",
+            "adapter_id": adapter_id,
+        }
+
+    payload = dict(result or {})
+    project_dir = str(payload.get("project_dir") or "").strip()
+    payload["adapter_id"] = adapter_id
+    if project_dir and not isinstance(payload.get("artifact_paths"), list):
+        payload["artifact_paths"] = [project_dir]
+    failure_signals = _payload_reports_failure(payload, str(payload.get("message") or ""))
+    if project_dir and str(payload.get("message") or "").strip() and not failure_signals:
+        return str(payload.get("message") or "").strip(), payload
+    if project_dir and not failure_signals:
+        message = f"Proje üretildi: {project_dir}"
+        payload["message"] = message
+        return message, payload
+    reason = str(payload.get("error") or payload.get("message") or "Canonical greenfield üretim doğrulanamadı.").strip()
+    payload.setdefault("success", False)
+    payload.setdefault("error_code", "unsupported_or_unverified_generation")
+    payload.setdefault("failure_class", "generation_unverified")
+    payload["success"] = False
+    payload.setdefault("error", reason)
+    return reason, payload
+
+
+async def _execute_contract_first_coding(ctx: Any, agent: Any) -> tuple[bool, str]:
+    contract = ctx.coding_contract if isinstance(getattr(ctx, "coding_contract", {}), dict) else {}
+    if not contract:
+        return False, ""
+    if not bool(contract.get("supported", False)):
+        failure = contract.get("failure_envelope") if isinstance(contract.get("failure_envelope"), dict) else {}
+        code = str(failure.get("code") or "unsupported_stack").strip()
+        reason = str(failure.get("reason") or "Kod görevi desteklenmeyen stack nedeniyle güvenli biçimde yürütülemedi.").strip()
+        ctx.claim_blocked_reason = code
+        ctx.delivery_blocked = True
+        ctx.errors.append(f"contract_first:{code}")
+        ctx.final_response = reason
+        return True, ctx.final_response
+
+    _set_execution_trace(
+        ctx,
+        route="contract_first_coding",
+        decision_path=["repo_truth", "adapter_select", "contract_first_coding"],
+        details={
+            "adapter": str(contract.get("adapter_id") or ""),
+            "repo_type": str(contract.get("repo_type") or ""),
+        },
+    )
+    if isinstance(ctx.telemetry, dict):
+        ctx.telemetry["coding_runtime"] = {
+            "adapter": str(contract.get("adapter_id") or ""),
+            "repo_type": str(contract.get("repo_type") or ""),
+            "required_gates": list(contract.get("required_gates") or []),
+        }
+
+    intent_payload = ctx.intent if isinstance(ctx.intent, dict) else {"action": ctx.action, "params": {}}
+    final_text = ""
+    payload: dict[str, Any] = {}
+    source = "contract_first_runtime"
+
+    if str(getattr(ctx, "action", "") or "").strip().lower() == "create_coding_project":
+        final_text, payload = await _execute_contract_first_greenfield(ctx, agent, contract)
+        source = "contract_first_greenfield"
+    else:
+        task_spec = intent_payload.get("task_spec") if isinstance(intent_payload.get("task_spec"), dict) else None
+        if not isinstance(task_spec, dict) or not hasattr(agent, "_run_runtime_task_spec"):
+            ctx.claim_blocked_reason = "missing_coding_taskspec"
+            ctx.errors.append("contract_first:missing_task_spec")
+            ctx.delivery_blocked = True
+            ctx.final_response = "Kod görevi için geçerli contract-first TaskSpec üretemedim."
+            return True, ctx.final_response
+        final_text = str(await agent._run_runtime_task_spec(task_spec, user_input=ctx.user_input) or "").strip()
+        payload = getattr(agent, "_last_runtime_task_spec_payload", None) or {}
+
+    success = bool(payload.get("success", False))
+    if payload and _payload_reports_failure(payload, final_text):
+        success = False
+    if not payload:
+        success = bool(final_text) and "hata kodu:" not in final_text.lower() and "error" not in final_text.lower() and "hata" not in final_text.lower()
+    row = {
+        "action": str(ctx.action or ""),
+        "success": success,
+        "message": final_text,
+        "source": source,
+    }
+    if isinstance(payload, dict) and payload:
+        row["raw"] = dict(payload)
+        if isinstance(payload.get("artifact_paths"), list):
+            row["artifact_paths"] = [str(item).strip() for item in payload.get("artifact_paths") if str(item).strip()]
+        for key in ("project_dir", "path", "file_path", "output_path", "error", "error_code", "failure_class"):
+            if key in payload:
+                row[key] = payload.get(key)
+    ctx.tool_results.append(row)
+    ctx.final_response += final_text
+    if not success:
+        error_code = str(payload.get("error_code") or row.get("error_code") or "execution_failed").strip()
+        ctx.errors.append(f"contract_first:{error_code}")
+    return True, final_text
 
 
 def _build_capability_fallback_params(action: str, user_input: str) -> Dict[str, Any]:
@@ -1572,6 +1891,14 @@ class PipelineContext:
     output_contract_spec: Dict[str, Any] = field(default_factory=dict)
     world_snapshot: Dict[str, Any] = field(default_factory=dict)
     screen_state: Dict[str, Any] = field(default_factory=dict)
+    repo_snapshot: Dict[str, Any] = field(default_factory=dict)
+    coding_contract: Dict[str, Any] = field(default_factory=dict)
+    style_intent: Dict[str, Any] = field(default_factory=dict)
+    gate_state: Dict[str, Any] = field(default_factory=dict)
+    repair_budget: int = 0
+    model_ladder_trace: List[str] = field(default_factory=list)
+    evidence_bundle: Dict[str, Any] = field(default_factory=dict)
+    claim_blocked_reason: str = ""
 
     # Stage 3: Plan
     plan: List[Dict] = field(default_factory=list)
@@ -2435,6 +2762,16 @@ class StageRoute(PipelineStage):
                         intent_confidence=float(ctx.intent.get("confidence", 0.0) or 0.0),
                     )
                     ctx.intent["task_spec"] = task_spec
+                if is_contract_first_coding_candidate(ctx.action, ctx.job_type, ctx.user_input):
+                    prepared = prepare_contract_first_coding(
+                        user_input=ctx.user_input,
+                        task_spec=task_spec,
+                        workspace_path=_resolve_workspace_root(ctx),
+                        runtime_policy=ctx.runtime_policy,
+                        workspace_files=ctx.workspace_files or None,
+                    )
+                    _apply_contract_first_coding_metadata(ctx, prepared)
+                    task_spec = ctx.intent.get("task_spec") if isinstance(ctx.intent, dict) and isinstance(ctx.intent.get("task_spec"), dict) else task_spec
 
                 if strict_taskspec:
                     from core.spec.task_spec import validate_task_spec
@@ -2979,6 +3316,14 @@ class StageExecute(PipelineStage):
                 await _try_llm_intent_rescue(ctx, agent, min_confidence=llm_min_conf)
             except Exception:
                 pass
+
+            if _should_use_contract_first_coding(ctx):
+                handled, _ = await _execute_contract_first_coding(ctx, agent)
+                if handled:
+                    if action_lock.is_locked:
+                        action_lock.unlock()
+                    ctx.stage_timings["execute"] = time.time() - t0
+                    return ctx
 
             # 2. Direct Intent Execution (Deterministic Tools)
             if hasattr(agent, '_should_run_direct_intent') and agent._should_run_direct_intent(ctx.intent, ctx.user_input):
@@ -3882,6 +4227,86 @@ class StageVerify(PipelineStage):
         except Exception as e:
             logger.debug(f"Output quality contract skipped: {e}")
 
+        if ctx.is_code_job and isinstance(ctx.coding_contract, dict) and ctx.coding_contract:
+            try:
+                coding_cfg = ctx.runtime_policy.get("coding", {}) if isinstance(ctx.runtime_policy, dict) and isinstance(ctx.runtime_policy.get("coding"), dict) else {}
+                if bool(coding_cfg.get("execute_adapter_gates", True)) and not isinstance(ctx.qa_results.get("adapter_gate_results"), list):
+                    repo_payload = ctx.repo_snapshot if isinstance(ctx.repo_snapshot, dict) else {}
+                    snapshot = RepoSnapshot(
+                        snapshot_id=str(repo_payload.get("snapshot_id") or ""),
+                        root_path=str(repo_payload.get("root_path") or Path.cwd()),
+                        repo_type=str(repo_payload.get("repo_type") or "unknown"),
+                        language=str(repo_payload.get("language") or "unknown"),
+                        framework=str(repo_payload.get("framework") or ""),
+                        package_manager=str(repo_payload.get("package_manager") or "none"),
+                        stack_family=str(repo_payload.get("stack_family") or repo_payload.get("repo_type") or "unknown"),
+                        entrypoints=list(repo_payload.get("entrypoints") or []),
+                        test_runner=str(repo_payload.get("test_runner") or ""),
+                        formatter=str(repo_payload.get("formatter") or ""),
+                        linter=str(repo_payload.get("linter") or ""),
+                        build_system=str(repo_payload.get("build_system") or ""),
+                        workspace_roots=list(repo_payload.get("workspace_roots") or []),
+                        available_gates=list(repo_payload.get("available_gates") or []),
+                        commands=dict(repo_payload.get("commands") or {}),
+                        available_commands=dict(repo_payload.get("available_commands") or repo_payload.get("commands") or {}),
+                        issues=list(repo_payload.get("issues") or []),
+                        existing_files=list(repo_payload.get("existing_files") or []),
+                        is_greenfield=bool(repo_payload.get("is_greenfield", False)),
+                        supported=bool(repo_payload.get("supported", True)),
+                        adapter_hint=str(repo_payload.get("adapter_hint") or ""),
+                        fingerprint=str(repo_payload.get("fingerprint") or ""),
+                        cache_hit=bool(repo_payload.get("cache_hit", False)),
+                        file_count=int(repo_payload.get("file_count", 0) or 0),
+                    )
+                    adapter_execution = run_adapter_verification_gates(
+                        snapshot=snapshot,
+                        contract=ctx.coding_contract,
+                        artifact_paths=collect_paths_from_tool_results(ctx.tool_results),
+                        style_intent=ctx.style_intent if isinstance(ctx.style_intent, dict) else {},
+                    )
+                    ctx.qa_results["adapter_execution"] = adapter_execution.to_dict()
+                    ctx.qa_results["adapter_gate_results"] = list(adapter_execution.gate_results or [])
+                bundle = build_coding_evidence_bundle(
+                    tool_results=[row for row in ctx.tool_results if isinstance(row, dict)],
+                    qa_results=ctx.qa_results if isinstance(ctx.qa_results, dict) else {},
+                    contract=ctx.coding_contract,
+                    final_response=ctx.final_response,
+                )
+                ctx.evidence_bundle = bundle.to_dict()
+                ctx.gate_state = evaluate_coding_gate_state(ctx.coding_contract, ctx.evidence_bundle)
+                ctx.qa_results["coding_runtime"] = {
+                    "repo_snapshot": dict(ctx.repo_snapshot or {}),
+                    "contract": {
+                        "contract_id": str(ctx.coding_contract.get("contract_id") or ""),
+                        "adapter_id": str(ctx.coding_contract.get("adapter_id") or ""),
+                        "repo_type": str(ctx.coding_contract.get("repo_type") or ""),
+                        "required_gates": list(ctx.coding_contract.get("required_gates") or []),
+                    },
+                    "gate_state": dict(ctx.gate_state or {}),
+                    "evidence_bundle": dict(ctx.evidence_bundle or {}),
+                }
+                claim_blocked_reason = str((ctx.gate_state or {}).get("claim_blocked_reason") or "").strip()
+                if claim_blocked_reason:
+                    ctx.claim_blocked_reason = claim_blocked_reason
+                    ctx.delivery_blocked = True
+                    ctx.errors.extend(
+                        [
+                            f"coding_gate:{item}"
+                            for item in list((ctx.gate_state or {}).get("failed") or []) + list((ctx.gate_state or {}).get("missing") or [])
+                        ]
+                    )
+                elif not ctx.errors:
+                    ctx.verified = True
+                if isinstance(ctx.runtime_policy, dict):
+                    metadata = ctx.runtime_policy.get("metadata", {}) if isinstance(ctx.runtime_policy.get("metadata"), dict) else {}
+                    metadata["gate_state"] = dict(ctx.gate_state or {})
+                    metadata["evidence_bundle_id"] = str((ctx.evidence_bundle or {}).get("bundle_id") or "")
+                    metadata["claim_blocked_reason"] = str(ctx.claim_blocked_reason or "")
+                    metadata["adapter_id"] = str((ctx.coding_contract or {}).get("execution_adapter") or (ctx.coding_contract or {}).get("adapter_id") or "")
+                    ctx.runtime_policy["metadata"] = metadata
+            except Exception as coding_verify_exc:
+                ctx.errors.append(f"coding_runtime_verify:{coding_verify_exc}")
+
         try:
             contract_payload = {
                 "contract_id": ctx.output_contract_spec.get("contract_id") if isinstance(ctx.output_contract_spec, dict) else "",
@@ -4265,7 +4690,10 @@ class StageVerify(PipelineStage):
         else:
             # No contract → inline delivery, skip verification
             if not (flag_enabled(ctx, "upgrade_verify_mandatory_gates", default=False) and ctx.delivery_blocked):
-                ctx.verified = True
+                if ctx.is_code_job and isinstance(ctx.coding_contract, dict) and ctx.coding_contract:
+                    ctx.verified = bool((ctx.gate_state or {}).get("ok", False)) and not bool(ctx.delivery_blocked)
+                else:
+                    ctx.verified = True
 
         ctx.stage_timings["verify"] = time.time() - t0
         return ctx
@@ -4278,19 +4706,53 @@ class StageDeliver(PipelineStage):
     async def run(self, ctx: PipelineContext, agent) -> PipelineContext:
         t0 = time.time()
 
+        if ctx.is_code_job and isinstance(ctx.coding_contract, dict) and ctx.coding_contract:
+            try:
+                if not ctx.evidence_bundle:
+                    bundle = build_coding_evidence_bundle(
+                        tool_results=[row for row in ctx.tool_results if isinstance(row, dict)],
+                        qa_results=ctx.qa_results if isinstance(ctx.qa_results, dict) else {},
+                        contract=ctx.coding_contract,
+                        final_response=ctx.final_response or ctx.llm_response,
+                    )
+                    ctx.evidence_bundle = bundle.to_dict()
+                if not ctx.gate_state:
+                    ctx.gate_state = evaluate_coding_gate_state(ctx.coding_contract, ctx.evidence_bundle)
+                if not ctx.claim_blocked_reason:
+                    ctx.claim_blocked_reason = str((ctx.gate_state or {}).get("claim_blocked_reason") or "").strip()
+                if isinstance(ctx.runtime_policy, dict):
+                    metadata = ctx.runtime_policy.get("metadata", {}) if isinstance(ctx.runtime_policy.get("metadata"), dict) else {}
+                    metadata["repo_snapshot_id"] = str((ctx.repo_snapshot or {}).get("snapshot_id") or "")
+                    metadata["coding_contract_id"] = str((ctx.coding_contract or {}).get("contract_id") or "")
+                    metadata["adapter_id"] = str((ctx.coding_contract or {}).get("execution_adapter") or (ctx.coding_contract or {}).get("adapter_id") or "")
+                    metadata["style_intent"] = dict(ctx.style_intent or {})
+                    metadata["gate_state"] = dict(ctx.gate_state or {})
+                    metadata["model_ladder_trace"] = list(ctx.model_ladder_trace or [])
+                    metadata["evidence_bundle_id"] = str((ctx.evidence_bundle or {}).get("bundle_id") or "")
+                    metadata["claim_blocked_reason"] = str(ctx.claim_blocked_reason or "")
+                    ctx.runtime_policy["metadata"] = metadata
+            except Exception as coding_deliver_exc:
+                ctx.errors.append(f"coding_runtime_deliver:{coding_deliver_exc}")
+
         # Evidence Gate enforcement
         try:
             from core.evidence_gate import evidence_gate
+            tool_results_for_evidence = [row for row in ctx.tool_results if isinstance(row, dict)]
+            if isinstance(ctx.evidence_bundle, dict) and ctx.evidence_bundle:
+                tool_results_for_evidence.append({"evidence_bundle": dict(ctx.evidence_bundle), "success": bool(ctx.verified)})
             ctx.final_response = evidence_gate.enforce(
                 ctx.final_response or ctx.llm_response,
-                ctx.tool_results
+                tool_results_for_evidence
             )
             ctx.evidence_valid = not evidence_gate.has_delivery_claims(ctx.final_response) or \
-                                 evidence_gate.has_real_evidence(ctx.tool_results)
+                                 evidence_gate.has_real_evidence(tool_results_for_evidence)
             ctx.delivery_blocked = not ctx.evidence_valid
             if flag_enabled(ctx, "upgrade_verify_mandatory_gates", default=False) and not ctx.verified:
                 ctx.evidence_valid = False
                 ctx.delivery_blocked = True
+            if ctx.claim_blocked_reason:
+                ctx.delivery_blocked = True
+                ctx.evidence_valid = False
         except Exception as e:
             ctx.errors.append(f"deliver: {e}")
 
@@ -4388,6 +4850,12 @@ class StageDeliver(PipelineStage):
                         "orchestration_mode": str(ctx.capability_plan.get("orchestration_telemetry", {}).get("selected_mode", "single_agent"))
                         if isinstance(ctx.capability_plan, dict)
                         else "single_agent",
+                        "adapter": str((ctx.coding_contract or {}).get("adapter_id") or ""),
+                        "repo_type": str((ctx.repo_snapshot or {}).get("repo_type") or ""),
+                        "gates_requested": list((ctx.coding_contract or {}).get("required_gates") or []),
+                        "gates_passed": list((ctx.gate_state or {}).get("passed") or []),
+                        "claim_blocked": bool(ctx.claim_blocked_reason),
+                        "unsupported_reason": str((ctx.coding_contract or {}).get("failure_envelope", {}).get("code") or ""),
                     }
                 )
         except Exception:
@@ -4411,6 +4879,7 @@ class StageDeliver(PipelineStage):
                 "delivery_blocked": bool(ctx.delivery_blocked),
                 "evidence_valid": bool(ctx.evidence_valid),
                 "final_status": final_status,
+                "claim_blocked_reason": str(ctx.claim_blocked_reason or ""),
             }
         except Exception:
             pass

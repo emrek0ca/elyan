@@ -120,7 +120,7 @@ SUFFIX_CHAINS = [
     (r"(dan|den)$", ["ablative"]),
     (r"(da|de)$", ["locative"]),
     (r"(la|le)$", ["instrumental"]),
-    (r"(ya|ye|na|ne)$", ["dative"]),
+    (r"(a|e|ya|ye|na|ne)$", ["dative"]),
     (r"(ı|i|u|ü)$", ["accusative"]),
     (r"(ın|in|un|ün)$", ["genitive"]),
 ]
@@ -469,8 +469,8 @@ class TurkishNLPAnalyzer:
         # Clean whitespace
         normalized = re.sub(r"\s+", " ", normalized).strip()
 
-        # Remove common punctuation (keep ? for question detection)
-        normalized = re.sub(r"[,.;:!]", "", normalized)
+        # Remove common punctuation; question detection uses the original text path.
+        normalized = re.sub(r"[,.;:!?]", "", normalized)
 
         return normalized
 

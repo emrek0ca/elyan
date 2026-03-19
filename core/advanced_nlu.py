@@ -177,14 +177,18 @@ class SemanticAnalyzer:
             frame = SemanticFrame(predicate=verb)
 
             # Find agent (usually before verb)
-            agent_match = re.search(rf"(\b[A-Za-z\s]+?)\b{re.escape(verb)}", text, re.IGNORECASE)
+            agent_match = re.search(rf"(.+?)\b{re.escape(verb)}\b", text, re.IGNORECASE)
             if agent_match:
-                frame.agent = agent_match.group(1).strip()
+                agent = agent_match.group(1).strip(" ,.;:")
+                if agent:
+                    frame.agent = agent.split()[-1]
 
             # Find patient (usually after verb)
-            patient_match = re.search(rf"\b{re.escape(verb)}\s+(\b[A-Za-z\s]+?)(?:\b(by|with|from|to)\b|$)", text, re.IGNORECASE)
+            patient_match = re.search(rf"\b{re.escape(verb)}\b\s+(.+?)(?:\b(by|with|from|to|and|then)\b|$)", text, re.IGNORECASE)
             if patient_match:
-                frame.patient = patient_match.group(1).strip()
+                patient = patient_match.group(1).strip(" ,.;:")
+                if patient:
+                    frame.patient = patient
 
             frames.append(frame)
 
@@ -194,10 +198,28 @@ class SemanticAnalyzer:
         """Extract main verbs from text (simple heuristic-based)."""
         # This is a simplified version; production would use POS tagging
         verb_pattern = re.compile(
-            r"\b(create|delete|read|update|execute|search|analyze|summarize|build|make|get|set|run|do|find|check|view)\b",
-            re.IGNORECASE
+            r"\b("
+            r"create|creates|created|creating|"
+            r"delete|deletes|deleted|deleting|"
+            r"read|reads|reading|"
+            r"update|updates|updated|updating|"
+            r"execute|executes|executed|executing|"
+            r"search|searches|searched|searching|"
+            r"analyze|analyzes|analyzed|analyzing|"
+            r"summarize|summarizes|summarized|summarizing|"
+            r"build|builds|built|building|"
+            r"make|makes|made|making|"
+            r"get|gets|got|getting|"
+            r"set|sets|setting|"
+            r"run|runs|ran|running|"
+            r"do|does|did|doing|"
+            r"find|finds|found|finding|"
+            r"check|checks|checked|checking|"
+            r"view|views|viewed|viewing"
+            r")\b",
+            re.IGNORECASE,
         )
-        matches = verb_pattern.findall(text)
+        matches = [match.group(1) for match in verb_pattern.finditer(text)]
         return matches if matches else []
 
 
@@ -295,6 +317,25 @@ class EntityExtractor:
                 confidence=0.85
             ))
 
+        # Generic noun grounding for simple semantic contexts
+        generic_terms = {
+            "file", "files", "content", "database", "report", "data", "size",
+            "book", "books", "task", "project", "document", "documents",
+            "result", "results", "image", "table", "chart", "email",
+        }
+        for match in re.finditer(r"\b[\wçğıöşüÇĞİÖŞÜ]+\b", text):
+            token = match.group().lower()
+            if token in generic_terms:
+                entities.append(
+                    Entity(
+                        type="noun",
+                        value=match.group(),
+                        start=match.start(),
+                        end=match.end(),
+                        confidence=0.75,
+                    )
+                )
+
         return entities
 
 
@@ -325,17 +366,21 @@ class RelationshipMapper:
                 idx = match.start()
                 before = text[:idx].split()[-2:]
                 after = text[idx + len(match.group()):].split()[:2]
+                entity1 = " ".join(before).strip()
+                entity2 = " ".join(after).strip()
 
-                if before and after:
-                    entity1 = " ".join(before).strip()
-                    entity2 = " ".join(after).strip()
-                    if entity1 and entity2:
-                        relationships.append(Relationship(
-                            entity1=entity1,
-                            relation_type=relation_type,
-                            entity2=entity2,
-                            confidence=0.8
-                        ))
+                if relation_type == "temporal" and not entity1 and entity2:
+                    entity1 = match.group().strip()
+                elif relation_type == "dependency" and not entity1 and entity2:
+                    entity1 = match.group().strip()
+
+                if entity1 and entity2:
+                    relationships.append(Relationship(
+                        entity1=entity1,
+                        relation_type=relation_type,
+                        entity2=entity2,
+                        confidence=0.8
+                    ))
 
         return relationships
 
@@ -384,7 +429,7 @@ class AmbiguityResolver:
     def _compile_ambiguity_patterns(self) -> Dict[str, re.Pattern]:
         """Patterns that indicate ambiguous input."""
         return {
-            "multiple_objects": re.compile(r"\b(A|B|file|item)\s+and\s+(another|also|another\s+[A|B|file|item])"),
+            "multiple_objects": re.compile(r"\b(?:file|item|document|folder)\s+[A-Z0-9]+\b.*\band\b.*\b(?:file|item|document|folder)\s+[A-Z0-9]+\b", re.IGNORECASE),
             "unclear_reference": re.compile(r"\b(it|that|this|there)\b", re.IGNORECASE),
             "multiple_verbs": re.compile(r"\b(and|or)\b.*\b(and|or)\b"),
         }
@@ -394,7 +439,10 @@ class AmbiguityResolver:
         ambiguities = []
 
         # Check for multiple objects
-        if self.ambiguity_patterns["multiple_objects"].search(text):
+        if self.ambiguity_patterns["multiple_objects"].search(text) or (
+            len(re.findall(r"\b(?:file|item|document|folder)\b", text, re.IGNORECASE)) >= 2
+            and re.search(r"\band\b", text, re.IGNORECASE)
+        ):
             ambiguities.append("Multiple objects mentioned - which one is primary?")
 
         # Check for unclear references
@@ -471,7 +519,6 @@ class ErrorCorrectionEngine:
     def _build_typo_map(self) -> Dict[str, str]:
         """Map common typos to corrections."""
         return {
-            "fil": "file",
             "fiel": "file",
             "lsit": "list",
             "creat": "create",
@@ -487,8 +534,8 @@ class ErrorCorrectionEngine:
         correction_note = None
 
         for typo, correction in self.common_typos.items():
-            if typo in text.lower():
-                corrected = re.sub(typo, correction, text, flags=re.IGNORECASE)
+            if re.search(rf"\b{re.escape(typo)}\b", corrected, flags=re.IGNORECASE):
+                corrected = re.sub(rf"\b{re.escape(typo)}\b", correction, corrected, flags=re.IGNORECASE)
                 correction_note = f"Corrected '{typo}' to '{correction}'"
                 break
 
@@ -539,11 +586,8 @@ class ConfidenceEstimator:
         error_score = 1.0 if not nlu_result.error_correction else 0.7
         factors["error_correction"] = error_score
 
-        # Calculate weighted confidence
-        overall_confidence = sum(
-            factors.get(key, 0.0) * weight
-            for key, weight in self.confidence_weights.items()
-        )
+        # Calculate overall confidence as the average factor score.
+        overall_confidence = sum(factors.values()) / len(factors) if factors else 0.0
 
         return overall_confidence, factors
 

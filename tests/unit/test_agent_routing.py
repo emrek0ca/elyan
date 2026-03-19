@@ -265,6 +265,24 @@ def test_agent_execute_tool_blocks_mutation_before_superpowers_approval(monkeypa
     assert result["error_code"] == "WORKFLOW_APPROVAL_REQUIRED"
 
 
+def test_agent_execute_tool_requires_actionable_screen_state_for_low_level_ui_actions():
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+
+    result = asyncio.run(
+        agent._execute_tool(
+            "mouse_click",
+            {"x": 120, "y": 240},
+            user_input="ekrandaki butona tıkla",
+            step_name="Tıkla",
+        )
+    )
+
+    assert result["success"] is False
+    assert result["error_code"] == "SCREEN_STATE_UNAVAILABLE"
+
+
 def test_task_engine_bridge_loads_legacy_engine():
     from core.task_engine import get_task_engine
 
@@ -410,6 +428,180 @@ def test_agent_process_uses_chat_fast_path_for_greeting(monkeypatch):
     assert response.status == "success"
     assert response.text == "Merhaba! Sana nasıl yardımcı olabilirim?"
     chat_mock.assert_awaited_once()
+    agent._finalize_turn.assert_awaited_once()
+
+
+def test_agent_process_envelope_refuses_captcha_without_pipeline(monkeypatch):
+    agent = Agent()
+    agent.llm = SimpleNamespace(fast_response=SimpleNamespace(get_fast_response=lambda _text: None))
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+    agent.quick_intent = _DummyQuickIntentUnknown()
+    agent.intent_parser = IntentParser()
+    agent.learning = _DummyLearning()
+    agent.user_profile = _DummyProfile()
+    agent._resolve_pending_workflow_session = lambda *_args, **_kwargs: {}
+    agent._should_schedule_away_task = lambda *_args, **_kwargs: False
+    agent._handle_away_task_command = AsyncMock(return_value=None)
+    agent._ensure_llm = lambda: None
+    agent._finalize_turn = AsyncMock(return_value=None)
+
+    class _DummyLedger:
+        def __init__(self, run_id):
+            self.run_id = run_id
+
+        def write_manifest(self, **kwargs):
+            _ = kwargs
+            return "/tmp/refusal-manifest.json"
+
+    class _DummyRunStore:
+        def __init__(self, run_id):
+            self.run_id = run_id
+            self.base_dir = "/tmp"
+
+        def write_task(self, *args, **kwargs):
+            _ = (args, kwargs)
+            return None
+
+        def write_evidence(self, *args, **kwargs):
+            _ = (args, kwargs)
+            return None
+
+        def write_summary(self, *args, **kwargs):
+            _ = (args, kwargs)
+            return None
+
+        def write_logs(self, *args, **kwargs):
+            _ = (args, kwargs)
+            return None
+
+    async def _unexpected_pipeline_run(*_args, **_kwargs):
+        raise AssertionError("pipeline should not run for unsupported actions")
+
+    def _unexpected_create_task(*_args, **_kwargs):
+        raise AssertionError("task creation should not run for unsupported actions")
+
+    monkeypatch.setattr("core.agent.ExecutionLedger", _DummyLedger)
+    monkeypatch.setattr("core.agent.RunStore", _DummyRunStore)
+    monkeypatch.setattr("core.agent.pipeline_runner.run", _unexpected_pipeline_run)
+    monkeypatch.setattr("core.agent.task_brain.create_task", _unexpected_create_task)
+
+    response = asyncio.run(agent.process_envelope("SMS kodunu geç"))
+
+    assert response.status == "partial"
+    assert "CAPTCHA" in response.text or "doğrulamalarını" in response.text
+    agent._finalize_turn.assert_awaited_once()
+    agent._handle_away_task_command.assert_awaited_once()
+
+
+def test_agent_process_envelope_handoffs_code_request_to_mission_runtime(monkeypatch):
+    agent = Agent()
+    agent.llm = SimpleNamespace(fast_response=SimpleNamespace(get_fast_response=lambda _text: None))
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+    agent.quick_intent = _DummyQuickIntentUnknown()
+    agent.intent_parser = SimpleNamespace(parse=lambda _text: {"action": "create_coding_project", "params": {"project_kind": "website"}})
+    agent.learning = _DummyLearning()
+    agent.user_profile = _DummyProfile()
+    agent._resolve_pending_workflow_session = lambda *_args, **_kwargs: {}
+    agent._should_schedule_away_task = lambda *_args, **_kwargs: False
+    agent._handle_away_task_command = AsyncMock(return_value=None)
+    agent._finalize_turn = AsyncMock(return_value=None)
+
+    class _DummyLedger:
+        def __init__(self, run_id):
+            self.run_id = run_id
+
+        def write_manifest(self, **kwargs):
+            _ = kwargs
+            return "/tmp/mission-handoff-manifest.json"
+
+    class _DummyRunStore:
+        def __init__(self, run_id):
+            self.run_id = run_id
+            self.base_dir = "/tmp"
+
+        def write_task(self, *args, **kwargs):
+            _ = (args, kwargs)
+            return None
+
+        def write_evidence(self, *args, **kwargs):
+            _ = (args, kwargs)
+            return None
+
+        def write_summary(self, *args, **kwargs):
+            _ = (args, kwargs)
+            return "/tmp/mission-summary.txt"
+
+        def write_logs(self, *args, **kwargs):
+            _ = (args, kwargs)
+            return None
+
+    class _DummyCoworkRuntime:
+        @staticmethod
+        def route_command(*_args, **_kwargs):
+            return SimpleNamespace(mode="code", confidence=0.95, refusal=False, to_dict=lambda: {"mode": "code", "confidence": 0.95})
+
+        @staticmethod
+        def start_session(**_kwargs):
+            return SimpleNamespace(session_id="sess_1", mode="code", selected_model="local", memory_policy={}, verification_policy={})
+
+        @staticmethod
+        def observe_turn(**_kwargs):
+            return None
+
+    class _MissionStore:
+        def __init__(self):
+            self.create_calls = []
+            self.run_calls = []
+
+        async def create_mission(self, goal, **kwargs):
+            self.create_calls.append({"goal": goal, **kwargs})
+            return SimpleNamespace(
+                mission_id="mission_1",
+                goal=goal,
+                status="queued",
+                route_mode="code",
+                deliverable="",
+                evidence=[],
+                approvals=[],
+            )
+
+        async def run_mission(self, mission_id, **kwargs):
+            self.run_calls.append({"mission_id": mission_id, **kwargs})
+            return SimpleNamespace(
+                mission_id=mission_id,
+                goal="Landing page üret",
+                status="completed",
+                route_mode="code",
+                deliverable="Mission deliverable",
+                evidence=[
+                    SimpleNamespace(path="/tmp/mission-evidence.json", kind="manifest", label="manifest"),
+                    SimpleNamespace(path="/tmp/index.html", kind="file", label="index.html"),
+                ],
+                approvals=[],
+            )
+
+    store = _MissionStore()
+
+    def _unexpected_pipeline_run(*_args, **_kwargs):
+        raise AssertionError("pipeline should not run for coding mission handoff")
+
+    def _unexpected_create_task(*_args, **_kwargs):
+        raise AssertionError("task brain should not run for coding mission handoff")
+
+    monkeypatch.setattr("core.agent.ExecutionLedger", _DummyLedger)
+    monkeypatch.setattr("core.agent.RunStore", _DummyRunStore)
+    monkeypatch.setattr("core.agent.get_cowork_runtime", lambda: _DummyCoworkRuntime())
+    monkeypatch.setattr("core.agent.get_mission_runtime", lambda: store)
+    monkeypatch.setattr("core.agent.pipeline_runner.run", _unexpected_pipeline_run)
+    monkeypatch.setattr("core.agent.task_brain.create_task", _unexpected_create_task)
+
+    response = asyncio.run(agent.process_envelope("Landing page website yap"))
+
+    assert response.status == "success"
+    assert response.text == "Mission deliverable"
+    assert response.metadata["mission_id"] == "mission_1"
+    assert store.create_calls
+    assert store.run_calls
     agent._finalize_turn.assert_awaited_once()
 
 
@@ -1155,6 +1347,64 @@ def test_agent_run_direct_create_coding_project_website_and_open_ide(monkeypatch
     assert captured.get("plan", {}).get("complexity") == "advanced"
     assert captured.get("verify", {}).get("project_kind") == "website"
     assert captured.get("ide", {}).get("project_path", "").endswith("ai-panel")
+
+
+def test_agent_run_direct_create_coding_project_handoffs_to_mission_runtime_when_policy_active(monkeypatch):
+    agent = Agent()
+    agent.llm = _DummyLLM()
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+
+    class _MissionStore:
+        def __init__(self):
+            self.create_calls = []
+            self.run_calls = []
+
+        async def create_mission(self, goal, **kwargs):
+            self.create_calls.append({"goal": goal, **kwargs})
+            return SimpleNamespace(
+                mission_id="mission_42",
+                goal=goal,
+                status="queued",
+                route_mode="code",
+                deliverable="",
+                evidence=[],
+                approvals=[],
+            )
+
+        async def run_mission(self, mission_id, **kwargs):
+            self.run_calls.append({"mission_id": mission_id, **kwargs})
+            return SimpleNamespace(
+                mission_id=mission_id,
+                goal="AI panel website yap",
+                status="completed",
+                route_mode="code",
+                deliverable="Mission authority teslimi",
+                evidence=[],
+                approvals=[],
+            )
+
+    store = _MissionStore()
+
+    monkeypatch.setattr("core.agent.get_mission_runtime", lambda: store)
+    monkeypatch.setattr(
+        Agent,
+        "_current_runtime_policy",
+        staticmethod(lambda: {"metadata": {"channel": "dashboard", "user_id": "local", "run_id": "run_1"}}),
+    )
+
+    intent = {
+        "action": "create_coding_project",
+        "params": {
+            "project_kind": "website",
+            "project_name": "AI Panel",
+            "stack": "react",
+        },
+    }
+    out = asyncio.run(agent._run_direct_intent(intent, "AI panel website yap", "inference", []))
+
+    assert out == "Mission authority teslimi"
+    assert store.create_calls and store.create_calls[0]["goal"] == "AI panel website yap"
+    assert store.run_calls and store.run_calls[0]["mission_id"] == "mission_42"
 
 
 def test_agent_process_executes_free_form_multi_step_sequence(monkeypatch, tmp_path):

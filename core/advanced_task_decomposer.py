@@ -441,13 +441,16 @@ class AdvancedTaskDecomposer:
         tasks = []
         task_id = 0
 
-        # Split by common connectors
-        parts = request.split(" then ")
-        if len(parts) == 1:
-            parts = request.split(" and then ")
-        if len(parts) == 1:
-            parts = request.split(" also ")
-        if len(parts) == 1:
+        # Split by common connectors and punctuation while preserving order.
+        import re
+
+        parts = re.split(
+            r"\s+(?:and then|then|next|afterwards|after that|also|finally)\s+|,|;",
+            request,
+            flags=re.IGNORECASE,
+        )
+        parts = [part.strip() for part in parts if part and part.strip()]
+        if not parts:
             parts = [request]
 
         for part in parts:
@@ -482,7 +485,9 @@ class AdvancedTaskDecomposer:
         for i, task in enumerate(tasks):
             if i > 0:
                 # Simple heuristic: tasks mentioned in order have sequential dependency
-                if any(keyword in task.description.lower() for keyword in ["after", "then", "next"]):
+                if any(keyword in task.description.lower() for keyword in ["after", "then", "next", "finally"]):
+                    dependencies[task.task_id] = [tasks[i - 1].task_id]
+                elif sequential_pattern.search(request):
                     dependencies[task.task_id] = [tasks[i - 1].task_id]
 
         return dependencies

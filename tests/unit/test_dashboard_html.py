@@ -3,29 +3,33 @@
 from pathlib import Path
 
 
-def test_dashboard_html_contains_task_center_and_quick_actions():
+def test_dashboard_html_contains_mission_tools_and_settings_tabs():
     html = Path("/Users/emrekoca/Desktop/bot/ui/web/dashboard.html").read_text(encoding="utf-8")
 
-    assert "Task Center" in html
-    assert 'data-tab="overview"' in html
-    assert 'data-panel="models"' in html
-    assert 'id="task-list"' in html
-    assert 'id="workflow-preset-list"' in html
-    assert 'id="workflow-report"' in html
-    assert 'id="benchmark-summary"' in html
-    assert 'id="setup-list"' in html
-    assert 'id="onboarding-list"' in html
-    assert 'id="release-list"' in html
-    assert 'id="model-registry-list"' in html
-    assert 'id="model-pool-summary"' in html
-    assert 'id="model-add-btn"' in html
-    assert 'id="collab-save-btn"' in html
-    assert 'id="profile-save-btn"' in html
-    assert 'id="agent-name-input"' in html
-    assert 'id="profile-summary"' in html
-    assert "data-quick-prompt=" in html
-    assert 'id="status-note"' in html
-    assert 'id="status-detail"' in html
+    assert "Mission" in html
+    assert 'data-t="mission"' in html
+    assert 'data-t="tools"' in html
+    assert 'data-t="settings"' in html
+    assert 'id="mission-input"' in html
+    assert 'id="mission-list"' in html
+    assert 'id="mission-filters"' in html
+    assert 'id="mission-timeline"' in html
+    assert 'id="mission-approvals"' in html
+    assert 'id="mission-evidence"' in html
+    assert 'id="mission-control-strip"' in html
+    assert 'id="mission-quality"' in html
+    assert 'id="mission-skills"' in html
+    assert 'id="mission-memory"' in html
+    assert "Save as Skill" in html
+    assert 'id="p-tools"' in html
+    assert 'id="llm-grid"' in html
+    assert 'id="oll-installed"' in html
+    assert 'id="st-table"' in html
+    assert "Tools" in html
+    assert "LLM Yönetimi" not in html
+    assert "Ollama Yönetimi" not in html
+    assert "Sistem Durumu" not in html
+    assert "/desktop" not in html
     assert "/ui/web/dashboard.css" in html
     assert "/ui/web/dashboard.js" in html
 

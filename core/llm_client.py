@@ -4,6 +4,7 @@ import asyncio
 import time
 import importlib.util
 import re
+from contextvars import ContextVar
 from typing import Any, Optional
 from config.elyan_config import elyan_config
 from core.model_orchestrator import model_orchestrator
@@ -14,10 +15,17 @@ from .intent_classifier import get_classifier
 from .llm_optimizer import get_llm_optimizer
 from .pricing_tracker import get_pricing_tracker
 from .fast_response import FastResponseSystem, QuestionType
+from core.command_hardening import (
+    build_chat_fallback_message,
+    build_chat_history_block,
+    chat_output_needs_retry,
+    sanitize_chat_output,
+)
 from security.privacy_guard import redact_text, is_external_provider
 from utils.logger import get_logger
 
 logger = get_logger("llm_client")
+_chat_system_prompt_override: ContextVar[str | None] = ContextVar("llm_chat_system_prompt_override", default=None)
 
 class LLMClient:
     def __init__(self):
@@ -100,100 +108,7 @@ class LLMClient:
         )
 
     def _sanitize_chat_output(self, text: Any) -> str:
-        content = str(text or "").replace("\r\n", "\n").strip()
-        if not content:
-            return ""
-        try:
-            if content[:1] in {"{", "["}:
-                parsed = json.loads(content)
-                extracted = ""
-                if isinstance(parsed, dict):
-                    for key in ("message", "text", "answer", "response", "reply", "content"):
-                        value = parsed.get(key)
-                        if isinstance(value, str) and value.strip():
-                            extracted = value.strip()
-                            break
-                    if not extracted:
-                        string_values = [
-                            str(value).strip()
-                            for value in parsed.values()
-                            if isinstance(value, str) and str(value).strip()
-                        ]
-                        if string_values:
-                            extracted = string_values[0]
-                elif isinstance(parsed, list):
-                    string_values = [str(item).strip() for item in parsed if isinstance(item, str) and str(item).strip()]
-                    if string_values:
-                        extracted = " ".join(string_values[:2])
-                if extracted:
-                    content = extracted
-        except Exception:
-            pass
-
-        content = re.sub(r"```[\w-]*\n.*?```", "", content, flags=re.DOTALL)
-        lines = content.splitlines()
-        cleaned: list[str] = []
-        skip_prefixes = (
-            "deliverable spec:",
-            "done criteria:",
-            "başarı kriteri:",
-            "success criteria:",
-            "system notu:",
-            "sistem notu:",
-            "analiz ediyorum",
-            "şimdi size",
-            "simdi size",
-            "tabii ki",
-            "elbette",
-            "öncelikle",
-            "oncelikle",
-            "kısaca",
-            "kisaca",
-        )
-        for line in lines:
-            stripped = line.strip()
-            lower = stripped.lower()
-            if not stripped:
-                if cleaned and cleaned[-1] != "":
-                    cleaned.append("")
-                continue
-            if lower.startswith(skip_prefixes):
-                continue
-            if stripped.startswith("|") and stripped.endswith("|"):
-                continue
-            if stripped.startswith("{") or stripped.startswith("["):
-                continue
-            cleaned.append(stripped)
-
-        paragraphs: list[str] = []
-        for paragraph in re.split(r"\n{2,}", "\n".join(cleaned).strip()):
-            chunk = paragraph.strip()
-            if not chunk:
-                continue
-            chunk = re.sub(r"\s+", " ", chunk)
-            chunk = re.sub(
-                r"^(tabii ki|elbette|şimdi size|simdi size|analiz ediyorum|öncelikle|oncelikle|kısaca|kisaca|sizin için|sizin icin)[,:;\-\s]+",
-                "",
-                chunk,
-                flags=re.IGNORECASE,
-            ).strip()
-            if not chunk:
-                continue
-            sentences = re.split(r"(?<=[.!?])\s+", chunk)
-            deduped: list[str] = []
-            seen: set[str] = set()
-            for sentence in sentences:
-                piece = sentence.strip()
-                if not piece:
-                    continue
-                normalized = re.sub(r"\s+", " ", piece).lower()
-                if normalized in seen:
-                    continue
-                seen.add(normalized)
-                deduped.append(piece)
-            if deduped:
-                paragraphs.append(" ".join(deduped))
-        return "\n\n".join(paragraphs).strip()
+        return sanitize_chat_output(text)
 
     def _resolve_system_prompt(self) -> str:
         custom = str(
@@ -267,6 +182,9 @@ class LLMClient:
                 "4. Sonuçta net bir öneri veya karar sun.\n"
                 "5. Karmaşık konuları basit, anlaşılır dille açıkla.\n"
             )
+
+        if _role == "chat":
+            return self._chat_system_prompt()
 
         if _role == "creative":
             return (
@@ -1169,7 +1087,7 @@ class LLMClient:
         if max_tokens is not None:
             cfg = dict(cfg)
             cfg["max_tokens"] = int(max_tokens)
-        sys_prompt = self._resolve_system_prompt()
+        sys_prompt = _chat_system_prompt_override.get() or self._resolve_system_prompt()
         if provider_name == "ollama":
             return await self._call_ollama(prompt, sys_prompt, cfg)
         elif provider_name == "openai":
@@ -1230,15 +1148,53 @@ class LLMClient:
         """Kısa sohbet yanıtı üretir. cost_guard açıksa token bütçesini kısıtlar."""
         fast = self.fast_response.get_fast_response(text)
         if fast and fast.question_type == QuestionType.GREETING:
-            return self._sanitize_chat_output(fast.answer)
+            answer = self._sanitize_chat_output(fast.answer)
+            if answer:
+                return answer
+            return build_chat_fallback_message(language=str(elyan_config.get("agent.language", "tr") or "tr"))
         max_tokens = self._role_token_limit("chat")
         temp = 0.3
-        system = system_prompt or self._chat_system_prompt()
-        prompt = f"{system}\n\nKullanıcı: {text}"
-        # If _call_any_provider has been monkey-patched on the instance, use it
-        _patched = self.__dict__.get('_call_any_provider')
-        if _patched is not None:
-            return self._sanitize_chat_output(await _patched(prompt, user_message=text, temp=temp, max_tokens=max_tokens))
-        return self._sanitize_chat_output(
-            await self._call_any_provider(prompt, user_message=text, temp=temp, max_tokens=max_tokens)
+        system = str(system_prompt or self._chat_system_prompt()).strip()
+        history_block = build_chat_history_block(history, max_pairs=4)
+        prompt_parts = [system]
+        if history_block:
+            prompt_parts.append(history_block)
+        prompt_parts.append(f"Kullanıcı: {text}")
+        prompt = "\n\n".join(part for part in prompt_parts if part).strip()
+
+        async def _call_once(prompt_text: str, *, temp_value: float = temp) -> str:
+            token = _chat_system_prompt_override.set(system)
+            try:
+                patched = self.__dict__.get("_call_any_provider")
+                if patched is not None:
+                    return await patched(prompt_text, user_message=text, temp=temp_value, max_tokens=max_tokens)
+                return await self._call_any_provider(prompt_text, user_message=text, temp=temp_value, max_tokens=max_tokens)
+            finally:
+                _chat_system_prompt_override.reset(token)
+
+        try:
+            raw = await _call_once(prompt)
+        except Exception:
+            raw = ""
+        sanitized = self._sanitize_chat_output(raw)
+        if sanitized and not chat_output_needs_retry(raw, sanitized_text=sanitized):
+            return sanitized
+
+        strict_system = (
+            system
+            + "\n\nSadece kısa, doğal ve tek paragraf bir cevap ver. JSON, tablo, kod bloğu, plan ve meta açıklama yazma."
         )
+        strict_parts = [strict_system]
+        if history_block:
+            strict_parts.append(history_block)
+        strict_parts.append(f"Kullanıcı: {text}")
+        strict_prompt = "\n\n".join(part for part in strict_parts if part).strip()
+        try:
+            retry_raw = await _call_once(strict_prompt, temp_value=min(temp, 0.2))
+        except Exception:
+            retry_raw = ""
+        retry_sanitized = self._sanitize_chat_output(retry_raw)
+        if retry_sanitized and not chat_output_needs_retry(retry_raw, sanitized_text=retry_sanitized):
+            return retry_sanitized
+
+        return build_chat_fallback_message(language=str(elyan_config.get("agent.language", "tr") or "tr"))

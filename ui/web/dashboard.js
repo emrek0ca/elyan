@@ -20,6 +20,34 @@ document.addEventListener("DOMContentLoaded", function () {
   /* ── state ── */
   var providers = [];
   var ollamaData = {};
+  var missionState = {
+    overview: {},
+    missions: [],
+    approvals: [],
+    skills: [],
+    memory: { profile: [], workflow: [], task: [], evidence: [] },
+    selectedMissionId: ""
+  };
+  var initialMissionId = "";
+  try {
+    var params = new URLSearchParams(window.location.search || "");
+    initialMissionId = params.get("mission_id") || params.get("selected_mission_id") || "";
+  } catch (e) {
+    initialMissionId = "";
+  }
+  var requestedMissionId = initialMissionId;
+  if (initialMissionId) {
+    missionState.selectedMissionId = initialMissionId;
+  }
+  var missionFilter = "all";
+  var REQUEST_TIMEOUT = { timeoutMs: 130000 };
+  var timeoutMs = 130000;
+
+  function friendlyFailure(error) {
+    var low = String(error || "").toLowerCase();
+    if (low.indexOf("timeout") >= 0 || low.indexOf("zaman") >= 0) return "Istek zaman asimina ugradi";
+    return "Mission simdilik tamamlanamadi";
+  }
 
   /* ── toast ── */
   function toast(msg, type) {
@@ -33,23 +61,517 @@ document.addEventListener("DOMContentLoaded", function () {
 
   /* ── api ── */
   function api(url, opts) {
-    return fetch(url, opts || {})
+    var options = opts || {};
+    var controller = new AbortController();
+    var t = window.setTimeout(function () { controller.abort(); }, Number(options.timeoutMs || timeoutMs));
+    var headers = options.headers || {};
+    return fetch(url, {
+      method: options.method || "GET",
+      headers: headers,
+      body: options.body,
+      signal: controller.signal
+    })
       .then(function (r) { return r.json(); })
-      .catch(function (e) { console.error("api", url, e); return { ok: false, error: e.message }; });
+      .catch(function (e) { console.error("api", url, e); return { ok: false, error: e.message }; })
+      .finally(function () { window.clearTimeout(t); });
   }
   function GET(url) { return api(url); }
   function POST(url, body) {
     return api(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      timeoutMs: timeoutMs
+    });
+  }
+
+  function fmtDate(ts) {
+    var v = Number(ts || 0);
+    if (!v) return "-";
+    try { return new Date(v * 1000).toLocaleString("tr-TR"); } catch (e) { return "-"; }
+  }
+
+  function badge(state) {
+    var value = String(state || "").toLowerCase();
+    var cls = "warn";
+    if (value === "completed" || value === "approved") cls = "ok";
+    else if (value === "failed" || value === "denied") cls = "err";
+    return '<span class="pill ' + cls + '">' + esc(state || "-") + "</span>";
+  }
+
+  function missionArray(value) {
+    return Array.isArray(value) ? value : [];
+  }
+
+  function missionOverview(mission) {
+    var m = mission || {};
+    var graph = m.graph || {};
+    var nodes = missionArray(graph.nodes);
+    var counts = {
+      total: nodes.length,
+      completed: 0,
+      running: 0,
+      queued: 0,
+      failed: 0,
+      waiting_approval: 0,
+      blocked: 0
+    };
+    nodes.forEach(function (node) {
+      var status = String((node || {}).status || "queued").toLowerCase();
+      if (counts.hasOwnProperty(status)) {
+        counts[status] += 1;
+      } else {
+        counts.queued += 1;
+      }
+    });
+
+    var evidence = missionArray(m.evidence);
+    var approvals = missionArray(m.approvals);
+    var quality = {};
+    if (m.quality_summary && typeof m.quality_summary === "object") {
+      quality = m.quality_summary;
+    } else if (m.metadata && typeof m.metadata.quality_summary === "object") {
+      quality = m.metadata.quality_summary;
+    }
+    var control = m.control_summary && typeof m.control_summary === "object" ? m.control_summary : {};
+
+    var artifactCount = 0;
+    for (var i = 0; i < evidence.length; i++) {
+      if (evidence[i] && evidence[i].path) artifactCount += 1;
+    }
+
+    var pendingApprovals = 0;
+    for (var j = 0; j < approvals.length; j++) {
+      if (!approvals[j] || !approvals[j].status || String(approvals[j].status).toLowerCase() === "pending") {
+        pendingApprovals += 1;
+      }
+    }
+
+    return {
+      counts: counts,
+      evidence_count: evidence.length,
+      artifact_count: artifactCount,
+      pending_approvals: pendingApprovals,
+      quality: quality,
+      control: control,
+      meta: m.metadata || {}
+    };
+  }
+
+  function missionStatusTone(status) {
+    var value = String(status || "").toLowerCase();
+    if (value === "completed" || value === "approved") return "ok";
+    if (value === "failed" || value === "denied") return "err";
+    if (value === "waiting_approval" || value === "waiting-approval") return "warn";
+    return "warn";
+  }
+
+  function missionQualityTone(quality) {
+    var value = String((quality && (quality.status || quality.quality_status)) || "").toLowerCase();
+    if (value === "pass" || value === "ready" || value === "approved") return "ok";
+    if (value === "partial" || value === "pending") return "warn";
+    if (value === "fail" || value === "blocked") return "err";
+    return "warn";
+  }
+
+  function missionChip(label, value, tone) {
+    return '<span class="control-chip ' + esc(tone || "") + '"><strong>' + esc(label) + ':</strong> ' + esc(value) + "</span>";
+  }
+
+  function missionMetricCard(label, value, tone, detail) {
+    var cls = tone || "warn";
+    var html = '<div class="quality-card ' + esc(cls) + '"><strong>' + esc(label) + "</strong><span>" + esc(value) + "</span>";
+    if (detail) {
+      html += '<div class="muted-sm" style="margin-top:6px">' + esc(detail) + "</div>";
+    }
+    html += "</div>";
+    return html;
+  }
+
+  function missionFilterMatches(mission) {
+    var status = String((mission || {}).status || "").toLowerCase();
+    if (missionFilter === "all") return true;
+    if (missionFilter === "active") return status === "queued" || status === "running" || status === "waiting_approval";
+    return status === missionFilter;
+  }
+
+  /* ================================================================
+     MISSION CONTROL
+     ================================================================ */
+  function currentMission() {
+    var list = missionState.missions || [];
+    if (!list.length) return null;
+    if (!missionState.selectedMissionId) missionState.selectedMissionId = list[0].mission_id;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].mission_id === missionState.selectedMissionId) return list[i];
+    }
+    missionState.selectedMissionId = list[0].mission_id;
+    return list[0];
+  }
+
+  function ensureRequestedMissionVisible() {
+    if (!requestedMissionId) {
+      return Promise.resolve();
+    }
+    var found = false;
+    for (var i = 0; i < missionState.missions.length; i++) {
+      if (missionState.missions[i] && missionState.missions[i].mission_id === requestedMissionId) {
+        found = true;
+        break;
+      }
+    }
+    if (found) {
+      return Promise.resolve();
+    }
+    return GET("/api/missions/" + encodeURIComponent(requestedMissionId) + "?user_id=local").then(function (data) {
+      if (data && data.ok && data.mission) {
+        missionState.missions.unshift(data.mission);
+        missionState.selectedMissionId = data.mission.mission_id;
+      }
+    });
+  }
+
+  function renderMissionKPIs() {
+    var o = missionState.overview || {};
+    var el = $("#mission-kpis");
+    if (!el) return;
+    el.innerHTML =
+      mkKPI("Aktif", o.active || 0) +
+      mkKPI("Approval", o.waiting_approval || 0) +
+      mkKPI("Tamamlanan", o.completed || 0) +
+      mkKPI("Skill", o.skills || 0);
+  }
+
+  function renderMissionList() {
+    var list = $("#mission-list");
+    if (!list) return;
+    var missions = (missionState.missions || []).filter(missionFilterMatches);
+    if (!missions.length) {
+      if ((missionState.missions || []).length && missionFilter !== "all") {
+        list.innerHTML = '<div class="empty">Bu filtrede mission yok. Farklı bir görünüm seç.</div>';
+      } else {
+        list.innerHTML = '<div class="empty">Henüz mission yok. Outcome yazıp başlat.</div>';
+      }
+      return;
+    }
+    list.innerHTML = missions.map(function (mission) {
+      var active = mission.mission_id === missionState.selectedMissionId ? " active" : "";
+      var summary = missionOverview(mission);
+      var qualityStatus = String((summary.quality && (summary.quality.status || summary.quality.quality_status)) || mission.quality_status || "-");
+      var meta = [
+        "mode: " + esc(mission.mode || "Balanced"),
+        "status: " + esc(mission.status || "queued"),
+        "quality: " + esc(qualityStatus || "-"),
+        "evidence: " + esc(summary.evidence_count || 0),
+        "waves: " + esc(mission.parallel_waves || 0)
+      ].join(" • ");
+      return (
+        '<article class="mission-card' + active + '" data-mission-id="' + esc(mission.mission_id) + '">' +
+          "<h4>" + esc(mission.goal || "Mission") + "</h4>" +
+          '<div class="muted-sm">' + esc(mission.deliverable_preview || "Teslim bekleniyor") + "</div>" +
+          '<div class="mission-meta"><span>' + meta + "</span></div>" +
+        "</article>"
+      );
+    }).join("");
+    list.querySelectorAll(".mission-card").forEach(function (card) {
+      card.addEventListener("click", function () {
+        missionState.selectedMissionId = card.getAttribute("data-mission-id");
+        loadMissionDetail();
+      });
+    });
+  }
+
+  function renderMissionControlStrip(mission) {
+    var root = $("#mission-control-strip");
+    if (!root) return;
+    if (!mission) {
+      root.innerHTML = '<div class="empty">Mission seç.</div>';
+      return;
+    }
+    var summary = missionOverview(mission);
+    var quality = summary.quality || {};
+    var chips = [];
+    chips.push(missionChip("Route", mission.route_mode || "-", "ok"));
+    chips.push(missionChip("Status", mission.status || "-", missionStatusTone(mission.status)));
+    chips.push(missionChip("Evidence", String(summary.evidence_count || 0), summary.evidence_count ? "ok" : "warn"));
+    chips.push(missionChip("Approvals", String(summary.pending_approvals || 0), summary.pending_approvals ? "warn" : "ok"));
+    chips.push(missionChip("Nodes", String(summary.counts.completed || 0) + "/" + String(summary.counts.total || 0), summary.counts.failed ? "err" : "ok"));
+    if (quality && typeof quality === "object" && (quality.status || quality.quality_status || quality.claim_coverage !== undefined || quality.critical_claim_coverage !== undefined)) {
+      chips.push(missionChip("Quality", quality.status || quality.quality_status || "-", missionQualityTone(quality)));
+    }
+    root.innerHTML = chips.join("");
+  }
+
+  function renderMissionQuality(mission) {
+    var root = $("#mission-quality");
+    if (!root) return;
+    if (!mission) {
+      root.innerHTML = '<div class="empty">Research quality sinyali yok.</div>';
+      return;
+    }
+    var summary = missionOverview(mission);
+    var quality = summary.quality || {};
+    var cards = [];
+    if (quality && typeof quality === "object" && Object.keys(quality).length > 0) {
+      if (quality.status || quality.quality_status) cards.push(missionMetricCard("Durum", quality.status || quality.quality_status, missionQualityTone(quality), "Veri sinyalleri"));
+      if (quality.claim_coverage !== undefined) cards.push(missionMetricCard("Claim coverage", (Number(quality.claim_coverage) * 100).toFixed(0) + "%", missionQualityTone(quality), "Toplam claim kapsami"));
+      if (quality.critical_claim_coverage !== undefined) cards.push(missionMetricCard("Critical coverage", (Number(quality.critical_claim_coverage) * 100).toFixed(0) + "%", missionQualityTone(quality), "Kritik claim kapsami"));
+      if (quality.uncertainty_count !== undefined) cards.push(missionMetricCard("Uncertainty", String(quality.uncertainty_count), Number(quality.uncertainty_count) > 0 ? "warn" : "ok", "Belirsiz claim sayisi"));
+      if (quality.conflict_count !== undefined) cards.push(missionMetricCard("Conflicts", String(quality.conflict_count), Number(quality.conflict_count) > 0 ? "warn" : "ok", "Cakisan bulgu sayisi"));
+      if (quality.manual_review_claim_count !== undefined) cards.push(missionMetricCard("Manual review", String(quality.manual_review_claim_count), Number(quality.manual_review_claim_count) > 0 ? "warn" : "ok", "Elle kontrol gereken claim'ler"));
+      if (quality.source_count !== undefined) cards.push(missionMetricCard("Sources", String(quality.source_count), "ok", "Kullanilan kaynak sayisi"));
+      if (quality.avg_reliability !== undefined) cards.push(missionMetricCard("Reliability", (Number(quality.avg_reliability) * 100).toFixed(0) + "%", "ok", "Ortalama guvenilirlik"));
+      if (quality.claim_map_path) cards.push(missionMetricCard("Claim map", "Hazir", "ok", quality.claim_map_path));
+      if (quality.revision_summary_path) cards.push(missionMetricCard("Revision", "Hazir", "ok", quality.revision_summary_path));
+    }
+    if (!cards.length) {
+      root.innerHTML = '<div class="empty">Research quality sinyali yok.</div>';
+      return;
+    }
+    root.innerHTML = cards.join("");
+  }
+
+  function renderMissionDetail(mission) {
+    var detail = $("#mission-detail");
+    var rail = $("#mission-rail");
+    var control = $("#mission-control-strip");
+    var quality = $("#mission-quality");
+    var timeline = $("#mission-timeline");
+    var deliverable = $("#mission-deliverable");
+    var evidence = $("#mission-evidence");
+    if (!detail || !rail || !control || !quality || !timeline || !deliverable || !evidence) return;
+    if (!mission) {
+      detail.innerHTML = '<div class="empty">Bir mission seç.</div>';
+      rail.innerHTML = "";
+      control.innerHTML = '<div class="empty">Control strip yok.</div>';
+      quality.innerHTML = '<div class="empty">Research quality yok.</div>';
+      timeline.innerHTML = '<div class="empty">Timeline yok.</div>';
+      deliverable.textContent = "Henüz bir mission seçilmedi.";
+      evidence.innerHTML = '<div class="empty">Kanıt yok.</div>';
+      return;
+    }
+    renderMissionControlStrip(mission);
+    var preview = mission.preview_summary && typeof mission.preview_summary === "object"
+      ? mission.preview_summary
+      : (mission.metadata && typeof mission.metadata.request_contract === "object" ? mission.metadata.request_contract : {});
+    var previewChips = [];
+    if (preview.content_kind) previewChips.push("Tür: " + preview.content_kind);
+    if (Array.isArray(preview.output_formats) && preview.output_formats.length) previewChips.push("Çıktı: " + preview.output_formats.slice(0, 4).join(", "));
+    if (preview.style_profile) previewChips.push("Stil: " + preview.style_profile);
+    if (preview.source_policy) previewChips.push("Kaynak: " + preview.source_policy);
+    if (Array.isArray(preview.quality_contract) && preview.quality_contract.length) previewChips.push("Kalite: " + preview.quality_contract.slice(0, 3).join(", "));
+    if (preview.needs_clarification) previewChips.push("Netleştirme gerekli");
+    if (preview.clarifying_question) previewChips.push("Soru: " + preview.clarifying_question);
+
+    detail.innerHTML =
+      '<div class="row"><span class="row-k">Mission</span><span class="row-v">' + esc(mission.mission_id) + "</span></div>" +
+      '<div class="row"><span class="row-k">Durum</span><span class="row-v">' + badge(mission.status) + "</span></div>" +
+      '<div class="row"><span class="row-k">Mode</span><span class="row-v">' + esc(mission.mode || "Balanced") + "</span></div>" +
+      '<div class="row"><span class="row-k">Route</span><span class="row-v">' + esc(mission.route_mode || "task") + "</span></div>" +
+      '<div class="row"><span class="row-k">Risk</span><span class="row-v">' + esc(mission.risk_profile || "low") + "</span></div>" +
+      '<div class="detail-lead">' + esc(mission.goal || "") + "</div>" +
+      (preview.preview ? '<div class="detail-note">' + esc(preview.preview) + "</div>" : "") +
+      (previewChips.length ? '<div class="mission-meta"><span>' + previewChips.map(function (item) { return esc(item); }).join("</span><span>") + "</span></div>" : "") +
+      '<div class="btn-row"><button class="btn btn-s btn-sm" id="save-skill-btn">Save as Skill</button></div>';
+
+    var nodes = (((mission.graph || {}).nodes) || []);
+    rail.innerHTML = nodes.length ? nodes.map(function (node) {
+      var cls = esc(String(node.status || "queued").replace(/\s+/g, "_"));
+      return (
+        '<div class="node-pill ' + cls + '">' +
+          "<strong>" + esc(node.title || node.node_id || "node") + "</strong>" +
+          "<span>" + esc(node.specialist || node.kind || "task") + " • " + esc(node.status || "queued") + "</span>" +
+        "</div>"
+      );
+    }).join("") : '<div class="empty">Task graph yok.</div>';
+
+    renderMissionQuality(mission);
+
+    var events = mission.events || [];
+    timeline.innerHTML = events.length ? events.slice().reverse().map(function (item) {
+      return (
+        '<div class="timeline-item">' +
+          "<strong>" + esc(item.label || item.event_type || "event") + "</strong>" +
+          "<p>" + esc(item.status || "") + " • " + esc(fmtDate(item.created_at)) + "</p>" +
+        "</div>"
+      );
+    }).join("") : '<div class="empty">Timeline yok.</div>';
+
+    deliverable.textContent = mission.deliverable || "Teslim henüz hazır değil.";
+
+    var evidenceItems = mission.evidence || [];
+    evidence.innerHTML = evidenceItems.length ? evidenceItems.slice().reverse().map(function (item) {
+      var target = item.path || item.summary || "";
+      return (
+        '<div class="stack-item">' +
+          "<strong>" + esc(item.label || item.kind || "evidence") + "</strong>" +
+          "<p>" + esc(target) + "</p>" +
+        "</div>"
+      );
+    }).join("") : '<div class="empty">Kanıt henüz yok.</div>';
+
+    var saveSkillBtn = $("#save-skill-btn");
+    if (saveSkillBtn) saveSkillBtn.addEventListener("click", function () { saveMissionSkill(mission.mission_id); });
+  }
+
+  function renderMissionApprovals() {
+    var root = $("#mission-approvals");
+    if (!root) return;
+    var approvals = missionState.approvals || [];
+    if (!approvals.length) {
+      root.innerHTML = '<div class="empty">Bekleyen approval yok.</div>';
+      return;
+    }
+    root.innerHTML = approvals.map(function (item) {
+      return (
+        '<div class="approval-item">' +
+          "<strong>" + esc(item.title || "Approval") + "</strong>" +
+          "<p>" + esc(item.goal || item.summary || "") + "</p>" +
+          '<div class="mission-meta"><span>risk: ' + esc(item.risk_level || "medium") + "</span><span>" + esc(fmtDate(item.created_at)) + "</span></div>" +
+          '<div class="approval-actions">' +
+            '<button class="btn btn-p btn-sm js-approve" data-a="' + esc(item.approval_id) + '">Onayla</button>' +
+            '<button class="btn btn-d btn-sm js-deny" data-a="' + esc(item.approval_id) + '">Reddet</button>' +
+          "</div>" +
+        "</div>"
+      );
+    }).join("");
+    root.querySelectorAll(".js-approve").forEach(function (btn) {
+      btn.addEventListener("click", function () { resolveMissionApproval(btn.getAttribute("data-a"), true); });
+    });
+    root.querySelectorAll(".js-deny").forEach(function (btn) {
+      btn.addEventListener("click", function () { resolveMissionApproval(btn.getAttribute("data-a"), false); });
+    });
+  }
+
+  function renderMissionSkills() {
+    var root = $("#mission-skills");
+    if (!root) return;
+    var skills = missionState.skills || [];
+    if (!skills.length) {
+      root.innerHTML = '<div class="empty">Henüz skill kaydı yok.</div>';
+      return;
+    }
+    root.innerHTML = skills.map(function (item) {
+      return (
+        '<div class="stack-item">' +
+          "<strong>" + esc(item.name || "Skill") + "</strong>" +
+          "<p>risk: " + esc(item.risk_profile || "low") + " • mission: " + esc(item.source_mission_id || "-") + "</p>" +
+        "</div>"
+      );
+    }).join("");
+  }
+
+  function renderMissionMemory() {
+    var root = $("#mission-memory");
+    if (!root) return;
+    var groups = missionState.memory || {};
+    var rows = [];
+    ["profile", "workflow", "task", "evidence"].forEach(function (key) {
+      var items = groups[key] || [];
+      items.slice(0, 2).forEach(function (item) {
+        rows.push(
+          '<div class="memory-item">' +
+            "<strong>" + esc(item.title || key) + "</strong>" +
+            "<p>" + esc(item.content || "") + "</p>" +
+            '<div class="muted-sm">' + esc(key) + " • confidence: " + esc(item.confidence || 0) + "</div>" +
+          "</div>"
+        );
+      });
+    });
+    root.innerHTML = rows.length ? rows.join("") : '<div class="empty">Mission memory henüz boş.</div>';
+  }
+
+  function updateMissionFilterButtons() {
+    $$(".js-mission-filter").forEach(function (btn) {
+      var active = String(btn.getAttribute("data-filter") || "all") === missionFilter;
+      btn.classList.toggle("active", active);
+    });
+  }
+
+  function loadMissionDetail() {
+    var mission = currentMission();
+    if (!mission) {
+      renderMissionDetail(null);
+      return Promise.resolve();
+    }
+    return GET("/api/missions/" + encodeURIComponent(mission.mission_id) + "?user_id=local").then(function (data) {
+      if (data && data.ok && data.mission) {
+        renderMissionDetail(data.mission);
+      } else {
+        renderMissionDetail(null);
+      }
+    });
+  }
+
+  function loadMissionControl() {
+    return Promise.all([
+      GET("/api/missions/overview?user_id=local"),
+      GET("/api/missions?user_id=local&limit=12"),
+      GET("/api/missions/approvals?user_id=local"),
+      GET("/api/missions/skills"),
+      GET("/api/missions/memory?user_id=local")
+    ]).then(function (results) {
+      missionState.overview = results[0] || {};
+      missionState.missions = Array.isArray((results[1] || {}).missions) ? results[1].missions : [];
+      missionState.approvals = Array.isArray((results[2] || {}).pending) ? results[2].pending : [];
+      missionState.skills = Array.isArray((results[3] || {}).skills) ? results[3].skills : [];
+      missionState.memory = (results[4] && results[4].ok) ? results[4] : { profile: [], workflow: [], task: [], evidence: [] };
+      return ensureRequestedMissionVisible().then(function () {
+        if (!missionState.selectedMissionId && missionState.missions.length) {
+          missionState.selectedMissionId = missionState.missions[0].mission_id;
+        }
+        renderMissionKPIs();
+        renderMissionList();
+        renderMissionApprovals();
+        renderMissionSkills();
+        renderMissionMemory();
+        return loadMissionDetail();
+      });
+    });
+  }
+
+  function createMission() {
+    var input = $("#mission-input");
+    var modeEl = $("#mission-mode");
+    var goal = input ? input.value.trim() : "";
+    if (!goal) { toast("Mission hedefi bos olamaz", "err"); return; }
+    POST("/api/missions", { goal: goal, mode: (modeEl && modeEl.value) || "Balanced", user_id: "local", channel: "dashboard" }).then(function (res) {
+      if (res && res.ok && res.mission) {
+        missionState.selectedMissionId = res.mission.mission_id;
+        toast("Mission baslatildi", "ok");
+        loadMissionControl();
+      } else {
+        toast(friendlyFailure((res || {}).error || "mission_create_failed"), "err");
+      }
+    });
+  }
+
+  function resolveMissionApproval(approvalId, approved) {
+    POST("/api/missions/approvals/resolve", { id: approvalId, approved: approved }).then(function (res) {
+      if (res && res.ok) {
+        toast(approved ? "Approval onaylandi" : "Approval reddedildi", approved ? "ok" : "info");
+        loadMissionControl();
+      } else {
+        toast((res && res.error) || "Approval guncellenemedi", "err");
+      }
+    });
+  }
+
+  function saveMissionSkill(missionId) {
+    POST("/api/missions/skills/save", { mission_id: missionId }).then(function (res) {
+      if (res && res.ok) {
+        toast("Mission skill olarak kaydedildi", "ok");
+        loadMissionControl();
+      } else {
+        toast((res && res.error) || "Skill kaydedilemedi", "err");
+      }
     });
   }
 
   /* ================================================================
      TABS
      ================================================================ */
-  var tabMap = { llms: "p-llms", ollama: "p-ollama", status: "p-status", settings: "p-settings" };
+  var tabMap = { mission: "p-mission", tools: "p-tools", settings: "p-settings" };
 
   $$(".nav-tab").forEach(function (btn) {
     btn.addEventListener("click", function () {
@@ -62,16 +584,33 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   });
 
+  var missionRunBtn = $("#mission-run");
+  if (missionRunBtn) missionRunBtn.addEventListener("click", createMission);
+  $$(".js-mission-preset").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var input = $("#mission-input");
+      if (input) input.value = btn.getAttribute("data-prompt") || "";
+    });
+  });
+  $$(".js-mission-filter").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      missionFilter = String(btn.getAttribute("data-filter") || "all");
+      updateMissionFilterButtons();
+      renderMissionList();
+    });
+  });
+  updateMissionFilterButtons();
+
   /* ================================================================
      PROVIDER META
      ================================================================ */
   var META = {
-    groq:      { icon: "\uD83D\uDE80", label: "Groq",           note: "Ucretsiz, ultra hizli" },
-    google:    { icon: "\uD83D\uDD35", label: "Google Gemini",   note: "Ucretsiz tier mevcut" },
-    openai:    { icon: "\uD83E\uDD16", label: "OpenAI",          note: "GPT-4o, premium kalite" },
-    anthropic: { icon: "\uD83E\uDDE0", label: "Anthropic Claude",note: "Reasoning ve kod" },
-    deepseek:  { icon: "\u26A1",       label: "DeepSeek",        note: "Dusuk maliyet" },
-    ollama:    { icon: "\uD83C\uDFE0", label: "Ollama",          note: "Yerel, gizlilik oncelikli" }
+    groq:      { icon: "\uD83D\uDE80", label: "Groq",           note: "Hızlı" },
+    google:    { icon: "\uD83D\uDD35", label: "Google Gemini",   note: "Genel" },
+    openai:    { icon: "\uD83E\uDD16", label: "OpenAI",          note: "Premium" },
+    anthropic: { icon: "\uD83E\uDDE0", label: "Anthropic Claude",note: "Kod" },
+    deepseek:  { icon: "\u26A1",       label: "DeepSeek",        note: "Ekonomik" },
+    ollama:    { icon: "\uD83C\uDFE0", label: "Ollama",          note: "Yerel" }
   };
   var PROVIDER_ORDER = ["groq", "google", "openai", "anthropic", "deepseek", "ollama"];
 
@@ -135,7 +674,7 @@ document.addEventListener("DOMContentLoaded", function () {
     var pillText = ok ? "Aktif" : (hasKey ? "Key var" : "Kapali");
 
     var html = '<div class="card-top"><div><h3>' + m.icon + " " + esc(m.label) + "</h3>";
-    html += '<div class="card-desc">' + esc(m.note) + (p.free ? " &middot; ucretsiz" : "") + "</div></div>";
+    html += '<div class="card-desc">' + esc(m.note) + "</div></div>";
     html += '<span class="pill ' + pillClass + '"><span class="pdot"></span>' + pillText + "</span></div>";
 
     html += '<div class="row"><span class="row-k">Model</span><span class="row-v">' + esc(p.model || "-") + "</span></div>";
@@ -444,6 +983,8 @@ document.addEventListener("DOMContentLoaded", function () {
           var msg = JSON.parse(e.data);
           if (msg.event === "llm_update" || msg.event === "provider_change") {
             loadProviders();
+          } else if (msg.event === "mission_event" || msg.event === "mission_overview" || msg.event === "mission_list") {
+            loadMissionControl();
           }
         } catch (ex) { /* ignore */ }
       };
@@ -456,11 +997,13 @@ document.addEventListener("DOMContentLoaded", function () {
      REFRESH & BOOT
      ================================================================ */
   function refreshAll() {
-    return Promise.all([loadProviders(), loadOllama(), loadHealth()]);
+    return Promise.all([loadMissionControl(), loadProviders(), loadOllama(), loadHealth()]);
   }
 
   var refreshBtn = $("#g-refresh");
   if (refreshBtn) refreshBtn.addEventListener("click", function () { refreshAll(); });
+  var toolsRefreshBtn = $("#g-refresh-tools");
+  if (toolsRefreshBtn) toolsRefreshBtn.addEventListener("click", function () { refreshAll(); });
 
   // Boot
   refreshAll().then(function () { loadSettings(); });

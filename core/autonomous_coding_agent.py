@@ -1,6 +1,9 @@
 """
-Autonomous Coding Agent - OpenClaw Component
-Generates, reviews, and optimizes code with quality gates
+Legacy autonomous coding helper.
+
+Contract-first coding runtime is now the primary execution path.
+This module remains as a heuristic helper and should not be treated
+as the canonical project-generation engine.
 """
 
 import json

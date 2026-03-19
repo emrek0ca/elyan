@@ -32,6 +32,13 @@ _ALLOWED_ACTIONS = {
     "edit_word_document",
     "summarize_document",
     "analyze_document",
+    "summarize_document_rag",
+    "document_rag_qa",
+    "analyze_document_rag",
+    "build_document_rag_index",
+    "analyze_document_vision",
+    "extract_tables_from_document",
+    "extract_charts_from_document",
     "run_safe_command",
     "summarize_text",
     "generate_report",
@@ -44,8 +51,9 @@ _ALLOWED_ACTIONS = {
     "mouse_move",
     "mouse_click",
     "computer_use",
+    "create_coding_project",
 }
-_PATH_REQUIRED_ACTIONS = {"mkdir", "write_file", "verify_file", "report_artifacts", "read_file", "list_files", "edit_text_file", "edit_word_document", "summarize_document", "analyze_document"}
+_PATH_REQUIRED_ACTIONS = {"mkdir", "write_file", "verify_file", "report_artifacts", "read_file", "list_files", "edit_text_file", "edit_word_document", "summarize_document", "analyze_document", "summarize_document_rag", "analyze_document_rag"}
 _PARAMS_REQUIRED_ACTIONS = {
     "api_health_check",
     "http_request",
@@ -56,6 +64,13 @@ _PARAMS_REQUIRED_ACTIONS = {
     "edit_word_document",
     "summarize_document",
     "analyze_document",
+    "summarize_document_rag",
+    "document_rag_qa",
+    "analyze_document_rag",
+    "build_document_rag_index",
+    "analyze_document_vision",
+    "extract_tables_from_document",
+    "extract_charts_from_document",
     "summarize_text",
     "generate_report",
     "advanced_research",
@@ -67,6 +82,7 @@ _PARAMS_REQUIRED_ACTIONS = {
     "mouse_move",
     "mouse_click",
     "computer_use",
+    "create_coding_project",
 }
 _ALLOWED_CHECK_TYPES = {
     "tool_success",
@@ -80,6 +96,18 @@ _ALLOWED_CHECK_TYPES = {
     "exit_code",
     "json_valid",
 }
+
+_CODING_REQUIRED_FIELDS = (
+    "execution_mode",
+    "repo_snapshot",
+    "coding_contract",
+    "style_intent",
+    "required_gates",
+    "evidence_requirements",
+    "allowed_write_paths",
+    "forbidden_write_paths",
+    "claim_policy",
+)
 
 
 def _step_path(step: Dict[str, Any], params: Dict[str, Any]) -> str:
@@ -267,6 +295,47 @@ def _manual_validate(task_spec: Any) -> Tuple[bool, List[str]]:
     if risk not in {"low", "med", "high", "guarded", "dangerous"}:
         errors.append("invalid:risk_level")
 
+    if intent == "coding_batch":
+        for key in _CODING_REQUIRED_FIELDS:
+            if key not in task_spec:
+                errors.append(f"missing:{key}")
+        execution_mode = str(task_spec.get("execution_mode") or "").strip()
+        if not execution_mode:
+            errors.append("invalid:execution_mode")
+        repo_snapshot = task_spec.get("repo_snapshot")
+        if not isinstance(repo_snapshot, dict):
+            errors.append("invalid:repo_snapshot")
+        else:
+            if not str(repo_snapshot.get("repo_type") or "").strip():
+                errors.append("missing:repo_snapshot.repo_type")
+            if not str(repo_snapshot.get("root_path") or "").strip():
+                errors.append("missing:repo_snapshot.root_path")
+        coding_contract = task_spec.get("coding_contract")
+        if not isinstance(coding_contract, dict):
+            errors.append("invalid:coding_contract")
+        else:
+            if not str(coding_contract.get("adapter_id") or coding_contract.get("adapter") or "").strip():
+                errors.append("missing:coding_contract.adapter_id")
+        style_intent = task_spec.get("style_intent")
+        if not isinstance(style_intent, dict):
+            errors.append("invalid:style_intent")
+        elif not str(style_intent.get("visual_direction") or "").strip():
+            errors.append("missing:style_intent.visual_direction")
+        required_gates = task_spec.get("required_gates")
+        if not isinstance(required_gates, list):
+            errors.append("invalid:required_gates")
+        evidence_requirements = task_spec.get("evidence_requirements")
+        if not isinstance(evidence_requirements, list) or not evidence_requirements:
+            errors.append("invalid:evidence_requirements")
+        allowed_write_paths = task_spec.get("allowed_write_paths")
+        if not isinstance(allowed_write_paths, list) or not allowed_write_paths:
+            errors.append("invalid:allowed_write_paths")
+        forbidden_write_paths = task_spec.get("forbidden_write_paths")
+        if not isinstance(forbidden_write_paths, list):
+            errors.append("invalid:forbidden_write_paths")
+        if not isinstance(task_spec.get("claim_policy"), dict):
+            errors.append("invalid:claim_policy")
+
     timeouts = task_spec.get("timeouts")
     if not isinstance(timeouts, dict):
         errors.append("invalid:timeouts")
@@ -346,6 +415,38 @@ def _manual_validate(task_spec: Any) -> Tuple[bool, List[str]]:
             has_path = bool(path)
             if not has_path and not has_content:
                 errors.append(f"missing:steps[{idx}].path_or_params.content")
+        if action == "summarize_document_rag":
+            has_content = bool(str(params.get("content") or "").strip())
+            has_path = bool(path)
+            if not has_path and not has_content:
+                errors.append(f"missing:steps[{idx}].path_or_params.content")
+        if action == "analyze_document_vision":
+            has_content = bool(str(params.get("content") or "").strip())
+            has_path = bool(path)
+            if not has_path and not has_content:
+                errors.append(f"missing:steps[{idx}].path_or_params.content")
+        if action == "extract_tables_from_document":
+            has_content = bool(str(params.get("content") or "").strip())
+            has_path = bool(path)
+            if not has_path and not has_content:
+                errors.append(f"missing:steps[{idx}].path_or_params.content")
+        if action == "extract_charts_from_document":
+            has_content = bool(str(params.get("content") or "").strip())
+            has_path = bool(path)
+            if not has_path and not has_content:
+                errors.append(f"missing:steps[{idx}].path_or_params.content")
+        if action == "document_rag_qa":
+            has_content = bool(str(params.get("content") or "").strip())
+            has_path = bool(path)
+            question = str(params.get("question") or "").strip()
+            if not has_path and not has_content:
+                errors.append(f"missing:steps[{idx}].path_or_params.content")
+            if not question:
+                errors.append(f"missing:steps[{idx}].params.question")
+        if action == "build_document_rag_index":
+            paths = params.get("paths")
+            if not isinstance(paths, list) or not paths:
+                errors.append(f"missing:steps[{idx}].params.paths")
         if action == "api_health_check":
             url = str(params.get("url") or "").strip()
             if not url:
@@ -357,6 +458,13 @@ def _manual_validate(task_spec: Any) -> Tuple[bool, List[str]]:
                 errors.append(f"missing:steps[{idx}].params.url")
             if not method:
                 errors.append(f"missing:steps[{idx}].params.method")
+        if action == "create_coding_project":
+            project_name = str(params.get("project_name") or "").strip()
+            brief = str(params.get("brief") or "").strip()
+            if not project_name:
+                errors.append(f"missing:steps[{idx}].params.project_name")
+            if not brief:
+                errors.append(f"missing:steps[{idx}].params.brief")
         if action == "graphql_query":
             url = str(params.get("url") or "").strip()
             query = str(params.get("query") or "").strip()

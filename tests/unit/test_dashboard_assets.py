@@ -59,40 +59,27 @@ async def test_handle_ops_console_page_sets_admin_cookie(monkeypatch):
     assert resp.cookies["elyan_admin_session"].value == "ops-token"
 
 
-def test_dashboard_js_uses_longer_message_timeout_and_friendly_abort_text():
+def test_dashboard_js_includes_mission_control_runtime_hooks():
     js = Path("/Users/emrekoca/Desktop/bot/ui/web/dashboard.js").read_text(encoding="utf-8")
     assert "timeoutMs: 130000" in js
     assert "Istek zaman asimina ugradi" in js
     assert "friendlyFailure" in js
-    assert "claim coverage:" in js
-    assert "critical claim:" in js
-    assert "uncertainty:" in js
-    assert "conflicts:" in js
-    assert "manual review:" in js
-    assert "route:" in js
-    assert "autonomy:" in js
-    assert "decision:" in js
-    assert "workflow:" in js
-    assert "approval:" in js
-    assert "plan:" in js
-    assert "review:" in js
-    assert "workspace:" in js
-    assert "team q:" in js
-    assert "team waves:" in js
-    assert "team packets:" in js
-    assert "team conflicts:" in js
-    assert "team claim:" in js
-    assert "team critical:" in js
-    assert "status-detail" in js
-    assert "/api/product/home" in js
-    assert "/api/models" in js
-    assert "/api/agent/profile" in js
-    assert "model-add-btn" in js
-    assert "collab-save-btn" in js
-    assert "profile-save-btn" in js
-    assert "/api/product/workflows/run" in js
-    assert "onboarding-list" in js
-    assert "release-list" in js
+    assert "missionFilter" in js
+    assert "renderMissionControlStrip" in js
+    assert "renderMissionQuality" in js
+    assert "/api/missions" in js
+    assert "/api/missions/" in js
+    assert "/api/missions/overview" in js
+    assert "/api/missions/approvals/resolve" in js
+    assert "/api/missions/skills/save" in js
+    assert "/api/missions/memory" in js
+    assert "Mission baslatildi" in js
+    assert "mission_event" in js
+    assert "URLSearchParams" in js
+    assert "mission_id" in js
+    assert "selected_mission_id" in js
+    assert 'tools: "p-tools"' in js
+    assert "g-refresh-tools" in js
 
 
 def test_ops_console_js_points_to_admin_endpoints():

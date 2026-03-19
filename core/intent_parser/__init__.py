@@ -15,6 +15,7 @@ from ._research import ResearchParser
 from ._documents import DocumentParser
 from ._media import MediaParser
 from ._free_apis import FreeApiParser
+from core.nlu.phase1_engine import get_phase1_engine
 
 from utils.logger import get_logger
 
@@ -88,6 +89,7 @@ class IntentParser(
             self._parse_summarize,
             self._parse_translate,
             # Belgeler
+            self._parse_document_vision,
             self._parse_create_coding_project,
             self._parse_create_website,
             self._parse_create_word,
@@ -119,6 +121,7 @@ class IntentParser(
             r"\s*(?:[,;]+\s*|\s+(?:ve\s+sonra|ardından|ardindan|sonra|sonrasında|sonrasinda|then|açıp|acip|çalıştırıp|calistirip|gidip|girip|yazıp|yazip)\s+)\s*",
             re.IGNORECASE,
         )
+        self._phase1 = get_phase1_engine()
 
     # ── Public API ────────────────────────────────────────────────────────────
     def parse(self, text: str) -> dict[str, Any]:
@@ -160,6 +163,18 @@ class IntentParser(
         if single:
             return single
 
+        phase1 = self._phase1.classify(original, allow_clarify=True)
+        if phase1:
+            payload = phase1.to_parser_payload()
+            if payload.get("action") != "chat":
+                logger.debug(
+                    "[intent_parser] phase1 → %s (intent=%s, confidence=%.2f)",
+                    payload.get("action"),
+                    phase1.intent,
+                    phase1.confidence,
+                )
+                return payload
+
         return self._parse_chat_fallback(text, text_norm, original)
 
     def _parse_single(self, text: str, text_norm: str, original: str) -> dict[str, Any] | None:
@@ -179,6 +194,26 @@ class IntentParser(
         """
         Basit çok-adımlı cümleleri (ve sonra / ardından) tek plana dönüştür.
         """
+        if any(
+            marker in original.lower()
+            for marker in (
+                "layout",
+                "ocr",
+                "tablo",
+                "table",
+                "chart",
+                "grafik",
+                "diagram",
+                "figure",
+                "vision",
+                "görsel",
+                "gorsel",
+            )
+        ):
+            document_vision = self._parse_document_vision(original.lower(), self._normalize(original), original)
+            if document_vision:
+                return document_vision
+
         normalized = re.sub(r"\baçıp\b", "aç sonra", original, flags=re.IGNORECASE)
         normalized = re.sub(r"\bacip\b", "aç sonra", normalized, flags=re.IGNORECASE)
         normalized = re.sub(r"\bçalıştırıp\b", "çalıştır sonra", normalized, flags=re.IGNORECASE)

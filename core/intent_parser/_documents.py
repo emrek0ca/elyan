@@ -5,6 +5,7 @@ Kapsam: create_word, create_excel, create_pdf, create_website
 import re
 from pathlib import Path
 from config.settings import HOME_DIR
+from core.storage_paths import resolve_elyan_data_dir
 from ._base import (BaseParser, _RE_WEBSITE_DIRECT_TOPIC, _RE_WEBSITE_TOPIC,
                     _RE_WEBSITE_ALT, _RE_WEBSITE_CLEAN, _RE_WEBSITE_FILENAME,
                     _RE_WEBSITE_FOLDER, _RE_WEBSITE_SLUGIFY)
@@ -34,6 +35,121 @@ class DocumentParser(BaseParser):
             if len(candidate) >= 3:
                 return candidate
         return ""
+
+    def parse(self, text: str) -> dict:
+        """Backward-compatible parser entrypoint for direct DocumentParser usage."""
+        from . import IntentParser
+
+        return IntentParser().parse(text)
+
+    @staticmethod
+    def _document_vision_signals(text: str) -> tuple[bool, bool, bool]:
+        low = str(text or "").lower()
+        document_markers = (
+            "pdf",
+            "belge",
+            "dokuman",
+            "doküman",
+            "docx",
+            "word",
+            "rapor",
+            "report",
+            "sunum",
+            "presentation",
+            "layout",
+            "ocr",
+            "görsel",
+            "gorsel",
+            "vision",
+            "scan",
+            "tarama",
+        )
+        table_markers = (
+            "tablo",
+            "table",
+            "csv",
+            "xlsx",
+            "sheet",
+            "spreadsheet",
+        )
+        chart_markers = (
+            "grafik",
+            "chart",
+            "diagram",
+            "plot",
+            "figure",
+            "çizim",
+            "cizim",
+        )
+        document_signal = any(marker in low for marker in document_markers)
+        table_signal = any(marker in low for marker in table_markers)
+        chart_signal = any(marker in low for marker in chart_markers)
+        return document_signal, table_signal, chart_signal
+
+    def _parse_document_vision(self, text: str, text_norm: str, original: str) -> dict | None:
+        document_signal, table_signal, chart_signal = self._document_vision_signals(text)
+        low = str(text or "").lower()
+
+        if not document_signal and not table_signal and not chart_signal:
+            return None
+
+        # Exclude authoring requests that belong to create_word/create_excel/create_presentation.
+        if any(k in low for k in ["oluştur", "olustur", "yaz", "hazırla", "hazirla", "create", "build", "kaydet"]):
+            if not any(k in low for k in ["incele", "analiz", "analiz et", "araştır", "arastir", "tara", "oku", "çıkar", "cikar", "extract", "layout", "ocr"]):
+                return None
+
+        path = self._extract_path(original) or self._extract_path(text_norm) or ""
+        output_dir = str(resolve_elyan_data_dir() / "vision")
+
+        if table_signal and any(k in low for k in ["çıkar", "cikar", "extract", "ayıkl", "ayikla", "parse", "dönüştür", "donustur", "export"]):
+            params = {
+                "path": path,
+                "output_dir": output_dir,
+                "export_formats": ["json", "xlsx"],
+            }
+            if not path:
+                params["content"] = ""
+            return {
+                "action": "extract_tables_from_document",
+                "params": params,
+                "reply": "Belgedeki tablolar çıkarılıyor...",
+            }
+
+        if chart_signal and any(k in low for k in ["çıkar", "cikar", "extract", "ayıkl", "ayikla", "veri", "data", "dönüştür", "donustur", "export"]):
+            params = {
+                "path": path,
+                "output_dir": output_dir,
+            }
+            if not path:
+                params["content"] = ""
+            return {
+                "action": "extract_charts_from_document",
+                "params": params,
+                "reply": "Belgedeki grafikler çıkarılıyor...",
+            }
+
+        params = {
+            "path": path,
+            "output_dir": output_dir,
+            "export_formats": ["json", "xlsx"],
+            "include_tables": bool(table_signal),
+            "include_charts": bool(chart_signal),
+            "use_multimodal_fallback": True,
+        }
+        if not path:
+            params["content"] = ""
+        reply = "Belge görsel olarak inceleniyor..."
+        if table_signal and chart_signal:
+            reply = "Belge, tablo ve grafik yapısı ile birlikte inceleniyor..."
+        elif table_signal:
+            reply = "Belge ve tablo yapısı inceleniyor..."
+        elif chart_signal:
+            reply = "Belge ve grafik yapısı inceleniyor..."
+        return {
+            "action": "analyze_document_vision",
+            "params": params,
+            "reply": reply,
+        }
 
     # ── Word Document ─────────────────────────────────────────────────────────
     def _parse_create_word(self, text: str, text_norm: str, original: str) -> dict | None:

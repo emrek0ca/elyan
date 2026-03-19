@@ -14,14 +14,16 @@ MAX_CONTENT_LENGTH = 8000
 async def summarize_document(
     path: str = None,
     content: str = None,
-    style: str = "brief"
+    style: str = "brief",
+    question: str | None = None
 ) -> dict[str, Any]:
-    """Summarize a document using LLM
+    """Summarize a document using the local RAG engine first, LLM fallback second.
 
     Args:
         path: Path to the document (Word, Excel, or PDF)
         content: Direct text content to summarize (alternative to path)
         style: Summary style - "brief" (short), "detailed" (longer), "bullets" (bullet points)
+        question: Optional question for document QA mode
     """
     try:
         # Either path or content must be provided
@@ -36,6 +38,32 @@ async def summarize_document(
             file_path = Path(path).expanduser().resolve()
             filename = file_path.name
             ext = file_path.suffix.lower()
+
+            vision_result: dict[str, Any] | None = None
+            if ext in [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"]:
+                try:
+                    from tools.vision_documents import analyze_document_vision
+
+                    vision_result = await analyze_document_vision(
+                        path=str(file_path),
+                        export_formats=(),
+                        export_page_images=False,
+                        include_tables=True,
+                        include_charts=True,
+                        use_multimodal_fallback=True,
+                    )
+                    if vision_result.get("success"):
+                        vision_text = str(
+                            vision_result.get("full_text")
+                            or vision_result.get("summary")
+                            or vision_result.get("layout_summary")
+                            or vision_result.get("prompt_block")
+                            or ""
+                        ).strip()
+                        if vision_text:
+                            document_content = vision_text
+                except Exception as vision_exc:
+                    logger.debug("Vision document analysis fallback: %s", vision_exc)
 
             if ext in [".docx", ".doc"]:
                 from .word_tools import read_word
@@ -77,6 +105,32 @@ async def summarize_document(
                 result = await read_pdf(path, extract_tables=False, use_ocr=False)
                 if result.get("success"):
                     document_content = str(result.get("content", "") or "")[:MAX_CONTENT_LENGTH]
+                    if vision_result and vision_result.get("success"):
+                        extra = vision_result.get("summary") or vision_result.get("layout_summary") or vision_result.get("prompt_block") or ""
+                        if extra:
+                            document_content = f"{document_content}\n\n{extra}".strip()
+            elif ext in [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"]:
+                if vision_result and vision_result.get("success"):
+                    result = vision_result
+                    document_content = str(
+                        vision_result.get("full_text")
+                        or vision_result.get("summary")
+                        or vision_result.get("layout_summary")
+                        or vision_result.get("prompt_block")
+                        or ""
+                    )[:MAX_CONTENT_LENGTH]
+                else:
+                    try:
+                        from tools.vision_tools import analyze_image
+
+                        image_result = await analyze_image(path, prompt="Belgedeki metni, tabloyu ve grafikleri özetle.")
+                        if image_result.get("success"):
+                            document_content = str(image_result.get("analysis", "") or "")[:MAX_CONTENT_LENGTH]
+                            result = {"success": True, "content": document_content}
+                        else:
+                            result = image_result
+                    except Exception as image_exc:
+                        result = {"success": False, "error": str(image_exc)}
             elif ext == ".txt":
                 # Simple text file
                 is_valid, error, _ = validate_path(path)
@@ -97,6 +151,61 @@ async def summarize_document(
         if not document_content or len(document_content.strip()) < 50:
             return {"success": False, "error": "Özetlenecek yeterli içerik yok"}
 
+        rag_result: dict[str, Any] | None = None
+        try:
+            from tools.research_tools.document_rag import document_rag_qa, summarize_document_rag
+
+            if path:
+                if question:
+                    rag_result = await document_rag_qa(path=path, question=question, top_k=5, use_llm=False)
+                else:
+                    rag_result = await summarize_document_rag(
+                        path=path,
+                        style=style,
+                        include_bibliography=style in {"detailed", "bullets"},
+                    )
+            else:
+                if question:
+                    rag_result = await document_rag_qa(text=document_content, question=question, top_k=5, use_llm=False)
+                else:
+                    rag_result = await summarize_document_rag(
+                        text=document_content,
+                        title=filename,
+                        style=style,
+                        include_bibliography=style in {"detailed", "bullets"},
+                    )
+        except Exception as rag_exc:
+            logger.debug("RAG summarize fallback: %s", rag_exc)
+
+        if isinstance(rag_result, dict) and rag_result.get("success"):
+            summary_text = str(rag_result.get("answer") or rag_result.get("summary") or "").strip()
+            if summary_text:
+                logger.info(f"Summarized document via RAG: {filename}, style: {style}")
+                payload = {
+                    "success": True,
+                    "filename": filename,
+                    "style": style,
+                    "summary": summary_text,
+                    "original_length": len(document_content),
+                    "summary_length": len(summary_text),
+                    "source_count": int(rag_result.get("source_count", 0) or 0),
+                    "citations": rag_result.get("citations", []),
+                    "highlights": rag_result.get("highlights", []),
+                    "summary_kind": rag_result.get("summary_kind") or rag_result.get("answer_mode") or "rag",
+                    "sections": rag_result.get("sections", []),
+                    "analysis": rag_result.get("analysis", {}),
+                }
+                if vision_result and vision_result.get("success"):
+                    payload["layout_summary"] = vision_result.get("layout_summary", "")
+                    payload["table_summary"] = vision_result.get("table_summary", "")
+                    payload["chart_summary"] = vision_result.get("chart_summary", "")
+                    payload["vision_prompt_block"] = vision_result.get("prompt_block", "")
+                    payload["vision_artifacts"] = vision_result.get("artifacts", [])
+                if question:
+                    payload["question"] = question
+                    payload["answer_mode"] = rag_result.get("answer_mode", "rag")
+                return payload
+
         # Truncate if too long
         if len(document_content) > MAX_CONTENT_LENGTH:
             document_content = document_content[:MAX_CONTENT_LENGTH]
@@ -109,6 +218,8 @@ async def summarize_document(
         }
 
         prompt = style_prompts.get(style, style_prompts["brief"])
+        if question:
+            prompt = f"{prompt}\n\nAyrıca aşağıdaki soruyu da yanıtla: {question}"
         full_prompt = f"{prompt}\n\nBelge:\n{document_content}"
 
         # Use the configured global LLM stack (OpenAI/Groq/Gemini/Ollama...)
@@ -142,7 +253,8 @@ async def summarize_document(
             "style": style,
             "summary": summary,
             "original_length": len(document_content),
-            "summary_length": len(summary)
+            "summary_length": len(summary),
+            "summary_kind": "llm_fallback",
         }
 
     except Exception as e:

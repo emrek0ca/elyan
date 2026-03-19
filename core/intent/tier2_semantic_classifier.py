@@ -11,6 +11,7 @@ import time
 from typing import Optional, Dict, Any, List
 from utils.logger import get_logger
 from .models import IntentCandidate, TaskDefinition
+from core.nlu.phase1_engine import get_phase1_engine
 
 logger = get_logger("tier2_semantic_classifier")
 
@@ -56,9 +57,13 @@ Sadece JSON döndür, başka metin yok.
 class SemanticClassifier:
     """LLM-based semantic intent classifier with multi-provider routing."""
 
+    PHASE1_DIRECT_THRESHOLD = 0.30
+    PHASE1_CLARIFY_THRESHOLD = 0.20
+
     def __init__(self, llm_orchestrator=None):
         self.llm = llm_orchestrator
         self.timeout_ms = 200
+        self._phase1 = get_phase1_engine()
 
     def classify(
         self,
@@ -80,6 +85,43 @@ class SemanticClassifier:
         start = time.time()
 
         try:
+            phase1_candidate = self._phase1.classify(
+                user_input,
+                context=context,
+                available_tools=available_tools,
+            )
+            if phase1_candidate is not None:
+                if phase1_candidate.needs_clarification and phase1_candidate.confidence >= self.PHASE1_CLARIFY_THRESHOLD:
+                    candidate = phase1_candidate.to_candidate()
+                    candidate.execution_time_ms = (time.time() - start) * 1000
+                    logger.info(
+                        "Tier 2 phase1 clarify (%s) in %.1fms",
+                        candidate.action,
+                        candidate.execution_time_ms,
+                    )
+                    return candidate
+                if phase1_candidate.confidence >= self.PHASE1_DIRECT_THRESHOLD:
+                    candidate = phase1_candidate.to_candidate()
+                    if candidate.action in available_tools or candidate.action in {"chat", "clarify", "multi_task"}:
+                        candidate.execution_time_ms = (time.time() - start) * 1000
+                        logger.info(
+                            "Tier 2 phase1 direct %s (%.2f) in %.1fms",
+                            candidate.action,
+                            candidate.confidence,
+                            candidate.execution_time_ms,
+                        )
+                        return candidate
+                    if candidate.intent in available_tools:
+                        candidate.action = candidate.intent
+                        candidate.execution_time_ms = (time.time() - start) * 1000
+                        logger.info(
+                            "Tier 2 phase1 direct intent %s (%.2f) in %.1fms",
+                            candidate.intent,
+                            candidate.confidence,
+                            candidate.execution_time_ms,
+                        )
+                        return candidate
+
             # Build tool list for prompt
             tool_list = self._format_tool_list(available_tools)
 
@@ -91,11 +133,40 @@ class SemanticClassifier:
 
             if context:
                 prompt += f"\n\nKONVERSASYON CONTEXT:\n{context}"
+            if phase1_candidate is not None:
+                prompt += (
+                    "\n\nLOCAL PHASE1 HINT:\n"
+                    f"- intent: {phase1_candidate.intent}\n"
+                    f"- action: {phase1_candidate.action}\n"
+                    f"- confidence: {phase1_candidate.confidence:.2f}\n"
+                    f"- reasoning: {phase1_candidate.reasoning}\n"
+                )
 
             # Get LLM response - use best cost/speed provider
             response = self._call_llm(prompt)
 
             if not response:
+                if phase1_candidate is not None:
+                    candidate = phase1_candidate.to_candidate()
+                    if candidate.action in available_tools or candidate.action in {"chat", "clarify", "multi_task"}:
+                        candidate.execution_time_ms = (time.time() - start) * 1000
+                        logger.info(
+                            "Tier 2 phase1 fallback %s (%.2f) in %.1fms",
+                            candidate.action,
+                            candidate.confidence,
+                            candidate.execution_time_ms,
+                        )
+                        return candidate
+                    if candidate.intent in available_tools:
+                        candidate.action = candidate.intent
+                        candidate.execution_time_ms = (time.time() - start) * 1000
+                        logger.info(
+                            "Tier 2 phase1 fallback intent %s (%.2f) in %.1fms",
+                            candidate.intent,
+                            candidate.confidence,
+                            candidate.execution_time_ms,
+                        )
+                        return candidate
                 logger.warning(f"Tier 2: LLM returned empty response for '{user_input}'")
                 return None
 
@@ -236,5 +307,6 @@ class SemanticClassifier:
         return {
             "tier": "semantic_classifier",
             "timeout_ms": self.timeout_ms,
-            "llm_available": self.llm is not None
+            "llm_available": self.llm is not None,
+            "phase1": self._phase1.describe(),
         }

@@ -22,6 +22,7 @@ class RuntimePolicy:
     tools: Dict[str, Any] = field(default_factory=dict)
     security: Dict[str, Any] = field(default_factory=dict)
     response: Dict[str, Any] = field(default_factory=dict)
+    coding: Dict[str, Any] = field(default_factory=dict)
 
 
 class RuntimePolicyResolver:
@@ -39,6 +40,7 @@ class RuntimePolicyResolver:
             "agent.capability_router.min_confidence_override": 0.7,
             "agent.planning.use_llm": True,
             "agent.planning.max_subtasks": 8,
+            "agent.execution.mode": "assist",
             "agent.multi_agent.enabled": True,
             "agent.multi_agent.complexity_threshold": 0.95,
             "agent.multi_agent.capability_confidence_threshold": 0.85,
@@ -55,6 +57,7 @@ class RuntimePolicyResolver:
             "tools.requireApproval": ["group:runtime", "group:fs", "delete_file", "write_file"],
             "agent.response_style.mode": "formal",
             "agent.response_style.friendly": False,
+            "agent.response_style.compact_actions": True,
             "agent.response_style.share_manifest_default": True,
             "agent.response_style.share_attachments_default": True,
         },
@@ -63,6 +66,7 @@ class RuntimePolicyResolver:
             "agent.capability_router.min_confidence_override": 0.5,
             "agent.planning.use_llm": True,
             "agent.planning.max_subtasks": 10,
+            "agent.execution.mode": "operator",
             "agent.multi_agent.enabled": True,
             "agent.multi_agent.complexity_threshold": 0.9,
             "agent.multi_agent.capability_confidence_threshold": 0.7,
@@ -79,6 +83,7 @@ class RuntimePolicyResolver:
             "tools.requireApproval": ["delete_file", "write_file"],
             "agent.response_style.mode": "friendly",
             "agent.response_style.friendly": True,
+            "agent.response_style.compact_actions": True,
             "agent.response_style.share_manifest_default": False,
             "agent.response_style.share_attachments_default": False,
         },
@@ -87,6 +92,7 @@ class RuntimePolicyResolver:
             "agent.capability_router.min_confidence_override": 0.35,
             "agent.planning.use_llm": True,
             "agent.planning.max_subtasks": 14,
+            "agent.execution.mode": "operator",
             "agent.multi_agent.enabled": True,
             "agent.multi_agent.complexity_threshold": 0.8,
             "agent.multi_agent.capability_confidence_threshold": 0.55,
@@ -103,12 +109,15 @@ class RuntimePolicyResolver:
             "tools.requireApproval": [],
             "agent.response_style.mode": "friendly",
             "agent.response_style.friendly": True,
+            "agent.response_style.compact_actions": False,
             "agent.response_style.share_manifest_default": False,
             "agent.response_style.share_attachments_default": False,
         },
     }
 
     def resolve(self) -> RuntimePolicy:
+        operator_mode = str(elyan_config.get("security.operatorMode", "Confirmed") or "Confirmed")
+        execution_mode = str(elyan_config.get("agent.execution.mode", "operator") or "operator")
         return RuntimePolicy(
             name=str(elyan_config.get("agent.runtime_policy.preset", "custom") or "custom"),
             flags={
@@ -122,9 +131,57 @@ class RuntimePolicyResolver:
                     elyan_config.get("agent.capability_router.min_confidence_override", 0.5) or 0.5
                 ),
             },
+            workflow={
+                "profile": str(elyan_config.get("agent.workflow.profile", "default") or "default"),
+                "allowed_domains": self._as_list(
+                    elyan_config.get(
+                        "agent.workflow.allowed_domains",
+                        ["code", "debug", "api_integration", "full_stack_delivery"],
+                    ),
+                    ["code", "debug", "api_integration", "full_stack_delivery"],
+                ),
+                "require_explicit_approval": bool(
+                    elyan_config.get("agent.workflow.require_explicit_approval", True)
+                ),
+                "workspace_policy": str(elyan_config.get("agent.workflow.workspace_policy", "auto") or "auto"),
+            },
             planning={
                 "use_llm": bool(elyan_config.get("agent.planning.use_llm", True)),
                 "max_subtasks": int(elyan_config.get("agent.planning.max_subtasks", 10) or 10),
+            },
+            execution={
+                "mode": execution_mode,
+                "default_mode": str(elyan_config.get("agent.execution.default_mode", execution_mode) or execution_mode),
+                "derive_from_operator_mode": bool(
+                    elyan_config.get("agent.execution.derive_from_operator_mode", True)
+                ),
+                "skip_verify_for_chat": bool(elyan_config.get("agent.execution.skip_verify_for_chat", True)),
+                "assist_preview_max_steps": int(
+                    elyan_config.get("agent.execution.assist_preview_max_steps", 6) or 6
+                ),
+                "prefer_short_turns": bool(elyan_config.get("agent.execution.prefer_short_turns", False)),
+            },
+            nlu={
+                "model_a": {
+                    "enabled": bool(elyan_config.get("agent.nlu.model_a.enabled", True)),
+                    "model_path": str(
+                        elyan_config.get(
+                            "agent.nlu.model_a.model_path",
+                            str(Path.home() / ".elyan" / "models" / "nlu" / "baseline_intent_model.json"),
+                        )
+                        or str(Path.home() / ".elyan" / "models" / "nlu" / "baseline_intent_model.json")
+                    ),
+                    "min_confidence": float(
+                        elyan_config.get("agent.nlu.model_a.min_confidence", 0.78) or 0.78
+                    ),
+                    "allowed_actions": self._as_list(
+                        elyan_config.get(
+                            "agent.nlu.model_a.allowed_actions",
+                            ["open_app", "close_app", "open_url", "read_file", "write_file", "web_search"],
+                        ),
+                        ["open_app", "close_app", "open_url", "read_file", "write_file", "web_search"],
+                    ),
+                }
             },
             orchestration={
                 "multi_agent_enabled": bool(elyan_config.get("agent.multi_agent.enabled", True)),
@@ -185,11 +242,12 @@ class RuntimePolicyResolver:
             response={
                 "friendly": bool(elyan_config.get("agent.response_style.friendly", True)),
                 "mode": str(elyan_config.get("agent.response_style.mode", "friendly") or "friendly"),
+                "compact_actions": bool(elyan_config.get("agent.response_style.compact_actions", True)),
                 "share_manifest_default": bool(elyan_config.get("agent.response_style.share_manifest_default", False)),
                 "share_attachments_default": bool(elyan_config.get("agent.response_style.share_attachments_default", False)),
             },
             security={
-                "operator_mode": str(elyan_config.get("security.operatorMode", "Confirmed") or "Confirmed"),
+                "operator_mode": operator_mode,
                 "local_first_models": bool(elyan_config.get("agent.model.local_first", True)),
                 "default_user_role": str(elyan_config.get("security.defaultUserRole", "operator") or "operator"),
                 "enforce_rbac": bool(elyan_config.get("security.enforceRBAC", True)),
@@ -218,6 +276,24 @@ class RuntimePolicyResolver:
                 "kvkk_strict_mode": bool(elyan_config.get("security.kvkk.strict", True)),
                 "redact_cloud_prompts": bool(elyan_config.get("security.kvkk.redactCloudPrompts", True)),
                 "allow_cloud_fallback": bool(elyan_config.get("security.kvkk.allowCloudFallback", True)),
+            },
+            coding={
+                "fail_closed": bool(elyan_config.get("agent.coding.fail_closed", True)),
+                "require_repo_truth": bool(elyan_config.get("agent.coding.require_repo_truth", True)),
+                "require_evidence": bool(elyan_config.get("agent.coding.require_evidence", True)),
+                "max_repair_loops": int(elyan_config.get("agent.coding.max_repair_loops", 2) or 2),
+                "unknown_stack_policy": str(
+                    elyan_config.get("agent.coding.unknown_stack_policy", "fail_closed") or "fail_closed"
+                ),
+                "cloud_debug_budget": float(elyan_config.get("agent.coding.cloud_debug_budget", 0.0) or 0.0),
+                "style_lock": bool(elyan_config.get("agent.coding.style_lock", True)),
+                "repo_snapshot_cache": bool(elyan_config.get("agent.coding.repo_snapshot_cache", True)),
+                "execute_adapter_gates": bool(elyan_config.get("agent.coding.execute_adapter_gates", True)),
+                "adapter_allowlist": self._as_list(
+                    elyan_config.get("agent.coding.adapter_allowlist", []),
+                    [],
+                ),
+                "local_first": bool(elyan_config.get("agent.model.local_first", True)),
             },
         )
 

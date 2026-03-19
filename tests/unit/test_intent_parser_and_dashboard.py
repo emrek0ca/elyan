@@ -301,13 +301,13 @@ def test_dashboard_no_browser_mode_does_not_open(monkeypatch):
     assert opened == []
 
 
-def test_dashboard_default_mode_uses_product_url(monkeypatch):
+def test_dashboard_default_mode_uses_dashboard_url(monkeypatch):
     opened = []
     monkeypatch.setattr(dashboard.webbrowser, "open", lambda url: opened.append(url))
 
     dashboard.open_dashboard(port=18888)
 
-    assert opened == ["http://localhost:18888/product"]
+    assert opened == ["http://localhost:18888/dashboard"]
 
 
 def test_dashboard_ops_mode_uses_tokenized_ops_url(monkeypatch):

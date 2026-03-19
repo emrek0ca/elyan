@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
 from core.advanced_checkpoints import CheckpointManager
+from core.command_hardening import CommandRouteDecision, classify_command_route
 from core.smart_context_manager import SmartContextManager
 from core.tool_usage import get_tool_usage_snapshot
 from utils.logger import get_logger
@@ -349,6 +350,16 @@ class CoworkSession:
     active_task: dict[str, Any] = field(default_factory=dict)
     screen_state: ScreenState | None = None
     tool_decision: ToolDecision | None = None
+    repo_snapshot_id: str = ""
+    coding_contract_id: str = ""
+    adapter_id: str = ""
+    style_intent: dict[str, Any] = field(default_factory=dict)
+    request_contract: dict[str, Any] = field(default_factory=dict)
+    gate_state: dict[str, Any] = field(default_factory=dict)
+    repair_budget: int = 0
+    model_ladder_trace: list[str] = field(default_factory=list)
+    evidence_bundle_id: str = ""
+    claim_blocked_reason: str = ""
     telemetry: dict[str, Any] = field(default_factory=dict)
     checkpoints: list[dict[str, Any]] = field(default_factory=list)
     turn_count: int = 0
@@ -398,6 +409,16 @@ class CoworkRuntime:
         attachments: list[str] | None = None,
         capability_domain: str = "",
     ) -> str:
+        route = self.route_command(
+            user_input,
+            quick_intent=quick_intent,
+            attachments=attachments,
+            capability_domain=capability_domain,
+        )
+        if route.refusal or route.should_clarify:
+            return "communication"
+        if route.mode:
+            return route.mode
         low = _normalize_text(user_input)
         category = str(getattr(quick_intent, "category", "") or "").strip().lower()
         if category in {"greeting", "chat"} or _is_greeting_like(low):
@@ -415,6 +436,27 @@ class CoworkRuntime:
         if category == "calculation":
             return "communication"
         return "task"
+
+    def route_command(
+        self,
+        user_input: str,
+        *,
+        quick_intent: Any = None,
+        parsed_intent: dict[str, Any] | None = None,
+        attachments: list[str] | None = None,
+        capability_domain: str = "",
+        screen_state: Any = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> CommandRouteDecision:
+        return classify_command_route(
+            user_input,
+            quick_intent=quick_intent,
+            parsed_intent=parsed_intent,
+            attachments=attachments,
+            capability_domain=capability_domain,
+            screen_state=screen_state,
+            metadata=metadata,
+        )
 
     def _budget_for_mode(self, mode: str, runtime_policy: dict[str, Any] | None = None) -> dict[str, Any]:
         policy = runtime_policy if isinstance(runtime_policy, dict) else {}
@@ -481,11 +523,16 @@ class CoworkRuntime:
         runtime_policy: dict[str, Any] | None = None,
         active_task: dict[str, Any] | None = None,
         tool_decision: ToolDecision | None = None,
+        route_decision: CommandRouteDecision | None = None,
     ) -> CoworkSession:
         key = self.session_key(user_id, channel)
         raw_user, _ = _coerce_user_id(user_id)
-        mode = self._mode_from_input(objective, quick_intent=quick_intent, attachments=attachments, capability_domain=capability_domain)
+        if isinstance(route_decision, CommandRouteDecision) and route_decision.mode:
+            mode = str(route_decision.mode).strip().lower()
+        else:
+            mode = self._mode_from_input(objective, quick_intent=quick_intent, attachments=attachments, capability_domain=capability_domain)
         session = self._sessions.get(key)
+        coding_policy = runtime_policy.get("coding", {}) if isinstance(runtime_policy, dict) and isinstance(runtime_policy.get("coding"), dict) else {}
         if session is None:
             session = CoworkSession(
                 session_id=key,
@@ -495,12 +542,13 @@ class CoworkRuntime:
                 mode=mode,
                 objective=str(objective or "").strip(),
                 objective_kind="communication" if mode == "communication" else "task",
-                selected_model=self._selected_model(mode, tool_decision),
+                selected_model=str(route_decision.model_tier if isinstance(route_decision, CommandRouteDecision) and route_decision.model_tier else self._selected_model(mode, tool_decision)),
                 budget=self._budget_for_mode(mode, runtime_policy),
                 verification_policy=self._verification_policy(mode, runtime_policy),
                 memory_policy=self._memory_policy(mode),
                 active_task=dict(active_task or {}),
                 tool_decision=tool_decision,
+                repair_budget=max(0, int(coding_policy.get("max_repair_loops", 0) or 0)),
             )
             self._sessions[key] = session
         else:
@@ -509,7 +557,10 @@ class CoworkRuntime:
             session.mode = mode or session.mode
             session.objective = str(objective or session.objective or "").strip()
             session.objective_kind = "communication" if session.mode == "communication" else "task"
-            session.selected_model = self._selected_model(session.mode, tool_decision or session.tool_decision)
+            if isinstance(route_decision, CommandRouteDecision) and route_decision.model_tier:
+                session.selected_model = str(route_decision.model_tier)
+            else:
+                session.selected_model = self._selected_model(session.mode, tool_decision or session.tool_decision)
             session.budget = self._budget_for_mode(session.mode, runtime_policy)
             session.verification_policy = self._verification_policy(session.mode, runtime_policy)
             session.memory_policy = self._memory_policy(session.mode)
@@ -517,12 +568,32 @@ class CoworkRuntime:
                 session.active_task = dict(active_task)
             if tool_decision is not None:
                 session.tool_decision = tool_decision
+            session.repair_budget = max(0, int(coding_policy.get("max_repair_loops", session.repair_budget) or session.repair_budget))
         session.execution_id = key
         session.updated_at = time.time()
         if run_id:
             session.telemetry["last_run_id"] = str(run_id)
         if runtime_policy:
             session.telemetry["runtime_policy_name"] = str(runtime_policy.get("name") or "custom")
+            if isinstance(runtime_policy.get("metadata"), dict):
+                meta = runtime_policy.get("metadata") or {}
+                session.repo_snapshot_id = str(meta.get("repo_snapshot_id") or session.repo_snapshot_id or "")
+                session.coding_contract_id = str(meta.get("coding_contract_id") or session.coding_contract_id or "")
+                session.adapter_id = str(meta.get("adapter_id") or session.adapter_id or "")
+                if isinstance(meta.get("style_intent"), dict):
+                    session.style_intent = dict(meta.get("style_intent") or {})
+                if isinstance(meta.get("request_contract"), dict):
+                    session.request_contract = dict(meta.get("request_contract") or {})
+                if isinstance(meta.get("gate_state"), dict):
+                    session.gate_state = dict(meta.get("gate_state") or {})
+                session.evidence_bundle_id = str(meta.get("evidence_bundle_id") or session.evidence_bundle_id or "")
+                session.claim_blocked_reason = str(meta.get("claim_blocked_reason") or session.claim_blocked_reason or "")
+                if isinstance(meta.get("model_ladder_trace"), list):
+                    session.model_ladder_trace = [str(item).strip() for item in meta.get("model_ladder_trace") if str(item).strip()]
+                if session.request_contract:
+                    session.telemetry["request_contract"] = dict(session.request_contract)
+        if isinstance(route_decision, CommandRouteDecision):
+            session.telemetry["route_decision"] = route_decision.to_dict()
         return session
 
     def update_session(self, session_key: str, **updates: Any) -> CoworkSession | None:
@@ -726,6 +797,27 @@ class CoworkRuntime:
             memory_text_parts.append(pref_block)
 
         memory_text = "\n\n".join(part for part in memory_text_parts if part).strip()
+        memory_sections = {
+            "profile": {
+                "text": pref_block,
+                "items": preferences,
+            },
+            "conversation": {
+                "items": recent_rows,
+            },
+            "task": {
+                "items": task_rows,
+            },
+            "knowledge": {
+                "items": knowledge_rows,
+            },
+            "session": {
+                "text": session_summary,
+            },
+            "working": {
+                "text": memory_text,
+            },
+        }
         session.memory_policy = dict(policy)
         session.telemetry["memory_scope"] = policy.get("scope", "task_routed")
         session.telemetry["topic_shift_detected"] = topic_shift
@@ -735,6 +827,14 @@ class CoworkRuntime:
             "knowledge": len(knowledge_rows),
         }
         session.telemetry["memory_results_present"] = bool(memory_results)
+        session.telemetry["memory_sections"] = {
+            key: {
+                "count": len(value.get("items") or []) if isinstance(value, dict) else 0,
+                "has_text": bool(str(value.get("text") or "").strip()) if isinstance(value, dict) else False,
+            }
+            for key, value in memory_sections.items()
+            if isinstance(value, dict)
+        }
         session.updated_at = time.time()
 
         return {
@@ -749,6 +849,15 @@ class CoworkRuntime:
             "preferences": preferences,
             "memory_results": memory_results,
             "session_summary": session_summary,
+            "sections": memory_sections,
+            "summary": {
+                "scope": policy.get("scope", "task_routed"),
+                "topic_shift_detected": topic_shift,
+                "recent_conversations": len(recent_rows),
+                "task_history": len(task_rows),
+                "knowledge": len(knowledge_rows),
+                "has_preferences": bool(preferences),
+            },
         }
 
     def should_capture_screen(
@@ -1036,6 +1145,24 @@ class CoworkRuntime:
             "duration_ms": duration_ms,
             "metadata": dict(metadata or {}),
         }
+        meta = dict(metadata or {})
+        session.repo_snapshot_id = str(meta.get("repo_snapshot_id") or session.repo_snapshot_id or "")
+        session.coding_contract_id = str(meta.get("coding_contract_id") or session.coding_contract_id or "")
+        if isinstance(meta.get("style_intent"), dict):
+            session.style_intent = dict(meta.get("style_intent") or {})
+        if isinstance(meta.get("gate_state"), dict):
+            session.gate_state = dict(meta.get("gate_state") or {})
+        if "repair_budget" in meta:
+            try:
+                session.repair_budget = max(0, int(meta.get("repair_budget") or session.repair_budget))
+            except Exception:
+                pass
+        if isinstance(meta.get("request_contract"), dict):
+            session.request_contract = dict(meta.get("request_contract") or session.request_contract)
+        if isinstance(meta.get("model_ladder_trace"), list):
+            session.model_ladder_trace = [str(item).strip() for item in meta.get("model_ladder_trace") if str(item).strip()]
+        session.evidence_bundle_id = str(meta.get("evidence_bundle_id") or session.evidence_bundle_id or "")
+        session.claim_blocked_reason = str(meta.get("claim_blocked_reason") or session.claim_blocked_reason or "")
         try:
             checkpoint_state = {
                 "response_text": str(response_text or ""),
@@ -1071,6 +1198,7 @@ def get_cowork_runtime() -> CoworkRuntime:
 __all__ = [
     "CoworkRuntime",
     "CoworkSession",
+    "CommandRouteDecision",
     "ScreenState",
     "ToolDecision",
     "get_cowork_runtime",

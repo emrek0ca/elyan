@@ -17,12 +17,15 @@ _DELIVERY_PATTERNS = [
     # Turkish
     r"✅\s*(?:teslim|oluşturuldu|hazır|tamamlandı|gönderildi|kaydedildi)",
     r"(?:dosya|site|proje|rapor)\s+(?:oluşturuldu|hazırlandı|teslim edildi|kaydedildi)",
+    r"(?:testler|lint|build|typecheck)\s+(?:geçti|tamamlandı|başarılı)",
+    r"(?:production-ready|prodüksiyon hazır|production ready)",
     r"(?:başarıyla|successfully)\s+(?:oluşturuldu|created|yazıldı|written|teslim)",
     r"zip\s+(?:dosyası|arşivi)\s+(?:hazır|oluşturuldu)",
     r"(?:masaüstüne|desktop'a)\s+(?:kaydettim|kaydedildi|oluşturdum)",
     # English
     r"(?:delivered|created|saved|generated)\s+(?:successfully|the file|the project)",
     r"(?:file|project|report|website)\s+(?:has been|was)\s+(?:created|saved|delivered)",
+    r"(?:tests|lint|build|typecheck)\s+(?:passed|completed|succeeded)",
     r"(?:you can find|check|open)\s+(?:it|the file|the project)\s+(?:at|in|on)",
 ]
 
@@ -56,8 +59,34 @@ class EvidenceGate:
         for result in tool_results:
             if not isinstance(result, dict):
                 continue
+            source = str(result.get("source") or "").strip().lower()
+            action = str(result.get("action") or "").strip().lower()
+            raw = result.get("raw") if isinstance(result.get("raw"), dict) else {}
+            raw_action = str(raw.get("action") or "").strip().lower()
+            coding_runtime = source.startswith("contract_first") or action == "create_coding_project" or raw_action == "create_coding_project"
+            nested = result.get("evidence_bundle")
+            if isinstance(nested, dict):
+                artifact_paths = nested.get("artifact_paths")
+                gate_results = nested.get("gate_results")
+                commands = nested.get("commands")
+                if isinstance(artifact_paths, list) and any(str(item or "").strip() for item in artifact_paths):
+                    return True
+                if isinstance(gate_results, list) and any(
+                    isinstance(item, dict) and item.get("ok") is True for item in gate_results
+                ):
+                    return True
+                if isinstance(commands, list) and any(str(item or "").strip() for item in commands):
+                    return True
+            if isinstance(result.get("artifact_paths"), list) and any(str(item or "").strip() for item in result.get("artifact_paths")):
+                return True
+            if isinstance(result.get("gate_results"), list) and any(
+                isinstance(item, dict) and item.get("ok") is True for item in result.get("gate_results")
+            ):
+                return True
+            if isinstance(result.get("verification"), dict) and any(bool(v) for v in result.get("verification", {}).values()):
+                return True
             # Başarılı tool execution
-            if result.get("success") is True:
+            if result.get("success") is True and not coding_runtime:
                 return True
             # Path/file evidence
             if result.get("path") or result.get("file_path") or result.get("output_path"):

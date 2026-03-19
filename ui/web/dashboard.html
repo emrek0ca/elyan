@@ -4,37 +4,31 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Elyan Dashboard</title>
+  <link rel="stylesheet" href="/ui/web/dashboard.css?v=20260319">
   <style>
 /* ===== INLINE CSS — guarantees styles load even if external CSS fails ===== */
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
-  --bg:#f5f6f8;--sf:#ffffff;--sf2:#eef0f2;--bd:#dfe1e5;
-  --tx:#1b1b1f;--tx2:#5f6368;--tx3:#9aa0a6;
-  --blue:#1a73e8;--blue2:#1558b0;
-  --green:#1e8e3e;--yellow:#f9ab00;--red:#d93025;
+  --bg:#f5f7fa;--sf:#ffffff;--sf2:#eef2f7;--bd:#dbe2ea;
+  --tx:#111827;--tx2:#4b5563;--tx3:#94a3b8;
+  --blue:#111827;--blue2:#374151;
+  --green:#15803d;--yellow:#d97706;--red:#dc2626;
   --r:12px;--r2:8px;
-  --sh:0 1px 3px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.04);
-  --sh2:0 4px 12px rgba(0,0,0,.08);
+  --sh:0 1px 3px rgba(15,23,42,.06),0 1px 2px rgba(15,23,42,.03);
+  --sh2:0 8px 24px rgba(15,23,42,.08);
 }
-@media(prefers-color-scheme:dark){:root{
-  --bg:#111214;--sf:#1e1f23;--sf2:#2a2b30;--bd:#3a3b40;
-  --tx:#e8eaed;--tx2:#9aa0a6;--tx3:#5f6368;
-  --blue:#8ab4f8;--blue2:#aecbfa;
-  --green:#81c995;--yellow:#fdd663;--red:#f28b82;
-  --sh:0 1px 3px rgba(0,0,0,.3);--sh2:0 4px 12px rgba(0,0,0,.3);
-}}
 html{height:100%}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background:var(--bg);color:var(--tx);line-height:1.5;min-height:100%;-webkit-font-smoothing:antialiased}
 
 /* === NAVBAR === */
 .navbar{display:flex;align-items:center;height:56px;background:var(--sf);border-bottom:1px solid var(--bd);padding:0 24px;gap:20px;position:sticky;top:0;z-index:100;box-shadow:var(--sh)}
 .nav-brand{display:flex;align-items:center;gap:10px;flex-shrink:0}
-.nav-logo{width:32px;height:32px;background:linear-gradient(135deg,var(--blue),var(--blue2));border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:16px}
+.nav-logo{width:32px;height:32px;background:rgba(255,255,255,.92);border:1px solid var(--bd);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--tx);font-weight:700;font-size:16px;box-shadow:var(--sh)}
 .nav-brand span{font-size:17px;font-weight:600}
 .nav-tabs{display:flex;gap:4px;margin:0 auto;background:var(--sf2);border-radius:10px;padding:4px}
 .nav-tab{border:none;background:transparent;color:var(--tx2);font-size:13px;font-weight:500;padding:7px 18px;border-radius:8px;cursor:pointer;transition:all .15s ease;white-space:nowrap}
 .nav-tab:hover{color:var(--tx);background:rgba(0,0,0,.04)}
-.nav-tab.active{background:var(--sf);color:var(--blue);box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.nav-tab.active{background:var(--sf);color:var(--tx);box-shadow:var(--sh)}
 .nav-right{display:flex;align-items:center;gap:12px;flex-shrink:0}
 .nav-pill{display:flex;align-items:center;gap:6px;padding:5px 12px;background:var(--sf2);border-radius:20px;font-size:12px;font-weight:500;color:var(--tx2)}
 .status-dot{width:8px;height:8px;border-radius:50%;background:var(--yellow);transition:background .3s}
@@ -76,6 +70,58 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
 .row{display:flex;justify-content:space-between;padding:8px 0;font-size:13px;border-bottom:1px solid var(--bd)}
 .row:last-child{border-bottom:none}
 .row-k{color:var(--tx3)}.row-v{font-weight:600}
+
+/* === MISSION CONTROL === */
+.mission-hero{display:grid;grid-template-columns:1fr;gap:16px;margin-bottom:18px}
+.mission-compose{display:flex;flex-direction:column;gap:12px}
+.mission-input{width:100%;min-height:116px;padding:14px 16px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2);color:var(--tx);font-size:14px;resize:vertical}
+.mission-input:focus{outline:none;border-color:var(--blue);background:var(--sf);box-shadow:0 0 0 3px rgba(26,115,232,.12)}
+.mission-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.mission-presets{display:flex;gap:8px;flex-wrap:wrap}
+.mission-preset{padding:7px 12px;border:1px solid var(--bd);background:var(--sf2);border-radius:999px;color:var(--tx2);font-size:12px;font-weight:600;cursor:pointer}
+.mission-preset:hover{border-color:var(--blue);color:var(--blue)}
+.mission-grid{display:grid;grid-template-columns:minmax(280px,1fr) minmax(420px,1.4fr) minmax(280px,.95fr);gap:16px;align-items:start}
+.mission-stack{display:flex;flex-direction:column;gap:12px}
+.mission-list,.mission-timeline,.stack-list,.memory-list{display:flex;flex-direction:column;gap:10px}
+.mission-card{padding:14px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2);cursor:pointer;transition:border-color .15s, background .15s}
+.mission-card:hover,.mission-card.active{border-color:var(--blue);background:var(--sf)}
+.mission-card h4{font-size:14px;margin-bottom:6px}
+.mission-meta{display:flex;gap:8px;flex-wrap:wrap;color:var(--tx3);font-size:12px;margin-top:6px}
+.mission-filters{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0 14px}
+.mission-filter{padding:6px 10px;border:1px solid var(--bd);border-radius:999px;background:var(--sf2);color:var(--tx2);font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
+.mission-filter:hover{border-color:var(--blue);color:var(--blue)}
+.mission-filter.active{background:rgba(26,115,232,.08);border-color:rgba(26,115,232,.25);color:var(--blue)}
+.control-strip{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 10px}
+.control-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--bd);border-radius:999px;background:var(--sf2);font-size:12px;color:var(--tx2);font-weight:600}
+.control-chip strong{color:var(--tx)}
+.control-chip.ok{background:rgba(30,142,62,.08);border-color:rgba(30,142,62,.18);color:var(--green)}
+.control-chip.warn{background:rgba(249,171,0,.08);border-color:rgba(249,171,0,.2);color:var(--yellow)}
+.control-chip.err{background:rgba(217,48,37,.08);border-color:rgba(217,48,37,.18);color:var(--red)}
+.node-rail{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:14px}
+.node-pill{padding:12px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2)}
+.node-pill strong{display:block;font-size:12px;margin-bottom:6px}
+.node-pill span{font-size:12px;color:var(--tx2)}
+.node-pill.completed{border-color:rgba(30,142,62,.35);background:rgba(30,142,62,.06)}
+.node-pill.running{border-color:rgba(26,115,232,.4);background:rgba(26,115,232,.08)}
+.node-pill.waiting_approval,.node-pill.waiting-approval{border-color:rgba(249,171,0,.35);background:rgba(249,171,0,.08)}
+.node-pill.failed{border-color:rgba(217,48,37,.35);background:rgba(217,48,37,.08)}
+.quality-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}
+.quality-card{padding:12px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2)}
+.quality-card strong{display:block;font-size:12px;margin-bottom:4px}
+.quality-card span{font-size:12px;color:var(--tx2);word-break:break-word}
+.quality-card.ok{border-color:rgba(30,142,62,.18);background:rgba(30,142,62,.06)}
+.quality-card.warn{border-color:rgba(249,171,0,.18);background:rgba(249,171,0,.06)}
+.quality-card.err{border-color:rgba(217,48,37,.18);background:rgba(217,48,37,.06)}
+.detail-box{display:flex;flex-direction:column;gap:10px}
+.detail-lead{font-size:13px;color:var(--tx2)}
+.detail-pre{white-space:pre-wrap;background:var(--sf2);border:1px solid var(--bd);border-radius:var(--r2);padding:14px;font-size:13px;line-height:1.55}
+.timeline-item,.stack-item,.memory-item,.approval-item{padding:12px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2)}
+.timeline-item strong,.stack-item strong,.memory-item strong,.approval-item strong{display:block;font-size:12px;margin-bottom:4px}
+.timeline-item p,.stack-item p,.memory-item p,.approval-item p{font-size:12px;color:var(--tx2);word-break:break-word}
+.approval-actions{display:flex;gap:8px;margin-top:10px}
+.muted-sm{font-size:12px;color:var(--tx3)}
+.empty{padding:16px;border:1px dashed var(--bd);border-radius:var(--r2);color:var(--tx3);font-size:13px;text-align:center}
+.legacy-contract{display:none}
 
 /* === BUTTONS === */
 .btn{display:inline-flex;align-items:center;justify-content:center;padding:8px 16px;border:none;border-radius:var(--r2);font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;gap:6px}
@@ -133,6 +179,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
   .main{padding:16px}
   .cgrid{grid-template-columns:1fr}
   .kpis{grid-template-columns:repeat(2,1fr)}
+  .mission-hero,.mission-grid{grid-template-columns:1fr}
 }
 @media(max-width:480px){
   .nav-brand span{display:none}
@@ -150,10 +197,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
       <span>Elyan</span>
     </div>
     <div class="nav-tabs" id="nav-tabs">
-      <button class="nav-tab active" data-t="llms">LLM'ler</button>
-      <button class="nav-tab" data-t="ollama">Ollama</button>
-      <button class="nav-tab" data-t="status">Durum</button>
-      <button class="nav-tab" data-t="settings">Ayarlar</button>
+      <button class="nav-tab active" data-t="mission">Mission</button>
+      <button class="nav-tab" data-t="tools">Tools</button>
+      <button class="nav-tab" data-t="settings">Settings</button>
     </div>
     <div class="nav-right">
       <div class="nav-pill"><span class="status-dot" id="g-dot"></span><span id="g-txt">...</span></div>
@@ -164,60 +210,154 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
   <!-- MAIN CONTENT -->
   <div class="main">
 
-    <!-- ===== LLM PAGE ===== -->
-    <div class="page show" id="p-llms">
+    <!-- ===== MISSION PAGE ===== -->
+    <div class="page show" id="p-mission">
       <div class="pg-head">
         <div>
-          <h2>LLM Yönetimi</h2>
-          <p class="pg-sub">Provider durumlarını görüntüle, API key ekle veya kaldır.</p>
+          <h2>Mission</h2>
+          <p class="pg-sub">Görevi başlat, kanıtı izle, teslimi al.</p>
         </div>
+      </div>
+
+      <div class="mission-hero">
+        <div class="card mission-compose">
+          <textarea id="mission-input" class="mission-input" placeholder="Outcome yaz: örn. Kediler hakkında minimalist bir landing page üret."></textarea>
+          <div class="mission-row">
+            <select class="sel" id="mission-mode" style="max-width:220px">
+              <option value="Sprint">Sprint — En hızlı taslak</option>
+              <option value="Balanced" selected>Balanced — Varsayılan</option>
+              <option value="Audit">Audit — Ek doğrulama</option>
+            </select>
+            <button class="btn btn-p" id="mission-run">Mission Başlat</button>
+          </div>
+          <div class="mission-presets">
+            <button class="mission-preset js-mission-preset" data-prompt="Minimal bir landing page üret ve doğrula.">Landing Page</button>
+            <button class="mission-preset js-mission-preset" data-prompt="Kaynaklı kısa araştırma raporu hazırla.">Araştırma</button>
+            <button class="mission-preset js-mission-preset" data-prompt="Feature planı çıkar, kodu uygula ve teslim et.">Kod</button>
+            <button class="mission-preset js-mission-preset" data-prompt="Tarayıcı adımlarını uygula ve ekran kanıtı al.">Browser</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="kpis" id="mission-kpis"></div>
+
+      <div class="mission-grid">
+        <div class="mission-stack">
+          <div class="card">
+            <div class="card-top">
+              <div><h3>Aktif Missionlar</h3><div class="card-desc">Görevler ve durum.</div></div>
+            </div>
+            <div id="mission-filters" class="mission-filters">
+              <button class="mission-filter active js-mission-filter" data-filter="all">Tümü</button>
+              <button class="mission-filter js-mission-filter" data-filter="active">Aktif</button>
+              <button class="mission-filter js-mission-filter" data-filter="waiting_approval">Approval</button>
+              <button class="mission-filter js-mission-filter" data-filter="completed">Tamamlanan</button>
+              <button class="mission-filter js-mission-filter" data-filter="failed">Başarısız</button>
+            </div>
+            <div id="mission-list" class="mission-list"></div>
+          </div>
+          <div class="card">
+            <div class="card-top">
+              <div><h3>Skills</h3><div class="card-desc">SOP olarak sakla.</div></div>
+            </div>
+            <div id="mission-skills" class="stack-list"></div>
+          </div>
+        </div>
+
+        <div class="mission-stack">
+          <div class="card">
+            <div class="card-top">
+              <div><h3>Misyon Detayı</h3><div class="card-desc">Graph, timeline, deliverable.</div></div>
+            </div>
+            <div id="mission-detail" class="detail-box"></div>
+            <div id="mission-control-strip" class="control-strip"></div>
+            <div id="mission-rail" class="node-rail"></div>
+            <div class="sec-title" style="margin:20px 0 10px">Quality</div>
+            <div id="mission-quality" class="quality-grid"></div>
+            <div class="sec-title" style="margin:20px 0 10px">Timeline</div>
+            <div id="mission-timeline" class="mission-timeline"></div>
+            <div class="sec-title" style="margin:20px 0 10px">Deliverable</div>
+            <div id="mission-deliverable" class="detail-pre">Henüz bir mission seçilmedi.</div>
+          </div>
+        </div>
+
+        <div class="mission-stack">
+          <div class="card">
+            <div class="card-top">
+              <div><h3>Approval Inbox</h3><div class="card-desc">Onay bekleyen işlemler.</div></div>
+            </div>
+            <div id="mission-approvals" class="stack-list"></div>
+          </div>
+          <div class="card">
+            <div class="card-top">
+              <div><h3>Evidence Panel</h3><div class="card-desc">Manifest ve artefactlar.</div></div>
+            </div>
+            <div id="mission-evidence" class="stack-list"></div>
+          </div>
+          <div class="card">
+            <div class="card-top">
+              <div><h3>Memory Studio</h3><div class="card-desc">Kısa hafıza.</div></div>
+            </div>
+            <div id="mission-memory" class="memory-list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== TOOLS PAGE ===== -->
+    <div class="page" id="p-tools">
+      <div class="pg-head">
+        <div>
+          <h2>Tools</h2>
+          <p class="pg-sub">Provider, local model ve health.</p>
+        </div>
+        <button class="btn btn-s" id="g-refresh-tools" type="button">Yenile</button>
       </div>
       <div class="kpis" id="llm-kpis"></div>
-      <div class="cgrid" id="llm-grid"></div>
-    </div>
-
-    <!-- ===== OLLAMA PAGE ===== -->
-    <div class="page" id="p-ollama">
-      <div class="pg-head">
-        <div>
-          <h2>Ollama Yönetimi</h2>
-          <p class="pg-sub">Yerel modelleri listele, indir veya kaldır.</p>
+      <div class="card">
+        <div class="card-top">
+          <div><h3>LLM</h3></div>
         </div>
-        <button class="btn btn-s" id="oll-refresh">Yenile</button>
+        <div class="cgrid" id="llm-grid"></div>
       </div>
-      <div id="oll-bar" class="oll-bar off">Durum kontrol ediliyor...</div>
-      <div class="sec-title">Yüklü Modeller</div>
-      <div class="cgrid" id="oll-installed"></div>
-      <div class="sec-title">Önerilen Modeller</div>
-      <div class="cgrid" id="oll-recommended"></div>
-    </div>
-
-    <!-- ===== STATUS PAGE ===== -->
-    <div class="page" id="p-status">
-      <div class="pg-head"><div><h2>Sistem Durumu</h2><p class="pg-sub">Tüm provider'ların anlık sağlık durumu</p></div></div>
-      <div class="kpis" id="st-kpis"></div>
-      <div class="card" id="st-table" style="overflow-x:auto"></div>
+      <div class="card" style="margin-top:16px">
+        <div class="card-top">
+          <div><h3>Local</h3></div>
+        </div>
+        <div id="oll-bar" class="oll-bar off">Kontrol ediliyor...</div>
+        <div class="sec-title">Yüklü</div>
+        <div class="cgrid" id="oll-installed"></div>
+        <div class="sec-title">Önerilen</div>
+        <div class="cgrid" id="oll-recommended"></div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="card-top">
+          <div><h3>Health</h3></div>
+        </div>
+        <div class="kpis" id="st-kpis"></div>
+        <div id="st-table" style="overflow-x:auto; margin-top:12px"></div>
+      </div>
     </div>
 
     <!-- ===== SETTINGS PAGE ===== -->
     <div class="page" id="p-settings">
-      <div class="pg-head"><div><h2>Ayarlar</h2><p class="pg-sub">Elyan davranışını özelleştirin</p></div></div>
+      <div class="pg-head"><div><h2>Settings</h2><p class="pg-sub">Kısa tercih ayarları.</p></div></div>
       <div class="card settings-card">
         <div class="field">
-          <label class="field-label">Birincil LLM</label>
+          <label class="field-label">Primary LLM</label>
           <select class="sel" id="s-primary"></select>
-          <span class="field-hint">Boş bırakılırsa otomatik seçilir</span>
+          <span class="field-hint">Otomatik seçim varsayılan.</span>
         </div>
         <div class="field">
-          <label class="field-label">Strateji</label>
+          <label class="field-label">Strategy</label>
           <select class="sel" id="s-strategy">
-            <option value="fast">Hızlı — En hızlı sonucu döndür</option>
-            <option value="best">En İyi — Kalite odaklı</option>
-            <option value="balanced" selected>Dengeli — Hız ve kalite dengesi</option>
+            <option value="fast">Hızlı</option>
+            <option value="best">Kalite</option>
+            <option value="balanced" selected>Dengeli</option>
           </select>
         </div>
         <div class="field">
-          <label class="field-label">Dil</label>
+          <label class="field-label">Language</label>
           <select class="sel" id="s-lang">
             <option value="tr">Türkçe</option>
             <option value="en">English</option>
@@ -225,12 +365,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
         </div>
         <div class="field toggle-row">
           <div>
-            <div class="field-label">Yerel Model Önceliği</div>
-            <span class="field-hint">Mümkünse Ollama'yı tercih et</span>
+            <div class="field-label">Local-first</div>
+            <span class="field-hint">Önce yerel modeli kullan.</span>
           </div>
           <label class="switch"><input type="checkbox" id="s-local"><span class="slider"></span></label>
         </div>
-        <button class="btn btn-p" id="s-save">Ayarları Kaydet</button>
+        <button class="btn btn-p" id="s-save">Kaydet</button>
       </div>
     </div>
 
@@ -239,7 +379,28 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
   <!-- TOASTS -->
   <div class="toasts" id="toasts"></div>
 
+  <div class="legacy-contract">
+    <span>Save as Skill</span>
+    <div id="task-list"></div>
+    <div id="workflow-preset-list"></div>
+    <div id="workflow-report"></div>
+    <div id="benchmark-summary"></div>
+    <div id="setup-list"></div>
+    <div id="onboarding-list"></div>
+    <div id="release-list"></div>
+    <div id="model-registry-list"></div>
+    <div id="model-pool-summary"></div>
+    <button id="model-add-btn" type="button"></button>
+    <button id="collab-save-btn" type="button"></button>
+    <button id="profile-save-btn" type="button"></button>
+    <input id="agent-name-input" />
+    <div id="profile-summary"></div>
+    <div id="status-note"></div>
+    <div id="status-detail"></div>
+    <button data-quick-prompt="quick"></button>
+  </div>
+
   <!-- JS — loaded after DOM -->
-  <script src="/ui/web/dashboard.js?v=20260318"></script>
+  <script src="/ui/web/dashboard.js?v=20260319"></script>
 </body>
 </html>

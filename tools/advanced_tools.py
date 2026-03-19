@@ -213,6 +213,65 @@ async def analyze_document(
         if not path.exists():
             return {"success": False, "error": f"File not found: {file_path}"}
 
+        ext = path.suffix.lower()
+        if ext in {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"}:
+            try:
+                from tools.vision_documents import analyze_document_vision
+
+                vision_result = await analyze_document_vision(
+                    path=str(path),
+                    export_formats=(),
+                    export_page_images=False,
+                    include_tables=True,
+                    include_charts=True,
+                    use_multimodal_fallback=True,
+                )
+                if isinstance(vision_result, dict) and vision_result.get("success"):
+                    metadata = {}
+                    if extract_metadata:
+                        stat = path.stat()
+                        metadata = {
+                            "size": stat.st_size,
+                            "created": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                            "extension": path.suffix,
+                            "name": path.name,
+                        }
+                    return {
+                        "success": True,
+                        "file_path": file_path,
+                        "analysis_type": analysis_type,
+                        "metadata": metadata,
+                        "analysis": {
+                            "mode": "vision",
+                            "summary": vision_result.get("summary", ""),
+                            "layout_summary": vision_result.get("layout_summary", ""),
+                            "table_summary": vision_result.get("table_summary", ""),
+                            "chart_summary": vision_result.get("chart_summary", ""),
+                            "pages": vision_result.get("pages", []),
+                            "tables": vision_result.get("tables", []),
+                            "charts": vision_result.get("charts", []),
+                            "full_text": vision_result.get("full_text", ""),
+                            "prompt_block": vision_result.get("prompt_block", ""),
+                        },
+                        "content_length": len(str(vision_result.get("full_text") or vision_result.get("summary") or "")),
+                    }
+            except Exception as vision_exc:
+                logger.debug("Vision document analysis fallback: %s", vision_exc)
+
+        try:
+            from tools.research_tools.document_rag import analyze_document_rag
+
+            rag_result = await analyze_document_rag(
+                str(path),
+                analysis_type=analysis_type,
+                extract_metadata=extract_metadata,
+            )
+            if isinstance(rag_result, dict) and rag_result.get("success"):
+                return rag_result
+        except Exception as rag_exc:
+            logger.debug("Document RAG analysis fallback: %s", rag_exc)
+
         # Read file content
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()

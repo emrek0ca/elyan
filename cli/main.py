@@ -41,6 +41,10 @@ TOP_LEVEL_COMMANDS = [
     "quota",
 ]
 
+COMMAND_SUGGESTION_OVERRIDES = {
+    "desktop": "dashboard",
+}
+
 
 SETUP_OPTIONAL_COMMANDS = {
     "onboard",
@@ -84,6 +88,9 @@ _bootstrap_project_path()
 
 
 def _suggest_command(raw: str) -> str:
+    override = COMMAND_SUGGESTION_OVERRIDES.get(raw.strip().lower())
+    if override:
+        return override
     matches = get_close_matches(raw, TOP_LEVEL_COMMANDS, n=1, cutoff=0.68)
     return matches[0] if matches else ""
 

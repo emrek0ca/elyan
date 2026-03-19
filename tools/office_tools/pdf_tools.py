@@ -1,126 +1,244 @@
-"""PDF Tools - Advanced Extraction, OCR, and Table Parsing"""
+"""PDF Tools - fitz-backed extraction, layout analysis, and table parsing."""
+
+from __future__ import annotations
 
 import asyncio
-import pdfplumber
+import re
 from pathlib import Path
-from typing import Any
-from utils.logger import get_logger
+from typing import Any, Iterable
+
+import fitz
+
 from security.validator import validate_path
-
-try:
-    import pytesseract
-except Exception:  # pragma: no cover - optional dependency
-    pytesseract = None
-
-try:
-    from pdf2image import convert_from_path
-except Exception:  # pragma: no cover - optional dependency
-    convert_from_path = None
+from utils.logger import get_logger
 
 logger = get_logger("office.pdf")
 
-# Maximum file size (20MB)
 MAX_FILE_SIZE = 20 * 1024 * 1024
+
+
+def _normalize_pages(pages: str | None, total_pages: int) -> list[int]:
+    if not pages:
+        return list(range(total_pages))
+    wanted: set[int] = set()
+    for chunk in re.split(r"[,\s]+", str(pages)):
+        part = chunk.strip()
+        if not part:
+            continue
+        if "-" in part:
+            left, right = part.split("-", 1)
+            try:
+                start = max(1, int(left))
+                end = min(total_pages, int(right))
+            except Exception:
+                continue
+            for page in range(start, end + 1):
+                wanted.add(page - 1)
+        else:
+            try:
+                page = int(part)
+            except Exception:
+                continue
+            if 1 <= page <= total_pages:
+                wanted.add(page - 1)
+    return sorted(wanted) if wanted else list(range(total_pages))
+
+
+def _table_preview(table: dict[str, Any] | None) -> str:
+    if not isinstance(table, dict):
+        return ""
+    rows = table.get("rows") or []
+    if not rows:
+        return ""
+    first = rows[0]
+    if isinstance(first, (list, tuple)):
+        return " | ".join(str(cell or "").strip() for cell in first[:5] if str(cell or "").strip())
+    return str(first)
+
 
 async def read_pdf(
     path: str,
-    pages: str = None,
+    pages: str | None = None,
     extract_tables: bool = True,
-    use_ocr: bool = False
+    use_ocr: bool = False,
 ) -> dict[str, Any]:
-    """Extract text and tables from a PDF file with optional OCR."""
+    """Extract text, layout, tables and chart summaries from a PDF file.
+
+    The implementation uses PyMuPDF as the primary backend. When OCR is
+    requested it will try the document vision pipeline's multimodal fallback.
+    """
     try:
         is_valid, error, _ = validate_path(path)
-        if not is_valid: return {"success": False, "error": error}
+        if not is_valid:
+            return {"success": False, "error": error}
 
         file_path = Path(path).expanduser().resolve()
-        if not file_path.exists(): return {"success": False, "error": f"Dosya bulunamadı: {file_path.name}"}
-        warnings: list[str] = []
-        ocr_available = bool(pytesseract and convert_from_path)
-        if use_ocr and not ocr_available:
-            warnings.append("OCR bağımlılıkları eksik (pytesseract/pdf2image). OCR atlandı.")
-            logger.warning("read_pdf OCR requested but pytesseract/pdf2image unavailable")
+        if not file_path.exists():
+            return {"success": False, "error": f"Dosya bulunamadı: {file_path.name}"}
 
-        def _read():
-            results = []
-            with pdfplumber.open(str(file_path)) as pdf:
-                total_pages = len(pdf.pages)
-                # Simple page parsing logic
-                target_pages = range(total_pages)
-                
-                full_text = ""
-                all_tables = []
-                
-                for p_idx in target_pages:
-                    page = pdf.pages[p_idx]
-                    text = page.extract_text() or ""
-                    
-                    if use_ocr and ocr_available and not text.strip():
-                        try:
-                            images = convert_from_path(str(file_path), first_page=p_idx + 1, last_page=p_idx + 1)
-                            if images:
-                                text = pytesseract.image_to_string(images[0], lang='tur+eng')
-                        except Exception as ocr_exc:
-                            warnings.append(f"Sayfa {p_idx + 1} OCR başarısız: {ocr_exc}")
-                    
-                    full_text += f"--- Sayfa {p_idx+1} ---\n{text}\n\n"
-                    
-                    if extract_tables:
-                        tables = page.extract_tables()
-                        for table in tables:
-                            if table:
-                                cleaned = [[str(cell) if cell else "" for cell in row] for row in table]
-                                all_tables.append({"page": p_idx + 1, "data": cleaned})
-            
-            return full_text, all_tables, total_pages
+        file_size = file_path.stat().st_size
+        if file_size > MAX_FILE_SIZE:
+            return {
+                "success": False,
+                "error": f"Dosya çok büyük ({file_size} bytes). Limit: {MAX_FILE_SIZE} bytes",
+            }
 
-        loop = asyncio.get_event_loop()
-        content, tables, total_pages = await loop.run_in_executor(None, _read)
+        from tools.vision_documents import analyze_document_vision
+
+        vision_result = await analyze_document_vision(
+            str(file_path),
+            export_formats=(),
+            export_page_images=False,
+            include_tables=extract_tables,
+            include_charts=True,
+            use_multimodal_fallback=bool(use_ocr),
+            max_pages=None,
+        )
+        if not vision_result.get("success"):
+            return vision_result
+
+        pages_payload = list(vision_result.get("pages") or [])
+        total_pages = int(vision_result.get("page_count") or 0)
+
+        page_filter = _normalize_pages(pages, total_pages) if total_pages else []
+        if pages and page_filter:
+            filtered_pages = [pages_payload[idx] for idx in page_filter if 0 <= idx < len(pages_payload)]
+        else:
+            filtered_pages = pages_payload
+
+        full_text_parts: list[str] = []
+        table_rows: list[dict[str, Any]] = []
+        for page in filtered_pages:
+            text = str(page.get("text") or "").strip()
+            if text:
+                full_text_parts.append(f"--- Sayfa {page.get('page_number')} ---\n{text}")
+            for table in page.get("tables") or []:
+                if isinstance(table, dict):
+                    table_rows.append(table)
+
+        if not full_text_parts:
+            full_text_parts.append(str(vision_result.get("full_text") or "").strip())
+
+        content = "\n\n".join(part for part in full_text_parts if part).strip()
+        tables = list(vision_result.get("tables") or [])
+        if pages and page_filter:
+            allowed_pages = {idx + 1 for idx in page_filter}
+            tables = [row for row in tables if int(row.get("page_number") or 0) in allowed_pages]
+
+        layout_blocks = list(vision_result.get("pages") or [])
+        charts = list(vision_result.get("charts") or [])
 
         return {
             "success": True,
             "path": str(file_path),
             "filename": file_path.name,
             "content": content,
-            "tables": tables,
-            "total_pages": total_pages,
-            "ocr_used": bool(use_ocr and ocr_available),
-            "warnings": warnings,
+            "tables": tables or table_rows,
+            "layout": layout_blocks,
+            "charts": charts,
+            "vision_summary": vision_result.get("summary", ""),
+            "layout_summary": vision_result.get("layout_summary", ""),
+            "table_summary": vision_result.get("table_summary", ""),
+            "chart_summary": vision_result.get("chart_summary", ""),
+            "prompt_block": vision_result.get("prompt_block", ""),
+            "page_summaries": [
+                {
+                    "page_number": page.get("page_number"),
+                    "title": page.get("title"),
+                    "text": page.get("text"),
+                    "multimodal_summary": page.get("multimodal_summary"),
+                    "table_count": len(page.get("tables") or []),
+                    "chart_count": len(page.get("charts") or []),
+                }
+                for page in filtered_pages
+            ],
+            "total_pages": total_pages or len(filtered_pages),
+            "ocr_used": bool(use_ocr),
+            "warnings": list(vision_result.get("warnings") or []),
         }
     except Exception as e:
         logger.error(f"Read PDF error: {e}")
         return {"success": False, "error": str(e)}
 
+
 async def get_pdf_info(path: str) -> dict[str, Any]:
     """Get PDF file information."""
     try:
         is_valid, error, _ = validate_path(path)
-        if not is_valid: return {"success": False, "error": error}
+        if not is_valid:
+            return {"success": False, "error": error}
 
         file_path = Path(path).expanduser().resolve()
-        def _get_info():
-            with pdfplumber.open(str(file_path)) as pdf:
+        if not file_path.exists():
+            return {"success": False, "error": f"Dosya bulunamadı: {file_path.name}"}
+
+        def _get_info() -> dict[str, Any]:
+            with fitz.open(str(file_path)) as pdf:
                 return {
-                    "total_pages": len(pdf.pages),
-                    "metadata": pdf.metadata,
-                    "is_encrypted": pdf.is_encrypted
+                    "total_pages": len(pdf),
+                    "metadata": dict(pdf.metadata or {}),
+                    "is_encrypted": bool(pdf.is_encrypted),
+                    "file_size": file_path.stat().st_size,
                 }
+
         loop = asyncio.get_event_loop()
         info = await loop.run_in_executor(None, _get_info)
         return {"success": True, **info}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+
 async def search_in_pdf(path: str, query: str) -> dict[str, Any]:
-    """Search for text in PDF."""
+    """Search for text in a PDF."""
     try:
+        is_valid, error, _ = validate_path(path)
+        if not is_valid:
+            return {"success": False, "error": error}
+
         file_path = Path(path).expanduser().resolve()
-        matches = []
-        with pdfplumber.open(str(file_path)) as pdf:
-            for i, page in enumerate(pdf.pages):
-                text = page.extract_text()
-                if text and query.lower() in text.lower():
-                    matches.append({"page": i + 1})
+        if not file_path.exists():
+            return {"success": False, "error": f"Dosya bulunamadı: {file_path.name}"}
+
+        matches: list[dict[str, Any]] = []
+        needle = str(query or "").strip().lower()
+        if not needle:
+            return {"success": False, "error": "query boş olamaz"}
+
+        with fitz.open(str(file_path)) as pdf:
+            for index, page in enumerate(pdf, start=1):
+                text = page.get_text("text") or ""
+                if text and needle in text.lower():
+                    matches.append({"page": index, "excerpt": text[:240]})
+
         return {"success": True, "matches": matches, "count": len(matches)}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+async def analyze_pdf_vision(
+    path: str,
+    *,
+    output_dir: str | None = None,
+    export_formats: Iterable[str] | None = None,
+    export_page_images: bool = False,
+    include_tables: bool = True,
+    include_charts: bool = True,
+    use_multimodal_fallback: bool = False,
+    max_pages: int | None = None,
+) -> dict[str, Any]:
+    """Convenience wrapper around the phase-3 document vision agent."""
+    from tools.vision_documents import analyze_document_vision
+
+    return await analyze_document_vision(
+        path,
+        output_dir=output_dir,
+        export_formats=tuple(export_formats or ()),
+        export_page_images=export_page_images,
+        include_tables=include_tables,
+        include_charts=include_charts,
+        use_multimodal_fallback=use_multimodal_fallback,
+        max_pages=max_pages,
+    )
+
+
+__all__ = ["read_pdf", "get_pdf_info", "search_in_pdf", "analyze_pdf_vision"]

@@ -19,15 +19,22 @@ def _screen_runner():
     return get_desktop_host().run_screen_operator
 
 
+def _invalid_input(message: str) -> Dict[str, Any]:
+    return {"success": False, "error": message, "error_code": "INVALID_INPUT"}
+
+
 async def browser_open(url: str, headless: bool = True) -> Dict[str, Any]:
     try:
+        normalized_url = str(url or "").strip()
+        if not normalized_url:
+            return _invalid_input("url is required")
         from core.capabilities.browser import run_browser_runtime
 
         result = await run_browser_runtime(
             action="open",
-            url=url,
+            url=normalized_url,
             headless=headless,
-            expected_url_contains=str(url or "").strip(),
+            expected_url_contains=normalized_url,
             screenshot=True,
             screen_operator_runner=_screen_runner(),
         )
@@ -49,11 +56,14 @@ async def browser_open(url: str, headless: bool = True) -> Dict[str, Any]:
 
 async def browser_click(selector: str) -> Dict[str, Any]:
     try:
+        target = str(selector or "").strip()
+        if not target:
+            return _invalid_input("selector is required")
         from core.capabilities.browser import run_browser_runtime
 
         result = await run_browser_runtime(
             action="click",
-            selector=selector,
+            selector=target,
             screenshot=True,
             screen_operator_runner=_screen_runner(),
         )
@@ -72,11 +82,14 @@ async def browser_click(selector: str) -> Dict[str, Any]:
 
 async def browser_type(selector: str, text: str) -> Dict[str, Any]:
     try:
+        target = str(selector or "").strip()
+        if not target:
+            return _invalid_input("selector is required")
         from core.capabilities.browser import run_browser_runtime
 
         result = await run_browser_runtime(
             action="type",
-            selector=selector,
+            selector=target,
             text=text,
             screenshot=True,
             screen_operator_runner=_screen_runner(),
@@ -112,11 +125,14 @@ async def browser_screenshot(selector: Optional[str] = None) -> Optional[str]:
 
 async def browser_get_text(selector: str) -> Optional[str]:
     try:
+        target = str(selector or "").strip()
+        if not target:
+            return None
         from core.capabilities.browser import run_browser_runtime
 
         result = await run_browser_runtime(
             action="extract",
-            selector=selector,
+            selector=target,
             screenshot=False,
             screen_operator_runner=_screen_runner(),
         )
@@ -130,11 +146,14 @@ async def browser_get_text(selector: str) -> Optional[str]:
 
 async def browser_scroll(direction: str = "down", amount: int = 500) -> Dict[str, Any]:
     try:
+        normalized_direction = str(direction or "down").strip().lower()
+        if normalized_direction not in {"up", "down", "left", "right"}:
+            return _invalid_input("direction must be one of: up, down, left, right")
         from core.capabilities.browser import run_browser_runtime
 
         result = await run_browser_runtime(
             action="scroll",
-            selector=str(direction or "down"),
+            selector=normalized_direction,
             text=str(int(amount or 500)),
             screenshot=False,
             screen_operator_runner=_screen_runner(),
@@ -151,11 +170,14 @@ async def browser_scroll(direction: str = "down", amount: int = 500) -> Dict[str
 
 async def browser_wait(selector: str, timeout: int = 10000) -> Dict[str, Any]:
     try:
+        target = str(selector or "").strip()
+        if not target:
+            return _invalid_input("selector is required")
         from core.capabilities.browser import run_browser_runtime
 
         result = await run_browser_runtime(
             action="wait",
-            selector=selector,
+            selector=target,
             timeout_ms=int(timeout or 10000),
             screenshot=False,
             screen_operator_runner=_screen_runner(),

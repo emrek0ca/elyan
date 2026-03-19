@@ -148,6 +148,26 @@ def test_score_tool_prefers_safe_low_latency_tools():
     assert safe.available is True
 
 
+def test_route_command_refuses_unsupported_actions():
+    runtime = CoworkRuntime()
+
+    decision = runtime.route_command("SMS kodunu geç", quick_intent=SimpleNamespace(category="command"))
+
+    assert decision.refusal is True
+    assert decision.mode == "communication"
+    assert decision.should_bypass_pipeline is True
+
+
+def test_route_command_clarifies_multi_family_requests():
+    runtime = CoworkRuntime()
+
+    decision = runtime.route_command("ekranı aç ve dosyayı kaydet")
+
+    assert decision.should_clarify is True
+    assert "birden fazla" in decision.reason or "ambiguous" in decision.reason
+    assert decision.detected_families
+
+
 @pytest.mark.asyncio
 async def test_vision_automate_returns_fused_screen_state(monkeypatch):
     captured: dict[str, str] = {}

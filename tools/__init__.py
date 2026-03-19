@@ -113,8 +113,22 @@ def _lazy_load_tool(tool_name: str):
         return _loaded_tools.get(tool_name)
 
     # Office Tools
-    if tool_name in ["read_word", "write_word", "read_excel", "write_excel",
-                     "read_pdf", "get_pdf_info", "summarize_document", "analyze_excel_data", "search_in_pdf"]:
+    if tool_name in [
+        "read_word",
+        "write_word",
+        "read_excel",
+        "write_excel",
+        "read_pdf",
+        "get_pdf_info",
+        "analyze_pdf_vision",
+        "summarize_document",
+        "analyze_excel_data",
+        "search_in_pdf",
+        "analyze_document_vision",
+        "extract_tables_from_document",
+        "extract_charts_from_document",
+        "get_document_vision_agent",
+    ]:
         tools = {}
         # Core office tools should remain loadable even if optional PDF/OCR deps are missing.
         try:
@@ -132,17 +146,33 @@ def _lazy_load_tool(tool_name: str):
         except Exception:
             pass
         try:
-            from .office_tools.pdf_tools import read_pdf, get_pdf_info, search_in_pdf
+            from .office_tools.pdf_tools import read_pdf, get_pdf_info, search_in_pdf, analyze_pdf_vision
             tools.update({
                 "read_pdf": read_pdf,
                 "get_pdf_info": get_pdf_info,
                 "search_in_pdf": search_in_pdf,
+                "analyze_pdf_vision": analyze_pdf_vision,
             })
         except Exception:
             pass
         try:
             from .office_tools.document_summarizer import summarize_document
             tools.update({"summarize_document": summarize_document})
+        except Exception:
+            pass
+        try:
+            from .vision_documents import (
+                analyze_document_vision,
+                extract_tables_from_document,
+                extract_charts_from_document,
+                get_document_vision_agent,
+            )
+            tools.update({
+                "analyze_document_vision": analyze_document_vision,
+                "extract_tables_from_document": extract_tables_from_document,
+                "extract_charts_from_document": extract_charts_from_document,
+                "get_document_vision_agent": get_document_vision_agent,
+            })
         except Exception:
             pass
         _loaded_tools.update(tools)
@@ -291,17 +321,28 @@ def _lazy_load_tool(tool_name: str):
     # Research Tools
     if tool_name in ["advanced_research", "evaluate_source", "quick_research",
                      "synthesize_findings", "create_research_report",
-                     "deep_research", "get_research_engine"]:
+                     "deep_research", "get_research_engine",
+                     "build_document_rag_index", "document_rag_qa",
+                     "summarize_document_rag", "analyze_document_rag",
+                     "get_document_rag_engine"]:
         from .research_tools import (
             advanced_research, evaluate_source, quick_research,
             synthesize_findings, create_research_report,
-            deep_research, get_research_engine
+            deep_research, get_research_engine,
+            build_document_rag_index, document_rag_qa,
+            summarize_document_rag, analyze_document_rag,
+            get_document_rag_engine,
         )
         tools = {
             "advanced_research": advanced_research, "evaluate_source": evaluate_source,
             "quick_research": quick_research, "synthesize_findings": synthesize_findings,
             "create_research_report": create_research_report,
             "deep_research": deep_research, "get_research_engine": get_research_engine,
+            "build_document_rag_index": build_document_rag_index,
+            "document_rag_qa": document_rag_qa,
+            "summarize_document_rag": summarize_document_rag,
+            "analyze_document_rag": analyze_document_rag,
+            "get_document_rag_engine": get_document_rag_engine,
         }
         _loaded_tools.update(tools)
         return _loaded_tools.get(tool_name)
@@ -516,7 +557,7 @@ class LazyToolDict(dict):
             "control_music", "get_now_playing", "set_display_brightness",
             # Office Tools
             "read_word", "write_word", "read_excel", "write_excel", "read_pdf",
-            "get_pdf_info", "summarize_document", "analyze_excel_data", "search_in_pdf",
+            "get_pdf_info", "analyze_pdf_vision", "summarize_document", "analyze_excel_data", "search_in_pdf",
             # Web Tools
             "fetch_page", "extract_text", "web_search", "start_research", "get_research_status",
             # Advanced Tools
@@ -531,6 +572,8 @@ class LazyToolDict(dict):
             # Research Tools
             "advanced_research", "evaluate_source", "quick_research", "synthesize_findings",
             "create_research_report", "deep_research", "get_research_engine",
+            "build_document_rag_index", "document_rag_qa", "summarize_document_rag",
+            "analyze_document_rag", "get_document_rag_engine",
             # Document Generator Tools
             "generate_research_document", "get_document_generator", "create_presentation",
             # Visualization Tools

@@ -20,6 +20,7 @@ from .tier2_semantic_classifier import SemanticClassifier
 from .tier3_deep_reasoning import DeepReasoner
 from .user_intent_memory import UserIntentMemory
 from .intent_metrics import IntentMetricsTracker
+from core.nlu.phase1_engine import get_phase1_engine
 
 logger = get_logger("intent_router")
 
@@ -29,17 +30,21 @@ _semantic_classifier: Optional[SemanticClassifier] = None
 _deep_reasoner: Optional[DeepReasoner] = None
 _user_memory: Optional[UserIntentMemory] = None
 _metrics: Optional[IntentMetricsTracker] = None
+_phase1_engine = None
+
+PHASE1_DIRECT_THRESHOLD = 0.30
 
 
 def initialize_router(llm_orchestrator=None, db_path: str = "~/.elyan/intent_memory.db") -> None:
     """Initialize intent router components."""
-    global _fast_matcher, _semantic_classifier, _deep_reasoner, _user_memory, _metrics
+    global _fast_matcher, _semantic_classifier, _deep_reasoner, _user_memory, _metrics, _phase1_engine
 
     _fast_matcher = FastMatcher()
     _semantic_classifier = SemanticClassifier(llm_orchestrator)
     _deep_reasoner = DeepReasoner(llm_orchestrator)
     _user_memory = UserIntentMemory(db_path=db_path)
     _metrics = IntentMetricsTracker()
+    _phase1_engine = get_phase1_engine()
 
     logger.info(f"Intent router initialized. Tier 1 patterns: {_fast_matcher.get_pattern_count()}")
 
@@ -105,6 +110,26 @@ class IntentRouter:
                     _metrics.record_routing(result)
                     logger.info(f"Tier 1 match: {result.action} ({result.confidence:.2f})")
                     return result
+
+            # 2.5 Phase 1 local NLU (< 100ms)
+            if _phase1_engine is not None and (not force_tier or force_tier == "phase1"):
+                phase1_candidate = _phase1_engine.classify(
+                    user_input,
+                    context=context.get_context_summary() if context else None,
+                    available_tools=available_tools,
+                )
+                if phase1_candidate is not None:
+                    self._populate_result(result, phase1_candidate.to_candidate(), "phase1")
+                    result.execution_time_ms = (time.time() - start) * 1000
+                    _metrics.record_routing(result)
+                    if phase1_candidate.needs_clarification or phase1_candidate.confidence >= PHASE1_DIRECT_THRESHOLD:
+                        logger.info(
+                            "Phase 1 match: %s (%s, %.2f)",
+                            result.action,
+                            "clarify" if phase1_candidate.needs_clarification else "direct",
+                            result.confidence,
+                        )
+                        return result
 
             # 3. Tier 2 Semantic Classifier (< 200ms)
             if not force_tier or force_tier == "tier2":
@@ -201,6 +226,9 @@ class IntentRouter:
             if correct_action in ["set_volume", "take_screenshot", "chat", "lock_screen"]:
                 _fast_matcher.add_pattern(correct_action, user_input.lower())
 
+            if _phase1_engine is not None:
+                _phase1_engine.learn_from_correction(user_input, correct_action, params or {})
+
             # Record in user memory
             _user_memory.learn_pattern(user_id, user_input, correct_action, params or {})
 
@@ -213,6 +241,7 @@ class IntentRouter:
         """Get routing statistics."""
         return {
             "tier1_patterns": _fast_matcher.get_pattern_count() if _fast_matcher else 0,
+            "phase1": _phase1_engine.describe() if _phase1_engine else {},
             "metrics": _metrics.get_summary() if _metrics else {},
             "user_memory_entries": _user_memory.get_stats() if _user_memory else {}
         }

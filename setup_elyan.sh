@@ -228,7 +228,7 @@ create_launch_script() {
 
     cd "$REPO_DIR"
 
-    # Create desktop launcher for macOS
+    # Create launcher for macOS
     if [ "$(uname)" = "Darwin" ]; then
         LAUNCHER="${INSTALL_DIR}/Elyan.sh"
 

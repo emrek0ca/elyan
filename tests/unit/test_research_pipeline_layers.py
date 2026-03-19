@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
+from tools.office_tools.content_manifest import build_office_content_manifest
 from tools.document_tools.output_renderer import DocumentRenderer, sections_to_sectioned_document
+from tools.generators.slidev_generator import SlidevGenerator
 from tools.research_tools.data_agent import TimeSeriesAgent, summarize_time_series
 from tools.research_tools.research_orchestrator import (
     ResearchOrchestrator,
@@ -202,3 +204,136 @@ async def test_document_renderer_reuses_word_tool(monkeypatch, tmp_path: Path):
     assert captured["title"] == "Araştırma Raporu - Test"
     assert "Kısa Özet" in captured["paragraphs"]
     assert "Birinci bulgu." in captured["paragraphs"]
+
+
+@pytest.mark.asyncio
+async def test_document_renderer_uses_manifest_for_excel(monkeypatch, tmp_path: Path):
+    manifest = build_office_content_manifest(
+        title="Araştırma Raporu - Test",
+        topic="Test Konusu",
+        brief="Kısa brief",
+        audience="executive",
+        language="tr",
+        content_kind="research",
+        document_profile="analytical",
+        citation_mode="inline",
+        source_policy="trusted",
+        sections=[
+            {
+                "title": "Kısa Özet",
+                "paragraphs": [{"text": "Kısa karar özeti.", "claim_ids": ["claim_1"]}],
+            },
+            {
+                "title": "Temel Bulgular",
+                "paragraphs": [{"text": "Birinci bulgu.", "claim_ids": ["claim_1"]}],
+            },
+        ],
+        sources=[
+            {"title": "Kaynak 1", "url": "https://example.com", "reliability_score": 0.9},
+        ],
+        quality_summary={
+            "status": "pass",
+            "claim_coverage": 1.0,
+            "critical_claim_coverage": 1.0,
+            "uncertainty_count": 0,
+            "conflict_count": 0,
+        },
+        research_contract={
+            "claim_list": [
+                {
+                    "claim_id": "claim_1",
+                    "text": "Birinci bulgu.",
+                    "source_urls": ["https://example.com"],
+                    "critical": True,
+                    "confidence": 0.9,
+                }
+            ]
+        },
+        claim_map={
+            "sections": [
+                {
+                    "title": "Kısa Özet",
+                    "paragraphs": [{"text": "Kısa karar özeti.", "claim_ids": ["claim_1"]}],
+                },
+                {
+                    "title": "Temel Bulgular",
+                    "paragraphs": [{"text": "Birinci bulgu.", "claim_ids": ["claim_1"]}],
+                },
+            ],
+            "research_contract": {
+                "claim_list": [
+                    {
+                        "claim_id": "claim_1",
+                        "text": "Birinci bulgu.",
+                        "source_urls": ["https://example.com"],
+                        "critical": True,
+                        "confidence": 0.9,
+                    }
+                ]
+            },
+        },
+    )
+
+    document = sections_to_sectioned_document(
+        title="Araştırma Raporu - Test",
+        sections=[
+            {
+                "title": "Kısa Özet",
+                "paragraphs": [{"text": "Kısa karar özeti.", "claim_ids": ["claim_1"]}],
+            },
+            {
+                "title": "Temel Bulgular",
+                "paragraphs": [{"text": "Birinci bulgu.", "claim_ids": ["claim_1"]}],
+            },
+        ],
+        metadata={"topic": "Test Konusu", "office_content_manifest": manifest.to_dict()},
+    )
+
+    captured = {}
+
+    async def _fake_write_excel(path=None, data=None, headers=None, multi_sheet=False, **kwargs):
+        _ = kwargs
+        captured["path"] = path
+        captured["data"] = data
+        captured["headers"] = headers
+        captured["multi_sheet"] = multi_sheet
+        Path(path).write_bytes(b"xlsx")
+        return {"success": True, "path": path}
+
+    monkeypatch.setattr("tools.office_tools.excel_tools.write_excel", _fake_write_excel)
+
+    renderer = DocumentRenderer()
+    result = await renderer.render_to_path(document, "xlsx", str(tmp_path / "report.xlsx"))
+    assert result["success"] is True
+    assert captured["multi_sheet"] is True
+    assert "Ozet" in captured["data"]
+    assert "Kaynaklar" in captured["data"]
+    assert "Kalite" in captured["data"]
+    assert "IddiaHaritasi" in captured["data"]
+
+
+@pytest.mark.asyncio
+async def test_slidev_generator_accepts_manifest_payload(tmp_path: Path):
+    generator = SlidevGenerator()
+    generator.base_dir = tmp_path
+    manifest = build_office_content_manifest(
+        title="Sunum Başlığı",
+        topic="Sunum Konusu",
+        brief="Kısa bir brief",
+        sections=[
+            {"title": "Kısa Özet", "paragraphs": [{"text": "İlk özet."}]},
+            {"title": "Temel Bulgular", "paragraphs": [{"text": "İkinci bulgu."}]},
+        ],
+        sources=[{"title": "Kaynak 1", "url": "https://example.com", "reliability_score": 0.91}],
+        quality_summary={"status": "pass", "claim_coverage": 1.0, "critical_claim_coverage": 1.0},
+        notes=["Not 1"],
+    )
+
+    result = await generator.create_presentation("deck", manifest.to_dict())
+    assert result["success"] is True
+    md_path = Path(result["path"])
+    content = md_path.read_text(encoding="utf-8")
+    assert "Sunum Başlığı" in content
+    assert "Yönetici Özeti" in content
+    assert "Kaynaklar" in content
+    assert result.get("manifest_path")

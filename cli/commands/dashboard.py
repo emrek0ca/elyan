@@ -19,11 +19,11 @@ def open_dashboard(port: int | None = None, no_browser: bool = False, ops: bool 
         url = f"http://localhost:{port}/ops?token={token}"
         print("🔐  Elyan Ops Console açılıyor...")
     else:
-        url = f"http://localhost:{port}/product"
-        print("🚀  Elyan Product Surface açılıyor...")
-    
+        url = f"http://localhost:{port}/dashboard"
+        print("🚀  Elyan Dashboard açılıyor...")
+
     print(f"🔗  URL: {url}")
-    
+
     # Give a small delay for server to be ready if called during start
     if no_browser:
         return

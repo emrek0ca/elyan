@@ -44,6 +44,22 @@ async def test_browser_get_text_wrapper_returns_extracted_text(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_browser_click_wrapper_rejects_empty_selector():
+    result = await browser_automation.browser_click("   ")
+
+    assert result["success"] is False
+    assert result["error_code"] == "INVALID_INPUT"
+
+
+@pytest.mark.asyncio
+async def test_browser_open_wrapper_rejects_empty_url():
+    result = await browser_automation.browser_open("   ")
+
+    assert result["success"] is False
+    assert result["error_code"] == "INVALID_INPUT"
+
+
+@pytest.mark.asyncio
 async def test_scrape_page_wrapper_uses_runtime(monkeypatch):
     calls = {"count": 0}
 

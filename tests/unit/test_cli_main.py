@@ -88,3 +88,13 @@ def test_main_chat_command_starts_chat_session(monkeypatch):
 
     assert code == 0
     assert captured["prompt"] == "merhaba elyan"
+
+
+def test_main_rejects_desktop_command_and_suggests_dashboard(monkeypatch, capsys):
+    monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)
+
+    code = cli_main.main(["desktop"])
+    captured = capsys.readouterr()
+
+    assert code == 2
+    assert "Şunu mu demek istediniz: 'dashboard'" in captured.err

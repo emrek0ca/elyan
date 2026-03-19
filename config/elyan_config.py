@@ -167,7 +167,16 @@ def _default_config() -> AppConfig:
                 "defaultDeny": True,
             },
         },
-        gateway={"port": 18789, "host": "127.0.0.1", "corsOrigins": ["http://localhost:3000"]},
+        gateway={
+            "port": 18789,
+            "host": "127.0.0.1",
+            "corsOrigins": [
+                "http://localhost:3000",
+                "tauri://localhost",
+                "http://tauri.localhost",
+                "https://tauri.localhost",
+            ],
+        },
         voice={"feedback_enabled": True},
         skills={
             "enabled": ["system", "files", "research", "browser", "office"],

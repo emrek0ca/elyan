@@ -214,9 +214,9 @@ async def test_handle_product_home_aggregates_readiness_and_reports(monkeypatch)
     assert payload["preset_workflows"]
     assert payload["recent_workflow_reports"][0]["workflow_name"] == "Telegram-triggered desktop task completion"
     assert payload["onboarding"]["first_demo_workflow"]
-    assert payload["release"]["entrypoint"] == "/product"
+    assert payload["release"]["entrypoint"] == "/dashboard"
     checks = payload["release"]["quickstart_checks"]
-    assert any(item["label"] == "Product start script" for item in checks)
+    assert any(item["label"] == "Dashboard start script" for item in checks)
     assert any(item["label"] == "Production benchmark gate" for item in checks)
 
 
@@ -503,7 +503,7 @@ async def test_handle_product_health_exposes_release_ready_summary(monkeypatch):
                 "average_replans": 0.5,
                 "remaining_failure_codes": [],
             },
-            "release": {"version": "18.0.0", "health_status": "ok", "entrypoint": "/product"},
+            "release": {"version": "18.0.0", "health_status": "ok", "entrypoint": "/dashboard"},
         }
 
     srv._build_product_home_payload = _build
@@ -511,7 +511,7 @@ async def test_handle_product_health_exposes_release_ready_summary(monkeypatch):
     payload = json.loads(resp.text)
     assert payload["ok"] is True
     assert payload["status"] == "ready"
-    assert payload["entrypoint"] == "/product"
+    assert payload["entrypoint"] == "/dashboard"
 
 
 @pytest.mark.asyncio

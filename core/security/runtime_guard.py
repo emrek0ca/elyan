@@ -17,6 +17,7 @@ import re
 from typing import Any, Dict, List, Tuple
 
 from config.elyan_config import elyan_config
+from core.command_hardening import blocked_command_reason
 from core.operator_policy import get_operator_policy_engine
 from core.security.rbac import Role, rbac
 
@@ -66,6 +67,25 @@ DESTRUCTIVE_ACTIONS = {
     "kill_process",
 }
 
+WRITE_ACTIONS = {
+    "write_file",
+    "replace_in_file",
+    "edit_text_file",
+    "append_file",
+    "delete_file",
+    "move_file",
+    "copy_file",
+    "rename_file",
+    "create_folder",
+    "write_word",
+    "write_excel",
+    "create_web_project_scaffold",
+    "create_software_project_pack",
+    "create_coding_project",
+    "create_coding_delivery_plan",
+    "create_coding_verification_report",
+}
+
 PATH_KEYS = {
     "path",
     "file_path",
@@ -88,6 +108,18 @@ DEFAULT_DANGEROUS_PATTERNS = [
     "reboot",
     "kill -9 1",
     ":(){:|:&};:",
+]
+
+DEFAULT_MUTATION_COMMAND_PATTERNS = [
+    ">",
+    ">>",
+    " tee ",
+    "touch ",
+    "mkdir ",
+    "cp ",
+    "mv ",
+    "rm ",
+    "sed -i",
 ]
 
 
@@ -264,6 +296,18 @@ class RuntimeSecurityGuard:
                 return value.strip()
         return ""
 
+    @staticmethod
+    def _looks_like_write_mutation(tool_name: str, params: Dict[str, Any]) -> bool:
+        tool = str(tool_name or "").strip().lower()
+        if tool in WRITE_ACTIONS:
+            return True
+        if tool not in RUNTIME_ACTIONS:
+            return False
+        compact = f" {_collapse_whitespace(RuntimeSecurityGuard._extract_command(params or {})).lower()} "
+        if not compact.strip():
+            return False
+        return any(marker in compact for marker in DEFAULT_MUTATION_COMMAND_PATTERNS)
+
     def evaluate(
         self,
         *,
@@ -278,6 +322,16 @@ class RuntimeSecurityGuard:
         uid = str(user_id or "unknown").strip() or "unknown"
         meta = metadata if isinstance(metadata, dict) else {}
         risk = self.classify_risk(tool)
+
+        unsupported_reason = blocked_command_reason(str(meta.get("user_input") or ""), tool_name=tool)
+        if unsupported_reason and tool in RUNTIME_ACTIONS.union(SYSTEM_ACTIONS):
+            return {
+                "allowed": False,
+                "requires_approval": False,
+                "risk": "dangerous",
+                "reason": unsupported_reason,
+                "profile": profile,
+            }
 
         # RBAC
         role = str(meta.get("user_role", profile.default_user_role) or profile.default_user_role).strip().lower()
@@ -343,9 +397,10 @@ class RuntimeSecurityGuard:
                         "profile": profile,
                     }
 
+        paths, invalid_paths = self._collect_paths(params or {})
+
         # Path guard
         if profile.path_guard_enabled:
-            paths, invalid_paths = self._collect_paths(params or {})
             if invalid_paths:
                 sample = invalid_paths[0]
                 return {
@@ -375,6 +430,50 @@ class RuntimeSecurityGuard:
                         "requires_approval": False,
                         "risk": risk,
                         "reason": f"Path is outside allowed roots: {p}",
+                        "profile": profile,
+                    }
+
+        # Contract-first coding write scope guard
+        if self._looks_like_write_mutation(tool, params or {}):
+            write_allowed = [self._normalize_path(v) for v in _to_list(meta.get("allowed_write_paths"))]
+            write_forbidden = [self._normalize_path(v) for v in _to_list(meta.get("forbidden_write_paths"))]
+            write_allowed = [p for p in write_allowed if p is not None]
+            write_forbidden = [p for p in write_forbidden if p is not None]
+            if meta.get("contract_first_coding") and not write_allowed:
+                return {
+                    "allowed": False,
+                    "requires_approval": False,
+                    "risk": "dangerous",
+                    "reason": "Coding runtime write scope missing.",
+                    "profile": profile,
+                }
+            if tool in RUNTIME_ACTIONS and self._looks_like_write_mutation(tool, params or {}) and not paths:
+                cwd_value = self._normalize_path(str((params or {}).get("cwd") or ""))
+                if cwd_value is not None:
+                    paths = [cwd_value]
+                elif meta.get("contract_first_coding"):
+                    return {
+                        "allowed": False,
+                        "requires_approval": False,
+                        "risk": "dangerous",
+                        "reason": "Mutating command requires an explicit scoped path or cwd.",
+                        "profile": profile,
+                    }
+            for p in paths:
+                if any(self._path_under(p, root) for root in write_forbidden):
+                    return {
+                        "allowed": False,
+                        "requires_approval": False,
+                        "risk": "dangerous",
+                        "reason": f"Write scope denied: {p}",
+                        "profile": profile,
+                    }
+                if write_allowed and not any(self._path_under(p, root) for root in write_allowed):
+                    return {
+                        "allowed": False,
+                        "requires_approval": False,
+                        "risk": "dangerous",
+                        "reason": f"Path is outside coding write scope: {p}",
                         "profile": profile,
                     }
 
