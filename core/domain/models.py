@@ -92,6 +92,7 @@ class AppConfig(BaseModel):
     evaluation: Dict[str, Any] = Field(default_factory=dict)
     adapter_training: Dict[str, Any] = Field(default_factory=dict)
     retrieval: Dict[str, Any] = Field(default_factory=dict)
+    runtime_control: Dict[str, Any] = Field(default_factory=dict)
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
     coding: CodingConfig = Field(default_factory=CodingConfig)
     security: Dict[str, Any] = Field(default_factory=dict)

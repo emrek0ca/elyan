@@ -30,6 +30,8 @@ from core.user_profile import get_user_profile_store
 from core.ml import get_model_runtime
 from core.personalization import get_personalization_manager
 from core.reliability import get_outcome_store, get_regression_evaluator
+from core.learning_control import get_learning_control_plane
+from core.runtime_control import get_runtime_control_plane
 from core.runtime import (
     EMRE_WORKFLOW_PRESETS,
     list_emre_workflow_reports,
@@ -1968,6 +1970,20 @@ class ElyanGatewayServer:
                 "status": "error",
                 "error": str(reliability_exc),
             }
+        try:
+            learning_status = get_learning_control_plane().get_status()
+        except Exception as learning_exc:
+            learning_status = {
+                "status": "error",
+                "error": str(learning_exc),
+            }
+        try:
+            runtime_control_status = get_runtime_control_plane().get_status()
+        except Exception as runtime_control_exc:
+            runtime_control_status = {
+                "status": "error",
+                "error": str(runtime_control_exc),
+            }
 
         from core.action_lock import action_lock
         return web.json_response({
@@ -1992,6 +2008,8 @@ class ElyanGatewayServer:
             "personalization": personalization_status,
             "ml": ml_status,
             "reliability": reliability_status,
+            "learning": learning_status,
+            "runtime_control": runtime_control_status,
             "runtime": {
                 "uptime_seconds": uptime_s,
                 "cpu_pct": health.cpu_percent,
@@ -2007,6 +2025,8 @@ class ElyanGatewayServer:
                 "personalization": personalization_status,
                 "ml": ml_status,
                 "reliability": reliability_status,
+                "learning": learning_status,
+                "runtime_control": runtime_control_status,
                 "orchestration": orchestration_summary,
                 "pipeline_jobs": pipeline_jobs_summary,
             },
@@ -5032,6 +5052,7 @@ class ElyanGatewayServer:
                 "audit": audit_trail.delete_user_data(user_id),
                 "personalization": get_personalization_manager().delete_user_data(user_id),
                 "reliability": get_outcome_store().delete_user(user_id),
+                "runtime_control": get_runtime_control_plane().sync_store.delete_user(user_id),
             }
             push_activity("privacy", "dashboard", f"user_data_deleted:{user_id}", True)
             return web.json_response({"ok": True, "result": result})
@@ -5414,6 +5435,11 @@ class ElyanGatewayServer:
             timeout_s = 90
 
         push_activity("message", channel, str(text)[:60])
+        metadata = dict(data.get("metadata") or {}) if isinstance(data.get("metadata"), dict) else {}
+        for key in ("user_id", "device_id", "session_id", "channel_session_id", "client_id"):
+            value = data.get(key)
+            if value not in (None, ""):
+                metadata[key] = value
 
         if wait_response:
             try:
@@ -5421,7 +5447,7 @@ class ElyanGatewayServer:
                     self.agent.process(
                         str(text),
                         channel=channel,
-                        metadata=data.get("metadata") if isinstance(data.get("metadata"), dict) else None,
+                        metadata=metadata or None,
                     ),
                     timeout=timeout_s,
                 )
@@ -5435,7 +5461,7 @@ class ElyanGatewayServer:
             self.agent.process(
                 str(text),
                 channel=channel,
-                metadata=data.get("metadata") if isinstance(data.get("metadata"), dict) else None,
+                metadata=metadata or None,
             )
         )
         return web.json_response({"status": "processing"})

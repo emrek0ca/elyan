@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+import core.personalization.retrieval as retrieval_module
 from core.personalization.adapters import AdapterArtifactStore, AdapterRegistry
 from core.personalization.manager import PersonalizationManager
 from core.personalization.memory import PersonalMemoryStore
@@ -97,6 +98,48 @@ def test_memory_retriever_and_reranker_return_user_scoped_hits(tmp_path):
     assert result["vector_hits"]
     assert result["vector_hits"][0]["user_input"] == "Python için kısa not çıkar"
     assert all("React landing page hazırla" != hit["user_input"] for hit in result["vector_hits"])
+
+
+def test_memory_retriever_prunes_stale_hits(monkeypatch, tmp_path):
+    store = PersonalMemoryStore(storage_root=tmp_path / "memory", vector_backend="sqlite", graph_backend="sqlite")
+    old_row = store.write_interaction(
+        user_id="user-a",
+        user_input="Eski python notu",
+        assistant_output="Eski cevap",
+        action="chat",
+        success=True,
+    )
+    store.write_interaction(
+        user_id="user-a",
+        user_input="Yeni python notu",
+        assistant_output="Yeni cevap",
+        action="chat",
+        success=True,
+    )
+    with store._connect() as conn:  # noqa: SLF001
+        conn.execute("UPDATE interactions SET created_at = ? WHERE interaction_id = ?", (1.0, old_row["interaction_id"]))
+        conn.commit()
+    retriever = MemoryRetriever(store, MemoryReranker())
+    monkeypatch.setattr(
+        retrieval_module,
+        "elyan_config",
+        type(
+            "_Cfg",
+            (),
+            {
+                "get": staticmethod(
+                    lambda key, default=None: {"stale_window_days": 1, "rerank_top_k": 5}
+                    if key == "retrieval"
+                    else default
+                )
+            },
+        )(),
+    )
+    monkeypatch.setattr(retrieval_module.time, "time", lambda: 86400.0 * 3)
+    result = retriever.retrieve("python", "user-a", 256, k=5)
+
+    assert result["vector_hits"]
+    assert all(hit["user_input"] != "Eski python notu" for hit in result["vector_hits"])
 
 
 def test_reward_event_store_and_preference_pair_builder(tmp_path):

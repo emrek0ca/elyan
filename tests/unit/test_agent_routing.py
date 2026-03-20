@@ -297,6 +297,13 @@ def test_agent_resolve_tool_name_aliases():
     assert agent._resolve_tool_name("openapp") == "open_app"
 
 
+def test_agent_keeps_simple_browser_open_intent_without_forcing_computer_use():
+    agent = Agent()
+    intent = {"action": "open_url", "params": {"url": "https://openai.com"}}
+    result = agent._coerce_intent_for_request_shape(intent, "safariden openai.com aç")
+    assert result.get("action") == "open_url"
+
+
 def test_agent_prepare_tool_params_infers_app_name_from_input():
     agent = Agent()
     params = agent._prepare_tool_params(
@@ -602,6 +609,172 @@ def test_agent_process_envelope_handoffs_code_request_to_mission_runtime(monkeyp
     assert response.metadata["mission_id"] == "mission_1"
     assert store.create_calls
     assert store.run_calls
+    agent._finalize_turn.assert_awaited_once()
+
+
+def test_agent_process_envelope_fast_direct_path_handles_natural_write_command(monkeypatch, tmp_path):
+    agent = Agent()
+    agent.llm = SimpleNamespace(fast_response=SimpleNamespace(get_fast_response=lambda _text: None))
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+    agent.quick_intent = _DummyQuickIntentUnknown()
+    target_file = tmp_path / "Desktop" / "note.txt"
+    agent.intent_parser = SimpleNamespace(
+        parse=lambda _text: {
+            "action": "write_file",
+            "params": {"path": str(target_file), "content": "merhaba"},
+            "confidence": 0.9,
+            "reply": "note.txt oluşturuluyor...",
+        }
+    )
+    agent.capability_router = None
+    agent.learning = _DummyLearning()
+    agent.user_profile = _DummyProfile()
+    agent._resolve_pending_workflow_session = lambda *_args, **_kwargs: {}
+    agent._should_schedule_away_task = lambda *_args, **_kwargs: False
+    agent._handle_away_task_command = AsyncMock(return_value=None)
+    agent._finalize_turn = AsyncMock(return_value=None)
+    agent.runtime_control.prepare_turn = AsyncMock(
+        return_value={
+            "request_class": "direct_action",
+            "execution_path": "fast",
+            "latency_budget_ms": 800,
+            "personalization": {},
+            "model_runtime": {},
+            "intent_prediction": {"label": "write_file", "confidence": 0.92},
+            "route_choice": {"candidate": "direct_action", "score": 0.92},
+            "clarification_policy": {"should_clarify": False, "decision": "proceed", "confidence": 0.2},
+            "sync": {"device_id": "primary", "session_id": "default"},
+            "request_prompt": "masaüstüne note.txt dosyasına merhaba yaz",
+        }
+    )
+    agent.runtime_control.record_stage = lambda **_kwargs: {}
+
+    class _DummyCoworkRuntime:
+        @staticmethod
+        def route_command(*_args, **_kwargs):
+            return SimpleNamespace(mode="file", confidence=0.93, refusal=False, to_dict=lambda: {"mode": "file", "confidence": 0.93})
+
+        @staticmethod
+        def start_session(**_kwargs):
+            raise AssertionError("cowork session should not start for direct fast-path")
+
+    def _unexpected_pipeline_run(*_args, **_kwargs):
+        raise AssertionError("pipeline should not run for direct fast-path")
+
+    def _unexpected_create_task(*_args, **_kwargs):
+        raise AssertionError("task creation should not run for direct fast-path")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("core.agent.get_cowork_runtime", lambda: _DummyCoworkRuntime())
+    monkeypatch.setattr("core.agent.pipeline_runner.run", _unexpected_pipeline_run)
+    monkeypatch.setattr("core.agent.task_brain.create_task", _unexpected_create_task)
+    monkeypatch.setattr("core.evidence.execution_ledger.resolve_proofs_root", lambda: tmp_path / "proofs")
+    monkeypatch.setattr("core.evidence.run_store.resolve_runs_root", lambda: tmp_path / "runs")
+
+    async def _fake_write_file(path: str, content: str = ""):
+        target = Path(path).expanduser()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content or "merhaba", encoding="utf-8")
+        return {"success": True, "path": str(target), "message": "dosya yazıldı"}
+
+    monkeypatch.setattr("core.agent.AVAILABLE_TOOLS", {"write_file": _fake_write_file})
+
+    response = asyncio.run(
+        agent.process_envelope(
+            "masaüstüne note.txt dosyasına merhaba yaz",
+            metadata={"user_id": "u1", "device_id": "macbook", "session_id": "s1"},
+        )
+    )
+
+    assert response.status == "success"
+    assert response.metadata["action"] == "write_file"
+    assert response.metadata["execution_path"] == "fast"
+    assert target_file.exists()
+    agent._finalize_turn.assert_awaited_once()
+
+
+def test_agent_process_envelope_fast_direct_path_handles_natural_browser_command(monkeypatch, tmp_path):
+    agent = Agent()
+    agent.llm = SimpleNamespace(fast_response=SimpleNamespace(get_fast_response=lambda _text: None))
+    agent.kernel = SimpleNamespace(memory=_DummyMemory(), tools=_DummyTools())
+    agent.quick_intent = _DummyQuickIntentUnknown()
+    agent.intent_parser = SimpleNamespace(
+        parse=lambda _text: {
+            "action": "multi_task",
+            "tasks": [
+                {"id": "task_1", "action": "open_app", "params": {"app_name": "Safari"}},
+                {"id": "task_2", "action": "open_url", "params": {"url": "https://openai.com", "browser": "Safari"}},
+            ],
+            "confidence": 0.9,
+        }
+    )
+    agent.capability_router = None
+    agent.learning = _DummyLearning()
+    agent.user_profile = _DummyProfile()
+    agent._resolve_pending_workflow_session = lambda *_args, **_kwargs: {}
+    agent._should_schedule_away_task = lambda *_args, **_kwargs: False
+    agent._handle_away_task_command = AsyncMock(return_value=None)
+    agent._finalize_turn = AsyncMock(return_value=None)
+    agent.runtime_control.prepare_turn = AsyncMock(
+        return_value={
+            "request_class": "direct_action",
+            "execution_path": "fast",
+            "latency_budget_ms": 800,
+            "personalization": {},
+            "model_runtime": {},
+            "intent_prediction": {"label": "browser", "confidence": 0.9},
+            "route_choice": {"candidate": "direct_action", "score": 0.9},
+            "clarification_policy": {"should_clarify": False, "decision": "proceed", "confidence": 0.2},
+            "sync": {"device_id": "primary", "session_id": "default"},
+            "request_prompt": "safariden openai.com aç",
+        }
+    )
+    agent.runtime_control.record_stage = lambda **_kwargs: {}
+
+    calls = []
+
+    class _DummyCoworkRuntime:
+        @staticmethod
+        def route_command(*_args, **_kwargs):
+            return SimpleNamespace(mode="browser", confidence=0.91, refusal=False, to_dict=lambda: {"mode": "browser", "confidence": 0.91})
+
+        @staticmethod
+        def start_session(**_kwargs):
+            raise AssertionError("cowork session should not start for direct fast-path")
+
+    def _unexpected_pipeline_run(*_args, **_kwargs):
+        raise AssertionError("pipeline should not run for direct fast-path")
+
+    def _unexpected_create_task(*_args, **_kwargs):
+        raise AssertionError("task creation should not run for direct fast-path")
+
+    monkeypatch.setattr("core.agent.get_cowork_runtime", lambda: _DummyCoworkRuntime())
+    monkeypatch.setattr("core.agent.pipeline_runner.run", _unexpected_pipeline_run)
+    monkeypatch.setattr("core.agent.task_brain.create_task", _unexpected_create_task)
+    monkeypatch.setattr("core.evidence.execution_ledger.resolve_proofs_root", lambda: tmp_path / "proofs")
+    monkeypatch.setattr("core.evidence.run_store.resolve_runs_root", lambda: tmp_path / "runs")
+
+    async def _fake_open_app(app_name: str):
+        calls.append(("open_app", app_name))
+        return {"success": True, "app_name": app_name, "verified": True, "message": f"{app_name} açıldı"}
+
+    async def _fake_open_url(url: str, browser: str = ""):
+        calls.append(("open_url", url, browser))
+        return {"success": True, "url": url, "browser": browser, "verified": True, "message": "sayfa açıldı"}
+
+    monkeypatch.setattr("core.agent.AVAILABLE_TOOLS", {"open_app": _fake_open_app, "open_url": _fake_open_url})
+
+    response = asyncio.run(
+        agent.process_envelope(
+            "safariden openai.com aç",
+            metadata={"user_id": "u1", "device_id": "iphone", "session_id": "s2"},
+        )
+    )
+
+    assert response.status == "success"
+    assert response.metadata["action"] == "multi_task"
+    assert any(call[0] == "open_app" for call in calls)
+    assert any(call[0] == "open_url" for call in calls)
     agent._finalize_turn.assert_awaited_once()
 
 
@@ -3855,14 +4028,13 @@ def test_agent_run_runtime_task_spec_run_timeout_triggers_rollback(monkeypatch, 
     assert rollback_file.exists()
 
 
-def test_agent_coerce_browser_search_to_computer_use():
+def test_agent_coerce_browser_search_to_multi_task():
     agent = Agent()
     intent = {"action": "open_url", "params": {}}
     coerced = agent._coerce_intent_for_request_shape(intent, "safariden köpek resimleri arat")
     assert isinstance(coerced, dict)
-    assert coerced.get("action") == "computer_use"
-    params = coerced.get("params", {}) if isinstance(coerced.get("params"), dict) else {}
-    steps = params.get("steps", []) if isinstance(params.get("steps"), list) else []
+    assert coerced.get("action") == "multi_task"
+    steps = coerced.get("tasks", []) if isinstance(coerced.get("tasks"), list) else []
     assert len(steps) >= 2
     assert steps[0].get("action") == "open_app"
     assert str(steps[0].get("params", {}).get("app_name", "")).lower() == "safari"

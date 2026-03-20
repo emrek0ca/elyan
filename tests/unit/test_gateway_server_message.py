@@ -58,7 +58,7 @@ async def test_handle_external_message_wait_returns_agent_response(monkeypatch):
     srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
     srv.agent = _Agent(response="tamam")
 
-    req = _Req({"text": "merhaba", "channel": "dashboard", "wait": True, "timeout_s": 30})
+    req = _Req({"text": "merhaba", "channel": "dashboard", "wait": True, "timeout_s": 30, "user_id": "u1", "device_id": "iphone"})
     resp = await gateway_server.ElyanGatewayServer.handle_external_message(srv, req)
 
     assert resp.status == 200
@@ -66,6 +66,8 @@ async def test_handle_external_message_wait_returns_agent_response(monkeypatch):
     assert payload["status"] == "ok"
     assert payload["response"] == "tamam"
     assert srv.agent.calls and srv.agent.calls[0]["channel"] == "dashboard"
+    assert srv.agent.calls[0]["metadata"]["user_id"] == "u1"
+    assert srv.agent.calls[0]["metadata"]["device_id"] == "iphone"
 
 
 @pytest.mark.asyncio
@@ -144,6 +146,16 @@ async def test_handle_status_includes_runtime_health_and_tool_count(monkeypatch)
         "get_regression_evaluator",
         lambda: SimpleNamespace(summary=lambda: {"verification_pass_rate": 0.75}),
     )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_learning_control_plane",
+        lambda: SimpleNamespace(get_status=lambda: {"personalization": {"enabled": True}}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_runtime_control_plane",
+        lambda: SimpleNamespace(get_status=lambda: {"enabled": True, "sync": {"sessions": 2}}),
+    )
 
     srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
     srv.router = _StatusRouter()
@@ -160,8 +172,11 @@ async def test_handle_status_includes_runtime_health_and_tool_count(monkeypatch)
     assert payload["personalization"]["enabled"] is True
     assert payload["ml"]["enabled"] is True
     assert payload["reliability"]["store"]["outcomes"] == 3
+    assert payload["learning"]["personalization"]["enabled"] is True
+    assert payload["runtime_control"]["enabled"] is True
     assert payload["runtime"]["personalization"]["mode"] == "hybrid"
     assert payload["runtime"]["ml"]["execution_mode"] == "local_first"
+    assert payload["runtime"]["runtime_control"]["sync"]["sessions"] == 2
     assert "orchestration_telemetry" in payload
 
 
@@ -208,6 +223,16 @@ async def test_handle_status_treats_webchat_online_and_optional_whatsapp_as_non_
         gateway_server,
         "get_regression_evaluator",
         lambda: SimpleNamespace(summary=lambda: {"verification_pass_rate": 1.0}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_learning_control_plane",
+        lambda: SimpleNamespace(get_status=lambda: {"personalization": {"enabled": True}}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_runtime_control_plane",
+        lambda: SimpleNamespace(get_status=lambda: {"enabled": True, "sync": {"sessions": 1}}),
     )
 
     class _Router:
@@ -284,6 +309,16 @@ async def test_handle_status_treats_telegram_conflict_as_optional_for_core_runti
         gateway_server,
         "get_regression_evaluator",
         lambda: SimpleNamespace(summary=lambda: {"verification_pass_rate": 1.0}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_learning_control_plane",
+        lambda: SimpleNamespace(get_status=lambda: {"personalization": {"enabled": True}}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_runtime_control_plane",
+        lambda: SimpleNamespace(get_status=lambda: {"enabled": True, "sync": {"sessions": 1}}),
     )
 
     class _Router:

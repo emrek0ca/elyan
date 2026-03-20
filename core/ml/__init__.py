@@ -17,7 +17,15 @@ from .scorers import (
     get_intent_scorer,
     get_verifier,
 )
-from .types import DecisionRecord, ModelCapabilitySnapshot, OutcomeRecord, PreferencePair, RewardEvent
+from .types import (
+    DecisionRecord,
+    ModelCapabilitySnapshot,
+    OutcomeRecord,
+    PreferencePair,
+    RewardEvent,
+    RuntimeContext,
+    VerificationRecord,
+)
 
 __all__ = [
     "ActionRanker",
@@ -33,9 +41,11 @@ __all__ = [
     "PreferencePair",
     "RepoAwareEditRanker",
     "RewardEvent",
+    "RuntimeContext",
     "SourceQualityScorer",
     "TestImpactPredictor",
     "Verifier",
+    "VerificationRecord",
     "get_action_ranker",
     "get_clarification_classifier",
     "get_intent_scorer",

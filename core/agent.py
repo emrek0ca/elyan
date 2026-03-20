@@ -109,6 +109,8 @@ from core.ml import (
 )
 from core.personalization import get_personalization_manager
 from core.reliability import get_outcome_store
+from core.learning_control import get_learning_control_plane
+from core.runtime_control import get_runtime_control_plane
 from utils.logger import get_logger
 
 logger = get_logger("agent")
@@ -305,12 +307,14 @@ class Agent:
         self.learning = get_learning_engine()
         self.user_profile = get_user_profile_store()
         self.personalization = get_personalization_manager()
+        self.learning_control = get_learning_control_plane()
         self.model_runtime = get_model_runtime()
         self.intent_scorer = get_intent_scorer()
         self.action_ranker = get_action_ranker()
         self.clarification_classifier = get_clarification_classifier()
         self.verifier_service = get_verifier()
         self.outcome_store = get_outcome_store()
+        self.runtime_control = get_runtime_control_plane()
         self.current_user_id = None
         self.file_context = {
             "last_dir": str(Path.home() / "Desktop"),
@@ -637,6 +641,579 @@ class Agent:
             evidence_manifest_path=manifest,
             status=status,
             error="",
+        )
+
+    def _build_runtime_policy_payload(
+        self,
+        runtime_policy: Any,
+        *,
+        channel: str,
+        uid: str,
+        run_id: str,
+        run_dir: str,
+        route_metadata: dict[str, Any] | None = None,
+        pending_workflow: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            "name": getattr(runtime_policy, "name", "default"),
+            "capability": dict(getattr(runtime_policy, "capability", {}) or {}),
+            "workflow": dict(getattr(runtime_policy, "workflow", {}) or {}),
+            "planning": dict(getattr(runtime_policy, "planning", {}) or {}),
+            "execution": dict(getattr(runtime_policy, "execution", {}) or {}),
+            "nlu": dict(getattr(runtime_policy, "nlu", {}) or {}),
+            "orchestration": dict(getattr(runtime_policy, "orchestration", {}) or {}),
+            "api_tools": dict(getattr(runtime_policy, "api_tools", {}) or {}),
+            "skills": dict(getattr(runtime_policy, "skills", {}) or {}),
+            "tools": dict(getattr(runtime_policy, "tools", {}) or {}),
+            "response": dict(getattr(runtime_policy, "response", {}) or {}),
+            "security": dict(getattr(runtime_policy, "security", {}) or {}),
+            "coding": dict(getattr(runtime_policy, "coding", {}) or {}),
+            "metadata": {
+                "channel": str(channel or "cli"),
+                "user_id": str(uid or "local"),
+                "run_id": str(run_id or ""),
+                "run_dir": str(run_dir or ""),
+                "workspace_path": str(Path.cwd()),
+            },
+        }
+        route_map = dict(route_metadata or {})
+        if route_map.get("personalization"):
+            payload["metadata"]["personalization"] = dict(route_map.get("personalization") or {})
+        if route_map.get("model_runtime"):
+            payload["metadata"]["model_runtime"] = dict(route_map.get("model_runtime") or {})
+        if route_map.get("intent_prediction"):
+            payload["metadata"]["intent_prediction"] = dict(route_map.get("intent_prediction") or {})
+        if route_map.get("route_choice"):
+            payload["metadata"]["route_choice"] = dict(route_map.get("route_choice") or {})
+        if route_map.get("clarification_policy"):
+            payload["metadata"]["clarification_policy"] = dict(route_map.get("clarification_policy") or {})
+        if route_map.get("request_class"):
+            payload["metadata"]["request_class"] = str(route_map.get("request_class") or "")
+        if route_map.get("execution_path"):
+            payload["metadata"]["execution_path"] = str(route_map.get("execution_path") or "")
+        if route_map.get("sync"):
+            payload["metadata"]["sync"] = dict(route_map.get("sync") or {})
+        if pending_workflow:
+            payload["metadata"]["workflow_session"] = dict(pending_workflow)
+        if isinstance(metadata, dict):
+            for key, value in metadata.items():
+                if isinstance(key, str):
+                    payload["metadata"][key] = value
+            exec_mode = str(
+                metadata.get("execution_mode")
+                or metadata.get("agent_mode")
+                or ""
+            ).strip()
+            if exec_mode:
+                exec_cfg = payload.get("execution", {}) if isinstance(payload.get("execution"), dict) else {}
+                exec_cfg["mode"] = exec_mode
+                payload["execution"] = exec_cfg
+        return payload
+
+    async def _resolve_fast_direct_intent(
+        self,
+        user_input: str,
+        *,
+        parsed_intent: Optional[dict[str, Any]] = None,
+        quick_intent: Any = None,
+        attachments: list[str] | None = None,
+        history: list | None = None,
+        user_id: str = "local",
+        request_class: str = "",
+        execution_path: str = "",
+    ) -> Optional[dict[str, Any]]:
+        request_kind = str(request_class or "").strip().lower()
+        exec_path = str(execution_path or "").strip().lower()
+        if request_kind != "direct_action" or exec_path != "fast":
+            return None
+
+        candidates: list[tuple[str, dict[str, Any]]] = []
+        seen: set[str] = set()
+
+        def _push_candidate(source: str, payload: Any) -> None:
+            if not isinstance(payload, dict):
+                return
+            normalized = self._coerce_intent_for_request_shape(
+                dict(payload),
+                user_input,
+                attachments=list(attachments or []),
+            )
+            if not isinstance(normalized, dict):
+                return
+            try:
+                key = json.dumps(normalized, ensure_ascii=False, sort_keys=True, default=str)
+            except Exception:
+                key = str(normalized)
+            if key in seen:
+                return
+            seen.add(key)
+            normalized["_intent_source"] = str(source or "")
+            candidates.append((str(source or ""), normalized))
+
+        learned_match = None
+        try:
+            if getattr(self, "learning", None) and hasattr(self.learning, "quick_match"):
+                learned_match = self.learning.quick_match(user_input)
+        except Exception:
+            learned_match = None
+        if isinstance(learned_match, dict):
+            _push_candidate("learning_quick_match", learned_match)
+        elif isinstance(learned_match, str) and learned_match.strip():
+            _push_candidate(
+                "learning_quick_match",
+                {
+                    "action": str(learned_match).strip(),
+                    "params": {},
+                    "confidence": 0.88,
+                    "reply": "Öğrenilmiş hızlı aksiyon uygulanıyor...",
+                },
+            )
+
+        _push_candidate("intent_parser", parsed_intent)
+        try:
+            _push_candidate("skill_intent", self._infer_skill_intent(user_input))
+        except Exception:
+            pass
+        try:
+            _push_candidate("general_tool_intent", self._infer_general_tool_intent(user_input))
+        except Exception:
+            pass
+        if self._looks_compound_action_request(user_input):
+            try:
+                _push_candidate("multi_task_infer", self._infer_multi_task_intent(user_input))
+            except Exception:
+                pass
+
+        for _source, candidate in candidates:
+            if self._should_run_direct_intent(candidate, user_input):
+                return candidate
+
+        allow_llm_rescue = exec_path == "fast" and request_kind == "direct_action"
+        if not allow_llm_rescue:
+            return None
+        try:
+            llm_intent = await self._infer_llm_tool_intent(
+                user_input,
+                history=list(history or []),
+                user_id=str(user_id or "local"),
+            )
+        except Exception:
+            llm_intent = None
+        if not isinstance(llm_intent, dict):
+            return None
+        llm_intent = self._coerce_intent_for_request_shape(
+            llm_intent,
+            user_input,
+            attachments=list(attachments or []),
+        )
+        if not isinstance(llm_intent, dict):
+            return None
+        if float(llm_intent.get("confidence", 0.0) or 0.0) < 0.78:
+            return None
+        if not self._should_run_direct_intent(llm_intent, user_input):
+            return None
+        llm_intent["_intent_source"] = "llm_tool_router"
+        return llm_intent
+
+    def _collect_direct_artifacts(self, action: str, payload: Any, ledger: ExecutionLedger) -> list[dict[str, Any]]:
+        artifacts: list[dict[str, Any]] = []
+        seen_paths: set[str] = set()
+        for item in list(getattr(ledger, "artifacts", []) or []):
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "").strip()
+            if path:
+                seen_paths.add(path)
+            artifacts.append(dict(item))
+
+        def _add_path(raw_path: str, *, source_result: dict[str, Any] | None = None) -> None:
+            path_text = str(raw_path or "").strip()
+            if not path_text:
+                return
+            try:
+                resolved = Path(path_text).expanduser().resolve()
+            except Exception:
+                return
+            resolved_text = str(resolved)
+            if resolved_text in seen_paths or not resolved.exists():
+                return
+            entry: dict[str, Any] = {
+                "path": resolved_text,
+                "name": resolved.name,
+                "type": "directory" if resolved.is_dir() else "file",
+                "mime": "",
+                "size_bytes": 0,
+                "sha256": "",
+                "tool": str(action or ""),
+                "source": "direct_intent",
+            }
+            if resolved.is_file():
+                mime, _ = mimetypes.guess_type(resolved_text)
+                entry["mime"] = str(mime or "application/octet-stream")
+                try:
+                    entry["size_bytes"] = int(resolved.stat().st_size)
+                except Exception:
+                    entry["size_bytes"] = 0
+                entry["sha256"] = self._compute_sha256(resolved_text)
+            if isinstance(source_result, dict) and source_result:
+                entry["source_result"] = dict(source_result)
+            seen_paths.add(resolved_text)
+            artifacts.append(entry)
+
+        def _walk(node: Any) -> None:
+            if isinstance(node, dict):
+                proof = node.get("_proof")
+                if isinstance(proof, dict):
+                    for proof_key in ("screenshot", "path"):
+                        proof_path = str(proof.get(proof_key) or "").strip()
+                        if proof_path:
+                            _add_path(proof_path, source_result=node)
+                for key in ("path", "file_path", "output_path", "destination", "project_dir", "pack_dir", "summary_path"):
+                    candidate = str(node.get(key) or "").strip()
+                    if candidate:
+                        _add_path(candidate, source_result=node)
+                for key in ("artifact_paths", "files_created", "report_paths", "outputs", "screenshots"):
+                    values = node.get(key)
+                    if isinstance(values, list):
+                        for item in values:
+                            _add_path(str(item or "").strip(), source_result=node)
+                if isinstance(node.get("result"), dict):
+                    _walk(node.get("result"))
+                if isinstance(node.get("steps"), list):
+                    for item in node.get("steps") or []:
+                        _walk(item)
+            elif isinstance(node, list):
+                for item in node:
+                    _walk(item)
+
+        _walk(payload)
+        return artifacts
+
+    def _direct_action_requires_artifact(self, action: str, payload: Any = None) -> bool:
+        mapped = ACTION_TO_TOOL.get(str(action or "").strip(), str(action or "").strip()).strip().lower()
+        required_actions = {
+            "write_file",
+            "write_word",
+            "write_excel",
+            "edit_text_file",
+            "edit_word_document",
+            "take_screenshot",
+            "research_document_delivery",
+            "create_web_project_scaffold",
+            "create_software_project_pack",
+            "create_coding_project",
+            "api_health_get_save",
+        }
+        if mapped in required_actions:
+            return True
+        if mapped != "multi_task":
+            return False
+        if isinstance(payload, dict):
+            if any(str(item or "").strip() for item in list(payload.get("artifact_paths") or [])):
+                return True
+            for row in list(payload.get("steps") or []):
+                if not isinstance(row, dict):
+                    continue
+                if self._direct_action_requires_artifact(str(row.get("action") or ""), row.get("result")):
+                    return True
+        return False
+
+    def _verify_direct_result(
+        self,
+        *,
+        action: str,
+        payload: Any,
+        response_text: str,
+        artifacts: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        mapped = ACTION_TO_TOOL.get(str(action or "").strip(), str(action or "").strip()).strip().lower()
+        payload_map = dict(payload or {}) if isinstance(payload, dict) else {}
+        payload_success = bool(payload_map.get("success", True))
+        payload_map.setdefault("status", "success" if payload_success else "failed")
+        payload_map.setdefault("text", str(response_text or ""))
+        payload_map["artifacts"] = list(artifacts or [])
+        payload_map["artifact_count"] = len([item for item in artifacts if isinstance(item, dict) and str(item.get("path") or "").strip()])
+
+        ui_actions = {
+            "open_app",
+            "close_app",
+            "open_url",
+            "key_combo",
+            "press_key",
+            "type_text",
+            "mouse_click",
+            "mouse_move",
+            "computer_use",
+            "screen_workflow",
+            "analyze_screen",
+        }
+        requires_artifact = self._direct_action_requires_artifact(mapped, payload_map)
+        evidence = [
+            dict(item.get("evidence") or {"path": str(item.get("path") or "")})
+            for item in artifacts
+            if isinstance(item, dict) and (item.get("evidence") or str(item.get("path") or "").strip())
+        ]
+        verification = dict(
+            self.verifier_service.score(
+                {"kind": "file" if requires_artifact else "system"},
+                payload_map,
+                evidence,
+            )
+            or {}
+        )
+        reasons = list(verification.get("reasons") or [])
+
+        if not payload_success:
+            ok = False
+            reasons.append("tool_failed")
+        elif mapped in ui_actions:
+            ok = bool(payload_map.get("verified", True) is not False)
+            reasons.append("ui_action_verified" if ok else "ui_action_unverified")
+        elif requires_artifact:
+            ok = payload_map["artifact_count"] > 0
+            reasons.append("artifact_present" if ok else "artifact_missing")
+        else:
+            ok = bool(str(response_text or "").strip() or payload_map.get("message") or payload_map.get("summary"))
+            reasons.append("response_present" if ok else "response_missing")
+
+        verification["ok"] = bool(ok)
+        verification["status"] = "success" if ok else "failed"
+        verification["reasons"] = list(dict.fromkeys(reasons))
+        verification["artifact_count"] = int(payload_map.get("artifact_count") or 0)
+        verification["evidence_count"] = len(evidence)
+        if ok:
+            verification["score"] = max(float(verification.get("score", 0.0) or 0.0), 0.74 if mapped in ui_actions else 0.68)
+        else:
+            verification["score"] = min(float(verification.get("score", 1.0) or 1.0), 0.42)
+        return verification
+
+    async def _execute_fast_direct_path(
+        self,
+        *,
+        intent: dict[str, Any],
+        ledger: ExecutionLedger,
+        run_store: RunStore,
+        run_id: str,
+        started_at: float,
+        user_input: str,
+        channel: str,
+        uid: str,
+        route_metadata: dict[str, Any],
+        runtime_policy_payload: dict[str, Any],
+        history: list | None = None,
+    ) -> AgentResponse:
+        action = str(intent.get("action") or "").strip().lower()
+        if getattr(self, "runtime_control", None):
+            try:
+                self.runtime_control.record_stage(
+                    request_id=run_id,
+                    user_id=uid,
+                    channel=str(channel or "cli"),
+                    state="running",
+                    metadata=dict(route_metadata or {}),
+                )
+            except Exception as sync_exc:
+                logger.debug(f"direct path sync running skipped: {sync_exc}")
+
+        ledger_token = _active_ledger.set(ledger)
+        runtime_policy_token = _active_runtime_policy.set(dict(runtime_policy_payload or {}))
+        state_token = set_current_pipeline_state(create_pipeline_state())
+        try:
+            response_text = await self._run_direct_intent(
+                intent,
+                user_input,
+                "inference",
+                list(history or []),
+                user_id=uid,
+            )
+        finally:
+            _active_ledger.reset(ledger_token)
+            _active_runtime_policy.reset(runtime_policy_token)
+            reset_current_pipeline_state(state_token)
+
+        payload = dict(self._last_direct_intent_payload or {}) if isinstance(self._last_direct_intent_payload, dict) else {}
+        if not payload:
+            payload = {"action": action, "success": not str(response_text or "").strip().lower().startswith("hata:")}
+        payload.setdefault("action", action)
+
+        if getattr(self, "runtime_control", None):
+            try:
+                self.runtime_control.record_stage(
+                    request_id=run_id,
+                    user_id=uid,
+                    channel=str(channel or "cli"),
+                    state="verifying",
+                    metadata={**dict(route_metadata or {}), "action": action},
+                )
+            except Exception as sync_exc:
+                logger.debug(f"direct path sync verifying skipped: {sync_exc}")
+
+        artifacts = self._collect_direct_artifacts(action, payload, ledger)
+        verification = self._verify_direct_result(
+            action=action,
+            payload=payload,
+            response_text=response_text,
+            artifacts=artifacts,
+        )
+        success = bool(payload.get("success", True)) and bool(verification.get("ok", False))
+        status = "success" if success else "failed"
+        error_text = ""
+        if not success:
+            error_text = str(payload.get("error") or payload.get("failure_class") or payload.get("message") or response_text or "").strip()
+
+        manifest = ledger.write_manifest(
+            status=status,
+            error=error_text,
+            metadata={
+                "channel": channel,
+                "user_id": uid,
+                "mode": "fast_direct_path",
+                "action": action,
+                "request_class": str(route_metadata.get("request_class") or ""),
+                "execution_path": str(route_metadata.get("execution_path") or ""),
+                "intent_source": str(intent.get("_intent_source") or ""),
+                "verification": dict(verification),
+            },
+        )
+        task_state = {
+            "status": status,
+            "action": action,
+            "job_type": str(route_metadata.get("request_class") or action or "direct_action"),
+            "context": {
+                "action": action,
+                "job_type": str(route_metadata.get("request_class") or action or "direct_action"),
+                "channel": str(channel or "cli"),
+                "user_id": str(uid or "local"),
+                "request_class": str(route_metadata.get("request_class") or ""),
+                "execution_path": str(route_metadata.get("execution_path") or ""),
+            },
+        }
+        run_store.write_task(
+            intent,
+            user_input=user_input,
+            metadata={
+                "channel": channel,
+                "user_id": uid,
+                "phase": "fast_direct_path",
+                "action": action,
+                "job_type": str(route_metadata.get("request_class") or action or "direct_action"),
+                "status": status,
+            },
+            task_state=task_state,
+        )
+        run_store.write_evidence(
+            manifest_path=manifest,
+            steps=[step.to_dict() for step in list(getattr(ledger, "steps", []) or [])],
+            artifacts=list(artifacts),
+            metadata={
+                "status": status,
+                "mode": "fast_direct_path",
+                "action": action,
+                "verification_result": dict(verification),
+                "intent_source": str(intent.get("_intent_source") or ""),
+            },
+        )
+        final_text = str(response_text or "").strip()
+        requires_evidence = self._direct_action_requires_artifact(action, payload)
+        needs_artifact_summary = self._user_requested_artifact_details(user_input) or requires_evidence or status != "success"
+        if artifacts and needs_artifact_summary and "artifact" not in final_text.lower():
+            paths = [str(item.get("path") or "").strip() for item in artifacts if isinstance(item, dict) and str(item.get("path") or "").strip()]
+            if paths:
+                final_text = f"{final_text}\n\nArtifacts:\n" + "\n".join(f"- {path}" for path in paths)
+        summary_path = run_store.write_summary(
+            status=status,
+            response_text=final_text,
+            error=error_text,
+            artifacts=list(artifacts),
+            metadata={
+                "manifest_path": manifest,
+                "action": action,
+                "mode": "fast_direct_path",
+                "request_class": str(route_metadata.get("request_class") or ""),
+                "execution_path": str(route_metadata.get("execution_path") or ""),
+                "verification_result": dict(verification),
+            },
+        )
+        logs_path = run_store.write_logs(
+            lines=[
+                "fast_direct_path",
+                str(action or ""),
+                str(intent.get("_intent_source") or ""),
+                str(status or ""),
+                str(error_text or ""),
+            ]
+        )
+
+        share_ctx = type(
+            "DirectCtx",
+            (),
+            {
+                "action": action,
+                "runtime_policy": dict(runtime_policy_payload or {}),
+                "requires_evidence": bool(requires_evidence),
+            },
+        )()
+        refs: list[AttachmentRef] = []
+        if self._should_share_attachments(user_input, share_ctx, artifacts):
+            refs = [
+                self._attachment_ref_from_artifact(item)
+                for item in artifacts
+                if isinstance(item, dict) and str(item.get("path") or "").strip() and Path(str(item.get("path"))).expanduser().is_file()
+            ]
+
+        await self._finalize_turn(
+            user_input=user_input,
+            response_text=final_text,
+            action=action or "direct_action",
+            success=success,
+            started_at=started_at,
+            context={
+                "role": "direct_intent",
+                "job_type": str(route_metadata.get("request_class") or action or "direct_action"),
+                "errors": 0 if success else 1,
+                "run_id": run_id,
+                "channel": str(channel or "cli"),
+                "mode": "fast_direct_path",
+                "personalization": dict(route_metadata.get("personalization") or {}),
+                "model_runtime": dict(route_metadata.get("model_runtime") or {}),
+                "intent_prediction": dict(route_metadata.get("intent_prediction") or {}),
+                "route_choice": dict(route_metadata.get("route_choice") or {}),
+                "clarification_policy": dict(route_metadata.get("clarification_policy") or {}),
+                "tool_call_result": {
+                    "action": action,
+                    "success": bool(payload.get("success", True)),
+                    "artifact_count": len(artifacts),
+                    "intent_source": str(intent.get("_intent_source") or ""),
+                    "payload": dict(payload),
+                },
+                "verification_result": dict(verification),
+                "verified": bool(verification.get("ok", False)),
+                "delivery_blocked": not bool(verification.get("ok", False)),
+            },
+        )
+
+        return AgentResponse(
+            run_id=run_id,
+            text=final_text,
+            attachments=refs,
+            evidence_manifest_path=manifest,
+            status=status,
+            error=error_text if status == "failed" else "",
+            metadata={
+                "action": action,
+                "job_type": str(route_metadata.get("request_class") or action or "direct_action"),
+                "run_dir": str(run_store.base_dir),
+                "task_path": str(run_store.base_dir / "task.json"),
+                "evidence_path": str(run_store.base_dir / "evidence.json"),
+                "summary_path": summary_path,
+                "logs_path": logs_path,
+                "share_manifest": bool(self._should_share_manifest(user_input, share_ctx)),
+                "verification_result": dict(verification),
+                "direct_intent_source": str(intent.get("_intent_source") or ""),
+                "request_class": str(route_metadata.get("request_class") or ""),
+                "execution_path": str(route_metadata.get("execution_path") or ""),
+            },
         )
 
     @staticmethod
@@ -1459,7 +2036,8 @@ class Agent:
                 error="",
             )
 
-        uid = str(self.current_user_id or "local")
+        runtime_metadata = dict(metadata or {})
+        uid = str(runtime_metadata.get("user_id") or self.current_user_id or "local")
         raw_attachments, resolved_paths = self._normalize_inbound_attachments(attachments)
         pending_workflow = self._resolve_pending_workflow_session(user_input, uid, str(channel or "cli"))
         away_task_command = await self._handle_away_task_command(user_input, user_id=uid)
@@ -1522,11 +2100,11 @@ class Agent:
             str(pending_workflow.get("objective") or user_input) if pending_workflow and approval_granted(user_input) else user_input
         )
         last_personalization = self._last_turn_context.get("personalization", {}) if isinstance(self._last_turn_context, dict) else {}
-        if getattr(self, "personalization", None) and isinstance(last_personalization, dict):
+        if getattr(self, "learning_control", None) and isinstance(last_personalization, dict):
             last_interaction_id = str(self._last_turn_context.get("interaction_id") or "").strip()
             if last_interaction_id and get_feedback_detector().is_positive(effective_user_input):
                 try:
-                    self.personalization.record_feedback(
+                    self.learning_control.record_feedback(
                         user_id=uid,
                         interaction_id=last_interaction_id,
                         event_type="like",
@@ -1560,6 +2138,8 @@ class Agent:
             "channel": str(channel or "cli"),
             "user_id": uid,
             "run_id": run_id,
+            "device_id": str(runtime_metadata.get("device_id") or runtime_metadata.get("client_id") or "primary"),
+            "session_id": str(runtime_metadata.get("session_id") or runtime_metadata.get("channel_session_id") or "default"),
         }
         if isinstance(metadata, dict):
             for key in ("tool_name", "capability_domain", "workflow_profile", "workflow_phase"):
@@ -1622,129 +2202,46 @@ class Agent:
         except Exception:
             pass
         active_base_model_id = f"{active_provider}:{active_model}" if active_provider else active_model
-        personalization_context: dict[str, Any] = {}
         personalized_chat_input = effective_user_input
-        if getattr(self, "personalization", None):
-            try:
-                personalization_context = await self.personalization.get_runtime_context(
-                    uid,
-                    {
-                        "request": effective_user_input,
-                        "channel": str(channel or "cli"),
-                        "provider": active_provider,
-                        "model": active_model,
-                        "base_model_id": active_base_model_id,
-                        "metadata": dict(route_metadata),
-                    },
-                )
-                route_metadata["personalization"] = {
-                    "runtime_profile": dict(personalization_context.get("runtime_profile") or {}),
-                    "retrieved_memory_context": str(personalization_context.get("retrieved_memory_context") or ""),
-                    "retrieved_memory": dict(personalization_context.get("retrieved_memory") or {}),
-                    "adapter_binding": dict(personalization_context.get("adapter_binding") or {}),
-                    "reward_policy": dict(personalization_context.get("reward_policy") or {}),
-                    "training_decision": dict(personalization_context.get("training_decision") or {}),
-                    "provider": str(personalization_context.get("provider") or active_provider),
-                    "model": str(personalization_context.get("model") or active_model),
-                    "base_model_id": str(personalization_context.get("base_model_id") or active_base_model_id),
-                }
-                personalized_chat_input = str(personalization_context.get("request_prompt") or effective_user_input)
-            except Exception as personalization_exc:
-                logger.debug(f"personalization context skipped: {personalization_exc}")
         try:
-            ml_runtime_snapshot = dict(self.model_runtime.snapshot() or {}) if getattr(self, "model_runtime", None) else {}
-            intent_prediction = (
-                dict(
-                    self.intent_scorer.score(
-                        effective_user_input,
-                        quick_intent=quick_intent,
-                        parsed_intent=parsed_intent,
-                    )
-                    or {}
-                )
-                if getattr(self, "intent_scorer", None)
-                else {}
+            runtime_turn = await self.runtime_control.prepare_turn(
+                request_id=run_id,
+                user_id=uid,
+                request=effective_user_input,
+                channel=str(channel or "cli"),
+                provider=active_provider,
+                model=active_model,
+                base_model_id=active_base_model_id,
+                quick_intent=quick_intent,
+                parsed_intent=parsed_intent,
+                route_decision=route_decision,
+                request_contract=request_contract,
+                capability_plan=capability_plan,
+                metadata=dict(route_metadata),
             )
-            route_rankings = (
-                self.action_ranker.rank(
-                    intent_prediction,
-                    [
-                        str(getattr(route_decision, "mode", "") or "").strip().lower(),
-                        str(request_contract.get("route_mode") or "").strip().lower(),
-                        str(getattr(capability_plan, "suggested_job_type", "") or "").strip().lower() if capability_plan is not None else "",
-                        str(route_metadata.get("request_content_kind") or "").strip().lower(),
-                    ],
-                    {
-                        "route_decision": route_decision.to_dict() if hasattr(route_decision, "to_dict") else {},
-                        "request_contract": dict(request_contract or {}),
-                        "capability_plan": capability_plan.to_dict() if hasattr(capability_plan, "to_dict") else {},
-                    },
-                )
-                if getattr(self, "action_ranker", None)
-                else []
-            )
-            route_choice = dict(route_rankings[0] or {}) if route_rankings else {}
-            clarification_policy = (
-                dict(
-                    self.clarification_classifier.classify(
-                        effective_user_input,
-                        intent_prediction=intent_prediction,
-                        route_choice=route_choice,
-                        request_contract=request_contract,
-                    )
-                    or {}
-                )
-                if getattr(self, "clarification_classifier", None)
-                else {}
-            )
-            if ml_runtime_snapshot:
-                route_metadata["model_runtime"] = ml_runtime_snapshot
-            if intent_prediction:
-                route_metadata["intent_prediction"] = intent_prediction
-            if route_choice:
-                route_metadata["route_choice"] = route_choice
-                route_metadata["route_rankings"] = route_rankings[:5]
-            if clarification_policy:
-                route_metadata["clarification_policy"] = clarification_policy
-            if getattr(self, "outcome_store", None):
-                if intent_prediction:
-                    self.outcome_store.record_decision(
-                        request_id=run_id,
-                        user_id=uid,
-                        kind="intent_prediction",
-                        selected=str(intent_prediction.get("label") or "unknown"),
-                        confidence=float(intent_prediction.get("confidence", 0.0) or 0.0),
-                        raw_confidence=float(intent_prediction.get("raw_confidence", 0.0) or 0.0),
-                        channel=str(channel or "cli"),
-                        source=str(intent_prediction.get("source") or "heuristic"),
-                        metadata={"advisory": str(intent_prediction.get("advisory") or "")},
-                    )
-                if route_choice:
-                    self.outcome_store.record_decision(
-                        request_id=run_id,
-                        user_id=uid,
-                        kind="route_choice",
-                        selected=str(route_choice.get("candidate") or "unknown"),
-                        confidence=float(route_choice.get("score", 0.0) or 0.0),
-                        raw_confidence=float(route_choice.get("score", 0.0) or 0.0),
-                        channel=str(channel or "cli"),
-                        source="action_ranker",
-                        metadata={"reasons": list(route_choice.get("reasons") or []), "rankings": route_rankings[:5]},
-                    )
-                if clarification_policy:
-                    self.outcome_store.record_decision(
-                        request_id=run_id,
-                        user_id=uid,
-                        kind="clarification_policy",
-                        selected=str(clarification_policy.get("decision") or "proceed"),
-                        confidence=float(clarification_policy.get("confidence", 0.0) or 0.0),
-                        raw_confidence=float(clarification_policy.get("confidence", 0.0) or 0.0),
-                        channel=str(channel or "cli"),
-                        source="clarification_classifier",
-                        metadata={"reasons": list(clarification_policy.get("reasons") or [])},
-                    )
-        except Exception as ml_route_exc:
-            logger.debug(f"ml routing telemetry skipped: {ml_route_exc}")
+            if isinstance(runtime_turn.get("personalization"), dict):
+                route_metadata["personalization"] = dict(runtime_turn.get("personalization") or {})
+            if isinstance(runtime_turn.get("model_runtime"), dict):
+                route_metadata["model_runtime"] = dict(runtime_turn.get("model_runtime") or {})
+            if isinstance(runtime_turn.get("intent_prediction"), dict):
+                route_metadata["intent_prediction"] = dict(runtime_turn.get("intent_prediction") or {})
+            if isinstance(runtime_turn.get("route_choice"), dict):
+                route_metadata["route_choice"] = dict(runtime_turn.get("route_choice") or {})
+            if isinstance(runtime_turn.get("clarification_policy"), dict):
+                route_metadata["clarification_policy"] = dict(runtime_turn.get("clarification_policy") or {})
+            if isinstance(runtime_turn.get("sync"), dict):
+                route_metadata["sync"] = dict(runtime_turn.get("sync") or {})
+            if runtime_turn.get("route_rankings"):
+                route_metadata["route_rankings"] = list(runtime_turn.get("route_rankings") or [])[:5]
+            if runtime_turn.get("request_class"):
+                route_metadata["request_class"] = str(runtime_turn.get("request_class") or "")
+            if runtime_turn.get("execution_path"):
+                route_metadata["execution_path"] = str(runtime_turn.get("execution_path") or "")
+            if runtime_turn.get("latency_budget_ms") is not None:
+                route_metadata["latency_budget_ms"] = int(runtime_turn.get("latency_budget_ms") or 0)
+            personalized_chat_input = str(runtime_turn.get("request_prompt") or effective_user_input)
+        except Exception as runtime_turn_exc:
+            logger.debug(f"runtime control prepare skipped: {runtime_turn_exc}")
         if route_decision is not None and getattr(route_decision, "refusal", False):
             refusal_text = str(
                 getattr(route_decision, "refusal_message", "")
@@ -1773,31 +2270,6 @@ class Agent:
                     "clarification_policy": dict(route_metadata.get("clarification_policy") or {}),
                 },
             )
-        cowork_session = None
-        try:
-            cowork_session = cowork_runtime.start_session(
-                user_id=uid,
-                channel=str(channel or "cli"),
-                objective=effective_user_input,
-                run_id=run_id,
-                quick_intent=quick_intent,
-                attachments=list(resolved_paths),
-                runtime_policy={"execution": {"skip_verify_for_chat": True}},
-                route_decision=route_decision,
-            )
-            cowork_runtime.observe_turn(
-                session_key=cowork_session.session_id,
-                role="user",
-                content=effective_user_input,
-                metadata={
-                    "channel": str(channel or "cli"),
-                    "run_id": run_id,
-                    "attachment_count": len(resolved_paths),
-                },
-            )
-        except Exception as cowork_exc:
-            logger.debug(f"Cowork session bootstrap skipped: {cowork_exc}")
-
         route_mode_name = str(getattr(route_decision, "mode", "") or "").strip().lower() if route_decision is not None else ""
         request_contract_needs_clarification = bool(request_contract.get("needs_clarification")) if isinstance(request_contract, dict) else False
         request_content_kind = str(request_contract.get("content_kind") or "").strip().lower() if isinstance(request_contract, dict) else ""
@@ -1868,6 +2340,79 @@ class Agent:
                 uid=uid,
                 route_decision=route_decision.to_dict() if hasattr(route_decision, "to_dict") else {},
             )
+
+        runtime_policy = get_runtime_policy_resolver().resolve()
+        runtime_policy_payload = self._build_runtime_policy_payload(
+            runtime_policy,
+            channel=str(channel or "cli"),
+            uid=uid,
+            run_id=run_id,
+            run_dir=str(run_store.base_dir),
+            route_metadata=route_metadata,
+            pending_workflow=pending_workflow,
+            metadata=metadata,
+        )
+
+        direct_history = []
+        try:
+            direct_history = list(self.kernel.memory.get_recent_conversations(uid, limit=6) or [])
+        except Exception:
+            direct_history = []
+
+        direct_intent = await self._resolve_fast_direct_intent(
+            effective_user_input,
+            parsed_intent=parsed_intent,
+            quick_intent=quick_intent,
+            attachments=list(resolved_paths),
+            history=direct_history,
+            user_id=uid,
+            request_class=str(route_metadata.get("request_class") or ""),
+            execution_path=str(route_metadata.get("execution_path") or ""),
+        )
+        if isinstance(direct_intent, dict) and self._should_run_direct_intent(direct_intent, effective_user_input):
+            route_metadata["direct_intent"] = {
+                "action": str(direct_intent.get("action") or ""),
+                "source": str(direct_intent.get("_intent_source") or ""),
+                "confidence": float(direct_intent.get("confidence", 0.0) or 0.0),
+            }
+            return await self._execute_fast_direct_path(
+                intent=direct_intent,
+                ledger=ledger,
+                run_store=run_store,
+                run_id=run_id,
+                started_at=started_at,
+                user_input=effective_user_input,
+                channel=str(channel or "cli"),
+                uid=uid,
+                route_metadata=route_metadata,
+                runtime_policy_payload=runtime_policy_payload,
+                history=direct_history,
+            )
+
+        cowork_session = None
+        try:
+            cowork_session = cowork_runtime.start_session(
+                user_id=uid,
+                channel=str(channel or "cli"),
+                objective=effective_user_input,
+                run_id=run_id,
+                quick_intent=quick_intent,
+                attachments=list(resolved_paths),
+                runtime_policy={"execution": {"skip_verify_for_chat": True}},
+                route_decision=route_decision,
+            )
+            cowork_runtime.observe_turn(
+                session_key=cowork_session.session_id,
+                role="user",
+                content=effective_user_input,
+                metadata={
+                    "channel": str(channel or "cli"),
+                    "run_id": run_id,
+                    "attachment_count": len(resolved_paths),
+                },
+            )
+        except Exception as cowork_exc:
+            logger.debug(f"Cowork session bootstrap skipped: {cowork_exc}")
 
         if fast_chat_allowed and self.llm is not None:
             session_mode = str(getattr(cowork_session, "mode", "") or "").strip().lower()
@@ -2038,7 +2583,6 @@ class Agent:
             attachments=resolved_paths,
         )
         task_brain.save_task(task)
-        runtime_policy = get_runtime_policy_resolver().resolve()
         autonomy_mode = ""
         if isinstance(metadata, dict):
             autonomy_mode = str(
@@ -2064,40 +2608,7 @@ class Agent:
                 if ext in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
                     self.file_context["last_attachment"] = str(Path(str(p)).expanduser())
                     break
-        ctx.runtime_policy = {
-            "name": runtime_policy.name,
-            "capability": dict(runtime_policy.capability),
-            "workflow": dict(getattr(runtime_policy, "workflow", {}) or {}),
-            "planning": dict(runtime_policy.planning),
-            "execution": dict(runtime_policy.execution),
-            "nlu": dict(runtime_policy.nlu),
-            "orchestration": dict(runtime_policy.orchestration),
-            "api_tools": dict(runtime_policy.api_tools),
-            "skills": dict(runtime_policy.skills),
-            "tools": dict(runtime_policy.tools),
-            "response": dict(runtime_policy.response),
-            "security": dict(runtime_policy.security),
-            "coding": dict(getattr(runtime_policy, "coding", {}) or {}),
-            "metadata": {
-                "channel": str(channel or "cli"),
-                "user_id": uid,
-                "run_id": run_id,
-                "run_dir": str(run_store.base_dir),
-                "workspace_path": str(Path.cwd()),
-            },
-        }
-        if route_metadata.get("personalization"):
-            ctx.runtime_policy["metadata"]["personalization"] = dict(route_metadata.get("personalization") or {})
-        if route_metadata.get("model_runtime"):
-            ctx.runtime_policy["metadata"]["model_runtime"] = dict(route_metadata.get("model_runtime") or {})
-        if route_metadata.get("intent_prediction"):
-            ctx.runtime_policy["metadata"]["intent_prediction"] = dict(route_metadata.get("intent_prediction") or {})
-        if route_metadata.get("route_choice"):
-            ctx.runtime_policy["metadata"]["route_choice"] = dict(route_metadata.get("route_choice") or {})
-        if route_metadata.get("clarification_policy"):
-            ctx.runtime_policy["metadata"]["clarification_policy"] = dict(route_metadata.get("clarification_policy") or {})
-        if pending_workflow:
-            ctx.runtime_policy["metadata"]["workflow_session"] = dict(pending_workflow)
+        ctx.runtime_policy = dict(runtime_policy_payload or {})
         try:
             profile = self.user_profile.profile_summary(uid)
         except Exception:
@@ -2222,6 +2733,12 @@ class Agent:
             ctx.runtime_policy["metadata"]["route_choice"] = dict(route_metadata.get("route_choice") or {})
         if route_metadata.get("clarification_policy"):
             ctx.runtime_policy["metadata"]["clarification_policy"] = dict(route_metadata.get("clarification_policy") or {})
+        if route_metadata.get("request_class"):
+            ctx.runtime_policy["metadata"]["request_class"] = str(route_metadata.get("request_class") or "")
+        if route_metadata.get("execution_path"):
+            ctx.runtime_policy["metadata"]["execution_path"] = str(route_metadata.get("execution_path") or "")
+        if route_metadata.get("sync"):
+            ctx.runtime_policy["metadata"]["sync"] = dict(route_metadata.get("sync") or {})
 
         ledger_token = _active_ledger.set(ledger)
         runtime_policy_token = _active_runtime_policy.set(dict(ctx.runtime_policy or {}))
@@ -5574,19 +6091,10 @@ class Agent:
 
         # Deterministic computer-use coercion:
         # Convert mixed browser/keyboard/mouse instructions into executable UI steps.
-        ui_markers = any(
+        has_browser_hint = any(k in low_in for k in ("safari", "chrome", "krom", "browser", "tarayıcı", "tarayici"))
+        interaction_ui_markers = any(
             k in low_in
             for k in (
-                "safari",
-                "chrome",
-                "krom",
-                "browser",
-                "tarayıcı",
-                "tarayici",
-                "youtube",
-                "google",
-                "arat",
-                "search",
                 "tıkla",
                 "tikla",
                 "mouse",
@@ -5608,7 +6116,7 @@ class Agent:
                 "otonom",
             )
         )
-        if action in {"open_url", "web_search", "chat", "unknown", "communication", "", "computer_use"} and ui_markers:
+        if action in {"open_url", "web_search", "chat", "unknown", "communication", "", "computer_use"} and interaction_ui_markers:
             ui_steps = self._build_computer_use_steps_from_text(user_input)
             if len(ui_steps) >= 2:
                 return {
@@ -5624,7 +6132,6 @@ class Agent:
         # Browser search coercion:
         # "Safari'den köpek resimleri arat" should not keep noisy tokens in query.
         has_search_verb = any(k in low_in for k in ("arat", " ara ", "search", "ara "))
-        has_browser_hint = any(k in low_in for k in ("safari", "chrome", "krom", "tarayıcı", "tarayici", "browser"))
         if action in {"open_url", "web_search", "chat", "unknown", "communication", ""} and has_search_verb and has_browser_hint:
             query = self._extract_browser_search_query(user_input)
             if query:
@@ -10505,9 +11012,9 @@ class Agent:
         personalization_meta = (context or {}).get("personalization") if isinstance((context or {}).get("personalization"), dict) else {}
         if not personalization_meta:
             personalization_meta = runtime_metadata.get("personalization", {}) if isinstance(runtime_metadata.get("personalization"), dict) else {}
-        if getattr(self, "personalization", None):
+        if getattr(self, "learning_control", None):
             try:
-                personalization_result = self.personalization.record_interaction(
+                personalization_result = self.learning_control.record_interaction(
                     user_id=uid_raw,
                     user_input=user_input,
                     assistant_output=response_text,
@@ -10617,6 +11124,19 @@ class Agent:
                     user_feedback=user_feedback,
                     decision_trace=decision_trace,
                     metadata=outcome_metadata,
+                )
+            if getattr(self, "runtime_control", None):
+                self.runtime_control.finalize_turn(
+                    request_id=str((context or {}).get("run_id") or ""),
+                    user_id=uid_raw,
+                    channel=str((context or {}).get("channel") or runtime_metadata.get("channel") or ""),
+                    final_outcome=final_outcome,
+                    success=bool(success),
+                    metadata={
+                        **outcome_metadata,
+                        "device_id": str((runtime_metadata.get("sync") or {}).get("device_id") or runtime_metadata.get("device_id") or "primary"),
+                        "session_id": str((runtime_metadata.get("sync") or {}).get("session_id") or runtime_metadata.get("session_id") or "default"),
+                    },
                 )
         except Exception as outcome_exc:
             logger.debug(f"reliability outcome update failed: {outcome_exc}")

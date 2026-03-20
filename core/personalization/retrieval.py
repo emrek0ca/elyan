@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import time
 from typing import Any
+
+from config.elyan_config import elyan_config
 
 from .memory import PersonalMemoryStore
 
@@ -46,5 +49,14 @@ class MemoryRetriever:
 
     def retrieve(self, query: str, user_id: str, budget: int, *, k: int = 5) -> dict[str, Any]:
         result = self.store.retrieve_context(user_id, query, k=k, token_budget=budget)
-        result["vector_hits"] = self.reranker.rerank(list(result.get("vector_hits") or []), query)
+        retrieval_cfg = dict(elyan_config.get("retrieval", {}) or {})
+        stale_window_days = int(retrieval_cfg.get("stale_window_days", 30) or 30)
+        rerank_top_k = max(1, int(retrieval_cfg.get("rerank_top_k", k) or k))
+        hits = list(result.get("vector_hits") or [])
+        if stale_window_days > 0:
+            cutoff = time.time() - float(stale_window_days * 86400)
+            fresh_hits = [row for row in hits if float(row.get("created_at", 0.0) or 0.0) >= cutoff]
+            if fresh_hits:
+                hits = fresh_hits
+        result["vector_hits"] = self.reranker.rerank(hits[: max(k, rerank_top_k)], query)[:k]
         return result

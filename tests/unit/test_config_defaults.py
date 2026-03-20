@@ -24,3 +24,4 @@ def test_default_config_enforces_local_memory_baseline():
     assert cfg.ml.get("execution_mode") == "local_first"
     assert cfg.evaluation.get("verifier_threshold") == 0.55
     assert cfg.retrieval.get("top_k") == 5
+    assert cfg.runtime_control.get("enabled") is True

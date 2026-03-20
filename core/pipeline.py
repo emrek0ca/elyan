@@ -2830,9 +2830,10 @@ class StageRoute(PipelineStage):
                         wrong_action=agent._last_action,
                         correction_text=corr_text
                     )
-                    if getattr(agent, "personalization", None):
+                    if getattr(agent, "learning_control", None) or getattr(agent, "personalization", None):
                         try:
-                            agent.personalization.record_feedback(
+                            feedback_target = getattr(agent, "learning_control", None) or getattr(agent, "personalization", None)
+                            feedback_target.record_feedback(
                                 user_id=str(ctx.user_id),
                                 interaction_id=str(getattr(agent, "_last_turn_context", {}).get("interaction_id") or ""),
                                 event_type="correction",

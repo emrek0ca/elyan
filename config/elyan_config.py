@@ -180,6 +180,23 @@ def _default_config() -> AppConfig:
             "max_context_tokens": 512,
             "stale_window_days": 30,
         },
+        runtime_control={
+            "enabled": True,
+            "fast_path_threshold": 0.68,
+            "clarify_threshold": 0.55,
+            "latency_budgets_ms": {
+                "direct_action": 800,
+                "research": 2500,
+                "coding": 3000,
+                "workflow": 2500,
+                "chat": 1200,
+            },
+            "sync": {
+                "enabled": True,
+                "max_devices_per_user": 8,
+                "stale_minutes": 1440,
+            },
+        },
         security={
             "operatorMode": "Confirmed",
             "requirePlanApproval": True,

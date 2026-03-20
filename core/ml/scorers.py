@@ -5,7 +5,6 @@ import re
 from typing import Any
 
 from config.elyan_config import elyan_config
-from core.reliability import get_confidence_calibrator
 
 
 def _clamp(value: float, lo: float = 0.0, hi: float = 1.0) -> float:
@@ -45,6 +44,8 @@ def _first_non_empty(*values: Any) -> str:
 
 class IntentScorer:
     def __init__(self) -> None:
+        from core.reliability import get_confidence_calibrator
+
         self.calibrator = get_confidence_calibrator()
 
     def score(self, text: str, *, quick_intent: Any = None, parsed_intent: Any = None) -> dict[str, Any]:

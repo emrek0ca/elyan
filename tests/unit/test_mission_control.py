@@ -189,6 +189,9 @@ async def test_create_mission_routes_file_request_to_file_and_sequences_steps(tm
     assert [node.specialist for node in work_nodes] == ["file", "file"]
     assert work_nodes[0].depends_on == ["planner"]
     assert work_nodes[1].depends_on == [work_nodes[0].node_id]
+    snapshot = runtime.sync_store.get_user_snapshot("local")
+    assert snapshot["requests"][0]["request_id"] == mission.mission_id
+    assert snapshot["requests"][0]["request_class"] == "direct_action"
 
 
 @pytest.mark.asyncio

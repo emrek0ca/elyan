@@ -14,6 +14,7 @@ from typing import Any, Callable, Optional
 from core.conversation_memory import conversation_memory
 from core.capability_router import get_capability_router
 from core.cowork_runtime import get_cowork_runtime
+from core.device_sync import get_device_sync_store
 from core.memory_v2 import memory_v2
 from core.ml import get_verifier
 from core.reliability import get_outcome_store
@@ -799,8 +800,28 @@ class MissionRuntime:
         self._lock = asyncio.Lock()
         self._running: dict[str, asyncio.Task] = {}
         self.outcome_store = get_outcome_store()
+        self.sync_store = get_device_sync_store()
         self.verifier_service = get_verifier()
         self._load()
+
+    @staticmethod
+    def _sync_identifiers(mission: "Mission") -> tuple[str, str]:
+        metadata = dict(mission.metadata or {})
+        return (
+            str(metadata.get("device_id") or metadata.get("client_id") or "primary"),
+            str(metadata.get("session_id") or metadata.get("channel_session_id") or "default"),
+        )
+
+    @staticmethod
+    def _sync_request_class(route_mode: str) -> str:
+        mode = str(route_mode or "").strip().lower()
+        if mode in {"file", "browser", "task"}:
+            return "direct_action"
+        if mode in {"research", "document"}:
+            return "research"
+        if mode in {"code", "coding"}:
+            return "coding"
+        return "workflow"
 
     def _load(self) -> None:
         try:
@@ -1249,6 +1270,21 @@ class MissionRuntime:
                     "node_count": int(control.get("node_count", 0) or 0),
                     "completed_nodes": int(control.get("completed_nodes", 0) or 0),
                     "failed_nodes": int(control.get("failed_nodes", 0) or 0),
+                },
+            )
+            device_id, session_id = self._sync_identifiers(mission)
+            self.sync_store.record_outcome(
+                request_id=mission.mission_id,
+                user_id=str(mission.owner or "local"),
+                channel=str(mission.channel or "dashboard"),
+                final_outcome=str(final_status or mission.status or ""),
+                success=str(final_status or "").strip().lower() == "completed",
+                device_id=device_id,
+                session_id=session_id,
+                metadata={
+                    "mission_id": mission.mission_id,
+                    "route_mode": str(mission.route_mode or ""),
+                    "quality_status": str(control.get("quality_status") or quality.get("status") or "").strip(),
                 },
             )
         except Exception as exc:
@@ -1877,6 +1913,26 @@ class MissionRuntime:
                 )
             except Exception as exc:
                 logger.debug(f"mission route decision telemetry skipped: {exc}")
+            try:
+                device_id, session_id = self._sync_identifiers(mission)
+                self.sync_store.record_request(
+                    request_id=mission.mission_id,
+                    user_id=str(user_id or "local"),
+                    channel=str(channel or "dashboard"),
+                    request_text=goal_text,
+                    request_class=self._sync_request_class(route_mode),
+                    execution_path="fast" if route_mode in {"file", "browser", "task"} else "deep",
+                    device_id=device_id,
+                    session_id=session_id,
+                    state="queued",
+                    metadata={
+                        "mission_id": mission.mission_id,
+                        "route_mode": route_mode,
+                        "mode": str(mode or "Balanced"),
+                    },
+                )
+            except Exception as exc:
+                logger.debug(f"mission sync request skipped: {exc}")
             self._save()
         if auto_start:
             await self.start_mission(mission.mission_id, agent=agent)
@@ -1902,6 +1958,19 @@ class MissionRuntime:
                 return mission
             mission.status = "running"
             self._record_event(mission, "mission.running", "Mission çalışıyor", status="running")
+            try:
+                device_id, session_id = self._sync_identifiers(mission)
+                self.sync_store.record_stage(
+                    request_id=mission.mission_id,
+                    user_id=str(mission.owner or "local"),
+                    channel=str(mission.channel or "dashboard"),
+                    state="running",
+                    device_id=device_id,
+                    session_id=session_id,
+                    metadata={"mission_id": mission.mission_id, "route_mode": str(mission.route_mode or "")},
+                )
+            except Exception as exc:
+                logger.debug(f"mission sync running skipped: {exc}")
             self._save()
 
         while True:
@@ -1930,6 +1999,19 @@ class MissionRuntime:
                 if not ready:
                     if pending_approval or any(node.status == "waiting_approval" for node in mission.graph.nodes):
                         mission.status = "waiting_approval"
+                        try:
+                            device_id, session_id = self._sync_identifiers(mission)
+                            self.sync_store.record_stage(
+                                request_id=mission.mission_id,
+                                user_id=str(mission.owner or "local"),
+                                channel=str(mission.channel or "dashboard"),
+                                state="waiting_approval",
+                                device_id=device_id,
+                                session_id=session_id,
+                                metadata={"mission_id": mission.mission_id},
+                            )
+                        except Exception as exc:
+                            logger.debug(f"mission sync waiting approval skipped: {exc}")
                         self._save()
                         return mission
                     failed_nodes = [node for node in mission.graph.nodes if node.status == "failed"]
