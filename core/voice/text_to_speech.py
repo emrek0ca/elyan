@@ -3,8 +3,10 @@ Text-to-Speech using pyttsx3 (local, offline)
 """
 
 import asyncio
+import importlib
 from typing import Optional
 from pathlib import Path
+from core.dependencies import get_dependency_runtime
 from utils.logger import get_logger
 
 logger = get_logger("text_to_speech")
@@ -18,11 +20,43 @@ except ImportError:
     pyttsx3 = None
 
 
+def _ensure_tts_runtime() -> bool:
+    global pyttsx3, TTS_AVAILABLE
+    if TTS_AVAILABLE and pyttsx3 is not None:
+        return True
+    try:
+        import pyttsx3 as tts_mod
+        pyttsx3 = tts_mod
+        TTS_AVAILABLE = True
+        return True
+    except ImportError:
+        runtime = get_dependency_runtime()
+        record = runtime.ensure_module(
+            "pyttsx3",
+            install_spec="pyttsx3",
+            source="pypi",
+            trust_level="trusted",
+            skill_name="voice",
+            tool_name="speak_text_local",
+            allow_install=True,
+        )
+        if record.status in {"installed", "ready"}:
+            importlib.invalidate_caches()
+            try:
+                import pyttsx3 as tts_mod
+                pyttsx3 = tts_mod
+                TTS_AVAILABLE = True
+                return True
+            except ImportError:
+                return False
+        return False
+
+
 class TextToSpeechService:
     """Local text-to-speech using pyttsx3 (macOS NSSpeech)"""
     
     def __init__(self):
-        if not TTS_AVAILABLE:
+        if not _ensure_tts_runtime():
             logger.error("pyttsx3 not installed. Run: pip install pyttsx3")
             self.engine = None
             return

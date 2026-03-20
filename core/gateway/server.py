@@ -18,6 +18,7 @@ from core.scheduler.cron_engine import CronEngine
 from core.scheduler.heartbeat import HeartbeatManager
 from core.scheduler.routine_engine import routine_engine
 from core.skills.manager import skill_manager
+from core.skills.registry import skill_registry
 from core.subscription import subscription_manager
 from core.quota import quota_manager
 from core.task_brain import task_brain
@@ -30,8 +31,10 @@ from core.user_profile import get_user_profile_store
 from core.ml import get_model_runtime
 from core.personalization import get_personalization_manager
 from core.reliability import get_outcome_store, get_regression_evaluator
+from core.dependencies import get_dependency_runtime
 from core.learning_control import get_learning_control_plane
 from core.runtime_control import get_runtime_control_plane
+from core.operator_control_plane import get_operator_control_plane
 from core.runtime import (
     EMRE_WORKFLOW_PRESETS,
     list_emre_workflow_reports,
@@ -887,6 +890,7 @@ class ElyanGatewayServer:
         self.app.router.add_post('/api/skills/toggle', self.handle_skill_toggle)
         self.app.router.add_post('/api/skills/remove', self.handle_skill_remove)
         self.app.router.add_post('/api/skills/update', self.handle_skill_update)
+        self.app.router.add_post('/api/skills/refresh', self.handle_skill_refresh)
         self.app.router.add_get('/api/skills/check', self.handle_skill_check)
         self.app.router.add_get('/api/skills/workflows', self.handle_skill_workflows)
         self.app.router.add_post('/api/skills/workflows/toggle', self.handle_skill_workflow_toggle)
@@ -1984,6 +1988,21 @@ class ElyanGatewayServer:
                 "status": "error",
                 "error": str(runtime_control_exc),
             }
+        try:
+            operator_status = get_operator_control_plane().get_status()
+        except Exception as operator_exc:
+            operator_status = {
+                "status": "error",
+                "error": str(operator_exc),
+            }
+        try:
+            dependency_runtime = get_dependency_runtime().snapshot()
+        except Exception as dependency_exc:
+            dependency_runtime = {
+                "enabled": False,
+                "mode": "error",
+                "error": str(dependency_exc),
+            }
 
         from core.action_lock import action_lock
         return web.json_response({
@@ -2010,6 +2029,8 @@ class ElyanGatewayServer:
             "reliability": reliability_status,
             "learning": learning_status,
             "runtime_control": runtime_control_status,
+            "operator": operator_status,
+            "dependency_runtime": dependency_runtime,
             "runtime": {
                 "uptime_seconds": uptime_s,
                 "cpu_pct": health.cpu_percent,
@@ -2027,6 +2048,7 @@ class ElyanGatewayServer:
                 "reliability": reliability_status,
                 "learning": learning_status,
                 "runtime_control": runtime_control_status,
+                "dependency_runtime": dependency_runtime,
                 "orchestration": orchestration_summary,
                 "pipeline_jobs": pipeline_jobs_summary,
             },
@@ -2194,6 +2216,12 @@ class ElyanGatewayServer:
         readiness = dict(home.get("readiness") or {})
         benchmark = dict(home.get("benchmark") or {})
         release = dict(home.get("release") or {})
+        try:
+            from core.dependencies import get_system_dependency_runtime
+
+            system_dependencies = get_system_dependency_runtime().snapshot()
+        except Exception:
+            system_dependencies = {"enabled": False, "status_counts": {}}
         return web.json_response(
             {
                 "ok": bool(readiness.get("elyan_ready")),
@@ -2203,6 +2231,7 @@ class ElyanGatewayServer:
                 "entrypoint": str(release.get("entrypoint") or "/dashboard"),
                 "benchmark": benchmark,
                 "readiness": readiness,
+                "system_dependencies": system_dependencies,
             }
         )
 
@@ -2894,6 +2923,7 @@ class ElyanGatewayServer:
             from core.llm.token_budget import token_budget
             from core.automation_registry import automation_registry
             from core.monitoring import get_resource_monitor, get_monitoring
+            from core.dependencies import get_system_dependency_runtime
             
             monitor = get_resource_monitor()
             mon = get_monitoring()
@@ -2902,6 +2932,7 @@ class ElyanGatewayServer:
             pipeline_jobs = mon.get_pipeline_job_summary()
             active_automations = automation_registry.get_active()
             module_health = automation_registry.get_module_health(limit=12)
+            system_dependencies = get_system_dependency_runtime().snapshot()
             
             return web.json_response({
                 "ok": True,
@@ -2922,6 +2953,7 @@ class ElyanGatewayServer:
                     "tasks": active_automations[:10],
                     "module_health": module_health,
                 },
+                "system_dependencies": system_dependencies,
                 "orchestration": orchestration,
                 "pipeline_jobs": pipeline_jobs,
                 "uptime_s": int(time.time() - _start_time)
@@ -4706,6 +4738,7 @@ class ElyanGatewayServer:
         if not name:
             return web.json_response({"ok": False, "error": "name required"}, status=400)
         ok, msg, info = skill_manager.install_skill(name)
+        skill_registry.refresh()
         push_activity("skill_install", "dashboard", f"{name}: {msg}", success=ok)
         return web.json_response({"ok": ok, "message": msg, "skill": info}, status=200 if ok else 400)
 
@@ -4719,6 +4752,7 @@ class ElyanGatewayServer:
         if not name:
             return web.json_response({"ok": False, "error": "name required"}, status=400)
         ok, msg, info = skill_manager.set_enabled(name, enabled)
+        skill_registry.refresh()
         push_activity("skill_toggle", "dashboard", f"{name}: {'on' if enabled else 'off'}", success=ok)
         return web.json_response({"ok": ok, "message": msg, "skill": info}, status=200 if ok else 400)
 
@@ -4731,6 +4765,7 @@ class ElyanGatewayServer:
         if not name:
             return web.json_response({"ok": False, "error": "name required"}, status=400)
         ok, msg = skill_manager.remove_skill(name)
+        skill_registry.refresh()
         push_activity("skill_remove", "dashboard", f"{name}: {msg}", success=ok)
         return web.json_response({"ok": ok, "message": msg}, status=200 if ok else 400)
 
@@ -4742,8 +4777,18 @@ class ElyanGatewayServer:
         name = str(data.get("name", "")).strip() if data.get("name") else None
         update_all = bool(data.get("all", False))
         result = skill_manager.update_skills(name=name, update_all=update_all)
+        skill_registry.refresh()
         push_activity("skill_update", "dashboard", f"updated={len(result.get('updated', []))}", success=True)
         return web.json_response({"ok": True, **result})
+
+    async def handle_skill_refresh(self, request):
+        skill_registry.refresh()
+        summary = {
+            "skills": len(skill_registry.list_skills(available=True, enabled_only=True)),
+            "workflows": len(skill_registry.list_workflows(enabled_only=True)),
+        }
+        push_activity("skill_refresh", "dashboard", f"skills={summary['skills']} workflows={summary['workflows']}", success=True)
+        return web.json_response({"ok": True, "message": "skill registry refreshed", **summary})
 
     async def handle_skill_check(self, request):
         name = request.rel_url.query.get("name")
@@ -4780,6 +4825,7 @@ class ElyanGatewayServer:
         if not workflow_id:
             return web.json_response({"ok": False, "error": "id required"}, status=400)
         ok, msg, info = skill_manager.set_workflow_enabled(workflow_id, enabled)
+        skill_registry.refresh()
         push_activity("workflow_toggle", "dashboard", f"{workflow_id}: {'on' if enabled else 'off'}", success=ok)
         return web.json_response({"ok": ok, "message": msg, "workflow": info}, status=200 if ok else 400)
 
@@ -4820,6 +4866,8 @@ class ElyanGatewayServer:
             ok, msg, warnings = await mp.install_from_dict(data["package"])
         else:
             return web.json_response({"ok": False, "error": "url or package required"}, status=400)
+        if ok:
+            skill_registry.refresh()
         return web.json_response({"ok": ok, "message": msg, "warnings": warnings}, status=200 if ok else 400)
 
     async def handle_marketplace_review(self, request):

@@ -80,6 +80,16 @@ def test_dashboard_js_includes_mission_control_runtime_hooks():
     assert "selected_mission_id" in js
     assert 'tools: "p-tools"' in js
     assert "g-refresh-tools" in js
+    assert "loadSkillCatalog" in js
+    assert "refreshSkillRegistry" in js
+    assert "loadMarketplace" in js
+    assert "installMarketplaceSkill" in js
+    assert "/api/skills/refresh" in js
+    assert "skills-refresh" in js
+    assert "/api/marketplace/browse" in js
+    assert "/api/marketplace/categories" in js
+    assert "/api/marketplace/install" in js
+    assert "marketplace-refresh" in js
     assert 'rawStrategy === "hızlı"' in js
     assert 'normalizedStrategy = "fast"' in js
 

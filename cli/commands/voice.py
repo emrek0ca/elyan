@@ -3,13 +3,15 @@ CLI: voice commands — Full implementation
 """
 import asyncio
 import click
+from core.dependencies import get_dependency_runtime
 
 
 def _run_voice_start() -> None:
     click.echo("🎤 Ses modu başlatılıyor...")
     try:
-        from core.voice.voice_manager import VoiceManager
-        vm = VoiceManager()
+        from core.voice import get_voice_manager
+
+        vm = get_voice_manager()
         asyncio.run(vm.start())
         click.echo("✓ Ses modu aktif. Wake word: 'elyan'")
     except ImportError:
@@ -21,8 +23,9 @@ def _run_voice_start() -> None:
 def _run_voice_stop() -> None:
     click.echo("Ses modu durduruluyor...")
     try:
-        from core.voice.voice_manager import VoiceManager
-        vm = VoiceManager()
+        from core.voice import get_voice_manager
+
+        vm = get_voice_manager()
         asyncio.run(vm.stop())
         click.echo("✓ Ses modu durduruldu.")
     except Exception as e:
@@ -31,8 +34,9 @@ def _run_voice_stop() -> None:
 
 def _run_voice_status() -> None:
     try:
-        from core.voice.voice_manager import VoiceManager
-        vm = VoiceManager()
+        from core.voice import get_voice_manager
+
+        vm = get_voice_manager()
         status = vm.get_status()
         click.echo(f"Ses Modu: {'✓ Aktif' if status.get('running') else '✗ Pasif'}")
         click.echo(f"STT:      {status.get('stt_provider', 'whisper')}")
@@ -45,6 +49,25 @@ def _run_voice_status() -> None:
 def _run_voice_test() -> None:
     click.echo("🎤 Mikrofon test ediliyor (3 saniye)...")
     try:
+        runtime = get_dependency_runtime()
+        runtime.ensure_module(
+            "sounddevice",
+            install_spec="sounddevice",
+            source="pypi",
+            trust_level="trusted",
+            skill_name="voice",
+            tool_name="voice_test",
+            allow_install=True,
+        )
+        runtime.ensure_module(
+            "numpy",
+            install_spec="numpy",
+            source="pypi",
+            trust_level="trusted",
+            skill_name="voice",
+            tool_name="voice_test",
+            allow_install=True,
+        )
         import sounddevice as sd
         import numpy as np
         duration = 3
@@ -62,6 +85,8 @@ def _run_voice_test() -> None:
 def _run_voice_transcribe(file: str) -> None:
     click.echo(f"📝 Transkripsiyon başlatılıyor: {file}")
     try:
+        runtime = get_dependency_runtime()
+        runtime.ensure_module("whisper", install_spec="openai-whisper", source="pypi", trust_level="trusted", skill_name="voice", tool_name="voice_transcribe", allow_install=True)
         import whisper
         model = whisper.load_model("base")
         result = model.transcribe(file)
@@ -76,6 +101,8 @@ def _run_voice_speak(text: str, provider: str) -> None:
     click.echo(f"🔊 Seslendiriliyor ({provider})...")
     try:
         if provider == "pyttsx3":
+            runtime = get_dependency_runtime()
+            runtime.ensure_module("pyttsx3", install_spec="pyttsx3", source="pypi", trust_level="trusted", skill_name="voice", tool_name="voice_speak", allow_install=True)
             import pyttsx3
             engine = pyttsx3.init()
             engine.say(text)

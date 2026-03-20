@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from config.elyan_config import elyan_config
+from core.dependencies import get_dependency_runtime
 from core.model_catalog import QWEN_LIGHT_OLLAMA_MODEL, default_model_for_provider, normalize_model_name
 from core.runtime_policy import get_runtime_policy_resolver
 from security.keychain import KeychainManager, keychain
@@ -56,27 +57,27 @@ def _ensure_optional_dependency(
         return True
 
     print(f"⚠️ {label} için gerekli bağımlılık eksik: `{install_spec}`")
-    if headless:
-        print(f"   Kurulum için: {sys.executable} -m pip install {install_spec}")
-        return False
+    if not headless:
+        should_install = _safe_input("Şimdi otomatik kurulsun mu? (Y/n): ", "y").strip().lower() in {"", "y", "yes"}
+        if not should_install:
+            print(f"   Atlandı. Sonradan çalıştır: {sys.executable} -m pip install {install_spec}")
+            return False
 
-    should_install = _safe_input("Şimdi otomatik kurulsun mu? (Y/n): ", "y").strip().lower() in {"", "y", "yes"}
-    if not should_install:
-        print(f"   Atlandı. Sonradan çalıştır: {sys.executable} -m pip install {install_spec}")
-        return False
-
+    runtime = get_dependency_runtime()
     try:
-        proc = subprocess.run(
-            [sys.executable, "-m", "pip", "install", install_spec],
-            check=False,
-            capture_output=True,
-            text=True,
+        record = runtime.ensure_module(
+            module_name,
+            install_spec=install_spec,
+            source="pypi",
+            trust_level="trusted",
+            skill_name="onboard",
+            tool_name=label,
+            allow_install=True,
         )
-        if proc.returncode == 0 and importlib.util.find_spec(module_name) is not None:
+        if record.status in {"installed", "ready"} or importlib.util.find_spec(module_name) is not None:
             print(f"✅ {label} bağımlılığı kuruldu.")
             return True
-        err = (proc.stderr or proc.stdout or "").strip()
-        print(f"⚠️ Otomatik kurulum başarısız: {err or 'pip install failed'}")
+        print(f"⚠️ Otomatik kurulum başarısız: {record.reason or record.status}")
         print(f"   Manuel: {sys.executable} -m pip install {install_spec}")
         return False
     except Exception as exc:

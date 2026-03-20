@@ -104,6 +104,13 @@ class RewardService:
             distance = float(meta.get("edit_distance", 1.0) or 1.0)
             reward = 0.55 if distance <= 0.25 else 0.15
             category = "implicit_safe_positive"
+        elif raw_type in {"latency", "latency_reward"}:
+            latency_ms = float(meta.get("latency_ms", score or 0.0) or 0.0)
+            target_ms = float(meta.get("target_ms", meta.get("budget_ms", 800.0)) or 800.0)
+            if target_ms <= 0:
+                target_ms = 800.0
+            reward = max(-1.0, min(1.0, 1.0 - (latency_ms / target_ms)))
+            category = "latency_reward"
         elif raw_type in _ZERO_REWARD_EVENTS:
             reward = 0.0
             category = "neutral_ignored"

@@ -1,4 +1,6 @@
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 
 import pytest
 import asyncio
@@ -18,6 +20,45 @@ class _Proc:
         if callable(self._on_communicate):
             self._on_communicate()
         return self._stdout, self._stderr
+
+
+class _FakePyAutoGUI:
+    def __init__(self, tmp_path=None):
+        self.tmp_path = tmp_path
+        self.calls = []
+
+    def write(self, text, interval=0.0):
+        self.calls.append(("write", text, interval))
+
+    def press(self, key):
+        self.calls.append(("press", key))
+
+    def hotkey(self, *keys):
+        self.calls.append(("hotkey", keys))
+
+    def screenshot(self, region=None):
+        self.calls.append(("screenshot", region))
+
+        class _Shot:
+            def __init__(self, outer, region):
+                self.outer = outer
+                self.region = region
+
+            def save(self, path):
+                Path(path).write_bytes(b"png-bytes")
+
+        return _Shot(self, region)
+
+
+class _FakePyperclip:
+    def __init__(self):
+        self.value = ""
+
+    def copy(self, text):
+        self.value = str(text or "")
+
+    def paste(self):
+        return self.value
 
 
 @pytest.mark.asyncio
@@ -106,6 +147,94 @@ async def test_take_screenshot_returns_error_on_nonzero_exit(monkeypatch, tmp_pa
     assert result["success"] is False
     assert result["status"] == "failed"
     assert "permission denied" in str(result.get("error") or "")
+
+
+@pytest.mark.asyncio
+async def test_get_running_apps_uses_windows_tasklist(monkeypatch):
+    monkeypatch.setattr(system_tools.platform, "system", lambda: "Windows")
+
+    async def _fake_exec(*args, **kwargs):
+        _ = kwargs
+        if args[:4] == ("tasklist", "/fo", "csv", "/nh"):
+            return _Proc(returncode=0, stdout=b'"Safari.exe","1234"\r\n"Finder.exe","4567"\r\n')
+        return _Proc(returncode=1, stderr=b"unexpected")
+
+    monkeypatch.setattr(system_tools.asyncio, "create_subprocess_exec", _fake_exec)
+
+    result = await system_tools.get_running_apps()
+
+    assert result["success"] is True
+    assert result["apps"] == ["Safari.exe", "Finder.exe"]
+
+
+@pytest.mark.asyncio
+async def test_get_frontmost_app_name_uses_windows_ctypes(monkeypatch):
+    monkeypatch.setattr(system_tools.platform, "system", lambda: "Windows")
+
+    class _User32:
+        def GetForegroundWindow(self):
+            return 101
+
+        def GetWindowTextLengthW(self, hwnd):
+            _ = hwnd
+            return len("Finder")
+
+        def GetWindowTextW(self, hwnd, buffer, size):
+            _ = (hwnd, size)
+            buffer.value = "Finder"
+            return 1
+
+    import ctypes
+
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(user32=_User32()), raising=False)
+
+    title = await system_tools._get_frontmost_app_name()
+
+    assert title == "Finder"
+
+
+@pytest.mark.asyncio
+async def test_take_screenshot_uses_pyautogui_on_non_darwin(monkeypatch, tmp_path):
+    fake_pyautogui = _FakePyAutoGUI(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(system_tools.platform, "system", lambda: "Linux")
+    monkeypatch.setitem(sys.modules, "pyautogui", fake_pyautogui)
+
+    result = await system_tools.take_screenshot("proof.png")
+
+    assert result["success"] is True
+    assert result["method"] == "pyautogui"
+    assert fake_pyautogui.calls and fake_pyautogui.calls[0][0] == "screenshot"
+    assert Path(result["path"]).exists()
+
+
+@pytest.mark.asyncio
+async def test_type_text_uses_pyautogui_on_non_darwin(monkeypatch):
+    fake_pyautogui = _FakePyAutoGUI()
+    monkeypatch.setattr(system_tools.platform, "system", lambda: "Linux")
+    monkeypatch.setitem(sys.modules, "pyautogui", fake_pyautogui)
+
+    result = await system_tools.type_text("hello", press_enter=True)
+
+    assert result["success"] is True
+    assert result["method"] == "pyautogui"
+    assert fake_pyautogui.calls[0][0] == "write"
+    assert fake_pyautogui.calls[1][0] == "press"
+
+
+@pytest.mark.asyncio
+async def test_clipboard_uses_pyperclip_on_non_darwin(monkeypatch):
+    fake_pyperclip = _FakePyperclip()
+    monkeypatch.setattr(system_tools.platform, "system", lambda: "Linux")
+    monkeypatch.setitem(sys.modules, "pyperclip", fake_pyperclip)
+
+    write_result = await system_tools.write_clipboard("Merhaba")
+    read_result = await system_tools.read_clipboard()
+
+    assert write_result["success"] is True
+    assert write_result["method"] == "pyperclip"
+    assert read_result["success"] is True
+    assert read_result["text"] == "Merhaba"
 
 
 @pytest.mark.asyncio

@@ -56,6 +56,11 @@ class SkillPackage:
     repository: str = ""
     required_tools: List[str] = field(default_factory=list)
     dependencies: List[str] = field(default_factory=list)
+    python_dependencies: List[str] = field(default_factory=list)
+    post_install: List[str] = field(default_factory=list)
+    trust_level: str = "curated"
+    source: str = "marketplace"
+    hashes: Dict[str, str] = field(default_factory=dict)
     commands: List[str] = field(default_factory=list)
     files: Dict[str, str] = field(default_factory=dict)  # path -> content
     icon: str = ""
@@ -279,6 +284,11 @@ class SkillMarketplace:
                 repository=data.get("repository", ""),
                 required_tools=data.get("required_tools", []),
                 dependencies=data.get("dependencies", []),
+                python_dependencies=data.get("python_dependencies", []),
+                post_install=data.get("post_install", []),
+                trust_level=data.get("trust_level", "curated"),
+                source=data.get("source", "marketplace"),
+                hashes=data.get("hashes", {}),
                 commands=data.get("commands", []),
                 files=data.get("files", {}),
                 tags=data.get("tags", []),
@@ -307,9 +317,13 @@ class SkillMarketplace:
             "repository": package.repository,
             "required_tools": package.required_tools,
             "dependencies": package.dependencies,
+            "python_dependencies": package.python_dependencies,
+            "post_install": package.post_install,
+            "trust_level": package.trust_level,
+            "hashes": package.hashes,
             "commands": package.commands,
             "tags": package.tags,
-            "source": "marketplace",
+            "source": package.source,
             "installed_at": datetime.now(UTC).isoformat(),
             "checksum": package.checksum(),
         }
@@ -358,6 +372,11 @@ class SkillMarketplace:
             category=kwargs.get("category", "custom"),
             required_tools=kwargs.get("required_tools", []),
             dependencies=kwargs.get("dependencies", []),
+            python_dependencies=kwargs.get("python_dependencies", []),
+            post_install=kwargs.get("post_install", []),
+            trust_level=kwargs.get("trust_level", "curated"),
+            source=kwargs.get("source", "marketplace"),
+            hashes=kwargs.get("hashes", {}),
             commands=kwargs.get("commands", []),
             files=files,
             tags=kwargs.get("tags", []),

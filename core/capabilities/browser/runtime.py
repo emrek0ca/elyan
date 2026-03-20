@@ -10,7 +10,7 @@ from core.contracts.failure_taxonomy import FailureCode
 from core.contracts.verification_result import VerificationCheck, VerificationResult
 from core.storage_paths import resolve_elyan_data_dir
 
-from .services import BrowserRuntimeServices, PLAYWRIGHT_AVAILABLE, default_browser_runtime_services
+from .services import BrowserRuntimeServices, default_browser_runtime_services, is_playwright_available
 
 
 ScreenOperatorRunner = Callable[..., Awaitable[dict[str, Any]]]
@@ -479,7 +479,7 @@ async def run_browser_runtime(
         "action_result": dict(action_result),
         "verifier_outcomes": [verification],
         "fallback": {"used": False},
-        "playwright_available": bool(PLAYWRIGHT_AVAILABLE),
+        "playwright_available": bool(is_playwright_available()),
     }
     payload["recovery_hints"] = _browser_recovery_hints(
         before_state=before_state if isinstance(before_state, dict) else {},

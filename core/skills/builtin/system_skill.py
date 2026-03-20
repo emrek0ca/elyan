@@ -31,20 +31,20 @@ class SystemSkill(BaseSkill):
 
             if command == "volume":
                 level = params.get("level", 50)
-                result = await execute_registered_tool("set_volume", {"level": level}, source="builtin_system_skill")
+                result = await execute_registered_tool("set_volume", {"level": level}, source="builtin_system_skill", skill_name=self.name)
                 return wrap_skill_tool_result(result)
             elif command == "brightness":
                 level = params.get("level", 50)
-                result = await execute_registered_tool("set_brightness", {"level": level}, source="builtin_system_skill")
+                result = await execute_registered_tool("set_brightness", {"level": level}, source="builtin_system_skill", skill_name=self.name)
                 return wrap_skill_tool_result(result)
             elif command == "screenshot":
-                result = await execute_registered_tool("take_screenshot", {}, source="builtin_system_skill")
+                result = await execute_registered_tool("take_screenshot", {}, source="builtin_system_skill", skill_name=self.name)
                 return wrap_skill_tool_result(result)
             elif command == "sysinfo":
-                result = await execute_registered_tool("get_system_info", {}, source="builtin_system_skill")
+                result = await execute_registered_tool("get_system_info", {}, source="builtin_system_skill", skill_name=self.name)
                 return wrap_skill_tool_result(result)
             elif command == "battery":
-                result = await execute_registered_tool("get_battery_status", {}, source="builtin_system_skill")
+                result = await execute_registered_tool("get_battery_status", {}, source="builtin_system_skill", skill_name=self.name)
                 return wrap_skill_tool_result(result)
             else:
                 return {"success": False, "error": f"Unknown command: {command}"}

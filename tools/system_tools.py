@@ -14,7 +14,31 @@ from utils.logger import get_logger
 import urllib.parse
 import urllib.request
 
+from core.dependencies import get_system_dependency_runtime
+
 logger = get_logger("system_tools")
+_SYSTEM_RUNTIME = None
+
+
+def _get_system_runtime():
+    global _SYSTEM_RUNTIME
+    if _SYSTEM_RUNTIME is None:
+        _SYSTEM_RUNTIME = get_system_dependency_runtime()
+    return _SYSTEM_RUNTIME
+
+
+def _ensure_system_binary(binary: str, *, allow_install: bool = True) -> bool:
+    try:
+        record = _get_system_runtime().ensure_binary(
+            binary,
+            allow_install=allow_install,
+            skill_name="system_tools",
+            tool_name=binary,
+        )
+        return str(record.status).lower() in {"ready", "installed"}
+    except Exception as exc:
+        logger.debug("System binary ensure failed for %s: %s", binary, exc)
+        return False
 
 def _tool_error_payload(error: str, *, retryable: bool = False, **extra: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
@@ -1222,13 +1246,79 @@ def _build_goal_repair_steps(goal: str, analysis: Dict[str, Any]) -> list[dict[s
 
 async def _get_frontmost_app_name() -> str:
     try:
-        script = (
-            'tell application "System Events" to get name of first application process '
-            "whose frontmost is true"
-        )
-        code, out, _ = await _run_osascript(script)
-        if code == 0 and str(out).strip():
-            return str(out).strip()
+        system = platform.system()
+        if system == "Darwin":
+            script = (
+                'tell application "System Events" to get name of first application process '
+                "whose frontmost is true"
+            )
+            code, out, _ = await _run_osascript(script)
+            if code == 0 and str(out).strip():
+                return str(out).strip()
+        elif system == "Windows":
+            try:
+                import ctypes
+
+                user32 = getattr(ctypes, "windll", None)
+                user32 = getattr(user32, "user32", None)
+                if user32 is not None:
+                    hwnd = int(getattr(user32, "GetForegroundWindow", lambda: 0)() or 0)
+                    if hwnd:
+                        length = int(getattr(user32, "GetWindowTextLengthW", lambda _hwnd: 0)(hwnd) or 0)
+                        buffer = ctypes.create_unicode_buffer(max(1, length + 1))
+                        getattr(user32, "GetWindowTextW", lambda *_args: 0)(hwnd, buffer, len(buffer))
+                        title = str(buffer.value or "").strip()
+                        if title:
+                            return title
+            except Exception:
+                pass
+        else:
+            if not shutil.which("xdotool"):
+                _ensure_system_binary("xdotool")
+            if shutil.which("xdotool"):
+                proc = await asyncio.create_subprocess_exec(
+                    "xdotool",
+                    "getactivewindow",
+                    "getwindowname",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _stderr = await proc.communicate()
+                title = str(stdout.decode("utf-8", errors="ignore").strip())
+                if title:
+                    return title
+            if not shutil.which("wmctrl"):
+                _ensure_system_binary("wmctrl")
+            if not shutil.which("xprop"):
+                _ensure_system_binary("xprop")
+            if shutil.which("wmctrl") and shutil.which("xprop"):
+                try:
+                    active_proc = await asyncio.create_subprocess_exec(
+                        "xprop",
+                        "-root",
+                        "_NET_ACTIVE_WINDOW",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    active_out, _ = await active_proc.communicate()
+                    match = re.search(r"0x[0-9a-fA-F]+", active_out.decode("utf-8", errors="ignore"))
+                    if match:
+                        win_id = match.group(0)
+                        name_proc = await asyncio.create_subprocess_exec(
+                            "xprop",
+                            "-id",
+                            win_id,
+                            "WM_NAME",
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                        )
+                        name_out, _ = await name_proc.communicate()
+                        title_match = re.search(r'=\s*"([^"]+)"', name_out.decode("utf-8", errors="ignore"))
+                        title = str(title_match.group(1) if title_match else "").strip()
+                        if title:
+                            return title
+                except Exception:
+                    pass
     except Exception:
         pass
     return ""
@@ -1577,6 +1667,61 @@ async def open_app(app_name: Optional[str] = None, settle_timeout_s: float = 1.2
         if not app_name or not str(app_name).strip():
             return _tool_error_payload("app_name gerekli (örnek: Safari, Google Chrome, Finder).")
         app_name = str(app_name).strip()
+        if platform.system() != "Darwin":
+            last_error = ""
+            try:
+                if platform.system() == "Windows":
+                    os.startfile(app_name)  # type: ignore[attr-defined]
+                    return _tool_success_payload(
+                        message=f"{app_name} opened.",
+                        data={"app_name": app_name, "activated": True, "method": "os.startfile"},
+                        app_name=app_name,
+                        activated=True,
+                        verified=True,
+                        method="os.startfile",
+                    )
+            except Exception:
+                pass
+
+            launch_candidates = [app_name]
+            normalized = _normalize_text_for_match(app_name)
+            if normalized in {"google chrome", "chrome", "krom"}:
+                launch_candidates.extend(["google-chrome", "chrome", "chromium", "chromium-browser"])
+            elif normalized in {"firefox"}:
+                launch_candidates.append("firefox")
+            elif normalized in {"terminal", "shell"}:
+                launch_candidates.extend(["x-terminal-emulator", "gnome-terminal", "konsole", "xterm"])
+            elif normalized in {"finder"}:
+                _ensure_system_binary("xdg-open")
+                launch_candidates.extend(["xdg-open", "gio"])
+
+            for candidate in launch_candidates:
+                cmd = shutil.which(candidate)
+                if not cmd:
+                    continue
+                try:
+                    args = [cmd]
+                    if candidate in {"xdg-open", "gio"} and normalized == "finder":
+                        args.append(str(Path.home()))
+                    proc = await asyncio.create_subprocess_exec(
+                        *args,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    stdout, stderr = await proc.communicate()
+                    if proc.returncode == 0:
+                        return _tool_success_payload(
+                            message=f"{app_name} opened.",
+                            data={"app_name": app_name, "activated": True, "method": "subprocess"},
+                            app_name=app_name,
+                            activated=True,
+                            verified=False,
+                            method="subprocess",
+                        )
+                    last_error = (stderr.decode("utf-8", errors="ignore") or stdout.decode("utf-8", errors="ignore")).strip()
+                except Exception as exc:
+                    last_error = str(exc)
+            return _tool_error_payload(last_error or f"{app_name} açılamadı.", retryable=True)
         process = await asyncio.create_subprocess_exec(
             "open",
             "-a",
@@ -1668,10 +1813,43 @@ async def kill_process(process_name: str) -> dict[str, Any]:
 @tool("get_running_apps", "List all active non-background applications.")
 async def get_running_apps() -> dict[str, Any]:
     try:
-        script = 'tell application "System Events" to get name of every process whose background only is false'
-        code, out, _ = await _run_osascript(script)
-        apps = [app.strip() for app in out.split(",")] if out else []
-        return {"success": code == 0, "apps": apps, "count": len(apps)}
+        system = platform.system()
+        if system == "Darwin":
+            script = 'tell application "System Events" to get name of every process whose background only is false'
+            code, out, _ = await _run_osascript(script)
+            apps = [app.strip() for app in out.split(",")] if out else []
+            return {"success": code == 0, "apps": apps, "count": len(apps)}
+        if system == "Windows":
+            proc = await asyncio.create_subprocess_exec(
+                "tasklist",
+                "/fo",
+                "csv",
+                "/nh",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            out, _ = await proc.communicate()
+            apps = []
+            for line in out.decode("utf-8", errors="ignore").splitlines():
+                parts = [part.strip().strip('"') for part in line.split(",")]
+                if parts and parts[0]:
+                    apps.append(parts[0])
+            return {"success": True, "apps": list(dict.fromkeys(apps)), "count": len(apps)}
+        proc = await asyncio.create_subprocess_exec(
+            "ps",
+            "-A",
+            "-o",
+            "comm=",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, _ = await proc.communicate()
+        apps = []
+        for line in out.decode("utf-8", errors="ignore").splitlines():
+            app = str(line or "").strip()
+            if app:
+                apps.append(app.split("/")[-1])
+        return {"success": True, "apps": list(dict.fromkeys(apps)), "count": len(apps)}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -1758,14 +1936,42 @@ async def type_text(text: str, press_enter: bool = False) -> dict[str, Any]:
         payload = str(text or "")
         if not payload:
             return {"success": False, "error": "text boş olamaz."}
+        if platform.system() != "Darwin":
+            try:
+                import pyautogui  # type: ignore
+
+                await asyncio.to_thread(pyautogui.write, payload, interval=0.01)
+                if bool(press_enter):
+                    await asyncio.to_thread(pyautogui.press, "enter")
+                return {"success": True, "typed_chars": len(payload), "press_enter": bool(press_enter), "method": "pyautogui"}
+            except Exception:
+                pass
         esc = _escape_applescript_text(payload)
         script = f'tell application "System Events" to keystroke "{esc}"'
         code, _out, err = await _run_osascript(script)
         if code != 0:
+            if platform.system() != "Darwin":
+                try:
+                    import pyautogui  # type: ignore
+
+                    await asyncio.to_thread(pyautogui.write, payload, interval=0.01)
+                    if bool(press_enter):
+                        await asyncio.to_thread(pyautogui.press, "enter")
+                    return {"success": True, "typed_chars": len(payload), "press_enter": bool(press_enter), "method": "pyautogui"}
+                except Exception:
+                    pass
             return {"success": False, "error": err or "Metin yazılamadı."}
         if bool(press_enter):
             code2, _out2, err2 = await _run_osascript('tell application "System Events" to key code 36')
             if code2 != 0:
+                if platform.system() != "Darwin":
+                    try:
+                        import pyautogui  # type: ignore
+
+                        await asyncio.to_thread(pyautogui.press, "enter")
+                        return {"success": True, "typed_chars": len(payload), "press_enter": bool(press_enter), "method": "pyautogui"}
+                    except Exception:
+                        pass
                 return {"success": False, "error": err2 or "Enter tuşuna basılamadı."}
         return {"success": True, "typed_chars": len(payload), "press_enter": bool(press_enter)}
     except Exception as e:
@@ -1809,6 +2015,18 @@ async def press_key(key: str, modifiers: Optional[List[str]] = None) -> dict[str
             "delete": 51,
             "backspace": 51,
         }
+        if platform.system() != "Darwin":
+            try:
+                import pyautogui  # type: ignore
+
+                if mods:
+                    await asyncio.to_thread(pyautogui.hotkey, *(mods + [raw_key]))
+                else:
+                    await asyncio.to_thread(pyautogui.press, raw_key)
+                return {"success": True, "key": raw_key, "modifiers": modifiers or [], "method": "pyautogui"}
+            except Exception:
+                pass
+
         if raw_key in keycode_map:
             script = f'tell application "System Events" to key code {keycode_map[raw_key]}{using_clause}'
         else:
@@ -1819,6 +2037,17 @@ async def press_key(key: str, modifiers: Optional[List[str]] = None) -> dict[str
 
         code, _out, err = await _run_osascript(script)
         if code != 0:
+            if platform.system() != "Darwin":
+                try:
+                    import pyautogui  # type: ignore
+
+                    if mods:
+                        await asyncio.to_thread(pyautogui.hotkey, *(mods + [raw_key]))
+                    else:
+                        await asyncio.to_thread(pyautogui.press, raw_key)
+                    return {"success": True, "key": raw_key, "modifiers": modifiers or [], "method": "pyautogui"}
+                except Exception:
+                    pass
             return {"success": False, "error": err or "Tuş basımı başarısız."}
         return {"success": True, "key": raw_key, "modifiers": modifiers or []}
     except Exception as e:
@@ -1887,6 +2116,8 @@ async def mouse_move(x: int, y: int) -> dict[str, Any]:
             pass
 
         cliclick = shutil.which("cliclick")
+        if not cliclick and _ensure_system_binary("cliclick"):
+            cliclick = shutil.which("cliclick")
         if cliclick:
             proc = await asyncio.create_subprocess_exec(
                 cliclick,
@@ -1921,6 +2152,8 @@ async def mouse_click(x: int, y: int, button: str = "left", double: bool = False
             pass
 
         cliclick = shutil.which("cliclick")
+        if not cliclick and _ensure_system_binary("cliclick"):
+            cliclick = shutil.which("cliclick")
         if cliclick:
             if bool(double):
                 action = "dc"
@@ -2329,18 +2562,110 @@ async def set_wallpaper(image_path: Optional[str] = None, search_query: Optional
 @tool("read_clipboard", "Get current text from clipboard.")
 async def read_clipboard() -> dict[str, Any]:
     try:
-        p = await asyncio.create_subprocess_exec("pbpaste", stdout=asyncio.subprocess.PIPE)
-        out, _ = await p.communicate()
-        return {"success": True, "text": out.decode().strip()}
+        if platform.system() == "Darwin":
+            p = await asyncio.create_subprocess_exec("pbpaste", stdout=asyncio.subprocess.PIPE)
+            out, _ = await p.communicate()
+            return {"success": True, "text": out.decode().strip()}
+        if _ensure_system_binary("xclip"):
+            proc = await asyncio.create_subprocess_exec(
+                "xclip",
+                "-selection",
+                "clipboard",
+                "-o",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            out, err = await proc.communicate()
+            if proc.returncode == 0:
+                return {"success": True, "text": out.decode().strip(), "method": "xclip"}
+            if str(err.decode("utf-8", errors="ignore").strip()):
+                logger.debug("xclip clipboard read failed: %s", err.decode("utf-8", errors="ignore").strip())
+        if _ensure_system_binary("xsel"):
+            proc = await asyncio.create_subprocess_exec(
+                "xsel",
+                "-b",
+                "-o",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            out, err = await proc.communicate()
+            if proc.returncode == 0:
+                return {"success": True, "text": out.decode().strip(), "method": "xsel"}
+            if str(err.decode("utf-8", errors="ignore").strip()):
+                logger.debug("xsel clipboard read failed: %s", err.decode("utf-8", errors="ignore").strip())
+        try:
+            import pyperclip  # type: ignore
+
+            return {"success": True, "text": str(pyperclip.paste() or "").strip(), "method": "pyperclip"}
+        except Exception:
+            pass
+        try:
+            import tkinter as tk
+
+            root = tk.Tk()
+            root.withdraw()
+            text = root.clipboard_get()
+            root.destroy()
+            return {"success": True, "text": str(text or "").strip(), "method": "tkinter"}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 @tool("write_clipboard", "Copy text to clipboard.")
 async def write_clipboard(text: str) -> dict[str, Any]:
     try:
-        p = await asyncio.create_subprocess_exec("pbcopy", stdin=asyncio.subprocess.PIPE)
-        await p.communicate(input=text.encode())
-        return {"success": True}
+        if platform.system() == "Darwin":
+            p = await asyncio.create_subprocess_exec("pbcopy", stdin=asyncio.subprocess.PIPE)
+            await p.communicate(input=text.encode())
+            return {"success": True}
+        if _ensure_system_binary("xclip"):
+            proc = await asyncio.create_subprocess_exec(
+                "xclip",
+                "-selection",
+                "clipboard",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _stdout, err = await proc.communicate(input=str(text or "").encode())
+            if proc.returncode == 0:
+                return {"success": True, "method": "xclip"}
+            if str(err.decode("utf-8", errors="ignore").strip()):
+                logger.debug("xclip clipboard write failed: %s", err.decode("utf-8", errors="ignore").strip())
+        if _ensure_system_binary("xsel"):
+            proc = await asyncio.create_subprocess_exec(
+                "xsel",
+                "-b",
+                "-i",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _stdout, err = await proc.communicate(input=str(text or "").encode())
+            if proc.returncode == 0:
+                return {"success": True, "method": "xsel"}
+            if str(err.decode("utf-8", errors="ignore").strip()):
+                logger.debug("xsel clipboard write failed: %s", err.decode("utf-8", errors="ignore").strip())
+        try:
+            import pyperclip  # type: ignore
+
+            pyperclip.copy(str(text or ""))
+            return {"success": True, "method": "pyperclip"}
+        except Exception:
+            pass
+        try:
+            import tkinter as tk
+
+            root = tk.Tk()
+            root.withdraw()
+            root.clipboard_clear()
+            root.clipboard_append(str(text or ""))
+            root.update()
+            root.destroy()
+            return {"success": True, "method": "tkinter"}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -2350,6 +2675,75 @@ async def write_clipboard(text: str) -> dict[str, Any]:
 async def take_screenshot(filename: Optional[str] = None) -> dict[str, Any]:
     try:
         path = Path.home() / "Desktop" / (filename or f"SS_{int(time.time())}.png")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if platform.system() != "Darwin":
+            try:
+                import pyautogui  # type: ignore
+
+                image = await asyncio.to_thread(pyautogui.screenshot)
+                await asyncio.to_thread(image.save, str(path))
+                if not path.exists():
+                    return _tool_error_payload(f"Ekran görüntüsü dosyası oluşmadı: {path}", retryable=True)
+                size_bytes = int(path.stat().st_size) if path.is_file() else 0
+                if size_bytes <= 0:
+                    return _tool_error_payload(f"Ekran görüntüsü boş görünüyor: {path}", retryable=True)
+                return _tool_success_payload(
+                    message="Screenshot captured.",
+                    path=str(path),
+                    artifact_type="image",
+                    data={"size_bytes": size_bytes, "filename": path.name},
+                    size_bytes=size_bytes,
+                    filename=path.name,
+                    method="pyautogui",
+                )
+            except Exception:
+                pass
+            if platform.system() == "Linux":
+                if _ensure_system_binary("scrot"):
+                    proc = await asyncio.create_subprocess_exec(
+                        "scrot",
+                        str(path),
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    stdout, stderr = await proc.communicate()
+                    if proc.returncode == 0 and path.exists() and int(path.stat().st_size or 0) > 0:
+                        size_bytes = int(path.stat().st_size)
+                        return _tool_success_payload(
+                            message="Screenshot captured.",
+                            path=str(path),
+                            artifact_type="image",
+                            data={"size_bytes": size_bytes, "filename": path.name},
+                            size_bytes=size_bytes,
+                            filename=path.name,
+                            method="scrot",
+                        )
+                    error = (stderr.decode("utf-8", errors="ignore") or stdout.decode("utf-8", errors="ignore")).strip()
+                    if error:
+                        logger.debug("scrot screenshot failed: %s", error)
+                if _ensure_system_binary("gnome-screenshot"):
+                    proc = await asyncio.create_subprocess_exec(
+                        "gnome-screenshot",
+                        "-f",
+                        str(path),
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    stdout, stderr = await proc.communicate()
+                    if proc.returncode == 0 and path.exists() and int(path.stat().st_size or 0) > 0:
+                        size_bytes = int(path.stat().st_size)
+                        return _tool_success_payload(
+                            message="Screenshot captured.",
+                            path=str(path),
+                            artifact_type="image",
+                            data={"size_bytes": size_bytes, "filename": path.name},
+                            size_bytes=size_bytes,
+                            filename=path.name,
+                            method="gnome-screenshot",
+                        )
+                    error = (stderr.decode("utf-8", errors="ignore") or stdout.decode("utf-8", errors="ignore")).strip()
+                    if error:
+                        logger.debug("gnome-screenshot failed: %s", error)
         proc = await asyncio.create_subprocess_exec(
             "screencapture",
             "-x",
@@ -2880,6 +3274,39 @@ async def capture_region(x: int, y: int, width: int, height: int, filename: Opti
     try:
         shot_name = filename or f"region_{int(time.time())}.png"
         path = Path.home() / "Desktop" / shot_name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if platform.system() != "Darwin":
+            try:
+                import pyautogui  # type: ignore
+
+                region = (int(x), int(y), int(width), int(height))
+                image = await asyncio.to_thread(pyautogui.screenshot, region=region)
+                await asyncio.to_thread(image.save, str(path))
+                if not path.exists():
+                    return {"success": False, "error": f"Bölge görüntüsü dosyası oluşmadı: {path}"}
+                size_bytes = int(path.stat().st_size) if path.is_file() else 0
+                if size_bytes <= 0:
+                    return {"success": False, "error": f"Bölge görüntüsü boş görünüyor: {path}"}
+                return {"success": True, "path": str(path), "size_bytes": size_bytes, "method": "pyautogui"}
+            except Exception:
+                pass
+            if platform.system() == "Linux" and _ensure_system_binary("scrot"):
+                region_arg = f"{int(x)},{int(y)},{int(width)},{int(height)}"
+                proc = await asyncio.create_subprocess_exec(
+                    "scrot",
+                    "-a",
+                    region_arg,
+                    str(path),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await proc.communicate()
+                if proc.returncode == 0 and path.exists() and int(path.stat().st_size or 0) > 0:
+                    size_bytes = int(path.stat().st_size)
+                    return {"success": True, "path": str(path), "size_bytes": size_bytes, "method": "scrot"}
+                error = (stderr.decode("utf-8", errors="ignore") or stdout.decode("utf-8", errors="ignore")).strip()
+                if error:
+                    logger.debug("scrot region capture failed: %s", error)
         region_arg = f"{int(x)},{int(y)},{int(width)},{int(height)}"
         proc = await asyncio.create_subprocess_exec(
             "screencapture",
@@ -2938,19 +3365,82 @@ async def open_url(url: str, browser: Optional[str] = None) -> dict[str, Any]:
                     return {"success": False, "error": err or f"{app_name} içinde URL açılamadı."}
                 return {"success": True, "url": target_url, "browser": app_name}
 
-            proc = await asyncio.create_subprocess_exec(
-                "open",
-                "-a",
-                app_name,
-                target_url,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _stdout, stderr = await proc.communicate()
-            if proc.returncode != 0:
-                return {"success": False, "error": stderr.decode("utf-8", errors="ignore").strip() or f"{app_name} açılamadı."}
-            return {"success": True, "url": target_url, "browser": app_name}
+            if platform.system() == "Windows":
+                try:
+                    os.startfile(target_url)  # type: ignore[attr-defined]
+                    return {"success": True, "url": target_url, "browser": app_name, "method": "os.startfile"}
+                except Exception:
+                    pass
 
+            browser_cmd = shutil.which(app_name) or shutil.which(app_name.lower())
+            if browser_cmd:
+                proc = await asyncio.create_subprocess_exec(
+                    browser_cmd,
+                    target_url,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _stdout, stderr = await proc.communicate()
+                if proc.returncode == 0:
+                    return {"success": True, "url": target_url, "browser": app_name, "method": "subprocess"}
+                fallback_error = stderr.decode("utf-8", errors="ignore").strip() or f"{app_name} açılamadı."
+            else:
+                fallback_error = ""
+
+            if platform.system() == "Linux" and _ensure_system_binary("xdg-open"):
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        "xdg-open",
+                        target_url,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    stdout, stderr = await proc.communicate()
+                    if proc.returncode == 0:
+                        return {"success": True, "url": target_url, "browser": app_name or "xdg-open", "method": "xdg-open"}
+                    fallback_error = (stderr.decode("utf-8", errors="ignore") or stdout.decode("utf-8", errors="ignore")).strip() or fallback_error
+                except Exception:
+                    pass
+
+            try:
+                import webbrowser
+
+                if webbrowser.open(target_url):
+                    return {"success": True, "url": target_url, "browser": app_name or "", "method": "webbrowser"}
+            except Exception:
+                pass
+
+            return {"success": False, "error": fallback_error or f"{app_name} açılamadı."}
+
+        if platform.system() == "Windows":
+            try:
+                os.startfile(target_url)  # type: ignore[attr-defined]
+                return {"success": True, "url": target_url, "method": "os.startfile"}
+            except Exception:
+                pass
+        fallback_error = ""
+        if platform.system() == "Linux" and _ensure_system_binary("xdg-open"):
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "xdg-open",
+                    target_url,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await proc.communicate()
+                if proc.returncode == 0:
+                    return {"success": True, "url": target_url, "method": "xdg-open"}
+                fallback_error = (stderr.decode("utf-8", errors="ignore") or stdout.decode("utf-8", errors="ignore")).strip()
+            except Exception:
+                fallback_error = ""
+        if platform.system() != "Darwin":
+            try:
+                import webbrowser
+
+                if webbrowser.open(target_url):
+                    return {"success": True, "url": target_url, "method": "webbrowser"}
+            except Exception:
+                pass
         await asyncio.create_subprocess_exec("open", target_url)
         return {"success": True, "url": target_url}
     except Exception as e:

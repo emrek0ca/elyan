@@ -9,6 +9,8 @@ import base64
 import httpx
 from pathlib import Path
 from typing import Any, Dict, Optional
+from core.dependencies import get_system_dependency_runtime
+from utils.ollama_helper import OllamaHelper
 from utils.logger import get_logger
 
 logger = get_logger("tools.vision")
@@ -16,6 +18,25 @@ logger = get_logger("tools.vision")
 # Settings
 VISION_MODEL_LOCAL = "llava:7b"
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+
+
+def _ensure_ollama_runtime() -> bool:
+    try:
+        if OllamaHelper.ensure_available(allow_install=True, start_service=True):
+            return True
+    except Exception as exc:
+        logger.debug("Ollama helper ensure_available failed: %s", exc)
+    try:
+        record = get_system_dependency_runtime().ensure_binary(
+            "ollama",
+            allow_install=True,
+            skill_name="vision",
+            tool_name="ollama",
+        )
+        return str(record.status).lower() in {"ready", "installed"}
+    except Exception as exc:
+        logger.debug("System ollama ensure failed: %s", exc)
+        return False
 
 async def analyze_image(
     image_path: str,
@@ -100,6 +121,14 @@ async def _analyze_with_gemini(image_base64: str, prompt: str, api_key: str, lan
 async def _analyze_with_ollama(image_base64: str, prompt: str, language: str) -> Dict[str, Any]:
     """Analyzes image using local Ollama (Llava)"""
     logger.info(f"Using local {VISION_MODEL_LOCAL} for vision analysis")
+
+    if not _ensure_ollama_runtime():
+        return {
+            "success": False,
+            "error": "Ollama runtime hazir degil.",
+            "provider": "ollama/llava",
+            "error_code": "ollama_runtime_missing",
+        }
     
     ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
     

@@ -11,6 +11,8 @@ import os
 import subprocess
 from pathlib import Path
 from config.elyan_config import elyan_config
+from core.dependencies import get_dependency_runtime
+from core.dependencies import get_system_dependency_runtime
 from security.keychain import keychain
 from core.version import APP_VERSION
 
@@ -110,43 +112,80 @@ def run_doctor(fix=False):
 
     # 5. Critical Dependencies
     deps = {
-        "pydantic":  "Core",
-        "aiohttp":   "Core",
-        "telegram":  "Telegram channel",
-        "PyQt6":     "Desktop UI",
-        "json5":     "Config parsing",
-        "apscheduler": "Cron scheduler",
+        "pydantic":  {"install_spec": "pydantic", "purpose": "Core"},
+        "aiohttp":   {"install_spec": "aiohttp", "purpose": "Core"},
+        "telegram":  {"install_spec": "python-telegram-bot", "purpose": "Telegram channel"},
+        "PyQt6":     {"install_spec": "PyQt6", "purpose": "Desktop UI"},
+        "json5":     {"install_spec": "json5", "purpose": "Config parsing"},
+        "apscheduler": {"install_spec": "apscheduler", "purpose": "Cron scheduler"},
     }
     print("\n📦  Dependency Check:")
+    dep_runtime = get_dependency_runtime()
     for dep, purpose in deps.items():
+        install_spec = str(purpose.get("install_spec") or dep)
+        label = str(purpose.get("purpose") or dep)
         try:
-            __import__(dep)
-            print(f"  ✅  {dep:<15}: OK ({purpose})")
-        except ImportError:
-            print(f"  ❌  {dep:<15}: MISSING ({purpose})")
-            issues += 1
-            if fix:
-                subprocess.run([sys.executable, "-m", "pip", "install", dep], check=False, capture_output=True)
-                print(f"      → Fixed: pip install {dep}")
-                issues -= 1
+            record = dep_runtime.inspect_dependency(dep, install_spec=install_spec, source="pypi", trust_level="trusted")
+            if record.get("available", False):
+                print(f"  ✅  {dep:<15}: OK ({label})")
+            else:
+                print(f"  ❌  {dep:<15}: MISSING ({label})")
+                issues += 1
+                if fix:
+                    install_record = dep_runtime.ensure_module(dep, install_spec=install_spec, source="pypi", trust_level="trusted", skill_name="doctor", tool_name=dep, allow_install=True)
+                    if install_record.status in {"installed", "ready"} or dep_runtime.inspect_dependency(dep, install_spec=install_spec).get("available", False):
+                        print(f"      → Fixed: {install_spec} [{install_record.status}]")
+                        issues -= 1
+                    else:
+                        print(f"      → Fix failed: {install_record.reason or install_record.status}")
+        except Exception:
+            try:
+                __import__(dep)
+                print(f"  ✅  {dep:<15}: OK ({label})")
+            except ImportError:
+                print(f"  ❌  {dep:<15}: MISSING ({label})")
+                issues += 1
 
     # 6. External Tools
     tools = {
         "docker":  "Sandbox isolation",
         "ollama":  "Local AI models",
         "ffmpeg":  "Audio/video processing",
+        "tesseract": "OCR engine",
+        "xdg-open": "Desktop file opener",
+        "xclip": "Clipboard helper",
+        "xsel": "Clipboard helper",
+        "scrot": "Screenshot helper",
+        "gnome-screenshot": "Screenshot helper",
+        "xdotool": "X11 automation",
+        "xprop": "X11 window metadata",
+        "wmctrl": "X11 window control",
+        "cliclick": "macOS mouse helper",
     }
+    system_runtime = get_system_dependency_runtime()
     print("\n🛠️  External Tool Check:")
     for t, purpose in tools.items():
         if shutil.which(t):
             print(f"  ✅  {t:<12}: FOUND ({purpose})")
         else:
-            print(f"  ⚠️   {t:<12}: NOT FOUND (Optional — {purpose})")
+            if fix and t != "docker":
+                install_record = system_runtime.ensure_binary(t, allow_install=True, skill_name="doctor", tool_name=t)
+                if install_record.status in {"ready", "installed"} or shutil.which(t):
+                    print(f"  ✅  {t:<12}: FIXED ({purpose})")
+                    continue
+                print(f"  ⚠️   {t:<12}: {install_record.status.upper()} (Optional — {purpose})")
+                print(f"    → {install_record.reason or system_runtime.get_install_hint(t)}")
+            else:
+                print(f"  ⚠️   {t:<12}: NOT FOUND (Optional — {purpose})")
 
     print("\n👁️  Vision Check:")
     if not shutil.which("ollama"):
-        print(f"  ⚠️   Vision model : Ollama missing (expected local model {VISION_MODEL_NAME})")
-        issues += 1
+        ollama_record = system_runtime.ensure_binary("ollama", allow_install=fix, skill_name="doctor", tool_name="ollama")
+        if ollama_record.status in {"ready", "installed"} or shutil.which("ollama"):
+            print(f"  ✅  Vision runtime: Ollama ready")
+        else:
+            print(f"  ⚠️   Vision model : Ollama missing (expected local model {VISION_MODEL_NAME})")
+            issues += 1
     else:
         try:
             result = subprocess.run(
@@ -204,6 +243,23 @@ def run_doctor(fix=False):
     except Exception as e:
         print(f"  ❌  Config error: {e}")
         issues += 1
+
+    # 7.5 Dependency Runtime
+    print("\n🧰  Dependency Runtime:")
+    try:
+        dep_snapshot = dep_runtime.snapshot()
+        print(f"  - Mode       : {dep_snapshot.get('mode', 'managed_venv')}")
+        print(f"  - Venv       : {dep_snapshot.get('managed_venv', '')}")
+        print(f"  - Installer  : {dep_snapshot.get('installer', '')}")
+        print(f"  - State file : {dep_snapshot.get('state_path', '')}")
+        counts = dep_snapshot.get("status_counts", {}) or {}
+        print(f"  - Installing : {counts.get('installing', 0)}")
+        print(f"  - Installed  : {counts.get('installed', 0)}")
+        print(f"  - Ready      : {counts.get('ready', 0)}")
+        print(f"  - Blocked    : {counts.get('blocked', 0)}")
+        print(f"  - Failed     : {counts.get('failed', 0)}")
+    except Exception as e:
+        print(f"  ⚠️   Dependency runtime snapshot failed: {e}")
 
     # 8. Channel resilience checks
     print("\n📡  Channel Resilience Check:")

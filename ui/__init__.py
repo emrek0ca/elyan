@@ -2,6 +2,10 @@
 Elyan Desktop UI - Modern PyQt6 based user interface
 """
 
+from core.dependencies.autoinstall_hook import activate as _activate_autoinstall_hook
+
+_activate_autoinstall_hook()
+
 # Original components
 from .app import DesktopApp
 from .qr_generator import QRGenerator

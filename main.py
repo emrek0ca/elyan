@@ -16,6 +16,10 @@ project_root = Path(__file__).parent.resolve()
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+from core.dependencies.autoinstall_hook import activate as _activate_autoinstall_hook
+
+_activate_autoinstall_hook()
+
 try:
     import click
 except ImportError:

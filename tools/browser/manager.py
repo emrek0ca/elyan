@@ -10,16 +10,54 @@ from datetime import datetime
 import time
 from pathlib import Path
 from utils.logger import get_logger
+from core.dependencies import get_dependency_runtime
 
 logger = get_logger("browser_manager")
 
 # Playwright imports (optional)
-try:
-    from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright
-    PLAYWRIGHT_AVAILABLE = True
-except ImportError:
-    PLAYWRIGHT_AVAILABLE = False
-    async_playwright = None
+async_playwright = None
+Browser = BrowserContext = Page = Playwright = None
+PLAYWRIGHT_AVAILABLE = False
+
+
+def _refresh_playwright_import() -> bool:
+    global async_playwright, Browser, BrowserContext, Page, Playwright, PLAYWRIGHT_AVAILABLE
+    try:
+        from playwright.async_api import async_playwright as _async_playwright, Browser as _Browser, BrowserContext as _BrowserContext, Page as _Page, Playwright as _Playwright
+
+        async_playwright = _async_playwright
+        Browser = _Browser
+        BrowserContext = _BrowserContext
+        Page = _Page
+        Playwright = _Playwright
+        PLAYWRIGHT_AVAILABLE = True
+        return True
+    except ImportError:
+        PLAYWRIGHT_AVAILABLE = False
+        return False
+
+
+def is_playwright_available() -> bool:
+    return bool(PLAYWRIGHT_AVAILABLE and async_playwright is not None)
+
+
+def _ensure_playwright_runtime() -> bool:
+    if _refresh_playwright_import():
+        return True
+    runtime = get_dependency_runtime()
+    record = runtime.ensure_module(
+        "playwright",
+        install_spec="playwright",
+        source="pypi",
+        trust_level="trusted",
+        post_install=["playwright install chromium"],
+        skill_name="browser",
+        tool_name="browser_runtime",
+        allow_install=True,
+    )
+    if record.status in {"installed", "ready"}:
+        return _refresh_playwright_import()
+    return False
 
 
 class BrowserManager:
@@ -33,11 +71,6 @@ class BrowserManager:
             headless: Run browser headlessly
             timeout: Default timeout in milliseconds
         """
-        if not PLAYWRIGHT_AVAILABLE:
-            logger.error("Playwright not installed. Run: pip install playwright && playwright install chromium")
-            self.playwright = None
-            return
-        
         self.headless = headless
         self.timeout = timeout
         self.playwright: Optional[Playwright] = None
@@ -51,7 +84,10 @@ class BrowserManager:
     
     async def start(self) -> bool:
         """Start Playwright and browser"""
-        if not PLAYWRIGHT_AVAILABLE:
+        if self.is_ready():
+            return True
+        if not _ensure_playwright_runtime():
+            logger.error("Playwright not installed or could not be prepared.")
             return False
         
         try:
@@ -176,7 +212,7 @@ class BrowserManager:
     
     def is_ready(self) -> bool:
         """Check if browser is ready"""
-        return PLAYWRIGHT_AVAILABLE and self.page is not None
+        return is_playwright_available() and self.page is not None
     
     async def get_current_url(self) -> Optional[str]:
         """Get current page URL"""
@@ -211,6 +247,9 @@ async def get_browser_manager(headless: bool = True) -> Optional[BrowserManager]
     
     if _browser_manager is None:
         _browser_manager = BrowserManager(headless=headless)
+        if not await _browser_manager.start():
+            return None
+    elif not _browser_manager.is_ready():
         if not await _browser_manager.start():
             return None
     

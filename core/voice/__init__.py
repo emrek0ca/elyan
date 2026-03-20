@@ -23,6 +23,10 @@ from .text_to_speech import (
     get_tts_service,
     TTS_AVAILABLE
 )
+from .voice_manager import (
+    VoiceManager,
+    get_voice_manager,
+)
 
 __all__ = [
     # Audio utils
@@ -41,4 +45,8 @@ __all__ = [
     'TextToSpeechService',
     'get_tts_service',
     'TTS_AVAILABLE',
+    
+    # Voice manager
+    'VoiceManager',
+    'get_voice_manager',
 ]

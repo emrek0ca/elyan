@@ -6,6 +6,7 @@ physical OS-level Mouse and Keyboard actions via PyAutoGUI.
 """
 
 from typing import Optional
+from core.dependencies import get_dependency_runtime
 from utils.logger import get_logger
 
 logger = get_logger("coordinate_mapper")
@@ -17,6 +18,7 @@ try:
     HAS_GUI_DEPS = True
 except ImportError:
     HAS_GUI_DEPS = False
+    pyautogui = None
     logger.warning("GUI dependencies missing. Run: pip install pyautogui")
 
 class CoordinateMapper:
@@ -24,10 +26,36 @@ class CoordinateMapper:
         if HAS_GUI_DEPS:
             # Add a slight delay between commands to mimic human behavior and avoid rate limits
             pyautogui.PAUSE = 0.5
-            
+
+    def _ensure_gui_runtime(self) -> bool:
+        global HAS_GUI_DEPS, pyautogui
+        if HAS_GUI_DEPS and pyautogui is not None:
+            return True
+        runtime = get_dependency_runtime()
+        record = runtime.ensure_module(
+            "pyautogui",
+            install_spec="pyautogui",
+            source="pypi",
+            trust_level="trusted",
+            skill_name="system",
+            tool_name="coordinate_mapper",
+            allow_install=True,
+        )
+        if record.status in {"installed", "ready"}:
+            try:
+                import pyautogui as pyautogui_mod
+                pyautogui = pyautogui_mod
+                HAS_GUI_DEPS = True
+                pyautogui.PAUSE = 0.5
+                pyautogui.FAILSAFE = True
+                return True
+            except ImportError:
+                return False
+        return False
+
     def click(self, x: int, y: int, clicks: int = 1, button: str = 'left'):
         """Executes a physical mouse click at given coordinates."""
-        if not HAS_GUI_DEPS:
+        if not self._ensure_gui_runtime():
             logger.error("CoordinateMapper failed: pyautogui not installed.")
             return False
             
@@ -46,7 +74,7 @@ class CoordinateMapper:
 
     def type_text(self, text: str, x: Optional[int] = None, y: Optional[int] = None):
         """Clicks a coordinate (optional) and types a string."""
-        if not HAS_GUI_DEPS:
+        if not self._ensure_gui_runtime():
             return False
             
         if x is not None and y is not None:
@@ -68,7 +96,8 @@ class CoordinateMapper:
             
     def drag_and_drop(self, start_x: int, start_y: int, end_x: int, end_y: int):
         """Drags mouse from start coordinates to end coordinates."""
-        if not HAS_GUI_DEPS: return False
+        if not self._ensure_gui_runtime():
+            return False
         try:
             logger.info(f"🤚 Dragging from ({start_x},{start_y}) to ({end_x},{end_y})")
             pyautogui.moveTo(start_x, start_y, duration=0.3)

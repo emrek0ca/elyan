@@ -28,9 +28,24 @@ class SkillInfo:
     description: str
     category: str
     source: str
-    required_tools: List[str]
-    dependencies: List[str]
-    commands: List[str]
+    integration_type: str = ""
+    required_scopes: List[str] = None
+    auth_strategy: str = ""
+    fallback_policy: str = ""
+    supported_platforms: List[str] = None
+    required_tools: List[str] = None
+    dependencies: List[str] = None
+    commands: List[str] = None
+    python_dependencies: List[str] = None
+    post_install: List[str] = None
+    trust_level: str = "trusted"
+    hashes: Dict[str, str] = None
+    latency_level: str = "standard"
+    evidence_contract: Dict[str, Any] = None
+    approval_level: int = 0
+    real_time: bool = False
+    workflow_bundle: Dict[str, Any] = None
+    dependency_status: Dict[str, Dict[str, Any]] = None
     installed: bool = False
     enabled: bool = False
     path: str = ""
@@ -52,6 +67,17 @@ class SkillInfo:
         data["blocked_tools"] = data.get("blocked_tools") or []
         data["approval_tools"] = data.get("approval_tools") or []
         data["tool_access"] = data.get("tool_access") or {}
+        data["evidence_contract"] = data.get("evidence_contract") or {}
+        data["required_scopes"] = data.get("required_scopes") or []
+        data["supported_platforms"] = data.get("supported_platforms") or []
+        data["required_tools"] = data.get("required_tools") or []
+        data["dependencies"] = data.get("dependencies") or []
+        data["commands"] = data.get("commands") or []
+        data["python_dependencies"] = data.get("python_dependencies") or []
+        data["post_install"] = data.get("post_install") or []
+        data["hashes"] = data.get("hashes") or {}
+        data["workflow_bundle"] = data.get("workflow_bundle") or {}
+        data["dependency_status"] = data.get("dependency_status") or {}
         return data
 
 
@@ -122,17 +148,93 @@ class SkillManager:
     def _available_tools_set(self) -> set[str]:
         return {str(k).strip() for k in AVAILABLE_TOOLS.keys()}
 
+    @staticmethod
+    def _listify(raw: Any) -> List[str]:
+        if isinstance(raw, (list, tuple, set)):
+            items: List[str] = []
+            for x in raw:
+                if isinstance(x, dict):
+                    value = str(x.get("package") or x.get("name") or x.get("module") or x.get("install_spec") or "").strip()
+                else:
+                    value = str(x).strip()
+                if value:
+                    items.append(value)
+            return items
+        return []
+
+    @staticmethod
+    def _dictify(raw: Any) -> Dict[str, Any]:
+        return dict(raw) if isinstance(raw, dict) else {}
+
     def _build_skill_info(self, raw: Dict[str, Any], *, installed: bool, enabled_set: set[str], path: str = "") -> SkillInfo:
         name = self._sanitize_name(raw.get("name", ""))
         required_tools = [str(x).strip() for x in raw.get("required_tools", []) if str(x).strip()]
         dependencies = [str(x).strip() for x in raw.get("dependencies", []) if str(x).strip()]
         commands = [str(x).strip() for x in raw.get("commands", []) if str(x).strip()]
+        python_dependencies = self._listify(raw.get("python_dependencies") or raw.get("dependencies") or [])
+        post_install = self._listify(raw.get("post_install") or [])
+        integration_type = str(raw.get("integration_type") or "").strip().lower()
+        required_scopes = [str(x).strip() for x in raw.get("required_scopes", []) if str(x).strip()]
+        auth_strategy = str(raw.get("auth_strategy") or "").strip().lower()
+        fallback_policy = str(raw.get("fallback_policy") or "").strip().lower()
+        supported_platforms = [str(x).strip().lower() for x in raw.get("supported_platforms", []) if str(x).strip()]
+        trust_level = str(
+            raw.get("trust_level")
+            or ("trusted" if str(raw.get("source") or "").strip().lower() in {"builtin", "curated", "marketplace"} else "local")
+        ).strip().lower() or "trusted"
+        hashes = self._dictify(raw.get("hashes"))
         enabled = name in enabled_set
+        latency_level = str(raw.get("latency_level") or "standard").strip().lower() or "standard"
+        evidence_contract = dict(raw.get("evidence_contract") or {}) if isinstance(raw.get("evidence_contract"), dict) else {}
+        approval_level = int(raw.get("approval_level") or 0)
+        real_time = bool(raw.get("real_time", latency_level == "real_time"))
+        workflow_bundle = dict(raw.get("workflow_bundle") or {}) if isinstance(raw.get("workflow_bundle"), dict) else {}
+
+        if not integration_type:
+            if name in {"browser", "research"}:
+                integration_type = "browser"
+            elif name in {"email"}:
+                integration_type = "email"
+            elif name in {"calendar"}:
+                integration_type = "scheduler"
+            else:
+                integration_type = "desktop"
+        if not auth_strategy:
+            if integration_type in {"browser", "email", "api", "social", "scheduler"}:
+                auth_strategy = "oauth" if required_scopes else "browser_session"
+            else:
+                auth_strategy = "none"
+        if not fallback_policy:
+            fallback_policy = "web" if integration_type in {"browser", "email", "api", "social", "scheduler"} else "native"
+        if not supported_platforms:
+            supported_platforms = ["windows", "darwin", "linux"]
 
         available_tools = self._available_tools_set()
         missing_tools = sorted([t for t in required_tools if t not in available_tools])
-        # Dependencies check intentionally lightweight; package-level validation can be expensive.
         missing_deps: List[str] = []
+        dependency_status: Dict[str, Dict[str, Any]] = {}
+        if python_dependencies:
+            try:
+                from core.dependencies import get_dependency_runtime
+
+                dep_runtime = get_dependency_runtime()
+                for dep in python_dependencies:
+                    status = dep_runtime.inspect_dependency(
+                        dep,
+                        source=str(raw.get("source") or "pypi"),
+                        trust_level=trust_level,
+                        hashes=hashes,
+                        post_install=post_install,
+                        skill_name=name,
+                    )
+                    dependency_status[dep] = dict(status)
+                    if not status.get("available", False):
+                        missing_deps.append(dep)
+            except Exception as e:
+                logger.debug(f"Dependency status check skipped for {name}: {e}")
+                for dep in python_dependencies:
+                    dependency_status[dep] = {"available": False, "error": str(e)}
+                    missing_deps.append(dep)
         blocked_tools: List[str] = []
         approval_tools: List[str] = []
         tool_access: Dict[str, Dict[str, Any]] = {}
@@ -166,9 +268,24 @@ class SkillManager:
             description=str(raw.get("description", "")),
             category=str(raw.get("category", "general")),
             source=str(raw.get("source", "local")),
+            integration_type=integration_type,
+            required_scopes=required_scopes,
+            auth_strategy=auth_strategy,
+            fallback_policy=fallback_policy,
+            supported_platforms=supported_platforms,
             required_tools=required_tools,
             dependencies=dependencies,
             commands=commands,
+            python_dependencies=python_dependencies,
+            post_install=post_install,
+            trust_level=trust_level,
+            hashes=hashes,
+            latency_level=latency_level,
+            evidence_contract=evidence_contract,
+            approval_level=approval_level,
+            real_time=real_time,
+            workflow_bundle=workflow_bundle,
+            dependency_status=dependency_status,
             installed=installed,
             enabled=enabled,
             path=path,
@@ -184,6 +301,12 @@ class SkillManager:
             tool_access=tool_access,
         )
         return info
+
+    def manifest_from_skill(self, name: str) -> Optional[Dict[str, Any]]:
+        info = self.get_skill(name)
+        if not info:
+            return None
+        return dict(info)
 
     def _load_installed_from_disk(self) -> Dict[str, SkillInfo]:
         enabled = self._enabled_set()
@@ -273,6 +396,18 @@ class SkillManager:
                 "source": "local",
                 "required_tools": [],
                 "dependencies": [],
+                "python_dependencies": [],
+                "post_install": [],
+                "integration_type": "",
+                "required_scopes": [],
+                "auth_strategy": "",
+                "fallback_policy": "",
+                "supported_platforms": ["windows", "darwin", "linux"],
+                "approval_level": 0,
+                "real_time": False,
+                "workflow_bundle": {},
+                "trust_level": "local",
+                "hashes": {},
                 "commands": [],
             }
         raw["name"] = n
@@ -369,6 +504,10 @@ class SkillManager:
                 "missing_tools": missing_tools,
                 "missing_dependencies": missing_deps,
                 "blocked_tools": s.get("blocked_tools", []) or [],
+                "python_dependencies": s.get("python_dependencies", []) or [],
+                "post_install": s.get("post_install", []) or [],
+                "trust_level": s.get("trust_level", "trusted"),
+                "dependency_status": s.get("dependency_status", {}) or {},
             })
         ok = all(c["health_ok"] for c in checks) if checks else True
         return {"ok": ok, "checks": checks}
@@ -383,7 +522,7 @@ class SkillManager:
         disabled = self._disabled_workflow_set()
         out: List[Dict[str, Any]] = []
         available_tools = self._available_tools_set()
-        enabled_skills = {str(s.get("name", "")).strip() for s in self.list_skills(available=False, enabled_only=True)}
+        enabled_skills = {str(s.get("name", "")).strip() for s in self.list_skills(available=True, enabled_only=True)}
 
         for wid, raw in workflows.items():
             wf_id = self._sanitize_name(str(raw.get("id") or wid))

@@ -3,12 +3,36 @@ import platform
 import subprocess
 import os
 import time
+import shutil
 from pathlib import Path
 from typing import Any, Optional, Dict, List
+from core.dependencies import get_system_dependency_runtime
 from core.registry import tool
 from utils.logger import get_logger
 
 logger = get_logger("system_tools")
+_SYSTEM_RUNTIME = None
+
+
+def _get_system_runtime():
+    global _SYSTEM_RUNTIME
+    if _SYSTEM_RUNTIME is None:
+        _SYSTEM_RUNTIME = get_system_dependency_runtime()
+    return _SYSTEM_RUNTIME
+
+
+def _ensure_system_binary(binary: str, *, allow_install: bool = True) -> bool:
+    try:
+        record = _get_system_runtime().ensure_binary(
+            binary,
+            allow_install=allow_install,
+            skill_name="system_tools",
+            tool_name=binary,
+        )
+        return str(record.status).lower() in {"ready", "installed"}
+    except Exception as exc:
+        logger.debug("System binary ensure failed for %s: %s", binary, exc)
+        return False
 
 async def _run_osascript(script: str) -> tuple[int, str, str]:
     """Helper to run AppleScript commands."""
@@ -93,6 +117,35 @@ async def open_app(app_name: Optional[str] = None) -> dict[str, Any]:
                 "error": "app_name gerekli (örnek: Safari, Google Chrome, Finder)."
             }
         app_name = str(app_name).strip()
+        if platform.system() != "Darwin":
+            if platform.system() == "Windows":
+                try:
+                    os.startfile(app_name)  # type: ignore[attr-defined]
+                    return {"success": True, "message": f"{app_name} opened.", "method": "os.startfile"}
+                except Exception:
+                    pass
+            if app_name.lower() in {"finder", "files"} and _ensure_system_binary("xdg-open"):
+                proc = await asyncio.create_subprocess_exec("xdg-open", str(Path.home()), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                stdout, stderr = await proc.communicate()
+                if proc.returncode == 0:
+                    return {"success": True, "message": f"{app_name} opened.", "method": "xdg-open"}
+                return {"success": False, "error": (stderr.decode("utf-8", errors="ignore") or stdout.decode("utf-8", errors="ignore")).strip() or f"{app_name} açılamadı."}
+            browser_candidates = [app_name, app_name.lower()]
+            if app_name.lower() in {"google chrome", "chrome", "krom"}:
+                browser_candidates.extend(["google-chrome", "chrome", "chromium", "chromium-browser"])
+            elif app_name.lower() == "firefox":
+                browser_candidates.append("firefox")
+            elif app_name.lower() in {"terminal", "shell"}:
+                browser_candidates.extend(["x-terminal-emulator", "gnome-terminal", "konsole", "xterm"])
+            for candidate in browser_candidates:
+                cmd = shutil.which(candidate)
+                if not cmd:
+                    continue
+                proc = await asyncio.create_subprocess_exec(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                stdout, stderr = await proc.communicate()
+                if proc.returncode == 0:
+                    return {"success": True, "message": f"{app_name} opened.", "method": "subprocess"}
+            return {"success": False, "error": f"{app_name} açılamadı.", "retryable": True}
         process = await asyncio.create_subprocess_exec("open", "-a", app_name)
         await process.wait()
         return {"success": True, "message": f"{app_name} opened."}
@@ -216,6 +269,24 @@ async def read_clipboard() -> dict[str, Any]:
         p = await asyncio.create_subprocess_exec("pbpaste", stdout=asyncio.subprocess.PIPE)
         out, _ = await p.communicate()
         return {"success": True, "text": out.decode().strip()}
+        # unreachable on Darwin, but keep Linux fallbacks below for parity.
+        # pragma: no cover
+    except Exception as e:
+        pass
+    try:
+        if _ensure_system_binary("xclip"):
+            proc = await asyncio.create_subprocess_exec("xclip", "-selection", "clipboard", "-o", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            out, _ = await proc.communicate()
+            if proc.returncode == 0:
+                return {"success": True, "text": out.decode().strip(), "method": "xclip"}
+        if _ensure_system_binary("xsel"):
+            proc = await asyncio.create_subprocess_exec("xsel", "-b", "-o", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            out, _ = await proc.communicate()
+            if proc.returncode == 0:
+                return {"success": True, "text": out.decode().strip(), "method": "xsel"}
+        import pyperclip  # type: ignore
+
+        return {"success": True, "text": str(pyperclip.paste() or "").strip(), "method": "pyperclip"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -226,6 +297,23 @@ async def write_clipboard(text: str) -> dict[str, Any]:
         await p.communicate(input=text.encode())
         return {"success": True}
     except Exception as e:
+        pass
+    try:
+        if _ensure_system_binary("xclip"):
+            proc = await asyncio.create_subprocess_exec("xclip", "-selection", "clipboard", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            await proc.communicate(input=str(text or "").encode())
+            if proc.returncode == 0:
+                return {"success": True, "method": "xclip"}
+        if _ensure_system_binary("xsel"):
+            proc = await asyncio.create_subprocess_exec("xsel", "-b", "-i", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            await proc.communicate(input=str(text or "").encode())
+            if proc.returncode == 0:
+                return {"success": True, "method": "xsel"}
+        import pyperclip  # type: ignore
+
+        pyperclip.copy(str(text or ""))
+        return {"success": True, "method": "pyperclip"}
+    except Exception as e:
         return {"success": False, "error": str(e)}
 
 # --- UTILITIES ---
@@ -234,6 +322,29 @@ async def write_clipboard(text: str) -> dict[str, Any]:
 async def take_screenshot(filename: Optional[str] = None) -> dict[str, Any]:
     try:
         path = Path.home() / "Desktop" / (filename or f"SS_{int(time.time())}.png")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if platform.system() != "Darwin":
+            try:
+                import pyautogui  # type: ignore
+
+                image = await asyncio.to_thread(pyautogui.screenshot)
+                await asyncio.to_thread(image.save, str(path))
+                if path.exists():
+                    return {"success": True, "path": str(path), "method": "pyautogui"}
+            except Exception:
+                pass
+            if platform.system() == "Linux" and _ensure_system_binary("scrot"):
+                proc = await asyncio.create_subprocess_exec("scrot", str(path), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                stdout, stderr = await proc.communicate()
+                if proc.returncode == 0 and path.exists():
+                    return {"success": True, "path": str(path), "method": "scrot"}
+                if stderr.decode("utf-8", errors="ignore").strip():
+                    if _ensure_system_binary("gnome-screenshot"):
+                        proc = await asyncio.create_subprocess_exec("gnome-screenshot", "-f", str(path), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                        stdout, stderr = await proc.communicate()
+                        if proc.returncode == 0 and path.exists():
+                            return {"success": True, "path": str(path), "method": "gnome-screenshot"}
+                    return {"success": False, "error": stderr.decode("utf-8", errors="ignore").strip()}
         await asyncio.create_subprocess_exec("screencapture", "-x", str(path))
         return {"success": True, "path": str(path)}
     except Exception as e:
@@ -254,6 +365,18 @@ async def send_notification(title: str = "Elyan", message: str = "") -> dict[str
 async def open_url(url: str) -> dict[str, Any]:
     try:
         if not url.startswith("http"): url = "https://" + url
+        if platform.system() == "Linux" and _ensure_system_binary("xdg-open"):
+            proc = await asyncio.create_subprocess_exec("xdg-open", url, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, stderr = await proc.communicate()
+            if proc.returncode == 0:
+                return {"success": True, "url": url, "method": "xdg-open"}
+        try:
+            import webbrowser
+
+            if webbrowser.open(url):
+                return {"success": True, "url": url, "method": "webbrowser"}
+        except Exception:
+            pass
         await asyncio.create_subprocess_exec("open", url)
         return {"success": True}
     except Exception as e:

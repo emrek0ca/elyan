@@ -75,19 +75,39 @@ def detect_artifact_mismatch(*, expected_extensions: list[str], produced_paths: 
 
 def collect_paths_from_tool_results(tool_results: list[dict[str, Any]]) -> list[str]:
     paths: list[str] = []
-    for row in tool_results or []:
-        if not isinstance(row, dict):
-            continue
-        for key in ("path", "file_path", "output_path"):
-            val = row.get(key)
-            if isinstance(val, str) and val.strip():
-                paths.append(val.strip())
-        result = row.get("result")
-        if isinstance(result, dict):
+
+    def _push(value: Any) -> None:
+        if isinstance(value, str):
+            candidate = value.strip()
+            if candidate and candidate not in paths:
+                paths.append(candidate)
+
+    def _walk(payload: Any, *, depth: int = 0) -> None:
+        if depth > 5:
+            return
+        if isinstance(payload, dict):
             for key in ("path", "file_path", "output_path"):
-                val = result.get(key)
-                if isinstance(val, str) and val.strip():
-                    paths.append(val.strip())
+                _push(payload.get(key))
+            for key in ("outputs", "screenshots"):
+                values = payload.get(key)
+                if isinstance(values, list):
+                    for item in values:
+                        _push(item)
+            artifacts = payload.get("artifacts")
+            if isinstance(artifacts, list):
+                for item in artifacts:
+                    if isinstance(item, dict):
+                        _push(item.get("path"))
+                    else:
+                        _push(item)
+            for item in payload.values():
+                if isinstance(item, (dict, list, tuple)):
+                    _walk(item, depth=depth + 1)
+        elif isinstance(payload, (list, tuple)):
+            for item in payload:
+                _walk(item, depth=depth + 1)
+
+    _walk(tool_results or [])
     return paths
 
 

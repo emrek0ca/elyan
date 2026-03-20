@@ -31,10 +31,10 @@ class BrowserSkill(BaseSkill):
 
             if command == "navigate":
                 url = params.get("url", "")
-                result = await execute_registered_tool("open_url", {"url": url}, source="builtin_browser_skill")
+                result = await execute_registered_tool("open_url", {"url": url}, source="builtin_browser_skill", skill_name=self.name)
                 return wrap_skill_tool_result(result)
             elif command == "screenshot":
-                result = await execute_registered_tool("browser_screenshot", {}, source="builtin_browser_skill")
+                result = await execute_registered_tool("browser_screenshot", {}, source="builtin_browser_skill", skill_name=self.name)
                 return wrap_skill_tool_result(result)
             else:
                 return {"success": False, "error": f"Unknown command: {command}"}

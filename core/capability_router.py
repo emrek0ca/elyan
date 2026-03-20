@@ -145,9 +145,16 @@ class CapabilityRouter:
         "api_integration": "api_integration",
         "automation": "system_ops",
         "research": "research_report",
+        "email": "communication",
+        "calendar": "planning",
+        "social": "communication",
+        "scheduler": "automation",
+        "google": "api_integration",
+        "drive": "document",
         "document": "research_report",
         "summarization": "research_report",
         "screen_operator": "system_automation",
+        "real_time_control": "system_automation",
         "file_ops": "file_operations",
         "multimodal": "browser_task",
         "image": "browser_task",
@@ -179,10 +186,35 @@ class CapabilityRouter:
             "araştır", "arastir", "research", "kaynak", "source", "literature",
             "incele", "analiz", "benchmark", "karşılaştır", "karsilastir"
         ],
+        "email": [
+            "mail", "email", "e-posta", "inbox", "outlook", "gmail", "smtp", "imap",
+            "posta kutusu", "gelen kutu", "gelen kutusu",
+        ],
+        "calendar": [
+            "calendar", "takvim", "event", "reminder", "hatırlat", "hatirlat",
+            "meeting", "meet", "appointment", "randevu",
+        ],
+        "social": [
+            "x.com", "twitter", "tweet", "instagram", "whatsapp", "dm", "story",
+            "social media", "post at", "yayınla", "yayinla",
+        ],
+        "scheduler": [
+            "schedule", "cron", "zamanla", "planla", "remind later", "heartbeat", "routine",
+        ],
+        "google": [
+            "google", "gmail", "calendar", "drive", "docs", "sheets", "slides", "workspace",
+        ],
+        "drive": [
+            "drive", "google drive", "dosya sürücü", "dosya surucu", "workspace files",
+        ],
         "screen_operator": [
             "ekrana bak", "ekrani oku", "ekranı oku", "ekrandakini oku", "durum nedir",
             "ekranda ne var", "screen", "screenshot", "ss", "tıkla", "tikla", "mouse",
             "cursor", "imlec", "computer use", "bilgisayari kullan", "bilgisayarı kullan"
+        ],
+        "real_time_control": [
+            "real time", "realtime", "canli ekran", "canlı ekran", "anlık ekran", "anlik ekran",
+            "desktop control", "computer control", "ekran kontrol", "ekranı kontrol", "ekrani kontrol",
         ],
         "file_ops": [
             "dosya", "klasör", "klasor", "folder", "file", "kaydet", "yaz", "oku",
@@ -271,6 +303,60 @@ class CapabilityRouter:
             "quality_checklist": ["source_quality", "coverage", "traceability", "actionability"],
             "learning_tags": ["research", "analysis", "evidence"],
         },
+        "email": {
+            "objective": "manage_email_workflow_with_traceability",
+            "workflow_id": "email_workflow",
+            "primary_action": "send_email",
+            "preferred_tools": ["send_email", "get_emails", "search_emails", "read_file"],
+            "output_artifacts": ["email_receipt", "inbox_summary"],
+            "quality_checklist": ["recipient_accuracy", "delivery_confirmation", "thread_context"],
+            "learning_tags": ["email", "communication", "delivery"],
+        },
+        "calendar": {
+            "objective": "manage_schedule_and_reminders_reliably",
+            "workflow_id": "calendar_workflow",
+            "primary_action": "create_event",
+            "preferred_tools": ["create_event", "create_reminder", "get_today_events"],
+            "output_artifacts": ["calendar_entry", "reminder_receipt"],
+            "quality_checklist": ["time_accuracy", "timezone_safety", "confirmation"],
+            "learning_tags": ["calendar", "planning", "reminder"],
+        },
+        "social": {
+            "objective": "manage_social_workflows_with_confirmation",
+            "workflow_id": "social_workflow",
+            "primary_action": "browser_social_control",
+            "preferred_tools": ["open_url", "browser_open", "browser_click", "browser_type", "take_screenshot"],
+            "output_artifacts": ["post_receipt", "conversation_summary"],
+            "quality_checklist": ["account_accuracy", "post_verification", "policy_safety"],
+            "learning_tags": ["social", "post", "communication"],
+        },
+        "scheduler": {
+            "objective": "schedule_tasks_and_followups_reliably",
+            "workflow_id": "scheduler_workflow",
+            "primary_action": "create_reminder",
+            "preferred_tools": ["create_reminder", "create_event", "schedule_job"],
+            "output_artifacts": ["schedule_receipt", "job_spec"],
+            "quality_checklist": ["time_accuracy", "persistence", "retryability"],
+            "learning_tags": ["scheduler", "cron", "automation"],
+        },
+        "google": {
+            "objective": "integrate_google_services",
+            "workflow_id": "google_api_workflow",
+            "primary_action": "http_request",
+            "preferred_tools": ["http_request", "write_file", "read_file"],
+            "output_artifacts": ["api_spec", "integration_trace"],
+            "quality_checklist": ["scope_accuracy", "auth_safety", "traceability"],
+            "learning_tags": ["google", "oauth", "api"],
+        },
+        "drive": {
+            "objective": "manage_drive_documents_with_traceability",
+            "workflow_id": "drive_workflow",
+            "primary_action": "http_request",
+            "preferred_tools": ["http_request", "read_file", "write_file"],
+            "output_artifacts": ["drive_manifest", "file_receipt"],
+            "quality_checklist": ["file_integrity", "source_traceability", "permissions"],
+            "learning_tags": ["drive", "files", "workspace"],
+        },
         "screen_operator": {
             "objective": "inspect_control_and_verify_screen_state",
             "workflow_id": "screen_operator_workflow",
@@ -279,6 +365,15 @@ class CapabilityRouter:
             "output_artifacts": ["screenshots", "screen_summary", "control_result"],
             "quality_checklist": ["screen_readability", "control_verification", "artifact_traceability"],
             "learning_tags": ["screen", "operator", "vision"],
+        },
+        "real_time_control": {
+            "objective": "inspect_control_and_verify_screen_state",
+            "workflow_id": "real_time_control_workflow",
+            "primary_action": "screen_workflow",
+            "preferred_tools": ["screen_workflow", "vision_operator_loop", "analyze_screen", "computer_use", "take_screenshot"],
+            "output_artifacts": ["screenshots", "screen_summary", "control_result"],
+            "quality_checklist": ["screen_readability", "control_verification", "artifact_traceability"],
+            "learning_tags": ["screen", "operator", "vision", "real_time"],
         },
         "file_ops": {
             "objective": "perform_filesystem_tasks_with_verification",
@@ -393,6 +488,18 @@ class CapabilityRouter:
         low = str(text or "").lower()
         if domain == "research":
             return "research_delivery"
+        if domain == "email":
+            return "communication"
+        if domain == "calendar":
+            return "planning"
+        if domain == "social":
+            return "communication"
+        if domain == "scheduler":
+            return "automation"
+        if domain == "google":
+            return "api_integration"
+        if domain == "drive":
+            return "document_pack"
         if domain == "document":
             if any(marker in low for marker in ("excel", "xlsx", "csv", "tablo", "sheet", "spreadsheet")):
                 return "spreadsheet"
@@ -431,6 +538,15 @@ class CapabilityRouter:
             add("md")
         if content_kind == "spreadsheet":
             add("xlsx")
+        if content_kind == "communication":
+            add("txt")
+            if any(marker in low for marker in ("email", "mail")):
+                add("eml")
+        if content_kind == "planning":
+            add("ics")
+            add("json")
+        if content_kind == "automation":
+            add("json")
         if content_kind in {"research_delivery", "document_pack", "summary_pack"}:
             add("docx")
             if any(marker in low for marker in ("layout", "ocr", "vision", "görsel", "gorsel", "tablo", "table", "grafik", "chart", "diagram", "figure")):
@@ -465,6 +581,12 @@ class CapabilityRouter:
             return "presentation"
         if content_kind == "spreadsheet":
             return "structured"
+        if content_kind == "communication":
+            return "briefing"
+        if content_kind == "planning":
+            return "planning"
+        if content_kind == "automation":
+            return "operational"
         if domain == "code":
             return "implementation"
         if any(marker in low for marker in ("analitik", "analytical", "detaylı", "detayli", "scientific", "bilimsel")):
@@ -507,6 +629,24 @@ class CapabilityRouter:
                 "table_structure",
                 "header_clarity",
                 "source_traceability",
+            ]
+        if content_kind == "communication":
+            return [
+                "recipient_accuracy",
+                "thread_context",
+                "tone_alignment",
+            ]
+        if content_kind == "planning":
+            return [
+                "time_accuracy",
+                "timezone_safety",
+                "confirmation",
+            ]
+        if content_kind == "automation":
+            return [
+                "safety",
+                "repeatability",
+                "traceability",
             ]
         if content_kind == "web_project":
             return [
@@ -692,11 +832,11 @@ class CapabilityRouter:
             confidence = max(float(confidence or 0.0), 0.82)
 
         hints = dict(self._DOMAIN_HINTS[best_domain])
-        multi_step_operator = best_domain == "screen_operator" and self._has_multi_step_operator_signal(normalized)
+        multi_step_operator = best_domain in {"screen_operator", "real_time_control"} and self._has_multi_step_operator_signal(normalized)
         if multi_step_operator:
             hints["primary_action"] = "operator_mission_control"
             hints["preferred_tools"] = ["operator_mission_control", "vision_operator_loop", "screen_workflow", "computer_use", "analyze_screen", "take_screenshot"]
-        elif best_domain == "screen_operator" and self._has_strong_screen_control_signal(normalized):
+        elif best_domain in {"screen_operator", "real_time_control"} and self._has_strong_screen_control_signal(normalized):
             hints["primary_action"] = "vision_operator_loop"
             hints["preferred_tools"] = ["vision_operator_loop", "screen_workflow", "computer_use", "analyze_screen", "take_screenshot"]
         complexity_tier = self._complexity_tier(confidence=confidence, text=normalized, domain=best_domain)

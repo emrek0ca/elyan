@@ -37,6 +37,7 @@ class OfficeSkill(BaseSkill):
                     "write_excel",
                     {"path": path, "data": data},
                     source="builtin_office_skill",
+                    skill_name=self.name,
                 )
                 return wrap_skill_tool_result(result)
             elif command == "pdf":

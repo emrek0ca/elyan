@@ -221,12 +221,9 @@ def _ollama(action: str, name: str = None):
     try:
         from utils.ollama_helper import OllamaHelper
         if action == "list":
-            if not OllamaHelper.is_installed():
-                print("❌  Ollama kurulu değil.")
+            if not OllamaHelper.ensure_available(allow_install=True, start_service=True):
+                print("❌  Ollama otomatik kurulamadı.")
                 print(f"  Kurulum: {OllamaHelper.get_install_command()}")
-                return
-            if not OllamaHelper.is_running():
-                print("❌  Ollama çalışmıyor. Ollama uygulamasını başlatın.")
                 return
             models = OllamaHelper.list_local_models()
             if models:
@@ -241,10 +238,16 @@ def _ollama(action: str, name: str = None):
             import subprocess
             model_name = normalize_model_name("ollama", name)
             print(f"Modeli indiriliyor: {model_name}...")
+            if not OllamaHelper.ensure_available(allow_install=True, start_service=True):
+                print("❌  Ollama otomatik kurulamadı.")
+                print(f"  Kurulum: {OllamaHelper.get_install_command()}")
+                return
             subprocess.run(["ollama", "pull", model_name])
         elif action == "start":
-            import subprocess
-            subprocess.Popen(["ollama", "serve"])
+            if not OllamaHelper.ensure_available(allow_install=True, start_service=True):
+                print("❌  Ollama otomatik kurulamadı.")
+                print(f"  Kurulum: {OllamaHelper.get_install_command()}")
+                return
             print("✅  Ollama başlatıldı.")
         elif action == "stop":
             import subprocess

@@ -7,6 +7,11 @@ import os
 import sys
 from difflib import get_close_matches
 from pathlib import Path
+
+from core.dependencies.autoinstall_hook import activate as _activate_autoinstall_hook
+
+_activate_autoinstall_hook()
+
 from core.version import APP_VERSION
 
 

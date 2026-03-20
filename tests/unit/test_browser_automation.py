@@ -2,6 +2,8 @@
 
 import pytest
 import httpx
+import sys
+from types import SimpleNamespace
 
 from tools.browser_automation import SimpleBrowser
 
@@ -48,3 +50,24 @@ async def test_simple_browser_retries_without_tls_verification(monkeypatch):
     assert result["success"] is True
     assert result["tls_verify_bypassed"] is True
     assert rebuilt["done"] is True
+
+
+def test_browser_automation_lazy_installs_httpx(monkeypatch):
+    from tools import browser_automation
+
+    calls = {}
+
+    class _FakeRuntime:
+        def ensure_module(self, *args, **kwargs):
+            calls["args"] = args
+            calls["kwargs"] = kwargs
+            return SimpleNamespace(status="installed", reason="installed")
+
+    fake_httpx = SimpleNamespace(AsyncClient=lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(browser_automation, "httpx", None)
+    monkeypatch.setattr(browser_automation, "get_dependency_runtime", lambda: _FakeRuntime())
+    monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
+
+    assert browser_automation._ensure_httpx() is fake_httpx
+    assert calls["kwargs"]["install_spec"] == "httpx"
+    assert calls["kwargs"]["skill_name"] == "browser"

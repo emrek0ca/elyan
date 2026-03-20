@@ -11,6 +11,7 @@ import subprocess
 import os
 from pathlib import Path
 from typing import Optional, Tuple
+from core.dependencies import get_system_dependency_runtime
 from utils.logger import get_logger
 
 logger = get_logger("audio_utils")
@@ -19,6 +20,10 @@ logger = get_logger("audio_utils")
 def check_ffmpeg() -> bool:
     """Check if FFmpeg is available"""
     try:
+        runtime = get_system_dependency_runtime()
+        record = runtime.ensure_binary("ffmpeg", allow_install=True, skill_name="voice", tool_name="ffmpeg")
+        if record.status in {"installed", "ready"}:
+            return True
         subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -37,7 +42,9 @@ def convert_ogg_to_wav(ogg_path: str, wav_path: Optional[str] = None) -> Optiona
         Path to WAV file or None if failed
     """
     if not check_ffmpeg():
-        logger.error("FFmpeg not found. Install: brew install ffmpeg")
+        runtime = get_system_dependency_runtime()
+        hint = runtime.get_install_hint("ffmpeg")
+        logger.error(f"FFmpeg not found. Install hint: {hint or 'ffmpeg'}")
         return None
     
     if wav_path is None:

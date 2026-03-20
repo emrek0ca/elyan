@@ -31,7 +31,7 @@ class ResearchSkill(BaseSkill):
 
             if command == "search":
                 query = params.get("query", "")
-                result = await execute_registered_tool("web_search", {"query": query}, source="builtin_research_skill")
+                result = await execute_registered_tool("web_search", {"query": query}, source="builtin_research_skill", skill_name=self.name)
                 return wrap_skill_tool_result(result)
             elif command == "deep":
                 topic = params.get("topic", "")
@@ -40,11 +40,12 @@ class ResearchSkill(BaseSkill):
                     "advanced_research",
                     {"topic": topic, "depth": depth},
                     source="builtin_research_skill",
+                    skill_name=self.name,
                 )
                 return wrap_skill_tool_result(result)
             elif command == "scrape":
                 url = params.get("url", "")
-                result = await execute_registered_tool("scrape_page", {"url": url}, source="builtin_research_skill")
+                result = await execute_registered_tool("scrape_page", {"url": url}, source="builtin_research_skill", skill_name=self.name)
                 return wrap_skill_tool_result(result)
             else:
                 return {"success": False, "error": f"Unknown command: {command}"}

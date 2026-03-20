@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
-from tools.browser.manager import PLAYWRIGHT_AVAILABLE, close_browser_manager, get_browser_manager
+from tools.browser.manager import close_browser_manager, get_browser_manager, is_playwright_available
 
 
 AsyncDictCallable = Callable[..., Awaitable[dict[str, Any]]]
@@ -325,4 +325,4 @@ def default_browser_runtime_services() -> BrowserRuntimeServices:
     )
 
 
-__all__ = ["BrowserRuntimeServices", "PLAYWRIGHT_AVAILABLE", "default_browser_runtime_services"]
+__all__ = ["BrowserRuntimeServices", "default_browser_runtime_services", "is_playwright_available"]

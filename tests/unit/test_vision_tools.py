@@ -37,6 +37,7 @@ async def test_ollama_vision_missing_model_fails_fast_without_pull(monkeypatch, 
             return _FakeResponse(404, {})
 
     monkeypatch.setattr(vision_tools, "VISION_AUTO_PULL", False)
+    monkeypatch.setattr(vision_tools, "_ensure_ollama_runtime", lambda: True)
     monkeypatch.setattr("tools.vision_tools.httpx.AsyncClient", lambda timeout=0: _FakeClient())
 
     image_path = tmp_path / "shot.png"

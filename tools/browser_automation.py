@@ -6,14 +6,75 @@ For now, uses simple HTTP requests and parsing
 Can be enhanced with actual Playwright integration later
 """
 
+from __future__ import annotations
+
 import asyncio
-import httpx
-from bs4 import BeautifulSoup
+import importlib
 from typing import Dict, Any, Optional, List
 from urllib.parse import urljoin, urlparse
+
+try:
+    import httpx
+except ImportError:
+    httpx = None  # type: ignore[assignment]
+
+from core.dependencies import get_dependency_runtime
 from utils.logger import get_logger
 
 logger = get_logger("tools.browser_automation")
+BeautifulSoup = None
+
+
+def _ensure_httpx():
+    global httpx
+    if httpx is not None:
+        return httpx
+    runtime = get_dependency_runtime()
+    record = runtime.ensure_module(
+        "httpx",
+        install_spec="httpx",
+        source="pypi",
+        trust_level="trusted",
+        skill_name="browser",
+        tool_name="browser_automation",
+        allow_install=True,
+    )
+    if record.status in {"installed", "ready"}:
+        importlib.invalidate_caches()
+        import httpx as httpx_mod
+
+        httpx = httpx_mod
+        return httpx
+    return None
+
+
+def _ensure_bs4():
+    global BeautifulSoup
+    if BeautifulSoup is not None:
+        return BeautifulSoup
+    try:
+        from bs4 import BeautifulSoup as bs4_soup
+
+        BeautifulSoup = bs4_soup
+        return BeautifulSoup
+    except ImportError:
+        runtime = get_dependency_runtime()
+        record = runtime.ensure_module(
+            "bs4",
+            install_spec="beautifulsoup4",
+            source="pypi",
+            trust_level="trusted",
+            skill_name="browser",
+            tool_name="browser_automation",
+            allow_install=True,
+        )
+        if record.status in {"installed", "ready"}:
+            importlib.invalidate_caches()
+            from bs4 import BeautifulSoup as bs4_soup
+
+            BeautifulSoup = bs4_soup
+            return BeautifulSoup
+        return None
 
 
 def _is_tls_verify_error(exc: Exception) -> bool:
@@ -34,9 +95,12 @@ class SimpleBrowser:
         self.client = self._build_client(verify=True)
         self.current_url: Optional[str] = None
         self.current_html: Optional[str] = None
-        self.current_soup: Optional[BeautifulSoup] = None
+        self.current_soup: Optional[Any] = None
 
     def _build_client(self, *, verify: bool) -> httpx.AsyncClient:
+        httpx_mod = _ensure_httpx()
+        if httpx_mod is None:
+            raise ImportError("httpx kurulamadi")
         return httpx.AsyncClient(
             timeout=self.timeout,
             follow_redirects=True,
@@ -57,6 +121,19 @@ class SimpleBrowser:
             Page information
         """
         logger.info(f"Navigating to: {url}")
+        if _ensure_httpx() is None:
+            return {
+                "success": False,
+                "error": "httpx kurulamadi",
+                "url": url,
+            }
+        soup_cls = _ensure_bs4()
+        if soup_cls is None:
+            return {
+                "success": False,
+                "error": "beautifulsoup4 kurulamadi",
+                "url": url,
+            }
         
         try:
             response = await self.client.get(url)
@@ -64,7 +141,7 @@ class SimpleBrowser:
             
             self.current_url = str(response.url)
             self.current_html = response.text
-            self.current_soup = BeautifulSoup(self.current_html, 'html.parser')
+            self.current_soup = soup_cls(self.current_html, 'html.parser')
             
             # Extract page info
             title = self.current_soup.title.string if self.current_soup.title else ""
@@ -90,7 +167,14 @@ class SimpleBrowser:
                     response.raise_for_status()
                     self.current_url = str(response.url)
                     self.current_html = response.text
-                    self.current_soup = BeautifulSoup(self.current_html, 'html.parser')
+                    soup_cls = _ensure_bs4()
+                    if soup_cls is None:
+                        return {
+                            "success": False,
+                            "error": "beautifulsoup4 kurulamadi",
+                            "url": url,
+                        }
+                    self.current_soup = soup_cls(self.current_html, 'html.parser')
                     title = self.current_soup.title.string if self.current_soup.title else ""
                     return {
                         "success": True,
@@ -261,6 +345,119 @@ class SimpleBrowser:
     async def close(self):
         """Close the browser client"""
         await self.client.aclose()
+
+
+class BrowserAutomation:
+    """Compatibility wrapper for CLI browser commands."""
+
+    def __init__(self):
+        self._history: list[str] = []
+        self.current_url: str = ""
+        self._last_result: dict[str, Any] = {}
+
+    async def navigate(self, url: str) -> dict[str, Any]:
+        from core.capabilities.browser import run_browser_runtime
+
+        result = await run_browser_runtime(action="open", url=str(url or ""), screenshot=True)
+        self._last_result = dict(result or {})
+        if result.get("success"):
+            final_url = str(result.get("url") or url or "").strip()
+            if final_url:
+                self._history.append(final_url)
+                self.current_url = final_url
+        return result
+
+    async def screenshot(self, output_path: str = "", full_page: bool = True) -> dict[str, Any]:
+        from core.capabilities.browser import run_browser_runtime
+
+        result = await run_browser_runtime(action="screenshot", url=self.current_url, screenshot=True)
+        self._last_result = dict(result or {})
+        screenshots = [str(path).strip() for path in list(result.get("screenshots") or []) if str(path).strip()]
+        if output_path and screenshots:
+            try:
+                from pathlib import Path
+                import shutil
+
+                target = Path(output_path).expanduser().resolve()
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(screenshots[-1], target)
+                result["screenshot_path"] = str(target)
+            except Exception as exc:
+                result = dict(result)
+                result["success"] = False
+                result["error"] = str(exc)
+        return result
+
+    async def click(self, selector: str) -> dict[str, Any]:
+        from core.capabilities.browser import run_browser_runtime
+
+        result = await run_browser_runtime(action="click", selector=str(selector or ""), screenshot=True)
+        self._last_result = dict(result or {})
+        return result
+
+    async def type_text(self, selector: str, text: str) -> dict[str, Any]:
+        from core.capabilities.browser import run_browser_runtime
+
+        result = await run_browser_runtime(action="type", selector=str(selector or ""), text=str(text or ""), screenshot=True)
+        self._last_result = dict(result or {})
+        return result
+
+    async def extract_text(self, selector: str = "body") -> str:
+        browser = SimpleBrowser()
+        try:
+            if self.current_url:
+                nav = await browser.goto(self.current_url)
+                if not nav.get("success"):
+                    return ""
+            result = await browser.get_text(selector)
+            if result.get("success"):
+                return str(result.get("text") or "")
+            return ""
+        finally:
+            await browser.close()
+
+    async def extract_links(self) -> list[dict[str, Any]]:
+        browser = SimpleBrowser()
+        try:
+            if self.current_url:
+                nav = await browser.goto(self.current_url)
+                if not nav.get("success"):
+                    return []
+            result = await browser.get_links()
+            if result.get("success"):
+                return list(result.get("links") or [])
+            return []
+        finally:
+            await browser.close()
+
+    async def scroll(self, direction: str = "down", amount: int = 500) -> dict[str, Any]:
+        from core.capabilities.browser import run_browser_runtime
+
+        result = await run_browser_runtime(action="scroll", selector=str(direction or "down"), text=str(int(amount or 500)), screenshot=False)
+        self._last_result = dict(result or {})
+        return result
+
+    async def go_back(self) -> dict[str, Any]:
+        if len(self._history) < 2:
+            return {"success": False, "error": "history_empty"}
+        self._history.pop()
+        target = self._history[-1]
+        return await self.navigate(target)
+
+    async def close(self) -> dict[str, Any]:
+        from core.capabilities.browser import run_browser_runtime
+
+        result = await run_browser_runtime(action="close", screenshot=False)
+        self._last_result = dict(result or {})
+        return result
+
+    def list_profiles(self) -> list[dict[str, Any]]:
+        try:
+            from tools.browser.profile_manager import browser_profiles
+
+            return [{"id": name, "name": name} for name in browser_profiles.list_profiles()]
+        except Exception:
+            return []
 
 
 # Tool functions

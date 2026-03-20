@@ -1,13 +1,18 @@
 import sys
 import os
 from pathlib import Path
+
+# Add project root to sys.path before any repo imports.
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from core.dependencies.autoinstall_hook import activate as _activate_autoinstall_hook
+
+_activate_autoinstall_hook()
+
 import pytest
 
 from core.quota import quota_manager
 from core.subscription import subscription_manager
-
-# Add project root to sys.path
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Ensure dummy .env for tests if needed
 os.environ["FULL_DISK_ACCESS"] = "true"

@@ -9,6 +9,11 @@ import sys
 import time
 import asyncio
 from pathlib import Path
+
+from core.dependencies.autoinstall_hook import activate as _activate_autoinstall_hook
+
+_activate_autoinstall_hook()
+
 from tabulate import tabulate
 
 # Add bot root to path

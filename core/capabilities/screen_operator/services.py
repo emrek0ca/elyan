@@ -1,25 +1,279 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import csv
+import importlib.util
 import io
 import json
 import os
 import platform
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from core.confidence import coerce_confidence
+from core.dependencies import get_system_dependency_runtime
 from tools.vision_tools import analyze_image
 
 
 AsyncDictCallable = Callable[..., Awaitable[dict[str, Any]]]
 
 
+def _module_available(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except Exception:
+        return False
+
+
+def _ensure_system_binary(binary: str, *, allow_install: bool = True) -> bool:
+    try:
+        record = get_system_dependency_runtime().ensure_binary(
+            binary,
+            allow_install=allow_install,
+            skill_name="screen_operator",
+            tool_name=binary,
+        )
+        return str(record.status).lower() in {"ready", "installed"}
+    except Exception:
+        return False
+
+
 def _coerce_confidence(value: Any, default: float = 0.0) -> float:
     return coerce_confidence(value, default)
+
+
+def _normalize_role(role: Any) -> str:
+    raw = str(role or "").strip().lower()
+    if not raw:
+        return "unknown"
+    replacements = {
+        "push button": "button",
+        "button": "button",
+        "text": "text",
+        "text field": "text_field",
+        "editable text": "text_field",
+        "entry": "text_field",
+        "link": "link",
+        "menu item": "menu_item",
+        "menuitem": "menu_item",
+        "tab": "tab",
+        "checkbox": "checkbox",
+        "radio button": "radio",
+        "combo box": "combo_box",
+        "list item": "list_item",
+        "window": "window",
+        "pane": "group",
+        "group": "group",
+    }
+    for needle, replacement in replacements.items():
+        if needle in raw:
+            return replacement
+    return raw.replace(" ", "_")
+
+
+def _fallback_accessibility_snapshot_from_metadata(
+    *,
+    frontmost_app: str,
+    window_title: str,
+    bounds: dict[str, Any] | None = None,
+    reason: str = "",
+) -> dict[str, Any]:
+    elements: list[dict[str, Any]] = []
+    if frontmost_app:
+        elements.append({"label": frontmost_app, "role": "frontmost_app", "source": "window_metadata", "confidence": 0.92})
+    if window_title and window_title != frontmost_app:
+        row: dict[str, Any] = {"label": window_title, "role": "window_title", "source": "window_metadata", "confidence": 0.9}
+        if isinstance(bounds, dict):
+            row.update({k: int(v) for k, v in bounds.items() if isinstance(v, (int, float))})
+        elements.append(row)
+    return {
+        "success": True,
+        "frontmost_app": frontmost_app,
+        "window_title": window_title,
+        "elements": elements,
+        "summary": window_title or frontmost_app or "",
+        "source": "fallback/native_window_metadata",
+        "warning": reason,
+    }
+
+
+def _window_title_from_ctypes() -> dict[str, Any]:
+    user32 = getattr(ctypes, "windll", None)
+    if user32 is None:
+        return {"success": False, "error": "ctypes_windll_unavailable"}
+    user32 = getattr(user32, "user32", None)
+    if user32 is None:
+        return {"success": False, "error": "user32_unavailable"}
+    hwnd = int(getattr(user32, "GetForegroundWindow", lambda: 0)() or 0)
+    if not hwnd:
+        return {"success": False, "error": "foreground_window_unavailable"}
+    length = int(getattr(user32, "GetWindowTextLengthW", lambda _hwnd: 0)(hwnd) or 0)
+    buffer = ctypes.create_unicode_buffer(max(1, length + 1))
+    getattr(user32, "GetWindowTextW", lambda *_args: 0)(hwnd, buffer, len(buffer))
+    title = str(buffer.value or "").strip()
+    rect = getattr(ctypes, "wintypes", None)
+    bounds: dict[str, Any] = {}
+    if rect is not None and hasattr(rect, "RECT"):
+        try:
+            box = rect.RECT()
+            if getattr(user32, "GetWindowRect", lambda *_args: 0)(hwnd, ctypes.byref(box)):
+                bounds = {
+                    "x": int(box.left),
+                    "y": int(box.top),
+                    "width": int(box.right - box.left),
+                    "height": int(box.bottom - box.top),
+                }
+        except Exception:
+            bounds = {}
+    return {
+        "success": True,
+        "frontmost_app": title or "Windows",
+        "window_title": title,
+        "bounds": bounds,
+    }
+
+
+async def _linux_window_title() -> dict[str, Any]:
+    if not shutil.which("xdotool"):
+        _ensure_system_binary("xdotool")
+    if shutil.which("xdotool"):
+        proc = await asyncio.create_subprocess_exec(
+            "xdotool",
+            "getactivewindow",
+            "getwindowname",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode == 0:
+            title = str(stdout.decode("utf-8", errors="ignore").strip())
+            if title:
+                return {"success": True, "frontmost_app": title, "window_title": title, "bounds": {}}
+        err = stderr.decode("utf-8", errors="ignore").strip()
+        if err:
+            return {"success": False, "error": err}
+    if not shutil.which("wmctrl"):
+        _ensure_system_binary("wmctrl")
+    if not shutil.which("xprop"):
+        _ensure_system_binary("xprop")
+    if shutil.which("wmctrl") and shutil.which("xprop"):
+        try:
+            active_proc = await asyncio.create_subprocess_exec(
+                "xprop",
+                "-root",
+                "_NET_ACTIVE_WINDOW",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            active_out, _ = await active_proc.communicate()
+            match = re.search(r"0x[0-9a-fA-F]+", active_out.decode("utf-8", errors="ignore"))
+            if match:
+                win_id = match.group(0)
+                name_proc = await asyncio.create_subprocess_exec(
+                    "xprop",
+                    "-id",
+                    win_id,
+                    "WM_NAME",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                name_out, _ = await name_proc.communicate()
+                title_match = re.search(r'=\s*"([^"]+)"', name_out.decode("utf-8", errors="ignore"))
+                title = str(title_match.group(1) if title_match else "").strip()
+                if title:
+                    return {"success": True, "frontmost_app": title, "window_title": title, "bounds": {}}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+    return {"success": False, "error": "window_metadata_unsupported"}
+
+
+def _collect_uia_elements(control: Any, *, max_depth: int = 2, max_items: int = 24) -> list[dict[str, Any]]:
+    elements: list[dict[str, Any]] = []
+
+    def _walk(node: Any, depth: int) -> None:
+        if node is None or depth > max_depth or len(elements) >= max_items:
+            return
+        label = str(getattr(node, "Name", None) or getattr(node, "name", None) or "").strip()
+        role = _normalize_role(getattr(node, "ControlTypeName", None) or getattr(node, "control_type", None) or getattr(node, "RoleName", None) or getattr(node, "role_name", None) or "")
+        if hasattr(node, "BoundingRectangle"):
+            try:
+                rect = getattr(node, "BoundingRectangle")
+                if rect:
+                    x = int(getattr(rect, "left", getattr(rect, "x", 0)) or 0)
+                    y = int(getattr(rect, "top", getattr(rect, "y", 0)) or 0)
+                    width = int((getattr(rect, "right", 0) or 0) - (getattr(rect, "left", 0) or 0))
+                    height = int((getattr(rect, "bottom", 0) or 0) - (getattr(rect, "top", 0) or 0))
+                else:
+                    x = y = width = height = 0
+            except Exception:
+                x = y = width = height = 0
+        else:
+            x = y = width = height = 0
+        if label or role:
+            row = {
+                "label": label,
+                "role": role,
+                "source": "uiautomation",
+                "confidence": 0.8 if label else 0.55,
+            }
+            if any(v for v in (x, y, width, height)):
+                row.update({"x": x, "y": y, "width": width, "height": height})
+            elements.append(row)
+        try:
+            children = list(getattr(node, "GetChildren", lambda: [])() or [])
+        except Exception:
+            children = []
+        for child in children:
+            _walk(child, depth + 1)
+
+    _walk(control, 0)
+    return elements
+
+
+def _collect_pyatspi_elements(node: Any, *, max_depth: int = 2, max_items: int = 24) -> list[dict[str, Any]]:
+    elements: list[dict[str, Any]] = []
+
+    def _role_name(item: Any) -> str:
+        role = ""
+        try:
+            getter = getattr(item, "getRoleName", None)
+            if callable(getter):
+                role = str(getter() or "").strip()
+        except Exception:
+            role = ""
+        if not role:
+            role = str(getattr(item, "roleName", "") or getattr(item, "role_name", "") or "").strip()
+        return _normalize_role(role)
+
+    def _walk(item: Any, depth: int) -> None:
+        if item is None or depth > max_depth or len(elements) >= max_items:
+            return
+        label = str(getattr(item, "name", None) or getattr(item, "label", None) or "").strip()
+        role = _role_name(item)
+        if label or role:
+            elements.append({
+                "label": label,
+                "role": role,
+                "source": "pyatspi",
+                "confidence": 0.82 if label else 0.5,
+            })
+        try:
+            child_count = int(getattr(item, "childCount", 0) or 0)
+        except Exception:
+            child_count = 0
+        for idx in range(min(child_count, max_items - len(elements))):
+            try:
+                child = item.getChildAtIndex(idx)
+            except Exception:
+                child = None
+            _walk(child, depth + 1)
+
+    _walk(node, 0)
+    return elements
 
 @dataclass(frozen=True)
 class ScreenOperatorServices:
@@ -54,7 +308,25 @@ async def _run_osascript(script: str) -> tuple[int, str, str]:
 
 
 async def _default_window_metadata() -> dict[str, Any]:
-    if platform.system() != "Darwin":
+    system = platform.system()
+    if system == "Windows":
+        try:
+            data = await asyncio.to_thread(_window_title_from_ctypes)
+            if bool(data.get("success")):
+                return data
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+    elif system not in {"Darwin", "Windows"}:
+        data = await _linux_window_title()
+        if bool(data.get("success")):
+            return data
+        # fall through to mac-style unsupported message only after trying Linux helpers
+        linux_error = str(data.get("error") or "").strip()
+        if linux_error and linux_error != "window_metadata_unsupported":
+            return {"success": False, "error": linux_error}
+        return {"success": False, "error": "window_metadata_unsupported"}
+    if system != "Darwin":
+        # On non-Darwin systems, we already attempted the native helpers above.
         return {"success": False, "error": "window_metadata_unsupported"}
     script = r'''
         tell application "System Events"
@@ -107,8 +379,86 @@ async def _default_window_metadata() -> dict[str, Any]:
 
 
 async def _default_accessibility_snapshot() -> dict[str, Any]:
-    if platform.system() != "Darwin":
-        return {"success": False, "error": "accessibility_unsupported", "elements": []}
+    system = platform.system()
+    if system == "Windows":
+        try:
+            if _module_available("uiautomation"):
+                import uiautomation as auto  # type: ignore
+
+                focused = None
+                for getter_name in ("GetFocusedControl", "GetForegroundControl", "GetRootControl"):
+                    getter = getattr(auto, getter_name, None)
+                    if callable(getter):
+                        try:
+                            focused = getter()
+                        except Exception:
+                            focused = None
+                        if focused is not None:
+                            break
+                elements = _collect_uia_elements(focused, max_depth=2, max_items=24) if focused is not None else []
+                window_meta = await _default_window_metadata()
+                if not elements:
+                    return _fallback_accessibility_snapshot_from_metadata(
+                        frontmost_app=str(window_meta.get("frontmost_app") or "").strip(),
+                        window_title=str(window_meta.get("window_title") or "").strip(),
+                        bounds=dict(window_meta.get("bounds") or {}) if isinstance(window_meta.get("bounds"), dict) else {},
+                        reason="uiautomation_empty",
+                    )
+                return {
+                    "success": True,
+                    "frontmost_app": str(window_meta.get("frontmost_app") or "").strip(),
+                    "window_title": str(window_meta.get("window_title") or "").strip(),
+                    "elements": elements,
+                    "source": "uiautomation",
+                }
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "elements": []}
+        window_meta = await _default_window_metadata()
+        return _fallback_accessibility_snapshot_from_metadata(
+            frontmost_app=str(window_meta.get("frontmost_app") or "").strip(),
+            window_title=str(window_meta.get("window_title") or "").strip(),
+            bounds=dict(window_meta.get("bounds") or {}) if isinstance(window_meta.get("bounds"), dict) else {},
+            reason="uiautomation_unavailable",
+        )
+    if system not in {"Darwin", "Windows"}:
+        try:
+            if _module_available("pyatspi"):
+                import pyatspi  # type: ignore
+
+                desktop = None
+                registry = getattr(pyatspi, "Registry", None)
+                getter = getattr(registry, "getDesktop", None) if registry is not None else None
+                if callable(getter):
+                    try:
+                        desktop = getter(0)
+                    except Exception:
+                        desktop = None
+                if desktop is not None:
+                    elements = _collect_pyatspi_elements(desktop, max_depth=2, max_items=24)
+                    window_meta = await _default_window_metadata()
+                    if not elements:
+                        return _fallback_accessibility_snapshot_from_metadata(
+                            frontmost_app=str(window_meta.get("frontmost_app") or "").strip(),
+                            window_title=str(window_meta.get("window_title") or "").strip(),
+                            bounds=dict(window_meta.get("bounds") or {}) if isinstance(window_meta.get("bounds"), dict) else {},
+                            reason="pyatspi_empty",
+                        )
+                    return {
+                        "success": True,
+                        "frontmost_app": str(window_meta.get("frontmost_app") or "").strip(),
+                        "window_title": str(window_meta.get("window_title") or "").strip(),
+                        "elements": elements,
+                        "source": "pyatspi",
+                    }
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "elements": []}
+        window_meta = await _default_window_metadata()
+        return _fallback_accessibility_snapshot_from_metadata(
+            frontmost_app=str(window_meta.get("frontmost_app") or "").strip(),
+            window_title=str(window_meta.get("window_title") or "").strip(),
+            bounds=dict(window_meta.get("bounds") or {}) if isinstance(window_meta.get("bounds"), dict) else {},
+            reason="pyatspi_unavailable",
+        )
     script = r'''
         set AppleScript's text item delimiters to linefeed
         tell application "System Events"
@@ -217,6 +567,9 @@ async def _default_ocr(image_path: str) -> dict[str, Any]:
     if not target:
         return {"success": False, "error": "ocr_missing_image"}
     tesseract = shutil.which("tesseract")
+    if not tesseract:
+        if _ensure_system_binary("tesseract"):
+            tesseract = shutil.which("tesseract")
     if not tesseract:
         return {"success": False, "error": "ocr_unavailable", "text": "", "lines": []}
     proc = await asyncio.create_subprocess_exec(

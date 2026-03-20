@@ -29,6 +29,17 @@ document.addEventListener("DOMContentLoaded", function () {
     memory: { profile: [], workflow: [], task: [], evidence: [] },
     selectedMissionId: ""
   };
+  var skillCatalogState = {
+    skills: [],
+    workflows: [],
+    summary: { total: 0, enabled: 0, runtime_ready: 0, workflows_total: 0, workflows_enabled: 0 }
+  };
+  var marketplaceState = {
+    query: "",
+    listings: [],
+    categories: [],
+    total: 0
+  };
   var initialMissionId = "";
   try {
     var params = new URLSearchParams(window.location.search || "");
@@ -481,6 +492,185 @@ document.addEventListener("DOMContentLoaded", function () {
       });
     });
     root.innerHTML = rows.length ? rows.join("") : '<div class="empty">Mission memory henüz boş.</div>';
+  }
+
+  function renderSkillCatalog() {
+    var summary = skillCatalogState.summary || {};
+    var kpis = $("#skills-kpis");
+    if (kpis) {
+      kpis.innerHTML =
+        mkKPI("Toplam", summary.total || 0) +
+        mkKPI("Etkin", summary.enabled || 0) +
+        mkKPI("Hazır", summary.runtime_ready || 0) +
+        mkKPI("Workflow", summary.workflows_enabled || 0);
+    }
+
+    var skillsRoot = $("#skills-list");
+    if (skillsRoot) {
+      var skills = Array.isArray(skillCatalogState.skills) ? skillCatalogState.skills : [];
+      if (!skills.length) {
+        skillsRoot.innerHTML = '<div class="empty">Registry boş.</div>';
+      } else {
+        skillsRoot.innerHTML = skills.slice(0, 8).map(function (item) {
+          var tone = item.enabled && item.runtime_ready ? "ok" : (item.enabled ? "warn" : "err");
+          return (
+            '<div class="stack-item">' +
+              '<div class="mission-meta" style="margin-top:0;margin-bottom:6px">' +
+                '<span>' + esc(item.category || "general") + '</span>' +
+                '<span>' + esc(item.latency_level || "standard") + '</span>' +
+                '<span class="pill ' + tone + '">' + esc(item.enabled ? (item.runtime_ready ? "Ready" : "Partial") : "Off") + '</span>' +
+              '</div>' +
+              '<strong>' + esc(item.name || "Skill") + '</strong>' +
+              '<p>' + esc(item.description || "") + '</p>' +
+            '</div>'
+          );
+        }).join("");
+      }
+    }
+
+    var workflowsRoot = $("#skills-workflow-list");
+    if (workflowsRoot) {
+      var workflows = Array.isArray(skillCatalogState.workflows) ? skillCatalogState.workflows : [];
+      if (!workflows.length) {
+        workflowsRoot.innerHTML = '<div class="empty">Workflow yok.</div>';
+      } else {
+        workflowsRoot.innerHTML = workflows.slice(0, 8).map(function (item) {
+          var tone = item.enabled && item.runtime_ready ? "ok" : (item.enabled ? "warn" : "err");
+          return (
+            '<div class="stack-item">' +
+              '<div class="mission-meta" style="margin-top:0;margin-bottom:6px">' +
+                '<span>' + esc(item.category || "general") + '</span>' +
+                '<span>' + esc(item.source || "builtin") + '</span>' +
+                '<span class="pill ' + tone + '">' + esc(item.enabled ? (item.runtime_ready ? "Ready" : "Partial") : "Off") + '</span>' +
+              '</div>' +
+              '<strong>' + esc(item.name || item.id || "Workflow") + '</strong>' +
+              '<p>' + esc((item.required_tools || []).join(", ") || item.description || "") + '</p>' +
+            '</div>'
+          );
+        }).join("");
+      }
+    }
+  }
+
+  function loadSkillCatalog() {
+    return Promise.all([
+      GET("/api/skills?available=1"),
+      GET("/api/skills/workflows?enabled=0")
+    ]).then(function (results) {
+      var skillData = results[0] || {};
+      var workflowData = results[1] || {};
+      skillCatalogState = {
+        skills: Array.isArray(skillData.skills) ? skillData.skills : [],
+        workflows: Array.isArray(workflowData.workflows) ? workflowData.workflows : [],
+        summary: {
+          total: (skillData.summary && skillData.summary.total) || 0,
+          enabled: (skillData.summary && skillData.summary.enabled) || 0,
+          runtime_ready: (skillData.summary && skillData.summary.runtime_ready) || 0,
+          workflows_total: (workflowData.summary && workflowData.summary.total) || 0,
+          workflows_enabled: (workflowData.summary && workflowData.summary.enabled) || 0
+        }
+      };
+      renderSkillCatalog();
+    });
+  }
+
+  function refreshSkillRegistry() {
+    return POST("/api/skills/refresh", {}).then(function (res) {
+      if (res && res.ok) {
+        toast("Skill registry yenilendi", "ok");
+      } else {
+        toast((res && res.error) || "Skill registry yenilenemedi", "err");
+      }
+      return loadSkillCatalog();
+    });
+  }
+
+  function renderMarketplace() {
+    var summary = marketplaceState || {};
+    var kpis = $("#marketplace-kpis");
+    if (kpis) {
+      kpis.innerHTML =
+        mkKPI("Toplam", summary.total || 0) +
+        mkKPI("Kategori", (summary.categories || []).length || 0) +
+        mkKPI("Sorgu", summary.query ? 1 : 0);
+    }
+
+    var root = $("#marketplace-list");
+    if (!root) return;
+    var listings = Array.isArray(summary.listings) ? summary.listings : [];
+    if (!listings.length) {
+      root.innerHTML = '<div class="empty">Marketplace sonucu yok.</div>';
+      return;
+    }
+    root.innerHTML = listings.slice(0, 8).map(function (item) {
+      var hasUrl = !!item.download_url;
+      return (
+        '<div class="stack-item">' +
+          '<div class="mission-meta" style="margin-top:0;margin-bottom:6px">' +
+            '<span>' + esc(item.category || "custom") + '</span>' +
+            '<span>' + esc(String(item.rating || 0)) + '</span>' +
+            '<span>' + esc(String(item.downloads || 0)) + ' indirme</span>' +
+          '</div>' +
+          '<strong>' + esc(item.name || "Skill") + '</strong>' +
+          '<p>' + esc(item.description || "") + '</p>' +
+          '<div class="mission-meta">' +
+            '<span>' + esc(item.author || "unknown") + '</span>' +
+            '<span>' + esc(item.updated_at || "-") + '</span>' +
+          '</div>' +
+          '<div class="btn-row">' +
+            (hasUrl ? '<button class="btn btn-p btn-sm js-market-install" data-url="' + esc(item.download_url) + '" data-name="' + esc(item.name || "") + '">Kur</button>' : '') +
+          '</div>' +
+        '</div>'
+      );
+    }).join("");
+
+    root.querySelectorAll(".js-market-install").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        installMarketplaceSkill(btn.getAttribute("data-url"), btn.getAttribute("data-name"), btn);
+      });
+    });
+  }
+
+  function loadMarketplace(query) {
+    var q = typeof query === "string" ? query : String((marketplaceState && marketplaceState.query) || "");
+    marketplaceState.query = q.trim();
+    var url = "/api/marketplace/browse?sort=rating";
+    if (marketplaceState.query) {
+      url += "&q=" + encodeURIComponent(marketplaceState.query);
+    }
+    return Promise.all([
+      GET(url),
+      GET("/api/marketplace/categories")
+    ]).then(function (results) {
+      var data = results[0] || {};
+      var catData = results[1] || {};
+      marketplaceState.listings = Array.isArray(data.listings) ? data.listings : [];
+      marketplaceState.categories = Array.isArray(catData.categories) ? catData.categories : [];
+      marketplaceState.total = Number(data.total || marketplaceState.listings.length || 0);
+      renderMarketplace();
+    });
+  }
+
+  function installMarketplaceSkill(url, name, btn) {
+    var button = btn || null;
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Kuruluyor...";
+    }
+    POST("/api/marketplace/install", { url: url }).then(function (res) {
+      if (res && res.ok) {
+        toast((name || "Skill") + " kuruldu", "ok");
+        refreshSkillRegistry().then(function () {
+          return loadMarketplace(marketplaceState.query || "");
+        });
+      } else {
+        toast((res && res.error) || "Kurulum basarisiz", "err");
+      }
+      if (button) {
+        button.disabled = false;
+        button.textContent = "Kur";
+      }
+    });
   }
 
   function updateMissionFilterButtons() {
@@ -1039,13 +1229,31 @@ document.addEventListener("DOMContentLoaded", function () {
      REFRESH & BOOT
      ================================================================ */
   function refreshAll() {
-    return Promise.all([loadMissionControl(), loadProviders(), loadOllama(), loadHealth()]);
+    return Promise.all([loadMissionControl(), loadProviders(), loadOllama(), loadHealth(), loadSkillCatalog(), loadMarketplace("")]);
   }
 
   var refreshBtn = $("#g-refresh");
   if (refreshBtn) refreshBtn.addEventListener("click", function () { refreshAll(); });
   var toolsRefreshBtn = $("#g-refresh-tools");
   if (toolsRefreshBtn) toolsRefreshBtn.addEventListener("click", function () { refreshAll(); });
+  var skillsRefreshBtn = $("#skills-refresh");
+  if (skillsRefreshBtn) skillsRefreshBtn.addEventListener("click", function () { refreshSkillRegistry(); });
+  var marketplaceRefreshBtn = $("#marketplace-refresh");
+  if (marketplaceRefreshBtn) marketplaceRefreshBtn.addEventListener("click", function () { loadMarketplace(marketplaceState.query || ""); });
+  var marketplaceSearchBtn = $("#marketplace-search");
+  if (marketplaceSearchBtn) marketplaceSearchBtn.addEventListener("click", function () {
+    var input = $("#marketplace-query");
+    loadMarketplace(input ? input.value : "");
+  });
+  var marketplaceQueryInput = $("#marketplace-query");
+  if (marketplaceQueryInput) {
+    marketplaceQueryInput.addEventListener("keydown", function (evt) {
+      if (evt.key === "Enter") {
+        evt.preventDefault();
+        loadMarketplace(marketplaceQueryInput.value || "");
+      }
+    });
+  }
 
   // Boot
   refreshAll().then(function () { return loadSettings(); });

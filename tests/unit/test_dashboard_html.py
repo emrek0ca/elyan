@@ -25,6 +25,15 @@ def test_dashboard_html_contains_mission_tools_and_settings_tabs():
     assert 'id="llm-grid"' in html
     assert 'id="oll-installed"' in html
     assert 'id="st-table"' in html
+    assert 'id="skills-refresh"' in html
+    assert 'id="skills-kpis"' in html
+    assert 'id="skills-list"' in html
+    assert 'id="skills-workflow-list"' in html
+    assert 'id="marketplace-refresh"' in html
+    assert 'id="marketplace-query"' in html
+    assert 'id="marketplace-search"' in html
+    assert 'id="marketplace-kpis"' in html
+    assert 'id="marketplace-list"' in html
     assert "Tools" in html
     assert "LLM Yönetimi" not in html
     assert "Ollama Yönetimi" not in html

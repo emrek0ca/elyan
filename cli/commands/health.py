@@ -85,13 +85,15 @@ def run(args):
 
     # Ollama
     try:
-        import subprocess
-        result = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=3)
-        if result.returncode == 0:
-            models = [l.split()[0] for l in result.stdout.strip().splitlines()[1:] if l.strip()]
+        from utils.ollama_helper import OllamaHelper
+
+        if OllamaHelper.is_running():
+            models = OllamaHelper.list_local_models()
             print(f"    {'Ollama':12s} AKTIF ({len(models)} model)")
+        elif OllamaHelper.is_installed():
+            print(f"    {'Ollama':12s} KURULU AMA CALISMAYOR")
         else:
-            print(f"    {'Ollama':12s} KAPALII")
+            print(f"    {'Ollama':12s} KURULU DEGIL")
     except Exception:
         print(f"    {'Ollama':12s} KURULU DEGIL")
 

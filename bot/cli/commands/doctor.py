@@ -10,6 +10,7 @@ import asyncio
 import os
 from pathlib import Path
 from config.elyan_config import elyan_config
+from core.dependencies import get_system_dependency_runtime
 from security.keychain import keychain
 
 GATEWAY_PORT = int(os.environ.get("ELYAN_PORT", 18789))
@@ -131,13 +132,32 @@ def run_doctor(fix=False):
         "docker":  "Sandbox isolation",
         "ollama":  "Local AI models",
         "ffmpeg":  "Audio/video processing",
+        "tesseract": "OCR engine",
+        "xdg-open": "Desktop file opener",
+        "xclip": "Clipboard helper",
+        "xsel": "Clipboard helper",
+        "scrot": "Screenshot helper",
+        "gnome-screenshot": "Screenshot helper",
+        "xdotool": "X11 automation",
+        "xprop": "X11 window metadata",
+        "wmctrl": "X11 window control",
+        "cliclick": "macOS mouse helper",
     }
+    system_runtime = get_system_dependency_runtime()
     print("\n🛠️  External Tool Check:")
     for t, purpose in tools.items():
         if shutil.which(t):
             print(f"  ✅  {t:<12}: FOUND ({purpose})")
         else:
-            print(f"  ⚠️   {t:<12}: NOT FOUND (Optional — {purpose})")
+            if fix and t != "docker":
+                install_record = system_runtime.ensure_binary(t, allow_install=True, skill_name="doctor", tool_name=t)
+                if install_record.status in {"ready", "installed"} or shutil.which(t):
+                    print(f"  ✅  {t:<12}: FIXED ({purpose})")
+                    continue
+                print(f"  ⚠️   {t:<12}: {install_record.status.upper()} (Optional — {purpose})")
+                print(f"    → {install_record.reason or system_runtime.get_install_hint(t)}")
+            else:
+                print(f"  ⚠️   {t:<12}: NOT FOUND (Optional — {purpose})")
 
     # 6.5 Secret storage health (BUG-SEC-005)
     print("\n🔐  Secret Storage Check:")

@@ -1,10 +1,44 @@
+import importlib
 import os
-import whisper
 from typing import Optional
+
+from core.dependencies import get_dependency_runtime
 from config.elyan_config import elyan_config
 from utils.logger import get_logger
 
 logger = get_logger("whisper_stt")
+
+try:
+    import whisper
+except ImportError:
+    runtime = get_dependency_runtime()
+    record = runtime.ensure_module(
+        "whisper",
+        install_spec="openai-whisper",
+        source="pypi",
+        trust_level="trusted",
+        skill_name="voice",
+        tool_name="whisper_stt",
+        allow_install=True,
+    )
+    if record.status in {"installed", "ready"}:
+        importlib.invalidate_caches()
+        try:
+            import whisper
+        except ImportError as exc:
+            runtime.ensure_from_error(
+                str(exc),
+                skill_name="voice",
+                tool_name="whisper_stt",
+                allow_install=True,
+            )
+            importlib.invalidate_caches()
+            try:
+                import whisper
+            except ImportError:
+                whisper = None
+    else:
+        whisper = None
 
 class WhisperSTT:
     def __init__(self):
@@ -13,6 +47,8 @@ class WhisperSTT:
 
     def _get_model(self):
         if self._model is None:
+            if whisper is None:
+                return None
             logger.info(f"Loading Whisper model: {self.model_name}...")
             self._model = whisper.load_model(self.model_name)
         return self._model
@@ -25,8 +61,11 @@ class WhisperSTT:
         try:
             # Use thread executor for CPU-heavy model inference
             import asyncio
+            model = self._get_model()
+            if model is None:
+                return None
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, lambda: self._get_model().transcribe(audio_path))
+            result = await loop.run_in_executor(None, lambda: model.transcribe(audio_path))
             
             text = result.get("text", "").strip()
             logger.info(f"Transcription successful: {text[:50]}...")

@@ -22,6 +22,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from core.dependencies import get_dependency_runtime
 from core.cowork_runtime import get_cowork_runtime
 from utils.logger import get_logger
 
@@ -102,8 +103,26 @@ class VisionAutomationLoop:
                 from core.vision_dom.coordinate_mapper import CoordinateMapper
                 self._mapper = CoordinateMapper()
             except ImportError:
-                logger.warning("CoordinateMapper not available — pyautogui missing")
-                self._mapper = None
+                runtime = get_dependency_runtime()
+                record = runtime.ensure_module(
+                    "pyautogui",
+                    install_spec="pyautogui",
+                    source="pypi",
+                    trust_level="trusted",
+                    skill_name="system",
+                    tool_name="vision_automation",
+                    allow_install=True,
+                )
+                if record.status in {"installed", "ready"}:
+                    try:
+                        from core.vision_dom.coordinate_mapper import CoordinateMapper
+                        self._mapper = CoordinateMapper()
+                    except Exception:
+                        logger.warning("CoordinateMapper still unavailable after dependency install")
+                        self._mapper = None
+                else:
+                    logger.warning("CoordinateMapper not available — pyautogui missing")
+                    self._mapper = None
 
         if self._screenshot_fn is None:
             try:

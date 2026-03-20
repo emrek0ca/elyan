@@ -111,6 +111,7 @@ from core.personalization import get_personalization_manager
 from core.reliability import get_outcome_store
 from core.learning_control import get_learning_control_plane
 from core.runtime_control import get_runtime_control_plane
+from core.operator_control_plane import get_operator_control_plane
 from utils.logger import get_logger
 
 logger = get_logger("agent")
@@ -315,6 +316,7 @@ class Agent:
         self.verifier_service = get_verifier()
         self.outcome_store = get_outcome_store()
         self.runtime_control = get_runtime_control_plane()
+        self.operator_control = get_operator_control_plane()
         self.current_user_id = None
         self.file_context = {
             "last_dir": str(Path.home() / "Desktop"),
@@ -2251,33 +2253,34 @@ class Agent:
             route_metadata["capability_plan"] = capability_plan.to_dict()
         active_provider = str(elyan_config.get("models.default.provider", "ollama") or "ollama").strip().lower()
         active_model = str(elyan_config.get("models.default.model", "") or "").strip()
-        try:
-            from core.model_orchestrator import model_orchestrator
-
-            active_cfg = model_orchestrator.get_best_available("inference")
-            if isinstance(active_cfg, dict):
-                active_provider = str(active_cfg.get("provider") or active_provider).strip().lower()
-                active_model = str(active_cfg.get("model") or active_model).strip()
-        except Exception:
-            pass
         active_base_model_id = f"{active_provider}:{active_model}" if active_provider else active_model
         personalized_chat_input = effective_user_input
+        operator_turn: dict[str, Any] = {}
+        runtime_turn: dict[str, Any] = {}
         try:
-            runtime_turn = await self.runtime_control.prepare_turn(
+            operator_turn = await self.operator_control.plan_request(
                 request_id=run_id,
                 user_id=uid,
                 request=effective_user_input,
                 channel=str(channel or "cli"),
-                provider=active_provider,
-                model=active_model,
-                base_model_id=active_base_model_id,
+                device_id=str(route_metadata.get("device_id") or route_metadata.get("client_id") or "primary"),
+                context=dict(route_metadata),
                 quick_intent=quick_intent,
                 parsed_intent=parsed_intent,
                 route_decision=route_decision,
                 request_contract=request_contract,
                 capability_plan=capability_plan,
                 metadata=dict(route_metadata),
+                provider=active_provider,
+                model=active_model,
+                base_model_id=active_base_model_id,
             )
+            runtime_turn = dict(operator_turn or {})
+            if isinstance(operator_turn.get("model_selection"), dict):
+                model_selection = dict(operator_turn.get("model_selection") or {})
+                active_provider = str(model_selection.get("provider") or active_provider).strip().lower()
+                active_model = str(model_selection.get("model") or active_model).strip()
+                active_base_model_id = str(model_selection.get("base_model_id") or active_base_model_id).strip()
             if isinstance(runtime_turn.get("personalization"), dict):
                 route_metadata["personalization"] = dict(runtime_turn.get("personalization") or {})
             if isinstance(runtime_turn.get("model_runtime"), dict):
@@ -2298,9 +2301,19 @@ class Agent:
                 route_metadata["execution_path"] = str(runtime_turn.get("execution_path") or "")
             if runtime_turn.get("latency_budget_ms") is not None:
                 route_metadata["latency_budget_ms"] = int(runtime_turn.get("latency_budget_ms") or 0)
+            if isinstance(runtime_turn.get("skill"), dict):
+                route_metadata["skill_manifest"] = dict(runtime_turn.get("skill") or {})
+            if isinstance(runtime_turn.get("capability"), dict):
+                route_metadata["capability_manifest"] = dict(runtime_turn.get("capability") or {})
+            if isinstance(runtime_turn.get("real_time"), dict):
+                route_metadata["real_time"] = dict(runtime_turn.get("real_time") or {})
+            if isinstance(runtime_turn.get("operator_trace"), dict):
+                route_metadata["operator_trace"] = dict(runtime_turn.get("operator_trace") or {})
+            if isinstance(runtime_turn.get("operator_policy"), dict):
+                route_metadata["operator_policy"] = dict(runtime_turn.get("operator_policy") or {})
             personalized_chat_input = str(runtime_turn.get("request_prompt") or effective_user_input)
         except Exception as runtime_turn_exc:
-            logger.debug(f"runtime control prepare skipped: {runtime_turn_exc}")
+            logger.debug(f"operator control prepare skipped: {runtime_turn_exc}")
         if route_decision is not None and getattr(route_decision, "refusal", False):
             refusal_text = str(
                 getattr(route_decision, "refusal_message", "")
@@ -11076,33 +11089,56 @@ class Agent:
             personalization_meta = runtime_metadata.get("personalization", {}) if isinstance(runtime_metadata.get("personalization"), dict) else {}
         if getattr(self, "learning_control", None):
             try:
-                personalization_result = self.learning_control.record_interaction(
-                    user_id=uid_raw,
-                    user_input=user_input,
-                    assistant_output=response_text,
-                    intent=str((context or {}).get("job_type") or (context or {}).get("role") or action or ""),
-                    action=str(action or "chat"),
-                    success=bool(success),
-                    metadata={
+                personalization_result = None
+                if hasattr(self.learning_control, "record_turn"):
+                    personalization_result = self.learning_control.record_turn(
+                        user_id=uid_raw,
+                        user_input=user_input,
+                        assistant_output=response_text,
+                        action=str(action or "chat"),
+                        success=bool(success),
+                        duration_ms=float(duration_ms),
+                        intent=str((context or {}).get("job_type") or (context or {}).get("role") or action or ""),
+                        metadata={
+                            "provider": str((personalization_meta or {}).get("provider") or (context or {}).get("provider") or ""),
+                            "model": str((personalization_meta or {}).get("model") or (context or {}).get("model") or ""),
+                            "base_model_id": str((personalization_meta or {}).get("base_model_id") or (context or {}).get("base_model_id") or ""),
+                            "channel": str((context or {}).get("channel") or ""),
+                            "run_id": str((context or {}).get("run_id") or ""),
+                            "reward_evidence": dict((context or {}).get("reward_evidence") or {}),
+                            "latency_budget_ms": int((context or {}).get("latency_budget_ms") or 800),
+                        },
+                        privacy_flags={"source": "agent_finalize_turn"},
+                    )
+                else:
+                    personalization_result = self.learning_control.record_interaction(
+                        user_id=uid_raw,
+                        user_input=user_input,
+                        assistant_output=response_text,
+                        intent=str((context or {}).get("job_type") or (context or {}).get("role") or action or ""),
+                        action=str(action or "chat"),
+                        success=bool(success),
+                        metadata={
+                            "provider": str((personalization_meta or {}).get("provider") or (context or {}).get("provider") or ""),
+                            "model": str((personalization_meta or {}).get("model") or (context or {}).get("model") or ""),
+                            "base_model_id": str((personalization_meta or {}).get("base_model_id") or (context or {}).get("base_model_id") or ""),
+                            "channel": str((context or {}).get("channel") or ""),
+                            "run_id": str((context or {}).get("run_id") or ""),
+                            "reward_evidence": dict((context or {}).get("reward_evidence") or {}),
+                        },
+                        privacy_flags={"source": "agent_finalize_turn"},
+                    )
+                if personalization_result:
+                    interaction_id = str(personalization_result.get("interaction_id") or "").strip()
+                    if interaction_id:
+                        self._last_turn_context["interaction_id"] = interaction_id
+                    self._last_turn_context["personalization"] = {
                         "provider": str((personalization_meta or {}).get("provider") or (context or {}).get("provider") or ""),
                         "model": str((personalization_meta or {}).get("model") or (context or {}).get("model") or ""),
                         "base_model_id": str((personalization_meta or {}).get("base_model_id") or (context or {}).get("base_model_id") or ""),
-                        "channel": str((context or {}).get("channel") or ""),
-                        "run_id": str((context or {}).get("run_id") or ""),
-                        "reward_evidence": dict((context or {}).get("reward_evidence") or {}),
-                    },
-                    privacy_flags={"source": "agent_finalize_turn"},
-                )
-                interaction_id = str(personalization_result.get("interaction_id") or "").strip()
-                if interaction_id:
-                    self._last_turn_context["interaction_id"] = interaction_id
-                self._last_turn_context["personalization"] = {
-                    "provider": str((personalization_meta or {}).get("provider") or (context or {}).get("provider") or ""),
-                    "model": str((personalization_meta or {}).get("model") or (context or {}).get("model") or ""),
-                    "base_model_id": str((personalization_meta or {}).get("base_model_id") or (context or {}).get("base_model_id") or ""),
-                }
-                if personalization_result.get("training_job"):
-                    self._last_turn_context["training_job"] = dict(personalization_result.get("training_job") or {})
+                    }
+                    if personalization_result.get("training_job"):
+                        self._last_turn_context["training_job"] = dict(personalization_result.get("training_job") or {})
             except Exception as personalization_exc:
                 logger.debug(f"personalization interaction update failed: {personalization_exc}")
 

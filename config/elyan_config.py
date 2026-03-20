@@ -197,6 +197,44 @@ def _default_config() -> AppConfig:
                 "stale_minutes": 1440,
             },
         },
+        operator={
+            "enabled": True,
+            "local_first": True,
+            "real_time": {
+                "enabled": True,
+                "mode": "auto",
+                "fps": 60,
+                "screenpipe_url": "http://localhost:3030",
+            },
+            "model_roles": {
+                "direct_action": "router",
+                "research": "reasoning",
+                "coding": "code",
+                "workflow": "planning",
+                "chat": "router",
+            },
+        },
+        realtime_actuator={
+            "enabled": True,
+            "transport_mode": "auto",
+            "process_mode": False,
+            "fps": 60,
+            "screenpipe_url": "http://localhost:3030",
+            "monitor_interval_ms": 16,
+            "max_frames": 10,
+            "max_actions": 32,
+        },
+        dependency_runtime={
+            "enabled": True,
+            "mode": "managed_venv",
+            "managed_venv_root": "~/.elyan/venvs/runtime",
+            "auto_install": True,
+            "auto_retry": True,
+            "trusted_sources": ["pypi", "marketplace"],
+            "blocked_schemes": ["git+", "http://", "https://", "file:", "ssh://", "hg+", "svn+"],
+            "audit_path": "~/.elyan/logs/dependency_runtime.jsonl",
+            "state_path": "~/.elyan/logs/dependency_runtime_state.json",
+        },
         security={
             "operatorMode": "Confirmed",
             "requirePlanApproval": True,
@@ -229,6 +267,49 @@ def _default_config() -> AppConfig:
             "toolPolicy": {
                 "defaultDeny": True,
             },
+        },
+        oauth={
+            "enabled": True,
+            "storage": "secure_vault",
+            "fallback_mode": "web",
+            "providers": {
+                "google": {
+                    "auth_strategy": "oauth",
+                    "fallback_policy": "web",
+                    "scopes": [
+                        "https://www.googleapis.com/auth/gmail.modify",
+                        "https://www.googleapis.com/auth/calendar",
+                        "https://www.googleapis.com/auth/drive",
+                    ],
+                },
+                "microsoft": {
+                    "auth_strategy": "oauth",
+                    "fallback_policy": "web",
+                },
+                "meta": {
+                    "auth_strategy": "oauth",
+                    "fallback_policy": "web",
+                },
+                "x": {
+                    "auth_strategy": "oauth",
+                    "fallback_policy": "web",
+                },
+                "instagram": {
+                    "auth_strategy": "oauth",
+                    "fallback_policy": "web",
+                },
+                "whatsapp": {
+                    "auth_strategy": "oauth",
+                    "fallback_policy": "web",
+                },
+            },
+        },
+        integrations={
+            "enabled": True,
+            "auth_priority": ["oauth", "api", "native", "web"],
+            "default_fallback": "web",
+            "multi_agent_threshold": 2,
+            "supported_platforms": ["windows", "darwin", "linux"],
         },
         gateway={
             "port": 18789,

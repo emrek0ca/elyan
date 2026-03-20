@@ -37,10 +37,11 @@ class EmailSkill(BaseSkill):
                     "send_email",
                     {"to": to, "subject": subject, "body": body},
                     source="builtin_email_skill",
+                    skill_name=self.name,
                 )
                 return wrap_skill_tool_result(result)
             elif command == "check":
-                result = await execute_registered_tool("get_unread_emails", {}, source="builtin_email_skill")
+                result = await execute_registered_tool("get_unread_emails", {}, source="builtin_email_skill", skill_name=self.name)
                 return wrap_skill_tool_result(result)
             else:
                 return {"success": False, "error": f"Unknown command: {command}"}

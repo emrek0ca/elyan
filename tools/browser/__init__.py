@@ -6,7 +6,8 @@ from .manager import (
     BrowserManager,
     get_browser_manager,
     close_browser_manager,
-    PLAYWRIGHT_AVAILABLE
+    PLAYWRIGHT_AVAILABLE,
+    is_playwright_available,
 )
 
 from .automation import (
@@ -33,6 +34,7 @@ __all__ = [
     'get_browser_manager',
     'close_browser_manager',
     'PLAYWRIGHT_AVAILABLE',
+    'is_playwright_available',
     
     # Automation
     'browser_open',

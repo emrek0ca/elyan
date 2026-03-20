@@ -20,6 +20,67 @@ class LearningControlPlane:
     def record_feedback(self, **kwargs: Any) -> dict[str, Any]:
         return self.personalization.record_feedback(**kwargs)
 
+    def record_latency(
+        self,
+        *,
+        user_id: str,
+        interaction_id: str,
+        latency_ms: float,
+        target_ms: float = 800.0,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        meta = dict(metadata or {})
+        meta["latency_ms"] = float(latency_ms or 0.0)
+        meta["target_ms"] = float(target_ms or 800.0)
+        meta.setdefault("channel", str(meta.get("channel") or ""))
+        return self.personalization.record_feedback(
+            user_id=user_id,
+            interaction_id=interaction_id,
+            event_type="latency_reward",
+            score=float(latency_ms or 0.0),
+            metadata=meta,
+        )
+
+    def record_turn(
+        self,
+        *,
+        user_id: str,
+        user_input: str,
+        assistant_output: str,
+        action: str = "",
+        success: bool = True,
+        duration_ms: float = 0.0,
+        intent: str = "",
+        metadata: dict[str, Any] | None = None,
+        privacy_flags: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        meta = dict(metadata or {})
+        interaction = self.personalization.record_interaction(
+            user_id=user_id,
+            user_input=user_input,
+            assistant_output=assistant_output,
+            intent=intent or str(meta.get("intent") or action or ""),
+            action=action,
+            success=bool(success),
+            metadata=meta,
+            privacy_flags=privacy_flags,
+        )
+        latency_result = {}
+        interaction_id = str(interaction.get("interaction_id") or "").strip()
+        if interaction_id and duration_ms is not None:
+            latency_result = self.record_latency(
+                user_id=user_id,
+                interaction_id=interaction_id,
+                latency_ms=float(duration_ms or 0.0),
+                target_ms=float(meta.get("latency_budget_ms", 800) or 800),
+                metadata={**meta, "action": action, "success": bool(success)},
+            )
+        return {
+            **interaction,
+            "latency_reward": latency_result,
+            "duration_ms": float(duration_ms or 0.0),
+        }
+
     def summarize_user(self, user_id: str) -> dict[str, Any]:
         uid = str(user_id or "local")
         memory_stats = self.personalization.memory_store.get_stats()

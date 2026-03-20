@@ -5,6 +5,7 @@ from config.elyan_config import elyan_config
 from core.model_catalog import default_model_for_provider, normalize_model_name
 from core.neural_router import neural_router
 from security.keychain import KeychainManager, keychain
+from utils.ollama_helper import OllamaHelper
 from utils.logger import get_logger
 
 logger = get_logger("model_orchestrator")
@@ -103,6 +104,16 @@ class ModelOrchestrator:
         if provider_name == "groq":
             return model if low.startswith(("llama", "mixtral", "qwen", "deepseek")) else default_model_for_provider(provider_name)
         return normalize_model_name(provider_name, model)
+
+    def _ensure_provider_runtime(self, provider: str) -> bool:
+        provider_name = self._normalize_provider(provider)
+        if provider_name != "ollama":
+            return True
+        try:
+            return OllamaHelper.ensure_available(allow_install=True, start_service=True)
+        except Exception as exc:
+            logger.debug(f"Ollama runtime ensure failed: {exc}")
+            return False
 
     def _provider_default_config(self, provider: str) -> Dict[str, Any]:
         provider_name = self._normalize_provider(provider)
@@ -437,11 +448,14 @@ class ModelOrchestrator:
         ranked = self.rank_candidates(role=role, exclude=exclude)
         if ranked:
             top = ranked[0]
-            return self.get_provider_config(
+            config = self.get_provider_config(
                 str(top.get("provider") or ""),
                 role=role,
                 model=str(top.get("model") or ""),
             )
+            if self._normalize_provider(config.get("provider") or "") == "ollama" and not self._ensure_provider_runtime(config.get("provider") or ""):
+                config["status"] = "missing_runtime"
+            return config
 
         role_name = str(role or "inference").strip().lower() or "inference"
         priority = self._priority_for_role(role_name)
@@ -453,11 +467,17 @@ class ModelOrchestrator:
         for provider in priority:
             provider_name = self._normalize_provider(provider)
             if provider_name in self.providers and provider_name not in excluded:
-                return dict(self.providers[provider_name])
+                config = dict(self.providers[provider_name])
+                if provider_name == "ollama" and not self._ensure_provider_runtime(provider_name):
+                    config["status"] = "missing_runtime"
+                return config
 
         for provider_name, config in self.providers.items():
             if provider_name not in excluded:
-                return dict(config)
+                resolved = dict(config)
+                if provider_name == "ollama" and not self._ensure_provider_runtime(provider_name):
+                    resolved["status"] = "missing_runtime"
+                return resolved
         return {"type": "none", "error": f"No providers available (excluded: {exclude})"}
 
     def _priority_for_role(self, role: str) -> List[str]:

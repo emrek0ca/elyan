@@ -1,6 +1,8 @@
 import os
+import importlib
 import warnings
 from pathlib import Path
+from core.dependencies import get_dependency_runtime
 from utils.logger import get_logger
 
 logger = get_logger("local_stt")
@@ -24,7 +26,27 @@ class LocalSTT:
                 self.model = whisper.load_model(self.model_size)
                 logger.info("Whisper model loaded.")
             except ImportError:
-                logger.warning("Whisper not installed. pip install openai-whisper")
+                runtime = get_dependency_runtime()
+                record = runtime.ensure_module(
+                    "whisper",
+                    install_spec="openai-whisper",
+                    source="pypi",
+                    trust_level="trusted",
+                    skill_name="voice",
+                    tool_name="local_stt",
+                    allow_install=True,
+                )
+                if record.status in {"installed", "ready"}:
+                    importlib.invalidate_caches()
+                    try:
+                        import whisper
+                        self._whisper = whisper
+                        self.model = whisper.load_model(self.model_size)
+                        logger.info("Whisper model loaded.")
+                    except Exception as exc:
+                        logger.error(f"Whisper load error after install: {exc}")
+                else:
+                    logger.warning("Whisper not installed and auto-install failed.")
             except Exception as e:
                 logger.error(f"Whisper load error: {e}")
 

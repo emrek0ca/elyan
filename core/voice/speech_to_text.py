@@ -3,8 +3,10 @@ Speech-to-Text using OpenAI Whisper (local, offline)
 """
 
 import asyncio
+import importlib
 from typing import Dict, Any, Optional
 from pathlib import Path
+from core.dependencies import get_dependency_runtime
 from utils.logger import get_logger
 
 logger = get_logger("speech_to_text")
@@ -16,6 +18,54 @@ try:
 except ImportError:
     WHISPER_AVAILABLE = False
     whisper = None
+
+
+def _ensure_whisper_runtime() -> bool:
+    global whisper, WHISPER_AVAILABLE
+    if WHISPER_AVAILABLE and whisper is not None:
+        return True
+    try:
+        import whisper as whisper_mod
+        whisper = whisper_mod
+        WHISPER_AVAILABLE = True
+        return True
+    except ImportError:
+        runtime = get_dependency_runtime()
+        record = runtime.ensure_module(
+            "whisper",
+            install_spec="openai-whisper",
+            source="pypi",
+            trust_level="trusted",
+            skill_name="voice",
+            tool_name="transcribe_audio_file",
+            allow_install=True,
+        )
+        if record.status in {"installed", "ready"}:
+            importlib.invalidate_caches()
+            try:
+                import whisper as whisper_mod
+
+                whisper = whisper_mod
+                WHISPER_AVAILABLE = True
+                return True
+            except ImportError as exc:
+                runtime.ensure_from_error(
+                    str(exc),
+                    skill_name="voice",
+                    tool_name="transcribe_audio_file",
+                    allow_install=True,
+                )
+                try:
+                    import whisper as whisper_mod
+
+                    whisper = whisper_mod
+                    WHISPER_AVAILABLE = True
+                    return True
+                except ImportError:
+                    return False
+            except Exception:
+                return False
+        return False
 
 
 class SpeechToTextService:
@@ -31,7 +81,7 @@ class SpeechToTextService:
                 - base: 140MB, ~3-8s (recommended)
                 - small: 460MB, ~5-15s
         """
-        if not WHISPER_AVAILABLE:
+        if not _ensure_whisper_runtime():
             logger.error("Whisper not installed. Run: pip install openai-whisper")
             self.model = None
             return

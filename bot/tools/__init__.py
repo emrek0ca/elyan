@@ -2,6 +2,10 @@
 LAZY LOADING TOOL SYSTEM - Fast startup, load tools on demand
 """
 
+from core.dependencies.autoinstall_hook import activate as _activate_autoinstall_hook
+
+_activate_autoinstall_hook()
+
 _loaded_tools = {}
 _tool_load_errors = {}
 

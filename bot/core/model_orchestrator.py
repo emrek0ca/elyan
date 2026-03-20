@@ -3,6 +3,7 @@ from typing import Dict, Any, List, Optional
 from config.elyan_config import elyan_config
 from core.neural_router import neural_router
 from security.keychain import keychain, KeychainManager
+from utils.ollama_helper import OllamaHelper
 from utils.logger import get_logger
 import os
 
@@ -99,6 +100,14 @@ class ModelOrchestrator:
         # ollama/local: user may have arbitrary local model names.
         return model
 
+    def _ensure_provider_runtime(self, provider: str) -> bool:
+        if (provider or "").strip().lower() != "ollama":
+            return True
+        try:
+            return OllamaHelper.ensure_available(allow_install=True, start_service=True)
+        except Exception:
+            return False
+
     def get_best_available(self, role: str = "inference") -> Dict[str, Any]:
         """İstenen rol için en iyi aktif sağlayıcıyı döner"""
         
@@ -118,17 +127,25 @@ class ModelOrchestrator:
             config = self.providers[pref_provider].copy()
             if pref_model:
                 config["model"] = self._normalize_model_for_provider(pref_provider, pref_model)
+            if (pref_provider or "").strip().lower() == "ollama" and not self._ensure_provider_runtime(pref_provider):
+                config["status"] = "missing_runtime"
             return config
 
         # 2. Fallback: Active provider
         if self.active_provider in self.providers:
-            return self.providers[self.active_provider]
+            config = self.providers[self.active_provider].copy()
+            if (self.active_provider or "").strip().lower() == "ollama" and not self._ensure_provider_runtime(self.active_provider):
+                config["status"] = "missing_runtime"
+            return config
         
         # 3. Fallback: First available in priority list
         priority = ["groq", "openai", "anthropic", "google", "ollama"]
         for p in priority:
             if p in self.providers:
-                return self.providers[p]
+                config = self.providers[p].copy()
+                if (p or "").strip().lower() == "ollama" and not self._ensure_provider_runtime(p):
+                    config["status"] = "missing_runtime"
+                return config
         
         return {"type": "none", "error": "No providers configured"}
 

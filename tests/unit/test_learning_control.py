@@ -66,3 +66,22 @@ def test_learning_control_delegates_and_summarizes_user():
     assert summary["memory"]["interaction_count"] == 2
     assert summary["reward"]["avg_reward"] == 0.75
     assert evaluation["target_id"] == "adapter-v1"
+    assert evaluation["suite_name"] == "offline"
+
+
+def test_learning_control_records_latency_reward():
+    personalization = _Personalization()
+    plane = LearningControlPlane(personalization=personalization, evaluation_suite=_EvaluationSuite())
+
+    result = plane.record_latency(
+        user_id="u1",
+        interaction_id="i-latency",
+        latency_ms=120.0,
+        target_ms=800.0,
+        metadata={"channel": "cli"},
+    )
+
+    assert result["event_id"] == "e1"
+    assert personalization.feedback[-1]["event_type"] == "latency_reward"
+    assert personalization.feedback[-1]["metadata"]["latency_ms"] == 120.0
+    assert personalization.feedback[-1]["metadata"]["target_ms"] == 800.0

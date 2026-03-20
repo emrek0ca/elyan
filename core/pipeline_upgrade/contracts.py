@@ -164,28 +164,89 @@ def verify_taskspec_contract(
     produced_paths: list[str] | None = None,
 ) -> dict[str, Any]:
     """Verify task specification contract against produced outputs."""
-    result: dict[str, Any] = {"ok": True, "failed_gates": [], "warnings": []}
+    result: dict[str, Any] = {"ok": True, "failed": [], "failed_gates": [], "warnings": []}
     tool_results = tool_results or []
     produced_paths = produced_paths or []
 
     if not task_spec:
         return result
 
-    # Check required artifacts
-    required = task_spec.get("required_artifacts", [])
-    for artifact in required:
-        artifact_type = str(artifact.get("type", "") if isinstance(artifact, dict) else artifact)
-        if artifact_type == "file" and not produced_paths:
-            result["failed_gates"].append(f"missing_artifact:{artifact_type}")
-            result["ok"] = False
+    produced_set = {str(path or "").strip() for path in produced_paths if str(path or "").strip()}
+    expected_artifacts = [
+        dict(item)
+        for item in list(task_spec.get("artifacts_expected") or task_spec.get("required_artifacts") or [])
+        if isinstance(item, dict)
+    ]
+    deliverables = [
+        dict(item)
+        for item in list(task_spec.get("deliverables") or [])
+        if isinstance(item, dict) and bool(item.get("required", False))
+    ]
 
-    # Check success criteria
-    success_criteria = task_spec.get("success_criteria", [])
+    def _mark(code: str) -> None:
+        code = str(code or "").strip()
+        if not code:
+            return
+        result["ok"] = False
+        if code not in result["failed"]:
+            result["failed"].append(code)
+        if code not in result["failed_gates"]:
+            result["failed_gates"].append(code)
+
+    def _artifact_exists(path: str, artifact_type: str) -> bool:
+        target = Path(str(path or "")).expanduser()
+        if artifact_type == "directory":
+            return target.exists() and target.is_dir()
+        return target.exists() and target.is_file()
+
+    def _artifact_non_empty(path: str) -> bool:
+        try:
+            target = Path(str(path or "")).expanduser()
+            return bool(target.exists() and target.is_file() and int(target.stat().st_size) > 0)
+        except Exception:
+            return False
+
+    for item in expected_artifacts:
+        path = str(item.get("path") or "").strip()
+        artifact_type = str(item.get("type") or "file").strip().lower()
+        must_exist = bool(item.get("must_exist", False))
+        if not path or not must_exist:
+            continue
+        if not _artifact_exists(path, artifact_type):
+            _mark("document:missing_artifact")
+            _mark("criteria:artifact_path_exists" if artifact_type == "directory" else "criteria:artifact_file_exists")
+        elif artifact_type == "file" and not _artifact_non_empty(path):
+            _mark("document:empty_artifact")
+            _mark("criteria:artifact_file_not_empty")
+
+    for deliverable in deliverables:
+        name = str(deliverable.get("name") or "").strip()
+        kind = str(deliverable.get("kind") or "file").strip().lower()
+        if kind == "file" and name:
+            matched = any(Path(path).name == name for path in produced_set)
+            if not matched and not any(Path(str(item.get("path") or "")).name == name for item in expected_artifacts):
+                _mark(f"deliverable:{name}")
+
+    success_criteria = [str(item or "").strip().lower() for item in list(task_spec.get("success_criteria") or []) if str(item or "").strip()]
     for criterion in success_criteria:
-        crit_str = str(criterion)
-        if "file" in crit_str.lower() and not produced_paths:
-            result["failed_gates"].append(f"unmet_criterion:{crit_str[:50]}")
-            result["ok"] = False
+        if criterion == "artifacts_expected_exist":
+            if any(
+                not _artifact_exists(str(item.get("path") or ""), str(item.get("type") or "file").strip().lower())
+                for item in expected_artifacts
+                if bool(item.get("must_exist", False))
+            ):
+                _mark("criteria:artifacts_expected_exist")
+        elif criterion == "artifact_file_not_empty":
+            file_artifacts = [
+                item
+                for item in expected_artifacts
+                if bool(item.get("must_exist", False)) and str(item.get("type") or "file").strip().lower() == "file"
+            ]
+            if file_artifacts and any(not _artifact_non_empty(str(item.get("path") or "")) for item in file_artifacts):
+                _mark("criteria:artifact_file_not_empty")
+        elif criterion in {"artifact_file_exists", "artifact_path_exists"}:
+            if not expected_artifacts and not produced_set:
+                _mark(f"criteria:{criterion}")
 
     return result
 
@@ -198,21 +259,23 @@ def build_reflexion_hint(
     if not verification_payload:
         return ""
 
-    failed = verification_payload.get("failed_gates", [])
+    failed = verification_payload.get("failed") or verification_payload.get("failed_gates", [])
     if not failed:
         return ""
 
     hints = []
     for gate in failed[:3]:
         gate_str = str(gate)
-        if "missing_artifact" in gate_str:
-            hints.append("Beklenen dosya/çıktı üretilemedi — dosya oluşturma adımını kontrol et.")
-        elif "unmet_criterion" in gate_str:
-            hints.append(f"Başarı kriteri karşılanmadı: {gate_str}")
+        if "empty_artifact" in gate_str or "artifact_file_not_empty" in gate_str:
+            hints.append("dosya artifact boş kaldı; write step içeriğini üret ve tekrar doğrula.")
+        elif "missing_artifact" in gate_str or "artifact_file_exists" in gate_str or "artifact_path_exists" in gate_str:
+            hints.append("beklenen dosya artifact oluşmadı; hedef path ve üreten adımı yeniden çalıştır.")
+        elif "deliverable:" in gate_str:
+            hints.append(f"zorunlu teslim eksik: {gate_str.split(':', 1)[-1]}")
         else:
             hints.append(f"Doğrulama hatası: {gate_str}")
 
-    return " | ".join(hints) if hints else ""
+    return ("Reflexion next: " + " | ".join(hints)) if hints else ""
 
 
 def build_critic_review_prompt(
@@ -234,10 +297,18 @@ def build_critic_review_prompt(
     if errors:
         error_section = f"\nHatalar:\n" + "\n".join(f"- {e}" for e in errors[:5])
 
+    qa_section = ""
+    if qa_results:
+        try:
+            qa_section = "\nQA payload:\n" + json.dumps(qa_results, ensure_ascii=False, indent=2)[:2000]
+        except Exception:
+            qa_section = f"\nQA payload:\n{str(qa_results)[:2000]}"
+
     return (
         f"Aşağıdaki yanıtı kalite açısından değerlendir.\n"
         f"Görev tipi: {job_type}\n"
         f"Yanıt:\n{final_response[:2000]}\n"
+        f"{qa_section}"
         f"{error_section}\n\n"
-        f"Kısa bir değerlendirme yap: yanıt yeterli mi, eksik bir şey var mı?"
+        f"Kısa bir değerlendirme yap ve şu formatı kullan: verdict, risk, next."
     )

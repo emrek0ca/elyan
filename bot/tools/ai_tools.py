@@ -1,12 +1,36 @@
 import asyncio
 from typing import Any, Dict, List
+from core.dependencies import get_system_dependency_runtime
+from core.model_catalog import normalize_model_name
+from utils.ollama_helper import OllamaHelper
 from utils.logger import get_logger
 
 logger = get_logger("ai_tools")
 
+
+def _ensure_ollama_runtime(allow_install: bool = True) -> bool:
+    try:
+        if OllamaHelper.ensure_available(allow_install=allow_install, start_service=True):
+            return True
+    except Exception as exc:
+        logger.debug("Ollama helper ensure_available failed: %s", exc)
+    try:
+        record = get_system_dependency_runtime().ensure_binary(
+            "ollama",
+            allow_install=allow_install,
+            skill_name="ai_tools",
+            tool_name="ollama",
+        )
+        return str(record.status).lower() in {"ready", "installed"}
+    except Exception as exc:
+        logger.debug("System ollama ensure failed: %s", exc)
+        return False
+
 async def ollama_list_models() -> Dict[str, Any]:
     """List all installed Ollama models"""
     try:
+        if not _ensure_ollama_runtime():
+            return {"success": False, "error": "Ollama runtime hazir degil.", "error_code": "ollama_runtime_missing"}
         process = await asyncio.create_subprocess_exec(
             "ollama", "list",
             stdout=asyncio.subprocess.PIPE,
@@ -45,6 +69,9 @@ async def ollama_list_models() -> Dict[str, Any]:
 async def ollama_remove_model(model_name: str) -> Dict[str, Any]:
     """Remove a specific Ollama model"""
     try:
+        model_name = normalize_model_name("ollama", model_name)
+        if not _ensure_ollama_runtime():
+            return {"success": False, "error": "Ollama runtime hazir degil.", "error_code": "ollama_runtime_missing"}
         process = await asyncio.create_subprocess_exec(
             "ollama", "rm", model_name,
             stdout=asyncio.subprocess.PIPE,
