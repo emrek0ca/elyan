@@ -31,8 +31,8 @@ async def test_generate_blocks_cloud_when_local_first_and_no_cloud_fallback(monk
     monkeypatch.setattr("core.llm_client.elyan_config.get", _cfg_get)
     monkeypatch.setattr("core.llm.token_budget.token_budget.is_within_budget", lambda user_id: True)
 
-    # local_first only applies to "router" role now (quality-focused design)
-    out = await client.generate("Merhaba", user_id="u1", role="router")
+    # local-first should now apply to general inference roles too.
+    out = await client.generate("Merhaba", user_id="u1", role="inference")
     assert "fallback kapalı" in out.lower()
 
 

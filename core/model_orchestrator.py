@@ -38,6 +38,10 @@ class ModelOrchestrator:
         self._load_providers()
 
     @staticmethod
+    def _local_first_enabled() -> bool:
+        return bool(elyan_config.get("agent.model.local_first", True))
+
+    @staticmethod
     def _normalize_provider(provider: str) -> str:
         raw = str(provider or "").strip().lower()
         return _PROVIDER_ALIASES.get(raw, raw)
@@ -365,6 +369,8 @@ class ModelOrchestrator:
                 score += 30
             if role_name in collab["roles"]:
                 score += 10
+            if self._local_first_enabled() and provider == "ollama":
+                score += 120
             score += max(0, 25 - (provider_priority.get(provider, 99) * 5))
             success_rate = 0.0
             metrics = self.metrics.get(provider) or {}
@@ -454,25 +460,35 @@ class ModelOrchestrator:
                 return dict(config)
         return {"type": "none", "error": f"No providers available (excluded: {exclude})"}
 
-    @staticmethod
-    def _priority_for_role(role: str) -> List[str]:
+    def _priority_for_role(self, role: str) -> List[str]:
         """Return provider priority order for a given role.
 
-        Groq (free, llama-3.3-70b, fast) and Google Gemini (free, good Turkish)
-        are prioritised for quality.  Ollama (local, small) is kept as a fast
-        router and last-resort fallback.
+        When local-first is enabled, Ollama is preferred first for all roles
+        and cloud providers remain as fallback. Otherwise the historical
+        quality-first ordering is preserved.
         """
         role_name = str(role or "inference").strip().lower()
+        local_first = self._local_first_enabled()
+
+        cloud_order = ["groq", "google", "openai", "anthropic", "deepseek", "mistral", "together"]
+        local_order = ["ollama"]
+
         if role_name == "router":
-            # Router needs speed — local first, then cloud
-            return ["ollama", "groq", "google", "openai", "anthropic", "deepseek", "mistral", "together"]
+            return local_order + cloud_order
         if role_name in {"code", "code_worker"}:
+            if local_first:
+                return local_order + ["groq", "deepseek", "google", "anthropic", "openai", "mistral", "together"]
             return ["groq", "deepseek", "google", "anthropic", "openai", "mistral", "together", "ollama"]
         if role_name in {"reasoning", "research_worker", "worker", "critic", "planning", "qa"}:
+            if local_first:
+                return local_order + ["groq", "google", "deepseek", "anthropic", "openai", "mistral", "together"]
             return ["groq", "google", "deepseek", "anthropic", "openai", "mistral", "together", "ollama"]
         if role_name == "creative":
-            # Gemini excels at Turkish creative content
+            if local_first:
+                return local_order + ["google", "groq", "anthropic", "openai", "mistral", "together", "deepseek"]
             return ["google", "groq", "anthropic", "openai", "mistral", "together", "deepseek", "ollama"]
+        if local_first:
+            return local_order + cloud_order
         # inference / default — quality first
         return ["groq", "google", "openai", "anthropic", "deepseek", "mistral", "together", "ollama"]
 

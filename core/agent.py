@@ -525,6 +525,65 @@ class Agent:
             return None
         return Agent._sanitize_chat_reply(fast.answer)
 
+    def _fast_contextual_chat_reply(self, user_input: str = "") -> str | None:
+        """
+        Short follow-up questions should preserve the last topic instead of
+        falling back to a generic greeting.
+        """
+        text = str(user_input or "").strip()
+        low = normalize_turkish_text(text)
+        if not text:
+            return None
+
+        followup_markers = (
+            "hangi alanlarda",
+            "hangi alanlarda mesela",
+            "mesela",
+            "örnek",
+            "ornek",
+            "birkaç örnek",
+            "bir kac ornek",
+            "biraz daha",
+            "detay",
+            "nasıl yani",
+            "nasil yani",
+            "ne gibi",
+            "nerelerde",
+        )
+        if not any(marker in low for marker in followup_markers):
+            return None
+
+        last_turn = self._get_last_turn_context()
+        recent_user_text = self._get_recent_user_text(text)
+        recent_assistant_text = self._get_recent_assistant_text(text)
+        topic_seed = " ".join(
+            part
+            for part in (
+                str(last_turn.get("user_input") or "").strip(),
+                str(last_turn.get("response_text") or "").strip(),
+                str(recent_user_text or "").strip(),
+                str(recent_assistant_text or "").strip(),
+            )
+            if part
+        ).strip()
+        if not topic_seed:
+            return None
+
+        topic_seed_norm = normalize_turkish_text(topic_seed)
+        if any(k in topic_seed_norm for k in ("yapay zeka", "ai", "machine learning", "makine ogrenmesi", "makine öğrenmesi")):
+            return (
+                "Örneğin sağlık, eğitim, finans, müşteri hizmetleri, ulaşım, üretim ve yazılım geliştirmede kullanılıyor. "
+                "İstersen bunlardan birini seçip kısa örneklerle açayım."
+            )
+
+        topic = self._extract_topic(topic_seed, topic_seed)
+        if topic and topic != "genel konu":
+            return f"Mesela {topic} için kullanım örnekleri, avantajlar ve riskler üzerinden devam edebilirim. İstersen açayım."
+
+        if any(marker in low for marker in ("hangi alan", "nerede", "nerelerde", "örnek", "ornek")):
+            return "Örneğin sağlık, eğitim, finans, müşteri hizmetleri ve yazılım geliştirme gibi alanlarda kullanılıyor. İstersen tek tek örnekleyeyim."
+        return None
+
     @staticmethod
     def _build_information_question_prompt(user_input: str) -> str:
         question = str(user_input or "").strip()
@@ -3854,6 +3913,9 @@ class Agent:
             prompt = safe_params.get("message") or user_input
             try:
                 from core.resilience.fallback_manager import fallback_manager
+                contextual = self._fast_contextual_chat_reply(prompt)
+                if contextual:
+                    return contextual
                 quick = self._fast_chat_reply(prompt)
                 if quick:
                     return quick

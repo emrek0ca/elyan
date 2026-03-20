@@ -15,6 +15,7 @@ from .intent_classifier import get_classifier
 from .llm_optimizer import get_llm_optimizer
 from .pricing_tracker import get_pricing_tracker
 from .fast_response import FastResponseSystem, QuestionType
+from core.nlu_normalizer import normalize_turkish_text
 from core.command_hardening import (
     build_chat_fallback_message,
     build_chat_history_block,
@@ -470,10 +471,9 @@ class LLMClient:
         allow_cloud_fallback = bool(elyan_config.get("security.kvkk.allowCloudFallback", True))
         external_providers = {"openai", "groq", "gemini", "google", "anthropic"}
 
-        # local_first only applies to "router" role (fast classification).
-        # All other roles (inference, code, reasoning, creative) use the best
-        # available provider including cloud for maximum quality.
-        local_first_effective = local_first and role in ("router",)
+        # Local-first now applies broadly: prefer Ollama for simple and
+        # general inference paths, then fall back to cloud providers if needed.
+        local_first_effective = local_first
 
         # Retry Loop with Exponential Backoff and Provider Switching
         retry_attempts = 3
@@ -1197,4 +1197,53 @@ class LLMClient:
         if retry_sanitized and not chat_output_needs_retry(retry_raw, sanitized_text=retry_sanitized):
             return retry_sanitized
 
+        contextual = self._build_contextual_chat_reply(text, history)
+        if contextual:
+            return contextual
+
         return build_chat_fallback_message(language=str(elyan_config.get("agent.language", "tr") or "tr"))
+
+    def _build_contextual_chat_reply(self, text: str, history: list | None = None) -> str | None:
+        low = str(text or "").lower()
+        followup_markers = (
+            "hangi alanlarda",
+            "hangi alanlarda mesela",
+            "mesela",
+            "örnek",
+            "ornek",
+            "birkaç örnek",
+            "bir kac ornek",
+            "biraz daha",
+            "detay",
+            "nasıl yani",
+            "nasil yani",
+            "ne gibi",
+            "nerelerde",
+        )
+        if not any(marker in low for marker in followup_markers):
+            return None
+
+        last_user = ""
+        last_assistant = ""
+        for item in reversed(history or []):
+            if not isinstance(item, dict):
+                continue
+            last_user = str(item.get("user_message") or item.get("user") or "").strip()
+            last_assistant = str(item.get("bot_response") or item.get("assistant_message") or item.get("response") or "").strip()
+            if last_user or last_assistant:
+                break
+
+        seed = " ".join(part for part in (last_user, last_assistant, str(text or "").strip()) if part).strip()
+        if not seed:
+            return None
+
+        seed_norm = normalize_turkish_text(seed)
+        if any(k in seed_norm for k in ("yapay zeka", "ai", "machine learning", "makine ogrenmesi", "makine öğrenmesi")):
+            return (
+                "Örneğin sağlık, eğitim, finans, müşteri hizmetleri, ulaşım, üretim ve yazılım geliştirmede kullanılıyor. "
+                "İstersen bunlardan birini seçip kısa örneklerle açayım."
+            )
+
+        if any(k in low for k in ("hangi alan", "nerede", "nerelerde", "örnek", "ornek")):
+            return "Örneğin sağlık, eğitim, finans, müşteri hizmetleri ve yazılım geliştirme gibi alanlarda kullanılıyor. İstersen tek tek örnekleyeyim."
+        return None

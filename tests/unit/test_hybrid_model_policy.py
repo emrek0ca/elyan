@@ -26,11 +26,21 @@ def test_model_orchestrator_prefers_local_for_router_role():
     assert selected["type"] == "ollama"
 
 
-def test_model_orchestrator_prefers_strong_cloud_for_research_worker():
+def test_model_orchestrator_prefers_local_for_research_worker_when_local_first():
     orchestrator = ModelOrchestrator()
     orchestrator.providers = {
         "ollama": {"type": "ollama", "model": "llama3.1:8b", "status": "configured"},
         "openai": {"type": "openai", "model": "gpt-4o", "status": "configured"},
     }
     selected = orchestrator.get_best_available("research_worker")
-    assert selected["type"] == "openai"
+    assert selected["type"] == "ollama"
+
+
+def test_model_orchestrator_prefers_local_for_inference_when_available():
+    orchestrator = ModelOrchestrator()
+    orchestrator.providers = {
+        "ollama": {"type": "ollama", "model": "llama3.1:8b", "status": "configured"},
+        "openai": {"type": "openai", "model": "gpt-4o", "status": "configured"},
+    }
+    selected = orchestrator.get_best_available("inference")
+    assert selected["type"] == "ollama"

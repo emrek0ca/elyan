@@ -59,7 +59,7 @@ class IntentClassifier:
 
         # High confidence patterns (regex based)
         self.patterns = {
-            r'(masaüstü|desktop|belgeler|documents).*?(ne var|neler var|göster|listele)': "list_files",
+            r'(masaüstü|masaustu|desktop|desktop klasör|desktop klasor|belgeler|documents).*?(ne var|neler var|göster|goster|listele|contents|içerik|icerik)': "list_files",
             r'(safari|chrome|finder|terminal|vscode).*?(aç|kapat)': "app_open_close",
             r'(ekran|screenshot).*?(al|çek|görüntü)': "take_screenshot",
             r'ses.*?(kapat|aç|%\d+|\d+\s*yap)': "set_volume",

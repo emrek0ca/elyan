@@ -164,6 +164,20 @@ def test_agent_direct_intent_uses_available_tools(monkeypatch):
     assert "a.txt" in response
 
 
+def test_agent_contextual_followup_chat_reply_uses_previous_topic():
+    agent = Agent()
+    agent._last_turn_context = {
+        "user_input": "Yapay zeka nedir",
+        "response_text": "Yapay zeka, makinelerin insan benzeri düşünme ve öğrenme yetenekleri geliştirmesidir.",
+        "action": "chat",
+        "success": True,
+    }
+
+    reply = agent._fast_contextual_chat_reply("hangi alanlarda mesela")
+    assert reply is not None
+    assert "sağlık" in reply.lower() or "saglık" in reply.lower() or "eğitim" in reply.lower()
+
+
 def test_agent_execute_tool_maps_research(monkeypatch):
     agent = Agent()
     agent.llm = _DummyLLM()
