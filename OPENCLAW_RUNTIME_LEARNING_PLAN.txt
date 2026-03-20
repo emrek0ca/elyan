@@ -1,0 +1,228 @@
+Elyan'i OpenClaw Benzeri Hizli ve Surekli Ogrenen Sisteme Tasima Plani
+
+Tarih: 2026-03-20
+
+1. Ozet
+
+Elyan'da onemli temel katmanlar zaten var:
+- mission/runtime sertlestirmesi
+- evidence-based completion
+- dashboard/API/health duzeltmeleri
+- multi-LLM yonlendirme
+- kisilestirme V1
+- reward/trainer queue
+- ML fallback runtime
+- reliability telemetry
+
+Ana eksik, bu katmanlarin tek bir hizli cekirdekte birlesmemis olmasi.
+
+OpenClaw benzeri hedef icin cikarilan ana ozellikler:
+- dusuk gecikme
+- yerel/native hissi
+- kararlı tool kullanimi
+- siki UI-runtime dongusu
+- guclu baglamsal hafiza
+
+2. Bugune Kadar Tamamlanan Temel Katmanlar
+
+- Mission/runtime tarafinda sahte completed temizlendi; artifact/evidence yoksa basari sayilmiyor.
+- Dashboard ve gateway tarafinda health, mission response, status ve adapter/service ayrimi iyilestirildi.
+- Kisisellestirme V1 kuruldu: per-user memory, adapter registry, reward service, async trainer queue, cloud icin memory-only fallback.
+- ML stabilite yuzeyi eklendi: decision_trace, outcome_record, scorer/runtime fallback, reliability store.
+- Legacy sistemler buyuk olcude uyumlu tutuldu; agent, pipeline, mission ve gateway ayni telemetry omurgasina baglanmaya basladi.
+- Hedefli testlerde yeni katmanlar calisiyor; fakat mimari hala cok katmanli ve bazi kararlar birden fazla sistemde aliniyor.
+
+3. OpenClaw Seviyesine Cikmak Icin Kalan Eksikler
+
+- Tek bir hizli ana yol yok; basit istekler gereksiz planner/router/verifier katmanlarindan gecebiliyor.
+- Ogrenme, memory, feedback, training ve reliability icin birden fazla nesil sistem birlikte yasiyor; tek otorite eksik.
+- ML katmani hazir ama hala cogunlukla fallback/heuristic; gercek scorer/ranker/verifier zinciri canonical hale gelmedi.
+- Retrieval kisilestirmesi var ama semantic rerank, stale-memory pruning ve kalite puanlamasi tam degil.
+- Surekli ogrenme dongusu var ama veri kumesi uretimi, offline eval, promotion gate ve rollback tam urunlesmis degil.
+- Research ve coding icin ozel kalite modelleri yok; genel agent akisi her is turunu ayni sekilde tasimaya calisiyor.
+- UX tarafinda aninda hissedilen hiz icin token/time budget, warm cache, interruptibility ve visible state yeterince siki degil.
+
+4. Uygulama Plani
+
+4.1 Tek Otoriteli Runtime Cekirdegi
+
+- Yeni ana orkestrator RuntimeControlPlane olacak.
+- Request basinda intent, memory, policy, tool route, verification ve telemetry burada birlesecek.
+- Mevcut learning_engine, training_system, eski memory/profile yuzeyleri silinmeyecek; compat wrapper olarak bu cekirdege baglanacak.
+- Canonical kayit tipleri teklesecek:
+  - DecisionRecord
+  - OutcomeRecord
+  - VerificationRecord
+  - RewardEvent
+  - PreferencePair
+  - RuntimeContext
+- Ayni karar ayni request icinde iki farkli sistem tarafindan tekrar alinmayacak.
+
+4.2 Hiz Icin Iki Katmanli Calisma Modeli
+
+- Tum talepler dort sinifa ayrilacak:
+  - direct_action
+  - research
+  - coding
+  - workflow
+- direct_action icin fast path kurulacak:
+  - intent scorer
+  - action ranker
+  - policy gate
+  - dogrudan tool/mission kickoff
+  - yalniz gerektiginde verifier
+- research, coding ve cok adimli islerde deep path kullanilacak; planner/multi-agent yalniz burada acilacak.
+- Varsayilan gecikme butceleri:
+  - route karari p50 <150ms, p95 <400ms
+  - memory retrieval p50 <120ms, p95 <300ms
+  - ilk gorunur kullanici ack <300ms
+  - basit tool kickoff <800ms
+- Kullanici profil ozeti, sicak memory snapshot ve adapter binding request oncesi cache'lenecek.
+
+4.3 ML Dogruluk Katmani
+
+- ModelRuntime yetenek basamagi kesinlestirilecek:
+  - cpu_fallback
+  - sentence-transformers
+  - torch+mps
+  - remote_gpu_worker
+- Ilk gercek model ailesi yalniz karar kalitesini artiracak:
+  - IntentScorer
+  - ActionRanker
+  - ClarificationClassifier
+  - VerificationClassifier
+- Model sonucu tek basina icra yetkisi vermeyecek:
+  - dusuk guven -> clarify
+  - orta guven -> fallback
+  - yuksek guven -> policy+verifier
+- PyTorch kurulu degilse ayni API deterministik fallback ile calismaya devam edecek.
+
+4.4 Surekli Ogrenme ve Unutmadan Gelisme
+
+- Kisisel ogrenme hatti tek yere alinacak: LearningControlPlane.
+- Her interaction sonrasi zorunlu akis:
+  - event log
+  - outcome label
+  - memory index
+  - reward normalize
+  - gerekiyorsa preference pair
+  - training queue enqueue
+- Kisisel ogrenme sirasi:
+  - once profile/episodic/semantic memory guclenir
+  - sonra scorer kalibrasyonu guncellenir
+  - yeterli veri ve eval gecerse LoRA/QLoRA adapter egitimi yapilir
+- Unutmamayi garanti etmek icin:
+  - replay buffer zorunlu
+  - adapter promotion oncesi offline eval zorunlu
+  - basarisiz aday adapter asla promote edilmez
+  - son iyi adapter rollback icin tutulur
+- Merkezi ortak model guncellemesi yalniz opt-in veriyle yapilacak; varsayilan davranis kullanici verisinin yerelde kalmasidir.
+
+4.5 Retrieval ve Hafiza Guclendirmesi
+
+- Memory uc seviyede kalacak:
+  - profile
+  - episodic
+  - semantic
+- Backend sirasi:
+  - varsayilan SQLite + deterministic vectors
+  - opsiyonel sentence-transformers + LanceDB
+  - ileri faz FAISS/remote
+- Retrieval pipeline zorunlu asamalari:
+  - query embedding
+  - user-scoped candidate fetch
+  - semantic rerank
+  - stale/irrelevant pruning
+  - compact context packing
+- Cross-user leakage sifir tolerans olacak.
+
+4.6 Research ve Coding Icin Uzmanlastirma
+
+- Research icin:
+  - SourceQualityScorer
+  - ClaimEvidenceMatcher
+  - HallucinationRiskScorer
+- Coding icin:
+  - RepoAwareEditRanker
+  - TestImpactPredictor
+  - FixSuggestionReranker
+- Bu modeller cevap uretmeyecek; dogru kaynak, dogru dosya, dogru test ve dogru dogrulama yolunu sectirecek.
+
+4.7 Urun ve Operasyon Sertlestirmesi
+
+- Dashboard request durumu tek formatta gorunecek:
+  - queued
+  - routing
+  - running
+  - verifying
+  - waiting_approval
+  - completed
+  - failed
+- Kullanicıya gorunur state, evidence link'i, verifier sonucu ve fallback nedeni gosterilecek.
+- Health/status yuzeyi personalization, ML runtime, adapter training worker ve retrieval backend'i ayri raporlayacak.
+- Privacy wipe cagrisi user-scope icinde adapter, memory, reward ve eval kayitlarini birlikte silecek.
+
+5. Public API ve Kontrat Degisiklikleri
+
+- Yeni ana giris:
+  RuntimeControlPlane.handle(request, user_id, channel, provider)
+
+- Yeni servis kontratlari:
+  - ModelRuntime.get_capability(kind)
+  - MemoryRetriever.retrieve(query, user_id, token_budget)
+  - LearningControlPlane.record_feedback(event)
+  - AdapterTrainer.train(user_id, base_model_id, batch_id)
+  - EvaluationSuite.run(target_id, suite_name)
+
+- Canonical tipler:
+  - DecisionRecord
+  - OutcomeRecord
+  - VerificationRecord
+  - RewardEvent
+  - PreferencePair
+  - ModelCapabilitySnapshot
+
+- Authoritative config bloklari:
+  - ml.*
+  - evaluation.*
+  - retrieval.*
+  - adapter_training.*
+  - personalization.*
+
+6. Test ve Kabul Kriterleri
+
+Unit:
+- ML backend yokken tum scorer/ranker/verifier API'leri fallback ile calisir.
+- Dusuk confidence clarify veya fallback uretir; direkt icra vermez.
+- Reward pipeline implicit negatifleri yanlis cezaya cevirmemeli.
+- User-scoped retrieval baska kullanici verisi getirmemeli.
+- Bozuk adapter otomatik base-model fallback yapmali.
+
+Integration:
+- message -> route -> tool/mission -> verify -> outcome log
+- feedback -> reward -> preference pair -> training queue -> eval -> promote
+- memory retrieve -> rerank -> prompt context
+- local provider'da adapter aktif, cloud provider'da memory-only kalir
+
+Offline eval:
+- intent accuracy
+- route precision
+- false-positive execution rate
+- verification precision/recall
+- hallucination-risk score
+- adapter promotion delta
+
+Acceptance defaults:
+- yanlis tool/action orani mevcut baseline'a gore en az %40 dusecek
+- sahte success orani %2 altina inecek
+- clarification precision %80+ olacak
+- training worker kapaliyken inference tamamen calismaya devam edecek
+- 10k kullanici metadata lookup ve cold adapter resolve kabul edilebilir p95 altinda kalacak
+
+7. Varsayimlar ve Varsayilanlar
+
+- Varsayilan dagitim modeli local-first, single-node, MPS-ready; remote GPU ikinci faz.
+- Mevcut mission hardening, personalization V1, ML telemetry ve multi-LLM altyapisi korunacak; plan bunlari silmek degil tek cekirdekte toplamaktir.
+- Ilk gercek ML sprintleri buyuk model egitimi degil, kucuk scorer/ranker/verifier ve offline evaluation omurgasi olacaktir.
+- LoRA/QLoRA adapter egitimi yalniz yeterli veri, replay buffer ve promotion gate hazir olduktan sonra uretime acilacaktir.
+- OpenClaw kiyasi davranis hedefidir: daha hizli, daha kararli, daha baglamsal ve daha az yanlis icra yapan Elyan.
