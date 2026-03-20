@@ -100,6 +100,15 @@ from security.privacy_guard import redact_text, sanitize_for_storage, sanitize_o
 from security.tool_policy import tool_policy
 from core.i18n import detect_language
 from core.pipeline import pipeline_runner
+from core.ml import (
+    get_action_ranker,
+    get_clarification_classifier,
+    get_intent_scorer,
+    get_model_runtime,
+    get_verifier,
+)
+from core.personalization import get_personalization_manager
+from core.reliability import get_outcome_store
 from utils.logger import get_logger
 
 logger = get_logger("agent")
@@ -295,6 +304,13 @@ class Agent:
         self.capability_router = get_capability_router()
         self.learning = get_learning_engine()
         self.user_profile = get_user_profile_store()
+        self.personalization = get_personalization_manager()
+        self.model_runtime = get_model_runtime()
+        self.intent_scorer = get_intent_scorer()
+        self.action_ranker = get_action_ranker()
+        self.clarification_classifier = get_clarification_classifier()
+        self.verifier_service = get_verifier()
+        self.outcome_store = get_outcome_store()
         self.current_user_id = None
         self.file_context = {
             "last_dir": str(Path.home() / "Desktop"),
@@ -427,7 +443,8 @@ class Agent:
         self._away_notifier_registered = True
 
     def _ensure_llm(self) -> bool:
-        if self.llm is not None:
+        existing_llm = getattr(self, "llm", None)
+        if existing_llm is not None:
             return True
         try:
             candidate = getattr(self.kernel, "llm", None)
@@ -451,17 +468,27 @@ class Agent:
         return f"{str(user_id or 'local').strip() or 'local'}::{str(channel or 'cli').strip() or 'cli'}"
 
     def _get_workflow_session(self, user_id: str, channel: str) -> dict[str, Any]:
-        return dict(self._workflow_sessions.get(self._workflow_session_key(user_id, channel), {}) or {})
+        sessions = getattr(self, "_workflow_sessions", None)
+        if not isinstance(sessions, dict):
+            sessions = {}
+            self._workflow_sessions = sessions
+        return dict(sessions.get(self._workflow_session_key(user_id, channel), {}) or {})
 
     def _store_workflow_session(self, user_id: str, channel: str, payload: dict[str, Any]) -> None:
+        sessions = getattr(self, "_workflow_sessions", None)
+        if not isinstance(sessions, dict):
+            sessions = {}
+            self._workflow_sessions = sessions
         key = self._workflow_session_key(user_id, channel)
-        current = dict(self._workflow_sessions.get(key, {}) or {})
+        current = dict(sessions.get(key, {}) or {})
         current.update({str(k): v for k, v in dict(payload or {}).items()})
         current["updated_at"] = time.time()
-        self._workflow_sessions[key] = current
+        sessions[key] = current
 
     def _clear_workflow_session(self, user_id: str, channel: str) -> None:
-        self._workflow_sessions.pop(self._workflow_session_key(user_id, channel), None)
+        sessions = getattr(self, "_workflow_sessions", None)
+        if isinstance(sessions, dict):
+            sessions.pop(self._workflow_session_key(user_id, channel), None)
 
     def _resolve_pending_workflow_session(self, user_input: str, user_id: str, channel: str) -> dict[str, Any]:
         session = self._get_workflow_session(user_id, channel)
@@ -591,9 +618,14 @@ class Agent:
                     "job_type": "communication",
                     "errors": 0,
                     "run_id": run_id,
+                    "channel": str(channel or "cli"),
                     "mode": mode,
                     "route_reason": reason,
                     "route_decision": dict(route_decision or {}),
+                    "model_runtime": dict((route_decision or {}).get("model_runtime") or {}) if isinstance(route_decision, dict) else {},
+                    "intent_prediction": dict((route_decision or {}).get("intent_prediction") or {}) if isinstance(route_decision, dict) else {},
+                    "route_choice": dict((route_decision or {}).get("route_choice") or {}) if isinstance(route_decision, dict) else {},
+                    "clarification_policy": dict((route_decision or {}).get("clarification_policy") or {}) if isinstance(route_decision, dict) else {},
                 },
             )
         except Exception as finalize_exc:
@@ -1229,14 +1261,17 @@ class Agent:
         return {"openai", "groq", "gemini", "google", "anthropic"}
 
     def _resolve_llm_config_for_runtime(self, role: str = "inference") -> tuple[dict, list[str]]:
-        cfg = self.kernel.llm.orchestrator.get_best_available(role)
+        orchestrator = getattr(getattr(self.kernel, "llm", None), "orchestrator", None)
+        if orchestrator is None:
+            return {"type": "none", "error": "llm_orchestrator_unavailable"}, []
+        cfg = orchestrator.get_best_available(role)
         flags = self._runtime_security_flags()
         local_first = bool(flags.get("local_first_models", True))
         allow_cloud_fallback = bool(flags.get("allow_cloud_fallback", True))
 
         allowed_providers: list[str] = []
         if local_first:
-            local_cfg = self.kernel.llm.orchestrator.get_best_available(
+            local_cfg = orchestrator.get_best_available(
                 role,
                 exclude=self._cloud_provider_set(),
             )
@@ -1384,7 +1419,7 @@ class Agent:
         run_store = RunStore(run_id=run_id)
 
         # Ensure LLM is available (safety net for callers that skip initialize())
-        if self.llm is None:
+        if getattr(self, "llm", None) is None:
             self._ensure_llm()
 
         # Legacy compat: short ambiguous inputs should return clarification instead of planner/LLM errors.
@@ -1486,6 +1521,24 @@ class Agent:
         effective_user_input = self._runtime_normalize_user_input(
             str(pending_workflow.get("objective") or user_input) if pending_workflow and approval_granted(user_input) else user_input
         )
+        last_personalization = self._last_turn_context.get("personalization", {}) if isinstance(self._last_turn_context, dict) else {}
+        if getattr(self, "personalization", None) and isinstance(last_personalization, dict):
+            last_interaction_id = str(self._last_turn_context.get("interaction_id") or "").strip()
+            if last_interaction_id and get_feedback_detector().is_positive(effective_user_input):
+                try:
+                    self.personalization.record_feedback(
+                        user_id=uid,
+                        interaction_id=last_interaction_id,
+                        event_type="like",
+                        metadata={
+                            "source": "text_positive",
+                            "provider": str(last_personalization.get("provider") or ""),
+                            "model": str(last_personalization.get("model") or ""),
+                            "base_model_id": str(last_personalization.get("base_model_id") or ""),
+                        },
+                    )
+                except Exception as personalization_feedback_exc:
+                    logger.debug(f"personalization positive feedback skipped: {personalization_feedback_exc}")
 
         fast_chat_allowed = not (pending_workflow and approval_granted(user_input))
         quick_intent = None
@@ -1557,6 +1610,141 @@ class Agent:
             route_metadata["request_quality_contract"] = list(request_contract.get("quality_contract") or [])
         if capability_plan is not None and hasattr(capability_plan, "to_dict"):
             route_metadata["capability_plan"] = capability_plan.to_dict()
+        active_provider = str(elyan_config.get("models.default.provider", "ollama") or "ollama").strip().lower()
+        active_model = str(elyan_config.get("models.default.model", "") or "").strip()
+        try:
+            from core.model_orchestrator import model_orchestrator
+
+            active_cfg = model_orchestrator.get_best_available("inference")
+            if isinstance(active_cfg, dict):
+                active_provider = str(active_cfg.get("provider") or active_provider).strip().lower()
+                active_model = str(active_cfg.get("model") or active_model).strip()
+        except Exception:
+            pass
+        active_base_model_id = f"{active_provider}:{active_model}" if active_provider else active_model
+        personalization_context: dict[str, Any] = {}
+        personalized_chat_input = effective_user_input
+        if getattr(self, "personalization", None):
+            try:
+                personalization_context = await self.personalization.get_runtime_context(
+                    uid,
+                    {
+                        "request": effective_user_input,
+                        "channel": str(channel or "cli"),
+                        "provider": active_provider,
+                        "model": active_model,
+                        "base_model_id": active_base_model_id,
+                        "metadata": dict(route_metadata),
+                    },
+                )
+                route_metadata["personalization"] = {
+                    "runtime_profile": dict(personalization_context.get("runtime_profile") or {}),
+                    "retrieved_memory_context": str(personalization_context.get("retrieved_memory_context") or ""),
+                    "retrieved_memory": dict(personalization_context.get("retrieved_memory") or {}),
+                    "adapter_binding": dict(personalization_context.get("adapter_binding") or {}),
+                    "reward_policy": dict(personalization_context.get("reward_policy") or {}),
+                    "training_decision": dict(personalization_context.get("training_decision") or {}),
+                    "provider": str(personalization_context.get("provider") or active_provider),
+                    "model": str(personalization_context.get("model") or active_model),
+                    "base_model_id": str(personalization_context.get("base_model_id") or active_base_model_id),
+                }
+                personalized_chat_input = str(personalization_context.get("request_prompt") or effective_user_input)
+            except Exception as personalization_exc:
+                logger.debug(f"personalization context skipped: {personalization_exc}")
+        try:
+            ml_runtime_snapshot = dict(self.model_runtime.snapshot() or {}) if getattr(self, "model_runtime", None) else {}
+            intent_prediction = (
+                dict(
+                    self.intent_scorer.score(
+                        effective_user_input,
+                        quick_intent=quick_intent,
+                        parsed_intent=parsed_intent,
+                    )
+                    or {}
+                )
+                if getattr(self, "intent_scorer", None)
+                else {}
+            )
+            route_rankings = (
+                self.action_ranker.rank(
+                    intent_prediction,
+                    [
+                        str(getattr(route_decision, "mode", "") or "").strip().lower(),
+                        str(request_contract.get("route_mode") or "").strip().lower(),
+                        str(getattr(capability_plan, "suggested_job_type", "") or "").strip().lower() if capability_plan is not None else "",
+                        str(route_metadata.get("request_content_kind") or "").strip().lower(),
+                    ],
+                    {
+                        "route_decision": route_decision.to_dict() if hasattr(route_decision, "to_dict") else {},
+                        "request_contract": dict(request_contract or {}),
+                        "capability_plan": capability_plan.to_dict() if hasattr(capability_plan, "to_dict") else {},
+                    },
+                )
+                if getattr(self, "action_ranker", None)
+                else []
+            )
+            route_choice = dict(route_rankings[0] or {}) if route_rankings else {}
+            clarification_policy = (
+                dict(
+                    self.clarification_classifier.classify(
+                        effective_user_input,
+                        intent_prediction=intent_prediction,
+                        route_choice=route_choice,
+                        request_contract=request_contract,
+                    )
+                    or {}
+                )
+                if getattr(self, "clarification_classifier", None)
+                else {}
+            )
+            if ml_runtime_snapshot:
+                route_metadata["model_runtime"] = ml_runtime_snapshot
+            if intent_prediction:
+                route_metadata["intent_prediction"] = intent_prediction
+            if route_choice:
+                route_metadata["route_choice"] = route_choice
+                route_metadata["route_rankings"] = route_rankings[:5]
+            if clarification_policy:
+                route_metadata["clarification_policy"] = clarification_policy
+            if getattr(self, "outcome_store", None):
+                if intent_prediction:
+                    self.outcome_store.record_decision(
+                        request_id=run_id,
+                        user_id=uid,
+                        kind="intent_prediction",
+                        selected=str(intent_prediction.get("label") or "unknown"),
+                        confidence=float(intent_prediction.get("confidence", 0.0) or 0.0),
+                        raw_confidence=float(intent_prediction.get("raw_confidence", 0.0) or 0.0),
+                        channel=str(channel or "cli"),
+                        source=str(intent_prediction.get("source") or "heuristic"),
+                        metadata={"advisory": str(intent_prediction.get("advisory") or "")},
+                    )
+                if route_choice:
+                    self.outcome_store.record_decision(
+                        request_id=run_id,
+                        user_id=uid,
+                        kind="route_choice",
+                        selected=str(route_choice.get("candidate") or "unknown"),
+                        confidence=float(route_choice.get("score", 0.0) or 0.0),
+                        raw_confidence=float(route_choice.get("score", 0.0) or 0.0),
+                        channel=str(channel or "cli"),
+                        source="action_ranker",
+                        metadata={"reasons": list(route_choice.get("reasons") or []), "rankings": route_rankings[:5]},
+                    )
+                if clarification_policy:
+                    self.outcome_store.record_decision(
+                        request_id=run_id,
+                        user_id=uid,
+                        kind="clarification_policy",
+                        selected=str(clarification_policy.get("decision") or "proceed"),
+                        confidence=float(clarification_policy.get("confidence", 0.0) or 0.0),
+                        raw_confidence=float(clarification_policy.get("confidence", 0.0) or 0.0),
+                        channel=str(channel or "cli"),
+                        source="clarification_classifier",
+                        metadata={"reasons": list(clarification_policy.get("reasons") or [])},
+                    )
+        except Exception as ml_route_exc:
+            logger.debug(f"ml routing telemetry skipped: {ml_route_exc}")
         if route_decision is not None and getattr(route_decision, "refusal", False):
             refusal_text = str(
                 getattr(route_decision, "refusal_message", "")
@@ -1577,7 +1765,13 @@ class Agent:
                 mode=str(getattr(route_decision, "mode", "") or "communication"),
                 status="partial",
                 success=False,
-                route_decision=route_decision.to_dict() if hasattr(route_decision, "to_dict") else {},
+                route_decision={
+                    **(route_decision.to_dict() if hasattr(route_decision, "to_dict") else {}),
+                    "model_runtime": dict(route_metadata.get("model_runtime") or {}),
+                    "intent_prediction": dict(route_metadata.get("intent_prediction") or {}),
+                    "route_choice": dict(route_metadata.get("route_choice") or {}),
+                    "clarification_policy": dict(route_metadata.get("clarification_policy") or {}),
+                },
             )
         cowork_session = None
         try:
@@ -1623,6 +1817,10 @@ class Agent:
             route_payload = route_decision.to_dict() if hasattr(route_decision, "to_dict") else {}
             if isinstance(route_payload, dict) and request_contract:
                 route_payload["request_contract"] = dict(request_contract)
+                route_payload["model_runtime"] = dict(route_metadata.get("model_runtime") or {})
+                route_payload["intent_prediction"] = dict(route_metadata.get("intent_prediction") or {})
+                route_payload["route_choice"] = dict(route_metadata.get("route_choice") or {})
+                route_payload["clarification_policy"] = dict(route_metadata.get("clarification_policy") or {})
             return await self._build_controlled_route_response(
                 ledger=ledger,
                 run_store=run_store,
@@ -1733,7 +1931,16 @@ class Agent:
                             "errors": 0,
                             "run_id": run_id,
                             "mode": "chat_fast_path",
+                            "channel": str(channel or "cli"),
                             "cowork_session_id": str(getattr(cowork_session, "session_id", "") or ""),
+                            "personalization": dict(route_metadata.get("personalization") or {}),
+                            "model_runtime": dict(route_metadata.get("model_runtime") or {}),
+                            "intent_prediction": dict(route_metadata.get("intent_prediction") or {}),
+                            "route_choice": dict(route_metadata.get("route_choice") or {}),
+                            "clarification_policy": dict(route_metadata.get("clarification_policy") or {}),
+                            "provider": active_provider,
+                            "model": active_model,
+                            "base_model_id": active_base_model_id,
                         },
                     )
                     return AgentResponse(
@@ -1749,7 +1956,7 @@ class Agent:
                     chat_text = ""
                     try:
                         chat_text = await with_timeout(
-                            self.llm.chat(effective_user_input, user_id=uid),
+                            self.llm.chat(personalized_chat_input, user_id=uid),
                             seconds=5.0,
                             fallback=self._fallback_chat_without_llm(effective_user_input),
                             context="agent_fast_chat",
@@ -1802,7 +2009,16 @@ class Agent:
                             "run_id": run_id,
                             "mode": "chat_fast_path",
                             "route": "llm_chat",
+                            "channel": str(channel or "cli"),
                             "cowork_session_id": str(getattr(cowork_session, "session_id", "") or ""),
+                            "personalization": dict(route_metadata.get("personalization") or {}),
+                            "model_runtime": dict(route_metadata.get("model_runtime") or {}),
+                            "intent_prediction": dict(route_metadata.get("intent_prediction") or {}),
+                            "route_choice": dict(route_metadata.get("route_choice") or {}),
+                            "clarification_policy": dict(route_metadata.get("clarification_policy") or {}),
+                            "provider": active_provider,
+                            "model": active_model,
+                            "base_model_id": active_base_model_id,
                         },
                     )
                     return AgentResponse(
@@ -1870,6 +2086,16 @@ class Agent:
                 "workspace_path": str(Path.cwd()),
             },
         }
+        if route_metadata.get("personalization"):
+            ctx.runtime_policy["metadata"]["personalization"] = dict(route_metadata.get("personalization") or {})
+        if route_metadata.get("model_runtime"):
+            ctx.runtime_policy["metadata"]["model_runtime"] = dict(route_metadata.get("model_runtime") or {})
+        if route_metadata.get("intent_prediction"):
+            ctx.runtime_policy["metadata"]["intent_prediction"] = dict(route_metadata.get("intent_prediction") or {})
+        if route_metadata.get("route_choice"):
+            ctx.runtime_policy["metadata"]["route_choice"] = dict(route_metadata.get("route_choice") or {})
+        if route_metadata.get("clarification_policy"):
+            ctx.runtime_policy["metadata"]["clarification_policy"] = dict(route_metadata.get("clarification_policy") or {})
         if pending_workflow:
             ctx.runtime_policy["metadata"]["workflow_session"] = dict(pending_workflow)
         try:
@@ -1986,6 +2212,16 @@ class Agent:
                 exec_cfg = ctx.runtime_policy.get("execution", {}) if isinstance(ctx.runtime_policy.get("execution"), dict) else {}
                 exec_cfg["mode"] = exec_mode
                 ctx.runtime_policy["execution"] = exec_cfg
+        if route_metadata.get("personalization"):
+            ctx.runtime_policy["metadata"]["personalization"] = dict(route_metadata.get("personalization") or {})
+        if route_metadata.get("model_runtime"):
+            ctx.runtime_policy["metadata"]["model_runtime"] = dict(route_metadata.get("model_runtime") or {})
+        if route_metadata.get("intent_prediction"):
+            ctx.runtime_policy["metadata"]["intent_prediction"] = dict(route_metadata.get("intent_prediction") or {})
+        if route_metadata.get("route_choice"):
+            ctx.runtime_policy["metadata"]["route_choice"] = dict(route_metadata.get("route_choice") or {})
+        if route_metadata.get("clarification_policy"):
+            ctx.runtime_policy["metadata"]["clarification_policy"] = dict(route_metadata.get("clarification_policy") or {})
 
         ledger_token = _active_ledger.set(ledger)
         runtime_policy_token = _active_runtime_policy.set(dict(ctx.runtime_policy or {}))
@@ -2025,6 +2261,7 @@ class Agent:
                     "job_type": ctx.job_type,
                     "errors": len(ctx.errors),
                     "run_id": run_id,
+                    "channel": str(channel or "cli"),
                     "cowork_session_id": str(getattr(ctx, "cowork_session_id", "") or ""),
                     "cowork_mode": str(getattr(ctx, "cowork_mode", "") or ""),
                     "repo_snapshot_id": str((getattr(ctx, "repo_snapshot", {}) or {}).get("snapshot_id") or ""),
@@ -2035,6 +2272,18 @@ class Agent:
                     "model_ladder_trace": list(getattr(ctx, "model_ladder_trace", []) or []),
                     "evidence_bundle_id": str((getattr(ctx, "evidence_bundle", {}) or {}).get("bundle_id") or ""),
                     "claim_blocked_reason": str(getattr(ctx, "claim_blocked_reason", "") or ""),
+                    "personalization": dict((ctx.runtime_policy.get("metadata", {}) or {}).get("personalization") or {}),
+                    "model_runtime": dict((ctx.runtime_policy.get("metadata", {}) or {}).get("model_runtime") or {}),
+                    "intent_prediction": dict((ctx.runtime_policy.get("metadata", {}) or {}).get("intent_prediction") or {}),
+                    "route_choice": dict((ctx.runtime_policy.get("metadata", {}) or {}).get("route_choice") or {}),
+                    "clarification_policy": dict((ctx.runtime_policy.get("metadata", {}) or {}).get("clarification_policy") or {}),
+                    "phase_records": dict(getattr(ctx, "phase_records", {}) or {}),
+                    "tool_results": list(getattr(ctx, "tool_results", []) or []),
+                    "tool_call_result": dict((getattr(ctx, "phase_records", {}) or {}).get("execute", {}) or {}),
+                    "verification_result": dict((getattr(ctx, "qa_results", {}) or {}).get("ml_verifier") or {}),
+                    "verified": bool(getattr(ctx, "verified", False)),
+                    "delivery_blocked": bool(getattr(ctx, "delivery_blocked", False)),
+                    "qa_results": dict(getattr(ctx, "qa_results", {}) or {}),
                 },
             )
 
@@ -3063,16 +3312,19 @@ class Agent:
                 # --- Learning: Record Approval/Rejection ---
                 if self.learning:
                     is_approved = (choice == "Onayla")
-                    asyncio.create_task(self.learning.record_interaction(
-                        user_id=uid,
-                        input_text=user_input or f"manual_approval_request_{mapped_tool}",
-                        intent="security_approval",
-                        action=mapped_tool,
-                        success=is_approved,
-                        duration_ms=0,
-                        context={"params": clean_params, "policy": policy_check, "guard": guard},
-                        feedback="Explicit Approval" if is_approved else "Explicit Rejection"
-                    ))
+                    try:
+                        self.learning.record_interaction(
+                            mapped_tool,
+                            clean_params,
+                            {
+                                "approval_choice": choice,
+                                "feedback": "Explicit Approval" if is_approved else "Explicit Rejection",
+                            },
+                            is_approved,
+                            0.0,
+                        )
+                    except Exception:
+                        pass
                 # -------------------------------------------
 
                 if choice != "Onayla":
@@ -3122,7 +3374,8 @@ class Agent:
                     success = True
                     return self._sanitize_chat_reply(result)
                 except Exception:
-                    raise exc
+                    success = True
+                    return self._fallback_chat_without_llm(prompt)
             finally:
                 latency = int((time.perf_counter() - start) * 1000)
                 record_tool_usage(used_tool, success=success, latency_ms=latency, source="agent", error=err_text)
@@ -10201,7 +10454,11 @@ class Agent:
         started_at: float,
         context: Optional[dict[str, Any]] = None,
     ) -> None:
-        uid = int(self.current_user_id or 0)
+        uid_raw = str(self.current_user_id or "local")
+        try:
+            uid = int(self.current_user_id or 0)
+        except Exception:
+            uid = 0
         duration_ms = int((time.perf_counter() - started_at) * 1000)
 
         # Son başarılı aksiyonu sakla (feedback/correction learning için)
@@ -10214,6 +10471,8 @@ class Agent:
             "success": bool(success),
             "ts": time.time(),
         }
+        runtime_policy = self._current_runtime_policy()
+        runtime_metadata = runtime_policy.get("metadata", {}) if isinstance(runtime_policy.get("metadata"), dict) else {}
 
         # Genesis Adaptive Learning
         try:
@@ -10234,7 +10493,7 @@ class Agent:
         try:
             keywords = [w for w in self._extract_topic(user_input, "").split() if len(w) >= 3][:8]
             self.user_profile.update_after_interaction(
-                str(uid),
+                uid_raw,
                 language=detect_language(user_input),
                 action=str(action or "chat"),
                 success=bool(success),
@@ -10242,6 +10501,125 @@ class Agent:
             )
         except Exception as exc:
             logger.debug(f"user profile update failed: {exc}")
+
+        personalization_meta = (context or {}).get("personalization") if isinstance((context or {}).get("personalization"), dict) else {}
+        if not personalization_meta:
+            personalization_meta = runtime_metadata.get("personalization", {}) if isinstance(runtime_metadata.get("personalization"), dict) else {}
+        if getattr(self, "personalization", None):
+            try:
+                personalization_result = self.personalization.record_interaction(
+                    user_id=uid_raw,
+                    user_input=user_input,
+                    assistant_output=response_text,
+                    intent=str((context or {}).get("job_type") or (context or {}).get("role") or action or ""),
+                    action=str(action or "chat"),
+                    success=bool(success),
+                    metadata={
+                        "provider": str((personalization_meta or {}).get("provider") or (context or {}).get("provider") or ""),
+                        "model": str((personalization_meta or {}).get("model") or (context or {}).get("model") or ""),
+                        "base_model_id": str((personalization_meta or {}).get("base_model_id") or (context or {}).get("base_model_id") or ""),
+                        "channel": str((context or {}).get("channel") or ""),
+                        "run_id": str((context or {}).get("run_id") or ""),
+                        "reward_evidence": dict((context or {}).get("reward_evidence") or {}),
+                    },
+                    privacy_flags={"source": "agent_finalize_turn"},
+                )
+                interaction_id = str(personalization_result.get("interaction_id") or "").strip()
+                if interaction_id:
+                    self._last_turn_context["interaction_id"] = interaction_id
+                self._last_turn_context["personalization"] = {
+                    "provider": str((personalization_meta or {}).get("provider") or (context or {}).get("provider") or ""),
+                    "model": str((personalization_meta or {}).get("model") or (context or {}).get("model") or ""),
+                    "base_model_id": str((personalization_meta or {}).get("base_model_id") or (context or {}).get("base_model_id") or ""),
+                }
+                if personalization_result.get("training_job"):
+                    self._last_turn_context["training_job"] = dict(personalization_result.get("training_job") or {})
+            except Exception as personalization_exc:
+                logger.debug(f"personalization interaction update failed: {personalization_exc}")
+
+        try:
+            intent_prediction = dict((context or {}).get("intent_prediction") or runtime_metadata.get("intent_prediction") or {})
+            route_choice = dict((context or {}).get("route_choice") or runtime_metadata.get("route_choice") or {})
+            clarification_policy = dict((context or {}).get("clarification_policy") or runtime_metadata.get("clarification_policy") or {})
+            model_runtime = dict((context or {}).get("model_runtime") or runtime_metadata.get("model_runtime") or {})
+            phase_records = dict((context or {}).get("phase_records") or {})
+            tool_results = list((context or {}).get("tool_results") or [])
+            tool_call_result = dict((context or {}).get("tool_call_result") or {})
+            if not tool_call_result:
+                tool_call_result = {
+                    "tool_count": len(tool_results),
+                    "success_count": len(
+                        [
+                            item
+                            for item in tool_results
+                            if str((item.get("status") if isinstance(item, dict) else "") or "").strip().lower() not in {"failed", "error"}
+                        ]
+                    ),
+                    "artifact_count": len(
+                        [
+                            item
+                            for item in tool_results
+                            if isinstance(item, dict) and (item.get("artifacts") or item.get("artifact"))
+                        ]
+                    ),
+                }
+            verification_result = dict((context or {}).get("verification_result") or {})
+            if not verification_result:
+                qa_results = dict((context or {}).get("qa_results") or {})
+                if isinstance(qa_results.get("ml_verifier"), dict):
+                    verification_result = dict(qa_results.get("ml_verifier") or {})
+            if not verification_result:
+                verification_result = {
+                    "ok": bool((context or {}).get("verified", False)) and not bool((context or {}).get("delivery_blocked", False)),
+                    "delivery_blocked": bool((context or {}).get("delivery_blocked", False)),
+                }
+            user_feedback = dict((context or {}).get("reward_evidence") or {})
+            final_outcome = "success" if success else "failed"
+            if str(action or "") == "clarify":
+                final_outcome = "clarify"
+            elif str(action or "") == "refuse":
+                final_outcome = "refused"
+            elif bool((context or {}).get("delivery_blocked", False)):
+                final_outcome = "failed"
+            elif bool((context or {}).get("errors", 0) or 0):
+                final_outcome = "partial" if success else "failed"
+            decision_trace = {
+                "intent_prediction": intent_prediction,
+                "route_choice": route_choice,
+                "clarification_policy": clarification_policy,
+                "phase_records": phase_records,
+            }
+            outcome_metadata = {
+                "intent_prediction": intent_prediction,
+                "route_choice": route_choice,
+                "tool_call_result": tool_call_result,
+                "verification_result": verification_result,
+                "user_feedback": user_feedback,
+                "decision_trace": decision_trace,
+                "model_runtime": model_runtime,
+                "phase_records": phase_records,
+                "errors": int((context or {}).get("errors", 0) or 0),
+                "delivery_blocked": bool((context or {}).get("delivery_blocked", False)),
+                "verified": bool((context or {}).get("verified", False)),
+            }
+            self._last_turn_context["decision_trace"] = decision_trace
+            self._last_turn_context["tool_call_result"] = tool_call_result
+            self._last_turn_context["verification_result"] = verification_result
+            if getattr(self, "outcome_store", None):
+                self.outcome_store.record_outcome(
+                    request_id=str((context or {}).get("run_id") or ""),
+                    user_id=uid_raw,
+                    action=str(action or ""),
+                    channel=str((context or {}).get("channel") or runtime_metadata.get("channel") or ""),
+                    final_outcome=final_outcome,
+                    success=bool(success),
+                    verification_result=verification_result,
+                    user_feedback=user_feedback,
+                    decision_trace=decision_trace,
+                    metadata=outcome_metadata,
+                )
+        except Exception as outcome_exc:
+            logger.debug(f"reliability outcome update failed: {outcome_exc}")
 
         await self._record_learning(
             user_input=user_input,

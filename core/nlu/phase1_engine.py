@@ -894,7 +894,14 @@ class Phase1NLUEngine:
         for entry in self.entries:
             if any(kw in normalized for kw in entry.keywords):
                 if entry.intent in {"chat", "clarify"}:
-                    return self._decision_from_entry(entry, normalized, original, entities, score=0.95, scored=[])
+                    return self._decision_from_entry(
+                        entry=entry,
+                        normalized=normalized,
+                        original=original,
+                        entities=entities,
+                        score=0.95,
+                        scored=[],
+                    )
         return None
 
     def _score_intents(

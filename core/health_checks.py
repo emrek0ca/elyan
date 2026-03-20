@@ -84,7 +84,7 @@ class HealthCheck:
                 check_name=self.name,
                 status=HealthStatus.UNHEALTHY.value,
                 duration_ms=duration_ms,
-                message=f"Health check timed out after {self.timeout}s"
+                message=f"Health check timeout after {self.timeout}s"
             )
             self.last_result = result
             return result

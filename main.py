@@ -83,6 +83,33 @@ def _ollama_models():
         return []
 
 
+def _configured_model(cfg: dict | None = None) -> tuple[str, str]:
+    cfg = cfg or _cfg()
+    models = cfg.get("models", {}) if isinstance(cfg.get("models"), dict) else {}
+    default = models.get("default", {}) if isinstance(models.get("default"), dict) else {}
+    provider = str(default.get("provider") or cfg.get("provider") or "auto").strip() or "auto"
+    model = str(default.get("model") or cfg.get("model") or "").strip()
+    return provider, (model or "not set")
+
+
+def _gateway_health(port=PORT) -> dict:
+    status = {"reachable": _port_alive(port), "ok": None, "health_status": "", "entrypoint": ""}
+    try:
+        import httpx
+        resp = httpx.get(f"http://127.0.0.1:{port}/healthz", timeout=2.0)
+        status["reachable"] = resp.status_code < 500
+        if resp.headers.get("content-type", "").startswith("application/json"):
+            data = resp.json()
+            status["ok"] = bool(data.get("ok"))
+            status["health_status"] = str(data.get("health_status") or data.get("status") or "").strip()
+            status["entrypoint"] = str(data.get("entrypoint") or "").strip()
+        else:
+            status["ok"] = resp.status_code == 200
+    except Exception:
+        pass
+    return status
+
+
 # ── Fancy Printing ───────────────────────────────────────────
 
 def _banner():
@@ -537,8 +564,7 @@ def models(ctx):
     """🤖 Model yönetimi."""
     if ctx.invoked_subcommand is None:
         cfg = _cfg()
-        current = cfg.get("model", "not set")
-        provider = cfg.get("provider", "auto")
+        provider, current = _configured_model(cfg)
 
         click.echo(f"\n🤖 Model: {click.style(current, bold=True)} ({provider})")
         _line()
@@ -657,17 +683,21 @@ def models_key(provider, api_key):
 def status():
     """📊 Sistem durumu."""
     cfg = _cfg()
-    model = cfg.get("model", "not set")
-    gw = _port_alive()
+    provider, model = _configured_model(cfg)
+    health = _gateway_health()
+    gw = bool(health.get("reachable"))
+    gw_label = "🟢 ONLINE" if gw and health.get("ok") is not False else ("🟡 DEGRADED" if gw else "🔴 OFFLINE")
 
     click.echo(f"\n🧠 Elyan v{VERSION}")
     click.echo(f"{'═' * 40}")
-    click.echo(f"  Model:    {model}")
-    click.echo(f"  Gateway:  {'🟢 ONLINE' if gw else '🔴 OFFLINE'}")
+    click.echo(f"  Model:    {model} ({provider})")
+    click.echo(f"  Gateway:  {gw_label}")
     click.echo(f"  Ollama:   {'🟢' if _ollama_ok() else '🔴'}")
     click.echo(f"  Python:   {sys.version.split()[0]}")
     if gw:
         click.echo(f"  Dashboard: http://localhost:{PORT}/dashboard")
+        if health.get("health_status"):
+            click.echo(f"  Health:   {health.get('health_status')}")
     click.echo()
 
     modules = {
@@ -731,15 +761,20 @@ def doctor(fix):
 
     # Model
     cfg = _cfg()
-    m = cfg.get("model", "")
-    if m:
-        click.echo(f"  ✅ Model: {m}")
+    provider, m = _configured_model(cfg)
+    if m and m != "not set":
+        click.echo(f"  ✅ Model: {m} ({provider})")
     else:
         click.echo(f"  ⚠️  Model seçilmemiş → elyan models use <model>")
         issues += 1
 
     # Gateway & Ollama
-    click.echo(f"  {'✅' if _port_alive() else 'ℹ️ '} Gateway {'online' if _port_alive() else 'offline'}")
+    health = _gateway_health()
+    gateway_ok = bool(health.get("reachable"))
+    gateway_line = "offline"
+    if gateway_ok:
+        gateway_line = str(health.get("health_status") or "online")
+    click.echo(f"  {'✅' if gateway_ok and health.get('ok') is not False else 'ℹ️ '} Gateway {gateway_line}")
     click.echo(f"  {'✅' if _ollama_ok() else 'ℹ️ '} Ollama {'running' if _ollama_ok() else 'kapalı'}")
 
     # Deps

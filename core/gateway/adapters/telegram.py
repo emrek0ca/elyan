@@ -1,6 +1,7 @@
 import asyncio
 from typing import Dict, Any, List
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import Conflict, TelegramError
 from telegram.ext import ApplicationBuilder, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from .base import BaseChannelAdapter
 from ..message import UnifiedMessage
@@ -37,6 +38,39 @@ class TelegramAdapter(BaseChannelAdapter):
         self._callback_aliases: Dict[str, str] = {}
         self._max_callback_alias = max(64, int(config.get("callback_alias_cache_size", 512)))
         self._callback_stale_seconds = max(60, min(86400, int(config.get("callback_stale_seconds", 600))))
+        self._polling_conflict = False
+        self._last_polling_error = ""
+
+    def _handle_polling_error(self, error: TelegramError) -> None:
+        message = str(error or "").strip()
+        self._last_polling_error = message
+        self._is_connected = False
+        if isinstance(error, Conflict) or "terminated by other getupdates request" in message.lower():
+            self._polling_conflict = True
+            logger.warning("Telegram polling conflict algılandı; adapter pasif moda alındı.")
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._stop_after_conflict())
+            except Exception:
+                pass
+        else:
+            logger.error(f"Telegram polling error: {message}")
+
+    async def _stop_after_conflict(self) -> None:
+        app = self.app
+        if not app:
+            return
+        updater = getattr(app, "updater", None)
+        try:
+            if updater and getattr(updater, "running", False):
+                await updater.stop()
+        except Exception:
+            pass
+        try:
+            if getattr(app, "running", False):
+                await app.stop()
+        except Exception:
+            pass
 
     @staticmethod
     def _extract_local_image_path(text: str) -> str:
@@ -379,6 +413,8 @@ class TelegramAdapter(BaseChannelAdapter):
 
         try:
             self.app = ApplicationBuilder().token(self.token).build()
+            self._polling_conflict = False
+            self._last_polling_error = ""
             
             # Register handlers
             self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_text))
@@ -389,7 +425,11 @@ class TelegramAdapter(BaseChannelAdapter):
             
             # Start polling
             await self.app.initialize()
-            await self.app.updater.start_polling(drop_pending_updates=True)
+            await self.app.bot.delete_webhook(drop_pending_updates=True)
+            await self.app.updater.start_polling(
+                drop_pending_updates=True,
+                error_callback=self._handle_polling_error,
+            )
             await self.app.start()
             
             self._is_connected = True
@@ -408,6 +448,8 @@ class TelegramAdapter(BaseChannelAdapter):
             await self.app.stop()
             await self.app.shutdown()
         self._is_connected = False
+        self._polling_conflict = False
+        self._last_polling_error = ""
 
     async def _handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.effective_message or not update.effective_user:
@@ -824,6 +866,9 @@ class TelegramAdapter(BaseChannelAdapter):
         if not self.app:
             self._is_connected = False
             return "disconnected"
+        if self._polling_conflict:
+            self._is_connected = False
+            return "unavailable"
 
         app_running = bool(getattr(self.app, "running", False))
         updater = getattr(self.app, "updater", None)

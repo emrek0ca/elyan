@@ -325,7 +325,7 @@ class LLMOrchestrator:
             # Sort by latency
             sorted_providers = sorted(
                 enabled,
-                key=lambda p: self.providers[p].avg_latency_ms
+                key=lambda p: self.providers[p].avg_latency_ms if self.providers[p].avg_latency_ms > 0 else float("inf")
             )
             return sorted_providers[0] if sorted_providers else None
 
@@ -427,7 +427,7 @@ class LLMOrchestrator:
             )
         elif priority == "speed":
             providers.sort(
-                key=lambda p: self.providers[p].avg_latency_ms
+                key=lambda p: self.providers[p].avg_latency_ms if self.providers[p].avg_latency_ms > 0 else float("inf")
             )
 
         for provider in providers:

@@ -445,7 +445,7 @@ class AlertManager:
             return None
 
         # Check cooldown
-        alert_id = f"{metric_name}_{int(value)}"
+        alert_id = f"{metric_name}:{threshold.severity}"
         with self._lock:
             now = time.time()
             last_time = self.alert_cooldowns.get(alert_id, 0)

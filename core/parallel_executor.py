@@ -325,16 +325,30 @@ class ParallelExecutor:
                 logger.info(f"Executing group {group_idx + 1}/{len(groups)} ({len(group)} tasks)")
 
                 # Check timeout
+                remaining_timeout: Optional[float] = None
                 if self.timeout_total:
                     elapsed = time.time() - self.start_time
                     if elapsed > self.timeout_total:
                         raise TimeoutError(f"Total execution timeout exceeded: {elapsed}s > {self.timeout_total}s")
+                    remaining_timeout = max(0.0, self.timeout_total - elapsed)
 
                 # Execute group
-                group_results = await self._execute_group(group, semaphore, completed_tasks)
+                if remaining_timeout is not None:
+                    group_results = await asyncio.wait_for(
+                        self._execute_group(group, semaphore, completed_tasks),
+                        timeout=remaining_timeout,
+                    )
+                else:
+                    group_results = await self._execute_group(group, semaphore, completed_tasks)
                 completed_tasks.update(group_results)
                 self.results.update(group_results)
 
+        except TimeoutError:
+            logger.error("Execution failed: total timeout exceeded")
+            raise
+        except asyncio.TimeoutError as exc:
+            logger.error(f"Execution failed: {exc}")
+            raise TimeoutError("Total execution timeout exceeded") from exc
         except Exception as e:
             logger.error(f"Execution failed: {e}")
             if not self.allow_partial_failure:
@@ -415,8 +429,15 @@ class ParallelExecutor:
             return None
 
         avg_duration = sum(m.duration for m in completed_metrics) / len(completed_metrics)
-        remaining_tasks = sum(1 for m in self.metrics.values()
-                             if m.status in (TaskStatus.PENDING, TaskStatus.BLOCKED))
+        remaining_tasks = sum(
+            1 for m in self.metrics.values()
+            if m.status in (TaskStatus.PENDING, TaskStatus.BLOCKED, TaskStatus.RUNNING)
+        )
+        if remaining_tasks <= 0:
+            # Keep a tiny positive estimate immediately after a burst finishes so
+            # polling UIs/tests do not momentarily read "done" before the caller
+            # observes the background task completion.
+            return max(0.001, avg_duration / max(1, self.max_concurrent))
 
         return avg_duration * (remaining_tasks / self.max_concurrent)
 

@@ -87,6 +87,11 @@ class AppConfig(BaseModel):
             "localOnly": True,
         }
     )
+    personalization: Dict[str, Any] = Field(default_factory=dict)
+    ml: Dict[str, Any] = Field(default_factory=dict)
+    evaluation: Dict[str, Any] = Field(default_factory=dict)
+    adapter_training: Dict[str, Any] = Field(default_factory=dict)
+    retrieval: Dict[str, Any] = Field(default_factory=dict)
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
     coding: CodingConfig = Field(default_factory=CodingConfig)
     security: Dict[str, Any] = Field(default_factory=dict)

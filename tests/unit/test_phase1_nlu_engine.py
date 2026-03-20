@@ -87,3 +87,10 @@ def test_intent_parser_phase1_fallback_still_returns_parser_dict():
     result = parser.parse("unknown ama rapor hazırla")
     assert isinstance(result, dict)
     assert "action" in result
+
+
+def test_intent_parser_handles_natural_file_command_without_phase1_signature_error():
+    parser = IntentParser()
+    result = parser.parse("Masaüstüne test_elyan_note.txt dosyasına 'Merhaba Elyan' yaz")
+    assert isinstance(result, dict)
+    assert "action" in result

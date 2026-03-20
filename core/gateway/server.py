@@ -27,6 +27,9 @@ from core.model_catalog import default_model_for_provider
 from core.tool_usage import get_tool_usage_snapshot
 from core.runtime_policy import get_runtime_policy_resolver
 from core.user_profile import get_user_profile_store
+from core.ml import get_model_runtime
+from core.personalization import get_personalization_manager
+from core.reliability import get_outcome_store, get_regression_evaluator
 from core.runtime import (
     EMRE_WORKFLOW_PRESETS,
     list_emre_workflow_reports,
@@ -76,6 +79,36 @@ _ADMIN_READ_PATHS = {
     "/api/tool-requests/stats",
     "/api/tool-events",
 }
+_LOCAL_DASHBOARD_WRITE_PATHS = {
+    "/api/missions",
+    "/api/missions/approvals/resolve",
+    "/api/missions/skills/save",
+    "/api/models",
+    "/api/agent/profile",
+}
+
+
+def _adapter_health_bucket(name: str, status: Any, health: dict[str, Any]) -> str:
+    low_name = str(name or "").strip().lower()
+    low_status = str(status or "").strip().lower()
+    health_status = str((health or {}).get("status") or "").strip().lower()
+    last_error = str((health or {}).get("last_error") or "").strip().lower()
+
+    if low_status in {"connected", "online", "ok", "active", "healthy"} or health_status in {"connected", "healthy"}:
+        return "healthy"
+    if low_name == "webchat" and low_status.startswith("online"):
+        return "healthy"
+    if low_name == "telegram" and (
+        low_status in {"unavailable", "conflict"}
+        or health_status in {"unavailable", "conflict"}
+        or "getupdates request" in last_error
+    ):
+        return "optional"
+    if low_name == "whatsapp" and ("node.js bulunamadı" in last_error or "not configured" in last_error):
+        return "optional"
+    if health_status in {"disabled", "optional"}:
+        return "optional"
+    return "degraded"
 
 
 def _ensure_admin_access_token() -> str:
@@ -712,6 +745,8 @@ class ElyanGatewayServer:
         method = str(getattr(request, "method", "GET") or "GET").upper()
         if not path.startswith("/api"):
             return False
+        if method in {"POST", "PUT", "PATCH", "DELETE"} and path in _LOCAL_DASHBOARD_WRITE_PATHS:
+            return False
         if path == "/api/message":
             return True
         if method in {"POST", "PUT", "PATCH", "DELETE"}:
@@ -1100,6 +1135,7 @@ class ElyanGatewayServer:
                 "preset": str(elyan_config.get("agent.runtime_policy.preset", "balanced") or "balanced"),
                 "available_presets": ["strict", "balanced", "full-autonomy"],
                 "model_local_first": bool(elyan_config.get("agent.model.local_first", True)),
+                "dashboard_strategy": str(elyan_config.get("ui.dashboard.strategy", "balanced") or "balanced"),
                 "response_mode": str(elyan_config.get("agent.response_style.mode", "friendly") or "friendly"),
                 "response_friendly": bool(elyan_config.get("agent.response_style.friendly", True)),
                 "share_manifest_default": bool(elyan_config.get("agent.response_style.share_manifest_default", False)),
@@ -1330,6 +1366,13 @@ class ElyanGatewayServer:
                 data.get("model_local_first", elyan_config.get("agent.model.local_first", True)),
             )
         )
+        dashboard_strategy = str(
+            runtime_policy_data.get(
+                "dashboard_strategy",
+                data.get("dashboard_strategy", elyan_config.get("ui.dashboard.strategy", "balanced")),
+            )
+            or "balanced"
+        ).strip().lower()
         response_mode = str(
             runtime_policy_data.get(
                 "response_mode",
@@ -1561,6 +1604,7 @@ class ElyanGatewayServer:
         elyan_config.set("agent.team_mode.timeout_s", team_timeout_s)
         elyan_config.set("agent.team_mode.max_retries_per_task", team_max_retries_per_task)
         elyan_config.set("agent.model.local_first", model_local_first)
+        elyan_config.set("ui.dashboard.strategy", dashboard_strategy)
         elyan_config.set("skills.enabled", skills_enabled)
         elyan_config.set("skills.workflows.enabled", workflows_enabled)
 
@@ -1868,15 +1912,15 @@ class ElyanGatewayServer:
         adapter_health = self.router.get_adapter_health() if hasattr(self.router, "get_adapter_health") else {}
         adapter_total = len(adapter_status) if isinstance(adapter_status, dict) else 0
         adapter_healthy = 0
+        adapter_optional = 0
         for _name, st in (adapter_status.items() if isinstance(adapter_status, dict) else []):
-            low = str(st or "").lower()
-            if low in {"connected", "online", "ok", "active", "healthy"}:
+            health_row = adapter_health.get(_name, {}) if isinstance(adapter_health, dict) else {}
+            bucket = _adapter_health_bucket(_name, st, health_row if isinstance(health_row, dict) else {})
+            if bucket == "healthy":
                 adapter_healthy += 1
-            elif isinstance(st, dict):
-                inner = str(st.get("status", "")).lower()
-                if inner in {"connected", "online", "ok", "active", "healthy"}:
-                    adapter_healthy += 1
-        adapter_degraded = max(0, adapter_total - adapter_healthy)
+            elif bucket == "optional":
+                adapter_optional += 1
+        adapter_degraded = max(0, adapter_total - adapter_healthy - adapter_optional)
 
         tool_names = AVAILABLE_TOOLS.names() if hasattr(AVAILABLE_TOOLS, "names") else list(AVAILABLE_TOOLS.keys())
         tools_total = len(tool_names)
@@ -1895,8 +1939,35 @@ class ElyanGatewayServer:
                 "total": adapter_total,
                 "healthy": adapter_healthy,
                 "degraded": adapter_degraded,
+                "optional": adapter_optional,
             },
         }
+        try:
+            personalization_status = get_personalization_manager().get_status()
+        except Exception as personalization_exc:
+            personalization_status = {
+                "enabled": False,
+                "status": "error",
+                "error": str(personalization_exc),
+            }
+        try:
+            ml_status = get_model_runtime().snapshot()
+        except Exception as ml_exc:
+            ml_status = {
+                "enabled": False,
+                "status": "error",
+                "error": str(ml_exc),
+            }
+        try:
+            reliability_status = {
+                "store": get_outcome_store().stats(),
+                "evaluation": get_regression_evaluator().summary(),
+            }
+        except Exception as reliability_exc:
+            reliability_status = {
+                "status": "error",
+                "error": str(reliability_exc),
+            }
 
         from core.action_lock import action_lock
         return web.json_response({
@@ -1918,6 +1989,9 @@ class ElyanGatewayServer:
             "tool_count": tools_total,
             "tools_total": tools_total,
             "runtime_health": runtime_health,
+            "personalization": personalization_status,
+            "ml": ml_status,
+            "reliability": reliability_status,
             "runtime": {
                 "uptime_seconds": uptime_s,
                 "cpu_pct": health.cpu_percent,
@@ -1928,7 +2002,11 @@ class ElyanGatewayServer:
                 "channels_total": adapter_total,
                 "channels_healthy": adapter_healthy,
                 "channels_degraded": adapter_degraded,
+                "channels_optional": adapter_optional,
                 "health_status": runtime_health["status"],
+                "personalization": personalization_status,
+                "ml": ml_status,
+                "reliability": reliability_status,
                 "orchestration": orchestration_summary,
                 "pipeline_jobs": pipeline_jobs_summary,
             },
@@ -1987,6 +2065,15 @@ class ElyanGatewayServer:
         model = str(model_info.get("active_model") or "—").strip()
         provider_ready = provider not in {"", "—"} and model not in {"", "—"}
         benchmark_green = int(benchmark.get("pass_count") or 0) == int(benchmark.get("total") or 0) and int(benchmark.get("total") or 0) > 0
+        runtime_health_status = str(((status_payload.get("runtime_health") if isinstance(status_payload.get("runtime_health"), dict) else {}) or {}).get("status") or "").strip().lower()
+        setup_complete = bool(is_setup_complete())
+        core_ready = bool(
+            status_payload.get("status") == "online"
+            and provider_ready
+            and browser_ready
+            and setup_complete
+            and runtime_health_status != "degraded"
+        )
         first_demo = str((EMRE_WORKFLOW_PRESETS[0] if EMRE_WORKFLOW_PRESETS else {}).get("name") or "").strip()
         cli_mod = f"{Path(os.sys.executable)} -m cli.main"
         setup = [
@@ -2024,15 +2111,15 @@ class ElyanGatewayServer:
         return {
             "ok": True,
             "readiness": {
-                "elyan_ready": bool(status_payload.get("status") == "online" and benchmark_green and provider_ready),
+                "elyan_ready": core_ready,
                 "desktop_operator_ready": desktop_ready,
                 "browser_ready": browser_ready,
                 "telegram_ready": telegram_ready,
                 "connected_provider": provider,
                 "connected_model": model,
-                "runtime_health": str(((status_payload.get("runtime_health") if isinstance(status_payload.get("runtime_health"), dict) else {}) or {}).get("status") or ""),
+                "runtime_health": runtime_health_status,
                 "desktop_state_available": desktop_state_path.exists(),
-                "setup_complete": bool(is_setup_complete()),
+                "setup_complete": setup_complete,
             },
             "recent_tasks": {
                 "active": list(tasks_payload.get("active") or [])[:5],
@@ -4941,7 +5028,11 @@ class ElyanGatewayServer:
         if not user_id:
             return web.json_response({"ok": False, "error": "user_id required"}, status=400)
         try:
-            result = audit_trail.delete_user_data(user_id)
+            result = {
+                "audit": audit_trail.delete_user_data(user_id),
+                "personalization": get_personalization_manager().delete_user_data(user_id),
+                "reliability": get_outcome_store().delete_user(user_id),
+            }
             push_activity("privacy", "dashboard", f"user_data_deleted:{user_id}", True)
             return web.json_response({"ok": True, "result": result})
         except Exception as e:

@@ -124,6 +124,26 @@ async def test_handle_status_includes_runtime_health_and_tool_count(monkeypatch)
 
     import core.monitoring as monitoring
     monkeypatch.setattr(monitoring, "get_resource_monitor", lambda: _Mon())
+    monkeypatch.setattr(
+        gateway_server,
+        "get_personalization_manager",
+        lambda: SimpleNamespace(get_status=lambda: {"enabled": True, "mode": "hybrid"}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_model_runtime",
+        lambda: SimpleNamespace(snapshot=lambda: {"enabled": True, "execution_mode": "local_first"}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_outcome_store",
+        lambda: SimpleNamespace(stats=lambda: {"outcomes": 3, "success_rate": 0.66}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_regression_evaluator",
+        lambda: SimpleNamespace(summary=lambda: {"verification_pass_rate": 0.75}),
+    )
 
     srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
     srv.router = _StatusRouter()
@@ -137,7 +157,196 @@ async def test_handle_status_includes_runtime_health_and_tool_count(monkeypatch)
     assert payload["runtime_health"]["tooling"]["tools_total"] == payload["tools_total"]
     assert payload["runtime"]["tools_total"] == payload["tools_total"]
     assert payload["runtime_health"]["channels"]["total"] == 2
+    assert payload["personalization"]["enabled"] is True
+    assert payload["ml"]["enabled"] is True
+    assert payload["reliability"]["store"]["outcomes"] == 3
+    assert payload["runtime"]["personalization"]["mode"] == "hybrid"
+    assert payload["runtime"]["ml"]["execution_mode"] == "local_first"
     assert "orchestration_telemetry" in payload
+
+
+@pytest.mark.asyncio
+async def test_handle_status_treats_webchat_online_and_optional_whatsapp_as_non_degraded(monkeypatch):
+    monkeypatch.setattr(
+        gateway_server,
+        "_get_runtime_model_info",
+        lambda: {"active_model": "gpt-4o", "active_provider": "openai"},
+    )
+
+    class _Health:
+        status = "ok"
+        issues = []
+        cpu_percent = 5
+        ram_percent = 12
+        disk_percent = 20
+        battery_percent = 100
+        is_on_ac = True
+
+    class _Mon:
+        @staticmethod
+        def get_health_snapshot():
+            return _Health()
+
+    import core.monitoring as monitoring
+    monkeypatch.setattr(monitoring, "get_resource_monitor", lambda: _Mon())
+    monkeypatch.setattr(
+        gateway_server,
+        "get_personalization_manager",
+        lambda: SimpleNamespace(get_status=lambda: {"enabled": True}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_model_runtime",
+        lambda: SimpleNamespace(snapshot=lambda: {"enabled": True}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_outcome_store",
+        lambda: SimpleNamespace(stats=lambda: {"outcomes": 0}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_regression_evaluator",
+        lambda: SimpleNamespace(summary=lambda: {"verification_pass_rate": 1.0}),
+    )
+
+    class _Router:
+        @staticmethod
+        def get_adapter_status():
+            return {
+                "webchat": "online (0 clients)",
+                "telegram": "connected",
+                "whatsapp": "disconnected",
+            }
+
+        @staticmethod
+        def get_adapter_health():
+            return {
+                "webchat": {"status": "error", "last_error": "status=online (0 clients)"},
+                "telegram": {"status": "connected"},
+                "whatsapp": {"status": "error", "last_error": "Node.js bulunamadı. WhatsApp QR için önce Node.js kurun."},
+            }
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    srv.router = _Router()
+    srv.cron = _StatusCron()
+
+    resp = await gateway_server.ElyanGatewayServer.handle_status(srv, SimpleNamespace())
+    payload = json.loads(resp.text)
+
+    assert payload["runtime_health"]["status"] == "healthy"
+    assert payload["runtime_health"]["channels"]["healthy"] == 2
+    assert payload["runtime_health"]["channels"]["optional"] == 1
+    assert payload["runtime_health"]["channels"]["degraded"] == 0
+    assert payload["runtime"]["channels_optional"] == 1
+
+
+@pytest.mark.asyncio
+async def test_handle_status_treats_telegram_conflict_as_optional_for_core_runtime(monkeypatch):
+    monkeypatch.setattr(
+        gateway_server,
+        "_get_runtime_model_info",
+        lambda: {"active_model": "gpt-4o", "active_provider": "openai"},
+    )
+
+    class _Health:
+        status = "ok"
+        issues = []
+        cpu_percent = 4
+        ram_percent = 10
+        disk_percent = 20
+        battery_percent = 100
+        is_on_ac = True
+
+    class _Mon:
+        @staticmethod
+        def get_health_snapshot():
+            return _Health()
+
+    import core.monitoring as monitoring
+    monkeypatch.setattr(monitoring, "get_resource_monitor", lambda: _Mon())
+    monkeypatch.setattr(
+        gateway_server,
+        "get_personalization_manager",
+        lambda: SimpleNamespace(get_status=lambda: {"enabled": True}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_model_runtime",
+        lambda: SimpleNamespace(snapshot=lambda: {"enabled": True}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_outcome_store",
+        lambda: SimpleNamespace(stats=lambda: {"outcomes": 0}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_regression_evaluator",
+        lambda: SimpleNamespace(summary=lambda: {"verification_pass_rate": 1.0}),
+    )
+
+    class _Router:
+        @staticmethod
+        def get_adapter_status():
+            return {
+                "webchat": "online (0 clients)",
+                "telegram": "unavailable",
+            }
+
+        @staticmethod
+        def get_adapter_health():
+            return {
+                "webchat": {"status": "online (0 clients)"},
+                "telegram": {"status": "unavailable", "last_error": "terminated by other getUpdates request"},
+            }
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    srv.router = _Router()
+    srv.cron = _StatusCron()
+
+    resp = await gateway_server.ElyanGatewayServer.handle_status(srv, SimpleNamespace())
+    payload = json.loads(resp.text)
+
+    assert payload["runtime_health"]["status"] == "healthy"
+    assert payload["runtime_health"]["channels"]["optional"] == 1
+    assert payload["runtime_health"]["channels"]["degraded"] == 0
+
+
+@pytest.mark.asyncio
+async def test_handle_privacy_delete_wipes_personalization(monkeypatch):
+    pushed = {"value": False}
+
+    monkeypatch.setattr(
+        gateway_server.audit_trail,
+        "delete_user_data",
+        lambda user_id: {"scope": "audit", "user_id": user_id},
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_personalization_manager",
+        lambda: SimpleNamespace(delete_user_data=lambda user_id: {"scope": "personalization", "user_id": user_id}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_outcome_store",
+        lambda: SimpleNamespace(delete_user=lambda user_id: {"scope": "reliability", "user_id": user_id}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "push_activity",
+        lambda *_a, **_k: pushed.__setitem__("value", True),
+    )
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    resp = await gateway_server.ElyanGatewayServer.handle_privacy_delete(srv, _Req({"user_id": "user-42"}))
+    payload = json.loads(resp.text)
+
+    assert payload["ok"] is True
+    assert payload["result"]["audit"]["scope"] == "audit"
+    assert payload["result"]["personalization"]["scope"] == "personalization"
+    assert payload["result"]["reliability"]["scope"] == "reliability"
+    assert pushed["value"] is True
 
 
 @pytest.mark.asyncio
@@ -218,6 +427,66 @@ async def test_handle_product_home_aggregates_readiness_and_reports(monkeypatch)
     checks = payload["release"]["quickstart_checks"]
     assert any(item["label"] == "Dashboard start script" for item in checks)
     assert any(item["label"] == "Production benchmark gate" for item in checks)
+
+
+@pytest.mark.asyncio
+async def test_handle_product_health_stays_ready_without_benchmark_when_core_runtime_is_healthy(monkeypatch):
+    monkeypatch.setattr(
+        gateway_server,
+        "_get_runtime_model_info",
+        lambda: {"active_model": "gpt-4o", "active_provider": "openai"},
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "load_latest_benchmark_summary",
+        lambda: {
+            "pass_count": 0,
+            "total": 0,
+            "average_retries": 0.0,
+            "average_replans": 0.0,
+            "remaining_failure_codes": [],
+            "last_benchmark_timestamp": "",
+            "report_root": "",
+        },
+    )
+    monkeypatch.setattr(gateway_server, "list_emre_workflow_reports", lambda limit=8: [])
+    monkeypatch.setattr(
+        gateway_server,
+        "_check_macos_permissions",
+        lambda: {"is_macos": True, "osascript_available": True, "screencapture_available": True},
+    )
+    monkeypatch.setattr(gateway_server, "is_setup_complete", lambda: True)
+    monkeypatch.setattr(gateway_server.importlib.util, "find_spec", lambda name: object() if name == "playwright" else None)
+
+    async def _status(_request):
+        return gateway_server.web.json_response(
+            {
+                "status": "online",
+                "runtime_health": {"status": "healthy"},
+                "health_status": "ok",
+                "version": "18.0.0",
+                "adapters": {"telegram": "unavailable", "webchat": "online (0 clients)"},
+            }
+        )
+
+    async def _tasks(_request):
+        return gateway_server.web.json_response({"active": [], "history": []})
+
+    async def _runs(_request):
+        return gateway_server.web.json_response({"runs": [], "count": 0})
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    srv.handle_status = _status
+    srv.handle_tasks = _tasks
+    srv.handle_recent_runs = _runs
+
+    resp = await gateway_server.ElyanGatewayServer.handle_product_health(srv, SimpleNamespace())
+    payload = json.loads(resp.text)
+
+    assert payload["ok"] is True
+    assert payload["status"] == "ready"
+    assert payload["readiness"]["elyan_ready"] is True
+    assert payload["readiness"]["telegram_ready"] is False
 
 
 @pytest.mark.asyncio

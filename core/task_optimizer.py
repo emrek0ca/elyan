@@ -317,19 +317,28 @@ class TaskOptimizer:
             return 0.0
 
         chains = self.graph.get_parallelizable_chains()
-
-        # Estimate time: sum of chains / max concurrent
+        worker_count = max(1, int(max_concurrent or 1))
         total_time = 0.0
         for chain in chains:
-            chain_time = sum(
-                self.graph.tasks[task_id].estimated_duration
-                for task_id in chain
+            durations = sorted(
+                [
+                    float(self.graph.tasks[task_id].estimated_duration)
+                    for task_id in chain
+                    if task_id in self.graph.tasks
+                ],
+                reverse=True,
             )
-            total_time += chain_time
-
-        # Divide by parallelization factor
-        parallel_factor = min(len(chains), max_concurrent)
-        return total_time / max(1, parallel_factor)
+            if not durations:
+                continue
+            if worker_count == 1:
+                total_time += sum(durations)
+                continue
+            worker_loads = [0.0 for _ in range(min(worker_count, len(durations)))]
+            for duration in durations:
+                lightest_index = min(range(len(worker_loads)), key=lambda idx: worker_loads[idx])
+                worker_loads[lightest_index] += duration
+            total_time += max(worker_loads)
+        return total_time
 
     def compare_serial_vs_parallel(self) -> Dict[str, Any]:
         """Compare serial vs parallel execution."""

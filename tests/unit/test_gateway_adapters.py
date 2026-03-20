@@ -9,6 +9,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from pathlib import Path
 from types import SimpleNamespace
+from telegram.error import Conflict
 
 from core.gateway.adapters import ADAPTER_REGISTRY, get_adapter_class
 from core.gateway.adapters.base import BaseChannelAdapter
@@ -71,6 +72,69 @@ class TestTelegramAdapter:
         adapter = self._make()
         extracted = adapter._extract_local_image_path("Kaynak: https://example.com/image.png")
         assert extracted == ""
+
+    def test_polling_conflict_marks_adapter_unavailable(self):
+        adapter = self._make()
+        adapter.app = SimpleNamespace(running=True, updater=SimpleNamespace(running=True))
+        adapter._is_connected = True
+
+        adapter._handle_polling_error(Conflict("terminated by other getUpdates request"))
+
+        assert adapter.get_status() == "unavailable"
+        assert adapter._is_connected is False
+        assert adapter._polling_conflict is True
+
+    def test_polling_conflict_schedules_shutdown(self, monkeypatch):
+        adapter = self._make()
+        adapter.app = SimpleNamespace(running=True, updater=SimpleNamespace(running=True))
+        scheduled = []
+
+        class _Loop:
+            def create_task(self, coro):
+                scheduled.append(coro)
+                return SimpleNamespace()
+
+        monkeypatch.setattr("core.gateway.adapters.telegram.asyncio.get_running_loop", lambda: _Loop())
+
+        adapter._handle_polling_error(Conflict("terminated by other getUpdates request"))
+
+        assert scheduled
+        for coro in scheduled:
+            coro.close()
+
+    @pytest.mark.asyncio
+    async def test_connect_deletes_webhook_and_registers_error_callback(self, monkeypatch):
+        adapter = self._make()
+        updater = SimpleNamespace(start_polling=AsyncMock(), running=True, stop=AsyncMock())
+        bot = SimpleNamespace(delete_webhook=AsyncMock())
+        app = SimpleNamespace(
+            add_handler=MagicMock(),
+            initialize=AsyncMock(),
+            start=AsyncMock(),
+            stop=AsyncMock(),
+            shutdown=AsyncMock(),
+            updater=updater,
+            bot=bot,
+            running=True,
+        )
+
+        class _Builder:
+            def token(self, value):
+                _ = value
+                return self
+
+            def build(self):
+                return app
+
+        monkeypatch.setattr("core.gateway.adapters.telegram.ApplicationBuilder", lambda: _Builder())
+
+        await adapter.connect()
+
+        bot.delete_webhook.assert_awaited_once_with(drop_pending_updates=True)
+        updater.start_polling.assert_awaited_once()
+        kwargs = updater.start_polling.await_args.kwargs
+        assert kwargs["drop_pending_updates"] is True
+        assert callable(kwargs["error_callback"])
 
     @pytest.mark.asyncio
     async def test_handle_photo_ingest_emits_unified_message_with_attachment(self, tmp_path):

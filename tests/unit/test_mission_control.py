@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,90 @@ class _DummyAgent:
             status="success",
             metadata=dict(self.response_metadata),
         )
+
+
+class _NoArtifactAgent:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def process_envelope(self, text, channel="dashboard", metadata=None, attachments=None):
+        self.calls.append(
+            {
+                "text": text,
+                "channel": channel,
+                "metadata": metadata or {},
+                "attachments": attachments or [],
+            }
+        )
+        return AgentResponse(
+            run_id="run_test_2",
+            text="Yapabileceklerim: dosya islemleri ve arastirma.",
+            evidence_manifest_path="/tmp/evidence.json",
+            status="success",
+        )
+
+
+class _DirectIntentAgent(_NoArtifactAgent):
+    def __init__(self) -> None:
+        super().__init__()
+        self.intent_parser = object()
+        self._last_direct_intent_payload = {}
+
+    def _should_run_direct_intent(self, intent, user_input):
+        _ = user_input
+        return isinstance(intent, dict) and str(intent.get("action") or "").strip() in {"write_file", "read_file"}
+
+    async def _run_direct_intent(self, intent, user_input, role, history, user_id="local"):
+        _ = (user_input, role, history, user_id)
+        self.calls.append({"direct_intent": intent})
+        path = str(intent.get("params", {}).get("path") or "")
+        self._last_direct_intent_payload = {"success": True, "path": path}
+        return f"Dosya işlendi: {path}"
+
+
+class _BrowserDirectIntentAgent:
+    def __init__(self) -> None:
+        self.intent_parser = object()
+        self._last_direct_intent_payload = {}
+        self.shot_calls = 0
+
+    async def process_envelope(self, text, channel="dashboard", metadata=None, attachments=None):
+        _ = (text, channel, metadata, attachments)
+        raise AssertionError("direct intent path should be used")
+
+    def _should_run_direct_intent(self, intent, user_input):
+        _ = user_input
+        return isinstance(intent, dict) and str(intent.get("action") or "").strip() == "open_url"
+
+    async def _run_direct_intent(self, intent, user_input, role, history, user_id="local"):
+        _ = (intent, user_input, role, history, user_id)
+        self._last_direct_intent_payload = {"success": True, "url": "https://openai.com"}
+        return "İşlem tamamlandı: https://openai.com"
+
+    async def _execute_tool(self, tool_name, params, **kwargs):
+        _ = (params, kwargs)
+        assert tool_name == "take_screenshot"
+        self.shot_calls += 1
+        return {"success": True, "path": "/tmp/browser-proof.png"}
+
+
+class _FilePathDirectIntentAgent(_NoArtifactAgent):
+    def __init__(self) -> None:
+        super().__init__()
+        self.intent_parser = object()
+        self._last_direct_intent_payload = {}
+
+    def _should_run_direct_intent(self, intent, user_input):
+        _ = user_input
+        return isinstance(intent, dict) and str(intent.get("action") or "").strip() == "write_file"
+
+    async def _run_direct_intent(self, intent, user_input, role, history, user_id="local"):
+        _ = (intent, user_input, role, history, user_id)
+        self._last_direct_intent_payload = {
+            "success": True,
+            "file_path": "/tmp/direct-file-note.txt",
+        }
+        return "Dosya yazildi: /tmp/direct-file-note.txt"
 
 
 @pytest.mark.asyncio
@@ -88,6 +173,41 @@ async def test_create_mission_routes_spreadsheet_request_to_data(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_create_mission_routes_file_request_to_file_and_sequences_steps(tmp_path: Path):
+    runtime = MissionRuntime(storage_dir=tmp_path)
+
+    mission = await runtime.create_mission(
+        "Masaüstüne test_elyan_note.txt dosyasına 'Merhaba Elyan' yaz ve sonra içeriğini doğrula",
+        user_id="local",
+        channel="dashboard",
+        mode="Balanced",
+        auto_start=False,
+    )
+
+    assert mission.route_mode == "file"
+    work_nodes = [node for node in mission.graph.nodes if node.node_id.startswith("step_")]
+    assert [node.specialist for node in work_nodes] == ["file", "file"]
+    assert work_nodes[0].depends_on == ["planner"]
+    assert work_nodes[1].depends_on == [work_nodes[0].node_id]
+
+
+@pytest.mark.asyncio
+async def test_create_mission_routes_python_file_request_to_code(tmp_path: Path):
+    runtime = MissionRuntime(storage_dir=tmp_path)
+
+    mission = await runtime.create_mission(
+        "Python ile tek dosyalık basit bir hesap makinesi yaz ve masaüstüne calc_app.py olarak kaydet",
+        user_id="local",
+        channel="dashboard",
+        mode="Balanced",
+        auto_start=False,
+    )
+
+    assert mission.route_mode == "code"
+    assert any(node.specialist == "code" for node in mission.graph.nodes)
+
+
+@pytest.mark.asyncio
 async def test_run_mission_collects_evidence_and_deliverable(tmp_path: Path):
     runtime = MissionRuntime(storage_dir=tmp_path)
     agent = _DummyAgent()
@@ -109,6 +229,147 @@ async def test_run_mission_collects_evidence_and_deliverable(tmp_path: Path):
     assert any(record.kind == "manifest" for record in mission.evidence)
     assert any(node.specialist == "verifier" and node.status == "completed" for node in mission.graph.nodes)
     assert agent.calls
+
+
+@pytest.mark.asyncio
+async def test_file_node_requires_concrete_artifact_and_uses_raw_objective(tmp_path: Path):
+    runtime = MissionRuntime(storage_dir=tmp_path)
+    agent = _NoArtifactAgent()
+
+    mission = await runtime.create_mission(
+        "Masaüstüne note.txt yaz ve sonra doğrula",
+        user_id="local",
+        channel="dashboard",
+        mode="Balanced",
+        agent=agent,
+        auto_start=False,
+    )
+    mission = await runtime.run_mission(mission.mission_id, agent=agent)
+
+    assert mission is not None
+    assert mission.status == "failed"
+    assert agent.calls
+    assert agent.calls[0]["text"] == "Masaüstüne note.txt yaz"
+    work_nodes = [node for node in mission.graph.nodes if node.node_id.startswith("step_")]
+    assert work_nodes[0].status == "failed"
+    assert any("Somut artifact üretilmedi" in (event.label or "") for event in mission.events)
+
+
+@pytest.mark.asyncio
+async def test_file_node_prefers_direct_intent_with_inferred_path(tmp_path: Path):
+    runtime = MissionRuntime(storage_dir=tmp_path)
+    agent = _DirectIntentAgent()
+
+    mission = await runtime.create_mission(
+        "Masaüstüne note.txt dosyasına 'Merhaba Elyan' yaz ve sonra içeriğini doğrula",
+        user_id="local",
+        channel="dashboard",
+        mode="Balanced",
+        agent=agent,
+        auto_start=False,
+    )
+    mission = await runtime.run_mission(mission.mission_id, agent=agent)
+
+    assert mission is not None
+    assert any("direct_intent" in call for call in agent.calls)
+    first_direct = next(call["direct_intent"] for call in agent.calls if "direct_intent" in call)
+    assert first_direct["action"] == "write_file"
+    assert first_direct["params"]["path"] == "~/Desktop/note.txt"
+
+
+@pytest.mark.asyncio
+async def test_file_node_accepts_direct_payload_file_path_as_artifact(tmp_path: Path):
+    runtime = MissionRuntime(storage_dir=tmp_path)
+    agent = _FilePathDirectIntentAgent()
+
+    mission = await runtime.create_mission(
+        "Masaüstüne direct_note.txt dosyasına 'Merhaba' yaz",
+        user_id="local",
+        channel="dashboard",
+        mode="Balanced",
+        agent=agent,
+        auto_start=False,
+    )
+    mission = await runtime.run_mission(mission.mission_id, agent=agent)
+
+    assert mission is not None
+    assert mission.status == "completed"
+    assert any(str(record.path or "").endswith("direct-file-note.txt") for record in mission.evidence)
+
+
+@pytest.mark.asyncio
+async def test_run_mission_times_out_hanging_browser_node(tmp_path: Path, monkeypatch):
+    runtime = MissionRuntime(storage_dir=tmp_path)
+
+    class _HangingAgent:
+        async def process_envelope(self, text, channel="dashboard", metadata=None, attachments=None):
+            _ = (text, channel, metadata, attachments)
+            await asyncio.sleep(3600)
+
+    mission = await runtime.create_mission(
+        "Safari'de openai.com aç",
+        user_id="local",
+        channel="dashboard",
+        mode="Balanced",
+        auto_start=False,
+    )
+
+    original_wait_for = asyncio.wait_for
+
+    async def _fast_wait_for(awaitable, timeout):
+        _ = timeout
+        return await original_wait_for(awaitable, 0.01)
+
+    monkeypatch.setattr("core.mission_control.asyncio.wait_for", _fast_wait_for)
+
+    mission = await runtime.run_mission(mission.mission_id, agent=_HangingAgent())
+
+    assert mission is not None
+    assert mission.status == "failed"
+    browser_node = next(node for node in mission.graph.nodes if node.node_id == "browser_action")
+    assert browser_node.status == "failed"
+    assert "zaman aşımına" in (browser_node.summary or "")
+
+
+@pytest.mark.asyncio
+async def test_browser_direct_intent_adds_proof_and_passes_verifier(tmp_path: Path):
+    runtime = MissionRuntime(storage_dir=tmp_path)
+    agent = _BrowserDirectIntentAgent()
+
+    mission = await runtime.create_mission(
+        "Safari'de https://openai.com aç",
+        user_id="local",
+        channel="dashboard",
+        mode="Balanced",
+        agent=agent,
+        auto_start=False,
+    )
+    mission = await runtime.run_mission(mission.mission_id, agent=agent)
+
+    assert mission is not None
+    assert mission.status == "completed"
+    assert agent.shot_calls == 1
+    assert any(str(record.path or "").endswith("browser-proof.png") for record in mission.evidence)
+
+
+@pytest.mark.asyncio
+async def test_mission_to_dict_exposes_timeline_and_final_deliverable(tmp_path: Path):
+    runtime = MissionRuntime(storage_dir=tmp_path)
+    agent = _DummyAgent()
+
+    mission = await runtime.create_mission(
+        "Kısa rapor hazırla",
+        user_id="local",
+        channel="dashboard",
+        mode="Balanced",
+        agent=agent,
+        auto_start=False,
+    )
+    mission = await runtime.run_mission(mission.mission_id, agent=agent)
+
+    payload = mission.to_dict()
+    assert payload["final_deliverable"] == payload["deliverable"]
+    assert payload["timeline"] == payload["events"]
 
 
 @pytest.mark.asyncio

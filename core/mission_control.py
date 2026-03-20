@@ -8,12 +8,15 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Optional
 
 from core.conversation_memory import conversation_memory
 from core.capability_router import get_capability_router
 from core.cowork_runtime import get_cowork_runtime
 from core.memory_v2 import memory_v2
+from core.ml import get_verifier
+from core.reliability import get_outcome_store
 from core.storage_paths import resolve_elyan_data_dir, resolve_runs_root
 from utils.logger import get_logger
 
@@ -119,6 +122,134 @@ def _has_error_signal(*values: Any) -> bool:
     if not combined:
         return False
     return any(marker in combined for marker in _ERROR_SIGNAL_MARKERS)
+
+
+def _extract_path_candidates(*values: Any) -> list[str]:
+    found: list[str] = []
+    pattern = re.compile(r"(~?/Users/[^\s'\"]+|/Users/[^\s'\"]+|~\/[^\s'\"]+)")
+    for value in values:
+        text = str(value or "")
+        for match in pattern.findall(text):
+            candidate = str(match or "").strip()
+            if candidate and candidate not in found:
+                found.append(candidate)
+    return found
+
+
+def _has_concrete_artifact(node: "TaskNode", attachments: list[dict[str, Any]], text: str) -> bool:
+    paths: list[str] = []
+    for attachment in attachments:
+        path = str((attachment or {}).get("path") or "").strip()
+        if path:
+            paths.append(path)
+    paths.extend(_extract_path_candidates(text, node.output, node.summary))
+    normalized = [path.lower() for path in paths if path]
+    if node.specialist == "browser":
+        return any(path.endswith((".png", ".jpg", ".jpeg", ".webp")) for path in normalized)
+    if node.specialist in {"file", "code"}:
+        return any(
+            not path.endswith(("/manifest.json", "/summary.txt"))
+            and not "/.elyan/proofs/" in path
+            and not "/.elyan/runs/" in path
+            for path in normalized
+        )
+    return bool(normalized)
+
+
+def _attachments_from_direct_payload(payload: dict[str, Any], *, text: str = "") -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+
+    def _push(path_value: Any, kind: str = "artifact") -> None:
+        path = str(path_value or "").strip()
+        if not path:
+            return
+        rows.append({"path": path, "type": kind, "name": Path(path).name})
+
+    if not isinstance(payload, dict):
+        return rows
+    _push(payload.get("path"))
+    _push(payload.get("file_path"))
+    _push(payload.get("output_path"))
+    _push(payload.get("local_path"))
+    _push(payload.get("project_dir"), "directory")
+    _push(payload.get("pack_dir"), "directory")
+    for path in list(payload.get("artifact_paths") or []):
+        _push(path)
+    for path in list(payload.get("files_created") or []):
+        _push(path)
+    for path in list(payload.get("report_paths") or []):
+        _push(path)
+    for path in list(payload.get("screenshots") or []):
+        _push(path, "image")
+    proof = payload.get("_proof")
+    if isinstance(proof, dict):
+        _push(proof.get("screenshot"), "image")
+    for item in list(payload.get("artifacts") or []):
+        if isinstance(item, dict):
+            _push(item.get("path"), str(item.get("type") or "artifact"))
+    raw = payload.get("raw")
+    if isinstance(raw, dict):
+        _push(raw.get("path"))
+        _push(raw.get("file_path"))
+        _push(raw.get("output_path"))
+        _push(raw.get("local_path"))
+        for item in list(raw.get("artifacts") or []):
+            if isinstance(item, dict):
+                _push(item.get("path"), str(item.get("type") or "artifact"))
+        for path in list(raw.get("files_created") or []):
+            _push(path)
+        for path in list(raw.get("report_paths") or []):
+            _push(path)
+        for path in list(raw.get("screenshots") or []):
+            _push(path, "image")
+    for item in list(payload.get("artifact_manifest") or []):
+        if isinstance(item, dict):
+            _push(item.get("path"), str(item.get("type") or "artifact"))
+    if text:
+        for path in _extract_path_candidates(text):
+            if _path_exists(path):
+                _push(path)
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        key = str(row.get("path") or "")
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(row)
+    return unique
+
+
+def _infer_file_node_intent(mission: "Mission", node: "TaskNode") -> dict[str, Any]:
+    text = str(node.objective or "").strip()
+    combined = f"{mission.goal}\n{text}"
+    quoted_match = re.search(r"['\"]([^'\"]+)['\"]", text) or re.search(r"['\"]([^'\"]+)['\"]", combined)
+    content = str(quoted_match.group(1) or "").strip() if quoted_match else ""
+    low = _low(text)
+    mission_low = _low(combined)
+    path = ""
+    file_match = re.search(r"([A-Za-z0-9_\-./]+?\.(?:txt|md|py|json|html|csv|js|ts|docx|xlsx|pdf))", text)
+    if not file_match:
+        file_match = re.search(r"([A-Za-z0-9_\-./]+?\.(?:txt|md|py|json|html|csv|js|ts|docx|xlsx|pdf))", combined)
+    if file_match:
+        path = str(file_match.group(1) or "").strip()
+    if path and not path.startswith(("~/", "/")):
+        if any(token in mission_low for token in ("masaüstü", "masaustu", "desktop")):
+            path = f"~/Desktop/{Path(path).name}"
+    if not path:
+        return {}
+    if any(token in low for token in ("doğrula", "dogrula", "içeriğini", "icerigini", "içerik", "icerik", "oku", "kontrol et")):
+        return {"action": "read_file", "params": {"path": path}}
+    if any(token in low for token in (" yaz", " oluştur", "olustur", "kaydet", "save")):
+        return {"action": "write_file", "params": {"path": path, "content": content}}
+    return {}
+
+
+def _infer_browser_node_intent(node: "TaskNode") -> dict[str, Any]:
+    text = str(node.objective or "").strip()
+    url_match = re.search(r"(https?://[^\s'\"]+)", text)
+    if url_match:
+        return {"action": "open_url", "params": {"url": str(url_match.group(1) or "").strip()}}
+    return {}
 
 
 def _looks_like_web_build_goal(text: str) -> bool:
@@ -437,9 +568,11 @@ class Mission:
             "graph": self.graph.to_dict(),
             "status": self.status,
             "deliverable": self.deliverable,
+            "final_deliverable": self.deliverable,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "events": [event.to_dict() for event in self.events],
+            "timeline": [event.to_dict() for event in self.events],
             "evidence": [record.to_dict() for record in self.evidence],
             "approvals": [item.to_dict() for item in self.approvals],
             "attachments": list(self.attachments),
@@ -665,6 +798,8 @@ class MissionRuntime:
         self._listeners: list[Callable[[dict[str, Any]], Any]] = []
         self._lock = asyncio.Lock()
         self._running: dict[str, asyncio.Task] = {}
+        self.outcome_store = get_outcome_store()
+        self.verifier_service = get_verifier()
         self._load()
 
     def _load(self) -> None:
@@ -738,6 +873,26 @@ class MissionRuntime:
         return []
 
     @staticmethod
+    def _steps_are_sequential(goal: str) -> bool:
+        text = _low(goal)
+        if not text:
+            return False
+        markers = (
+            " sonra ",
+            " ve sonra ",
+            " ardından ",
+            " ardindan ",
+            " then ",
+            " after ",
+            " önce ",
+            " once ",
+            " kaydet",
+            " doğrula",
+            " dogrula",
+        )
+        return any(marker in f" {text} " for marker in markers)
+
+    @staticmethod
     def _select_specialist(text: str, *, route_mode: str = "") -> str:
         low = _low(text)
         mode = str(route_mode or "").strip().lower()
@@ -747,6 +902,26 @@ class MissionRuntime:
             return "browser"
         if mode == "code" or _looks_like_web_build_goal(low) or any(token in low for token in ("kod", "code", "python", "react", "javascript", "typescript", "website", "web sitesi", "uygulama", "app", "repo", "feature", "geliştir", "gelistir", "implement", "debug", "fix")):
             return "code"
+        if mode in {"file", "file_operations"} or any(
+            token in low
+            for token in (
+                "dosya",
+                "klasör",
+                "folder",
+                "file",
+                "kaydet",
+                "save",
+                "masaüstü",
+                "masaustu",
+                "desktop",
+                ".txt",
+                ".md",
+                ".json",
+                ".html",
+                ".csv",
+            )
+        ):
+            return "file"
         if any(token in low for token in ("veri", "csv", "dataset", "analitik", "grafik", "tablo", "excel", "xlsx", "sheet", "spreadsheet", "table")):
             return "data"
         if any(token in low for token in ("doküman", "dokuman", "sunum", "rapor", "teklif", "brief")):
@@ -832,6 +1007,7 @@ class MissionRuntime:
 
     def _build_graph(self, goal: str, route_mode: str, mode: str) -> MissionGraph:
         steps = self._extract_steps(goal)
+        sequential_steps = self._steps_are_sequential(goal)
         nodes: list[TaskNode] = [
             TaskNode(
                 node_id="planner",
@@ -853,6 +1029,9 @@ class MissionRuntime:
             for idx, step in enumerate(steps, start=1):
                 specialist = self._select_specialist(step, route_mode=route_mode)
                 node_id = f"step_{idx}"
+                depends_on = ["planner"]
+                if sequential_steps and idx > 1:
+                    depends_on = [f"step_{idx - 1}"]
                 add_node(
                     TaskNode(
                         node_id=node_id,
@@ -861,8 +1040,8 @@ class MissionRuntime:
                         objective=step,
                         kind=specialist,
                         risk_level=self._risk_from_text(step, route_mode=route_mode),
-                        depends_on=["planner"],
-                        parallel_group="wave_1",
+                        depends_on=depends_on,
+                        parallel_group="" if sequential_steps else "wave_1",
                         output_schema={"type": "step_result"},
                     )
                 )
@@ -1039,6 +1218,42 @@ class MissionRuntime:
         mission.updated_at = _now()
         self._emit("mission_event", {"mission_id": mission.mission_id, "event": event.to_dict(), "status": mission.status})
 
+    def _record_mission_outcome(self, mission: Mission, final_status: str, *, reason: str = "") -> None:
+        try:
+            control = mission.control_summary()
+            quality = mission.quality_summary()
+            self.outcome_store.record_outcome(
+                request_id=mission.mission_id,
+                user_id=str(mission.owner or "local"),
+                action=str(mission.route_mode or "mission"),
+                channel=str(mission.channel or "dashboard"),
+                final_outcome=str(final_status or mission.status or ""),
+                success=str(final_status or "").strip().lower() == "completed",
+                verification_result={
+                    "ok": str(final_status or "").strip().lower() == "completed",
+                    "quality_status": str(quality.get("status") or control.get("quality_status") or "").strip(),
+                    "reason": str(reason or ""),
+                },
+                decision_trace={
+                    "route_mode": str(mission.route_mode or ""),
+                    "timeline": [event.to_dict() for event in mission.events[-10:]],
+                },
+                metadata={
+                    "goal": str(mission.goal or ""),
+                    "reason": str(reason or ""),
+                    "final_deliverable": str(mission.deliverable or ""),
+                    "route_mode": str(mission.route_mode or ""),
+                    "evidence_count": int(control.get("evidence_count", 0) or 0),
+                    "artifact_count": int(control.get("artifact_count", 0) or 0),
+                    "quality_status": str(control.get("quality_status") or quality.get("status") or "").strip(),
+                    "node_count": int(control.get("node_count", 0) or 0),
+                    "completed_nodes": int(control.get("completed_nodes", 0) or 0),
+                    "failed_nodes": int(control.get("failed_nodes", 0) or 0),
+                },
+            )
+        except Exception as exc:
+            logger.debug(f"mission reliability outcome skipped: {exc}")
+
     def _add_evidence(self, mission: Mission, node: TaskNode, *, kind: str, label: str, path: str = "", summary: str = "", metadata: dict[str, Any] | None = None) -> None:
         record = EvidenceRecord(
             evidence_id=f"ev_{uuid.uuid4().hex[:10]}",
@@ -1123,23 +1338,27 @@ class MissionRuntime:
     def _compose_node_prompt(self, mission: Mission, node: TaskNode) -> str:
         contract = mission.success_contract
         criteria = contract.get("criteria") if isinstance(contract.get("criteria"), list) else []
+        expected_outputs = contract.get("expected_outputs") if isinstance(contract.get("expected_outputs"), list) else []
         lines = [
-            "Mission goal:",
-            mission.goal,
+            f"Bu node için gerçek işi yap: {node.objective}",
             "",
-            f"Node title: {node.title}",
-            f"Specialist: {node.specialist}",
-            f"Node objective: {node.objective}",
+            f"Ana görev: {mission.goal}",
+            f"Uzmanlık: {node.specialist}",
+            f"Node: {node.title}",
         ]
         if criteria:
-            lines.extend(["", "Success contract:"] + [f"- {item}" for item in criteria[:5]])
+            lines.extend(["", "Başarı ölçütleri:"] + [f"- {item}" for item in criteria[:5]])
+        if expected_outputs:
+            lines.extend(["", "Beklenen çıktılar:"] + [f"- {item}" for item in expected_outputs[:5]])
         lines.extend(
             [
                 "",
-                "Constraints:",
-                "- Local mission runtime içinde calisiyorsun.",
-                "- Sadece bu node amacina odaklan.",
-                "- Somut çıktı üret, metayı kısa tut.",
+                "Kurallar:",
+                "- Local mission runtime içinde çalışıyorsun.",
+                "- Yardım teklif etme; işi gerçekten uygula veya doğrulanabilir hata ver.",
+                "- Sadece bu node amacına odaklan.",
+                "- Mümkünse artifact üret ve kanıt bırak.",
+                "- Başarısız olduysa nedeni açıkça yaz.",
             ]
         )
         return "\n".join(lines).strip()
@@ -1225,18 +1444,111 @@ class MissionRuntime:
             self._record_event(mission, "node.failed", node.summary, status="failed", node_id=node.node_id)
             return
 
-        prompt = self._compose_node_prompt(mission, node)
-        response = await agent.process_envelope(
-            prompt,
-            channel=mission.channel,
-            metadata={
-                "skip_mission_control": True,
-                "mission_id": mission.mission_id,
-                "mission_node_id": node.node_id,
-                "adaptive_mode": mission.mode.lower(),
-                "local_only": True,
-            },
-        )
+        direct_response = None
+        if (
+            node.specialist in {"file", "browser"}
+            and hasattr(agent, "_run_direct_intent")
+            and hasattr(agent, "_should_run_direct_intent")
+        ):
+            direct_intent = _infer_file_node_intent(mission, node) if node.specialist == "file" else _infer_browser_node_intent(node)
+            if not isinstance(direct_intent, dict) or not direct_intent:
+                if hasattr(agent, "intent_parser"):
+                    try:
+                        direct_intent = agent.intent_parser.parse(node.objective)
+                    except Exception:
+                        direct_intent = {}
+            if isinstance(direct_intent, dict) and agent._should_run_direct_intent(direct_intent, node.objective):
+                timeout_s = 45.0 if node.specialist in {"browser", "file"} else 90.0
+                try:
+                    direct_text = await asyncio.wait_for(
+                        agent._run_direct_intent(direct_intent, node.objective, "operator", [], user_id=mission.owner),
+                        timeout=timeout_s,
+                    )
+                except asyncio.TimeoutError:
+                    node.status = "failed"
+                    node.completed_at = _now()
+                    node.summary = f"Node zaman aşımına uğradı ({int(timeout_s)}s)."
+                    self._record_event(
+                        mission,
+                        "node.failed",
+                        node.summary,
+                        status="failed",
+                        node_id=node.node_id,
+                        metadata={"specialist": node.specialist, "timeout_s": timeout_s},
+                    )
+                    return
+                direct_payload = getattr(agent, "_last_direct_intent_payload", None)
+                if (
+                    node.specialist == "browser"
+                    and isinstance(direct_payload, dict)
+                    and not _attachments_from_direct_payload(direct_payload)
+                    and hasattr(agent, "_execute_tool")
+                ):
+                    try:
+                        proof = await agent._execute_tool(
+                            "take_screenshot",
+                            {"filename": f"mission_browser_proof_{int(time.time() * 1000)}.png"},
+                            user_input=node.objective,
+                            step_name=f"{node.title} proof",
+                        )
+                        if isinstance(proof, dict):
+                            proof_path = str(proof.get("path") or proof.get("output_path") or "").strip()
+                            if proof_path:
+                                direct_payload = dict(direct_payload)
+                                screenshots = list(direct_payload.get("screenshots") or [])
+                                if proof_path not in screenshots:
+                                    screenshots.append(proof_path)
+                                direct_payload["screenshots"] = screenshots
+                    except Exception:
+                        pass
+                direct_error = str((direct_payload or {}).get("error") or "").strip() if isinstance(direct_payload, dict) else ""
+                direct_success = bool((direct_payload or {}).get("success", True)) if isinstance(direct_payload, dict) else not _has_error_signal(direct_text)
+                direct_response = SimpleNamespace(
+                    run_id="",
+                    text=str(direct_text or ""),
+                    attachments=_attachments_from_direct_payload(
+                        direct_payload if isinstance(direct_payload, dict) else {},
+                        text=str(direct_text or ""),
+                    ),
+                    evidence_manifest_path="",
+                    status="success" if direct_success else "failed",
+                    error=direct_error,
+                    metadata={},
+                )
+
+        prompt = node.objective if node.specialist in {"file", "browser", "code"} else self._compose_node_prompt(mission, node)
+        if direct_response is not None:
+            response = direct_response
+        else:
+            timeout_s = 45.0 if node.specialist in {"browser", "file"} else 90.0
+            try:
+                response = await asyncio.wait_for(
+                    agent.process_envelope(
+                        prompt,
+                        channel=mission.channel,
+                        metadata={
+                            "skip_mission_control": True,
+                            "mission_id": mission.mission_id,
+                            "mission_node_id": node.node_id,
+                            "adaptive_mode": mission.mode.lower(),
+                            "local_only": True,
+                        },
+                    ),
+                    timeout=timeout_s,
+                )
+            except asyncio.TimeoutError:
+                node.status = "failed"
+                node.completed_at = _now()
+                node.summary = f"Node zaman aşımına uğradı ({int(timeout_s)}s)."
+                self._record_event(
+                    mission,
+                    "node.failed",
+                    node.summary,
+                    status="failed",
+                    node_id=node.node_id,
+                    metadata={"specialist": node.specialist, "timeout_s": timeout_s},
+                )
+                return
         response_metadata = getattr(response, "metadata", {})
         if isinstance(response_metadata, dict) and response_metadata:
             self._merge_runtime_metadata(mission, response_metadata)
@@ -1252,11 +1564,24 @@ class MissionRuntime:
         run_summary = (resolve_runs_root() / node.run_id / "summary.txt").expanduser() if node.run_id else None
         has_run_summary = bool(run_summary and run_summary.exists())
         has_artifact_evidence = bool(manifest_path or attachments or has_run_summary)
+        has_concrete_artifact = _has_concrete_artifact(node, attachments, text)
         error_signal = _has_error_signal(status, error_text, text, node.summary)
         requires_artifact = node.specialist in {"code", "browser", "file", "research", "data"}
-        if error_signal or status not in {"success", "ok"} or (requires_artifact and not has_artifact_evidence):
+        if (
+            error_signal
+            or status not in {"success", "ok"}
+            or (requires_artifact and not has_artifact_evidence)
+            or (node.specialist in {"code", "browser", "file"} and not has_concrete_artifact)
+        ):
             node.status = "failed"
-            failure_reason = error_text or getattr(response, "reason", "") or getattr(response, "summary", "") or text or "Node failed"
+            failure_reason = (
+                error_text
+                or getattr(response, "reason", "")
+                or getattr(response, "summary", "")
+                or ("Somut artifact üretilmedi." if node.specialist in {"code", "browser", "file"} and not has_concrete_artifact else "")
+                or text
+                or "Node failed"
+            )
             self._record_event(
                 mission,
                 "node.failed",
@@ -1346,7 +1671,11 @@ class MissionRuntime:
             if _has_error_signal(item.output, item.summary):
                 error_nodes.append(item.node_id)
         missing_evidence = [node_id for node_id, count in evidence_map.items() if count == 0]
-        artifact_missing = [item.node_id for item in work_nodes if item.specialist in {"code", "browser", "file"} and item.node_id not in artifact_nodes]
+        artifact_missing = [
+            item.node_id
+            for item in work_nodes
+            if item.kind != "probe" and item.specialist in {"code", "browser", "file"} and item.node_id not in artifact_nodes
+        ]
         passes = not failed and not error_nodes
         if strictness != "minimal":
             passes = passes and not missing_evidence and not artifact_missing
@@ -1361,17 +1690,37 @@ class MissionRuntime:
             summary_parts.append("artifact_missing=" + ", ".join(artifact_missing))
         if passes:
             summary_parts.append("verification=passed")
+        ml_verify = {}
+        try:
+            ml_verify = self.verifier_service.score(
+                {"kind": "mission_verifier", "specialist": "verifier"},
+                {
+                    "status": "success" if passes else "failed",
+                    "summary": "; ".join(summary_parts),
+                    "errors": failed + error_nodes + missing_evidence + artifact_missing,
+                    "artifact_count": len(artifact_nodes),
+                },
+                [record.to_dict() for record in mission.evidence if record.node_id in evidence_map],
+            )
+        except Exception as exc:
+            logger.debug(f"mission ml verifier skipped: {exc}")
         node.summary = "; ".join(summary_parts)
         node.output = node.summary
         node.completed_at = _now()
         node.status = "completed" if passes else "failed"
+        node.metadata["ml_verifier"] = dict(ml_verify or {})
         self._add_evidence(
             mission,
             node,
             kind="verification",
             label="Verification summary",
             summary=node.summary,
-            metadata={"strictness": strictness, "failed_nodes": failed, "missing_evidence": missing_evidence},
+            metadata={
+                "strictness": strictness,
+                "failed_nodes": failed,
+                "missing_evidence": missing_evidence,
+                "ml_verifier": dict(ml_verify or {}),
+            },
         )
         self._record_event(
             mission,
@@ -1469,6 +1818,12 @@ class MissionRuntime:
             route_mode = "document"
         elif request_content_kind == "spreadsheet" and route_mode in {"communication", "task", "document"}:
             route_mode = "data"
+        elif str(request_contract.get("route_mode") or "").strip().lower() == "file_operations":
+            specialist_hint = self._select_specialist(goal_text, route_mode="file_operations")
+            if specialist_hint == "code":
+                route_mode = "code"
+            elif route_mode in {"communication", "task", "document", "file"}:
+                route_mode = "file"
         if route_mode in {"communication", "task"}:
             specialist_hint = self._select_specialist(goal_text, route_mode=route_mode)
             if specialist_hint == "code":
@@ -1479,6 +1834,8 @@ class MissionRuntime:
                 route_mode = "browser"
             elif specialist_hint == "data":
                 route_mode = "data"
+            elif specialist_hint == "file":
+                route_mode = "file"
             elif specialist_hint == "document":
                 route_mode = "document"
         mission = Mission(
@@ -1503,6 +1860,23 @@ class MissionRuntime:
         async with self._lock:
             self._missions[mission.mission_id] = mission
             self._record_event(mission, "mission.created", "Mission oluşturuldu", status="queued", metadata={"route_mode": route_mode})
+            try:
+                self.outcome_store.record_decision(
+                    request_id=mission.mission_id,
+                    user_id=str(user_id or "local"),
+                    kind="mission_route",
+                    selected=str(route_mode or "task"),
+                    confidence=float(request_contract.get("confidence", 0.0) or 0.0),
+                    raw_confidence=float(request_contract.get("confidence", 0.0) or 0.0),
+                    channel=str(channel or "dashboard"),
+                    source="mission_control",
+                    metadata={
+                        "content_kind": str(request_contract.get("content_kind") or ""),
+                        "preview": str(request_contract.get("preview") or ""),
+                    },
+                )
+            except Exception as exc:
+                logger.debug(f"mission route decision telemetry skipped: {exc}")
             self._save()
         if auto_start:
             await self.start_mission(mission.mission_id, agent=agent)
@@ -1539,11 +1913,13 @@ class MissionRuntime:
                 if all(node.status == "completed" for node in mission.graph.nodes):
                     mission.status = "completed"
                     self._record_event(mission, "mission.completed", "Mission tamamlandı", status="completed")
+                    self._record_mission_outcome(mission, "completed")
                     self._save()
                     return mission
                 if any(node.status == "failed" for node in mission.graph.nodes if node.node_id == "verifier"):
                     mission.status = "failed"
                     self._record_event(mission, "mission.failed", "Verifier başarısız", status="failed")
+                    self._record_mission_outcome(mission, "failed", reason="verifier_failed")
                     self._save()
                     return mission
                 pending_approval = any(item.status == "pending" for item in mission.approvals)
@@ -1564,6 +1940,11 @@ class MissionRuntime:
                             "mission.failed",
                             f"Başarısız düğümler: {', '.join(node.node_id for node in failed_nodes[:4])}",
                             status="failed",
+                        )
+                        self._record_mission_outcome(
+                            mission,
+                            "failed",
+                            reason=f"failed_nodes:{','.join(node.node_id for node in failed_nodes[:4])}",
                         )
                         self._save()
                         return mission

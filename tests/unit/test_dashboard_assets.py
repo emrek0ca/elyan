@@ -80,6 +80,8 @@ def test_dashboard_js_includes_mission_control_runtime_hooks():
     assert "selected_mission_id" in js
     assert 'tools: "p-tools"' in js
     assert "g-refresh-tools" in js
+    assert 'rawStrategy === "hızlı"' in js
+    assert 'normalizedStrategy = "fast"' in js
 
 
 def test_ops_console_js_points_to_admin_endpoints():

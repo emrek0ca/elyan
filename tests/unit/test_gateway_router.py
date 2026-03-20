@@ -577,6 +577,35 @@ class TestGatewayRouter:
         assert health.get("status") in {"connected", "connecting", "reconnecting", "error"}
         await router.stop_all()
 
+    def test_get_adapter_health_syncs_live_status(self):
+        router, _ = self._router()
+
+        class PassiveAdapter:
+            def on_message(self, cb):
+                _ = cb
+
+            async def connect(self):
+                return None
+
+            async def disconnect(self):
+                return None
+
+            async def send_message(self, chat_id, response):
+                _ = (chat_id, response)
+                return None
+
+            def get_status(self):
+                return "unavailable"
+
+            def get_capabilities(self):
+                return {}
+
+        router.register_adapter("telegram", PassiveAdapter())
+        router._adapter_health["telegram"] = {"channel": "telegram", "status": "connected", "connected": True}
+        health = router.get_adapter_health()["telegram"]
+        assert health["status"] == "unavailable"
+        assert health["connected"] is False
+
     @pytest.mark.asyncio
     async def test_first_contact_welcome_sent_once_for_telegram(self, tmp_path):
         state_path = tmp_path / "welcome_state.json"

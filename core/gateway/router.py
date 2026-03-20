@@ -1106,7 +1106,19 @@ class GatewayRouter:
         self._update_health(channel_type, last_message_out_ts=time.time())
 
     def get_adapter_health(self) -> Dict[str, Dict[str, Any]]:
-        return {k: dict(v) for k, v in self._adapter_health.items()}
+        snapshot: Dict[str, Dict[str, Any]] = {}
+        for name, health in self._adapter_health.items():
+            row = dict(health)
+            adapter = self.adapters.get(name)
+            actual = self._safe_adapter_status(adapter) if adapter is not None else str(row.get("status") or "unknown").lower()
+            if actual:
+                row["status"] = actual
+                if actual in {"connected", "online", "healthy", "ok", "active"}:
+                    row["connected"] = True
+                elif actual in {"disconnected", "unavailable", "conflict", "error"}:
+                    row["connected"] = False
+            snapshot[name] = row
+        return snapshot
 
     def get_adapter_status(self) -> Dict[str, str]:
         return {name: self._safe_adapter_status(adapter) for name, adapter in self.adapters.items()}

@@ -20,6 +20,7 @@ document.addEventListener("DOMContentLoaded", function () {
   /* ── state ── */
   var providers = [];
   var ollamaData = {};
+  var settingsState = { primaryLLM: "", strategy: "balanced", language: "tr", localFirst: false };
   var missionState = {
     overview: {},
     missions: [],
@@ -69,7 +70,8 @@ document.addEventListener("DOMContentLoaded", function () {
       method: options.method || "GET",
       headers: headers,
       body: options.body,
-      signal: controller.signal
+      signal: controller.signal,
+      credentials: "same-origin"
     })
       .then(function (r) { return r.json(); })
       .catch(function (e) { console.error("api", url, e); return { ok: false, error: e.message }; })
@@ -927,13 +929,30 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function loadSettings() {
-    try {
-      var s = JSON.parse(localStorage.getItem("elyan_settings") || "{}");
-      if (s.primaryLLM) { var el = $("#s-primary"); if (el) el.value = s.primaryLLM; }
-      if (s.strategy) { var el2 = $("#s-strategy"); if (el2) el2.value = s.strategy; }
-      if (s.language) { var el3 = $("#s-lang"); if (el3) el3.value = s.language; }
-      if (s.localFirst) { var el4 = $("#s-local"); if (el4) el4.checked = true; }
-    } catch (e) { /* ignore */ }
+    return Promise.all([GET("/api/models"), GET("/api/agent/profile")]).then(function (rows) {
+      var models = rows && rows[0] && rows[0].ok ? rows[0] : {};
+      var profile = rows && rows[1] && rows[1].ok ? rows[1].profile || {} : {};
+      var runtime = profile.runtime_policy || {};
+      var rawStrategy = String(runtime.dashboard_strategy || "balanced").toLowerCase();
+      var normalizedStrategy = rawStrategy;
+      if (rawStrategy === "hızlı" || rawStrategy === "hizli") normalizedStrategy = "fast";
+      else if (rawStrategy === "kalite") normalizedStrategy = "best";
+      else if (rawStrategy === "dengeli") normalizedStrategy = "balanced";
+      settingsState = {
+        primaryLLM: String(((models.default || {}).provider) || ""),
+        strategy: normalizedStrategy || "balanced",
+        language: String(profile.language || "tr"),
+        localFirst: !!runtime.model_local_first
+      };
+      var el = $("#s-primary");
+      if (el) el.value = settingsState.primaryLLM || "";
+      var el2 = $("#s-strategy");
+      if (el2) el2.value = settingsState.strategy || "balanced";
+      var el3 = $("#s-lang");
+      if (el3) el3.value = settingsState.language || "tr";
+      var el4 = $("#s-local");
+      if (el4) el4.checked = !!settingsState.localFirst;
+    });
   }
 
   var saveBtn = $("#s-save");
@@ -945,8 +964,31 @@ document.addEventListener("DOMContentLoaded", function () {
         language: ($("#s-lang") || {}).value || "tr",
         localFirst: !!($("#s-local") || {}).checked
       };
-      localStorage.setItem("elyan_settings", JSON.stringify(s));
-      toast("Ayarlar kaydedildi", "ok");
+      var selectedProvider = s.primaryLLM || settingsState.primaryLLM || "";
+      var selectedModel = "";
+      providers.forEach(function (p) {
+        if (!selectedModel && p && p.provider === selectedProvider) selectedModel = String(p.model || "");
+      });
+      if (!selectedModel && selectedProvider === "ollama") selectedModel = "llama3.2:3b";
+      Promise.all([
+        POST("/api/models", selectedProvider ? { provider: selectedProvider, model: selectedModel, sync_roles: true } : {}),
+        POST("/api/agent/profile", {
+          language: s.language,
+          runtime_policy: {
+            model_local_first: !!s.localFirst,
+            dashboard_strategy: s.strategy
+          }
+        })
+      ]).then(function (rows) {
+        var failed = (rows || []).some(function (row) { return !row || row.ok === false; });
+        if (failed) {
+          toast("Ayarlar kaydedilemedi", "err");
+          return;
+        }
+        settingsState = s;
+        toast("Ayarlar kaydedildi", "ok");
+        refreshAll().then(function () { return loadSettings(); });
+      });
     });
   }
 
@@ -1006,7 +1048,7 @@ document.addEventListener("DOMContentLoaded", function () {
   if (toolsRefreshBtn) toolsRefreshBtn.addEventListener("click", function () { refreshAll(); });
 
   // Boot
-  refreshAll().then(function () { loadSettings(); });
+  refreshAll().then(function () { return loadSettings(); });
   connectWS();
 
   // Auto-refresh

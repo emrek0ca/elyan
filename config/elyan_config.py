@@ -134,6 +134,52 @@ def _default_config() -> AppConfig:
             "localOnly": True,
             "attachmentRetentionDays": 7,
         },
+        personalization={
+            "enabled": True,
+            "mode": "hybrid",
+            "vector_backend": "lancedb",
+            "graph_backend": "sqlite",
+            "feedback_policy": "explicit_safe_implicit",
+            "training": {
+                "min_examples": 50,
+                "cooldown_minutes": 60,
+            },
+            "adapters": {
+                "cache": {"max_hot": 32},
+                "storage_root": "",
+            },
+            "retrieval": {
+                "top_k": 5,
+                "max_context_tokens": 512,
+            },
+        },
+        ml={
+            "enabled": True,
+            "execution_mode": "local_first",
+            "device_policy": "cpu",
+            "backends": {
+                "embedding": "cpu_fallback",
+                "training": "disabled",
+                "adapter_runtime": "memory_only",
+            },
+        },
+        evaluation={
+            "verifier_threshold": 0.55,
+            "clarify_threshold": 0.55,
+        },
+        adapter_training={
+            "enabled": True,
+            "optimizer_priority": ["dpo", "ppo"],
+            "format": "lora_stub",
+            "min_examples": 50,
+            "cooldown_minutes": 60,
+        },
+        retrieval={
+            "top_k": 5,
+            "rerank_top_k": 5,
+            "max_context_tokens": 512,
+            "stale_window_days": 30,
+        },
         security={
             "operatorMode": "Confirmed",
             "requirePlanApproval": True,

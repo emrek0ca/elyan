@@ -51,6 +51,7 @@ from core.pipeline_upgrade import (
 from core.workspace_contract import ensure_workspace_contract
 from core.hybrid_model_policy import build_hybrid_model_plan
 from core.verifier import evaluate_runtime_capability
+from core.ml import get_verifier
 from core.process_profiles import (
     approval_granted,
     artifact_entry,
@@ -2158,6 +2159,23 @@ class StageRoute(PipelineStage):
                 logger.info(f"Memory context retrieved ({len(ctx.memory_context)} chars)")
             except Exception as e:
                 logger.debug(f"Memory retrieval skip: {e}")
+        runtime_meta = ctx.runtime_policy.get("metadata", {}) if isinstance(ctx.runtime_policy.get("metadata"), dict) else {}
+        personalization_meta = runtime_meta.get("personalization", {}) if isinstance(runtime_meta.get("personalization"), dict) else {}
+        personalization_text = str(personalization_meta.get("retrieved_memory_context") or "").strip()
+        if personalization_text:
+            if ctx.memory_context:
+                ctx.memory_context = f"{personalization_text}\n\n{ctx.memory_context}".strip()
+            else:
+                ctx.memory_context = personalization_text
+            merged_results = dict(ctx.memory_results or {})
+            merged_results["personalization"] = {
+                "runtime_profile": dict(personalization_meta.get("runtime_profile") or {}),
+                "retrieved_memory": dict(personalization_meta.get("retrieved_memory") or {}),
+                "adapter_binding": dict(personalization_meta.get("adapter_binding") or {}),
+                "reward_policy": dict(personalization_meta.get("reward_policy") or {}),
+                "training_decision": dict(personalization_meta.get("training_decision") or {}),
+            }
+            ctx.memory_results = merged_results
 
         screen_state_payload: Dict[str, Any] = {}
         screen_state_prompt = ""
@@ -2810,8 +2828,25 @@ class StageRoute(PipelineStage):
                         user_id=ctx.user_id,
                         original_input=ctx.user_input,
                         wrong_action=agent._last_action,
-                        corrected_text=corr_text
+                        correction_text=corr_text
                     )
+                    if getattr(agent, "personalization", None):
+                        try:
+                            agent.personalization.record_feedback(
+                                user_id=str(ctx.user_id),
+                                interaction_id=str(getattr(agent, "_last_turn_context", {}).get("interaction_id") or ""),
+                                event_type="correction",
+                                metadata={
+                                    "source": "pipeline_correction",
+                                    "corrected_text": corr_text,
+                                    "wrong_action": str(agent._last_action or ""),
+                                    "provider": str(getattr(agent, "_last_turn_context", {}).get("personalization", {}).get("provider") or ""),
+                                    "model": str(getattr(agent, "_last_turn_context", {}).get("personalization", {}).get("model") or ""),
+                                    "base_model_id": str(getattr(agent, "_last_turn_context", {}).get("personalization", {}).get("base_model_id") or ""),
+                                },
+                            )
+                        except Exception as personalization_feedback_exc:
+                            logger.debug(f"personalization correction feedback skipped: {personalization_feedback_exc}")
                     logger.info(f"Correction detected: {ctx.user_input} -> {corr_text}")
                     ctx.user_input = corr_text
         except Exception as e:
@@ -3341,10 +3376,6 @@ class StageExecute(PipelineStage):
                     else:
                         micro_path.append("direct_app_control")
                 _set_execution_trace(ctx, route=micro_route, decision_path=micro_path)
-                try:
-                    agent._last_direct_intent_payload = None
-                except Exception:
-                    pass
                 direct_text = await agent._run_direct_intent(
                     ctx.intent, ctx.user_input, ctx.role, [], user_id=ctx.user_id
                 )
@@ -3419,6 +3450,9 @@ class StageExecute(PipelineStage):
                         ctx.stage_timings["execute"] = time.time() - t0
                         return ctx
                     if direct_failed:
+                        failed_step = direct_payload.get("failed_step") if isinstance(direct_payload, dict) else {}
+                        failed_step_action = _normalize_action((failed_step or {}).get("action"))
+                        current_direct_action = _normalize_action(ctx.action)
                         if direct_failure_class in {"policy_block", "planning_failure"}:
                             logger.warning(
                                 "Direct intent failed with deterministic class=%s; skipping fallback.",
@@ -3430,10 +3464,13 @@ class StageExecute(PipelineStage):
                                 action_lock.unlock()
                             ctx.stage_timings["execute"] = time.time() - t0
                             return ctx
-                        if _is_simple_browser_or_app_intent(ctx.intent):
+                        if (
+                            current_direct_action == "multi_task"
+                            and failed_step_action == "open_url"
+                            and _is_simple_browser_or_app_intent(ctx.intent)
+                        ):
                             logger.warning(
-                                "Simple browser/app direct intent failed; blocking orchestrator fallback for action=%s.",
-                                ctx.action,
+                                "Direct intent simple browser sequence failed at open_url; preserving deterministic failure."
                             )
                             ctx.errors.append(f"direct_intent_failed:{ctx.action}")
                             ctx.final_response += str(direct_text or "")
@@ -3441,6 +3478,12 @@ class StageExecute(PipelineStage):
                                 action_lock.unlock()
                             ctx.stage_timings["execute"] = time.time() - t0
                             return ctx
+                        if _is_simple_browser_or_app_intent(ctx.intent):
+                            logger.warning(
+                                "Simple browser/app direct intent failed; falling back to standard execution for action=%s.",
+                                ctx.action,
+                            )
+                            ctx.errors.append(f"direct_intent_failed:{ctx.action}")
                         screen_actions = {"screen_workflow", "analyze_screen", "take_screenshot", "vision_operator_loop", "operator_mission_control", "computer_use"}
                         if _normalize_action(ctx.action) in screen_actions:
                             logger.warning("Direct intent screen/operator result failed; preserving workflow boundary.")
@@ -4119,10 +4162,28 @@ class StageExecute(PipelineStage):
             pass
 
         try:
+            tool_names: list[str] = []
+            success_count = 0
+            artifact_count = 0
+            for item in list(ctx.tool_results or []):
+                if isinstance(item, dict):
+                    tool_name = str(item.get("tool") or item.get("action") or "").strip()
+                    if tool_name:
+                        tool_names.append(tool_name)
+                    status = str(item.get("status") or "").strip().lower()
+                    if status not in {"failed", "error"}:
+                        success_count += 1
+                    artifacts = item.get("artifacts")
+                    if isinstance(artifacts, list):
+                        artifact_count += len([artifact for artifact in artifacts if artifact])
             ctx.phase_records["execute"] = {
                 "phase": "Execute",
                 "tool_call_count": len(ctx.tool_calls or []),
                 "tool_result_count": len(ctx.tool_results or []),
+                "tool_count": len(ctx.tool_results or []),
+                "success_count": success_count,
+                "artifact_count": artifact_count,
+                "tool_names": tool_names[:5],
                 "delivery_blocked": bool(ctx.delivery_blocked),
                 "worker_model": dict((ctx.model_roles or {}).get("worker") or {}),
             }
@@ -4142,10 +4203,27 @@ class StageVerify(PipelineStage):
 
         verification_policy = ctx.verification_policy if isinstance(ctx.verification_policy, dict) else {}
         skip_reason = "verification_policy" if bool(verification_policy.get("skip_verify", False)) else "communication"
-        if bool(verification_policy.get("skip_verify", False)) or str(getattr(ctx, "job_type", "") or "").strip().lower() == "communication":
+        should_skip_verify = bool(verification_policy.get("skip_verify", False))
+        if not should_skip_verify:
+            job_type = str(getattr(ctx, "job_type", "") or "").strip().lower()
+            actionable = _normalize_action(getattr(ctx, "action", "")) not in _NON_ACTIONABLE_INTENTS
+            should_skip_verify = (
+                job_type == "communication"
+                and not bool(getattr(ctx, "is_code_job", False))
+                and not _is_research_task(ctx)
+                and not actionable
+                and not list(getattr(ctx, "tool_results", []) or [])
+            )
+        if should_skip_verify:
             try:
                 ctx.verified = not bool(ctx.errors)
                 ctx.delivery_blocked = False
+                ctx.qa_results["ml_verifier"] = {
+                    "ok": bool(ctx.verified),
+                    "score": 1.0 if ctx.verified else 0.0,
+                    "status": "skipped",
+                    "fallback": True,
+                }
                 ctx.qa_results["verify_skipped"] = {
                     "reason": skip_reason,
                     "verified": bool(ctx.verified),
@@ -4694,6 +4772,48 @@ class StageVerify(PipelineStage):
                     ctx.verified = bool((ctx.gate_state or {}).get("ok", False)) and not bool(ctx.delivery_blocked)
                 else:
                     ctx.verified = True
+
+        try:
+            verifier = getattr(agent, "verifier_service", None) or get_verifier()
+            evidence_items: list[dict[str, Any]] = []
+            for item in list(ctx.tool_results or []):
+                if isinstance(item, dict):
+                    artifacts = item.get("artifacts")
+                    if isinstance(artifacts, list):
+                        evidence_items.extend([artifact for artifact in artifacts if artifact])
+            ml_verifier = verifier.score(
+                {
+                    "job_type": ctx.job_type,
+                    "kind": ctx.job_type or ctx.action,
+                    "specialist": ctx.role or ctx.job_type,
+                },
+                {
+                    "status": "success" if not ctx.errors else "failed",
+                    "text": ctx.final_response,
+                    "errors": list(ctx.errors or []),
+                    "artifacts": evidence_items,
+                    "artifact_count": len(evidence_items),
+                },
+                evidence_items,
+            )
+            ctx.qa_results["ml_verifier"] = ml_verifier
+            verify_record = dict(ctx.phase_records.get("verify") or {})
+            verify_record["ml_verifier"] = dict(ml_verifier)
+            verify_record["verified"] = bool(ctx.verified)
+            verify_record["delivery_blocked"] = bool(ctx.delivery_blocked)
+            ctx.phase_records["verify"] = verify_record
+            if isinstance(ctx.runtime_policy, dict):
+                metadata = ctx.runtime_policy.get("metadata", {}) if isinstance(ctx.runtime_policy.get("metadata"), dict) else {}
+                metadata["verification_result"] = dict(ml_verifier)
+                ctx.runtime_policy["metadata"] = metadata
+        except Exception as ml_verify_exc:
+            ctx.qa_results["ml_verifier"] = {
+                "ok": False,
+                "score": 0.0,
+                "status": "error",
+                "reason": str(ml_verify_exc),
+                "fallback": True,
+            }
 
         ctx.stage_timings["verify"] = time.time() - t0
         return ctx
