@@ -228,6 +228,23 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   }
 
+  function bindCopyCommandButtons(root) {
+    var scope = root || document;
+    if (!scope || !scope.querySelectorAll) return;
+    scope.querySelectorAll(".js-copy-command").forEach(function (btn) {
+      if (btn.__elyanCopyBound) return;
+      btn.__elyanCopyBound = true;
+      btn.addEventListener("click", function () {
+        var command = String(btn.getAttribute("data-command") || "").trim();
+        if (!command) {
+          toast("Komut bulunamadı", "err");
+          return;
+        }
+        copyText(command, "Komut kopyalandı");
+      });
+    });
+  }
+
   function safeFileName(value) {
     var text = String(value || "trace").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
     return text || "trace";
@@ -1476,8 +1493,11 @@ document.addEventListener("DOMContentLoaded", function () {
     var commandEl = $("#" + packDomId(pack, "command"));
     var rootEl = $("#" + packDomId(pack, "root"));
     var bundleEl = $("#" + packDomId(pack, "bundle"));
+    var readinessEl = $("#" + packDomId(pack, "readiness"));
+    var countEl = $("#" + packDomId(pack, "count"));
     var nextEl = $("#" + packDomId(pack, "next"));
     var featuresEl = $("#" + packDomId(pack, "features"));
+    var commandsEl = $("#" + packDomId(pack, "commands"));
 
     var statusText = String(item.status || (item.success ? "ready" : "missing"));
     if (statusEl) {
@@ -1493,6 +1513,12 @@ document.addEventListener("DOMContentLoaded", function () {
     if (bundleEl) {
       bundleEl.textContent = "bundle: " + String(item.bundle_id || (item.bundle && (item.bundle.id || item.bundle.workflow_id)) || "-");
     }
+    if (readinessEl) {
+      readinessEl.textContent = "readiness: " + String(item.readiness || (item.success ? "ready" : "missing"));
+    }
+    if (countEl) {
+      countEl.textContent = "features: " + String(item.feature_count != null ? item.feature_count : 0);
+    }
     if (nextEl) {
       nextEl.textContent = String(item.next_step || item.message || item.summary || "Live durum yok");
     }
@@ -1501,6 +1527,17 @@ document.addEventListener("DOMContentLoaded", function () {
       featuresEl.innerHTML = features.length ? features.map(function (feature) {
         return "<span>" + esc(feature) + "</span>";
       }).join("") : "";
+    }
+    if (commandsEl) {
+      var commands = item.commands && typeof item.commands === "object" ? item.commands : {};
+      var labels = ["status", "project", "scaffold", "workflow", "ask", "query"];
+      var chips = labels.map(function (key) {
+        var command = String(commands[key] || "").trim();
+        if (!command) return "";
+        return '<button type="button" class="pack-command-chip js-copy-command" data-command="' + esc(command) + '">' + esc(key) + "</button>";
+      }).filter(Boolean);
+      commandsEl.innerHTML = chips.length ? chips.join("") : "";
+      bindCopyCommandButtons(commandsEl);
     }
   }
 
@@ -1807,16 +1844,7 @@ document.addEventListener("DOMContentLoaded", function () {
       launchPackMission(btn.getAttribute("data-pack"), btn.getAttribute("data-action"));
     });
   });
-  $$(".js-copy-command").forEach(function (btn) {
-    btn.addEventListener("click", function () {
-      var command = String(btn.getAttribute("data-command") || "").trim();
-      if (!command) {
-        toast("Komut bulunamadı", "err");
-        return;
-      }
-      copyText(command, "Komut kopyalandı");
-    });
-  });
+  bindCopyCommandButtons(document);
   $$(".js-mission-filter").forEach(function (btn) {
     btn.addEventListener("click", function () {
       missionFilter = String(btn.getAttribute("data-filter") || "all");

@@ -17,6 +17,38 @@ def test_packs_list_prints_catalog(capsys):
     assert "elyan packs scaffold quivr --path ./quivr" in captured.out
 
 
+def test_packs_status_all_prints_readiness(monkeypatch, capsys):
+    async def fake_status_all(path=""):
+        _ = path
+        return {
+            "success": True,
+            "status": "success",
+            "packs": [
+                {
+                    "pack": "quivr",
+                    "label": "Quivr",
+                    "status": "ready",
+                    "success": True,
+                    "project": {"name": "Quivr", "root": "/tmp/quivr"},
+                    "bundle": {"id": "bundle-quivr"},
+                    "readiness": "ready",
+                    "feature_count": 4,
+                    "message": "ready",
+                }
+            ],
+            "count": 1,
+        }
+
+    monkeypatch.setattr(packs, "pack_status_all", fake_status_all)
+
+    code = packs.run(SimpleNamespace(action="status", pack="all", json=False))
+    captured = capsys.readouterr()
+
+    assert code == 0
+    assert "readiness: ready" in captured.out
+    assert "features: 4" in captured.out
+
+
 def test_packs_scaffold_dispatches_to_opengauss(monkeypatch, capsys):
     called = {}
 

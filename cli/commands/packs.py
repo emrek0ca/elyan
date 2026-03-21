@@ -46,6 +46,18 @@ def _print_payload(title: str, payload: dict[str, Any], *, as_json: bool = False
     if bundle:
         print(f"Bundle: {bundle.get('id') or bundle.get('workflow_id') or '-'}")
 
+    readiness = str(payload.get("readiness") or "").strip()
+    if readiness:
+        print(f"Readiness: {readiness}")
+
+    feature_count = payload.get("feature_count")
+    if feature_count is not None:
+        print(f"Features: {feature_count}")
+
+    feature_sample = list(payload.get("feature_sample") or [])
+    if feature_sample:
+        print(f"Feature sample: {', '.join(str(item) for item in feature_sample[:4])}")
+
     command = str(payload.get("command") or "").strip()
     if command:
         print(command)
@@ -120,6 +132,12 @@ def _print_status_all(payload: dict[str, Any], *, as_json: bool = False) -> int:
         bundle = item.get("bundle") or {}
         if bundle:
             print(f"  bundle: {bundle.get('id') or bundle.get('workflow_id') or '-'}")
+        readiness = str(item.get("readiness") or "").strip()
+        if readiness:
+            print(f"  readiness: {readiness}")
+        feature_count = item.get("feature_count")
+        if feature_count is not None:
+            print(f"  features: {feature_count}")
         message = str(item.get("message") or "").strip()
         if message:
             print(f"  {message}")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from tools.cloudflare_agents_tools import cloudflare_agents_status
@@ -75,12 +76,27 @@ async def pack_status(pack: str, path: str = "") -> dict[str, Any]:
 
 
 async def pack_status_all(path: str = "") -> dict[str, Any]:
+    pack_names = list(PACKS.keys())
+    results = await asyncio.gather(
+        *(pack_status(pack, path=path) for pack in pack_names),
+        return_exceptions=True,
+    )
     rows: list[dict[str, Any]] = []
-    for pack in PACKS:
-        payload = await pack_status(pack, path=path)
+    for pack, result in zip(pack_names, results, strict=False):
+        if isinstance(result, Exception):
+            payload = {
+                "success": False,
+                "status": "error",
+                "error": str(result),
+                "project": {},
+                "bundle": {},
+            }
+        else:
+            payload = result or {}
         project = payload.get("project") or {}
         bundle = payload.get("bundle") or payload.get("workflow") or {}
         features = list(project.get("features") or [])
+        commands = dict(PACKS[pack].get("commands") or {})
         rows.append(
             {
                 "pack": pack,
@@ -95,6 +111,8 @@ async def pack_status_all(path: str = "") -> dict[str, Any]:
                 "bundle_id": bundle.get("id") or bundle.get("workflow_id") or "",
                 "feature_count": len(features),
                 "feature_sample": features[:4],
+                "commands": commands,
+                "command_count": len(commands),
                 "readiness": "ready" if bool(payload.get("success", False)) else "missing",
                 "command": PACKS[pack]["commands"].get("status", ""),
                 "next_step": _pack_next_step(pack, payload),
@@ -115,12 +133,15 @@ def _merge_pack_meta(spec: dict[str, Any], live: dict[str, Any]) -> dict[str, An
     project = item.get("project") or {}
     bundle = item.get("bundle") or item.get("workflow") or {}
     features = list(project.get("features") or [])
+    commands = dict(item.get("commands") or {})
     item["root"] = item.get("root") or project.get("root") or ""
     item["bundle_id"] = item.get("bundle_id") or bundle.get("id") or bundle.get("workflow_id") or ""
     item["feature_count"] = item.get("feature_count") if item.get("feature_count") is not None else len(features)
     item["feature_sample"] = item.get("feature_sample") or features[:4]
     item["readiness"] = item.get("readiness") or ("ready" if bool(item.get("success", False)) else "missing")
     item["command"] = item.get("command") or item.get("commands", {}).get("status", "")
+    item["commands"] = commands
+    item["command_count"] = item.get("command_count") if item.get("command_count") is not None else len(commands)
     return item
 
 

@@ -30,6 +30,8 @@ async def test_build_pack_overview_merges_live_status(monkeypatch):
     assert item["bundle_id"] == "bundle-quivr"
     assert item["feature_count"] == 2
     assert item["readiness"] == "ready"
+    assert item["command"] == "elyan packs status quivr"
+    assert item["commands"]["status"] == "elyan packs status quivr"
 
 
 @pytest.mark.asyncio

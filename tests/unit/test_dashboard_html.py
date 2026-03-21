@@ -35,6 +35,15 @@ def test_dashboard_html_contains_mission_tools_and_settings_tabs():
     assert 'id="pack-quivr-status"' in html
     assert 'id="pack-cloudflare-agents-status"' in html
     assert 'id="pack-opengauss-status"' in html
+    assert 'id="pack-quivr-readiness"' in html
+    assert 'id="pack-cloudflare-agents-readiness"' in html
+    assert 'id="pack-opengauss-readiness"' in html
+    assert 'id="pack-quivr-count"' in html
+    assert 'id="pack-cloudflare-agents-count"' in html
+    assert 'id="pack-opengauss-count"' in html
+    assert 'id="pack-quivr-commands"' in html
+    assert 'id="pack-cloudflare-agents-commands"' in html
+    assert 'id="pack-opengauss-commands"' in html
     assert 'js-pack-refresh' in html
     assert 'js-pack-mission' in html
     assert 'elyan packs scaffold quivr --path ./quivr' in html
