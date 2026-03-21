@@ -243,6 +243,96 @@ document.addEventListener("DOMContentLoaded", function () {
     if (skillsEl) skillsEl.textContent = String(skillsEnabled);
     var skillsNoteEl = $("#hero-skills-note");
     if (skillsNoteEl) skillsNoteEl.textContent = skillsEnabled ? "enabled workflows" : "no skills yet";
+    renderInvestorReadiness();
+  }
+
+  function buildInvestorReadiness() {
+    var providersReady = (providers || []).filter(function (p) { return !!p.reachable; }).length;
+    var providerTotal = (providers || []).length;
+    var connectedAccounts = (integrationState.accounts || []).filter(function (item) {
+      return String(item.status || "").toLowerCase() === "ready";
+    }).length;
+    var skillsEnabled = Number((skillCatalogState.summary && skillCatalogState.summary.enabled) || 0);
+    var evidenceCount = Number((traceState.evidence || []).length || 0);
+    var autopilotRunning = !!autopilotState.running;
+    var items = [
+      {
+        label: "Local model reachable",
+        ok: providersReady > 0,
+        note: providerTotal ? providersReady + "/" + providerTotal + " provider reachable" : "No provider configured"
+      },
+      {
+        label: "Skills enabled",
+        ok: skillsEnabled > 0,
+        note: skillsEnabled ? skillsEnabled + " workflows active" : "Enable browser, desktop, calendar"
+      },
+      {
+        label: "Integrations connected",
+        ok: connectedAccounts > 0,
+        note: connectedAccounts ? connectedAccounts + " account ready" : "Connect Gmail or Calendar"
+      },
+      {
+        label: "Evidence trail present",
+        ok: evidenceCount > 0,
+        note: evidenceCount ? evidenceCount + " artifact captured" : "Run a demo to generate proof"
+      },
+      {
+        label: "Autopilot running",
+        ok: autopilotRunning,
+        note: autopilotRunning ? "Proactive mode on" : "Manual mode"
+      }
+    ];
+    var next = null;
+    for (var i = 0; i < items.length; i++) {
+      if (!items[i].ok) {
+        next = items[i];
+        break;
+      }
+    }
+    return {
+      items: items,
+      complete: items.filter(function (item) { return !!item.ok; }).length,
+      total: items.length,
+      next: next,
+      providersReady: providersReady,
+      providerTotal: providerTotal,
+      connectedAccounts: connectedAccounts,
+      skillsEnabled: skillsEnabled,
+      evidenceCount: evidenceCount,
+      autopilotRunning: autopilotRunning
+    };
+  }
+
+  function readinessLabel(count, total) {
+    if (count >= total) return "Investor-ready";
+    if (count >= 3) return "Almost ready";
+    return "Setup needed";
+  }
+
+  function readinessNextStep(snapshot) {
+    var next = snapshot && snapshot.next;
+    if (!next) return "Demo-ready: run a live mission, export the trace and share the link.";
+    if (next.label === "Local model reachable") return "Connect a provider or start Ollama so the operator can run locally.";
+    if (next.label === "Skills enabled") return "Enable browser, desktop and calendar skills for the first demo.";
+    if (next.label === "Integrations connected") return "Connect one account such as Gmail or Calendar for a richer flow.";
+    if (next.label === "Evidence trail present") return "Run a short demo to capture screenshots, video and artifacts.";
+    if (next.label === "Autopilot running") return "Start autopilot so the system can brief, maintain and suggest proactively.";
+    return "Run a live mission and share the trace.";
+  }
+
+  function renderInvestorReadiness() {
+    var root = $("#readiness-items");
+    var scoreEl = $("#readiness-score-value");
+    var labelEl = $("#readiness-score-label");
+    var nextEl = $("#readiness-next");
+    if (!root || !scoreEl || !labelEl || !nextEl) return;
+    var snapshot = buildInvestorReadiness();
+    root.innerHTML = snapshot.items.map(function (item) {
+      return '<div class="readiness-item ' + (item.ok ? "ok" : "warn") + '"><div class="readiness-dot"></div><div><strong>' + esc(item.label) + '</strong><p>' + esc(item.note) + '</p></div></div>';
+    }).join("");
+    scoreEl.textContent = snapshot.complete + "/" + snapshot.total;
+    labelEl.textContent = readinessLabel(snapshot.complete, snapshot.total);
+    nextEl.textContent = readinessNextStep(snapshot);
   }
 
   function badge(state) {
@@ -1615,6 +1705,34 @@ document.addEventListener("DOMContentLoaded", function () {
   });
   var traceDownloadBtn = $("#trace-download");
   if (traceDownloadBtn) traceDownloadBtn.addEventListener("click", function () { exportCurrentTrace(); });
+  var readinessCopyBtn = $("#readiness-copy");
+  if (readinessCopyBtn) {
+    readinessCopyBtn.addEventListener("click", function () {
+      var snapshot = buildInvestorReadiness();
+      var status = readinessLabel(snapshot.complete, snapshot.total);
+      var text = [
+        "Elyan readiness: " + status + " (" + snapshot.complete + "/" + snapshot.total + ")",
+        "Providers: " + snapshot.providersReady + "/" + snapshot.providerTotal,
+        "Skills: " + snapshot.skillsEnabled,
+        "Integrations: " + snapshot.connectedAccounts,
+        "Evidence: " + snapshot.evidenceCount,
+        "Autopilot: " + (snapshot.autopilotRunning ? "on" : "off")
+      ].join(" • ");
+      copyText(text, "Hazırlık durumu kopyalandı");
+    });
+  }
+  var readinessOpenTraceBtn = $("#readiness-open-trace");
+  if (readinessOpenTraceBtn) {
+    readinessOpenTraceBtn.addEventListener("click", function () {
+      var taskId = currentTraceTaskId();
+      if (taskId) {
+        window.open("/trace/" + encodeURIComponent(taskId), "_blank", "noopener");
+        return;
+      }
+      activateTab("trace");
+      toast("Önce bir trace seçin", "info");
+    });
+  }
   activateTab(activeTab);
 
   var integrationProviderSelect = $("#integration-provider");
