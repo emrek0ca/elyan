@@ -64,12 +64,12 @@ Minimum yapılandırma:
   },
   "models": {
     "default": "groq",
-    "groq_api_key": "gsk_xxx"
+    "groq_api_key": "YOUR_GROQ_API_KEY"
   },
   "channels": [
     {
       "type": "telegram",
-      "token": "YOUR_BOT_TOKEN",
+      "token": "YOUR_TELEGRAM_BOT_TOKEN",
       "enabled": true
     }
   ]
@@ -140,7 +140,7 @@ HTTPS hazır olduğunda polling yerine webhook kullanabilirsiniz:
 
 ```bash
 # Webhook kur
-curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://yourdomain.com/telegram/webhook"
+curl "https://api.telegram.org/botYOUR_TELEGRAM_BOT_TOKEN/setWebhook?url=https://yourdomain.com/telegram/webhook"
 ```
 
 ## Doğrulama

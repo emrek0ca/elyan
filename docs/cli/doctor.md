@@ -127,7 +127,7 @@ elyan gateway start --port 8766
 ### "API anahtarı bulunamadı"
 
 ```bash
-elyan models add --provider groq --key gsk_xxx
+elyan models add --provider groq --key YOUR_GROQ_API_KEY
 ```
 
 ### "Bağımlılık eksik"

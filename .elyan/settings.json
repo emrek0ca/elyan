@@ -46,7 +46,7 @@
   "assistant_expertise": "advanced",
   "ollama_host": "http://localhost:11434",
   "api_key": "",
-  "telegram_token": "8558313632:AAG6g6ueUCkWeIeec0NUKvsjbXRj5E8OAJ0",
+  "telegram_token": "YOUR_TELEGRAM_BOT_TOKEN",
   "allowed_user_ids": [],
   "photo_save_dir": "~/Desktop/TelegramInbox/Photos",
   "document_save_dir": "~/Desktop/TelegramInbox/Files",

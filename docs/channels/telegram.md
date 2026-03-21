@@ -12,7 +12,7 @@ Elyan, Telegram Bot API üzerinden mesaj alıp gönderebilir.
 1. Telegram'da `@BotFather` ile sohbet başlatın
 2. `/newbot` komutunu gönderin
 3. Bot adı ve kullanıcı adı belirleyin
-4. Token'ı kopyalayın: `1234567890:AAF...`
+4. Token'ı kopyalayın: `YOUR_TELEGRAM_BOT_TOKEN`
 
 ## Kurulum
 
@@ -28,7 +28,7 @@ Veya `~/.elyan/config.json5` dosyasına manuel ekleyin:
   "channels": [
     {
       "type": "telegram",
-      "token": "1234567890:AAFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "token": "YOUR_TELEGRAM_BOT_TOKEN",
       "allowed_users": [],    // Boş = herkese açık
       "enabled": true
     }

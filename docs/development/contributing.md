@@ -147,7 +147,7 @@ feat(adapters): add Google Chat Bot mode with Pub/Sub support
 
 ```bash
 export ELYAN_ENV=development
-export GROQ_API_KEY=gsk_xxx        # Test için
+export GROQ_API_KEY=YOUR_GROQ_API_KEY        # Test için
 export PYTHONPATH=/path/to/elyan
 ```
 
@@ -155,8 +155,8 @@ export PYTHONPATH=/path/to/elyan
 
 ```env
 ELYAN_ENV=development
-GROQ_API_KEY=gsk_xxx
-GEMINI_API_KEY=AIza_xxx
+GROQ_API_KEY=YOUR_GROQ_API_KEY
+GEMINI_API_KEY=YOUR_GOOGLE_API_KEY
 ```
 
 ## Mimari Kararlar

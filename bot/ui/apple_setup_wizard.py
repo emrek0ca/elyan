@@ -938,7 +938,7 @@ class AppleSetupWizard(QDialog):
         if provider == "openai":
             format_ok = api_key.startswith("sk-")
         elif provider == "groq":
-            format_ok = api_key.startswith("gsk_")
+            format_ok = len(api_key) >= 20
         elif provider == "gemini":
             format_ok = len(api_key) >= 20
 

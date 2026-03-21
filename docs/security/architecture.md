@@ -104,7 +104,7 @@ API anahtarları ve hassas veriler:
 
 ```bash
 # Keychain'e anahtar ekle
-elyan models add --provider groq --key gsk_xxx
+elyan models add --provider groq --key YOUR_GROQ_API_KEY
 
 # Doğrulama
 elyan config show --masked  # Değerler maskelenir

@@ -11,6 +11,7 @@ import socket
 import time
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 project_root = Path(__file__).parent.resolve()
 if str(project_root) not in sys.path:
@@ -19,6 +20,8 @@ if str(project_root) not in sys.path:
 from core.dependencies.autoinstall_hook import activate as _activate_autoinstall_hook
 
 _activate_autoinstall_hook()
+
+from cli.commands.bootstrap import handle_bootstrap
 
 try:
     import click
@@ -160,7 +163,18 @@ def cli(ctx):
     if ctx.invoked_subcommand is None:
         # İlk kez çalıştırılıyorsa setup'a yönlendir
         if not CFG_FILE.exists():
-            ctx.invoke(setup)
+            handle_bootstrap(
+                SimpleNamespace(
+                    action="onboard",
+                    headless=True,
+                    channel=None,
+                    install_daemon=False,
+                    force=False,
+                    bundle=None,
+                    output=None,
+                    json=False,
+                )
+            )
         else:
             _banner()
             cfg = _cfg()
@@ -288,7 +302,7 @@ def setup():
                 os.environ[env_key] = key
                 _ok("API key kaydedildi")
             else:
-                _warn(f"Atlandı. Sonra: export {env_key}=sk-xxx")
+                _warn(f"Atlandı. Sonra: export {env_key}=YOUR_API_KEY")
     else:
         _step(4, "Yerel Model — API key gerekmez")
         if not local_models:

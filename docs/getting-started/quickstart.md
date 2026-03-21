@@ -19,7 +19,7 @@ En az bir LLM sağlayıcısı gereklidir. Ücretsiz seçenekler:
 
 ```bash
 elyan config set models.default.provider groq
-elyan config set models.default.api_key "gsk_..."
+elyan config set models.default.api_key "YOUR_GROQ_API_KEY"
 ```
 
 ### 3. Telegram Botu (isteğe bağlı)
@@ -28,7 +28,7 @@ elyan config set models.default.api_key "gsk_..."
 2. Token'ı kaydedin:
 
 ```bash
-elyan config set channels.telegram.token "1234567890:AAF..."
+elyan config set channels.telegram.token "YOUR_TELEGRAM_BOT_TOKEN"
 ```
 
 ### 4. Gateway Başlatma

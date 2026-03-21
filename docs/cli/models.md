@@ -52,8 +52,8 @@ elyan models use ollama
 Yeni sağlayıcı/API anahtarı ekler.
 
 ```bash
-elyan models add --provider groq --key gsk_xxxxxxxxxxxx
-elyan models add --provider gemini --key AIzaxxxxxxxxxxxxxxxx
+elyan models add --provider groq --key YOUR_GROQ_API_KEY
+elyan models add --provider gemini --key YOUR_GOOGLE_API_KEY
 ```
 
 API anahtarı güvenli keychain deposuna kaydedilir.
@@ -112,7 +112,7 @@ API anahtarları macOS Keychain (veya Linux Secret Service) içinde güvenli ola
 
 ```bash
 # Ekle
-elyan models add --provider groq --key gsk_xxx
+elyan models add --provider groq --key YOUR_GROQ_API_KEY
 
 # Kaldır
 elyan config unset groq_api_key
@@ -121,8 +121,8 @@ elyan config unset groq_api_key
 Ortam değişkeni alternatifi:
 
 ```bash
-export GROQ_API_KEY=gsk_xxx
-export GEMINI_API_KEY=AIza_xxx
+export GROQ_API_KEY=YOUR_GROQ_API_KEY
+export GEMINI_API_KEY=YOUR_GOOGLE_API_KEY
 ```
 
 ## Ollama — Yerel Kurulum

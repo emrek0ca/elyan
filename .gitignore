@@ -51,6 +51,8 @@ htmlcov/
 # Project specific
 .elyan_audit/
 .cursor/
+site/
+.elyan/settings.json
 *.db
 *.sqlite
 node_modules/

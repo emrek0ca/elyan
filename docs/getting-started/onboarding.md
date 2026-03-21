@@ -39,7 +39,7 @@ Groq seçilirse API anahtarı sorulur:
 
 ```
 Groq API anahtarı (https://console.groq.com'dan ücretsiz alın):
-> gsk_xxxxxxxxxxxxx
+> YOUR_GROQ_API_KEY
 
 ✅ Groq API bağlantısı test edildi. Yanıt süresi: 342ms
 ```
@@ -68,7 +68,7 @@ Seçilen kanal(lar) için token/credentials sorulur. Örnek Telegram için:
 Telegram Bot Token:
 (BotFather: /newbot → token kopyalayın)
 
-> 1234567890:AAFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+> YOUR_TELEGRAM_BOT_TOKEN
 
 ✅ Telegram bağlantısı test edildi. Bot adı: @ElyanBot
 ```
@@ -138,12 +138,12 @@ Onboarding tamamlandıktan sonra `~/.elyan/elyan.json` oluşturulur:
   "version": "18.0",
   "models": {
     "default": "groq",
-    "groq_api_key": "gsk_xxx"   // Keychain'de saklanır
+    "groq_api_key": "YOUR_GROQ_API_KEY"   // Keychain'de saklanır
   },
   "channels": [
     {
       "type": "telegram",
-      "token": "1234...",
+      "token": "YOUR_TELEGRAM_BOT_TOKEN",
       "enabled": true
     }
   ],
@@ -171,8 +171,8 @@ Mevcut yapılandırma üzerine yazar (onay sorulur).
 CI/CD veya Docker ortamlarında:
 
 ```bash
-GROQ_API_KEY=gsk_xxx \
-TELEGRAM_TOKEN=1234... \
+GROQ_API_KEY=YOUR_GROQ_API_KEY \
+TELEGRAM_TOKEN=YOUR_TELEGRAM_BOT_TOKEN \
 elyan onboard --headless
 ```
 

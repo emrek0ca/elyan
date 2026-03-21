@@ -7,8 +7,8 @@ docker run -d \
   --name elyan \
   --restart unless-stopped \
   -p 18789:18789 \
-  -e TELEGRAM_BOT_TOKEN="your_token" \
-  -e GROQ_API_KEY="your_key" \
+  -e TELEGRAM_BOT_TOKEN="YOUR_TELEGRAM_BOT_TOKEN" \
+  -e GROQ_API_KEY="YOUR_GROQ_API_KEY" \
   -v ~/.elyan:/home/elyan/.elyan \
   ghcr.io/your-org/elyan:latest
 ```
@@ -46,8 +46,8 @@ volumes:
 
 `.env` dosyası:
 ```
-TELEGRAM_BOT_TOKEN=1234567890:AAF...
-GROQ_API_KEY=gsk_...
+TELEGRAM_BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN
+GROQ_API_KEY=YOUR_GROQ_API_KEY
 ```
 
 Başlat:
