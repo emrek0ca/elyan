@@ -86,6 +86,7 @@ fi
 
 cd "$PROJECT_DIR"
 export ELYAN_PROJECT_DIR="$PROJECT_DIR"
+WORKSPACE="$PROJECT_DIR"
 
 echo ""
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -201,7 +202,11 @@ fi
 export PATH="$HOME/.local/bin:$PATH"
 
 log "Creating workspace bootstrap files"
-.venv/bin/python3 -m elyan.bootstrap init --workspace "$PROJECT_DIR" --role operator >/dev/null
+if [[ "$HEADLESS" == "1" || "$NO_UI" == "1" ]]; then
+  .venv/bin/python3 -m elyan.bootstrap init --workspace "$WORKSPACE" --role operator --headless >/dev/null
+else
+  .venv/bin/python3 -m elyan.bootstrap init --workspace "$WORKSPACE" --role operator --open-dashboard >/dev/null
+fi
 ok "Workspace files created"
 
 log "Running onboarding"
