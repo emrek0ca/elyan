@@ -42,6 +42,7 @@ from core.runtime import (
     load_latest_benchmark_summary,
     run_emre_workflow_preset,
 )
+from core.project_packs import build_pack_overview, normalize_pack
 from core.confidence import coerce_confidence
 from core.mission_control import get_mission_runtime
 from core.storage_paths import resolve_elyan_data_dir, resolve_runs_root
@@ -872,6 +873,8 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/missions', self.handle_missions_list)
         self.app.router.add_post('/api/missions', self.handle_missions_create)
         self.app.router.add_get('/api/missions/{mission_id}', self.handle_mission_detail)
+        self.app.router.add_get('/api/packs', self.handle_packs_overview)
+        self.app.router.add_get('/api/packs/{pack}', self.handle_pack_detail)
         self.app.router.add_get('/api/trace/{task_id}', self.handle_trace_api)
         self.app.router.add_get('/api/memory/stats', self.handle_memory_stats)
         self.app.router.add_get('/api/memory/profile', self.handle_get_profile)
@@ -2966,6 +2969,20 @@ class ElyanGatewayServer:
     async def handle_missions_memory(self, request):
         user_id = str(request.query.get("user_id", "local") or "local").strip()
         return web.json_response(self._mission_store().memory_snapshot(user_id=user_id))
+
+    async def handle_packs_overview(self, request):
+        pack = normalize_pack(str(request.query.get("pack", "") or "all"))
+        path = str(request.query.get("path", "") or "").strip()
+        payload = await build_pack_overview(pack=pack, path=path)
+        return web.json_response({"ok": True, **payload})
+
+    async def handle_pack_detail(self, request):
+        pack = normalize_pack(str(request.match_info.get("pack", "") or ""))
+        path = str(request.query.get("path", "") or "").strip()
+        payload = await build_pack_overview(pack=pack, path=path)
+        if not payload.get("packs"):
+            return web.json_response({"ok": False, "error": f"pack not found: {pack}"}, status=404)
+        return web.json_response({"ok": True, **payload, "pack": pack})
 
     # ── Memory stats (new) ────────────────────────────────────────────────────
     async def handle_memory_stats(self, request):

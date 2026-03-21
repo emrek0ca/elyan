@@ -14,6 +14,7 @@ from core.scheduler.heartbeat import HeartbeatManager
 from core.scheduler.routine_engine import routine_engine
 from core.skills.manager import skill_manager
 from core.tool_usage import get_tool_usage_snapshot
+from core.project_packs import build_pack_overview, normalize_pack
 from config.elyan_config import elyan_config
 from security.tool_policy import tool_policy
 from security.keychain import KeychainManager
@@ -276,6 +277,8 @@ class ElyanGatewayServer:
 
         # ── Dashboard API (new) ───────────────────────────────────────────────
         self.app.router.add_get('/api/analytics', self.handle_analytics)
+        self.app.router.add_get('/api/packs', self.handle_packs_overview)
+        self.app.router.add_get('/api/packs/{pack}', self.handle_pack_detail)
         self.app.router.add_get('/api/tasks', self.handle_tasks)
         self.app.router.add_post('/api/tasks', self.handle_create_task)
         self.app.router.add_get('/api/memory/stats', self.handle_memory_stats)
@@ -302,6 +305,12 @@ class ElyanGatewayServer:
         self.app.router.add_post('/api/skills/remove', self.handle_skill_remove)
         self.app.router.add_post('/api/skills/update', self.handle_skill_update)
         self.app.router.add_get('/api/skills/check', self.handle_skill_check)
+        self.app.router.add_get('/api/integrations/accounts', self.handle_integrations_accounts)
+        self.app.router.add_post('/api/integrations/connect', self.handle_integrations_connect)
+        self.app.router.add_post('/api/integrations/accounts/connect', self.handle_integrations_account_connect)
+        self.app.router.add_post('/api/integrations/accounts/revoke', self.handle_integrations_account_revoke)
+        self.app.router.add_get('/api/integrations/traces', self.handle_integration_traces)
+        self.app.router.add_get('/api/integrations/summary', self.handle_integration_summary)
 
         # ── Dashboard & Web UI ────────────────────────────────────────────────
         self.app.router.add_get('/', self.handle_dashboard_page)
@@ -613,6 +622,211 @@ class ElyanGatewayServer:
             **_get_runtime_model_info(),
         })
 
+    async def handle_integrations_accounts(self, request):
+        from integrations import oauth_broker
+
+        provider = str(request.rel_url.query.get("provider", "") or "").strip().lower()
+        accounts = [item.public_dump() for item in oauth_broker.list_accounts(provider or None)]
+        counts: dict[str, int] = {}
+        for item in accounts:
+            state = str(item.get("status") or "unknown").strip().lower()
+            counts[state] = int(counts.get(state, 0)) + 1
+        return web.json_response({
+            "ok": True,
+            "provider": provider,
+            "accounts": accounts,
+            "total": len(accounts),
+            "counts": counts,
+        })
+
+    async def handle_integrations_connect(self, request):
+        return await self.handle_integrations_account_connect(request)
+
+    async def handle_integrations_account_connect(self, request):
+        from integrations import connector_factory, integration_registry, oauth_broker
+        from core.integration_trace import get_integration_trace_store
+
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        app_name = str(data.get("app_name") or data.get("intent") or data.get("application") or "").strip()
+        provider = str(data.get("provider", "") or "").strip().lower()
+        scopes = data.get("scopes", [])
+        if isinstance(scopes, str):
+            scopes = [item.strip() for item in scopes.split(",") if item.strip()]
+        if not isinstance(scopes, list):
+            scopes = []
+        mode = str(data.get("mode") or "auto")
+        alias_input = str(data.get("account_alias") or "").strip()
+        redirect_uri = str(data.get("redirect_uri") or "").strip() or "http://localhost:8765/callback"
+        plan = integration_registry.resolve_connection_plan(
+            app_name=app_name,
+            provider=provider,
+            scopes=scopes,
+            mode=mode,
+            account_alias=alias_input or "default",
+            extra={
+                "display_name": str(data.get("display_name") or "").strip(),
+                "email": str(data.get("email") or "").strip(),
+            },
+        )
+        provider = str(plan.get("provider") or provider or "").strip().lower()
+        if not provider:
+            return web.json_response({"ok": False, "error": "provider required"}, status=400)
+        scopes = list(plan.get("required_scopes") or scopes or [])
+        account_alias = alias_input or str(plan.get("account_alias") or "default").strip() or "default"
+        trace_store = get_integration_trace_store()
+        trace_store.record_trace(
+            operation="integration_connect_requested",
+            provider=provider,
+            connector_name=str(plan.get("connector_name") or provider or "connector"),
+            integration_type=str((plan.get("integration_type").value if hasattr(plan.get("integration_type"), "value") else plan.get("integration_type")) or ""),
+            status="requested",
+            success=False,
+            auth_state="pending",
+            account_alias=account_alias,
+            metadata={
+                "app_name": app_name,
+                "resolved_from": dict(plan.get("resolved_from") or {}),
+                "resolved_scopes": list(scopes),
+                "mode": mode,
+            },
+        )
+        account = oauth_broker.authorize(
+            provider,
+            scopes,
+            mode=mode,
+            account_alias=account_alias,
+            authorization_code=str(data.get("authorization_code") or ""),
+            redirect_uri=redirect_uri,
+            extra={
+                "display_name": str(data.get("display_name") or "").strip(),
+                "email": str(data.get("email") or "").strip(),
+                "app_name": app_name,
+                "resolved_provider": provider,
+            },
+        )
+        connector_result = None
+        if account.is_ready:
+            try:
+                capability = plan.get("capability")
+                connector = connector_factory.get(
+                    getattr(plan.get("integration_type"), "value", plan.get("integration_type") or "unknown"),
+                    auth_state={
+                        "capability": capability.model_dump() if hasattr(capability, "model_dump") else dict(capability or {}),
+                        "auth_account": account.model_dump() if hasattr(account, "model_dump") else account.public_dump(),
+                        "provider": provider,
+                        "connector_name": str(plan.get("connector_name") or provider or "connector"),
+                    },
+                )
+                connect_target = app_name or provider or str(plan.get("connector_name") or "integration")
+                connector_result = await connector.connect(connect_target, mode=mode)
+            except Exception as exc:
+                connector_result = {"success": False, "status": "failed", "error": str(exc), "message": str(exc)}
+        connector_success = True
+        connector_fallback_used = False
+        connector_fallback_reason = ""
+        if isinstance(connector_result, dict):
+            connector_success = bool(connector_result.get("success", False))
+            connector_fallback_used = bool(connector_result.get("fallback_used", False))
+            connector_fallback_reason = str(connector_result.get("fallback_reason") or "")
+        elif connector_result is not None:
+            connector_success = bool(getattr(connector_result, "success", False))
+            connector_fallback_used = bool(getattr(connector_result, "fallback_used", False))
+            connector_fallback_reason = str(getattr(connector_result, "fallback_reason", "") or "")
+        account_needs_input = str(getattr(account, "status", "") or "").strip().lower() == "needs_input"
+        account_fallback_mode = str(getattr(account.fallback_mode, "value", account.fallback_mode) or "")
+        push_activity(
+            "integration_connect",
+            "dashboard",
+            f"{provider}:{account.account_alias}:{account.status}",
+            success=bool(account.is_ready and connector_success),
+        )
+        payload = {
+            "ok": True,
+            "resolved_app_name": plan.get("app_name") or app_name or provider,
+            "resolved_provider": provider,
+            "resolved_scopes": scopes,
+            "resolved_account_alias": account_alias,
+            "account": account.public_dump(),
+            "needs_input": bool(account_needs_input),
+            "auth_url": account.auth_url,
+            "launch_url": account.auth_url if account.auth_url else "",
+            "fallback_mode": account_fallback_mode,
+            "connect_result": connector_result.model_dump() if hasattr(connector_result, "model_dump") else (dict(connector_result) if isinstance(connector_result, dict) else {}),
+        }
+        trace_store.record_trace(
+            operation="integration_connect_result",
+            provider=provider,
+            connector_name=str(plan.get("connector_name") or provider or "connector"),
+            integration_type=str((plan.get("integration_type").value if hasattr(plan.get("integration_type"), "value") else plan.get("integration_type")) or ""),
+            status=str((payload.get("connect_result") or {}).get("status") or account.status),
+            success=bool(account.is_ready and connector_success),
+            auth_state=str(account.status),
+            auth_strategy=str(plan.get("auth_strategy") or ""),
+            account_alias=account.account_alias,
+            fallback_used=bool(connector_fallback_used or account_needs_input),
+            fallback_reason=str(connector_fallback_reason or (account_fallback_mode if account_needs_input else "") or ""),
+            metadata={
+                "app_name": app_name,
+                "resolved_app_name": payload["resolved_app_name"],
+                "resolved_provider": provider,
+                "resolved_scopes": scopes,
+                "launch_url": payload["launch_url"],
+                "connect_result": payload.get("connect_result") or {},
+            },
+        )
+        return web.json_response(payload)
+
+    async def handle_integrations_account_revoke(self, request):
+        from integrations import oauth_broker
+
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        provider = str(data.get("provider", "") or "").strip().lower()
+        alias = str(data.get("account_alias") or "default").strip() or "default"
+        ok = oauth_broker.delete_account(provider, alias)
+        return web.json_response({"ok": ok, "provider": provider, "account_alias": alias})
+
+    async def handle_integration_traces(self, request):
+        from core.integration_trace import get_integration_trace_store
+
+        store = get_integration_trace_store()
+        query = request.rel_url.query
+        try:
+            limit = int(query.get("limit", 50) or 50)
+        except Exception:
+            limit = 50
+        traces = store.list_traces(
+            limit=limit,
+            provider=str(query.get("provider", "") or "").strip().lower(),
+            user_id=str(query.get("user_id", "") or "").strip(),
+            operation=str(query.get("operation", "") or "").strip().lower(),
+            connector_name=str(query.get("connector_name", "") or "").strip().lower(),
+            integration_type=str(query.get("integration_type", "") or "").strip().lower(),
+        )
+        return web.json_response({"ok": True, "total": len(traces), "summary": store.summary(limit=limit), "traces": traces})
+
+    async def handle_integration_summary(self, request):
+        from core.integration_trace import get_integration_trace_store
+        from integrations import oauth_broker
+
+        provider = str(request.rel_url.query.get("provider", "") or "").strip().lower()
+        store = get_integration_trace_store()
+        accounts = [item.public_dump() for item in oauth_broker.list_accounts(provider or None)]
+        counts: dict[str, int] = {}
+        for item in accounts:
+            state = str(item.get("status") or "unknown").strip().lower()
+            counts[state] = int(counts.get(state, 0)) + 1
+        return web.json_response({
+            "ok": True,
+            "accounts": {"total": len(accounts), "counts": counts, "provider": provider, "items": accounts[:20]},
+            "traces": store.summary(limit=200),
+        })
+
     # ── Analytics (new) ───────────────────────────────────────────────────────
     async def handle_analytics(self, request):
         """Aggregate analytics for dashboard overview cards."""
@@ -764,6 +978,20 @@ class ElyanGatewayServer:
     # ── Activity log (new) ────────────────────────────────────────────────────
     async def handle_activity_log(self, request):
         return web.json_response({"events": list(reversed(_activity_log))})
+
+    async def handle_packs_overview(self, request):
+        pack = normalize_pack(str(request.query.get("pack", "") or "all"))
+        path = str(request.query.get("path", "") or "").strip()
+        payload = await build_pack_overview(pack=pack, path=path)
+        return web.json_response({"ok": True, **payload})
+
+    async def handle_pack_detail(self, request):
+        pack = normalize_pack(str(request.match_info.get("pack", "") or ""))
+        path = str(request.query.get("path", "") or "").strip()
+        payload = await build_pack_overview(pack=pack, path=path)
+        if not payload.get("packs"):
+            return web.json_response({"ok": False, "error": f"pack not found: {pack}"}, status=404)
+        return web.json_response({"ok": True, **payload, "pack": pack})
 
     # ── Routine automation (new) ────────────────────────────────────────────
     @staticmethod

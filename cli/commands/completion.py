@@ -15,7 +15,7 @@ _elyan_completion() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    local commands="chat doctor health logs status routines config gateway channels skills security models cron memory webhooks agents browser voice message service dashboard onboard setup update version completion subscription quota"
+    local commands="chat doctor health logs status routines config gateway channels skills security models cron memory webhooks agents browser voice message service dashboard lean packs quivr cloudflare-agents opengauss onboard setup update version completion subscription quota"
 
     case "$prev" in
         elyan)
@@ -63,6 +63,25 @@ _elyan_completion() {
         browser)
             COMPREPLY=($(compgen -W "snapshot screenshot navigate click type extract scroll back forward refresh close profiles list-profiles clear-profile" -- "$cur"))
             return ;;
+        lean)
+            COMPREPLY=($(compgen -W "status project prove draft autoprove formalize autoformalize swarm" -- "$cur"))
+            return ;;
+        packs)
+            if [[ $COMP_CWORD -le 2 ]]; then
+                COMPREPLY=($(compgen -W "list status project scaffold workflow bundle ask query" -- "$cur"))
+            else
+                COMPREPLY=($(compgen -W "quivr cloudflare-agents opengauss all" -- "$cur"))
+            fi
+            return ;;
+        quivr)
+            COMPREPLY=($(compgen -W "status project scaffold ask bundle workflow --include-samples --no-include-samples" -- "$cur"))
+            return ;;
+        cloudflare-agents)
+            COMPREPLY=($(compgen -W "status project scaffold workflow bundle --include-chat --no-include-chat --include-workflows --no-include-workflows --include-mcp --no-include-mcp" -- "$cur"))
+            return ;;
+        opengauss)
+            COMPREPLY=($(compgen -W "status project scaffold query workflow bundle --include-samples --no-include-samples" -- "$cur"))
+            return ;;
         subscription)
             COMPREPLY=($(compgen -W "status set list-tiers" -- "$cur"))
             return ;;
@@ -105,6 +124,11 @@ _elyan() {
     'webhooks:Webhook yönetimi'
     'agents:Agent yönetimi'
     'browser:Tarayıcı otomasyonu'
+    'lean:Lean 4 formalizasyon'
+    'packs:Pack discovery ve dispatcher'
+    'quivr:Second-brain projeleri'
+    'cloudflare-agents:Cloudflare Agents projeleri'
+    'opengauss:OpenGauss veritabanı projeleri'
     'voice:Ses komutları'
     'message:Mesaj gönder'
     'service:Sistem servisi'
@@ -132,12 +156,17 @@ _elyan() {
         models) _values 'eylem' list status test use set-default set-fallback cost ollama ;;
         cron) _values 'eylem' list status add rm enable disable run history next ;;
         security) _values 'eylem' audit status events sandbox ;;
-        skills) _values 'eylem' list info install enable disable update remove search check ;;
+        skills) _values 'eylem' list info install enable disable update edit remove search check ;;
         config) _values 'eylem' show get set unset validate reset export import edit ;;
         memory) _values 'eylem' status index search export import clear stats ;;
         webhooks) _values 'eylem' list add remove test logs ;;
         agents) _values 'eylem' list status add remove start stop logs info create ;;
         browser) _values 'eylem' snapshot screenshot navigate click type extract scroll back forward refresh close profiles list-profiles clear-profile ;;
+        lean) _values 'eylem' status project prove draft autoprove formalize autoformalize swarm ;;
+        packs) _values 'eylem' list status project scaffold workflow bundle ask query quivr cloudflare-agents opengauss all ;;
+        quivr) _values 'eylem' status project scaffold ask bundle workflow --include-samples --no-include-samples ;;
+        cloudflare-agents) _values 'eylem' status project scaffold workflow bundle --include-chat --no-include-chat --include-workflows --no-include-workflows --include-mcp --no-include-mcp ;;
+        opengauss) _values 'eylem' status project scaffold query workflow bundle --include-samples --no-include-samples ;;
         voice) _values 'eylem' start stop status test transcribe speak set-wake-word set-tts set-stt listen ;;
         subscription) _values 'eylem' status set list-tiers ;;
         quota) _values 'eylem' status check ;;
@@ -155,7 +184,7 @@ fi
 _FISH_SCRIPT = '''# Elyan CLI — Fish completion
 # Kopyala: ~/.config/fish/completions/elyan.fish
 
-set -l elyan_commands chat doctor health logs status routines config gateway channels skills security models cron memory webhooks agents browser voice message service dashboard onboard setup update version completion subscription quota
+set -l elyan_commands chat doctor health logs status routines config gateway channels skills security models cron memory webhooks agents browser lean packs quivr cloudflare-agents opengauss voice message service dashboard onboard setup update version completion subscription quota
 
 complete -c elyan -f -n __fish_use_subcommand -a "$elyan_commands"
 complete -c elyan -n "__fish_seen_subcommand_from gateway" -a "start stop status restart logs reload health"
@@ -164,10 +193,15 @@ complete -c elyan -n "__fish_seen_subcommand_from channels" -a "list status add 
 complete -c elyan -n "__fish_seen_subcommand_from models" -a "list status test use set-default set-fallback cost ollama"
 complete -c elyan -n "__fish_seen_subcommand_from cron" -a "list status add rm enable disable run history next"
 complete -c elyan -n "__fish_seen_subcommand_from security" -a "audit status events sandbox"
-complete -c elyan -n "__fish_seen_subcommand_from skills" -a "list info install enable disable update remove search check"
+complete -c elyan -n "__fish_seen_subcommand_from skills" -a "list info install enable disable update edit remove search check"
 complete -c elyan -n "__fish_seen_subcommand_from memory" -a "status index search export import clear stats"
 complete -c elyan -n "__fish_seen_subcommand_from config" -a "show get set unset validate reset export import edit"
-'''
+complete -c elyan -n "__fish_seen_subcommand_from lean" -a "status project prove draft autoprove formalize autoformalize swarm"
+complete -c elyan -n "__fish_seen_subcommand_from packs" -a "list status project scaffold workflow bundle ask query quivr cloudflare-agents opengauss all"
+complete -c elyan -n "__fish_seen_subcommand_from quivr" -a "status project scaffold ask bundle workflow --include-samples --no-include-samples"
+complete -c elyan -n "__fish_seen_subcommand_from cloudflare-agents" -a "status project scaffold workflow bundle --include-chat --no-include-chat --include-workflows --no-include-workflows --include-mcp --no-include-mcp"
+complete -c elyan -n "__fish_seen_subcommand_from opengauss" -a "status project scaffold query workflow bundle --include-samples --no-include-samples"
+''' 
 
 
 def handle_completion(args):

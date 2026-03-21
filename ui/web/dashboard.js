@@ -62,6 +62,10 @@ document.addEventListener("DOMContentLoaded", function () {
     predictive: {},
     automation: {}
   };
+  var packState = {
+    packs: [],
+    lastLoadedAt: 0
+  };
   var initialMissionId = "";
   var initialTraceId = "";
   try {
@@ -89,6 +93,38 @@ document.addEventListener("DOMContentLoaded", function () {
   var activeTab = initialTraceId ? "trace" : "mission";
   var REQUEST_TIMEOUT = { timeoutMs: 130000 };
   var timeoutMs = 130000;
+  var PACK_ACTIONS = {
+    quivr: {
+      scaffold: {
+        mode: "Sprint",
+        prompt: "Quivr icin second-brain scaffold olustur: Brain.from_files, RetrievalConfig.from_yaml, grounded Q&A ve sample docs hazirla."
+      },
+      workflow: {
+        mode: "Balanced",
+        prompt: "Quivr workspace icin workflow bundle hazirla, grounded cevap zincirini ve teslim akisini toparla."
+      }
+    },
+    "cloudflare-agents": {
+      scaffold: {
+        mode: "Sprint",
+        prompt: "Cloudflare Agents worker app scaffold olustur: routeAgentRequest, useAgent, useAgentChat, workflow notlari ve MCP notlari hazirla."
+      },
+      workflow: {
+        mode: "Balanced",
+        prompt: "Cloudflare Agents icin workflow bundle hazirla, edge agent akisini ve deployment notlarini toparla."
+      }
+    },
+    opengauss: {
+      scaffold: {
+        mode: "Sprint",
+        prompt: "OpenGauss database workspace scaffold olustur: docker compose, schema bootstrap, query script, backup ve restore akislarini hazirla."
+      },
+      query: {
+        mode: "Audit",
+        prompt: "OpenGauss icin guvenli read-only query akisi hazirla ve gerekirse execute ederek kanitla."
+      }
+    }
+  };
 
   function friendlyFailure(error) {
     var low = String(error || "").toLowerCase();
@@ -1376,20 +1412,118 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  function createMission() {
+  function submitMission(goal, mode, opts) {
+    var resolvedGoal = String(goal || "").trim();
+    if (!resolvedGoal) {
+      toast("Mission hedefi bos olamaz", "err");
+      return Promise.resolve({ ok: false });
+    }
     var input = $("#mission-input");
-    var modeEl = $("#mission-mode");
-    var goal = input ? input.value.trim() : "";
-    if (!goal) { toast("Mission hedefi bos olamaz", "err"); return; }
-    POST("/api/missions", { goal: goal, mode: (modeEl && modeEl.value) || "Balanced", user_id: "local", channel: "dashboard" }).then(function (res) {
+    if (input && !opts) {
+      input.value = resolvedGoal;
+    }
+    return POST("/api/missions", { goal: resolvedGoal, mode: String(mode || "Balanced"), user_id: "local", channel: "dashboard" }).then(function (res) {
       if (res && res.ok && res.mission) {
         missionState.selectedMissionId = res.mission.mission_id;
         toast("Mission baslatildi", "ok");
+        if (!opts || opts.clearInput !== false) {
+          if (input) input.value = "";
+        }
         loadMissionControl();
       } else {
         toast(friendlyFailure((res || {}).error || "mission_create_failed"), "err");
       }
+      return res;
     });
+  }
+
+  function createMission() {
+    var input = $("#mission-input");
+    var modeEl = $("#mission-mode");
+    var goal = input ? input.value.trim() : "";
+    return submitMission(goal, (modeEl && modeEl.value) || "Balanced");
+  }
+
+  function launchPackMission(pack, action) {
+    var normalizedPack = String(pack || "").trim().toLowerCase();
+    var normalizedAction = String(action || "").trim().toLowerCase();
+    var packSpec = PACK_ACTIONS[normalizedPack];
+    if (!packSpec || !packSpec[normalizedAction]) {
+      toast("Pack aksiyonu bulunamadi", "err");
+      return Promise.resolve({ ok: false });
+    }
+    var spec = packSpec[normalizedAction];
+    var input = $("#mission-input");
+    if (input) input.value = spec.prompt;
+    return submitMission(spec.prompt, spec.mode, { clearInput: false });
+  }
+
+  function packDomId(pack, suffix) {
+    return "pack-" + String(pack || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") + "-" + String(suffix || "").trim();
+  }
+
+  function packBadgeClass(status) {
+    var low = String(status || "").toLowerCase();
+    if (low === "success" || low === "ready" || low === "ok") return "ok";
+    if (low === "partial" || low === "missing" || low === "warn") return "warn";
+    return "err";
+  }
+
+  function renderPackStatusCard(item) {
+    var pack = String(item && item.pack || "").trim();
+    if (!pack) return;
+    var statusEl = $("#" + packDomId(pack, "status"));
+    var commandEl = $("#" + packDomId(pack, "command"));
+    var rootEl = $("#" + packDomId(pack, "root"));
+    var bundleEl = $("#" + packDomId(pack, "bundle"));
+    var nextEl = $("#" + packDomId(pack, "next"));
+    var featuresEl = $("#" + packDomId(pack, "features"));
+
+    var statusText = String(item.status || (item.success ? "ready" : "missing"));
+    if (statusEl) {
+      statusEl.textContent = statusText;
+      statusEl.className = "pack-status-badge " + packBadgeClass(statusText);
+    }
+    if (commandEl) {
+      commandEl.textContent = String(item.command || item.commands && item.commands.status || "");
+    }
+    if (rootEl) {
+      rootEl.textContent = "root: " + String(item.root || (item.project && item.project.root) || "-");
+    }
+    if (bundleEl) {
+      bundleEl.textContent = "bundle: " + String(item.bundle_id || (item.bundle && (item.bundle.id || item.bundle.workflow_id)) || "-");
+    }
+    if (nextEl) {
+      nextEl.textContent = String(item.next_step || item.message || item.summary || "Live durum yok");
+    }
+    if (featuresEl) {
+      var features = Array.isArray(item.feature_sample) ? item.feature_sample : [];
+      featuresEl.innerHTML = features.length ? features.map(function (feature) {
+        return "<span>" + esc(feature) + "</span>";
+      }).join("") : "";
+    }
+  }
+
+  function applyPackOverview(payload) {
+    var rows = Array.isArray(payload && payload.packs) ? payload.packs : [];
+    packState.packs = rows;
+    packState.lastLoadedAt = Date.now();
+    rows.forEach(renderPackStatusCard);
+    return rows;
+  }
+
+  function loadPackOverview(pack) {
+    var target = String(pack || "all").trim().toLowerCase() || "all";
+    return GET("/api/packs" + (target !== "all" ? "/" + encodeURIComponent(target) : "")).then(function (data) {
+      if (data && data.ok) {
+        applyPackOverview(data);
+      }
+      return data;
+    });
+  }
+
+  function refreshPackOverview(pack) {
+    return loadPackOverview(pack || "all");
   }
 
   function resolveMissionApproval(approvalId, approved) {
@@ -1663,6 +1797,26 @@ document.addEventListener("DOMContentLoaded", function () {
       if (input) input.value = btn.getAttribute("data-prompt") || "";
     });
   });
+  $$(".js-pack-refresh").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      refreshPackOverview(btn.getAttribute("data-pack"));
+    });
+  });
+  $$(".js-pack-mission").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      launchPackMission(btn.getAttribute("data-pack"), btn.getAttribute("data-action"));
+    });
+  });
+  $$(".js-copy-command").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var command = String(btn.getAttribute("data-command") || "").trim();
+      if (!command) {
+        toast("Komut bulunamadı", "err");
+        return;
+      }
+      copyText(command, "Komut kopyalandı");
+    });
+  });
   $$(".js-mission-filter").forEach(function (btn) {
     btn.addEventListener("click", function () {
       missionFilter = String(btn.getAttribute("data-filter") || "all");
@@ -1687,6 +1841,8 @@ document.addEventListener("DOMContentLoaded", function () {
   }
   var traceRefreshBtn = $("#trace-refresh");
   if (traceRefreshBtn) traceRefreshBtn.addEventListener("click", function () { loadTrace(); });
+  var packsRefreshBtn = $("#packs-refresh");
+  if (packsRefreshBtn) packsRefreshBtn.addEventListener("click", function () { refreshPackOverview("all"); });
   var traceOpenBtn = $("#trace-open-full");
   if (traceOpenBtn) traceOpenBtn.addEventListener("click", function () {
     var taskId = currentTraceTaskId();
@@ -2256,7 +2412,7 @@ document.addEventListener("DOMContentLoaded", function () {
      REFRESH & BOOT
      ================================================================ */
   function refreshAll() {
-    return Promise.all([loadMissionControl(), loadProviders(), loadOllama(), loadHealth(), loadSkillCatalog(), loadMarketplace(""), refreshIntegrations(), loadAutopilot()]);
+    return Promise.all([loadMissionControl(), loadPackOverview("all"), loadProviders(), loadOllama(), loadHealth(), loadSkillCatalog(), loadMarketplace(""), refreshIntegrations(), loadAutopilot()]);
   }
 
   var refreshBtn = $("#g-refresh");

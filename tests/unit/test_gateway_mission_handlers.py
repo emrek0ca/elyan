@@ -129,3 +129,46 @@ async def test_handle_create_task_routes_to_mission_runtime(tmp_path, monkeypatc
     assert payload["status"] == "mission_created"
     assert payload["mission"]["goal"] == "Landing page üret"
     assert runtime.list_missions(owner="local", limit=5)[0]["mission_id"] == payload["mission"]["mission_id"]
+
+
+@pytest.mark.asyncio
+async def test_handle_packs_overview_and_detail(monkeypatch):
+    async def fake_overview(pack="all", path=""):
+        return {
+            "success": True,
+            "status": "success",
+            "count": 1,
+            "packs": [
+                {
+                    "pack": pack,
+                    "label": "Quivr",
+                    "summary": "Demo pack",
+                    "status": "ready",
+                    "project": {"name": "Demo", "root": "/tmp/demo"},
+                    "bundle": {"id": "bundle-1"},
+                    "next_step": "Do next",
+                    "command": "elyan packs status quivr",
+                    "feature_sample": ["docker_compose"],
+                }
+            ],
+        }
+
+    monkeypatch.setattr(gateway_server, "build_pack_overview", fake_overview)
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    overview_resp = await gateway_server.ElyanGatewayServer.handle_packs_overview(
+        srv,
+        _Req(query={"pack": "quivr", "path": "/tmp/demo"}),
+    )
+    overview_payload = json.loads(overview_resp.text)
+    assert overview_payload["ok"] is True
+    assert overview_payload["packs"][0]["label"] == "Quivr"
+    assert overview_payload["packs"][0]["bundle"].get("id") == "bundle-1"
+
+    detail_resp = await gateway_server.ElyanGatewayServer.handle_pack_detail(
+        srv,
+        _Req(query={"path": "/tmp/demo"}, match_info={"pack": "quivr"}),
+    )
+    detail_payload = json.loads(detail_resp.text)
+    assert detail_payload["ok"] is True
+    assert detail_payload["pack"] == "quivr"

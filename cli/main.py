@@ -40,6 +40,10 @@ TOP_LEVEL_COMMANDS = [
     "dashboard",
     "autopilot",
     "lean",
+    "packs",
+    "quivr",
+    "cloudflare-agents",
+    "opengauss",
     "onboard",
     "setup",
     "bootstrap",
@@ -52,6 +56,7 @@ TOP_LEVEL_COMMANDS = [
 
 COMMAND_SUGGESTION_OVERRIDES = {
     "desktop": "dashboard",
+    "cloudflare_agents": "cloudflare-agents",
 }
 
 
@@ -66,6 +71,10 @@ SETUP_OPTIONAL_COMMANDS = {
     "status",
     "autopilot",
     "chat",
+    "quivr",
+    "packs",
+    "cloudflare-agents",
+    "opengauss",
 }
 
 
@@ -155,6 +164,10 @@ def _print_cli_home() -> None:
         print("  elyan gateway start --daemon")
     print("  elyan bootstrap status")
     print("  elyan bootstrap onboard")
+    print("  elyan packs list")
+    print("  elyan quivr status")
+    print("  elyan cloudflare-agents status")
+    print("  elyan opengauss status")
     print("  elyan chat")
     print("  elyan doctor")
     print("  elyan status")
@@ -522,6 +535,85 @@ def main(argv: list[str] | None = None):
     p.add_argument("--no-verify", action="store_true")
     p.add_argument("--json", action="store_true")
 
+    # ── packs ──────────────────────────────────────────────────────────
+    p = sub.add_parser("packs", help="Project pack kataloğu ve dispatcher")
+    p.add_argument("action", nargs="?", choices=["list", "status", "project", "scaffold", "workflow", "bundle", "ask", "query"], default="list")
+    p.add_argument("pack", nargs="?", default="all")
+    p.add_argument("text", nargs="*", help="Hedef, soru veya SQL metni")
+    p.add_argument("--path", metavar="PATH", default="")
+    p.add_argument("--name", metavar="NAME", default="")
+    p.add_argument("--backend", default="auto")
+    p.add_argument("--question", metavar="QUESTION", default="")
+    p.add_argument("--retrieval-config", dest="retrieval_config", metavar="PATH", default="")
+    p.add_argument("--file-path", dest="file_paths", action="append", default=[], help="Kaynak dosya yolu")
+    p.add_argument("--include-samples", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--include-chat", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--include-workflows", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--include-mcp", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--image", metavar="IMAGE", default="opengauss/opengauss-server:latest")
+    p.add_argument("--database", metavar="DB", default="appdb")
+    p.add_argument("--user", metavar="USER", default="root")
+    p.add_argument("--password", metavar="PASSWORD", default="OpenGauss@123")
+    p.add_argument("--port", type=int, default=5432)
+    p.add_argument("--force", action="store_true")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--use-llm", action="store_true")
+    p.add_argument("--sql", metavar="SQL", default="")
+    p.add_argument("--execute", action="store_true")
+    p.add_argument("--allow-mutation", action="store_true")
+    p.add_argument("--timeout", type=int, default=30)
+    p.add_argument("--json", action="store_true")
+
+    # ── quivr ───────────────────────────────────────────────────────────
+    p = sub.add_parser("quivr", help="Quivr second-brain orkestrasyonu")
+    p.add_argument("action", nargs="?", choices=["status", "project", "scaffold", "ask", "bundle", "workflow"], default="status")
+    p.add_argument("text", nargs="*", help="Soru veya hedef metni")
+    p.add_argument("--path", metavar="PATH", default="")
+    p.add_argument("--name", metavar="NAME", default="")
+    p.add_argument("--backend", default="auto")
+    p.add_argument("--question", metavar="QUESTION", default="")
+    p.add_argument("--retrieval-config", dest="retrieval_config", metavar="PATH", default="")
+    p.add_argument("--file-path", dest="file_paths", action="append", default=[], help="Kaynak dosya yolu")
+    p.add_argument("--include-samples", action="store_true")
+    p.add_argument("--force", action="store_true")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--use-llm", action="store_true")
+    p.add_argument("--json", action="store_true")
+
+    # ── cloudflare-agents ───────────────────────────────────────────────
+    p = sub.add_parser("cloudflare-agents", help="Cloudflare Agents proje orkestrasyonu")
+    p.add_argument("action", nargs="?", choices=["status", "project", "scaffold", "workflow", "bundle"], default="status")
+    p.add_argument("text", nargs="*", help="Hedef veya proje özeti")
+    p.add_argument("--path", metavar="PATH", default="")
+    p.add_argument("--name", metavar="NAME", default="")
+    p.add_argument("--backend", default="auto")
+    p.add_argument("--include-chat", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--include-workflows", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--include-mcp", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--force", action="store_true")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--json", action="store_true")
+
+    # ── opengauss ───────────────────────────────────────────────────────
+    p = sub.add_parser("opengauss", help="OpenGauss database orkestrasyonu")
+    p.add_argument("action", nargs="?", choices=["status", "project", "scaffold", "query", "workflow", "bundle"], default="status")
+    p.add_argument("text", nargs="*", help="SQL veya hedef metni")
+    p.add_argument("--path", metavar="PATH", default="")
+    p.add_argument("--name", metavar="NAME", default="")
+    p.add_argument("--image", metavar="IMAGE", default="opengauss/opengauss-server:latest")
+    p.add_argument("--database", metavar="DB", default="appdb")
+    p.add_argument("--user", metavar="USER", default="root")
+    p.add_argument("--password", metavar="PASSWORD", default="OpenGauss@123")
+    p.add_argument("--port", type=int, default=5432)
+    p.add_argument("--backend", default="docker")
+    p.add_argument("--force", action="store_true")
+    p.add_argument("--include-samples", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--execute", action="store_true")
+    p.add_argument("--allow-mutation", action="store_true")
+    p.add_argument("--timeout", type=int, default=30)
+    p.add_argument("--json", action="store_true")
+
     # ── onboard ─────────────────────────────────────────────────────────
     p = sub.add_parser("onboard", help="Kurulum sihirbazı")
     _add_onboard_args(p)
@@ -759,6 +851,30 @@ def main(argv: list[str] | None = None):
     elif args.command == "lean":
         from cli.commands import lean
         result = lean.run(args)
+        if isinstance(result, int):
+            return result
+
+    elif args.command == "packs":
+        from cli.commands import packs
+        result = packs.run(args)
+        if isinstance(result, int):
+            return result
+
+    elif args.command == "quivr":
+        from cli.commands import quivr
+        result = quivr.run(args)
+        if isinstance(result, int):
+            return result
+
+    elif args.command == "cloudflare-agents":
+        from cli.commands import cloudflare_agents
+        result = cloudflare_agents.run(args)
+        if isinstance(result, int):
+            return result
+
+    elif args.command == "opengauss":
+        from cli.commands import opengauss
+        result = opengauss.run(args)
         if isinstance(result, int):
             return result
 
