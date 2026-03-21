@@ -40,3 +40,8 @@ def __getattr__(name: str) -> Any:
 
 def __dir__() -> list[str]:
     return sorted(set(globals()) | set(__all__))
+
+
+from ..approval.legacy_adapter import patch_legacy_imports
+
+patch_legacy_imports()

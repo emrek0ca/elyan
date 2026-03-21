@@ -46,7 +46,7 @@ from .operator_policy import get_operator_policy_engine
 from config.settings_manager import SettingsPanel
 from security.validator import validate_input, sanitize_input
 from security.audit import get_audit_logger
-from security.approval import get_approval_manager, RiskLevel
+from elyan.approval.legacy_adapter import get_approval_manager, RiskLevel
 from security.tool_policy import tool_policy
 from security.privacy_guard import redact_text, sanitize_for_storage, sanitize_object, is_external_provider
 from tools import AVAILABLE_TOOLS

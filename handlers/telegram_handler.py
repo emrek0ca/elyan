@@ -3,7 +3,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from core.agent import Agent
 from config.settings import HOME_DIR, LOGS_DIR
 from security.rate_limiter import rate_limiter
-from security.approval import get_approval_manager
+from elyan.approval.legacy_adapter import get_approval_manager
 from security.validator import sanitize_input, validate_input
 from core.error_handler import ErrorHandler
 from core.tool_health import get_tool_health_manager, ToolStatus
