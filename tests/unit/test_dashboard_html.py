@@ -38,9 +38,15 @@ def test_dashboard_html_contains_mission_tools_and_settings_tabs():
     assert 'id="pack-quivr-readiness"' in html
     assert 'id="pack-cloudflare-agents-readiness"' in html
     assert 'id="pack-opengauss-readiness"' in html
+    assert 'id="pack-quivr-score"' in html
+    assert 'id="pack-cloudflare-agents-score"' in html
+    assert 'id="pack-opengauss-score"' in html
     assert 'id="pack-quivr-count"' in html
     assert 'id="pack-cloudflare-agents-count"' in html
     assert 'id="pack-opengauss-count"' in html
+    assert 'id="pack-quivr-missing"' in html
+    assert 'id="pack-cloudflare-agents-missing"' in html
+    assert 'id="pack-opengauss-missing"' in html
     assert 'id="pack-quivr-commands"' in html
     assert 'id="pack-cloudflare-agents-commands"' in html
     assert 'id="pack-opengauss-commands"' in html

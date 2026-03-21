@@ -136,6 +136,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
 .pack-command-rail{display:flex;gap:8px;flex-wrap:wrap}
 .pack-command-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--bd);border-radius:999px;background:#fff;font-size:11px;font-weight:600;color:var(--tx2);cursor:pointer;transition:all .15s ease}
 .pack-command-chip:hover{border-color:var(--blue);color:var(--blue);box-shadow:0 4px 12px rgba(15,23,42,.08)}
+.pack-command-highlight{background:rgba(37,99,235,.08);border-color:rgba(37,99,235,.22);color:var(--blue)}
 .mission-grid{display:grid;grid-template-columns:minmax(280px,1fr) minmax(420px,1.4fr) minmax(280px,.95fr);gap:16px;align-items:start}
 .mission-stack{display:flex;flex-direction:column;gap:12px}
 .mission-list,.mission-timeline,.stack-list,.memory-list{display:flex;flex-direction:column;gap:10px}
@@ -412,7 +413,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
                   <span id="pack-quivr-root">root: -</span>
                   <span id="pack-quivr-bundle">bundle: -</span>
                   <span id="pack-quivr-readiness">readiness: -</span>
+                  <span id="pack-quivr-score">score: -</span>
                   <span id="pack-quivr-count">features: -</span>
+                  <span id="pack-quivr-missing">missing: -</span>
                 </div>
                 <div class="pack-live-note" id="pack-quivr-next">Live durum bekleniyor...</div>
                 <div class="pack-live-features" id="pack-quivr-features"></div>
@@ -439,7 +442,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
                   <span id="pack-cloudflare-agents-root">root: -</span>
                   <span id="pack-cloudflare-agents-bundle">bundle: -</span>
                   <span id="pack-cloudflare-agents-readiness">readiness: -</span>
+                  <span id="pack-cloudflare-agents-score">score: -</span>
                   <span id="pack-cloudflare-agents-count">features: -</span>
+                  <span id="pack-cloudflare-agents-missing">missing: -</span>
                 </div>
                 <div class="pack-live-note" id="pack-cloudflare-agents-next">Live durum bekleniyor...</div>
                 <div class="pack-live-features" id="pack-cloudflare-agents-features"></div>
@@ -466,7 +471,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
                   <span id="pack-opengauss-root">root: -</span>
                   <span id="pack-opengauss-bundle">bundle: -</span>
                   <span id="pack-opengauss-readiness">readiness: -</span>
+                  <span id="pack-opengauss-score">score: -</span>
                   <span id="pack-opengauss-count">features: -</span>
+                  <span id="pack-opengauss-missing">missing: -</span>
                 </div>
                 <div class="pack-live-note" id="pack-opengauss-next">Live durum bekleniyor...</div>
                 <div class="pack-live-features" id="pack-opengauss-features"></div>

@@ -440,7 +440,8 @@ Project Packs ekranı da aynı prensiple çalışır:
 
 - Tek bir `/api/packs` overview çağrısı ile kartlar beslenir.
 - Kartlar `status`, `readiness`, `root`, `bundle`, `feature_count` ve kısa feature örneklerini gösterir.
-- Komutlar kopyalanabilir çipler halinde sunulur; kullanıcı scaffold veya workflow için tek tıkla komut alır.
+- Kartlar `status`, `readiness`, `readiness_percent`, `missing_features`, `root`, `bundle`, `feature_count` ve kısa feature örneklerini gösterir.
+- Önerilen komut ve diğer komutlar kopyalanabilir çipler halinde sunulur; kullanıcı scaffold veya workflow için tek tıkla komut alır.
 - Per-card ayrık fetch yapma; gecikmeyi artırır ve dashboard'u kirletir.
 - Trace bağlantısı varsa gerçek mission trace kullanılır; sahte trace linki üretilmez.
 

@@ -12,7 +12,7 @@ async def test_build_pack_overview_merges_live_status(monkeypatch):
         return {
             "success": True,
             "status": "success",
-            "project": {"name": pack, "root": f"/tmp/{pack}", "features": ["docker_compose", "schema_sql"]},
+            "project": {"name": pack, "root": f"/tmp/{pack}", "features": ["quivr_core", "brain_from_files"]},
             "bundle": {"id": f"bundle-{pack}"},
             "message": f"{pack} ready",
         }
@@ -29,9 +29,12 @@ async def test_build_pack_overview_merges_live_status(monkeypatch):
     assert item["root"] == "/tmp/quivr"
     assert item["bundle_id"] == "bundle-quivr"
     assert item["feature_count"] == 2
-    assert item["readiness"] == "ready"
+    assert item["readiness"] == "partial"
+    assert item["readiness_percent"] == 40
+    assert item["missing_features"] == ["retrieval_config", "query_loop", "workflow_yaml"]
     assert item["command"] == "elyan packs status quivr"
     assert item["commands"]["status"] == "elyan packs status quivr"
+    assert item["recommended_command"] == "elyan packs scaffold quivr --path ./quivr"
 
 
 @pytest.mark.asyncio

@@ -241,6 +241,7 @@ Supported knowledge and workflow families:
 - generated app packs
 - code/project scaffolds
 - live project packs with shared `/api/packs` overview, readiness, feature counts, and command rails
+- live project packs with shared `/api/packs` overview, readiness coverage, missing features, and command rails
 
 ## 6. Technologies
 
@@ -471,6 +472,7 @@ Next priorities:
 - polish dashboard and CLI UX to a Codex-level operator experience
 - add command palette, faster navigation, and clearer trace/evidence drilldowns
 - keep project pack cards action-oriented with live readiness, feature counts, and copyable commands
+- keep project pack cards action-oriented with live readiness coverage, missing features, and copyable commands
 - finish OpenGauss database workspace scaffolding and SQL query loop
 - finish public release packaging for launch
 

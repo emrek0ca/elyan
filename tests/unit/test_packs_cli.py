@@ -31,8 +31,11 @@ def test_packs_status_all_prints_readiness(monkeypatch, capsys):
                     "success": True,
                     "project": {"name": "Quivr", "root": "/tmp/quivr"},
                     "bundle": {"id": "bundle-quivr"},
-                    "readiness": "ready",
+                    "readiness": "partial",
+                    "readiness_percent": 40,
                     "feature_count": 4,
+                    "missing_features": ["retrieval_config", "query_loop"],
+                    "recommended_command": "elyan packs scaffold quivr --path ./quivr",
                     "message": "ready",
                 }
             ],
@@ -45,8 +48,10 @@ def test_packs_status_all_prints_readiness(monkeypatch, capsys):
     captured = capsys.readouterr()
 
     assert code == 0
-    assert "readiness: ready" in captured.out
+    assert "readiness: partial (40%)" in captured.out
     assert "features: 4" in captured.out
+    assert "missing: retrieval_config, query_loop" in captured.out
+    assert "recommended: elyan packs scaffold quivr --path ./quivr" in captured.out
 
 
 def test_packs_scaffold_dispatches_to_opengauss(monkeypatch, capsys):

@@ -1494,7 +1494,9 @@ document.addEventListener("DOMContentLoaded", function () {
     var rootEl = $("#" + packDomId(pack, "root"));
     var bundleEl = $("#" + packDomId(pack, "bundle"));
     var readinessEl = $("#" + packDomId(pack, "readiness"));
+    var scoreEl = $("#" + packDomId(pack, "score"));
     var countEl = $("#" + packDomId(pack, "count"));
+    var missingEl = $("#" + packDomId(pack, "missing"));
     var nextEl = $("#" + packDomId(pack, "next"));
     var featuresEl = $("#" + packDomId(pack, "features"));
     var commandsEl = $("#" + packDomId(pack, "commands"));
@@ -1516,8 +1518,16 @@ document.addEventListener("DOMContentLoaded", function () {
     if (readinessEl) {
       readinessEl.textContent = "readiness: " + String(item.readiness || (item.success ? "ready" : "missing"));
     }
+    if (scoreEl) {
+      var score = item.readiness_percent != null ? item.readiness_percent : 0;
+      scoreEl.textContent = "score: " + String(score) + "%";
+    }
     if (countEl) {
       countEl.textContent = "features: " + String(item.feature_count != null ? item.feature_count : 0);
+    }
+    if (missingEl) {
+      var missing = Array.isArray(item.missing_features) ? item.missing_features : [];
+      missingEl.textContent = missing.length ? "missing: " + missing.slice(0, 3).join(", ") : "missing: none";
     }
     if (nextEl) {
       nextEl.textContent = String(item.next_step || item.message || item.summary || "Live durum yok");
@@ -1536,6 +1546,10 @@ document.addEventListener("DOMContentLoaded", function () {
         if (!command) return "";
         return '<button type="button" class="pack-command-chip js-copy-command" data-command="' + esc(command) + '">' + esc(key) + "</button>";
       }).filter(Boolean);
+      var recommended = String(item.recommended_command || "").trim();
+      if (recommended) {
+        chips.unshift('<button type="button" class="pack-command-chip pack-command-highlight js-copy-command" data-command="' + esc(recommended) + '">recommended</button>');
+      }
       commandsEl.innerHTML = chips.length ? chips.join("") : "";
       bindCopyCommandButtons(commandsEl);
     }

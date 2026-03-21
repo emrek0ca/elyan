@@ -48,7 +48,11 @@ def _print_payload(title: str, payload: dict[str, Any], *, as_json: bool = False
 
     readiness = str(payload.get("readiness") or "").strip()
     if readiness:
-        print(f"Readiness: {readiness}")
+        readiness_percent = payload.get("readiness_percent")
+        if readiness_percent is not None:
+            print(f"Readiness: {readiness} ({readiness_percent}%)")
+        else:
+            print(f"Readiness: {readiness}")
 
     feature_count = payload.get("feature_count")
     if feature_count is not None:
@@ -57,6 +61,14 @@ def _print_payload(title: str, payload: dict[str, Any], *, as_json: bool = False
     feature_sample = list(payload.get("feature_sample") or [])
     if feature_sample:
         print(f"Feature sample: {', '.join(str(item) for item in feature_sample[:4])}")
+
+    missing_features = list(payload.get("missing_features") or [])
+    if missing_features:
+        print(f"Missing: {', '.join(str(item) for item in missing_features[:4])}")
+
+    recommended = str(payload.get("recommended_command") or "").strip()
+    if recommended:
+        print(f"Recommended: {recommended}")
 
     command = str(payload.get("command") or "").strip()
     if command:
@@ -134,10 +146,20 @@ def _print_status_all(payload: dict[str, Any], *, as_json: bool = False) -> int:
             print(f"  bundle: {bundle.get('id') or bundle.get('workflow_id') or '-'}")
         readiness = str(item.get("readiness") or "").strip()
         if readiness:
-            print(f"  readiness: {readiness}")
+            percent = item.get("readiness_percent")
+            if percent is not None:
+                print(f"  readiness: {readiness} ({percent}%)")
+            else:
+                print(f"  readiness: {readiness}")
         feature_count = item.get("feature_count")
         if feature_count is not None:
             print(f"  features: {feature_count}")
+        missing_features = list(item.get("missing_features") or [])
+        if missing_features:
+            print(f"  missing: {', '.join(str(v) for v in missing_features[:4])}")
+        recommended = str(item.get("recommended_command") or "").strip()
+        if recommended:
+            print(f"  recommended: {recommended}")
         message = str(item.get("message") or "").strip()
         if message:
             print(f"  {message}")

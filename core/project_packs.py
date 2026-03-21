@@ -11,6 +11,13 @@ PACKS: dict[str, dict[str, Any]] = {
     "quivr": {
         "label": "Quivr",
         "summary": "Second-brain, grounded Q&A ve local-first knowledge pack.",
+        "required_features": [
+            "quivr_core",
+            "brain_from_files",
+            "retrieval_config",
+            "query_loop",
+            "workflow_yaml",
+        ],
         "commands": {
             "status": "elyan packs status quivr",
             "project": "elyan packs project quivr --path ./quivr",
@@ -22,6 +29,15 @@ PACKS: dict[str, dict[str, Any]] = {
     "cloudflare-agents": {
         "label": "Cloudflare Agents",
         "summary": "Edge agent runtime, worker scaffold ve MCP hizalamasi.",
+        "required_features": [
+            "persistent_state",
+            "agent_routing",
+            "realtime_sync",
+            "callable_methods",
+            "workflow_hooks",
+            "mcp_ready",
+            "deploy_readiness",
+        ],
         "commands": {
             "status": "elyan packs status cloudflare-agents",
             "project": "elyan packs project cloudflare-agents --path ./worker",
@@ -32,6 +48,14 @@ PACKS: dict[str, dict[str, Any]] = {
     "opengauss": {
         "label": "OpenGauss",
         "summary": "Docker tabanli database workspace, schema ve safe SQL akisi.",
+        "required_features": [
+            "docker_compose",
+            "schema_sql",
+            "env_example",
+            "query_script",
+            "backup_script",
+            "restore_script",
+        ],
         "commands": {
             "status": "elyan packs status opengauss",
             "project": "elyan packs project opengauss --path ./db",
@@ -65,6 +89,80 @@ def build_pack_catalog(pack: str = "all") -> list[dict[str, Any]]:
     return [{"pack": name, **spec} for name, spec in PACKS.items()]
 
 
+def _unique_features(features: Any) -> list[str]:
+    values = []
+    seen = set()
+    for raw in list(features or []):
+        item = str(raw or "").strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        values.append(item)
+    return values
+
+
+def _required_features(pack: str) -> list[str]:
+    return _unique_features(PACKS.get(pack, {}).get("required_features") or [])
+
+
+def _recommended_command(pack: str, *, ready: bool, missing_features: list[str], commands: dict[str, Any]) -> str:
+    if not ready:
+        return str(commands.get("scaffold") or commands.get("project") or commands.get("status") or "").strip()
+    if missing_features:
+        return str(commands.get("scaffold") or commands.get("project") or commands.get("workflow") or commands.get("status") or "").strip()
+    if pack == "quivr":
+        return str(commands.get("workflow") or commands.get("ask") or commands.get("status") or "").strip()
+    if pack == "cloudflare-agents":
+        return str(commands.get("workflow") or commands.get("status") or "").strip()
+    if pack == "opengauss":
+        return str(commands.get("query") or commands.get("workflow") or commands.get("status") or "").strip()
+    return str(commands.get("status") or "").strip()
+
+
+def _pack_readiness(pack: str, payload: dict[str, Any], *, spec: dict[str, Any] | None = None) -> dict[str, Any]:
+    spec = dict(spec or PACKS.get(pack, {}))
+    project = payload.get("project") or {}
+    bundle = payload.get("bundle") or payload.get("workflow") or {}
+    features = _unique_features(project.get("features") or [])
+    required_features = _required_features(pack)
+    missing_features = [feature for feature in required_features if feature not in features]
+    ready_features = max(len(required_features) - len(missing_features), 0)
+    readiness_percent = 100 if not required_features else int(round((ready_features / len(required_features)) * 100))
+    raw_success = bool(payload.get("success", False))
+    if not raw_success:
+        readiness = "missing"
+    elif missing_features:
+        readiness = "partial"
+    else:
+        readiness = "ready"
+    commands = dict(spec.get("commands") or {})
+    item = dict(spec or {})
+    item.update(payload or {})
+    item["project"] = project
+    item["bundle"] = bundle
+    item["root"] = item.get("root") or project.get("root") or ""
+    item["bundle_id"] = item.get("bundle_id") or bundle.get("id") or bundle.get("workflow_id") or ""
+    item["feature_count"] = len(features)
+    item["feature_sample"] = features[:4]
+    item["required_features"] = required_features
+    item["ready_features"] = ready_features
+    item["missing_features"] = missing_features
+    item["missing_count"] = len(missing_features)
+    item["readiness_percent"] = readiness_percent
+    item["readiness"] = readiness
+    item["command"] = item.get("command") or commands.get("status", "")
+    item["commands"] = commands
+    item["command_count"] = len(commands)
+    item["recommended_command"] = item.get("recommended_command") or _recommended_command(
+        pack,
+        ready=raw_success,
+        missing_features=missing_features,
+        commands=commands,
+    )
+    item["next_step"] = item.get("next_step") or _pack_next_step(pack, payload, missing_features=missing_features)
+    return item
+
+
 async def pack_status(pack: str, path: str = "") -> dict[str, Any]:
     if pack == "quivr":
         return await quivr_status(path=path)
@@ -93,30 +191,21 @@ async def pack_status_all(path: str = "") -> dict[str, Any]:
             }
         else:
             payload = result or {}
-        project = payload.get("project") or {}
-        bundle = payload.get("bundle") or payload.get("workflow") or {}
-        features = list(project.get("features") or [])
-        commands = dict(PACKS[pack].get("commands") or {})
         rows.append(
-            {
-                "pack": pack,
-                "label": PACKS[pack]["label"],
-                "summary": PACKS[pack]["summary"],
-                "status": payload.get("status") or "ok",
-                "success": bool(payload.get("success", False)),
-                "project": project,
-                "bundle": bundle,
-                "message": payload.get("message"),
-                "root": project.get("root"),
-                "bundle_id": bundle.get("id") or bundle.get("workflow_id") or "",
-                "feature_count": len(features),
-                "feature_sample": features[:4],
-                "commands": commands,
-                "command_count": len(commands),
-                "readiness": "ready" if bool(payload.get("success", False)) else "missing",
-                "command": PACKS[pack]["commands"].get("status", ""),
-                "next_step": _pack_next_step(pack, payload),
-            }
+            _pack_readiness(
+                pack,
+                {
+                    "pack": pack,
+                    "label": PACKS[pack]["label"],
+                    "summary": PACKS[pack]["summary"],
+                    "status": payload.get("status") or "ok",
+                    "success": bool(payload.get("success", False)),
+                    "project": payload.get("project") or {},
+                    "bundle": payload.get("bundle") or payload.get("workflow") or {},
+                    "message": payload.get("message"),
+                },
+                spec=PACKS[pack],
+            )
         )
     success = all(item["success"] for item in rows)
     return {
@@ -128,21 +217,9 @@ async def pack_status_all(path: str = "") -> dict[str, Any]:
 
 
 def _merge_pack_meta(spec: dict[str, Any], live: dict[str, Any]) -> dict[str, Any]:
-    item = dict(spec or {})
-    item.update(live or {})
-    project = item.get("project") or {}
-    bundle = item.get("bundle") or item.get("workflow") or {}
-    features = list(project.get("features") or [])
-    commands = dict(item.get("commands") or {})
-    item["root"] = item.get("root") or project.get("root") or ""
-    item["bundle_id"] = item.get("bundle_id") or bundle.get("id") or bundle.get("workflow_id") or ""
-    item["feature_count"] = item.get("feature_count") if item.get("feature_count") is not None else len(features)
-    item["feature_sample"] = item.get("feature_sample") or features[:4]
-    item["readiness"] = item.get("readiness") or ("ready" if bool(item.get("success", False)) else "missing")
-    item["command"] = item.get("command") or item.get("commands", {}).get("status", "")
-    item["commands"] = commands
-    item["command_count"] = item.get("command_count") if item.get("command_count") is not None else len(commands)
-    return item
+    base = dict(spec or {})
+    base.update(live or {})
+    return _pack_readiness(str(base.get("pack") or spec.get("pack") or ""), base, spec=spec)
 
 
 async def build_pack_overview(pack: str = "all", path: str = "") -> dict[str, Any]:
@@ -172,9 +249,13 @@ async def build_pack_overview(pack: str = "all", path: str = "") -> dict[str, An
     }
 
 
-def _pack_next_step(pack: str, payload: dict[str, Any]) -> str:
+def _pack_next_step(pack: str, payload: dict[str, Any], *, missing_features: list[str] | None = None) -> str:
+    missing_features = list(missing_features or [])
     if not payload.get("success", False):
         return "Scaffold ile workspace kur."
+    if missing_features:
+        missing_text = ", ".join(missing_features[:4])
+        return f"Eksik: {missing_text}. Scaffold veya repair ile tamamla."
     if pack == "quivr":
         return "Brain.from_files ve grounded Q&A ile veri kaynagini bagla."
     if pack == "cloudflare-agents":
