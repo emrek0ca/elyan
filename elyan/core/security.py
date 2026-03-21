@@ -35,6 +35,7 @@ class SecurityLayer:
                 "command": str(payload.get("command") or code or ""),
                 "workspace_dir": str(payload.get("workspace_dir") or context.get("workspace_dir") or context.get("workspace") or ""),
                 "needs_network": bool(payload.get("needs_network", context.get("needs_network", False))),
+                "read_only": bool(payload.get("read_only", context.get("read_only", True))),
                 "timeout": int(payload.get("timeout") or context.get("timeout") or 30),
                 "env": dict(context.get("env") or payload.get("env") or {}),
                 "volumes": dict(payload.get("volumes") or context.get("volumes") or {}),
@@ -83,4 +84,3 @@ def get_security_layer() -> SecurityLayer:
 
 
 security_layer = get_security_layer()
-

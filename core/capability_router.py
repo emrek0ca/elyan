@@ -159,6 +159,7 @@ class CapabilityRouter:
         "multimodal": "browser_task",
         "image": "browser_task",
         "full_stack_delivery": "code_project",
+        "lean": "formal_methods",
         "general": "communication",
     }
 
@@ -238,6 +239,11 @@ class CapabilityRouter:
             "otomasyon", "automation", "workflow", "cron", "rutin", "schedule",
             "arka planda", "background", "daemon", "agent team", "multi agent"
         ],
+        "lean": [
+            "lean", "mathlib", "theorem", "lemma", "proof", "prove",
+            "formalize", "formalisation", "formalization", "autoformalize", "autoprove",
+            "lakefile", "lake", "lean-toolchain", "project-scoped formalization",
+        ],
         "full_stack_delivery": [
             "full stack", "uçtan uca", "uctan uca", "production", "deployment",
             "mimari", "architecture", "pipeline", "microservice", "dashboard"
@@ -302,6 +308,15 @@ class CapabilityRouter:
             "output_artifacts": ["research_document_bundle", "source_list", "recommendations"],
             "quality_checklist": ["source_quality", "coverage", "traceability", "actionability"],
             "learning_tags": ["research", "analysis", "evidence"],
+        },
+        "lean": {
+            "objective": "orchestrate_project_scoped_lean_formalization",
+            "workflow_id": "lean_formalization_workflow",
+            "primary_action": "lean_workflow",
+            "preferred_tools": ["lean_status", "lean_project", "lean_workflow", "lean_swarm", "run_safe_command"],
+            "output_artifacts": ["lean_project_manifest", "proof_trace", "build_log"],
+            "quality_checklist": ["typecheck", "traceability", "project_scope", "reproducibility"],
+            "learning_tags": ["lean", "mathlib", "formal_methods"],
         },
         "email": {
             "objective": "manage_email_workflow_with_traceability",
@@ -872,8 +887,8 @@ class CapabilityRouter:
             suggested_job_type=suggested_job_type,
             multi_agent_recommended=multi_agent_recommended,
             orchestration_mode="multi_agent" if multi_agent_recommended else "single_agent",
-            workflow_profile_applicable=best_domain in {"code", "api_integration", "full_stack_delivery"},
-            requires_design_phase=best_domain in {"code", "api_integration", "full_stack_delivery"},
+            workflow_profile_applicable=best_domain in {"code", "api_integration", "full_stack_delivery", "lean"},
+            requires_design_phase=best_domain in {"code", "api_integration", "full_stack_delivery", "lean"},
             requires_worktree=best_domain == "full_stack_delivery",
             content_kind=request_contract.content_kind,
             output_formats=list(request_contract.output_formats or []),

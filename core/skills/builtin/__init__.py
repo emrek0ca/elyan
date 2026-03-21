@@ -36,4 +36,9 @@ def get_builtin_skills() -> List:
         skills.append(EmailSkill())
     except Exception:
         pass
+    try:
+        from .lean_skill import LeanSkill
+        skills.append(LeanSkill())
+    except Exception:
+        pass
     return skills

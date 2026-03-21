@@ -26,6 +26,7 @@ TOP_LEVEL_COMMANDS = [
     "gateway",
     "channels",
     "skills",
+    "integrations",
     "security",
     "models",
     "cron",
@@ -37,8 +38,11 @@ TOP_LEVEL_COMMANDS = [
     "message",
     "service",
     "dashboard",
+    "autopilot",
+    "lean",
     "onboard",
     "setup",
+    "bootstrap",
     "update",
     "version",
     "completion",
@@ -54,11 +58,13 @@ COMMAND_SUGGESTION_OVERRIDES = {
 SETUP_OPTIONAL_COMMANDS = {
     "onboard",
     "setup",
+    "bootstrap",
     "version",
     "completion",
     "doctor",
     "health",
     "status",
+    "autopilot",
     "chat",
 }
 
@@ -147,6 +153,8 @@ def _print_cli_home() -> None:
     print("Hizli baslangic:")
     if not gateway_running:
         print("  elyan gateway start --daemon")
+    print("  elyan bootstrap status")
+    print("  elyan bootstrap onboard")
     print("  elyan chat")
     print("  elyan doctor")
     print("  elyan status")
@@ -337,11 +345,35 @@ def main(argv: list[str] | None = None):
     # ── skills ──────────────────────────────────────────────────────────
     p = sub.add_parser("skills", help="Beceri yönetimi")
     p.add_argument("action", nargs="?",
-                   choices=["list", "info", "install", "enable", "disable", "update", "remove", "search", "check"])
+                   choices=["list", "info", "install", "enable", "disable", "update", "edit", "remove", "search", "check"])
     p.add_argument("name", nargs="?")
     p.add_argument("--available", action="store_true")
     p.add_argument("--enabled", dest="enabled_only", action="store_true")
     p.add_argument("--all", dest="update_all", action="store_true")
+    p.add_argument("--set", dest="set_values", action="append", default=[], help="key=value manifest alanı güncelle")
+    p.add_argument("--file", dest="file", metavar="JSON_FILE", help="Manifest güncellemesi için JSON dosyası")
+    p.add_argument("--replace", action="store_true", help="Manifesti tamamen verilen alanlarla değiştir")
+    p.add_argument("--json", action="store_true")
+
+    # ── integrations ───────────────────────────────────────────────────
+    p = sub.add_parser("integrations", help="Entegrasyon hesapları ve trace yönetimi")
+    p.add_argument("action", nargs="?",
+                   choices=["accounts", "list", "status", "connect", "revoke", "traces", "summary"], default="accounts")
+    p.add_argument("--provider", metavar="PROVIDER", default="")
+    p.add_argument("--app-name", dest="app_name", metavar="APP_NAME", default="")
+    p.add_argument("--account-alias", dest="account_alias", metavar="ALIAS", default="default")
+    p.add_argument("--scopes", nargs="*", default=[])
+    p.add_argument("--mode", default="auto")
+    p.add_argument("--authorization-code", dest="authorization_code", metavar="CODE", default="")
+    p.add_argument("--redirect-uri", dest="redirect_uri", metavar="URI", default="")
+    p.add_argument("--display-name", dest="display_name", metavar="NAME", default="")
+    p.add_argument("--email", metavar="EMAIL", default="")
+    p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--user-id", dest="user_id", metavar="USER_ID", default="")
+    p.add_argument("--operation", default="")
+    p.add_argument("--connector-name", dest="connector_name", default="")
+    p.add_argument("--integration-type", dest="integration_type", default="")
+    p.add_argument("--json", dest="json", action="store_true")
 
     # ── security ────────────────────────────────────────────────────────
     p = sub.add_parser("security", help="Güvenlik araçları")
@@ -469,9 +501,41 @@ def main(argv: list[str] | None = None):
     p.add_argument("--no-browser", action="store_true")
     p.add_argument("--ops", action="store_true", help="Admin ops console ac")
 
+    # ── autopilot ───────────────────────────────────────────────────────
+    p = sub.add_parser("autopilot", help="Otonom otomasyon motoru")
+    p.add_argument("action", nargs="?", choices=["status", "start", "stop", "tick"], default="status")
+    p.add_argument("--port", type=int)
+    p.add_argument("--reason", default="manual_cli")
+
+    # ── lean ───────────────────────────────────────────────────────────
+    p = sub.add_parser("lean", help="Lean 4 proje ve formalizasyon orkestrasyonu")
+    p.add_argument("action", nargs="?", choices=["status", "project", "prove", "draft", "autoprove", "formalize", "autoformalize", "swarm"], default="status")
+    p.add_argument("text", nargs="*", help="Goal veya theorem metni")
+    p.add_argument("--path", metavar="PATH", default="")
+    p.add_argument("--name", metavar="NAME", default="")
+    p.add_argument("--target", metavar="FILE", default="")
+    p.add_argument("--backend", default="auto")
+    p.add_argument("--project-action", choices=["status", "init", "create", "use", "clear", "list"], default="status")
+    p.add_argument("--swarm-action", choices=["list", "attach", "cancel"], default="list")
+    p.add_argument("--session-id", default="")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--no-verify", action="store_true")
+    p.add_argument("--json", action="store_true")
+
     # ── onboard ─────────────────────────────────────────────────────────
     p = sub.add_parser("onboard", help="Kurulum sihirbazı")
     _add_onboard_args(p)
+
+    # ── bootstrap ─────────────────────────────────────────────────────
+    p = sub.add_parser("bootstrap", help="Kanonik kurulum ve geri yükleme akışı")
+    p.add_argument("action", nargs="?", choices=["status", "install", "onboard", "repair", "restore", "snapshot"], default="status")
+    p.add_argument("--headless", action="store_true")
+    p.add_argument("--channel", metavar="CHANNEL")
+    p.add_argument("--install-daemon", action="store_true")
+    p.add_argument("--force", action="store_true")
+    p.add_argument("--bundle", metavar="BUNDLE")
+    p.add_argument("--output", metavar="OUTPUT")
+    p.add_argument("--json", dest="json", action="store_true")
 
     # ── setup (onboard alias) ──────────────────────────────────────────
     p = sub.add_parser("setup", help="Kurulum sihirbazı (onboard alias)")
@@ -608,6 +672,12 @@ def main(argv: list[str] | None = None):
         from cli.commands import skills
         skills.handle_skills(args)
 
+    elif args.command == "integrations":
+        from cli.commands import integrations
+        result = integrations.handle_integrations(args)
+        if isinstance(result, int):
+            return result
+
     elif args.command == "security":
         from cli.commands import security
         # --last gibi period'u saate çevir
@@ -680,6 +750,18 @@ def main(argv: list[str] | None = None):
             ops=getattr(args, "ops", False),
         )
 
+    elif args.command == "autopilot":
+        from cli.commands import autopilot
+        result = autopilot.run_autopilot(args)
+        if isinstance(result, int):
+            return result
+
+    elif args.command == "lean":
+        from cli.commands import lean
+        result = lean.run(args)
+        if isinstance(result, int):
+            return result
+
     elif args.command in {"onboard", "setup"}:
         from cli.onboard import start_onboarding
         ok = start_onboarding(
@@ -690,6 +772,12 @@ def main(argv: list[str] | None = None):
         )
         if not ok:
             return 1
+
+    elif args.command == "bootstrap":
+        from cli.commands import bootstrap
+        result = bootstrap.handle_bootstrap(args)
+        if isinstance(result, int):
+            return result
 
     elif args.command == "update":
         print("Güncelleme kontrolü yapılıyor...")

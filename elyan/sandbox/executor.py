@@ -4,6 +4,7 @@ import asyncio
 import os
 import shutil
 import signal
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -38,11 +39,23 @@ class SandboxExecutor:
     def available(self) -> bool:
         if self._docker_available is not None:
             return bool(self._docker_available)
-        if shutil.which("docker") is not None:
-            self._docker_available = True
-            return True
-        self._docker_available = False
-        return False
+        docker_bin = shutil.which("docker")
+        if docker_bin is None:
+            self._docker_available = False
+            return False
+        try:
+            probe = subprocess.run(
+                [docker_bin, "info"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
+            )
+            self._docker_available = probe.returncode == 0
+            return bool(self._docker_available)
+        except Exception:
+            self._docker_available = False
+            return False
 
     def _materialize(self, code_or_command: str, config: SandboxConfig) -> tuple[SandboxConfig, str, str | None]:
         payload = merge_sandbox_config(config)
@@ -256,15 +269,21 @@ class SandboxExecutor:
     async def _run_legacy(self, command: str, config: SandboxConfig, timeout: int) -> dict[str, Any]:
         from core.sandbox.local_sandbox import local_sandbox
 
+        workspace_dir = ""
+        for host_path, container_path in sanitized_volumes(config).items():
+            if str(container_path).strip() == "/workspace":
+                workspace_dir = str(host_path)
+                break
+        legacy_config = config.model_copy(update={"working_dir": workspace_dir}) if workspace_dir else config
         result = await local_sandbox.execute(
             command=command,
-            workspace_dir=None,
-            env_vars=dict(config.env or {}),
-            timeout=max(1, int(timeout or config.timeout or 30)),
+            workspace_dir=workspace_dir or None,
+            env_vars=dict(legacy_config.env or {}),
+            timeout=max(1, int(timeout or legacy_config.timeout or 30)),
         )
         return self._normalize_result(
             backend="legacy-sandbox",
-            config=config,
+            config=legacy_config,
             command=command,
             raw=result,
             duration_ms=int(result.get("duration_ms") or 0),
@@ -274,9 +293,10 @@ class SandboxExecutor:
         cfg = merge_sandbox_config(config or {}) if config is not None else SandboxConfig()
         cfg, command, temp_dir = self._materialize(code_or_command, cfg)
         try:
-            if self.prefer_docker and self._client is not None and self.available():
+            docker_ready = self.available()
+            if self.prefer_docker and self._client is not None and docker_ready:
                 return await asyncio.to_thread(self._run_with_sdk, command, cfg, timeout)
-            if shutil.which("docker") is not None:
+            if docker_ready and shutil.which("docker") is not None:
                 return await self._run_with_cli(command, cfg, timeout)
             return await self._run_legacy(command, cfg, timeout)
         finally:

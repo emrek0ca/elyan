@@ -11,7 +11,7 @@ from typing import Any, Dict, Iterable, List
 from core.text_artifacts import write_json_artifact, write_text_artifact
 
 
-CODING_SUPERPOWERS_DOMAINS = frozenset({"code", "debug", "api_integration", "full_stack_delivery"})
+CODING_SUPERPOWERS_DOMAINS = frozenset({"code", "debug", "api_integration", "full_stack_delivery", "lean"})
 APPROVAL_MARKERS = (
     "onay",
     "go",
@@ -110,6 +110,8 @@ def normalize_workflow_profile(value: Any) -> str:
         return "superpowers_lite"
     if raw in {"superpowers-strict", "superpowers_strict"}:
         return "superpowers_strict"
+    if raw in {"lean", "lean_formalization", "lean-formalization"}:
+        return "lean"
     return "default"
 
 
@@ -171,7 +173,7 @@ def get_process_profile(profile: str, *, nexus_mode: str = "micro", allowed_doma
     normalized = normalize_workflow_profile(profile)
     if normalized == "default":
         return ProcessProfile(id="default", enabled_domains=list(allowed_domains or []))
-    workspace_policy = "require_worktree" if normalized == "superpowers_strict" else "auto"
+    workspace_policy = "require_worktree" if normalized in {"superpowers_strict", "lean"} else "auto"
     return ProcessProfile(
         id=normalized,
         enabled_domains=list(allowed_domains or CODING_SUPERPOWERS_DOMAINS),

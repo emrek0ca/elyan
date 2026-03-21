@@ -43,6 +43,7 @@ def default_sandbox_config(
     image: str = "",
     command: str = "",
     network: bool = False,
+    read_only: bool = True,
     timeout: int = 30,
     volumes: dict[str, str] | None = None,
     env: dict[str, str] | None = None,
@@ -54,6 +55,7 @@ def default_sandbox_config(
         "language": str(language or "shell").strip().lower() or "shell",
         "command": str(command or ""),
         "network": bool(network),
+        "read_only": bool(read_only),
         "timeout": max(1, int(timeout or 30)),
         "volumes": dict(volumes or {}),
         "env": dict(env or {}),
@@ -93,6 +95,7 @@ def sandbox_config_for_action(
     image = str(payload.get("image") or "").strip()
     command = str(payload.get("command") or payload.get("code") or payload.get("script") or "").strip()
     network = bool(payload.get("needs_network", payload.get("network", False)))
+    read_only = bool(payload.get("read_only", True))
     workspace_dir = str(payload.get("workspace_dir") or payload.get("workspace") or "").strip()
     volumes = dict(payload.get("volumes") or {})
     if workspace_dir:
@@ -105,10 +108,10 @@ def sandbox_config_for_action(
         image=image,
         command=command,
         network=network,
+        read_only=read_only,
         timeout=int(payload.get("timeout") or payload.get("sandbox_timeout") or 30),
         volumes=volumes,
         env=dict(payload.get("env") or {}),
         working_dir=str(payload.get("working_dir") or "/workspace"),
         metadata=metadata,
     )
-
