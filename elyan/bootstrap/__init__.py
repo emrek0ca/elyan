@@ -99,14 +99,12 @@ def ensure_runtime_dirs(home: str | Path | None = None) -> dict[str, str]:
     return created
 
 
-def init(
+def init_workspace(
     workspace: str | Path | None = None,
     *,
     role: str = "operator",
     metadata: dict[str, Any] | None = None,
     force: bool = False,
-    headless: bool = False,
-    open_dashboard: bool = False,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     workspace_path = Path(workspace or Path.cwd()).expanduser().resolve()
@@ -132,6 +130,36 @@ def init(
     if force or not memory_path.exists():
         memory_path.write_text(_memory_md(payload, contract_paths), encoding="utf-8")
 
+    result: dict[str, Any] = {
+        "workspace": str(workspace_path),
+        "agents_md": str(agents_path),
+        "memory_md": str(memory_path),
+    }
+    result.update(contract_paths)
+    return result
+
+
+def init(
+    workspace: str | Path | None = None,
+    *,
+    role: str = "operator",
+    metadata: dict[str, Any] | None = None,
+    force: bool = False,
+    headless: bool = False,
+    open_dashboard: bool = False,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    workspace_result = init_workspace(
+        workspace,
+        role=role,
+        metadata=metadata,
+        force=force,
+        dry_run=dry_run,
+    )
+    workspace_path = Path(workspace_result["workspace"])
+    agents_path = Path(workspace_result["agents_md"])
+    memory_path = Path(workspace_result["memory_md"])
+
     dependency_manager = DependencyManager(
         workspace=workspace_path,
         headless=headless,
@@ -140,12 +168,7 @@ def init(
     )
     dependency_summary = dependency_manager.bootstrap_all()
 
-    result: dict[str, Any] = {
-        "workspace": str(workspace_path),
-        "agents_md": str(agents_path),
-        "memory_md": str(memory_path),
-    }
-    result.update(contract_paths)
+    result: dict[str, Any] = dict(workspace_result)
     result["dependencies"] = dependency_summary
     return result
 
@@ -184,6 +207,20 @@ def _build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--dry-run", action="store_true")
     init_parser.add_argument("--json", action="store_true")
 
+    onboard_parser = sub.add_parser("onboard", help="Run the unified onboarding flow")
+    onboard_parser.add_argument("--workspace", default=".")
+    onboard_parser.add_argument("--role", default="operator")
+    onboard_parser.add_argument("--force", action="store_true")
+    onboard_parser.add_argument("--headless", action="store_true")
+    onboard_parser.add_argument("--open-dashboard", action="store_true")
+    onboard_parser.add_argument("--no-dashboard", action="store_true")
+    onboard_parser.add_argument("--skip-deps", action="store_true")
+    onboard_parser.add_argument("--channel", default=None)
+    onboard_parser.add_argument("--install-daemon", action="store_true")
+    onboard_parser.add_argument("--dry-run", action="store_true")
+    onboard_parser.add_argument("--json", action="store_true")
+    onboard_parser.set_defaults(open_dashboard=True)
+
     dirs = sub.add_parser("dirs", help="Create ~/.elyan runtime directories")
     dirs.add_argument("--home", default=str(Path.home() / ".elyan"))
     dirs.add_argument("--json", action="store_true")
@@ -203,6 +240,25 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"Runtime dirs ready: {getattr(args, 'home', '')}")
         return 0
+
+    if command == "onboard":
+        from .onboard import onboard
+
+        open_dashboard = bool(getattr(args, "open_dashboard", True)) and not bool(getattr(args, "no_dashboard", False))
+        result = onboard(
+            workspace=getattr(args, "workspace", "."),
+            role=getattr(args, "role", "operator"),
+            headless=bool(getattr(args, "headless", False)),
+            channel=getattr(args, "channel", None),
+            install_daemon=bool(getattr(args, "install_daemon", False)),
+            force=bool(getattr(args, "force", False)),
+            dry_run=bool(getattr(args, "dry_run", False)),
+            open_dashboard=open_dashboard,
+            skip_dependencies=bool(getattr(args, "skip_deps", False)),
+        )
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": bool(result)}, ensure_ascii=False, indent=2))
+        return 0 if result else 1
 
     result = bootstrap_workspace(
         getattr(args, "workspace", "."),
@@ -229,6 +285,7 @@ def main(argv: list[str] | None = None) -> int:
 __all__ = [
     "bootstrap_workspace",
     "ensure_runtime_dirs",
+    "init_workspace",
     "init",
     "main",
 ]

@@ -204,21 +204,12 @@ export PATH="$HOME/.local/bin:$PATH"
 log "Creating workspace bootstrap files"
 if [[ "$HEADLESS" == "1" || "$NO_UI" == "1" ]]; then
   .venv/bin/python3 -m elyan.bootstrap init --workspace "$WORKSPACE" --role operator --headless >/dev/null
+  .venv/bin/python3 -m elyan.bootstrap onboard --workspace "$WORKSPACE" --skip-deps --headless >/dev/null
 else
   .venv/bin/python3 -m elyan.bootstrap init --workspace "$WORKSPACE" --role operator --open-dashboard >/dev/null
+  .venv/bin/python3 -m elyan.bootstrap onboard --workspace "$WORKSPACE" --skip-deps >/dev/null
 fi
 ok "Workspace files created"
-
-log "Running onboarding"
-if [[ "$HEADLESS" == "1" || "$NO_UI" == "1" ]]; then
-  .venv/bin/elyan bootstrap onboard --headless --install-daemon || warn "Bootstrap onboarding did not complete."
-else
-  read -rp "Run onboarding now? (Y/n): " ans
-  ans_lc="$(printf '%s' "$ans" | tr '[:upper:]' '[:lower:]')"
-  if [[ "$ans_lc" != "n" ]]; then
-    .venv/bin/elyan bootstrap onboard || warn "Bootstrap onboarding did not complete."
-  fi
-fi
 
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
