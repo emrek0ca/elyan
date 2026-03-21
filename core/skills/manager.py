@@ -13,6 +13,7 @@ from core.task_executor import TaskExecutor
 from core.text_artifacts import DEFAULT_SAVE_MARKERS, default_summary_path
 from tools import AVAILABLE_TOOLS
 from utils.logger import get_logger
+from elyan.sandbox.policy import default_sandbox_config, merge_sandbox_config
 
 logger = get_logger("skill_manager")
 
@@ -43,6 +44,7 @@ class SkillInfo:
     latency_level: str = "standard"
     evidence_contract: Dict[str, Any] = None
     approval_level: int = 0
+    sandbox_config: Dict[str, Any] = None
     real_time: bool = False
     workflow_bundle: Dict[str, Any] = None
     dependency_status: Dict[str, Dict[str, Any]] = None
@@ -78,6 +80,7 @@ class SkillInfo:
         data["hashes"] = data.get("hashes") or {}
         data["workflow_bundle"] = data.get("workflow_bundle") or {}
         data["dependency_status"] = data.get("dependency_status") or {}
+        data["sandbox_config"] = data.get("sandbox_config") or {}
         return data
 
 
@@ -187,6 +190,17 @@ class SkillManager:
         latency_level = str(raw.get("latency_level") or "standard").strip().lower() or "standard"
         evidence_contract = dict(raw.get("evidence_contract") or {}) if isinstance(raw.get("evidence_contract"), dict) else {}
         approval_level = int(raw.get("approval_level") or 0)
+        sandbox_config = default_sandbox_config(
+            language="shell",
+            metadata={"skill_name": name, "integration_type": integration_type},
+        ).model_dump()
+        raw_sandbox_config = raw.get("sandbox_config")
+        if isinstance(raw_sandbox_config, dict) or hasattr(raw_sandbox_config, "model_dump"):
+            try:
+                sandbox_config = merge_sandbox_config(sandbox_config, raw_sandbox_config).model_dump()
+            except Exception:
+                if isinstance(raw_sandbox_config, dict):
+                    sandbox_config = dict(raw_sandbox_config)
         real_time = bool(raw.get("real_time", latency_level == "real_time"))
         workflow_bundle = dict(raw.get("workflow_bundle") or {}) if isinstance(raw.get("workflow_bundle"), dict) else {}
 
@@ -283,6 +297,7 @@ class SkillManager:
             latency_level=latency_level,
             evidence_contract=evidence_contract,
             approval_level=approval_level,
+            sandbox_config=sandbox_config,
             real_time=real_time,
             workflow_bundle=workflow_bundle,
             dependency_status=dependency_status,
@@ -344,10 +359,9 @@ class SkillManager:
 
         if available:
             merged = catalog
-            # Include installed custom skills not in catalog.
+            # Installed manifests must override catalog defaults so edits persist.
             for name, info in installed.items():
-                if name not in merged:
-                    merged[name] = info
+                merged[name] = info
         else:
             merged = installed
 
@@ -438,6 +452,124 @@ class SkillManager:
             enabled.remove(n)
             self._set_enabled_set(enabled)
         return True, f"'{n}' kaldırıldı."
+
+    @staticmethod
+    def _normalize_edit_value(key: str, value: Any) -> Any:
+        key = str(key or "").strip().lower()
+        list_keys = {
+            "required_tools",
+            "optional_tools",
+            "commands",
+            "dependencies",
+            "python_dependencies",
+            "post_install",
+            "required_scopes",
+            "supported_platforms",
+            "approval_tools",
+            "blocked_tools",
+            "output_artifacts",
+            "quality_checklist",
+            "steps",
+            "trigger_markers",
+            "required_skills",
+        }
+        dict_keys = {"evidence_contract", "workflow_bundle", "tool_policy", "output_contract", "metadata", "hashes"}
+        bool_keys = {
+            "enabled",
+            "real_time",
+            "runtime_ready",
+            "workflow_profile_applicable",
+            "requires_design_phase",
+            "requires_worktree",
+            "auto_intent",
+        }
+        int_keys = {"approval_level"}
+
+        if key in list_keys:
+            if isinstance(value, str):
+                return [item.strip() for item in value.split(",") if item.strip()]
+            if isinstance(value, (list, tuple, set)):
+                out: list[str] = []
+                for item in value:
+                    if item is None:
+                        continue
+                    if isinstance(item, str):
+                        cleaned = item.strip()
+                        if cleaned:
+                            out.append(cleaned)
+                    else:
+                        out.append(str(item))
+                return out
+            if value is None:
+                return []
+            return [str(value).strip()]
+
+        if key in dict_keys:
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, str) and value.strip():
+                try:
+                    parsed = json.loads(value)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except Exception:
+                    pass
+            return {}
+
+        if key in bool_keys:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                return value.strip().lower() in {"1", "true", "yes", "on", "evet", "enabled"}
+            return bool(value)
+
+        if key in int_keys:
+            try:
+                return int(value)
+            except Exception:
+                return 0
+
+        if value is None:
+            return ""
+        return str(value).strip() if not isinstance(value, (dict, list, tuple, set)) else value
+
+    def edit_skill(self, name: str, updates: Dict[str, Any], *, replace: bool = False) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+        n = self._sanitize_name(name)
+        if not n:
+            return False, "Geçersiz skill adı.", None
+
+        manifest_path = self._manifest_path(n)
+        raw = self._read_manifest(manifest_path) if manifest_path.exists() else None
+        if not raw:
+            return False, f"Beceri bulunamadı: {n}", None
+
+        normalized: Dict[str, Any] = {}
+        for key, value in dict(updates or {}).items():
+            key_str = str(key or "").strip()
+            if not key_str:
+                continue
+            normalized[key_str] = self._normalize_edit_value(key_str, value)
+
+        merged = dict(normalized) if replace else dict(raw)
+        if not replace:
+            merged.update(normalized)
+
+        merged["name"] = n
+        merged.setdefault("version", raw.get("version", "1.0.0"))
+        merged["updated_at"] = _now_iso()
+        if "installed_at" not in merged:
+            merged["installed_at"] = raw.get("installed_at") or merged["updated_at"]
+
+        if "enabled" in normalized:
+            enabled = self._enabled_set()
+            if bool(normalized["enabled"]):
+                enabled.add(n)
+            else:
+                enabled.discard(n)
+            self._set_enabled_set(enabled)
+
+        self._write_manifest(n, merged)
+        return True, f"'{n}' becerisi güncellendi.", self.get_skill(n)
 
     def set_enabled(self, name: str, enabled_flag: bool) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
         n = self._sanitize_name(name)

@@ -6,13 +6,16 @@ from typing import Any
 from config.elyan_config import elyan_config
 from core.capability_router import CapabilityPlan, CapabilityRouter, get_capability_router
 from core.learning_control import LearningControlPlane, get_learning_control_plane
+from core.autonomy_policy import AutonomyDecision, get_autonomy_policy
 from core.ml import get_model_runtime
 from core.model_orchestrator import ModelOrchestrator, model_orchestrator
 from core.operator_policy import OperatorPolicy, OperatorPolicyEngine, get_operator_policy_engine
 from core.realtime_actuator import RealTimeActuator, get_realtime_actuator
 from core.runtime_control import RuntimeControlPlane, get_runtime_control_plane
+from core.task_planner import get_task_planner
 from core.skills.registry import SkillRegistry, skill_registry
 from core.contracts.operator_runtime import CapabilityManifest, OperatorOutcome, OperatorRequestModel, SkillManifest
+from elyan.sandbox.policy import default_sandbox_config, merge_sandbox_config
 from utils.logger import get_logger
 
 logger = get_logger("operator_control_plane")
@@ -197,6 +200,20 @@ class OperatorControlPlane:
                 "real_time": bool(integration.get("real_time", skill.get("real_time", False))),
                 "workflow_bundle": dict(integration.get("workflow_bundle") or skill.get("workflow_bundle") or {}),
             }
+        sandbox_config = default_sandbox_config(
+            language="shell",
+            metadata={
+                "skill_id": str(skill.get("name") or workflow.get("id") or request_class or "general"),
+                "integration_type": str(skill.get("integration_type") or integration.get("integration_type") or ""),
+            },
+        ).model_dump()
+        raw_sandbox_config = skill.get("sandbox_config") or integration.get("sandbox_config")
+        if isinstance(raw_sandbox_config, dict) or hasattr(raw_sandbox_config, "model_dump"):
+            try:
+                sandbox_config = merge_sandbox_config(sandbox_config, raw_sandbox_config).model_dump()
+            except Exception:
+                if isinstance(raw_sandbox_config, dict):
+                    sandbox_config = dict(raw_sandbox_config)
         manifest = SkillManifest(
             skill_id=str(skill.get("name") or workflow.get("id") or request_class or "general"),
             name=str(skill.get("name") or workflow.get("name") or request_class or "general"),
@@ -226,6 +243,7 @@ class OperatorControlPlane:
             output_artifacts=list(workflow.get("output_artifacts") or []),
             quality_checklist=list(workflow.get("quality_checklist") or []),
             approval_level=int(skill.get("approval_level") or 0),
+            sandbox_config=sandbox_config,
             real_time=bool(skill.get("real_time", False)),
             tool_policy=dict(workflow.get("tool_policy") or {}),
             output_contract=dict(workflow.get("output_contract") or {}),
@@ -236,9 +254,92 @@ class OperatorControlPlane:
                 "workflow_enabled": bool(workflow.get("enabled", True)),
                 "workflow_runtime_ready": bool(workflow.get("runtime_ready", True)),
                 "integration": dict(integration or {}),
+                "sandbox_config": dict(sandbox_config or {}),
             },
         )
         return manifest.model_dump()
+
+    def _build_fallback_task_plan(
+        self,
+        *,
+        request_text: str,
+        request_class: str,
+        planning_domain: str,
+        capability_manifest: CapabilityManifest,
+        skill_manifest: dict[str, Any] | None,
+        integration_resolution: dict[str, Any] | None,
+        runtime_turn: dict[str, Any],
+    ) -> dict[str, Any]:
+        goal = str(capability_manifest.objective or request_text or "").strip() or request_text
+        first_tool = ""
+        tools = list((skill_manifest or {}).get("required_tools") or [])
+        if tools:
+            first_tool = str(tools[0] or "")
+        if not first_tool:
+            first_tool = str(capability_manifest.primary_action or "task_execution")
+
+        steps: list[dict[str, Any]] = []
+        if request_class in {"research", "workflow"} or planning_domain in {"research", "workflow"}:
+            steps.append(
+                {
+                    "kind": "research",
+                    "name": str(capability_manifest.workflow_id or "research_task"),
+                    "tool": first_tool or "research_document_delivery",
+                    "params": {"topic": goal, "language": "tr"},
+                    "verify": {"artifact_count_min": 1, "artifacts_exist": True},
+                    "repair_policy": {"max_retries": 1},
+                }
+            )
+        elif request_class in {"browser", "file", "task"} or planning_domain in {"browser", "file"}:
+            steps.append(
+                {
+                    "kind": "system",
+                    "name": str(capability_manifest.primary_action or "direct_action"),
+                    "tool": str(capability_manifest.primary_action or "direct_action"),
+                    "params": {"request": request_text},
+                    "verify": {"artifacts_exist": True},
+                    "repair_policy": {"max_retries": 1},
+                }
+            )
+        else:
+            steps.append(
+                {
+                    "kind": "system",
+                    "name": str(capability_manifest.primary_action or "task_execution"),
+                    "tool": str(capability_manifest.primary_action or "task_execution"),
+                    "params": {"request": request_text},
+                    "verify": {"artifacts_exist": True},
+                    "repair_policy": {"max_retries": 0},
+                }
+            )
+
+        return {
+            "goal": goal,
+            "name": str(capability_manifest.workflow_id or capability_manifest.capability_id or "operator-task"),
+            "steps": steps,
+            "constraints": list(capability_manifest.quality_contract or []),
+            "dependencies": list((skill_manifest or {}).get("dependencies") or []),
+            "evidence": [str(item) for item in (capability_manifest.output_artifacts or ["artifact"])],
+            "exit_criteria": ["Artifact veya doğrulama kanıtı oluşturulmalı."],
+            "approvals": list((skill_manifest or {}).get("approval_tools") or []),
+            "parallel_steps": [step for step in steps if str(step.get("kind") or "").lower() == "system"],
+            "rationale": str(capability_manifest.source_policy or "deterministic"),
+            "planning_trace": {
+                "request": request_text,
+                "planning_request": request_text,
+                "matched_rules": ["fallback_plan"],
+                "assumptions": [],
+                "missing_inputs": [],
+                "extracted": {
+                    "request_class": request_class,
+                    "domain": planning_domain,
+                    "integration": dict(integration_resolution or {}),
+                },
+                "bounded": True,
+                "safe_mode": "deterministic",
+                "runtime_request_id": str(runtime_turn.get("request_id") or ""),
+            },
+        }
 
     async def plan_request(
         self,
@@ -342,6 +443,48 @@ class OperatorControlPlane:
             "allow_destructive_actions": operator_policy.allow_destructive_actions,
             "require_confirmation_for_risky": operator_policy.require_confirmation_for_risky,
         }
+        autonomy_policy = get_autonomy_policy()
+        autonomy_decision: AutonomyDecision = autonomy_policy.decide(
+            request_text,
+            quick_intent=quick_intent,
+            parsed_intent=parsed_intent if isinstance(parsed_intent, dict) else {},
+            request_contract=request_contract,
+            capability_plan=route_plan,
+            metadata=dict(runtime_turn.get("operator_trace") or {}),
+        )
+        task_plan: dict[str, Any] = {}
+        planning_domain = str(getattr(route_plan, "domain", "") or "").strip().lower()
+        should_plan_task = bool(
+            request_class in {"research", "coding", "workflow", "file", "browser", "task"}
+            or planning_domain in {"research", "coding", "workflow", "file", "browser", "real_time_control", "screen_operator"}
+            or bool(capability_manifest.multi_agent_recommended)
+            or bool(capability_manifest.requires_real_time)
+        )
+        if should_plan_task:
+            try:
+                task_plan = get_task_planner().plan(
+                    request_text,
+                    context={
+                        "request_class": request_class,
+                        "domain": planning_domain,
+                        "capability": capability_manifest.model_dump(),
+                        "skill": dict(skill_manifest or {}),
+                        "integration": dict(integration_resolution or {}),
+                        "operator_trace": dict(runtime_turn.get("operator_trace") or {}),
+                    },
+                )
+            except Exception as exc:
+                logger.debug(f"task planning skipped: {exc}")
+            if not task_plan:
+                task_plan = self._build_fallback_task_plan(
+                    request_text=request_text,
+                    request_class=request_class,
+                    planning_domain=planning_domain,
+                    capability_manifest=capability_manifest,
+                    skill_manifest=skill_manifest,
+                    integration_resolution=integration_resolution,
+                    runtime_turn=runtime_turn,
+                )
         result = {
             **runtime_turn,
             "operator_request": req.model_dump(),
@@ -364,6 +507,9 @@ class OperatorControlPlane:
                 "allow_destructive_actions": operator_policy.allow_destructive_actions,
                 "require_confirmation_for_risky": operator_policy.require_confirmation_for_risky,
             },
+            "autonomy": autonomy_decision.to_dict(),
+            "task_plan": dict(task_plan or {}),
+            "task_card": dict(task_plan or {}),
             "model_runtime": runtime_model,
             "operator_trace": {
                 "request_id": request_id,
@@ -372,6 +518,10 @@ class OperatorControlPlane:
                 "skill_latency_level": str(skill_manifest.get("latency_level") or "standard"),
                 "real_time_required": needs_real_time,
                 "model_role": model_role,
+                "autonomy_mode": autonomy_decision.mode,
+                "should_ask": autonomy_decision.should_ask,
+                "should_resume": autonomy_decision.should_resume,
+                "task_plan_ready": bool(task_plan),
             },
         }
         result["realtime_actuator"] = self.real_time_actuator.get_status() if hasattr(self.real_time_actuator, "get_status") else {}
@@ -464,6 +614,46 @@ class OperatorControlPlane:
                 "actuation": actuation,
             },
         )
+        try:
+            from core.integration_trace import get_integration_trace_store
+
+            integration_meta = dict(plan.get("integration") or {})
+            trace_store = get_integration_trace_store()
+            trace_store.record_trace(
+                request_id=str(outcome.request_id or ctx.get("request_id") or ctx.get("run_id") or ""),
+                user_id=str(user_id or "local"),
+                session_id=str(ctx.get("session_id") or ctx.get("channel_session_id") or "default"),
+                channel=str(channel or "cli"),
+                provider=str(integration_meta.get("provider") or integration_meta.get("source") or plan.get("model_selection", {}).get("provider") or ""),
+                connector_name=str(integration_meta.get("connector_name") or skill_manifest.get("name") or plan.get("request_class") or ""),
+                integration_type=str(integration_meta.get("integration_type") or skill_manifest.get("integration_type") or ""),
+                operation="operator_handle",
+                status=str(outcome.status or ""),
+                success=bool(outcome.success),
+                auth_state=str(integration_meta.get("auth_resolution", {}).get("auth_state") or integration_meta.get("auth_state") or ""),
+                auth_strategy=str(integration_meta.get("auth_strategy") or skill_manifest.get("auth_strategy") or ""),
+                account_alias=str(integration_meta.get("auth_resolution", {}).get("account_alias") or ""),
+                fallback_used=bool(outcome.fallback_reason),
+                fallback_reason=str(outcome.fallback_reason or integration_meta.get("fallback_reason") or ""),
+                install_state=str(integration_meta.get("install_state") or ""),
+                retry_count=int(integration_meta.get("retry_count") or 0),
+                latency_ms=float(outcome.latency_ms or 0.0),
+                evidence=list(outcome.evidence or []),
+                artifacts=list(outcome.artifacts or []),
+                verification=dict(outcome.verification or {}),
+                metadata={
+                    "skill": outcome.skill,
+                    "capability": outcome.capability,
+                    "decision_trace": outcome.decision_trace,
+                    "model_runtime": outcome.model_runtime,
+                    "execution_path": outcome.execution_path,
+                    "operator_policy": dict(outcome.metadata.get("operator_plan") or {}),
+                    "actuation": dict(outcome.metadata.get("actuation") or {}),
+                    "auth_resolution": dict(integration_meta.get("auth_resolution") or {}),
+                },
+            )
+        except Exception:
+            pass
         return outcome
 
     def get_status(self) -> dict[str, Any]:

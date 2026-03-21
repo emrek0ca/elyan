@@ -60,6 +60,7 @@ dependencies = [
     # Security
     "cryptography>=42.0.0",
     "keyring>=25.0.0",
+    "docker>=7.0.0",
     # DB
     "sqlalchemy>=2.0.0",
 ]

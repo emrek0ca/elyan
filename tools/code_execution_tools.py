@@ -309,68 +309,136 @@ def get_code_executor() -> SafeCodeExecutor:
     return _code_executor
 
 
+async def _run_via_security(skill_name: str, language: str, code: str) -> dict[str, Any]:
+    from elyan.core.security import get_security_layer
+
+    security = get_security_layer()
+    result = await security.execute_safe(
+        skill_name,
+        {
+            "type": skill_name,
+            "action": skill_name,
+            "description": f"{language} code execution",
+            "language": language,
+            "image": {
+                "python": "python:3.12-slim",
+                "javascript": "node:20-slim",
+                "shell": "alpine:3.19",
+            }.get(language, "python:3.12-slim"),
+            "needs_network": False,
+            "approval_required": False,
+        },
+        code,
+        {"source": "code_execution_tools", "interactive": False},
+    )
+    return dict(result or {})
+
+
 # Tool functions
 async def execute_python_code(code: str) -> Dict[str, Any]:
     """Execute Python code safely"""
-    executor = get_code_executor()
-    result = await executor.execute_python(code)
+    try:
+        result = await _run_via_security("execute_python_code", "python", code)
+    except PermissionError as exc:
+        return {
+            "success": False,
+            "status": "blocked",
+            "output": "",
+            "error": str(exc),
+            "execution_time": 0.0,
+            "return_code": 1,
+            "sandboxed": False,
+            "error_code": "APPROVAL_DENIED",
+            "errors": ["APPROVAL_DENIED"],
+        }
     return {
-        "success": result.success,
-        "output": result.output,
-        "error": result.error,
-        "execution_time": result.execution_time,
-        "return_code": result.return_code
+        "success": bool(result.get("success", False)),
+        "status": str(result.get("status") or ("success" if result.get("success") else "failed")),
+        "output": str(result.get("stdout") or result.get("output") or ""),
+        "error": str(result.get("stderr") or result.get("error") or ""),
+        "execution_time": float(result.get("duration_ms") or result.get("execution_time") or 0.0) / (1000.0 if result.get("duration_ms") is not None else 1.0),
+        "return_code": int(result.get("return_code") or result.get("exit_code") or 0),
+        "sandboxed": bool(result.get("sandboxed", True)),
+        "backend": str(result.get("backend") or ""),
     }
 
 
 async def execute_javascript_code(code: str) -> Dict[str, Any]:
     """Execute JavaScript code safely"""
-    executor = get_code_executor()
-    result = await executor.execute_javascript(code)
+    try:
+        result = await _run_via_security("execute_javascript_code", "javascript", code)
+    except PermissionError as exc:
+        return {
+            "success": False,
+            "status": "blocked",
+            "output": "",
+            "error": str(exc),
+            "execution_time": 0.0,
+            "return_code": 1,
+            "sandboxed": False,
+            "error_code": "APPROVAL_DENIED",
+            "errors": ["APPROVAL_DENIED"],
+        }
     return {
-        "success": result.success,
-        "output": result.output,
-        "error": result.error,
-        "execution_time": result.execution_time,
-        "return_code": result.return_code
+        "success": bool(result.get("success", False)),
+        "status": str(result.get("status") or ("success" if result.get("success") else "failed")),
+        "output": str(result.get("stdout") or result.get("output") or ""),
+        "error": str(result.get("stderr") or result.get("error") or ""),
+        "execution_time": float(result.get("duration_ms") or result.get("execution_time") or 0.0) / (1000.0 if result.get("duration_ms") is not None else 1.0),
+        "return_code": int(result.get("return_code") or result.get("exit_code") or 0),
+        "sandboxed": bool(result.get("sandboxed", True)),
+        "backend": str(result.get("backend") or ""),
     }
 
 
 async def execute_shell_command(command: str) -> Dict[str, Any]:
     """Execute shell command safely"""
-    executor = get_code_executor()
-    result = await executor.execute_shell(command)
+    try:
+        result = await _run_via_security("execute_shell_command", "shell", command)
+    except PermissionError as exc:
+        return {
+            "success": False,
+            "status": "blocked",
+            "output": "",
+            "error": str(exc),
+            "execution_time": 0.0,
+            "return_code": 1,
+            "sandboxed": False,
+            "error_code": "APPROVAL_DENIED",
+            "errors": ["APPROVAL_DENIED"],
+        }
     return {
-        "success": result.success,
-        "output": result.output,
-        "error": result.error,
-        "execution_time": result.execution_time,
-        "return_code": result.return_code
+        "success": bool(result.get("success", False)),
+        "status": str(result.get("status") or ("success" if result.get("success") else "failed")),
+        "output": str(result.get("stdout") or result.get("output") or ""),
+        "error": str(result.get("stderr") or result.get("error") or ""),
+        "execution_time": float(result.get("duration_ms") or result.get("execution_time") or 0.0) / (1000.0 if result.get("duration_ms") is not None else 1.0),
+        "return_code": int(result.get("return_code") or result.get("exit_code") or 0),
+        "sandboxed": bool(result.get("sandboxed", True)),
+        "backend": str(result.get("backend") or ""),
     }
 
 
 async def debug_code(code: str, language: str = "python") -> Dict[str, Any]:
     """Debug code with execution analysis"""
-    executor = get_code_executor()
-
     if language == "python":
-        result = await executor.execute_python(code)
+        result = await execute_python_code(code)
     elif language == "javascript":
-        result = await executor.execute_javascript(code)
+        result = await execute_javascript_code(code)
     elif language == "shell":
-        result = await executor.execute_shell(code)
+        result = await execute_shell_command(code)
     else:
         return {"success": False, "error": f"Unknown language: {language}"}
 
     return {
-        "success": result.success,
+        "success": bool(result.get("success", False)),
         "language": language,
-        "output": result.output,
-        "error": result.error,
-        "execution_time": result.execution_time,
+        "output": str(result.get("output") or ""),
+        "error": str(result.get("error") or ""),
+        "execution_time": float(result.get("execution_time") or 0.0),
         "debug_info": {
-            "return_code": result.return_code,
-            "output_length": len(result.output),
-            "error_present": bool(result.error)
+            "return_code": int(result.get("return_code") or 0),
+            "output_length": len(str(result.get("output") or "")),
+            "error_present": bool(result.get("error")),
         }
     }

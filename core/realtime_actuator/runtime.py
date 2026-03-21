@@ -25,6 +25,7 @@ from core.contracts.operator_runtime import ExecutionEvidence, FrameObservation
 from core.contracts.failure_taxonomy import FailureCode
 from core.contracts.verification_result import VerificationCheck, VerificationResult
 from core.storage_paths import resolve_elyan_data_dir
+from elyan.core.security import get_security_layer
 from utils.logger import get_logger
 
 logger = get_logger("realtime_actuator")
@@ -634,10 +635,48 @@ class ActionExecutor:
         self.state_cache = state_cache or StateCache()
         self.observer = ScreenObserver(services=self.services, state_cache=self.state_cache)
         self.verifier = VisionVerifier(services=self.services, state_cache=self.state_cache)
+        self.security = get_security_layer()
 
     async def execute(self, action: dict[str, Any]) -> dict[str, Any]:
         started = time.perf_counter()
         payload = dict(action or {})
+        if not bool(payload.pop("_security_preapproved", False)):
+            interactive = bool(getattr(sys.stdin, "isatty", lambda: False)() and getattr(sys.stdout, "isatty", lambda: False)())
+            try:
+                await self.security.authorize_action(
+                    "screen_operator",
+                    {
+                        "type": str(payload.get("kind") or payload.get("action") or "realtime_action"),
+                        "description": str(
+                            payload.get("instruction")
+                            or payload.get("goal")
+                            or payload.get("description")
+                            or payload.get("action")
+                            or payload.get("kind")
+                            or ""
+                        ),
+                        "approval_required": bool(payload.get("approval_required", False)),
+                        "destructive": bool(payload.get("destructive", False)),
+                        "needs_network": bool(payload.get("needs_network", False)),
+                        "workspace_dir": str(payload.get("workspace_dir") or ""),
+                    },
+                    {
+                        "source": "realtime_actuator",
+                        "interactive": interactive,
+                        "screenshot_path": str(payload.get("screenshot_path") or ""),
+                    },
+                )
+            except PermissionError as exc:
+                result = {
+                    "success": False,
+                    "status": "blocked",
+                    "error": str(exc),
+                    "errors": ["APPROVAL_DENIED"],
+                    "data": {"error_code": "APPROVAL_DENIED"},
+                    "latency_ms": float((time.perf_counter() - started) * 1000.0),
+                }
+                self.state_cache.remember_action(payload, result)
+                return result
         if "instruction" in payload and str(payload.get("instruction") or "").strip():
             result = await run_screen_operator(
                 instruction=str(payload.get("instruction") or ""),
@@ -1044,6 +1083,7 @@ class RealTimeActuator:
         self._last_ticket = 0
         self._screenpipe_client = ScreenpipeClient(base_url=self.screenpipe_url)
         self._backend_profile: dict[str, Any] = self._build_backend_profile("inline")
+        self.security = get_security_layer()
 
     def _build_config(self) -> dict[str, Any]:
         return {
@@ -1197,14 +1237,59 @@ class RealTimeActuator:
 
     def submit(self, action: dict[str, Any]) -> dict[str, Any]:
         payload = dict(action or {})
+        interactive = bool(getattr(sys.stdin, "isatty", lambda: False)() and getattr(sys.stdout, "isatty", lambda: False)())
         with self._lock:
             self._last_ticket += 1
             ticket_id = f"ticket-{self._last_ticket}"
             self._drain_results()
+            if not bool(payload.get("_security_preapproved", False)):
+                try:
+                    asyncio.run(
+                        self.security.authorize_action(
+                            "screen_operator",
+                            {
+                                "type": str(payload.get("kind") or payload.get("action") or "realtime_action"),
+                                "description": str(
+                                    payload.get("instruction")
+                                    or payload.get("goal")
+                                    or payload.get("description")
+                                    or payload.get("action")
+                                    or payload.get("kind")
+                                    or ""
+                                ),
+                                "approval_required": bool(payload.get("approval_required", False)),
+                                "destructive": bool(payload.get("destructive", False)),
+                                "needs_network": bool(payload.get("needs_network", False)),
+                                "workspace_dir": str(payload.get("workspace_dir") or ""),
+                            },
+                            {
+                                "source": "realtime_actuator",
+                                "interactive": interactive,
+                                "screenshot_path": str(payload.get("screenshot_path") or ""),
+                            },
+                        )
+                    )
+                except PermissionError as exc:
+                    return {
+                        "ticket_id": ticket_id,
+                        "queued": False,
+                        "status": "blocked",
+                        "action": payload,
+                        "error": str(exc),
+                        "result": {
+                            "success": False,
+                            "status": "blocked",
+                            "error": str(exc),
+                            "errors": ["APPROVAL_DENIED"],
+                            "data": {"error_code": "APPROVAL_DENIED"},
+                        },
+                    }
+                payload["_security_preapproved"] = True
             if self.process_mode and self._transport is not None:
                 self._transport.send({"type": "action", "ticket_id": ticket_id, "payload": payload})
                 return {"ticket_id": ticket_id, "queued": True, "status": "queued", "action": payload}
         # Fallback to inline execution for test/dev or when process mode is disabled.
+        payload["_security_preapproved"] = True
         result = asyncio.run(ActionExecutor(services=self.services, state_cache=self.state_cache).execute(payload))
         self._last_snapshot = self.state_cache.snapshot()
         return {

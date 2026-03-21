@@ -3,6 +3,7 @@ import json
 import os
 import platform
 import re
+import sys
 import time
 import shutil
 import unicodedata
@@ -1803,10 +1804,33 @@ async def close_app(app_name: Optional[str] = None) -> dict[str, Any]:
 @tool("kill_process", "Forcefully terminate a process by name or PID.")
 async def kill_process(process_name: str) -> dict[str, Any]:
     try:
+        interactive = bool(getattr(sys.stdin, "isatty", lambda: False)() and getattr(sys.stdout, "isatty", lambda: False)())
+        from elyan.core.security import get_security_layer
+
+        await get_security_layer().authorize_action(
+            "kill_process",
+            {
+                "type": "kill_process",
+                "action": "kill_process",
+                "description": process_name,
+                "command": process_name,
+                "destructive": True,
+                "approval_required": True,
+            },
+            {"source": "system_tools", "interactive": interactive},
+        )
         cmd = ["pkill", "-f", process_name]
         process = await asyncio.create_subprocess_exec(*cmd)
         await process.wait()
-        return {"success": True, "message": f"Process {process_name} killed."}
+        return {"success": True, "status": "success", "message": f"Process {process_name} killed."}
+    except PermissionError as exc:
+        return {
+            "success": False,
+            "status": "blocked",
+            "error": str(exc),
+            "error_code": "APPROVAL_DENIED",
+            "errors": ["APPROVAL_DENIED"],
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -3449,57 +3473,168 @@ async def open_url(url: str, browser: Optional[str] = None) -> dict[str, Any]:
 @tool("shutdown_system", "Initiate system shutdown.")
 async def shutdown_system() -> dict[str, Any]:
     try:
+        interactive = bool(getattr(sys.stdin, "isatty", lambda: False)() and getattr(sys.stdout, "isatty", lambda: False)())
+        from elyan.core.security import get_security_layer
+
+        await get_security_layer().authorize_action(
+            "shutdown_system",
+            {
+                "type": "shutdown_system",
+                "action": "shutdown_system",
+                "description": "shutdown_system",
+                "command": "shutdown",
+                "destructive": True,
+                "requires_screen": True,
+            },
+            {"source": "system_tools", "interactive": interactive},
+        )
         await _run_osascript('tell application "System Events" to shut down')
-        return {"success": True}
+        return {"success": True, "status": "success"}
+    except PermissionError as exc:
+        return {
+            "success": False,
+            "status": "blocked",
+            "error": str(exc),
+            "error_code": "APPROVAL_DENIED",
+            "errors": ["APPROVAL_DENIED"],
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 @tool("restart_system", "Initiate system restart.")
 async def restart_system() -> dict[str, Any]:
     try:
+        interactive = bool(getattr(sys.stdin, "isatty", lambda: False)() and getattr(sys.stdout, "isatty", lambda: False)())
+        from elyan.core.security import get_security_layer
+
+        await get_security_layer().authorize_action(
+            "restart_system",
+            {
+                "type": "restart_system",
+                "action": "restart_system",
+                "description": "restart_system",
+                "command": "restart",
+                "destructive": True,
+                "requires_screen": True,
+            },
+            {"source": "system_tools", "interactive": interactive},
+        )
         await _run_osascript('tell application "System Events" to restart')
-        return {"success": True}
+        return {"success": True, "status": "success"}
+    except PermissionError as exc:
+        return {
+            "success": False,
+            "status": "blocked",
+            "error": str(exc),
+            "error_code": "APPROVAL_DENIED",
+            "errors": ["APPROVAL_DENIED"],
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 @tool("sleep_system", "Put system to sleep.")
 async def sleep_system() -> dict[str, Any]:
     try:
+        interactive = bool(getattr(sys.stdin, "isatty", lambda: False)() and getattr(sys.stdout, "isatty", lambda: False)())
+        from elyan.core.security import get_security_layer
+
+        await get_security_layer().authorize_action(
+            "sleep_system",
+            {
+                "type": "sleep_system",
+                "action": "sleep_system",
+                "description": "sleep_system",
+                "command": "sleep",
+                "destructive": True,
+                "approval_required": True,
+            },
+            {"source": "system_tools", "interactive": interactive},
+        )
         await _run_osascript('tell application "System Events" to sleep')
-        return {"success": True}
+        return {"success": True, "status": "success"}
+    except PermissionError as exc:
+        return {
+            "success": False,
+            "status": "blocked",
+            "error": str(exc),
+            "error_code": "APPROVAL_DENIED",
+            "errors": ["APPROVAL_DENIED"],
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 @tool("lock_screen", "Lock the current session.")
 async def lock_screen() -> dict[str, Any]:
     try:
+        interactive = bool(getattr(sys.stdin, "isatty", lambda: False)() and getattr(sys.stdout, "isatty", lambda: False)())
+        from elyan.core.security import get_security_layer
+
+        await get_security_layer().authorize_action(
+            "lock_screen",
+            {
+                "type": "lock_screen",
+                "action": "lock_screen",
+                "description": "lock_screen",
+                "command": "lock",
+                "destructive": True,
+                "approval_required": True,
+            },
+            {"source": "system_tools", "interactive": interactive},
+        )
         cmd = "/System/Library/CoreServices/Menu\\ Extras/User.menu/Contents/Resources/CGSession -suspend"
         await asyncio.create_subprocess_shell(cmd)
-        return {"success": True}
+        return {"success": True, "status": "success"}
+    except PermissionError as exc:
+        return {
+            "success": False,
+            "status": "blocked",
+            "error": str(exc),
+            "error_code": "APPROVAL_DENIED",
+            "errors": ["APPROVAL_DENIED"],
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
 @tool("run_safe_command", "Run a shell command with basic safety checks.")
 async def run_safe_command(command: str) -> dict[str, Any]:
-    blocked = ["rm -rf /", "mkfs", "dd if=", ":(){:|:&};:", "shutdown", "reboot"]
-    cmd_lower = command.lower().strip()
-    for b in blocked:
-        if b in cmd_lower:
-            return {"success": False, "error": f"Blocked command: {b}"}
     try:
-        proc = await asyncio.create_subprocess_shell(
-            command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        interactive = bool(getattr(sys.stdin, "isatty", lambda: False)() and getattr(sys.stdout, "isatty", lambda: False)())
+        from elyan.core.security import get_security_layer
+
+        result = await get_security_layer().execute_safe(
+            "run_safe_command",
+            {
+                "type": "run_safe_command",
+                "action": "run_safe_command",
+                "description": command,
+                "command": command,
+                "language": "shell",
+                "image": "alpine:3.19",
+                "needs_network": False,
+            },
+            command,
+            {"source": "system_tools", "interactive": interactive},
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
         return {
-            "success": proc.returncode == 0,
-            "stdout": stdout.decode()[:5000],
-            "stderr": stderr.decode()[:2000],
-            "returncode": proc.returncode,
+            "success": bool(result.get("success", False)),
+            "status": str(result.get("status") or ("success" if result.get("success") else "failed")),
+            "stdout": str(result.get("stdout") or ""),
+            "stderr": str(result.get("stderr") or result.get("error") or ""),
+            "returncode": int(result.get("return_code") or result.get("exit_code") or 0),
+            "sandboxed": bool(result.get("sandboxed", True)),
+            "backend": str(result.get("backend") or ""),
         }
-    except asyncio.TimeoutError:
-        return {"success": False, "error": "Command timed out (30s)"}
+    except PermissionError as exc:
+        return {
+            "success": False,
+            "status": "blocked",
+            "error": str(exc),
+            "returncode": 1,
+            "sandboxed": False,
+            "error_code": "APPROVAL_DENIED",
+            "errors": ["APPROVAL_DENIED"],
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -3711,7 +3846,6 @@ async def get_weather(city: str = "") -> dict[str, Any]:
 @tool("run_code", "Write and execute Python code, show output.")
 async def run_code(code: str = "", language: str = "python", description: str = "") -> dict[str, Any]:
     """Python kodu yaz ve çalıştır — çıktıyı döndür."""
-    import tempfile
     try:
         if not code or not code.strip():
             return {"success": False, "error": "Çalıştırılacak kod boş. Lütfen kod girin."}
@@ -3719,38 +3853,36 @@ async def run_code(code: str = "", language: str = "python", description: str = 
         lang = (language or "python").lower()
         if lang not in ("python", "python3", "py"):
             return {"success": False, "error": f"Desteklenmeyen dil: {language}. Şu an sadece Python destekleniyor."}
+        interactive = bool(getattr(sys.stdin, "isatty", lambda: False)() and getattr(sys.stdout, "isatty", lambda: False)())
+        from elyan.core.security import get_security_layer
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
-            f.write(code)
-            tmp_path = f.name
-
-        proc = await asyncio.create_subprocess_exec(
-            "python3", tmp_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        result = await get_security_layer().execute_safe(
+            "run_code",
+            {
+                "type": "run_code",
+                "action": "run_code",
+                "description": description or "python code execution",
+                "code": code,
+                "language": "python",
+                "image": "python:3.12-slim",
+                "needs_network": False,
+            },
+            code,
+            {"source": "system_tools", "interactive": interactive},
         )
-        try:
-            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=30.0)
-        except asyncio.TimeoutError:
-            proc.kill()
-            return {"success": False, "error": "Kod 30 saniye içinde tamamlanamadı (timeout)."}
-        finally:
-            try:
-                Path(tmp_path).unlink(missing_ok=True)
-            except Exception:
-                pass
-
-        stdout_text = stdout_b.decode("utf-8", errors="ignore").strip()
-        stderr_text = stderr_b.decode("utf-8", errors="ignore").strip()
-        ok = proc.returncode == 0
-
+        stdout_text = str(result.get("stdout") or "")
+        stderr_text = str(result.get("stderr") or result.get("error") or "")
+        ok = bool(result.get("success", False))
         return {
             "success": ok,
+            "status": str(result.get("status") or ("success" if ok else "failed")),
             "code": code,
             "language": "python",
             "output": stdout_text,
             "error_output": stderr_text,
-            "return_code": proc.returncode,
+            "return_code": int(result.get("return_code") or result.get("exit_code") or 0),
+            "sandboxed": bool(result.get("sandboxed", True)),
+            "backend": str(result.get("backend") or ""),
             "summary": (
                 f"✅ Kod çalıştı.\n```\n{stdout_text[:2000]}\n```" if ok
                 else f"❌ Hata:\n```\n{stderr_text[:1000]}\n```"

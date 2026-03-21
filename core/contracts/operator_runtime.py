@@ -6,6 +6,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from elyan.approval.matrix import ApprovalLevel
+from elyan.sandbox.policy import SandboxConfig
+
 
 def _ts() -> float:
     return time.time()
@@ -84,7 +87,8 @@ class SkillManifest(BaseModel):
     steps: list[str] = Field(default_factory=list)
     output_artifacts: list[str] = Field(default_factory=list)
     quality_checklist: list[str] = Field(default_factory=list)
-    approval_level: int = 0
+    approval_level: ApprovalLevel = ApprovalLevel.NONE
+    sandbox_config: SandboxConfig = Field(default_factory=SandboxConfig)
     real_time: bool = False
     tool_policy: dict[str, Any] = Field(default_factory=dict)
     output_contract: dict[str, Any] = Field(default_factory=dict)

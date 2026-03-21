@@ -5,8 +5,24 @@ from config.settings import TASK_TIMEOUT, CIRCUIT_BREAKER_THRESHOLD
 from utils.logger import get_logger
 from datetime import datetime, timedelta
 from core.compat.legacy_tool_wrappers import normalize_legacy_tool_payload
+from elyan.core.security import get_security_layer
 
 logger = get_logger("task_executor")
+
+_SELF_GUARDED_TOOLS = {
+    "run_safe_command",
+    "run_command",
+    "run_code",
+    "execute_python_code",
+    "execute_javascript_code",
+    "execute_shell_command",
+    "debug_code",
+    "kill_process",
+    "shutdown_system",
+    "restart_system",
+    "sleep_system",
+    "lock_screen",
+}
 
 class CircuitBreaker:
     def __init__(self, threshold: int = CIRCUIT_BREAKER_THRESHOLD):
@@ -56,6 +72,7 @@ class TaskExecutor:
         self.is_busy = False
         self.current_task = None
         self.task_history = []  # Son görevleri takip et
+        self.security = get_security_layer()
 
     def _get_tool_breaker(self, tool_name: str) -> CircuitBreaker:
         """Get or create circuit breaker for a tool"""
@@ -90,6 +107,23 @@ class TaskExecutor:
 
     async def execute(self, tool_func: Callable, params: dict[str, Any]) -> dict[str, Any]:
         tool_name = tool_func.__name__
+        action = {
+            "type": tool_name,
+            "action": tool_name,
+            "description": str(
+                params.get("description")
+                or params.get("command")
+                or params.get("path")
+                or params.get("file_path")
+                or tool_name
+            ),
+            "command": str(params.get("command") or params.get("cmd") or params.get("code") or ""),
+            "language": str(params.get("language") or ""),
+            "needs_network": bool(params.get("needs_network", params.get("network", False))),
+            "destructive": bool(params.get("destructive", False)),
+            "approval_required": bool(params.get("approval_required", False)),
+            "workspace_dir": str(params.get("workspace_dir") or params.get("workspace") or ""),
+        }
 
         # Check per-tool circuit breaker
         tool_breaker = self._get_tool_breaker(tool_name)
@@ -119,6 +153,34 @@ class TaskExecutor:
                 },
                 error_code="CIRCUIT_BREAKER_OPEN",
             )
+
+        if tool_name not in _SELF_GUARDED_TOOLS:
+            try:
+                await self.security.authorize_action(
+                    tool_name,
+                    action,
+                    {
+                        "source": "task_executor",
+                        "tool_name": tool_name,
+                        "params": dict(params or {}),
+                    },
+                )
+            except PermissionError as exc:
+                elapsed = 0.0
+                blocked = self._normalize_executor_result(
+                    tool_name,
+                    {
+                        "success": False,
+                        "status": "blocked",
+                        "error": str(exc),
+                        "errors": ["APPROVAL_DENIED"],
+                        "data": {"error_code": "APPROVAL_DENIED", "blocker": "approval_gate"},
+                    },
+                    elapsed_s=elapsed,
+                    error_code="APPROVAL_DENIED",
+                )
+                self._record_task(tool_name, False, elapsed, "approval_denied")
+                return blocked
 
         # Parallelism Enabled (v15.0) - Removed is_busy blocking
         # self.is_busy = True # No longer using simple flag
@@ -152,8 +214,11 @@ class TaskExecutor:
                 tool_breaker.record_success()
                 self.circuit_breaker.record_success()
             else:
-                tool_breaker.record_failure()
-                self.circuit_breaker.record_failure()
+                result_data = result.get("data") if isinstance(result.get("data"), dict) else {}
+                approval_denied = str(result.get("error_code") or result_data.get("error_code") or "").strip().upper() == "APPROVAL_DENIED"
+                if not approval_denied:
+                    tool_breaker.record_failure()
+                    self.circuit_breaker.record_failure()
 
             return result
 
