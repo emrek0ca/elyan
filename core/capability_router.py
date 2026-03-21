@@ -160,6 +160,7 @@ class CapabilityRouter:
         "image": "browser_task",
         "full_stack_delivery": "code_project",
         "lean": "formal_methods",
+        "cloudflare_agents": "code_project",
         "general": "communication",
     }
 
@@ -244,6 +245,11 @@ class CapabilityRouter:
             "formalize", "formalisation", "formalization", "autoformalize", "autoprove",
             "lakefile", "lake", "lean-toolchain", "project-scoped formalization",
         ],
+        "cloudflare_agents": [
+            "cloudflare agents", "routeagentrequest", "useagent", "useagentchat",
+            "durable objects", "cloudflare worker", "cloudflare workers", "wrangler",
+            "new_sqlite_classes", "ai-chat", "ai chat agent", "edge runtime", "mcp",
+        ],
         "full_stack_delivery": [
             "full stack", "uçtan uca", "uctan uca", "production", "deployment",
             "mimari", "architecture", "pipeline", "microservice", "dashboard"
@@ -317,6 +323,22 @@ class CapabilityRouter:
             "output_artifacts": ["lean_project_manifest", "proof_trace", "build_log"],
             "quality_checklist": ["typecheck", "traceability", "project_scope", "reproducibility"],
             "learning_tags": ["lean", "mathlib", "formal_methods"],
+        },
+        "cloudflare_agents": {
+            "objective": "build_cloudflare_agents_worker_app",
+            "workflow_id": "cloudflare_agents_workflow",
+            "primary_action": "cloudflare_agents_scaffold",
+            "preferred_tools": [
+                "cloudflare_agents_status",
+                "cloudflare_agents_project",
+                "cloudflare_agents_scaffold",
+                "cloudflare_agents_workflow",
+                "create_software_project_pack",
+                "create_web_project_scaffold",
+            ],
+            "output_artifacts": ["wrangler_jsonc", "server_ts", "client_tsx", "workflow_notes", "mcp_notes"],
+            "quality_checklist": ["deploy_readiness", "durable_state", "realtime_sync", "callable_methods", "mcp_ready"],
+            "learning_tags": ["cloudflare", "workers", "agents", "edge"],
         },
         "email": {
             "objective": "manage_email_workflow_with_traceability",
@@ -537,6 +559,8 @@ class CapabilityRouter:
             return "summary_pack"
         if domain == "full_stack_delivery":
             return "delivery_bundle"
+        if domain == "cloudflare_agents":
+            return "code_project"
         return "task"
 
     @staticmethod
@@ -587,6 +611,8 @@ class CapabilityRouter:
             add("docx")
         if domain == "code" and not formats:
             add("md")
+        if domain == "cloudflare_agents" and not formats:
+            add("md")
         return formats or ["docx"]
 
     @staticmethod
@@ -603,6 +629,8 @@ class CapabilityRouter:
         if content_kind == "automation":
             return "operational"
         if domain == "code":
+            return "implementation"
+        if domain == "cloudflare_agents":
             return "implementation"
         if any(marker in low for marker in ("analitik", "analytical", "detaylı", "detayli", "scientific", "bilimsel")):
             return "analytical"
@@ -662,6 +690,14 @@ class CapabilityRouter:
                 "safety",
                 "repeatability",
                 "traceability",
+            ]
+        if domain == "cloudflare_agents":
+            return [
+                "deploy_readiness",
+                "durable_state",
+                "realtime_sync",
+                "callable_methods",
+                "mcp_ready",
             ]
         if content_kind == "web_project":
             return [
@@ -887,9 +923,9 @@ class CapabilityRouter:
             suggested_job_type=suggested_job_type,
             multi_agent_recommended=multi_agent_recommended,
             orchestration_mode="multi_agent" if multi_agent_recommended else "single_agent",
-            workflow_profile_applicable=best_domain in {"code", "api_integration", "full_stack_delivery", "lean"},
-            requires_design_phase=best_domain in {"code", "api_integration", "full_stack_delivery", "lean"},
-            requires_worktree=best_domain == "full_stack_delivery",
+            workflow_profile_applicable=best_domain in {"code", "api_integration", "full_stack_delivery", "lean", "cloudflare_agents"},
+            requires_design_phase=best_domain in {"code", "api_integration", "full_stack_delivery", "lean", "cloudflare_agents"},
+            requires_worktree=best_domain in {"full_stack_delivery", "cloudflare_agents"},
             content_kind=request_contract.content_kind,
             output_formats=list(request_contract.output_formats or []),
             style_profile=request_contract.style_profile,

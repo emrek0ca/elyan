@@ -41,4 +41,9 @@ def get_builtin_skills() -> List:
         skills.append(LeanSkill())
     except Exception:
         pass
+    try:
+        from .cloudflare_agents_skill import CloudflareAgentsSkill
+        skills.append(CloudflareAgentsSkill())
+    except Exception:
+        pass
     return skills

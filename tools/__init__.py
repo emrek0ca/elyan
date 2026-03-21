@@ -34,6 +34,38 @@ def _lazy_load_tool(tool_name: str):
         }
         _loaded_tools.update(tools)
         return _loaded_tools.get(tool_name)
+
+    if tool_name in ["lean_status", "lean_project", "lean_workflow", "lean_swarm"]:
+        from .lean_tools import lean_status, lean_project, lean_workflow, lean_swarm
+        tools = {
+            "lean_status": lean_status,
+            "lean_project": lean_project,
+            "lean_workflow": lean_workflow,
+            "lean_swarm": lean_swarm,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
+
+    if tool_name in [
+        "cloudflare_agents_status",
+        "cloudflare_agents_project",
+        "cloudflare_agents_scaffold",
+        "cloudflare_agents_workflow",
+    ]:
+        from .cloudflare_agents_tools import (
+            cloudflare_agents_project,
+            cloudflare_agents_scaffold,
+            cloudflare_agents_status,
+            cloudflare_agents_workflow,
+        )
+        tools = {
+            "cloudflare_agents_status": cloudflare_agents_status,
+            "cloudflare_agents_project": cloudflare_agents_project,
+            "cloudflare_agents_scaffold": cloudflare_agents_scaffold,
+            "cloudflare_agents_workflow": cloudflare_agents_workflow,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
     
     # System Tools
     if tool_name in ["get_system_info", "get_battery_status", "open_app", "open_url", "get_running_apps",
@@ -593,6 +625,10 @@ class LazyToolDict(dict):
             # Multimodal Tools
             "transcribe_audio_file", "speak_text_local", "create_visual_asset_pack", "analyze_and_narrate_image",
             "get_multimodal_capability_report",
+            # Lean Tools
+            "lean_status", "lean_project", "lean_workflow", "lean_swarm",
+            # Cloudflare Agents Tools
+            "cloudflare_agents_status", "cloudflare_agents_project", "cloudflare_agents_scaffold", "cloudflare_agents_workflow",
             # Browser Tools
             "browser_open", "browser_click", "browser_type", "browser_screenshot", 
             "browser_get_text", "browser_scroll", "browser_wait", "browser_close", 
