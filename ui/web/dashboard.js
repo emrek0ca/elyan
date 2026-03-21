@@ -155,6 +155,96 @@ document.addEventListener("DOMContentLoaded", function () {
     try { return new Date(v * 1000).toLocaleString("tr-TR"); } catch (e) { return "-"; }
   }
 
+  function copyText(text, okMessage) {
+    var value = String(text || "");
+    if (!value) {
+      toast("Kopyalanacak veri yok", "err");
+      return Promise.resolve(false);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(value).then(function () {
+        if (okMessage) toast(okMessage, "ok");
+        return true;
+      }).catch(function () {
+        return fallbackCopy(value, okMessage);
+      });
+    }
+    return fallbackCopy(value, okMessage);
+  }
+
+  function fallbackCopy(value, okMessage) {
+    var ta = document.createElement("textarea");
+    ta.value = value;
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try {
+      document.execCommand("copy");
+      if (okMessage) toast(okMessage, "ok");
+      return Promise.resolve(true);
+    } catch (e) {
+      toast("Kopyalama basarisiz", "err");
+      return Promise.resolve(false);
+    } finally {
+      ta.remove();
+    }
+  }
+
+  function safeFileName(value) {
+    var text = String(value || "trace").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+    return text || "trace";
+  }
+
+  function downloadJson(filename, payload) {
+    var blob = new Blob([JSON.stringify(payload || {}, null, 2)], { type: "application/json;charset=utf-8" });
+    var url = window.URL.createObjectURL(blob);
+    var anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = String(filename || "elyan-trace.json");
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(function () { window.URL.revokeObjectURL(url); }, 500);
+  }
+
+  function providerReadyNote(ready, total, connected) {
+    var providerText = total ? ready + " reachable" : "no providers";
+    return providerText + " • " + connected + " connected";
+  }
+
+  function renderInvestorHero() {
+    var readinessEl = $("#hero-readiness");
+    if (!readinessEl) return;
+    var providersReady = (providers || []).filter(function (p) { return !!p.reachable; }).length;
+    var providerTotal = (providers || []).length;
+    var connectedAccounts = (integrationState.accounts || []).filter(function (item) {
+      return String(item.status || "").toLowerCase() === "ready";
+    }).length;
+    var skillsEnabled = Number((skillCatalogState.summary && skillCatalogState.summary.enabled) || 0);
+    var evidenceCount = Number((traceState.evidence || []).length || 0);
+    var activeMissions = Number((missionState.overview && missionState.overview.active) || 0);
+    var completedMissions = Number((missionState.overview && missionState.overview.completed) || 0);
+    var autopilotRunning = !!autopilotState.running;
+    var demoReady = providersReady > 0 && skillsEnabled > 0;
+    var readiness = demoReady ? "Investor-ready" : (providersReady > 0 || skillsEnabled > 0 ? "Warming up" : "Setup needed");
+    var readinessNote = (autopilotRunning ? "Autopilot on" : "Autopilot idle") + " • " + activeMissions + " aktif • " + completedMissions + " tamamlanan";
+    $("#hero-readiness").textContent = readiness;
+    var noteEl = $("#hero-readiness-note");
+    if (noteEl) noteEl.textContent = readinessNote;
+    var providerEl = $("#hero-providers");
+    if (providerEl) providerEl.textContent = providerTotal ? providersReady + "/" + providerTotal : String(providersReady);
+    var providerNoteEl = $("#hero-providers-note");
+    if (providerNoteEl) providerNoteEl.textContent = providerReadyNote(providersReady, providerTotal, connectedAccounts);
+    var evidenceEl = $("#hero-evidence");
+    if (evidenceEl) evidenceEl.textContent = String(evidenceCount);
+    var skillsEl = $("#hero-skills");
+    if (skillsEl) skillsEl.textContent = String(skillsEnabled);
+    var skillsNoteEl = $("#hero-skills-note");
+    if (skillsNoteEl) skillsNoteEl.textContent = skillsEnabled ? "enabled workflows" : "no skills yet";
+  }
+
   function badge(state) {
     var value = String(state || "").toLowerCase();
     var cls = "warn";
@@ -304,6 +394,7 @@ document.addEventListener("DOMContentLoaded", function () {
       mkKPI("Approval", o.waiting_approval || 0) +
       mkKPI("Tamamlanan", o.completed || 0) +
       mkKPI("Skill", o.skills || 0);
+    renderInvestorHero();
   }
 
   function renderMissionList() {
@@ -603,6 +694,7 @@ document.addEventListener("DOMContentLoaded", function () {
         }).join("");
       }
     }
+    renderInvestorHero();
   }
 
   function loadSkillCatalog() {
@@ -829,6 +921,7 @@ document.addEventListener("DOMContentLoaded", function () {
       mkKPI("Hazır", readyAccounts) +
       mkKPI("Needs input", needsInput) +
       mkKPI("Fallback", fallbackCount);
+    renderInvestorHero();
   }
 
   function renderIntegrationAccounts() {
@@ -976,6 +1069,7 @@ document.addEventListener("DOMContentLoaded", function () {
     if (btnStart) btnStart.disabled = running;
     if (btnStop) btnStop.disabled = !running;
     if (btnTick) btnTick.disabled = false;
+    renderInvestorHero();
   }
 
   function loadIntegrationAccounts() {
@@ -1398,6 +1492,7 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     renderTraceLive(traceState.live);
+    renderInvestorHero();
   }
 
   function loadTrace(taskId) {
@@ -1425,6 +1520,22 @@ document.addEventListener("DOMContentLoaded", function () {
       traceState.taskId = resolved;
     }
     activateTab("trace");
+    return Promise.resolve();
+  }
+
+  function exportCurrentTrace() {
+    var taskId = currentTraceTaskId();
+    if (!taskId) {
+      toast("Trace ID gerekli", "err");
+      return Promise.resolve();
+    }
+    if (!traceState.bundle || !traceState.bundle.history) {
+      return loadTrace(taskId).then(function () {
+        return exportCurrentTrace();
+      });
+    }
+    downloadJson("elyan-trace-" + safeFileName(taskId) + ".json", traceState.bundle);
+    toast("Trace JSON indirildi", "ok");
     return Promise.resolve();
   }
 
@@ -1493,6 +1604,17 @@ document.addEventListener("DOMContentLoaded", function () {
       window.open("/trace/" + encodeURIComponent(taskId), "_blank", "noopener");
     }
   });
+  var traceCopyBtn = $("#trace-copy-link");
+  if (traceCopyBtn) traceCopyBtn.addEventListener("click", function () {
+    var taskId = currentTraceTaskId();
+    if (!taskId) {
+      toast("Trace ID gerekli", "err");
+      return;
+    }
+    copyText(window.location.origin + "/trace/" + encodeURIComponent(taskId), "Trace linki kopyalandı");
+  });
+  var traceDownloadBtn = $("#trace-download");
+  if (traceDownloadBtn) traceDownloadBtn.addEventListener("click", function () { exportCurrentTrace(); });
   activateTab(activeTab);
 
   var integrationProviderSelect = $("#integration-provider");
@@ -1611,6 +1733,7 @@ document.addEventListener("DOMContentLoaded", function () {
       mkKPI("Aktif", active + " / " + total) +
       mkKPI("Ayarli", configured) +
       mkKPI("Toplam", total);
+    renderInvestorHero();
   }
 
   function mkKPI(label, val) {
@@ -2050,7 +2173,10 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   // Boot
-  refreshAll().then(function () { return loadSettings(); });
+  refreshAll().then(function () {
+    renderInvestorHero();
+    return loadSettings();
+  });
   connectWS();
 
   // Auto-refresh

@@ -126,6 +126,8 @@ def render_trace_page(task_id: str, *, bundle: dict[str, Any] | None = None) -> 
       <input class="input" id="trace-task-input" value="{task_id_value}" placeholder="Task / mission id" />
       <button class="btn btn-primary" id="trace-load-btn" type="button">Load</button>
       <button class="btn btn-secondary" id="trace-open-btn" type="button">Open full trace</button>
+      <button class="btn btn-secondary" id="trace-copy-btn" type="button">Copy link</button>
+      <button class="btn btn-secondary" id="trace-download-btn" type="button">Download JSON</button>
     </div>
 
     <div class="kpis">
@@ -186,14 +188,57 @@ def render_trace_page(task_id: str, *, bundle: dict[str, Any] | None = None) -> 
   <script>
     window.__ELYAN_TRACE_TASK_ID__ = {json.dumps(str(task_id_value))};
     window.__ELYAN_TRACE_LIVE__ = {live_seed};
+    window.__ELYAN_TRACE_BUNDLE__ = null;
     (function() {{
       var input = document.getElementById("trace-task-input");
       var loadBtn = document.getElementById("trace-load-btn");
       var openBtn = document.getElementById("trace-open-btn");
+      var copyBtn = document.getElementById("trace-copy-btn");
+      var downloadBtn = document.getElementById("trace-download-btn");
       var live = document.getElementById("trace-live");
       var pageTask = window.__ELYAN_TRACE_TASK_ID__ || "";
       function esc(s) {{
         return String(s == null ? "" : s);
+      }}
+      function safeFileName(value) {{
+        var text = String(value || "trace").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+        return text || "trace";
+      }}
+      function copyText(text) {{
+        var value = String(text || "");
+        if (!value) return Promise.resolve(false);
+        if (navigator.clipboard && navigator.clipboard.writeText) {{
+          return navigator.clipboard.writeText(value).catch(function () {{
+            var ta = document.createElement("textarea");
+            ta.value = value;
+            ta.style.position = "fixed";
+            ta.style.left = "-9999px";
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            try {{ document.execCommand("copy"); }} finally {{ ta.remove(); }}
+          }});
+        }}
+        var ta = document.createElement("textarea");
+        ta.value = value;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        try {{ document.execCommand("copy"); }} finally {{ ta.remove(); }}
+        return Promise.resolve(true);
+      }}
+      function downloadJson(filename, payload) {{
+        var blob = new Blob([JSON.stringify(payload || {{}}, null, 2)], {{ type: "application/json;charset=utf-8" }});
+        var url = window.URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = filename || "elyan-trace.json";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function () {{ window.URL.revokeObjectURL(url); }}, 500);
       }}
       function renderLive(items) {{
         if (!live) return;
@@ -214,6 +259,7 @@ def render_trace_page(task_id: str, *, bundle: dict[str, Any] | None = None) -> 
           var res = await fetch(url, {{ credentials: "same-origin" }});
           var data = await res.json();
           if (data && data.ok && data.trace) {{
+            window.__ELYAN_TRACE_BUNDLE__ = data.trace;
             pageTask = taskId;
             document.getElementById("trace-decision").textContent = JSON.stringify(data.trace.decision_trace || {{}}, null, 2);
             var evidence = data.trace.evidence || [];
@@ -237,6 +283,20 @@ def render_trace_page(task_id: str, *, bundle: dict[str, Any] | None = None) -> 
       if (loadBtn) loadBtn.addEventListener("click", reload);
       if (input) input.addEventListener("keydown", function (evt) {{ if (evt.key === "Enter") {{ evt.preventDefault(); reload(); }} }});
       if (openBtn) openBtn.addEventListener("click", function () {{ var taskId = (input && input.value || pageTask || "").trim(); if (taskId) window.open("/trace/" + encodeURIComponent(taskId), "_blank", "noopener"); }});
+      if (copyBtn) copyBtn.addEventListener("click", function () {{
+        var taskId = (input && input.value || pageTask || "").trim();
+        if (!taskId) return;
+        copyText(window.location.origin + "/trace/" + encodeURIComponent(taskId));
+      }});
+      if (downloadBtn) downloadBtn.addEventListener("click", function () {{
+        var trace = window.__ELYAN_TRACE_BUNDLE__;
+        var taskId = (input && input.value || pageTask || "").trim();
+        if (trace) {{
+          downloadJson("elyan-trace-" + safeFileName(taskId) + ".json", trace);
+          return;
+        }}
+        reload();
+      }});
       try {{
         var proto = location.protocol === "https:" ? "wss:" : "ws:";
         var ws = new WebSocket(proto + "//" + location.host + "/ws/dashboard");

@@ -73,6 +73,24 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
 
 /* === MISSION CONTROL === */
 .mission-hero{display:grid;grid-template-columns:1fr;gap:16px;margin-bottom:18px}
+.investor-hero{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(260px,.75fr);gap:0;overflow:hidden;background:linear-gradient(135deg,#0f172a 0%,#111827 45%,#1d4ed8 120%);color:#fff;border:1px solid rgba(148,163,184,.2);border-radius:var(--r);box-shadow:0 18px 44px rgba(15,23,42,.16);margin-bottom:16px}
+.investor-copy{padding:24px 22px 22px}
+.hero-kicker{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:#93c5fd}
+.hero-kicker::before{content:'';width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 6px rgba(34,197,94,.18)}
+.investor-copy h3{margin:12px 0 10px;font-size:28px;line-height:1.08;letter-spacing:-.04em;max-width:14ch}
+.investor-copy p{max-width:68ch;color:rgba(226,232,240,.88);font-size:14px;line-height:1.6}
+.hero-band{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.hero-band span{display:inline-flex;align-items:center;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);font-size:11px;font-weight:600;color:#e2e8f0}
+.hero-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+.investor-hero .btn{font-size:12px}
+.investor-hero .btn-s{background:rgba(255,255,255,.08);color:#e2e8f0;border-color:rgba(255,255,255,.12)}
+.investor-hero .btn-s:hover:not(:disabled){background:rgba(255,255,255,.14);color:#fff;border-color:rgba(255,255,255,.2)}
+.investor-hero .btn-p{background:linear-gradient(135deg,#38bdf8,#2563eb);color:#fff;box-shadow:0 10px 26px rgba(37,99,235,.25)}
+.hero-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:22px;background:rgba(15,23,42,.28);border-left:1px solid rgba(148,163,184,.14);backdrop-filter:blur(14px)}
+.hero-metric{padding:14px;border-radius:14px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12)}
+.hero-metric span{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:#93c5fd}
+.hero-metric strong{display:block;margin-top:8px;font-size:24px;line-height:1.05}
+.hero-metric small{display:block;margin-top:4px;color:rgba(226,232,240,.72);font-size:12px;line-height:1.45}
 .mission-compose{display:flex;flex-direction:column;gap:12px}
 .mission-input{width:100%;min-height:116px;padding:14px 16px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2);color:var(--tx);font-size:14px;resize:vertical}
 .mission-input:focus{outline:none;border-color:var(--blue);background:var(--sf);box-shadow:0 0 0 3px rgba(26,115,232,.12)}
@@ -225,11 +243,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
   .main{padding:16px}
   .cgrid{grid-template-columns:1fr}
   .kpis{grid-template-columns:repeat(2,1fr)}
+  .investor-hero{grid-template-columns:1fr}
+  .investor-copy h3{max-width:none;font-size:24px}
+  .hero-metrics{grid-template-columns:1fr 1fr}
   .mission-hero,.mission-grid{grid-template-columns:1fr}
 }
 @media(max-width:480px){
   .nav-brand span{display:none}
   .kpis{grid-template-columns:1fr}
+  .hero-metrics{grid-template-columns:1fr}
   .settings-card{max-width:100%}
 }
   </style>
@@ -267,9 +289,35 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
         </div>
       </div>
 
+      <div class="investor-hero">
+        <div class="investor-copy">
+          <div class="hero-kicker">Investor Demo Mode</div>
+          <h3>Natural language to trusted computer action.</h3>
+          <p>Zero-permission sandbox, live trace, approval matrix and evidence gallery. Elyan hızlıca demo edilebilir, kanıtlanabilir ve paylaşılabilir.</p>
+          <div class="hero-band">
+            <span>Local-first</span>
+            <span>Evidence-backed</span>
+            <span>Approval-gated</span>
+            <span>Autopilot ready</span>
+          </div>
+          <div class="hero-actions">
+            <button class="btn btn-p btn-sm js-mission-preset" data-prompt="Bir browser demo çalıştır: OpenAI sitesini aç, sonucu kanıtla ve 3 maddeyle özetle.">Browser demo</button>
+            <button class="btn btn-s btn-sm js-mission-preset" data-prompt="Bir research brief hazırla: konuyu kısa araştır, kaynakları doğrula ve kanıt paketi oluştur.">Research brief</button>
+            <button class="btn btn-s btn-sm js-mission-preset" data-prompt="Inbox triage yap: gelen kutusunu sınıflandır, öncelikleri çıkar ve kısa bir takip listesi üret.">Inbox triage</button>
+            <button class="btn btn-s btn-sm js-mission-preset" data-prompt="Bir landing page üret, doğrula, ekran kanıtı al ve teslim formatında özetle.">Landing demo</button>
+          </div>
+        </div>
+        <div class="hero-metrics">
+          <div class="hero-metric"><span>Readiness</span><strong id="hero-readiness">—</strong><small id="hero-readiness-note">Yükleniyor</small></div>
+          <div class="hero-metric"><span>Providers</span><strong id="hero-providers">—</strong><small id="hero-providers-note">LLM + local models</small></div>
+          <div class="hero-metric"><span>Evidence</span><strong id="hero-evidence">—</strong><small>trace artifacts</small></div>
+          <div class="hero-metric"><span>Skills</span><strong id="hero-skills">—</strong><small id="hero-skills-note">enabled workflows</small></div>
+        </div>
+      </div>
+
       <div class="mission-hero">
         <div class="card mission-compose">
-          <textarea id="mission-input" class="mission-input" placeholder="Outcome yaz: örn. Kediler hakkında minimalist bir landing page üret."></textarea>
+          <textarea id="mission-input" class="mission-input" placeholder="Outcome yaz: örn. 'OpenAI sitesini aç, ekran kanıtı al ve kısa demo özeti oluştur.'"></textarea>
           <div class="mission-row">
             <select class="sel" id="mission-mode" style="max-width:220px">
               <option value="Sprint">Sprint — En hızlı taslak</option>
@@ -279,10 +327,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
             <button class="btn btn-p" id="mission-run">Mission Başlat</button>
           </div>
           <div class="mission-presets">
-            <button class="mission-preset js-mission-preset" data-prompt="Minimal bir landing page üret ve doğrula.">Landing Page</button>
-            <button class="mission-preset js-mission-preset" data-prompt="Kaynaklı kısa araştırma raporu hazırla.">Araştırma</button>
-            <button class="mission-preset js-mission-preset" data-prompt="Feature planı çıkar, kodu uygula ve teslim et.">Kod</button>
-            <button class="mission-preset js-mission-preset" data-prompt="Tarayıcı adımlarını uygula ve ekran kanıtı al.">Browser</button>
+            <button class="mission-preset js-mission-preset" data-prompt="Bir browser demo çalıştır: OpenAI sitesini aç, sonucu kanıtla ve 3 maddeyle özetle.">Browser demo</button>
+            <button class="mission-preset js-mission-preset" data-prompt="Bir research brief hazırla: konuyu kısa araştır, kaynakları doğrula ve kanıt paketi oluştur.">Research brief</button>
+            <button class="mission-preset js-mission-preset" data-prompt="Inbox triage yap: gelen kutusunu sınıflandır, öncelikleri çıkar ve kısa bir takip listesi üret.">Inbox triage</button>
+            <button class="mission-preset js-mission-preset" data-prompt="Bir landing page üret, doğrula, ekran kanıtı al ve teslim formatında özetle.">Landing demo</button>
           </div>
         </div>
       </div>
@@ -365,6 +413,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
         <div class="btn-row" style="margin-top:0">
           <button class="btn btn-s" id="trace-refresh" type="button">Yenile</button>
           <button class="btn btn-p" id="trace-open-full" type="button">Full Page</button>
+          <button class="btn btn-s" id="trace-copy-link" type="button">Link Kopyala</button>
+          <button class="btn btn-s" id="trace-download" type="button">JSON İndir</button>
         </div>
       </div>
       <div class="card trace-shell">
