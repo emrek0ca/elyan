@@ -107,4 +107,4 @@ py-modules = ["elyan_entrypoint"]
 version = {attr = "core.version.__version__"}
 
 [tool.setuptools.packages.find]
-include = ["core*", "tools*", "utils*", "config*", "cli*"]
+include = ["core*", "tools*", "utils*", "config*", "cli*", "elyan*"]

@@ -85,8 +85,12 @@ def _invoke_main(main_fn: Callable, argv: list[str] | None):
 def main(argv: list[str] | None = None):
     errors: list[str] = []
     for root in _iter_candidate_roots():
-        cli_main = root / "cli" / "main.py"
-        if not cli_main.exists():
+        cli_candidates = (
+            root / "elyan" / "cli" / "main.py",
+            root / "cli" / "main.py",
+        )
+        cli_main = next((path for path in cli_candidates if path.exists()), None)
+        if cli_main is None:
             continue
         root_str = str(root)
         if root_str not in sys.path:

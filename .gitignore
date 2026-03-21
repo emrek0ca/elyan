@@ -54,3 +54,11 @@ htmlcov/
 *.sqlite
 node_modules/
 elyan-video/node_modules/
+
+# Elyan workspace bootstrap artifacts
+agents.md
+memory.md
+AGENTS.txt
+SOUL.txt
+TOOLS.txt
+MEMORY.txt
