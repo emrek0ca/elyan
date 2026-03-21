@@ -113,6 +113,9 @@ class PersonalizationManager:
                 merged[key] = value
         return merged
 
+    def get_runtime_profile(self, user_id: str) -> dict[str, Any]:
+        return self._runtime_profile(user_id)
+
     async def get_runtime_context(self, user_id: str, request_meta: dict[str, Any] | None = None) -> dict[str, Any]:
         uid = str(user_id or "local")
         meta = dict(request_meta or {})

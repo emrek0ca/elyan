@@ -242,3 +242,46 @@ def test_task_brain_list_all_and_get(tmp_path, monkeypatch):
     assert {item.task_id for item in items} == {first.task_id, second.task_id}
     completed = brain.list_all(states=["completed"])
     assert [item.task_id for item in completed] == [first.task_id]
+
+
+def test_task_brain_persists_task_card(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.task_brain.ELYAN_DIR", tmp_path)
+    from core.task_brain import TaskBrain
+
+    brain = TaskBrain(storage_path=tmp_path / "task_brain.json")
+    task = brain.create_task(
+        objective="Plan oluştur",
+        user_input="Bunu planla",
+        channel="telegram",
+        user_id="u-plan",
+        task_card={"goal": "plan", "steps": [{"name": "özetle"}]},
+    )
+
+    assert task.context["task_card"]["goal"] == "plan"
+    assert task.context["task_card"]["steps"][0]["name"] == "özetle"
+
+
+def test_task_brain_auto_builds_learning_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.task_brain.ELYAN_DIR", tmp_path)
+    from core.task_brain import TaskBrain
+
+    brain = TaskBrain(storage_path=tmp_path / "task_brain.json")
+    task = brain.create_task(
+        objective="OpenGauss veritabanı workspace hazırla",
+        user_input="OpenGauss veritabanı workspace hazırla",
+        channel="cli",
+        user_id="u-learning",
+    )
+    task.transition("planning", note="plan_ready")
+    task.register_artifacts([{"path": "/tmp/schema.sql", "type": "sql"}])
+    task.transition("completed", note="done")
+    brain.save_task(task)
+
+    reloaded = brain.get(task.task_id)
+    assert reloaded is not None
+    learning = reloaded.to_dict()["learning"]
+    assert learning["state"] == "completed"
+    assert learning["artifact_count"] == 1
+    assert learning["domain"] == "database"
+    assert learning["next_action"] == "Promote reusable skill/workflow"
+    assert learning["domain_hint"] == "Run read-only query before any mutation"

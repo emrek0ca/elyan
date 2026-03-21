@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 
 from config.settings import ELYAN_DIR
 from core.storage_paths import resolve_elyan_data_dir
+from core.learning_digest import build_task_learning_snapshot
 
 
 _VALID_STATES = {
@@ -48,6 +49,7 @@ class TaskRecord:
     context: Dict[str, Any] = field(default_factory=dict)
     subtasks: List[Dict[str, Any]] = field(default_factory=list)
     artifacts: List[Dict[str, Any]] = field(default_factory=list)
+    learning: Dict[str, Any] = field(default_factory=dict)
     state: str = "pending"
     history: List[TaskEvent] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
@@ -61,6 +63,7 @@ class TaskRecord:
         self.state = next_state
         self.updated_at = now
         self.history.append(TaskEvent(state=next_state, ts=now, note=str(note or ""), metadata=dict(metadata or {})))
+        self.learning = build_task_learning_snapshot(self)
 
     def register_artifacts(self, artifacts: List[Dict[str, Any]] | None) -> None:
         seen = {str(item.get("path") or "").strip() for item in self.artifacts if isinstance(item, dict)}
@@ -72,6 +75,7 @@ class TaskRecord:
                 self.artifacts.append(dict(artifact))
                 seen.add(path)
         self.updated_at = time.time()
+        self.learning = build_task_learning_snapshot(self)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -80,6 +84,7 @@ class TaskRecord:
             "context": dict(self.context),
             "subtasks": list(self.subtasks),
             "artifacts": list(self.artifacts),
+            "learning": dict(self.learning),
             "state": self.state,
             "history": [event.to_dict() for event in self.history],
             "created_at": self.created_at,
@@ -121,6 +126,7 @@ class TaskBrain:
                     context=dict(row.get("context") or {}),
                     subtasks=list(row.get("subtasks") or []),
                     artifacts=list(row.get("artifacts") or []),
+                    learning=dict(row.get("learning") or {}),
                     state=str(row.get("state") or "pending"),
                     history=[
                         TaskEvent(
@@ -149,6 +155,9 @@ class TaskBrain:
             self.storage_path.parent.mkdir(parents=True, exist_ok=True)
             self.storage_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def _refresh_learning(self, task: TaskRecord) -> None:
+        task.learning = build_task_learning_snapshot(task)
+
     def create_task(
         self,
         *,
@@ -157,6 +166,7 @@ class TaskBrain:
         channel: str,
         user_id: str,
         attachments: List[str] | None = None,
+        task_card: Dict[str, Any] | None = None,
     ) -> TaskRecord:
         task = TaskRecord(
             task_id=f"task_{uuid.uuid4().hex[:10]}",
@@ -166,14 +176,17 @@ class TaskBrain:
                 "channel": str(channel or ""),
                 "user_id": str(user_id or ""),
                 "attachments": list(attachments or []),
+                "task_card": dict(task_card or {}),
             },
         )
         task.transition("pending", note="task_created")
+        self._refresh_learning(task)
         self._tasks[task.task_id] = task
         self._save()
         return task
 
     def save_task(self, task: TaskRecord) -> None:
+        self._refresh_learning(task)
         self._tasks[str(task.task_id or "")] = task
         self._save()
 
