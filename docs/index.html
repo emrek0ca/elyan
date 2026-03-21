@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Elyan AI Operator - Investor Deck</title>
+  <style>
+    :root{
+      --bg:#070b16;
+      --panel:rgba(11,18,36,.82);
+      --line:rgba(148,163,184,.18);
+      --text:#eef2ff;
+      --muted:#94a3b8;
+      --accent:#7dd3fc;
+      --accent-2:#34d399;
+      --warn:#fbbf24;
+      --r:20px;
+      --shadow:0 24px 80px rgba(0,0,0,.35);
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;min-height:100%;background:
+      radial-gradient(circle at top left,rgba(125,211,252,.14),transparent 28%),
+      radial-gradient(circle at top right,rgba(52,211,153,.14),transparent 24%),
+      linear-gradient(180deg,#050816 0%,#070b16 100%);
+      color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    a{color:inherit}
+    .wrap{max-width:1240px;margin:0 auto;padding:28px 20px 60px}
+    .hero{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(320px,.8fr);gap:18px;align-items:end;margin-bottom:20px}
+    .eyebrow{color:var(--accent);text-transform:uppercase;letter-spacing:.18em;font-size:11px;font-weight:700}
+    h1{margin:10px 0 12px;font-size:clamp(40px,6vw,68px);line-height:.94;letter-spacing:-.05em}
+    .sub{max-width:760px;color:var(--muted);font-size:15px;line-height:1.7}
+    .pill-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+    .pill{display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.03);font-size:12px;color:#cbd5e1}
+    .cta{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+    .btn{display:inline-flex;align-items:center;justify-content:center;padding:12px 16px;border-radius:14px;text-decoration:none;font-weight:700;border:1px solid transparent}
+    .btn.primary{background:linear-gradient(135deg,#38bdf8,#22c55e);color:#04111f}
+    .btn.secondary{background:rgba(255,255,255,.03);border-color:var(--line);color:var(--text)}
+    .deck{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+    .slide{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:20px;box-shadow:var(--shadow)}
+    .slide h2{margin:0 0 10px;font-size:18px}
+    .slide p,.slide li{color:#dbeafe;line-height:1.65;font-size:14px}
+    .slide ul{margin:0;padding-left:18px;display:grid;gap:8px}
+    .wide{grid-column:1/-1}
+    .metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+    .metric{padding:16px;border-radius:16px;border:1px solid var(--line);background:rgba(255,255,255,.03)}
+    .metric span{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.14em}
+    .metric strong{display:block;margin-top:8px;font-size:22px}
+    .timeline{display:grid;gap:10px}
+    .step{display:grid;grid-template-columns:72px minmax(0,1fr);gap:14px;align-items:flex-start;padding:14px;border-radius:16px;border:1px solid var(--line);background:rgba(255,255,255,.03)}
+    .num{display:flex;align-items:center;justify-content:center;min-height:44px;border-radius:14px;background:rgba(125,211,252,.12);color:var(--accent);font-weight:800}
+    .foot{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:18px;color:var(--muted);font-size:12px}
+    .kbd{padding:3px 8px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.04);color:#cbd5e1}
+    @media (max-width: 920px){
+      .hero,.deck,.metric-grid{grid-template-columns:1fr}
+      .cta{justify-content:flex-start}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <div>
+        <div class="eyebrow">Elyan AI Operator</div>
+        <h1>Your Computer's New Brain.</h1>
+        <div class="sub">
+          Local-first AI operator that turns natural language into real desktop, browser, file, and integration actions
+          with sandboxing, approvals, trace, and evidence.
+        </div>
+        <div class="pill-row">
+          <span class="pill">Zero-permission default</span>
+          <span class="pill">Docker sandbox</span>
+          <span class="pill">Evidence-first</span>
+          <span class="pill">Local-first</span>
+        </div>
+      </div>
+      <div class="cta">
+        <a class="btn primary" href="./README.md">Read Docs</a>
+        <a class="btn secondary" href="../ui/web/dashboard.html">Open Dashboard</a>
+        <a class="btn secondary" href="./pitch-deck.md">Pitch Outline</a>
+      </div>
+    </section>
+
+    <section class="slide wide">
+      <div class="metric-grid">
+        <div class="metric"><span>Install</span><strong>30s</strong></div>
+        <div class="metric"><span>Default mode</span><strong>Local</strong></div>
+        <div class="metric"><span>Safety</span><strong>Approved</strong></div>
+        <div class="metric"><span>Output</span><strong>Trace + Evidence</strong></div>
+      </div>
+    </section>
+
+    <section class="deck">
+      <article class="slide">
+        <h2>1. Problem</h2>
+        <ul>
+          <li>Work still lives across browser, desktop, email, docs, and chat.</li>
+          <li>Current assistants are chat-first and brittle on real actions.</li>
+          <li>Teams need something that can act and prove what happened.</li>
+        </ul>
+      </article>
+
+      <article class="slide">
+        <h2>2. Solution</h2>
+        <ul>
+          <li>Natural language in, real computer work out.</li>
+          <li>Planner, skill registry, integrations, and actuator in one loop.</li>
+          <li>Every destructive action passes approval and sandbox gates.</li>
+        </ul>
+      </article>
+
+      <article class="slide">
+        <h2>3. Demo Flow</h2>
+        <div class="timeline">
+          <div class="step"><div class="num">01</div><div><strong>Install</strong><p><span class="kbd">curl -fsSL https://get.elyan.ai | bash</span></p></div></div>
+          <div class="step"><div class="num">02</div><div><strong>Ask</strong><p>Give a browser, desktop, email, or research task.</p></div></div>
+          <div class="step"><div class="num">03</div><div><strong>Verify</strong><p>Open the trace page and show evidence gallery.</p></div></div>
+        </div>
+      </article>
+
+      <article class="slide">
+        <h2>4. Product Surface</h2>
+        <ul>
+          <li>CLI for operators.</li>
+          <li>Dashboard for mission control.</li>
+          <li>Messaging adapters for remote control.</li>
+          <li>Skill Store for extensibility.</li>
+        </ul>
+      </article>
+
+      <article class="slide wide">
+        <h2>5. Why It Wins</h2>
+        <div class="metric-grid">
+          <div class="metric"><span>Action</span><strong>Real</strong></div>
+          <div class="metric"><span>Trust</span><strong>Traceable</strong></div>
+          <div class="metric"><span>Execution</span><strong>Sandboxed</strong></div>
+          <div class="metric"><span>Experience</span><strong>Operator-first</strong></div>
+        </div>
+      </article>
+
+      <article class="slide">
+        <h2>6. Market</h2>
+        <ul>
+          <li>Knowledge workers.</li>
+          <li>Ops and support teams.</li>
+          <li>Growth, research, and admin workflows.</li>
+        </ul>
+      </article>
+
+      <article class="slide">
+        <h2>7. Business</h2>
+        <ul>
+          <li>Free local tier.</li>
+          <li>Cloud fallback for convenience.</li>
+          <li>Enterprise sandbox, policy, and audit controls.</li>
+        </ul>
+      </article>
+
+      <article class="slide wide">
+        <h2>8. Ask</h2>
+        <p>
+          Elyan is positioned to become the default local operator layer for the desktop.
+          The next step is distribution, enterprise hardening, and a public skill ecosystem.
+        </p>
+      </article>
+    </section>
+
+    <div class="foot">
+      <div>Investor deck and docs for Elyan AI Operator.</div>
+      <div>Trace viewer: <span class="kbd">/trace/{task_id}</span></div>
+    </div>
+  </div>
+</body>
+</html>

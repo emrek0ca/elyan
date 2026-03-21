@@ -67,23 +67,40 @@ def test_dashboard_js_includes_mission_control_runtime_hooks():
     assert "missionFilter" in js
     assert "renderMissionControlStrip" in js
     assert "renderMissionQuality" in js
+    assert "traceState" in js
+    assert "renderTraceView" in js
+    assert "appendTraceLive" in js
     assert "/api/missions" in js
     assert "/api/missions/" in js
     assert "/api/missions/overview" in js
     assert "/api/missions/approvals/resolve" in js
     assert "/api/missions/skills/save" in js
     assert "/api/missions/memory" in js
+    assert "/api/trace/" in js
     assert "Mission baslatildi" in js
     assert "mission_event" in js
     assert "URLSearchParams" in js
     assert "mission_id" in js
     assert "selected_mission_id" in js
+    assert "trace_id" in js
+    assert "p-trace" in js
+    assert "trace-task-id" in js
+    assert "trace-open-full" in js
+    assert "mission-open-trace" in js
     assert 'tools: "p-tools"' in js
     assert "g-refresh-tools" in js
     assert "loadSkillCatalog" in js
     assert "refreshSkillRegistry" in js
     assert "loadMarketplace" in js
     assert "installMarketplaceSkill" in js
+    assert "loadAutopilot" in js
+    assert "startAutopilot" in js
+    assert "stopAutopilot" in js
+    assert "tickAutopilot" in js
+    assert "/api/autopilot/status" in js
+    assert "/api/autopilot/start" in js
+    assert "/api/autopilot/stop" in js
+    assert "/api/autopilot/tick" in js
     assert "/api/skills/refresh" in js
     assert "skills-refresh" in js
     assert "/api/marketplace/browse" in js
@@ -92,6 +109,27 @@ def test_dashboard_js_includes_mission_control_runtime_hooks():
     assert "marketplace-refresh" in js
     assert 'rawStrategy === "hızlı"' in js
     assert 'normalizedStrategy = "fast"' in js
+    assert "integrationState" in js
+    assert "integrationProviderPresetScopes" in js
+    assert "integrationQuickConnectPlan" in js
+    assert "integrationProviderBadge" in js
+    assert "/api/integrations/accounts" in js
+    assert "/api/integrations/connect" in js
+    assert "/api/integrations/accounts/connect" in js
+    assert "/api/integrations/accounts/revoke" in js
+    assert "/api/integrations/traces" in js
+    assert "/api/integrations/summary" in js
+    assert "integration-app" in js
+    assert "integration-quick-presets" in js
+    assert "integration-redirect-uri" in js
+    assert "js-integration-quick" in js
+    assert "refreshIntegrations" in js
+    assert "renderIntegrationSummary" in js
+    assert "integration-connect" in js
+    assert "integration-revoke" in js
+    assert "integration-trace-search" in js
+    assert 'tools: "p-tools"' in js
+    assert 'integrations: "p-integrations"' in js
 
 
 def test_ops_console_js_points_to_admin_endpoints():

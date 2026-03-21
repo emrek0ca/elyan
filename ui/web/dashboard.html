@@ -164,6 +164,52 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
 .slider::before{content:'';position:absolute;width:20px;height:20px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.25s;box-shadow:0 1px 3px rgba(0,0,0,.15)}
 .switch input:checked+.slider{background:var(--green)}
 .switch input:checked+.slider::before{transform:translateX(18px)}
+.integration-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+.integration-form{display:flex;flex-direction:column;gap:14px}
+.integration-advanced{border:1px solid var(--bd);border-radius:var(--r2);padding:10px 12px;background:var(--sf2)}
+.integration-advanced summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--tx2);list-style:none}
+.integration-advanced summary::-webkit-details-marker{display:none}
+.integration-advanced[open]{background:var(--sf)}
+.integration-logo{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:6px;font-size:10px;font-weight:700;color:#fff;line-height:1;flex-shrink:0}
+.integration-logo.google{background:#4285f4}
+.integration-logo.gmail{background:#db4437}
+.integration-logo.calendar{background:#1a73e8}
+.integration-logo.drive{background:#0f9d58}
+.integration-logo.docs{background:#2962ff}
+.integration-logo.sheets{background:#188038}
+.integration-logo.slides{background:#f4b400}
+.integration-logo.chat{background:#5f6368}
+.integration-logo.whatsapp{background:#25d366}
+.integration-logo.instagram{background:linear-gradient(135deg,#f58529,#dd2a7b,#8134af,#515bd4)}
+.integration-logo.x{background:#111827}
+.integration-logo.email{background:#6b7280}
+.integration-logo.scheduler{background:#7c3aed}
+.integration-account{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2)}
+.integration-account strong{font-size:13px}
+.integration-account .meta{font-size:12px;color:var(--tx2);word-break:break-word}
+.trace-item{display:flex;flex-direction:column;gap:6px;padding:12px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2)}
+.trace-item .meta{font-size:12px;color:var(--tx2);word-break:break-word}
+.trace-meta{display:flex;gap:8px;flex-wrap:wrap}
+.trace-meta span,.account-meta span{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border-radius:999px;background:rgba(0,0,0,.04);font-size:11px;color:var(--tx2)}
+.trace-shell{display:flex;flex-direction:column;gap:14px}
+.trace-toolbar{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:center}
+.trace-note{font-size:12px;color:var(--tx3)}
+.trace-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.trace-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(320px,.9fr);gap:16px}
+.trace-bottom-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(320px,.95fr);gap:16px}
+.trace-split{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.trace-evidence-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.trace-evidence-card{display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2)}
+.trace-preview{width:100%;aspect-ratio:16/10;object-fit:cover;display:block;background:#0f172a;border-bottom:1px solid var(--bd)}
+.trace-preview-fallback{display:flex;align-items:center;justify-content:center;min-height:160px;font-weight:700;color:var(--blue);background:var(--sf2)}
+.trace-live-feed{display:flex;flex-direction:column;gap:10px;max-height:520px;overflow:auto}
+.trace-live-item{padding:12px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2)}
+.trace-live-item strong{display:block;margin-bottom:4px}
+.trace-live-item p{font-size:12px;color:var(--tx2);word-break:break-word}
+.trace-live-item pre{margin-top:8px;white-space:pre-wrap;word-break:break-word;background:var(--sf);border:1px solid var(--bd);border-radius:var(--r2);padding:12px;font-size:12px;line-height:1.5;max-height:220px;overflow:auto}
+.trace-brief{display:flex;flex-direction:column;gap:8px}
+.trace-brief p{font-size:12px;color:var(--tx2)}
+.code-box{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
 
 /* === TOAST === */
 .toasts{position:fixed;bottom:20px;right:20px;display:flex;flex-direction:column;gap:8px;z-index:9999;pointer-events:none}
@@ -198,7 +244,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
     </div>
     <div class="nav-tabs" id="nav-tabs">
       <button class="nav-tab active" data-t="mission">Mission</button>
+      <button class="nav-tab" data-t="trace">Trace</button>
       <button class="nav-tab" data-t="tools">Tools</button>
+      <button class="nav-tab" data-t="integrations">Integrations</button>
       <button class="nav-tab" data-t="settings">Settings</button>
     </div>
     <div class="nav-right">
@@ -265,9 +313,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
         </div>
 
         <div class="mission-stack">
-          <div class="card">
-            <div class="card-top">
+        <div class="card">
+          <div class="card-top">
               <div><h3>Misyon Detayı</h3><div class="card-desc">Graph, timeline, deliverable.</div></div>
+              <div class="btn-row" style="margin-top:0">
+                <button class="btn btn-s btn-sm" id="mission-open-trace" type="button">Trace Aç</button>
+              </div>
             </div>
             <div id="mission-detail" class="detail-box"></div>
             <div id="mission-control-strip" class="control-strip"></div>
@@ -300,6 +351,66 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
             </div>
             <div id="mission-memory" class="memory-list"></div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== TRACE PAGE ===== -->
+    <div class="page" id="p-trace">
+      <div class="pg-head">
+        <div>
+          <h2>Trace</h2>
+          <p class="pg-sub">Decision trace, evidence gallery ve canlı olay akışı.</p>
+        </div>
+        <div class="btn-row" style="margin-top:0">
+          <button class="btn btn-s" id="trace-refresh" type="button">Yenile</button>
+          <button class="btn btn-p" id="trace-open-full" type="button">Full Page</button>
+        </div>
+      </div>
+      <div class="card trace-shell">
+        <div class="trace-toolbar">
+          <input class="mission-input" id="trace-task-id" placeholder="Task / Mission ID" style="min-height:44px;resize:none" />
+          <button class="btn btn-p" id="trace-load" type="button">Load Trace</button>
+          <div class="trace-note">Canlı akış /ws/dashboard üzerinden gelir.</div>
+        </div>
+        <div class="kpis" id="trace-kpis"></div>
+        <div class="trace-summary" id="trace-summary"></div>
+      </div>
+      <div class="trace-grid" style="margin-top:16px">
+        <div class="card">
+          <div class="card-top">
+            <div><h3>Decision Trace</h3><div class="card-desc">Graph ve kontrol özeti.</div></div>
+          </div>
+          <pre id="trace-decision" class="detail-pre">Henüz trace yüklenmedi.</pre>
+        </div>
+        <div class="card">
+          <div class="card-top">
+            <div><h3>Evidence Gallery</h3><div class="card-desc">Ekran görüntüsü, video ve artifactler.</div></div>
+          </div>
+          <div id="trace-evidence" class="trace-evidence-grid"></div>
+        </div>
+      </div>
+      <div class="trace-bottom-grid" style="margin-top:16px">
+        <div class="card">
+          <div class="card-top">
+            <div><h3>Timeline & Approvals</h3><div class="card-desc">Tam yürütme sırası.</div></div>
+          </div>
+          <div class="trace-split">
+            <div>
+              <div class="sec-title">Timeline</div>
+              <div id="trace-timeline" class="stack-list"></div>
+            </div>
+            <div>
+              <div class="sec-title">Approvals</div>
+              <div id="trace-approvals" class="stack-list"></div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-top">
+            <div><h3>Live Stream</h3><div class="card-desc">Dashboard WebSocket olayları.</div></div>
+          </div>
+          <div id="trace-live" class="trace-live-feed"></div>
         </div>
       </div>
     </div>
@@ -339,6 +450,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
       </div>
       <div class="card" style="margin-top:16px">
         <div class="card-top">
+          <div><h3>Autopilot</h3><div class="card-desc">Proaktif bakım, briefing ve otomatik eylem döngüsü.</div></div>
+          <div class="btn-row" style="margin-top:0">
+            <button class="btn btn-s btn-sm" id="autopilot-refresh" type="button">Yenile</button>
+            <button class="btn btn-p btn-sm" id="autopilot-start" type="button">Başlat</button>
+            <button class="btn btn-s btn-sm" id="autopilot-tick" type="button">Tick</button>
+            <button class="btn btn-d btn-sm" id="autopilot-stop" type="button">Durdur</button>
+          </div>
+        </div>
+        <div class="kpis" id="autopilot-kpis"></div>
+        <div id="autopilot-summary" class="stack-list"></div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="card-top">
           <div><h3>Skills</h3><div class="card-desc">Registry, workflow ve hot-reload.</div></div>
           <button class="btn btn-s" id="skills-refresh" type="button">Yenile</button>
         </div>
@@ -359,6 +483,121 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
         </div>
         <div class="kpis" id="marketplace-kpis"></div>
         <div class="stack-list" id="marketplace-list"></div>
+      </div>
+    </div>
+
+    <!-- ===== INTEGRATIONS PAGE ===== -->
+    <div class="page" id="p-integrations">
+      <div class="pg-head">
+        <div>
+          <h2>Integrations</h2>
+          <p class="pg-sub">OAuth, fallback, connector trace ve hesap yönetimi.</p>
+        </div>
+        <button class="btn btn-s" id="integrations-refresh" type="button">Yenile</button>
+      </div>
+      <div class="kpis" id="integration-kpis"></div>
+      <div class="card" style="margin-top:16px">
+        <div class="card-top">
+          <div><h3>Integration Summary</h3><div class="card-desc">Provider, status ve fallback dağılımı.</div></div>
+        </div>
+        <div class="stack-list" id="integration-summary"></div>
+      </div>
+      <div class="integration-grid">
+        <div class="card">
+          <div class="card-top">
+            <div><h3>OAuth / API Bağla</h3><div class="card-desc">İlk bağlantı, re-auth ve revoke.</div></div>
+          </div>
+          <div class="integration-form">
+            <div class="field">
+              <label class="field-label">App / One-click connect</label>
+              <input class="sel" id="integration-app" placeholder="Gmail, Google Docs, WhatsApp..." />
+              <span class="field-hint">Uygulama adını yaz veya aşağıdaki hızlı butonlardan birini seç.</span>
+            </div>
+            <div class="field-hint" style="margin:2px 0 4px 2px">
+              Uygulamayı seç, Elyan sağlayıcıyı, scope'ları ve redirect akışını otomatik yönetir.
+            </div>
+            <div class="mission-presets" id="integration-quick-presets">
+              <button class="mission-preset js-integration-quick" data-app="Gmail" data-provider="google"><span class="integration-logo gmail">G</span><span>Gmail</span></button>
+              <button class="mission-preset js-integration-quick" data-app="Google Calendar" data-provider="google"><span class="integration-logo calendar">C</span><span>Calendar</span></button>
+              <button class="mission-preset js-integration-quick" data-app="Google Drive" data-provider="google"><span class="integration-logo drive">D</span><span>Drive</span></button>
+              <button class="mission-preset js-integration-quick" data-app="Google Docs" data-provider="google"><span class="integration-logo docs">D</span><span>Docs</span></button>
+              <button class="mission-preset js-integration-quick" data-app="Google Sheets" data-provider="google"><span class="integration-logo sheets">S</span><span>Sheets</span></button>
+              <button class="mission-preset js-integration-quick" data-app="Google Slides" data-provider="google"><span class="integration-logo slides">S</span><span>Slides</span></button>
+              <button class="mission-preset js-integration-quick" data-app="Google Chat" data-provider="google"><span class="integration-logo chat">C</span><span>Chat</span></button>
+              <button class="mission-preset js-integration-quick" data-app="WhatsApp" data-provider="whatsapp"><span class="integration-logo whatsapp">W</span><span>WhatsApp</span></button>
+              <button class="mission-preset js-integration-quick" data-app="Instagram" data-provider="instagram"><span class="integration-logo instagram">I</span><span>Instagram</span></button>
+              <button class="mission-preset js-integration-quick" data-app="X" data-provider="x"><span class="integration-logo x">X</span><span>X</span></button>
+            </div>
+            <div class="integration-advanced" hidden aria-hidden="true">
+              <div class="integration-form" style="margin-top:12px">
+                <div class="field">
+                  <label class="field-label">Provider</label>
+                  <select class="sel" id="integration-provider">
+                    <option value="google">Google</option>
+                    <option value="gmail">Gmail</option>
+                    <option value="calendar">Calendar</option>
+                    <option value="drive">Drive</option>
+                    <option value="docs">Docs</option>
+                    <option value="sheets">Sheets</option>
+                    <option value="slides">Slides</option>
+                    <option value="chat">Chat</option>
+                    <option value="x">X</option>
+                    <option value="instagram">Instagram</option>
+                    <option value="whatsapp">WhatsApp</option>
+                    <option value="email">Email</option>
+                    <option value="scheduler">Scheduler</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label class="field-label">Account alias</label>
+                  <input class="sel" id="integration-account-alias" placeholder="default" />
+                </div>
+                <div class="field">
+                  <label class="field-label">Scopes</label>
+                  <input class="sel code-box" id="integration-scopes" placeholder="scope1, scope2" />
+                  <span class="field-hint">Otomatik eşleşen hesap yoksa isteği başlatmak için scope ekleyebilirsin.</span>
+                </div>
+                <div class="field">
+                  <label class="field-label">Auth mode</label>
+                  <select class="sel" id="integration-mode">
+                    <option value="auto">Auto</option>
+                    <option value="oauth">OAuth</option>
+                    <option value="web">Web fallback</option>
+                    <option value="native">Native</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label class="field-label">Authorization code</label>
+                  <input class="sel code-box" id="integration-auth-code" placeholder="(opsiyonel) OAuth code" />
+                </div>
+                <input type="hidden" id="integration-redirect-uri" value="http://localhost:8765/callback" />
+                <div class="field-hint">Redirect URI Elyan tarafından otomatik yönetilir.</div>
+              </div>
+            </div>
+            <div class="btn-row">
+              <button class="btn btn-p" id="integration-connect" type="button">Bağla</button>
+              <button class="btn btn-s" id="integration-revoke" type="button">Revoke</button>
+            </div>
+            <div id="integration-auth-note" class="empty">OAuth durumu burada görünecek.</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-top">
+            <div><h3>Hesaplar</h3><div class="card-desc">Provider bazlı bağlanmış hesaplar.</div></div>
+          </div>
+          <div id="integration-accounts" class="stack-list"></div>
+        </div>
+        <div class="card" style="grid-column:1/-1">
+          <div class="card-top">
+            <div><h3>Integration Traces</h3><div class="card-desc">Connector seçimi, auth state, fallback ve latency.</div></div>
+          </div>
+          <div class="mission-row" style="margin-bottom:12px">
+            <input class="mission-input" id="integration-trace-filter" placeholder="provider / connector / user filtresi" style="min-height:44px;resize:none;flex:1" />
+            <button class="btn btn-p" id="integration-trace-search" type="button">Filtrele</button>
+          </div>
+          <div class="kpis" id="integration-trace-kpis"></div>
+          <div id="integration-traces" class="stack-list"></div>
+        </div>
       </div>
     </div>
 

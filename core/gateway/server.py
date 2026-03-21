@@ -45,6 +45,8 @@ from core.runtime import (
 from core.confidence import coerce_confidence
 from core.mission_control import get_mission_runtime
 from core.storage_paths import resolve_elyan_data_dir, resolve_runs_root
+from elyan.dashboard.routes.trace import render_trace_page
+from elyan.verifier.evidence import build_trace_bundle, resolve_evidence_path
 from core.text_artifacts import existing_text_path
 from core.version import APP_VERSION
 from core.compliance.audit_trail import audit_trail
@@ -763,6 +765,8 @@ class ElyanGatewayServer:
             return False
         if path == "/api/message":
             return True
+        if path.startswith("/api/trace/") or path == "/api/evidence/file":
+            return True
         if method in {"POST", "PUT", "PATCH", "DELETE"}:
             return True
         if method == "GET" and path in _ADMIN_READ_PATHS:
@@ -841,6 +845,7 @@ class ElyanGatewayServer:
         self.app.router.add_post('/api/upload', self.handle_file_upload)
         self.app.router.add_post('/api/voice', self.handle_voice_upload)
         self.app.router.add_get('/api/voice/file', self.handle_voice_file_get)
+        self.app.router.add_get('/api/evidence/file', self.handle_evidence_file_get)
         self.app.router.add_get('/api/autopilot/status', self.handle_autopilot_status)
         self.app.router.add_post('/api/autopilot/tick', self.handle_autopilot_tick)
         self.app.router.add_post('/api/autopilot/start', self.handle_autopilot_start)
@@ -867,6 +872,7 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/missions', self.handle_missions_list)
         self.app.router.add_post('/api/missions', self.handle_missions_create)
         self.app.router.add_get('/api/missions/{mission_id}', self.handle_mission_detail)
+        self.app.router.add_get('/api/trace/{task_id}', self.handle_trace_api)
         self.app.router.add_get('/api/memory/stats', self.handle_memory_stats)
         self.app.router.add_get('/api/memory/profile', self.handle_get_profile)
         self.app.router.add_get('/api/activity', self.handle_activity_log)
@@ -945,6 +951,7 @@ class ElyanGatewayServer:
         # ── Dashboard & Web UI ────────────────────────────────────────────────
         self.app.router.add_get('/', self.handle_dashboard_page)
         self.app.router.add_get('/dashboard', self.handle_dashboard_page)
+        self.app.router.add_get('/trace/{task_id}', self.handle_trace_page)
         self.app.router.add_get('/assets/{filename}', self.handle_brand_asset)
         self.app.router.add_get('/healthz', self.handle_product_health)
         self.app.router.add_get('/ops', self.handle_ops_console_page)
@@ -975,6 +982,28 @@ class ElyanGatewayServer:
         if not p.exists():
             return web.Response(text="Dashboard file not found", status=404)
         response = web.FileResponse(p)
+        if _is_loopback_request(request):
+            response.set_cookie(
+                "elyan_admin_session",
+                _ensure_admin_access_token(),
+                httponly=True,
+                samesite="Strict",
+                secure=False,
+                path="/",
+            )
+        return response
+
+    async def handle_trace_page(self, request):
+        task_id = str(request.match_info.get("task_id", "") or "").strip()
+        if not task_id:
+            return web.Response(text="task_id required", status=400)
+        if not _is_loopback_request(request):
+            return web.Response(text="trace page is restricted to localhost", status=403)
+        bundle = build_trace_bundle(task_id, runtime=self._mission_store())
+        response = web.Response(
+            text=render_trace_page(task_id, bundle=bundle),
+            content_type="text/html",
+        )
         if _is_loopback_request(request):
             response.set_cookie(
                 "elyan_admin_session",
@@ -1023,6 +1052,13 @@ class ElyanGatewayServer:
         resp = web.FileResponse(asset_path)
         resp.headers["Cache-Control"] = "no-cache, must-revalidate"
         return resp
+
+    async def handle_trace_api(self, request):
+        task_id = str(request.match_info.get("task_id", "") or "").strip()
+        if not task_id:
+            return web.json_response({"ok": False, "error": "task_id required"}, status=400)
+        bundle = build_trace_bundle(task_id, runtime=self._mission_store())
+        return web.json_response({"ok": True, "task_id": task_id, "trace": bundle})
 
     async def handle_brand_asset(self, request):
         filename = str(request.match_info.get("filename", "")).strip()
@@ -2769,6 +2805,17 @@ class ElyanGatewayServer:
             return web.Response(status=404, text="File not found")
             
         return web.FileResponse(safe_path)
+
+    async def handle_evidence_file_get(self, request):
+        raw_path = str(request.query.get("path") or "").strip()
+        if not raw_path:
+            return web.Response(status=400, text="path required")
+        safe_path = resolve_evidence_path(raw_path)
+        if safe_path is None:
+            return web.Response(status=404, text="Evidence not found")
+        response = web.FileResponse(safe_path)
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
 
     async def handle_create_task(self, request):
         """Create and enqueue a new task."""

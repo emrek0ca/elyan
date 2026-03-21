@@ -29,6 +29,12 @@ document.addEventListener("DOMContentLoaded", function () {
     memory: { profile: [], workflow: [], task: [], evidence: [] },
     selectedMissionId: ""
   };
+  var traceState = {
+    taskId: "",
+    bundle: {},
+    evidence: [],
+    live: []
+  };
   var skillCatalogState = {
     skills: [],
     workflows: [],
@@ -40,18 +46,47 @@ document.addEventListener("DOMContentLoaded", function () {
     categories: [],
     total: 0
   };
+  var integrationState = {
+    provider: "google",
+    accounts: [],
+    traces: [],
+    summary: { accounts_total: 0, trace_total: 0, fallback_count: 0 }
+  };
+  var autopilotState = {
+    enabled: false,
+    running: false,
+    tick_count: 0,
+    last_tick_reason: "",
+    last_actions: [],
+    maintenance: {},
+    predictive: {},
+    automation: {}
+  };
   var initialMissionId = "";
+  var initialTraceId = "";
   try {
     var params = new URLSearchParams(window.location.search || "");
     initialMissionId = params.get("mission_id") || params.get("selected_mission_id") || "";
+    initialTraceId = params.get("trace_id") || params.get("task_id") || "";
   } catch (e) {
     initialMissionId = "";
+    initialTraceId = "";
   }
   var requestedMissionId = initialMissionId;
   if (initialMissionId) {
     missionState.selectedMissionId = initialMissionId;
   }
+  if (initialTraceId) {
+    traceState.taskId = initialTraceId;
+    if (!missionState.selectedMissionId) {
+      missionState.selectedMissionId = initialTraceId;
+    }
+    if (!requestedMissionId) {
+      requestedMissionId = initialTraceId;
+    }
+  }
   var missionFilter = "all";
+  var activeTab = initialTraceId ? "trace" : "mission";
   var REQUEST_TIMEOUT = { timeoutMs: 130000 };
   var timeoutMs = 130000;
 
@@ -84,7 +119,23 @@ document.addEventListener("DOMContentLoaded", function () {
       signal: controller.signal,
       credentials: "same-origin"
     })
-      .then(function (r) { return r.json(); })
+      .then(function (r) {
+        var contentType = String(r.headers && r.headers.get ? r.headers.get("content-type") : "").toLowerCase();
+        if (contentType.indexOf("application/json") >= 0) {
+          return r.json().then(function (data) {
+            if (!r.ok && data && typeof data === "object" && data.ok === undefined) {
+              data.ok = false;
+              data.status = r.status;
+            }
+            return data;
+          });
+        }
+        return r.text().then(function (text) {
+          var fallback = { ok: r.ok, status: r.status, error: "HTTP " + r.status };
+          if (text) fallback.body = text.slice(0, 500);
+          return fallback;
+        });
+      })
       .catch(function (e) { console.error("api", url, e); return { ok: false, error: e.message }; })
       .finally(function () { window.clearTimeout(t); });
   }
@@ -385,7 +436,7 @@ document.addEventListener("DOMContentLoaded", function () {
       '<div class="detail-lead">' + esc(mission.goal || "") + "</div>" +
       (preview.preview ? '<div class="detail-note">' + esc(preview.preview) + "</div>" : "") +
       (previewChips.length ? '<div class="mission-meta"><span>' + previewChips.map(function (item) { return esc(item); }).join("</span><span>") + "</span></div>" : "") +
-      '<div class="btn-row"><button class="btn btn-s btn-sm" id="save-skill-btn">Save as Skill</button></div>';
+      '<div class="btn-row"><button class="btn btn-s btn-sm" id="save-skill-btn">Save as Skill</button><button class="btn btn-s btn-sm" id="mission-open-trace" type="button">Trace Aç</button></div>';
 
     var nodes = (((mission.graph || {}).nodes) || []);
     rail.innerHTML = nodes.length ? nodes.map(function (node) {
@@ -425,6 +476,8 @@ document.addEventListener("DOMContentLoaded", function () {
 
     var saveSkillBtn = $("#save-skill-btn");
     if (saveSkillBtn) saveSkillBtn.addEventListener("click", function () { saveMissionSkill(mission.mission_id); });
+    var traceBtn = $("#mission-open-trace");
+    if (traceBtn) traceBtn.addEventListener("click", function () { openTraceTab(mission.mission_id); });
   }
 
   function renderMissionApprovals() {
@@ -673,6 +726,419 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
+  /* ================================================================
+     INTEGRATIONS
+     ================================================================ */
+  function integrationProviderPresetScopes(provider) {
+    var map = {
+      google: "gmail.read, calendar.read, drive.read, docs.read, sheets.read, slides.read, chat.read",
+      gmail: "email.read, email.send",
+      calendar: "calendar.read, calendar.write",
+      drive: "drive.read, drive.write",
+      docs: "docs.read, docs.write",
+      sheets: "sheets.read, sheets.write",
+      slides: "slides.read, slides.write",
+      chat: "chat.read, chat.write",
+      x: "x.read, x.write",
+      instagram: "instagram.read, instagram.write",
+      whatsapp: "whatsapp.read, whatsapp.write",
+      email: "email.read, email.send",
+      scheduler: "calendar.read, calendar.write"
+    };
+    return map[String(provider || "").toLowerCase()] || "";
+  }
+
+  function integrationQuickConnectPlan(appName) {
+    var key = String(appName || "").trim().toLowerCase();
+    var map = {
+      google: { provider: "google", scopes: "gmail.read, calendar.read, drive.read, docs.read, sheets.read, slides.read, chat.read" },
+      gmail: { provider: "google", scopes: "email.read, email.send" },
+      "google calendar": { provider: "google", scopes: "calendar.read, calendar.write" },
+      "google drive": { provider: "google", scopes: "drive.read, drive.write" },
+      "google docs": { provider: "google", scopes: "docs.read, docs.write" },
+      "google sheets": { provider: "google", scopes: "sheets.read, sheets.write" },
+      "google slides": { provider: "google", scopes: "slides.read, slides.write" },
+      "google chat": { provider: "google", scopes: "chat.read, chat.write" },
+      whatsapp: { provider: "whatsapp", scopes: "whatsapp.read, whatsapp.write" },
+      instagram: { provider: "instagram", scopes: "instagram.read, instagram.write" },
+      x: { provider: "x", scopes: "x.read, x.write" }
+    };
+    return map[key] || { provider: "", scopes: "" };
+  }
+
+  function integrationProviderBadge(provider) {
+    var key = String(provider || "").trim().toLowerCase();
+    var glyphMap = {
+      google: "G",
+      gmail: "G",
+      calendar: "C",
+      drive: "D",
+      docs: "D",
+      sheets: "S",
+      slides: "S",
+      chat: "C",
+      whatsapp: "W",
+      instagram: "I",
+      x: "X",
+      email: "E",
+      scheduler: "S"
+    };
+    var glyph = glyphMap[key] || (key ? key.charAt(0).toUpperCase() : "?");
+    return '<span class="integration-logo ' + esc(key || "google") + '">' + esc(glyph) + "</span>";
+  }
+
+  function integrationConnectEndpoint() {
+    return ["/api/integrations/connect", "/api/integrations/accounts/connect"];
+  }
+
+  function postIntegrationConnect(payload) {
+    var endpoints = integrationConnectEndpoint();
+    function attempt(index, lastError) {
+      if (index >= endpoints.length) {
+        return Promise.resolve({ ok: false, error: lastError || "Bağlantı kurulamadı" });
+      }
+      return POST(endpoints[index], payload).then(function (res) {
+        if (res && res.ok) {
+          res._endpoint = endpoints[index];
+          return res;
+        }
+        if (index + 1 < endpoints.length) {
+          return attempt(index + 1, (res && res.error) || lastError || "Bağlantı kurulamadı");
+        }
+        return res;
+      }).catch(function (err) {
+        if (index + 1 < endpoints.length) {
+          return attempt(index + 1, (err && err.message) || lastError || "Bağlantı kurulamadı");
+        }
+        return { ok: false, error: (err && err.message) || "Bağlantı kurulamadı" };
+      });
+    }
+    return attempt(0, "");
+  }
+
+  function renderIntegrationKPIs() {
+    var el = $("#integration-kpis");
+    if (!el) return;
+    var accounts = Array.isArray(integrationState.accounts) ? integrationState.accounts : [];
+    var traces = Array.isArray(integrationState.traces) ? integrationState.traces : [];
+    var readyAccounts = accounts.filter(function (item) { return String(item.status || "").toLowerCase() === "ready"; }).length;
+    var needsInput = accounts.filter(function (item) { return String(item.status || "").toLowerCase() === "needs_input"; }).length;
+    var fallbackCount = traces.filter(function (item) { return !!item.fallback_used; }).length;
+    el.innerHTML =
+      mkKPI("Hesaplar", accounts.length) +
+      mkKPI("Hazır", readyAccounts) +
+      mkKPI("Needs input", needsInput) +
+      mkKPI("Fallback", fallbackCount);
+  }
+
+  function renderIntegrationAccounts() {
+    var root = $("#integration-accounts");
+    var note = $("#integration-auth-note");
+    if (!root) return;
+    var accounts = Array.isArray(integrationState.accounts) ? integrationState.accounts : [];
+    if (!accounts.length) {
+      root.innerHTML = '<div class="empty">Bağlı hesap yok. OAuth / API ile bağla.</div>';
+      if (note) note.textContent = "Bağlı hesap bulunamadı.";
+      return;
+    }
+    root.innerHTML = accounts.map(function (account) {
+      var status = String(account.status || "").toLowerCase();
+      var tone = status === "ready" ? "ok" : (status === "blocked" || status === "failed" ? "err" : "warn");
+      var scopes = Array.isArray(account.granted_scopes) ? account.granted_scopes : [];
+      return (
+        '<div class="integration-account">' +
+          '<div class="trace-meta">' +
+            '<span>' + integrationProviderBadge(account.provider || "-") + ' ' + esc(account.provider || "-") + '</span>' +
+            '<span>' + esc(account.account_alias || "default") + '</span>' +
+            '<span class="pill ' + tone + '">' + esc(account.status || "-") + '</span>' +
+          '</div>' +
+          '<strong>' + esc(account.display_name || account.email || account.provider || "Account") + '</strong>' +
+          '<div class="meta">' + esc(account.email || account.auth_url || "—") + '</div>' +
+          '<div class="meta">Scopes: ' + esc(scopes.join(", ") || "—") + '</div>' +
+          '<div class="meta">Fallback: ' + esc(account.fallback_mode || "-") + '</div>' +
+          '<div class="btn-row">' +
+            '<button class="btn btn-s btn-sm js-integration-revoke" data-provider="' + esc(account.provider || "") + '" data-alias="' + esc(account.account_alias || "default") + '">Revoke</button>' +
+          '</div>' +
+        '</div>'
+      );
+    }).join("");
+    root.querySelectorAll(".js-integration-revoke").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        revokeIntegrationAccount(btn.getAttribute("data-provider"), btn.getAttribute("data-alias"));
+      });
+    });
+    if (note) {
+      var first = accounts[0] || {};
+      note.textContent = String(first.status || "needs_input") === "ready"
+        ? (first.display_name || first.provider || "Hazır")
+        : ((first.auth_url || "OAuth gerekir"));
+    }
+  }
+
+  function renderIntegrationTraces() {
+    var root = $("#integration-traces");
+    var kpis = $("#integration-trace-kpis");
+    if (kpis) {
+      var traces = Array.isArray(integrationState.traces) ? integrationState.traces : [];
+      kpis.innerHTML =
+        mkKPI("Toplam", traces.length) +
+        mkKPI("Fallback", traces.filter(function (t) { return !!t.fallback_used; }).length) +
+        mkKPI("Başarılı", traces.filter(function (t) { return !!t.success; }).length) +
+        mkKPI("Latency", traces.length ? Math.round(traces.reduce(function (a, t) { return a + Number(t.latency_ms || 0); }, 0) / traces.length) + " ms" : "-");
+    }
+    if (!root) return;
+    var tracesList = Array.isArray(integrationState.traces) ? integrationState.traces : [];
+    if (!tracesList.length) {
+      root.innerHTML = '<div class="empty">Trace yok. Bir hesap bağla veya bir entegrasyon çalıştır.</div>';
+      return;
+    }
+    root.innerHTML = tracesList.map(function (item) {
+      var tone = item.success ? "ok" : (item.fallback_used ? "warn" : "err");
+      var providerHtml = integrationProviderBadge(item.provider || "-") + ' <span>' + esc(item.provider || "-") + '</span>';
+      var meta = [
+        providerHtml,
+        '<span>' + esc(item.connector_name || "-") + '</span>',
+        '<span>' + esc(item.integration_type || "-") + '</span>'
+      ].join(" • ");
+      var details = [
+        "auth=" + (item.auth_state || "-"),
+        "fallback=" + (item.fallback_reason || "-"),
+        "latency=" + (item.latency_ms ? Math.round(Number(item.latency_ms)) + "ms" : "-"),
+        "retry=" + (item.retry_count || 0)
+      ].join(" • ");
+      var evidence = Array.isArray(item.evidence) ? item.evidence.length : 0;
+      var artifacts = Array.isArray(item.artifacts) ? item.artifacts.length : 0;
+      return (
+        '<div class="trace-item">' +
+          '<div class="trace-meta">' +
+            '<span>' + meta + '</span>' +
+            '<span class="pill ' + tone + '">' + esc(item.status || (item.success ? "success" : "failed")) + '</span>' +
+          '</div>' +
+          '<strong>' + esc(item.operation || "connector") + '</strong>' +
+          '<div class="meta">' + esc(details) + '</div>' +
+          '<div class="meta">evidence: ' + esc(evidence) + ' • artifacts: ' + esc(artifacts) + ' • ' + esc(item.session_id || "") + '</div>' +
+        '</div>'
+      );
+    }).join("");
+  }
+
+  function renderIntegrationSummary() {
+    var root = $("#integration-summary");
+    if (!root) return;
+    var summary = integrationState.summary && integrationState.summary.detail ? integrationState.summary.detail : {};
+    var accounts = summary.accounts || {};
+    var traces = summary.traces || {};
+    var accountCounts = accounts.counts || {};
+    var statusCounts = traces.by_status || {};
+    var providerCounts = traces.by_provider || {};
+    var recent = Array.isArray(traces.recent) ? traces.recent : [];
+    var lines = [];
+    lines.push('<div class="integration-account"><strong>Accounts</strong><div class="meta">provider: ' + esc(accounts.provider || integrationState.provider || "-") + ' • total: ' + esc(accounts.total || 0) + '</div><div class="meta">counts: ' + esc(Object.keys(accountCounts).map(function (k) { return k + "=" + accountCounts[k]; }).join(", ") || "-") + '</div></div>');
+    lines.push('<div class="integration-account"><strong>Traces</strong><div class="meta">total: ' + esc(traces.total || 0) + ' • avg latency: ' + esc((traces.avg_latency_ms != null ? traces.avg_latency_ms : "-")) + ' ms</div><div class="meta">fallback: ' + esc(traces.fallback_count || 0) + '</div></div>');
+    lines.push('<div class="integration-account"><strong>Trace Distribution</strong><div class="meta">by provider: ' + esc(Object.keys(providerCounts).map(function (k) { return k + "=" + providerCounts[k]; }).join(", ") || "-") + '</div><div class="meta">by status: ' + esc(Object.keys(statusCounts).map(function (k) { return k + "=" + statusCounts[k]; }).join(", ") || "-") + '</div></div>');
+    if (recent.length) {
+      lines.push('<div class="integration-account"><strong>Recent Trace</strong><div class="meta">' + esc((recent[0].provider || "-") + ":" + (recent[0].connector_name || "-") + " " + (recent[0].operation || "connector")) + '</div><div class="meta">' + esc((recent[0].status || (recent[0].success ? "success" : "failed")) + " • " + (recent[0].fallback_reason || "no fallback")) + '</div></div>');
+    }
+    root.innerHTML = lines.join("");
+  }
+
+  function renderAutopilot() {
+    var kpis = $("#autopilot-kpis");
+    var summary = $("#autopilot-summary");
+    var btnStart = $("#autopilot-start");
+    var btnStop = $("#autopilot-stop");
+    var btnTick = $("#autopilot-tick");
+    var running = !!(autopilotState || {}).running;
+    if (kpis) {
+      kpis.innerHTML =
+        mkKPI("Durum", running ? "aktif" : "pasif") +
+        mkKPI("Tick", autopilotState.tick_count || 0) +
+        mkKPI("Son tick", autopilotState.last_tick_reason || "-") +
+        mkKPI("Eylem", (autopilotState.last_actions || []).length || 0);
+    }
+    if (summary) {
+      var actions = Array.isArray(autopilotState.last_actions) ? autopilotState.last_actions : [];
+      var maintenance = autopilotState.maintenance || {};
+      var predictive = autopilotState.predictive || {};
+      var automation = autopilotState.automation || {};
+      var lines = [];
+      lines.push('<div class="integration-account"><strong>Runtime</strong><div class="meta">running: ' + esc(String(running)) + ' • enabled: ' + esc(String(!!autopilotState.enabled)) + '</div><div class="meta">last tick: ' + esc(autopilotState.last_tick_reason || "-") + '</div></div>');
+      lines.push('<div class="integration-account"><strong>Maintenance</strong><div class="meta">freed: ' + esc(maintenance.total_freed_mb != null ? maintenance.total_freed_mb : "-") + 'MB • tasks: ' + esc(maintenance.tasks_completed != null ? maintenance.tasks_completed : "-") + '</div></div>');
+      lines.push('<div class="integration-account"><strong>Predictive</strong><div class="meta">monitoring: ' + esc(predictive.monitoring_active != null ? String(predictive.monitoring_active) : "-") + ' • predictions: ' + esc(predictive.active_predictions != null ? predictive.active_predictions : "-") + '</div></div>');
+      lines.push('<div class="integration-account"><strong>Automation</strong><div class="meta">healthy: ' + esc((automation.summary && automation.summary.healthy) != null ? automation.summary.healthy : "-") + ' • failing: ' + esc((automation.summary && automation.summary.failing) != null ? automation.summary.failing : "-") + '</div></div>');
+      if (actions.length) {
+        lines.push('<div class="integration-account"><strong>Recent Actions</strong><div class="meta">' + esc(actions.slice(0, 3).map(function (item) {
+          return (item.kind || "action") + ":" + (item.status || "-");
+        }).join(" • ")) + '</div></div>');
+      }
+      summary.innerHTML = lines.join("");
+    }
+    if (btnStart) btnStart.disabled = running;
+    if (btnStop) btnStop.disabled = !running;
+    if (btnTick) btnTick.disabled = false;
+  }
+
+  function loadIntegrationAccounts() {
+    var provider = String((document.getElementById("integration-provider") || {}).value || "google");
+    integrationState.provider = provider;
+    return GET("/api/integrations/accounts?provider=" + encodeURIComponent(provider)).then(function (data) {
+      integrationState.accounts = Array.isArray(data.accounts) ? data.accounts : [];
+      integrationState.summary.accounts_total = Number(data.total || integrationState.accounts.length || 0);
+      renderIntegrationKPIs();
+      renderIntegrationAccounts();
+    });
+  }
+
+  function loadIntegrationTraces(filterValue) {
+    var raw = typeof filterValue === "string" ? filterValue : String((document.getElementById("integration-trace-filter") || {}).value || "");
+    var parts = raw.trim().split(/\s+/).filter(Boolean);
+    var params = ["limit=50"];
+    if (parts[0]) params.push("provider=" + encodeURIComponent(parts[0]));
+    if (parts[1]) params.push("connector_name=" + encodeURIComponent(parts[1]));
+    if (parts[2]) params.push("user_id=" + encodeURIComponent(parts[2]));
+    return GET("/api/integrations/traces?" + params.join("&")).then(function (data) {
+      integrationState.traces = Array.isArray(data.traces) ? data.traces : [];
+      integrationState.summary.trace_total = Number(data.total || integrationState.traces.length || 0);
+      integrationState.summary.fallback_count = data.summary && data.summary.fallback_count ? Number(data.summary.fallback_count) : integrationState.traces.filter(function (item) { return !!item.fallback_used; }).length;
+      renderIntegrationKPIs();
+      renderIntegrationTraces();
+    });
+  }
+
+  function loadIntegrationSummary() {
+    var provider = String(integrationState.provider || (document.getElementById("integration-provider") || {}).value || "google");
+    return GET("/api/integrations/summary?provider=" + encodeURIComponent(provider)).then(function (data) {
+      integrationState.summary.detail = data && data.ok ? data : {};
+      renderIntegrationSummary();
+      return data;
+    });
+  }
+
+  function refreshIntegrations() {
+    return Promise.all([loadIntegrationAccounts(), loadIntegrationTraces(), loadIntegrationSummary()]);
+  }
+
+  function loadAutopilot() {
+    return GET("/api/autopilot/status").then(function (data) {
+      autopilotState = data && data.ok ? data : (data || {});
+      renderAutopilot();
+      return data;
+    });
+  }
+
+  function startAutopilot() {
+    return POST("/api/autopilot/start", {}).then(function (data) {
+      if (data && data.ok) {
+        toast("Autopilot başlatıldı", "ok");
+      } else {
+        toast((data && data.error) || "Autopilot başlatılamadı", "err");
+      }
+      return loadAutopilot();
+    });
+  }
+
+  function stopAutopilot() {
+    return POST("/api/autopilot/stop", {}).then(function (data) {
+      if (data && data.ok) {
+        toast("Autopilot durduruldu", "info");
+      } else {
+        toast((data && data.error) || "Autopilot durdurulamadı", "err");
+      }
+      return loadAutopilot();
+    });
+  }
+
+  function tickAutopilot() {
+    return POST("/api/autopilot/tick", { reason: "dashboard_manual" }).then(function (data) {
+      if (data && data.ok) {
+        toast("Autopilot tick çalıştı", "ok");
+      } else {
+        toast((data && data.error) || "Autopilot tick çalışmadı", "err");
+      }
+      return loadAutopilot();
+    });
+  }
+
+  function connectIntegration(options) {
+    var opts = options || {};
+    var providerEl = $("#integration-provider");
+    var aliasEl = $("#integration-account-alias");
+    var scopesEl = $("#integration-scopes");
+    var modeEl = $("#integration-mode");
+    var codeEl = $("#integration-auth-code");
+    var redirectEl = $("#integration-redirect-uri");
+    var appEl = $("#integration-app");
+    var appName = String(opts.appName || (appEl ? appEl.value : "") || "").trim();
+    var inferredPlan = integrationQuickConnectPlan(appName);
+    var provider = String(opts.provider || "").trim().toLowerCase();
+    if (!provider && appName) {
+      provider = String(inferredPlan.provider || "").trim().toLowerCase();
+    }
+    if (!provider && !appName && providerEl) {
+      provider = String(providerEl.value || "google").trim().toLowerCase();
+    }
+    var scopesText = String(opts.scopes || (scopesEl ? scopesEl.value : "") || "");
+    var scopes = scopesText.split(",").map(function (item) { return item.trim(); }).filter(Boolean);
+    if (!scopes.length && inferredPlan.scopes) {
+      scopes = String(inferredPlan.scopes).split(",").map(function (item) { return item.trim(); }).filter(Boolean);
+    }
+    var mode = modeEl ? modeEl.value : "auto";
+    var requestPayload = {
+      app_name: appName,
+      provider: provider,
+      account_alias: aliasEl ? aliasEl.value.trim() : "default",
+      scopes: scopes,
+      mode: mode,
+      authorization_code: codeEl ? codeEl.value.trim() : "",
+      redirect_uri: redirectEl ? redirectEl.value.trim() : "",
+    };
+    return postIntegrationConnect(requestPayload).then(function (res) {
+      if (res && res.ok) {
+        var account = res.account || {};
+        if (res.needs_input && res.auth_url) {
+          if ($("#integration-auth-note")) {
+            $("#integration-auth-note").innerHTML =
+              '<div class="empty">OAuth gerekiyor: <span class="code-box">' + esc(res.auth_url) + '</span></div>' +
+              '<div class="muted-sm" style="margin-top:8px">Resolved: ' + esc(res.resolved_app_name || appName || provider) + ' → ' + esc(res.resolved_provider || provider) + '</div>' +
+              '<div class="muted-sm">Endpoint: ' + esc(res._endpoint || integrationConnectEndpoint()[0]) + '</div>';
+          }
+          try {
+            if (res.launch_url) {
+              window.open(res.launch_url, "_blank", "noopener");
+            }
+          } catch (e) {}
+          toast("OAuth bağlantısı başlatıldı", "info");
+        } else {
+          toast((res.resolved_app_name || account.provider || provider) + " bağlandı", "ok");
+          if ($("#integration-auth-note")) {
+            $("#integration-auth-note").textContent = String(res.resolved_app_name || account.provider || provider) + " → " + String(res.resolved_provider || provider) + " bağlandı";
+          }
+        }
+        return refreshIntegrations();
+      }
+      toast((res && res.error) || "Bağlantı kurulamadı", "err");
+      return loadIntegrationAccounts();
+    });
+  }
+
+  function revokeIntegrationAccount(provider, alias) {
+    if (!provider) {
+      toast("Provider gerekli", "err");
+      return Promise.resolve();
+    }
+    return POST("/api/integrations/accounts/revoke", {
+      provider: provider,
+      account_alias: alias || "default"
+    }).then(function (res) {
+      if (res && res.ok) {
+        toast(provider + " hesabı kaldırıldı", "ok");
+        return refreshIntegrations();
+      }
+      toast((res && res.error) || "Hesap kaldırılamadı", "err");
+      return loadIntegrationAccounts();
+    });
+  }
+
   function updateMissionFilterButtons() {
     $$(".js-mission-filter").forEach(function (btn) {
       var active = String(btn.getAttribute("data-filter") || "all") === missionFilter;
@@ -717,7 +1183,11 @@ document.addEventListener("DOMContentLoaded", function () {
         renderMissionApprovals();
         renderMissionSkills();
         renderMissionMemory();
-        return loadMissionDetail();
+        return loadMissionDetail().then(function () {
+          if (activeTab === "trace") {
+            return loadTrace();
+          }
+        });
       });
     });
   }
@@ -760,19 +1230,227 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
+  function currentTraceTaskId() {
+    return String(traceState.taskId || missionState.selectedMissionId || requestedMissionId || initialTraceId || initialMissionId || "").trim();
+  }
+
+  function traceSummaryCard(label, value, detail) {
+    var html = '<div class="stack-item"><strong>' + esc(label) + '</strong><p>' + esc(value) + '</p>';
+    if (detail) {
+      html += '<div class="muted-sm">' + esc(detail) + '</div>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function tracePreview(item) {
+    var mediaKind = String((item || {}).media_kind || "").toLowerCase();
+    var url = String((item || {}).url || "");
+    var label = String((item || {}).label || item.kind || "Evidence");
+    if (url && mediaKind === "image") {
+      return '<img src="' + esc(url) + '" alt="' + esc(label) + '" class="trace-preview" loading="lazy" />';
+    }
+    if (url && mediaKind === "video") {
+      return '<video src="' + esc(url) + '" controls class="trace-preview"></video>';
+    }
+    return '<div class="trace-preview-fallback">' + esc(String(mediaKind || (item && item.kind) || "FILE").toUpperCase()) + '</div>';
+  }
+
+  function traceEvidenceCard(item) {
+    var meta = [];
+    if (item.node_id) meta.push("node:" + item.node_id);
+    if (item.mime_type) meta.push(item.mime_type);
+    if (item.size_bytes) meta.push(String(item.size_bytes) + " bytes");
+    var body = '<article class="trace-evidence-card">' + tracePreview(item) + '<div class="trace-evidence-body">';
+    body += '<strong>' + esc(item.label || item.kind || "Evidence") + '</strong>';
+    body += '<p>' + esc(item.summary || item.display_path || "") + '</p>';
+    if (meta.length) {
+      body += '<div class="trace-evidence-meta">' + esc(meta.join(" • ")) + '</div>';
+    }
+    if (item.url) {
+      body += '<a href="' + esc(item.url) + '" target="_blank" rel="noreferrer" class="trace-link">Aç</a>';
+    }
+    body += '</div></article>';
+    return body;
+  }
+
+  function traceTimelineCard(item) {
+    return (
+      '<div class="stack-item">' +
+        '<strong>' + esc(item.label || item.event_type || item.kind || "event") + '</strong>' +
+        '<p>' + esc(item.status || "") + ' • ' + esc(fmtDate(item.created_at)) + '</p>' +
+      '</div>'
+    );
+  }
+
+  function traceApprovalCard(item) {
+    return (
+      '<div class="stack-item">' +
+        '<strong>' + esc(item.title || item.operation || "approval") + '</strong>' +
+        '<p>' + esc(item.status || "") + '</p>' +
+      '</div>'
+    );
+  }
+
+  function renderTraceLive(items) {
+    var root = $("#trace-live");
+    if (!root) return;
+    var rows = Array.isArray(items) ? items : traceState.live || [];
+    if (!rows.length) {
+      root.innerHTML = '<div class="empty">Live event yok.</div>';
+      return;
+    }
+    root.innerHTML = rows.slice(-40).map(function (item) {
+      var detail = item.detail;
+      var detailText = typeof detail === "string" ? detail : JSON.stringify(detail || item, null, 2);
+      return (
+        '<div class="trace-live-item">' +
+          '<strong>' + esc(item.label || item.type || "event") + '</strong>' +
+          '<p>' + esc(item.status || "") + '</p>' +
+          '<pre>' + esc(String(detailText || "").slice(0, 1200)) + '</pre>' +
+        '</div>'
+      );
+    }).join("");
+  }
+
+  function traceMatchesCurrent(payload) {
+    var wanted = currentTraceTaskId();
+    if (!wanted) return true;
+    if (!payload || typeof payload !== "object") return true;
+    var ids = [payload.task_id, payload.mission_id, payload.request_id, payload.id];
+    for (var i = 0; i < ids.length; i++) {
+      if (ids[i] != null && String(ids[i]) === wanted) return true;
+    }
+    return !ids.some(function (value) { return value != null; });
+  }
+
+  function appendTraceLive(eventName, payload) {
+    if (!traceMatchesCurrent(payload)) return;
+    var entry = {
+      label: String(eventName || (payload && payload.type) || "event"),
+      status: String((payload && (payload.status || payload.state || payload.channel)) || ""),
+      detail: payload
+    };
+    traceState.live = (traceState.live || []).concat([entry]).slice(-40);
+    renderTraceLive(traceState.live);
+  }
+
+  function renderTraceView(bundle) {
+    var trace = bundle || {};
+    var history = trace.history || {};
+    var evidence = Array.isArray(trace.evidence) ? trace.evidence : [];
+    var timeline = Array.isArray(history.timeline) ? history.timeline : [];
+    var approvals = Array.isArray(history.approvals) ? history.approvals : [];
+    var live = Array.isArray(history.live_events) ? history.live_events : [];
+    var taskId = String(trace.task_id || history.task_id || currentTraceTaskId() || "").trim();
+    traceState.taskId = taskId;
+    traceState.bundle = trace;
+    traceState.evidence = evidence;
+    traceState.live = live.slice(-40);
+
+    var input = $("#trace-task-id");
+    if (input) input.value = taskId;
+    var openBtn = $("#trace-open-full");
+    if (openBtn) {
+      openBtn.disabled = !taskId;
+    }
+
+    var title = history.goal || history.skill_name || taskId || "Trace";
+    document.title = "Elyan Trace • " + title;
+
+    var kpis = $("#trace-kpis");
+    if (kpis) {
+      kpis.innerHTML =
+        mkKPI("Status", history.status || "-") +
+        mkKPI("Evidence", evidence.length || 0) +
+        mkKPI("Approvals", approvals.length || 0) +
+        mkKPI("Timeline", timeline.length || 0) +
+        mkKPI("Controls", history.control && history.control.node_count != null ? history.control.node_count : (history.graph && history.graph.nodes ? history.graph.nodes.length : 0));
+    }
+
+    var summary = $("#trace-summary");
+    if (summary) {
+      summary.innerHTML =
+        traceSummaryCard("Goal", history.goal || "-", history.skill_name || "") +
+        traceSummaryCard("Route", history.route_mode || "-", history.mode || "") +
+        traceSummaryCard("Risk", history.risk_profile || "-", history.status || "") +
+        traceSummaryCard("Evidence file", String(evidence.filter(function (item) { return !!item.path; }).length || 0), "Artifact ready");
+    }
+
+    var decision = $("#trace-decision");
+    if (decision) {
+      decision.textContent = JSON.stringify(history.decision_trace || {}, null, 2);
+    }
+
+    var evidenceRoot = $("#trace-evidence");
+    if (evidenceRoot) {
+      evidenceRoot.innerHTML = evidence.length ? evidence.slice().reverse().map(traceEvidenceCard).join("") : '<div class="empty">Evidence yok.</div>';
+    }
+
+    var timelineRoot = $("#trace-timeline");
+    if (timelineRoot) {
+      timelineRoot.innerHTML = timeline.length ? timeline.slice().reverse().map(traceTimelineCard).join("") : '<div class="empty">Timeline yok.</div>';
+    }
+
+    var approvalsRoot = $("#trace-approvals");
+    if (approvalsRoot) {
+      approvalsRoot.innerHTML = approvals.length ? approvals.slice().reverse().map(traceApprovalCard).join("") : '<div class="empty">Approval yok.</div>';
+    }
+
+    renderTraceLive(traceState.live);
+  }
+
+  function loadTrace(taskId) {
+    var resolved = String(taskId || currentTraceTaskId() || "").trim();
+    traceState.taskId = resolved;
+    var input = $("#trace-task-id");
+    if (input) input.value = resolved;
+    if (!resolved) {
+      renderTraceView({ task_id: "", history: { status: "missing", decision_trace: {} }, evidence: [] });
+      return Promise.resolve();
+    }
+    return GET("/api/trace/" + encodeURIComponent(resolved)).then(function (data) {
+      if (data && data.ok && data.trace) {
+        renderTraceView(data.trace);
+      } else {
+        renderTraceView({ task_id: resolved, history: { status: "missing", decision_trace: {} }, evidence: [] });
+      }
+      return data;
+    });
+  }
+
+  function openTraceTab(taskId) {
+    var resolved = String(taskId || currentTraceTaskId() || "").trim();
+    if (resolved) {
+      traceState.taskId = resolved;
+    }
+    activateTab("trace");
+    return Promise.resolve();
+  }
+
   /* ================================================================
      TABS
      ================================================================ */
-  var tabMap = { mission: "p-mission", tools: "p-tools", settings: "p-settings" };
+  var tabMap = { mission: "p-mission", trace: "p-trace", tools: "p-tools", integrations: "p-integrations", settings: "p-settings" };
+
+  function activateTab(name) {
+    var key = String(name || "mission");
+    activeTab = key;
+    $$(".nav-tab").forEach(function (b) {
+      b.classList.toggle("active", String(b.getAttribute("data-t") || "") === key);
+    });
+    $$(".page").forEach(function (p) { p.classList.remove("show"); });
+    var target = tabMap[key] || tabMap.mission;
+    var el = document.getElementById(target);
+    if (el) el.classList.add("show");
+    if (key === "trace") {
+      loadTrace();
+    }
+  }
 
   $$(".nav-tab").forEach(function (btn) {
     btn.addEventListener("click", function () {
-      $$(".nav-tab").forEach(function (b) { b.classList.remove("active"); });
-      btn.classList.add("active");
-      var target = tabMap[btn.getAttribute("data-t")];
-      $$(".page").forEach(function (p) { p.classList.remove("show"); });
-      var el = document.getElementById(target);
-      if (el) el.classList.add("show");
+      activateTab(btn.getAttribute("data-t"));
     });
   });
 
@@ -792,6 +1470,108 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   });
   updateMissionFilterButtons();
+  var traceTaskInput = $("#trace-task-id");
+  if (traceTaskInput && traceState.taskId) {
+    traceTaskInput.value = traceState.taskId;
+  }
+  var traceLoadBtn = $("#trace-load");
+  if (traceLoadBtn) traceLoadBtn.addEventListener("click", function () { loadTrace(traceTaskInput ? traceTaskInput.value : currentTraceTaskId()); });
+  if (traceTaskInput) {
+    traceTaskInput.addEventListener("keydown", function (evt) {
+      if (evt.key === "Enter") {
+        evt.preventDefault();
+        loadTrace(traceTaskInput.value);
+      }
+    });
+  }
+  var traceRefreshBtn = $("#trace-refresh");
+  if (traceRefreshBtn) traceRefreshBtn.addEventListener("click", function () { loadTrace(); });
+  var traceOpenBtn = $("#trace-open-full");
+  if (traceOpenBtn) traceOpenBtn.addEventListener("click", function () {
+    var taskId = currentTraceTaskId();
+    if (taskId) {
+      window.open("/trace/" + encodeURIComponent(taskId), "_blank", "noopener");
+    }
+  });
+  activateTab(activeTab);
+
+  var integrationProviderSelect = $("#integration-provider");
+  if (integrationProviderSelect) {
+    integrationProviderSelect.addEventListener("change", function () {
+      var provider = String(integrationProviderSelect.value || "google");
+      integrationState.provider = provider;
+      var appInput = $("#integration-app");
+      if (appInput && !appInput.value.trim()) {
+        var quick = integrationQuickConnectPlan(provider);
+        appInput.value = provider === "google" ? "Google" : (provider === "gmail" ? "Gmail" : provider);
+        if (quick.scopes && integrationScopesInput) {
+          integrationScopesInput.value = quick.scopes;
+          integrationScopesInput.dataset.autofill = "1";
+        }
+      }
+      var scopesEl = $("#integration-scopes");
+      if (scopesEl) {
+        var preset = integrationProviderPresetScopes(provider);
+        if (!scopesEl.value.trim() || scopesEl.dataset.autofill === "1") {
+          scopesEl.value = preset;
+          scopesEl.dataset.autofill = "1";
+        }
+      }
+      loadIntegrationAccounts();
+    });
+  }
+  var integrationScopesInput = $("#integration-scopes");
+  if (integrationScopesInput) {
+    integrationScopesInput.addEventListener("input", function () {
+      integrationScopesInput.dataset.autofill = integrationScopesInput.value.trim() ? "0" : "1";
+    });
+  }
+  if (integrationProviderSelect && integrationScopesInput && !integrationScopesInput.value.trim()) {
+    integrationScopesInput.value = integrationProviderPresetScopes(integrationProviderSelect.value || "google");
+    integrationScopesInput.dataset.autofill = "1";
+  }
+  var integrationAppInput = $("#integration-app");
+  var integrationQuickPresets = $("#integration-quick-presets");
+  if (integrationAppInput && !integrationAppInput.value.trim()) {
+    integrationAppInput.value = "Gmail";
+  }
+  var integrationRefreshBtn = $("#integrations-refresh");
+  if (integrationRefreshBtn) integrationRefreshBtn.addEventListener("click", function () { refreshIntegrations(); });
+  var integrationConnectBtn = $("#integration-connect");
+  if (integrationConnectBtn) integrationConnectBtn.addEventListener("click", function () { connectIntegration(); });
+  var integrationRevokeBtn = $("#integration-revoke");
+  if (integrationRevokeBtn) {
+    integrationRevokeBtn.addEventListener("click", function () {
+      var providerEl = $("#integration-provider");
+      var aliasEl = $("#integration-account-alias");
+      revokeIntegrationAccount(providerEl ? providerEl.value : integrationState.provider, aliasEl ? aliasEl.value.trim() : "default");
+    });
+  }
+  var integrationTraceSearchBtn = $("#integration-trace-search");
+  if (integrationTraceSearchBtn) {
+    integrationTraceSearchBtn.addEventListener("click", function () {
+      loadIntegrationTraces();
+    });
+  }
+  var integrationTraceFilterInput = $("#integration-trace-filter");
+  if (integrationTraceFilterInput) {
+    integrationTraceFilterInput.addEventListener("keydown", function (evt) {
+      if (evt.key === "Enter") {
+        evt.preventDefault();
+        loadIntegrationTraces(integrationTraceFilterInput.value || "");
+      }
+    });
+  }
+  $$(".js-integration-quick").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var appName = btn.getAttribute("data-app") || "";
+      var provider = btn.getAttribute("data-provider") || "";
+      if (integrationAppInput) integrationAppInput.value = appName;
+      if (integrationProviderSelect && provider) integrationProviderSelect.value = provider;
+      if (integrationScopesInput) integrationScopesInput.value = integrationQuickConnectPlan(appName).scopes || integrationProviderPresetScopes(provider);
+      connectIntegration({ appName: appName, provider: provider });
+    });
+  });
 
   /* ================================================================
      PROVIDER META
@@ -1213,10 +1993,16 @@ document.addEventListener("DOMContentLoaded", function () {
       ws.onmessage = function (e) {
         try {
           var msg = JSON.parse(e.data);
+          var payload = msg.data || msg.payload || msg;
           if (msg.event === "llm_update" || msg.event === "provider_change") {
             loadProviders();
           } else if (msg.event === "mission_event" || msg.event === "mission_overview" || msg.event === "mission_list") {
             loadMissionControl();
+          } else if (msg.event === "autopilot" || msg.event === "autopilot_action" || msg.event === "briefing" || msg.event === "suggestion" || msg.event === "task_review" || msg.event === "intervention" || msg.event === "automation_health" || msg.event === "reconcile") {
+            loadAutopilot();
+          }
+          if (activeTab === "trace" && (msg.event === "mission_event" || msg.event === "activity" || msg.event === "tool_event" || msg.event === "telemetry" || msg.event === "history")) {
+            appendTraceLive(msg.event || "event", payload);
           }
         } catch (ex) { /* ignore */ }
       };
@@ -1229,13 +2015,21 @@ document.addEventListener("DOMContentLoaded", function () {
      REFRESH & BOOT
      ================================================================ */
   function refreshAll() {
-    return Promise.all([loadMissionControl(), loadProviders(), loadOllama(), loadHealth(), loadSkillCatalog(), loadMarketplace("")]);
+    return Promise.all([loadMissionControl(), loadProviders(), loadOllama(), loadHealth(), loadSkillCatalog(), loadMarketplace(""), refreshIntegrations(), loadAutopilot()]);
   }
 
   var refreshBtn = $("#g-refresh");
   if (refreshBtn) refreshBtn.addEventListener("click", function () { refreshAll(); });
   var toolsRefreshBtn = $("#g-refresh-tools");
   if (toolsRefreshBtn) toolsRefreshBtn.addEventListener("click", function () { refreshAll(); });
+  var autopilotRefreshBtn = $("#autopilot-refresh");
+  if (autopilotRefreshBtn) autopilotRefreshBtn.addEventListener("click", function () { loadAutopilot(); });
+  var autopilotStartBtn = $("#autopilot-start");
+  if (autopilotStartBtn) autopilotStartBtn.addEventListener("click", function () { startAutopilot(); });
+  var autopilotStopBtn = $("#autopilot-stop");
+  if (autopilotStopBtn) autopilotStopBtn.addEventListener("click", function () { stopAutopilot(); });
+  var autopilotTickBtn = $("#autopilot-tick");
+  if (autopilotTickBtn) autopilotTickBtn.addEventListener("click", function () { tickAutopilot(); });
   var skillsRefreshBtn = $("#skills-refresh");
   if (skillsRefreshBtn) skillsRefreshBtn.addEventListener("click", function () { refreshSkillRegistry(); });
   var marketplaceRefreshBtn = $("#marketplace-refresh");
