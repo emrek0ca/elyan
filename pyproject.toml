@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "elyan"
 dynamic = ["version"]
 description = "Elyan AGI Framework — Autonomous, Omni-Platform, Zero-Trust AI Agent"
-readme = "PROGRESS.md"
+readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
 authors = [
@@ -23,7 +23,6 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-
 dependencies = [
     # Core
     "pydantic>=2.0.0",
@@ -100,6 +99,12 @@ all = [
 
 [project.scripts]
 elyan = "elyan_entrypoint:main"
+
+[project.urls]
+Homepage = "https://github.com/emrek0ca/elyan"
+Repository = "https://github.com/emrek0ca/elyan"
+Documentation = "https://emrek0ca.github.io/elyan/"
+Issues = "https://github.com/emrek0ca/elyan/issues"
 
 [tool.setuptools]
 py-modules = ["elyan_entrypoint"]
