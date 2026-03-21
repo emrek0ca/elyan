@@ -66,6 +66,17 @@ def _lazy_load_tool(tool_name: str):
         }
         _loaded_tools.update(tools)
         return _loaded_tools.get(tool_name)
+
+    if tool_name in ["quivr_status", "quivr_project", "quivr_scaffold", "quivr_brain_ask"]:
+        from .quivr_tools import quivr_brain_ask, quivr_project, quivr_scaffold, quivr_status
+        tools = {
+            "quivr_status": quivr_status,
+            "quivr_project": quivr_project,
+            "quivr_scaffold": quivr_scaffold,
+            "quivr_brain_ask": quivr_brain_ask,
+        }
+        _loaded_tools.update(tools)
+        return _loaded_tools.get(tool_name)
     
     # System Tools
     if tool_name in ["get_system_info", "get_battery_status", "open_app", "open_url", "get_running_apps",
@@ -629,6 +640,8 @@ class LazyToolDict(dict):
             "lean_status", "lean_project", "lean_workflow", "lean_swarm",
             # Cloudflare Agents Tools
             "cloudflare_agents_status", "cloudflare_agents_project", "cloudflare_agents_scaffold", "cloudflare_agents_workflow",
+            # Quivr Tools
+            "quivr_status", "quivr_project", "quivr_scaffold", "quivr_brain_ask",
             # Browser Tools
             "browser_open", "browser_click", "browser_type", "browser_screenshot", 
             "browser_get_text", "browser_scroll", "browser_wait", "browser_close", 

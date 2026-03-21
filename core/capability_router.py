@@ -161,6 +161,7 @@ class CapabilityRouter:
         "full_stack_delivery": "code_project",
         "lean": "formal_methods",
         "cloudflare_agents": "code_project",
+        "quivr": "code_project",
         "general": "communication",
     }
 
@@ -249,6 +250,11 @@ class CapabilityRouter:
             "cloudflare agents", "routeagentrequest", "useagent", "useagentchat",
             "durable objects", "cloudflare worker", "cloudflare workers", "wrangler",
             "new_sqlite_classes", "ai-chat", "ai chat agent", "edge runtime", "mcp",
+        ],
+        "quivr": [
+            "quivr", "quivr-core", "second brain", "brain.from_files",
+            "retrievalconfig", "retrieval config", "megaparse", "ask your brain",
+            "knowledge base", "personal assistant",
         ],
         "full_stack_delivery": [
             "full stack", "uçtan uca", "uctan uca", "production", "deployment",
@@ -339,6 +345,22 @@ class CapabilityRouter:
             "output_artifacts": ["wrangler_jsonc", "server_ts", "client_tsx", "workflow_notes", "mcp_notes"],
             "quality_checklist": ["deploy_readiness", "durable_state", "realtime_sync", "callable_methods", "mcp_ready"],
             "learning_tags": ["cloudflare", "workers", "agents", "edge"],
+        },
+        "quivr": {
+            "objective": "build_second_brain_rag_stack",
+            "workflow_id": "quivr_second_brain_workflow",
+            "primary_action": "quivr_scaffold",
+            "preferred_tools": [
+                "quivr_status",
+                "quivr_project",
+                "quivr_scaffold",
+                "quivr_brain_ask",
+                "create_software_project_pack",
+                "research_document_delivery",
+            ],
+            "output_artifacts": ["brain_py", "quivr_chat_py", "basic_rag_workflow_yaml", "requirements_txt", "sample_docs"],
+            "quality_checklist": ["grounded_answers", "retrieval_config", "source_coverage", "file_ingestion", "deployability"],
+            "learning_tags": ["rag", "knowledge_base", "second_brain", "documents"],
         },
         "email": {
             "objective": "manage_email_workflow_with_traceability",
@@ -561,6 +583,8 @@ class CapabilityRouter:
             return "delivery_bundle"
         if domain == "cloudflare_agents":
             return "code_project"
+        if domain == "quivr":
+            return "code_project"
         return "task"
 
     @staticmethod
@@ -613,6 +637,8 @@ class CapabilityRouter:
             add("md")
         if domain == "cloudflare_agents" and not formats:
             add("md")
+        if domain == "quivr" and not formats:
+            add("md")
         return formats or ["docx"]
 
     @staticmethod
@@ -631,6 +657,8 @@ class CapabilityRouter:
         if domain == "code":
             return "implementation"
         if domain == "cloudflare_agents":
+            return "implementation"
+        if domain == "quivr":
             return "implementation"
         if any(marker in low for marker in ("analitik", "analytical", "detaylı", "detayli", "scientific", "bilimsel")):
             return "analytical"
@@ -698,6 +726,14 @@ class CapabilityRouter:
                 "realtime_sync",
                 "callable_methods",
                 "mcp_ready",
+            ]
+        if domain == "quivr":
+            return [
+                "grounded_answers",
+                "retrieval_config",
+                "source_coverage",
+                "file_ingestion",
+                "deployability",
             ]
         if content_kind == "web_project":
             return [
@@ -923,9 +959,9 @@ class CapabilityRouter:
             suggested_job_type=suggested_job_type,
             multi_agent_recommended=multi_agent_recommended,
             orchestration_mode="multi_agent" if multi_agent_recommended else "single_agent",
-            workflow_profile_applicable=best_domain in {"code", "api_integration", "full_stack_delivery", "lean", "cloudflare_agents"},
-            requires_design_phase=best_domain in {"code", "api_integration", "full_stack_delivery", "lean", "cloudflare_agents"},
-            requires_worktree=best_domain in {"full_stack_delivery", "cloudflare_agents"},
+            workflow_profile_applicable=best_domain in {"code", "api_integration", "full_stack_delivery", "lean", "cloudflare_agents", "quivr"},
+            requires_design_phase=best_domain in {"code", "api_integration", "full_stack_delivery", "lean", "cloudflare_agents", "quivr"},
+            requires_worktree=best_domain in {"full_stack_delivery", "cloudflare_agents", "quivr"},
             content_kind=request_contract.content_kind,
             output_formats=list(request_contract.output_formats or []),
             style_profile=request_contract.style_profile,

@@ -46,4 +46,9 @@ def get_builtin_skills() -> List:
         skills.append(CloudflareAgentsSkill())
     except Exception:
         pass
+    try:
+        from .quivr_skill import QuivrSkill
+        skills.append(QuivrSkill())
+    except Exception:
+        pass
     return skills

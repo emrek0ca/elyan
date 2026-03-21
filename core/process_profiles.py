@@ -11,7 +11,7 @@ from typing import Any, Dict, Iterable, List
 from core.text_artifacts import write_json_artifact, write_text_artifact
 
 
-CODING_SUPERPOWERS_DOMAINS = frozenset({"code", "debug", "api_integration", "full_stack_delivery", "lean", "cloudflare_agents"})
+CODING_SUPERPOWERS_DOMAINS = frozenset({"code", "debug", "api_integration", "full_stack_delivery", "lean", "cloudflare_agents", "quivr"})
 APPROVAL_MARKERS = (
     "onay",
     "go",
