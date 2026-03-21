@@ -1,6 +1,20 @@
-from setuptools import setup, find_packages
+from pathlib import Path
 import sys
-from core.version import APP_VERSION
+
+from setuptools import find_packages, setup
+
+
+def read_version() -> str:
+    version_file = Path(__file__).resolve().parent / "core" / "version.py"
+    namespace: dict[str, str] = {}
+    exec(version_file.read_text(encoding="utf-8"), namespace)
+    version = namespace.get("APP_VERSION")
+    if not version:
+        raise RuntimeError("Unable to determine Elyan version")
+    return version
+
+
+APP_VERSION = read_version()
 
 _darwin = sys.platform == "darwin"
 
@@ -90,6 +104,5 @@ setup(
         "Programming Language :: Python :: 3.12",
         "Operating System :: MacOS :: MacOS X",
         "Operating System :: POSIX :: Linux",
-        "License :: OSI Approved :: MIT License",
     ],
 )

@@ -7,7 +7,7 @@ name = "elyan"
 dynamic = ["version"]
 description = "Elyan AGI Framework — Autonomous, Omni-Platform, Zero-Trust AI Agent"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.11"
 authors = [
     {name = "Emre Koca"}
@@ -16,7 +16,6 @@ keywords = ["ai", "agent", "agi", "autonomous", "llm", "orchestrator"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
