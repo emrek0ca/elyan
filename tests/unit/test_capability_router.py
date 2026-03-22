@@ -35,6 +35,16 @@ def test_capability_router_full_stack_requires_worktree():
     assert plan.requires_worktree is True
 
 
+def test_capability_router_database_routes_to_opengauss():
+    plan = get_capability_router().route("OpenGauss database schema migration, SQL query ve backup workflow kur")
+    assert plan.domain == "opengauss"
+    assert plan.workflow_id == "opengauss_database_workflow"
+    assert plan.primary_action == "opengauss_scaffold"
+    assert plan.workflow_profile_applicable is True
+    assert plan.requires_design_phase is True
+    assert plan.requires_worktree is True
+
+
 def test_approval_granted_uses_explicit_tokens_only():
     assert approval_granted("go") is True
     assert approval_granted("devam et") is True

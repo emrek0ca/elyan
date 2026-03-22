@@ -1693,7 +1693,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Set user_id for audit logging
     agent.current_user_id = user.id
-    if agent.agent_loop:
+    if getattr(agent, "agent_loop", None):
         agent.agent_loop.current_user_id = user.id
 
     # Real-time step feedback callback

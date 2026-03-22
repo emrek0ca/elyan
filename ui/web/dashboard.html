@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Elyan Dashboard</title>
-  <link rel="stylesheet" href="/ui/web/dashboard.css?v=20260319">
+  <link rel="stylesheet" href="/ui/web/dashboard.css?v=20260322-1">
   <style>
 /* ===== INLINE CSS — guarantees styles load even if external CSS fails ===== */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -295,6 +295,329 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
   .pack-grid{grid-template-columns:1fr}
   .settings-card{max-width:100%}
 }
+
+/* === MINIMAL DASHBOARD OVERRIDES === */
+body{
+  background:#f4f6f8;
+  color:#0f172a;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Arial,sans-serif;
+}
+.navbar{
+  height:60px;
+  padding:0 20px;
+  background:rgba(255,255,255,.82);
+  backdrop-filter:saturate(180%) blur(18px);
+  border-bottom:1px solid rgba(15,23,42,.08);
+  box-shadow:none;
+}
+.nav-logo{
+  background:#0f172a;
+  color:#fff;
+  border-color:#0f172a;
+}
+.nav-tabs{
+  background:rgba(15,23,42,.05);
+  padding:3px;
+  border-radius:12px;
+}
+.nav-tab{
+  padding:7px 14px;
+  color:#475569;
+}
+.nav-tab:hover{
+  background:rgba(255,255,255,.7);
+  color:#0f172a;
+}
+.nav-tab.active{
+  background:#fff;
+  box-shadow:0 1px 2px rgba(15,23,42,.06);
+}
+.nav-pill{
+  background:rgba(15,23,42,.05);
+  color:#334155;
+}
+.main{
+  max-width:1320px;
+  padding:22px 20px 56px;
+}
+.pg-head h2{
+  font-size:22px;
+  font-weight:650;
+  letter-spacing:-.02em;
+}
+.pg-sub{color:#64748b}
+.card,
+.kpi-box,
+.readiness-panel,
+.integration-account,
+.stack-item,
+.mission-card,
+.quality-card,
+.trace-item,
+.trace-live-item,
+.approval-item,
+.timeline-item,
+.memory-item,
+.channel-list-item,
+.channel-catalog-item,
+.settings-card{
+  background:#fff;
+  border-color:#e5e7eb;
+  box-shadow:none;
+}
+.card:hover{
+  border-color:#cbd5e1;
+  box-shadow:none;
+}
+.btn{border-radius:10px}
+.btn-p{
+  background:#0f172a;
+  color:#fff;
+}
+.btn-p:hover:not(:disabled){background:#111827}
+.btn-s{
+  background:#fff;
+  border-color:#d7dee8;
+  color:#0f172a;
+}
+.btn-s:hover:not(:disabled){border-color:#cbd5e1}
+.btn-d{
+  background:#fff1f2;
+  border-color:#fecdd3;
+  color:#be123c;
+}
+.sel,
+.key-input input,
+.mission-input{
+  background:#fff;
+  border-color:#d7dee8;
+  box-shadow:none;
+}
+.sel:focus,
+.key-input input:focus,
+.mission-input:focus{
+  border-color:#0f172a;
+  box-shadow:0 0 0 3px rgba(15,23,42,.08);
+}
+.mission-input{min-height:104px}
+.investor-hero{
+  grid-template-columns:minmax(0,1fr) minmax(260px,340px);
+  background:linear-gradient(180deg,#ffffff 0%,#f8fafc 100%);
+  color:#0f172a;
+  border-color:#e5e7eb;
+  box-shadow:none;
+}
+.investor-copy{padding:20px}
+.hero-kicker{color:#475569}
+.hero-kicker::before{
+  background:#0ea5e9;
+  box-shadow:0 0 0 6px rgba(14,165,233,.14);
+}
+.investor-copy h3{
+  font-size:24px;
+  color:#0f172a;
+  max-width:18ch;
+}
+.investor-copy p{color:#475569}
+.hero-band span{
+  background:#fff;
+  border-color:#e5e7eb;
+  color:#475569;
+}
+.hero-metrics{
+  background:#f8fafc;
+  border-left:1px solid #e5e7eb;
+}
+.hero-metric{
+  background:#fff;
+  border-color:#e5e7eb;
+}
+.hero-metric span{color:#64748b}
+.hero-metric small{color:#64748b}
+.readiness-panel{background:#fff}
+.readiness-item{
+  background:#f8fafc;
+}
+.readiness-item.ok{
+  background:#f0fdf4;
+  border-color:#bbf7d0;
+}
+.readiness-item.warn{
+  background:#fffbeb;
+  border-color:#fde68a;
+}
+.oll-bar.on{
+  background:#f0fdf4;
+  color:#166534;
+  border-color:#bbf7d0;
+}
+.oll-bar.off{
+  background:#fff1f2;
+  color:#be123c;
+  border-color:#fecdd3;
+}
+.pack-card{
+  background:#fff;
+  border-color:#e5e7eb;
+  box-shadow:none;
+}
+.pack-snippet{
+  background:#f8fafc;
+  color:#0f172a;
+  border:1px solid #e5e7eb;
+}
+.pack-command-chip{
+  background:#fff;
+  border-color:#d7dee8;
+  color:#475569;
+}
+.pack-command-chip:hover{
+  border-color:#0f172a;
+  color:#0f172a;
+}
+.trace-preview-fallback{
+  background:#f8fafc;
+  color:#0f172a;
+}
+.trace-live-item pre{background:#f8fafc}
+.empty{
+  background:#fff;
+  border-color:#e5e7eb;
+  color:#64748b;
+}
+.settings-grid,
+.channel-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:16px;
+}
+.settings-wide{grid-column:1/-1}
+.channel-catalog{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+  gap:12px;
+}
+.channel-list{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+.channel-list-item{
+  padding:14px;
+  border:1px solid #e5e7eb;
+  border-radius:14px;
+  background:#fff;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+.channel-list-item.active{
+  border-color:#0f172a;
+  background:#f8fafc;
+}
+.channel-list-item:hover{
+  border-color:#cbd5e1;
+}
+.channel-list-top{
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  align-items:flex-start;
+}
+.channel-list-top strong{font-size:14px}
+.channel-list-meta{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  font-size:12px;
+  color:#475569;
+}
+.channel-field-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:12px;
+}
+.channel-field-grid .field{
+  padding:12px;
+  border:1px solid #e5e7eb;
+  border-radius:14px;
+  background:#f8fafc;
+}
+.channel-field-grid .field .sel{width:100%}
+.channel-catalog-item{
+  padding:14px;
+  border:1px solid #e5e7eb;
+  border-radius:14px;
+  background:#fff;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+.channel-catalog-item:hover{
+  border-color:#cbd5e1;
+}
+.channel-catalog-item .btn-row{margin-top:0}
+.channel-toolbar{
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  align-items:center;
+  flex-wrap:wrap;
+}
+.channel-note{
+  font-size:12px;
+  color:#64748b;
+}
+.channel-empty{
+  padding:18px;
+  border:1px dashed #d7dee8;
+  border-radius:14px;
+  color:#64748b;
+  background:#fff;
+}
+.policy-summary{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+}
+.policy-summary .pill{
+  background:#f8fafc;
+  border:1px solid #e5e7eb;
+  color:#475569;
+}
+@media(max-width:1024px){
+  .settings-grid,
+  .channel-grid{grid-template-columns:1fr}
+  .channel-field-grid{grid-template-columns:1fr}
+}
+@media(max-width:768px){
+  .navbar{height:auto;padding:12px 16px;gap:8px}
+  .nav-tabs{order:10;width:100%}
+  .nav-tab{flex:1;text-align:center;padding:7px 8px}
+  .main{padding:16px}
+  .cgrid,
+  .settings-grid,
+  .channel-grid,
+  .channel-field-grid{grid-template-columns:1fr}
+  .kpis{grid-template-columns:repeat(2,1fr)}
+  .investor-hero{grid-template-columns:1fr}
+  .investor-copy h3{max-width:none;font-size:22px}
+  .hero-metrics{grid-template-columns:1fr 1fr}
+  .pack-grid{grid-template-columns:1fr}
+  .mission-hero,.mission-grid{grid-template-columns:1fr}
+}
+@media(max-width:480px){
+  .nav-brand span{display:none}
+  .kpis{grid-template-columns:1fr}
+  .hero-metrics{grid-template-columns:1fr}
+  .pack-grid{grid-template-columns:1fr}
+  .settings-card{max-width:100%}
+  .channel-list-top,
+  .channel-toolbar{
+    flex-direction:column;
+    align-items:stretch;
+  }
+}
   </style>
 </head>
 <body>
@@ -310,6 +633,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
       <button class="nav-tab" data-t="trace">Trace</button>
       <button class="nav-tab" data-t="tools">Tools</button>
       <button class="nav-tab" data-t="integrations">Integrations</button>
+      <button class="nav-tab" data-t="channels">Channels</button>
       <button class="nav-tab" data-t="settings">Settings</button>
     </div>
     <div class="nav-right">
@@ -332,9 +656,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
 
       <div class="investor-hero">
         <div class="investor-copy">
-          <div class="hero-kicker">Investor Demo Mode</div>
+          <div class="hero-kicker">Operator Console</div>
           <h3>Natural language to trusted computer action.</h3>
-          <p>Zero-permission sandbox, live trace, approval matrix and evidence gallery. Elyan hızlıca demo edilebilir, kanıtlanabilir ve paylaşılabilir.</p>
+          <p>Local-first execution, live trace, approval gates and evidence. Kanallar, ayarlar ve mission akışı tek bir yüzeyde yönetilir.</p>
           <div class="hero-band">
             <span>Local-first</span>
             <span>Evidence-backed</span>
@@ -555,6 +879,64 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
             <div id="mission-memory" class="memory-list"></div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- ===== CHANNELS PAGE ===== -->
+    <div class="page" id="p-channels">
+      <div class="pg-head">
+        <div>
+          <h2>Channels</h2>
+          <p class="pg-sub">Mesaj kanallarını tek yerden ekle, test et, toggle et ve runtime'a senkronize et.</p>
+        </div>
+        <div class="btn-row" style="margin-top:0">
+          <button class="btn btn-s" id="channels-refresh" type="button">Yenile</button>
+          <button class="btn btn-p" id="channels-sync" type="button">Sync Runtime</button>
+        </div>
+      </div>
+      <div class="kpis" id="channel-kpis"></div>
+      <div class="channel-grid">
+        <div class="card channel-list-card">
+          <div class="card-top">
+            <div><h3>Configured Channels</h3><div class="card-desc">Enabled, connected, degraded.</div></div>
+          </div>
+          <div id="channel-list" class="channel-list"></div>
+        </div>
+        <div class="card channel-editor-card">
+          <div class="card-top">
+            <div><h3>Channel Editor</h3><div class="card-desc">Yeni kanal ekle ya da seçili olanı güncelle.</div></div>
+            <span class="pill warn" id="channel-editor-status">Yeni kayıt</span>
+          </div>
+          <div class="field">
+            <label class="field-label">Channel Type</label>
+            <select class="sel" id="channel-type"></select>
+            <span class="field-hint">Tip değişirse form otomatik güncellenir.</span>
+          </div>
+          <div class="field">
+            <label class="field-label">Channel ID</label>
+            <input class="sel" id="channel-id" placeholder="telegram-prod" />
+          </div>
+          <div class="field toggle-row">
+            <div>
+              <div class="field-label">Enabled</div>
+              <span class="field-hint">Runtime'a dahil et.</span>
+            </div>
+            <label class="switch"><input type="checkbox" id="channel-enabled"><span class="slider"></span></label>
+          </div>
+          <div id="channel-field-list" class="channel-field-grid"></div>
+          <div class="field-hint" id="channel-notes"></div>
+          <div class="btn-row">
+            <button class="btn btn-p" id="channel-save" type="button">Kaydet</button>
+            <button class="btn btn-s" id="channel-test" type="button">Test</button>
+            <button class="btn btn-s" id="channel-reset" type="button">Yeni</button>
+          </div>
+        </div>
+      </div>
+      <div class="card channel-catalog-card" style="margin-top:16px">
+        <div class="card-top">
+          <div><h3>Channel Catalog</h3><div class="card-desc">Hızlı başlangıç kartları.</div></div>
+        </div>
+        <div id="channel-catalog" class="channel-catalog"></div>
       </div>
     </div>
 
@@ -808,36 +1190,203 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
 
     <!-- ===== SETTINGS PAGE ===== -->
     <div class="page" id="p-settings">
-      <div class="pg-head"><div><h2>Settings</h2><p class="pg-sub">Kısa tercih ayarları.</p></div></div>
-      <div class="card settings-card">
-        <div class="field">
-          <label class="field-label">Primary LLM</label>
-          <select class="sel" id="s-primary"></select>
-          <span class="field-hint">Otomatik seçim varsayılan.</span>
+      <div class="pg-head">
+        <div>
+          <h2>Settings</h2>
+          <p class="pg-sub">Agent davranışı, güvenlik ve tool policy tek ekranda.</p>
         </div>
-        <div class="field">
-          <label class="field-label">Strategy</label>
-          <select class="sel" id="s-strategy">
-            <option value="fast">Hızlı</option>
-            <option value="best">Kalite</option>
-            <option value="balanced" selected>Dengeli</option>
-          </select>
+        <div class="btn-row" style="margin-top:0">
+          <button class="btn btn-s" id="settings-refresh" type="button">Yenile</button>
+          <button class="btn btn-p" id="s-save" type="button">Kaydet</button>
         </div>
-        <div class="field">
-          <label class="field-label">Language</label>
-          <select class="sel" id="s-lang">
-            <option value="tr">Türkçe</option>
-            <option value="en">English</option>
-          </select>
-        </div>
-        <div class="field toggle-row">
-          <div>
-            <div class="field-label">Local-first</div>
-            <span class="field-hint">Önce yerel modeli kullan.</span>
+      </div>
+      <div class="settings-grid">
+        <div class="card settings-card">
+          <div class="card-top">
+            <div><h3>Runtime</h3><div class="card-desc">Model, dil ve davranış.</div></div>
           </div>
-          <label class="switch"><input type="checkbox" id="s-local"><span class="slider"></span></label>
+          <div class="field">
+            <label class="field-label">Agent Name</label>
+            <input class="sel" id="s-name" placeholder="Elyan" />
+          </div>
+          <div class="field">
+            <label class="field-label">Personality</label>
+            <select class="sel" id="s-personality">
+              <option value="professional">Professional</option>
+              <option value="technical">Technical</option>
+              <option value="friendly">Friendly</option>
+              <option value="concise">Concise</option>
+              <option value="creative">Creative</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field-label">Primary LLM</label>
+            <select class="sel" id="s-primary"></select>
+            <span class="field-hint">Otomatik seçim varsayılan.</span>
+          </div>
+          <div class="field">
+            <label class="field-label">Runtime preset</label>
+            <select class="sel" id="s-preset">
+              <option value="strict">Strict</option>
+              <option value="balanced" selected>Balanced</option>
+              <option value="full-autonomy">Full autonomy</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field-label">Dashboard strategy</label>
+            <select class="sel" id="s-strategy">
+              <option value="fast">Hızlı</option>
+              <option value="best">Kalite</option>
+              <option value="balanced" selected>Dengeli</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field-label">Response mode</label>
+            <select class="sel" id="s-response-mode">
+              <option value="friendly">Friendly</option>
+              <option value="concise">Concise</option>
+              <option value="formal">Formal</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field-label">Response length</label>
+            <select class="sel" id="s-response-length">
+              <option value="short">Short</option>
+              <option value="medium">Medium</option>
+              <option value="detailed">Detailed</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field-label">Language</label>
+            <select class="sel" id="s-lang">
+              <option value="tr">Türkçe</option>
+              <option value="en">English</option>
+            </select>
+          </div>
+          <div class="field toggle-row">
+            <div>
+              <div class="field-label">Autonomous</div>
+              <span class="field-hint">Agent kendi başına aksiyon üretsin.</span>
+            </div>
+            <label class="switch"><input type="checkbox" id="s-autonomous"><span class="slider"></span></label>
+          </div>
+          <div class="field toggle-row">
+            <div>
+              <div class="field-label">Local-first</div>
+              <span class="field-hint">Önce yerel modeli kullan.</span>
+            </div>
+            <label class="switch"><input type="checkbox" id="s-local"><span class="slider"></span></label>
+          </div>
         </div>
-        <button class="btn btn-p" id="s-save">Kaydet</button>
+        <div class="card settings-card">
+          <div class="card-top">
+            <div><h3>Safety</h3><div class="card-desc">Veri koruma ve yetki katmanı.</div></div>
+          </div>
+          <div class="field">
+            <label class="field-label">Default user role</label>
+            <select class="sel" id="s-role">
+              <option value="operator">Operator</option>
+              <option value="admin">Admin</option>
+              <option value="viewer">Viewer</option>
+            </select>
+          </div>
+          <div class="field toggle-row">
+            <div>
+              <div class="field-label">KVKK strict</div>
+              <span class="field-hint">Katı gizlilik modu.</span>
+            </div>
+            <label class="switch"><input type="checkbox" id="s-kvkk"><span class="slider"></span></label>
+          </div>
+          <div class="field toggle-row">
+            <div>
+              <div class="field-label">Redact cloud prompts</div>
+              <span class="field-hint">Bulut isteklerini maskele.</span>
+            </div>
+            <label class="switch"><input type="checkbox" id="s-redact"><span class="slider"></span></label>
+          </div>
+          <div class="field toggle-row">
+            <div>
+              <div class="field-label">Allow cloud fallback</div>
+              <span class="field-hint">Yerel yetmezse buluta geç.</span>
+            </div>
+            <label class="switch"><input type="checkbox" id="s-cloud-fallback"><span class="slider"></span></label>
+          </div>
+          <div class="field toggle-row">
+            <div>
+              <div class="field-label">Enforce RBAC</div>
+              <span class="field-hint">Rol tabanlı erişim.</span>
+            </div>
+            <label class="switch"><input type="checkbox" id="s-rbac"><span class="slider"></span></label>
+          </div>
+          <div class="field toggle-row">
+            <div>
+              <div class="field-label">Path guard</div>
+              <span class="field-hint">Dosya yollarını koru.</span>
+            </div>
+            <label class="switch"><input type="checkbox" id="s-path-guard"><span class="slider"></span></label>
+          </div>
+          <div class="field toggle-row">
+            <div>
+              <div class="field-label">Dangerous tools</div>
+              <span class="field-hint">Riskli araçlara izin ver.</span>
+            </div>
+            <label class="switch"><input type="checkbox" id="s-dangerous"><span class="slider"></span></label>
+          </div>
+          <div class="field toggle-row">
+            <div>
+              <div class="field-label">Require confirmation</div>
+              <span class="field-hint">Riskli işler ön onay ister.</span>
+            </div>
+            <label class="switch"><input type="checkbox" id="s-confirm-risk"><span class="slider"></span></label>
+          </div>
+          <div class="field toggle-row">
+            <div>
+              <div class="field-label">Require evidence</div>
+              <span class="field-hint">Tehlikeli işler kanıtla bitsin.</span>
+            </div>
+            <label class="switch"><input type="checkbox" id="s-evidence"><span class="slider"></span></label>
+          </div>
+          <div class="field toggle-row">
+            <div>
+              <div class="field-label">Share manifest default</div>
+              <span class="field-hint">Varsayılan manifest paylaşımı.</span>
+            </div>
+            <label class="switch"><input type="checkbox" id="s-share-manifest"><span class="slider"></span></label>
+          </div>
+          <div class="field toggle-row">
+            <div>
+              <div class="field-label">Share attachments default</div>
+              <span class="field-hint">Varsayılan ek paylaşımı.</span>
+            </div>
+            <label class="switch"><input type="checkbox" id="s-share-attachments"><span class="slider"></span></label>
+          </div>
+        </div>
+        <div class="card settings-card settings-wide">
+          <div class="card-top">
+            <div><h3>Tool Policy</h3><div class="card-desc">Allow / deny / approval listeleri.</div></div>
+            <span class="pill warn" id="policy-default-deny">default deny</span>
+          </div>
+          <div class="field toggle-row">
+            <div>
+              <div class="field-label">Default deny</div>
+              <span class="field-hint">Tanımsız araçlar kapalı başlasın.</span>
+            </div>
+            <label class="switch"><input type="checkbox" id="s-default-deny"><span class="slider"></span></label>
+          </div>
+          <div class="field">
+            <label class="field-label">Allow list</label>
+            <textarea class="mission-input" id="s-policy-allow" style="min-height:84px"></textarea>
+          </div>
+          <div class="field">
+            <label class="field-label">Deny list</label>
+            <textarea class="mission-input" id="s-policy-deny" style="min-height:84px"></textarea>
+          </div>
+          <div class="field">
+            <label class="field-label">Require approval</label>
+            <textarea class="mission-input" id="s-policy-approval" style="min-height:84px"></textarea>
+          </div>
+          <div class="field-hint">Liste değerlerini virgülle ayır. Tool policy doğrudan runtime'a uygulanır.</div>
+        </div>
       </div>
     </div>
 
@@ -868,6 +1417,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
   </div>
 
   <!-- JS — loaded after DOM -->
-  <script src="/ui/web/dashboard.js?v=20260319"></script>
+  <script src="/ui/web/dashboard.js?v=20260322-1"></script>
 </body>
 </html>

@@ -364,7 +364,7 @@ class BaseConnector(ABC):
         auth_state: ConnectorState | str | None = None,
     ) -> ConnectorResult:
         snap = snapshot.model_dump() if isinstance(snapshot, ConnectorSnapshot) else dict(snapshot or {})
-        return ConnectorResult(
+        result_obj = ConnectorResult(
             success=bool(success),
             status=str(status or ("success" if success else "failed")),
             connector_name=self.connector_name,
@@ -384,6 +384,42 @@ class BaseConnector(ABC):
             retryable=bool(retryable),
             metadata=dict(metadata or {}),
         )
+        try:
+            from core.integration_trace import get_integration_trace_store
+
+            trace_meta = dict(metadata or {})
+            trace_store = get_integration_trace_store()
+            trace_store.record_trace(
+                request_id=str(trace_meta.get("request_id") or trace_meta.get("trace_id") or self.session_id or ""),
+                user_id=str(trace_meta.get("user_id") or ""),
+                session_id=str(trace_meta.get("session_id") or self.session_id or ""),
+                channel=str(trace_meta.get("channel") or ""),
+                provider=self.provider,
+                connector_name=self.connector_name,
+                integration_type=str(self.capability.integration_type.value if hasattr(self.capability.integration_type, "value") else self.capability.integration_type),
+                operation=str(trace_meta.get("operation") or "connector"),
+                status=str(result_obj.status or ""),
+                success=bool(result_obj.success),
+                auth_state=str(result_obj.auth_state.value if hasattr(result_obj.auth_state, "value") else result_obj.auth_state),
+                auth_strategy=str(self.capability.auth_strategy.value if hasattr(self.capability.auth_strategy, "value") else self.capability.auth_strategy),
+                account_alias=str(getattr(self.auth_account, "account_alias", "default") or "default"),
+                fallback_used=bool(result_obj.fallback_used),
+                fallback_reason=str(result_obj.fallback_reason or ""),
+                install_state=str(trace_meta.get("install_state") or ""),
+                retry_count=int(trace_meta.get("retry_count") or 0),
+                latency_ms=float(result_obj.latency_ms or 0.0),
+                evidence=list(result_obj.evidence or []),
+                artifacts=list(result_obj.artifacts or []),
+                verification=dict(trace_meta.get("verification") or {}),
+                metadata={
+                    **trace_meta,
+                    "snapshot": snap,
+                    "result": dict(result_obj.result or {}),
+                },
+            )
+        except Exception:
+            pass
+        return result_obj
 
     async def connect(self, app_name_or_url: str, **kwargs: Any) -> ConnectorResult:
         raise NotImplementedError
@@ -409,4 +445,3 @@ class BaseConnector(ABC):
 
 def path_str(value: Any) -> str:
     return _path_str(value)
-

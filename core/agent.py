@@ -30,6 +30,7 @@ from core.skills.registry import skill_registry
 from core.skills.manager import skill_manager
 from core.user_profile import get_user_profile_store
 from core.context7_client import context7_client
+from core.conversation_context import get_conversation_context_manager
 from core.canvas.engine import canvas_engine
 from tools.generators.slidev_generator import slidev_gen
 from tools import AVAILABLE_TOOLS
@@ -527,7 +528,7 @@ class Agent:
             return None
         return Agent._sanitize_chat_reply(fast.answer)
 
-    def _fast_contextual_chat_reply(self, user_input: str = "") -> str | None:
+    def _fast_contextual_chat_reply(self, user_input: str = "", conversation_context: dict[str, Any] | None = None) -> str | None:
         """
         Short follow-up questions should preserve the last topic instead of
         falling back to a generic greeting.
@@ -537,6 +538,7 @@ class Agent:
         if not text:
             return None
 
+        ctx = dict(conversation_context or {})
         followup_markers = (
             "hangi alanlarda",
             "hangi alanlarda mesela",
@@ -558,9 +560,22 @@ class Agent:
         last_turn = self._get_last_turn_context()
         recent_user_text = self._get_recent_user_text(text)
         recent_assistant_text = self._get_recent_assistant_text(text)
+        context_seed = " ".join(
+            part
+            for part in (
+                str(ctx.get("last_topic") or "").strip(),
+                str(ctx.get("last_task") or "").strip(),
+                str(ctx.get("last_app") or "").strip(),
+                str(ctx.get("last_url") or "").strip(),
+                str(ctx.get("last_file") or "").strip(),
+                " ".join(str(item) for item in list(ctx.get("recent_topics") or [])[:3] if item),
+            )
+            if part
+        ).strip()
         topic_seed = " ".join(
             part
             for part in (
+                context_seed,
                 str(last_turn.get("user_input") or "").strip(),
                 str(last_turn.get("response_text") or "").strip(),
                 str(recent_user_text or "").strip(),
@@ -585,6 +600,60 @@ class Agent:
         if any(marker in low for marker in ("hangi alan", "nerede", "nerelerde", "örnek", "ornek")):
             return "Örneğin sağlık, eğitim, finans, müşteri hizmetleri ve yazılım geliştirme gibi alanlarda kullanılıyor. İstersen tek tek örnekleyeyim."
         return None
+
+    def _build_conversation_context(self, history: list | None) -> dict[str, Any]:
+        try:
+            from core.conversation_context import get_conversation_context_manager
+            ctx_mgr = get_conversation_context_manager()
+        except Exception:
+            return {}
+        normalized_history: list[dict[str, str]] = []
+        for item in list(history or []):
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "").strip().lower()
+            content = str(item.get("content") or "").strip()
+            if content and role in {"user", "assistant"}:
+                normalized_history.append({"role": role, "content": content})
+                continue
+            user_message = str(item.get("user_message") or "").strip()
+            bot_response = str(item.get("bot_response") or "").strip()
+            if user_message:
+                normalized_history.append({"role": "user", "content": user_message})
+            if bot_response:
+                normalized_history.append({"role": "assistant", "content": bot_response})
+        try:
+            return ctx_mgr.extract_context(normalized_history)
+        except Exception:
+            return {}
+
+    def _safe_get_recent_conversations(self, uid: Any, limit: int = 8) -> list:
+        try:
+            numeric_uid = int(uid) if str(uid).isdigit() else uid
+            if hasattr(self.kernel.memory, "get_recent_conversations"):
+                return list(self.kernel.memory.get_recent_conversations(numeric_uid, limit=limit) or [])
+            if hasattr(self.kernel.memory, "conversation") and hasattr(self.kernel.memory.conversation, "get_history"):
+                return list(self.kernel.memory.conversation.get_history(numeric_uid, limit=limit) or [])
+            return []
+        except Exception:
+            return []
+
+    def _safe_store_conversation(self, uid: Any, user_input: str, response_text: str, action: str, success: bool):
+        try:
+            numeric_uid = int(uid) if str(uid).isdigit() else uid
+            if hasattr(self.kernel.memory, "store_conversation"):
+                self.kernel.memory.store_conversation(
+                    numeric_uid,
+                    user_input,
+                    {"message": response_text, "action": action, "success": bool(success)},
+                )
+            elif hasattr(self.kernel.memory, "conversation") and hasattr(self.kernel.memory.conversation, "add_message"):
+                self.kernel.memory.conversation.add_message(numeric_uid, "user", user_input)
+                import json
+                meta_str = json.dumps({"action": action, "success": bool(success)})
+                self.kernel.memory.conversation.add_message(numeric_uid, "assistant", response_text, metadata=meta_str)
+        except Exception as exc:
+            logger.debug(f"memory store failed: {exc}")
 
     @staticmethod
     def _build_information_question_prompt(user_input: str) -> str:
@@ -2209,6 +2278,123 @@ class Agent:
                     route_metadata[key] = value
         if pending_workflow:
             route_metadata["workflow_session"] = dict(pending_workflow)
+
+        conversation_history = []
+        conversation_context = {}
+        try:
+            conversation_history = list(self._safe_get_recent_conversations(uid, limit=8) or [])
+        except Exception:
+            conversation_history = []
+        conversation_context = self._build_conversation_context(conversation_history)
+        if conversation_context:
+            try:
+                from core.conversation_context import get_conversation_context_manager
+                ctx_mgr = get_conversation_context_manager()
+                route_metadata["conversation_context"] = dict(conversation_context)
+                route_metadata["conversation_prompt"] = ctx_mgr.build_context_prompt(conversation_context)
+                resolved_input = ctx_mgr.resolve_references(effective_user_input, conversation_context)
+                if resolved_input:
+                    effective_user_input = resolved_input
+                    route_metadata["resolved_user_input"] = resolved_input
+            except Exception:
+                pass
+
+        active_provider = str(elyan_config.get("models.default.provider", "ollama") or "ollama").strip().lower()
+        active_model = str(elyan_config.get("models.default.model", "") or "").strip()
+        active_base_model_id = f"{active_provider}:{active_model}" if active_provider else active_model
+
+        quick_category = getattr(quick_intent, "category", None)
+        chat_like_request = bool(
+            quick_category in {_IC.CHAT, _IC.GREETING, _IC.QUESTION}
+            or self._is_likely_chat_message(effective_user_input)
+            or self._should_route_to_llm_chat(effective_user_input, parsed_intent if isinstance(parsed_intent, dict) else None, quick_intent)
+        )
+        if chat_like_request:
+            fast_text = ""
+            fast_question_type = ""
+            try:
+                if getattr(self.llm, "fast_response", None):
+                    fast_result = self.llm.fast_response.get_fast_response(effective_user_input, context=conversation_context)
+                    if fast_result and str(getattr(fast_result, "answer", "") or "").strip():
+                        fast_question_type = str(getattr(fast_result, "question_type", "") or "")
+                        fast_text = self._sanitize_chat_reply(str(fast_result.answer))
+            except Exception:
+                fast_text = ""
+            if not fast_text:
+                fast_text = (
+                    self._fast_contextual_chat_reply(effective_user_input, conversation_context=conversation_context)
+                    or ""
+                )
+            if not fast_text and hasattr(self.llm, "chat"):
+                try:
+                    chat_text = await self.llm.chat(effective_user_input, history=conversation_history, user_id=uid)
+                    fast_text = self._sanitize_chat_reply(chat_text)
+                except Exception:
+                    fast_text = ""
+            if not fast_text:
+                fast_text = self._fallback_chat_without_llm(effective_user_input) or ""
+            if fast_text.strip():
+                manifest = ledger.write_manifest(
+                    status="success",
+                    metadata={
+                        "channel": channel,
+                        "user_id": uid,
+                        "mode": "chat_fast_path",
+                        "question_type": fast_question_type,
+                        "conversation_context": dict(conversation_context),
+                    },
+                )
+                run_store.write_task(
+                    {},
+                    user_input=effective_user_input,
+                    metadata={"channel": channel, "user_id": uid, "phase": "chat_fast_path"},
+                    task_state={},
+                )
+                run_store.write_evidence(
+                    manifest_path=manifest,
+                    steps=[],
+                    artifacts=[],
+                    metadata={"status": "success", "mode": "chat_fast_path"},
+                )
+                run_store.write_summary(
+                    status="success",
+                    response_text=fast_text,
+                    artifacts=[],
+                    metadata={"manifest_path": manifest, "mode": "chat_fast_path"},
+                )
+                run_store.write_logs(lines=["chat_fast_path"])
+                await self._finalize_turn(
+                    user_input=effective_user_input,
+                    response_text=fast_text,
+                    action="chat",
+                    success=True,
+                    started_at=started_at,
+                    context={
+                        "role": "chat",
+                        "job_type": "communication",
+                        "errors": 0,
+                        "run_id": run_id,
+                        "mode": "chat_fast_path",
+                        "channel": str(channel or "cli"),
+                        "conversation_context": dict(conversation_context),
+                        "personalization": {},
+                        "model_runtime": {},
+                        "intent_prediction": {},
+                        "route_choice": {},
+                        "clarification_policy": {},
+                        "provider": active_provider,
+                        "model": active_model,
+                        "base_model_id": active_base_model_id,
+                    },
+                )
+                return AgentResponse(
+                    run_id=run_id,
+                    text=fast_text,
+                    attachments=[],
+                    evidence_manifest_path=manifest,
+                    status="success",
+                    error="",
+                )
         try:
             route_decision = cowork_runtime.route_command(
                 effective_user_input,
@@ -2251,9 +2437,6 @@ class Agent:
             route_metadata["request_quality_contract"] = list(request_contract.get("quality_contract") or [])
         if capability_plan is not None and hasattr(capability_plan, "to_dict"):
             route_metadata["capability_plan"] = capability_plan.to_dict()
-        active_provider = str(elyan_config.get("models.default.provider", "ollama") or "ollama").strip().lower()
-        active_model = str(elyan_config.get("models.default.model", "") or "").strip()
-        active_base_model_id = f"{active_provider}:{active_model}" if active_provider else active_model
         personalized_chat_input = effective_user_input
         operator_turn: dict[str, Any] = {}
         runtime_turn: dict[str, Any] = {}
@@ -2425,11 +2608,12 @@ class Agent:
             metadata=metadata,
         )
 
-        direct_history = []
-        try:
-            direct_history = list(self.kernel.memory.get_recent_conversations(uid, limit=6) or [])
-        except Exception:
-            direct_history = []
+        direct_history = list(conversation_history or [])
+        if not direct_history:
+            try:
+                direct_history = list(self._safe_get_recent_conversations(uid, limit=6) or [])
+            except Exception:
+                direct_history = []
 
         direct_intent = await self._resolve_fast_direct_intent(
             effective_user_input,
@@ -2492,7 +2676,7 @@ class Agent:
             fast_response = None
             if not disable_fast_chat_for_mode:
                 try:
-                    fast_response = self.llm.fast_response.get_fast_response(effective_user_input) if getattr(self.llm, "fast_response", None) else None
+                    fast_response = self.llm.fast_response.get_fast_response(effective_user_input, context=conversation_context) if getattr(self.llm, "fast_response", None) else None
                 except Exception:
                     fast_response = None
 
@@ -2573,7 +2757,7 @@ class Agent:
                     chat_text = ""
                     try:
                         chat_text = await with_timeout(
-                            self.llm.chat(personalized_chat_input, user_id=uid),
+                            self.llm.chat(personalized_chat_input, history=conversation_history, user_id=uid),
                             seconds=5.0,
                             fallback=self._fallback_chat_without_llm(effective_user_input),
                             context="agent_fast_chat",
@@ -2653,6 +2837,7 @@ class Agent:
             channel=str(channel or "cli"),
             user_id=uid,
             attachments=resolved_paths,
+            task_card=dict(operator_turn.get("task_plan") or operator_turn.get("task_card") or {}),
         )
         task_brain.save_task(task)
         autonomy_mode = ""
@@ -5281,7 +5466,7 @@ class Agent:
         if uid <= 0:
             return ""
         try:
-            rows = self.kernel.memory.get_recent_conversations(uid, limit=8)
+            rows = self._safe_get_recent_conversations(uid, limit=8)
         except Exception:
             return ""
 
@@ -5314,7 +5499,7 @@ class Agent:
         if uid <= 0:
             return ""
         try:
-            rows = self.kernel.memory.get_recent_conversations(uid, limit=8)
+            rows = self._safe_get_recent_conversations(uid, limit=8)
         except Exception:
             return ""
 
@@ -11064,11 +11249,7 @@ class Agent:
             logger.debug(f"adaptive learning update failed: {e}")
 
         try:
-            self.kernel.memory.store_conversation(
-                uid,
-                user_input,
-                {"message": response_text, "action": action, "success": bool(success)},
-            )
+            self._safe_store_conversation(uid, user_input, response_text, action, success)
         except Exception as exc:
             logger.debug(f"memory store failed: {exc}")
 

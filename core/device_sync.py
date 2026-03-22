@@ -334,6 +334,44 @@ class DeviceSyncStore:
             "users": int((user_row["cnt"] if user_row else 0) or 0),
         }
 
+    def list_recent_sessions(self, *, limit: int = 10) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM device_sessions
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (max(1, int(limit or 10)),),
+            ).fetchall()
+        return [self._load_session(row) for row in rows]
+
+    def list_recent_users(self, *, limit: int = 10) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT user_id, MAX(updated_at) AS updated_at, COUNT(*) AS session_count
+                FROM device_sessions
+                GROUP BY user_id
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (max(1, int(limit or 10)),),
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            uid = str(row["user_id"] or "").strip()
+            if not uid:
+                continue
+            out.append(
+                {
+                    "user_id": uid,
+                    "updated_at": float(row["updated_at"] or 0.0),
+                    "session_count": int(row["session_count"] or 0),
+                }
+            )
+        return out
+
     def delete_user(self, user_id: str) -> dict[str, Any]:
         uid = str(user_id or "local")
         with self._connect() as conn:

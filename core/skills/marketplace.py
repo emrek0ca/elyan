@@ -14,12 +14,16 @@ Architecture:
 - SkillPackage: Standardized format for distributable skills
 """
 
+import asyncio
 import json
 import hashlib
 import time
+import shutil
+import threading
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, UTC
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Tuple
 
 from utils.logger import get_logger
@@ -57,6 +61,7 @@ class SkillPackage:
     required_tools: List[str] = field(default_factory=list)
     dependencies: List[str] = field(default_factory=list)
     python_dependencies: List[str] = field(default_factory=list)
+    os_dependencies: List[str] = field(default_factory=list)
     post_install: List[str] = field(default_factory=list)
     trust_level: str = "curated"
     source: str = "marketplace"
@@ -196,6 +201,169 @@ class SkillMarketplace:
         self._validator = SkillValidator()
         self._index_cache: Optional[List[MarketplaceListing]] = None
         self._cache_ttl = 3600  # 1 hour
+        self._install_lock_guard = threading.Lock()
+        self._install_locks: dict[str, asyncio.Lock] = {}
+
+    def _install_lock_for(self, package_name: str) -> asyncio.Lock:
+        key = self._sanitize_name(package_name)
+        with self._install_lock_guard:
+            lock = self._install_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._install_locks[key] = lock
+            return lock
+
+    @staticmethod
+    def _sanitize_name(value: str) -> str:
+        return str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+
+    @staticmethod
+    def _normalize_source(value: str) -> str:
+        return str(value or "").strip().lower()
+
+    @staticmethod
+    def _is_trusted_download_url(url: str) -> tuple[bool, str]:
+        parsed = urlparse(str(url or "").strip())
+        if not parsed.scheme or not parsed.netloc:
+            return False, "invalid_download_url"
+        scheme = parsed.scheme.lower()
+        host = str(parsed.hostname or "").strip().lower()
+        if scheme not in {"https"} and host not in {"127.0.0.1", "localhost"}:
+            return False, f"untrusted_url_scheme:{scheme or 'unknown'}"
+        trusted_hosts = {
+            "raw.githubusercontent.com",
+            "github.com",
+            "api.github.com",
+            "localhost",
+            "127.0.0.1",
+        }
+        if host not in trusted_hosts:
+            return False, f"untrusted_url_host:{host or 'unknown'}"
+        return True, ""
+
+    def _trust_metadata(self, package: SkillPackage) -> tuple[bool, str]:
+        source = self._normalize_source(package.source or "marketplace")
+        trust = self._normalize_source(package.trust_level or "curated")
+        trusted_sources = {"builtin", "marketplace", "curated", "local"}
+        trusted_levels = {"trusted", "curated", "builtin"}
+        if source not in trusted_sources:
+            return False, f"untrusted_source:{source or 'unknown'}"
+        if trust not in trusted_levels:
+            return False, f"untrusted_trust_level:{trust or 'unknown'}"
+        has_checksum = bool(package.hashes.get("package") or package.hashes.get("checksum") or package.hashes.get("manifest"))
+        if source not in {"builtin", "local"} and not (has_checksum or package.hashes):
+            return False, "hash_or_checksum_required_for_remote_package"
+        return True, ""
+
+    @staticmethod
+    def _hash_text(content: str) -> str:
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    def _verify_package_hashes(self, package: SkillPackage) -> tuple[bool, list[str]]:
+        issues: list[str] = []
+        for rel, expected in dict(package.hashes or {}).items():
+            key = str(rel or "").strip()
+            if not key:
+                continue
+            actual = ""
+            if key in {"checksum", "manifest", "package"}:
+                actual = package.checksum()
+            elif key in package.files:
+                actual = self._hash_text(str(package.files.get(key) or ""))
+            else:
+                candidate = package.files.get(key) or package.files.get(Path(key).name, "")
+                if candidate:
+                    actual = self._hash_text(str(candidate))
+            if actual and str(expected or "").strip() and actual != str(expected or "").strip():
+                issues.append(f"hash mismatch for {key}")
+        return len(issues) == 0, issues
+
+    def _write_package_to_dir(self, package: SkillPackage, skill_dir: Path) -> None:
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        manifest_data = {
+            "name": package.name,
+            "version": package.version,
+            "description": package.description,
+            "author": package.author,
+            "category": package.category,
+            "license": package.license,
+            "homepage": package.homepage,
+            "repository": package.repository,
+            "required_tools": package.required_tools,
+            "dependencies": package.dependencies,
+            "python_dependencies": package.python_dependencies,
+            "os_dependencies": package.os_dependencies,
+            "post_install": package.post_install,
+            "trust_level": package.trust_level,
+            "hashes": package.hashes,
+            "commands": package.commands,
+            "tags": package.tags,
+            "source": package.source,
+            "installed_at": datetime.now(UTC).isoformat(),
+            "checksum": package.checksum(),
+        }
+        (skill_dir / "skill.json").write_text(
+            json.dumps(manifest_data, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        for fpath, content in package.files.items():
+            if ".." in fpath or fpath.startswith("/"):
+                continue
+            target = skill_dir / fpath
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+
+    async def _install_python_dependencies(self, package: SkillPackage) -> list[str]:
+        installed: list[str] = []
+        deps = list(dict.fromkeys([str(dep).strip() for dep in package.python_dependencies if str(dep).strip()]))
+        if not deps:
+            return installed
+        try:
+            from core.dependencies import get_dependency_runtime
+
+            runtime = get_dependency_runtime()
+        except Exception as exc:
+            raise RuntimeError(f"dependency_runtime_unavailable:{exc}") from exc
+        for dep in deps:
+            record = await runtime.ensure_module_async(
+                dep,
+                install_spec=dep,
+                source="pypi",
+                trust_level=package.trust_level or "trusted",
+                hashes=package.hashes,
+                post_install=package.post_install,
+                skill_name=package.name,
+                tool_name="marketplace_install",
+                allow_install=True,
+            )
+            if str(record.status).lower() not in {"installed", "ready"}:
+                raise RuntimeError(f"python_dependency_failed:{dep}:{record.status}")
+            installed.append(dep)
+        return installed
+
+    async def _install_os_dependencies(self, package: SkillPackage) -> list[str]:
+        installed: list[str] = []
+        deps = list(dict.fromkeys([str(dep).strip() for dep in package.os_dependencies if str(dep).strip()]))
+        if not deps:
+            return installed
+        try:
+            from core.dependencies import get_system_dependency_runtime
+
+            runtime = get_system_dependency_runtime()
+        except Exception as exc:
+            raise RuntimeError(f"system_dependency_runtime_unavailable:{exc}") from exc
+        records = runtime.ensure_binaries(deps, allow_install=self._normalize_source(package.source) in {"builtin", "marketplace", "curated", "local"})
+        for record in records:
+            status = str(getattr(record, "status", "") or "").lower()
+            binary = str(getattr(record, "binary", "") or "").strip()
+            if status in {"ready", "installed"}:
+                if binary:
+                    installed.append(binary)
+            elif status in {"needs_input", "blocked"}:
+                raise RuntimeError(f"os_dependency_{status}:{binary}")
+            else:
+                raise RuntimeError(f"os_dependency_failed:{binary}:{status}")
+        return installed
 
     # ── Browse & Search ────────────────────────────────────────
 
@@ -255,6 +423,25 @@ class SkillMarketplace:
         Download and install a skill package from a URL.
         Returns (success, message, warnings).
         """
+        trusted_url, url_reason = self._is_trusted_download_url(url)
+        if not trusted_url:
+            try:
+                from core.integration_trace import get_integration_trace_store
+
+                get_integration_trace_store().record_trace(
+                    operation="marketplace_install",
+                    provider="marketplace",
+                    connector_name="skill_marketplace",
+                    integration_type="api",
+                    status="blocked",
+                    success=False,
+                    fallback_used=True,
+                    fallback_reason=url_reason,
+                    metadata={"url": str(url or ""), "reason": url_reason},
+                )
+            except Exception:
+                pass
+            return False, f"Untrusted marketplace URL: {url_reason}", [url_reason]
         try:
             import httpx
         except ImportError:
@@ -302,54 +489,122 @@ class SkillMarketplace:
             blocking = [i for i in issues if not i.startswith("WARNING")]
             return False, f"Validation failed: {'; '.join(blocking)}", issues
 
+        trusted, trust_reason = self._trust_metadata(package)
+        if not trusted:
+            try:
+                from core.integration_trace import get_integration_trace_store
+
+                get_integration_trace_store().record_trace(
+                    operation="marketplace_install",
+                    provider=package.source,
+                    connector_name="skill_marketplace",
+                    integration_type="api",
+                    status="blocked",
+                    success=False,
+                    fallback_used=True,
+                    fallback_reason=trust_reason,
+                    metadata={"skill": package.name, "reason": trust_reason},
+                )
+            except Exception:
+                pass
+            return False, f"Trust policy blocked: {trust_reason}", [trust_reason]
+
+        hashes_ok, hash_issues = self._verify_package_hashes(package)
+        if not hashes_ok:
+            try:
+                from core.integration_trace import get_integration_trace_store
+
+                get_integration_trace_store().record_trace(
+                    operation="marketplace_install",
+                    provider=package.source,
+                    connector_name="skill_marketplace",
+                    integration_type="api",
+                    status="blocked",
+                    success=False,
+                    fallback_used=True,
+                    fallback_reason="hash_verification_failed",
+                    metadata={"skill": package.name, "hash_issues": list(hash_issues)},
+                )
+            except Exception:
+                pass
+            return False, f"Hash verification failed: {'; '.join(hash_issues)}", hash_issues
+
         # Install via SkillManager
         from core.skills.manager import skill_manager
+        install_lock = self._install_lock_for(package.name)
+        async with install_lock:
+            skill_dir = skill_manager._skill_dir(package.name)
+            backup_dir = None
+            staging_dir = self._data_dir / "staging" / f"{package.name}.{int(time.time() * 1000)}"
+            staging_dir.parent.mkdir(parents=True, exist_ok=True)
+            if skill_dir.exists():
+                backup_dir = skill_dir.parent / f".{skill_dir.name}.bak_{int(time.time() * 1000)}"
+                if backup_dir.exists():
+                    shutil.rmtree(backup_dir, ignore_errors=True)
+                skill_dir.rename(backup_dir)
+            try:
+                self._write_package_to_dir(package, staging_dir)
+                await self._install_python_dependencies(package)
+                await self._install_os_dependencies(package)
+                if skill_dir.exists():
+                    shutil.rmtree(skill_dir, ignore_errors=True)
+                staging_dir.rename(skill_dir)
+                if backup_dir and backup_dir.exists():
+                    shutil.rmtree(backup_dir, ignore_errors=True)
+            except Exception as exc:
+                if skill_dir.exists() and skill_dir.is_dir():
+                    shutil.rmtree(skill_dir, ignore_errors=True)
+                if staging_dir.exists() and staging_dir.is_dir():
+                    shutil.rmtree(staging_dir, ignore_errors=True)
+                if backup_dir and backup_dir.exists():
+                    try:
+                        backup_dir.rename(skill_dir)
+                    except Exception:
+                        pass
+                try:
+                    from core.integration_trace import get_integration_trace_store
 
-        # Write manifest
-        manifest_data = {
-            "name": package.name,
-            "version": package.version,
-            "description": package.description,
-            "author": package.author,
-            "category": package.category,
-            "license": package.license,
-            "homepage": package.homepage,
-            "repository": package.repository,
-            "required_tools": package.required_tools,
-            "dependencies": package.dependencies,
-            "python_dependencies": package.python_dependencies,
-            "post_install": package.post_install,
-            "trust_level": package.trust_level,
-            "hashes": package.hashes,
-            "commands": package.commands,
-            "tags": package.tags,
-            "source": package.source,
-            "installed_at": datetime.now(UTC).isoformat(),
-            "checksum": package.checksum(),
-        }
-
-        skill_dir = skill_manager._skill_dir(package.name)
-        skill_dir.mkdir(parents=True, exist_ok=True)
-
-        # Write manifest
-        (skill_dir / "skill.json").write_text(
-            json.dumps(manifest_data, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-
-        # Write skill files
-        for fpath, content in package.files.items():
-            # Security: no path traversal
-            if ".." in fpath or fpath.startswith("/"):
-                continue
-            target = skill_dir / fpath
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
+                    get_integration_trace_store().record_trace(
+                        operation="marketplace_install",
+                        provider=package.source,
+                        connector_name="skill_marketplace",
+                        integration_type="api",
+                        status="failed",
+                        success=False,
+                        fallback_used=True,
+                        fallback_reason=str(exc),
+                        metadata={"skill": package.name, "error": str(exc)},
+                    )
+                except Exception:
+                    pass
+                return False, f"Installation failed: {exc}", [str(exc)]
 
         # Enable
         enabled = skill_manager._enabled_set()
         enabled.add(package.name)
         skill_manager._set_enabled_set(enabled)
+
+        try:
+            from core.integration_trace import get_integration_trace_store
+
+            get_integration_trace_store().record_trace(
+                operation="marketplace_install",
+                provider=package.source,
+                connector_name="skill_marketplace",
+                integration_type="api",
+                status="installed",
+                success=True,
+                fallback_used=False,
+                metadata={
+                    "skill": package.name,
+                    "python_dependencies": list(package.python_dependencies or []),
+                    "os_dependencies": list(package.os_dependencies or []),
+                    "trust_level": package.trust_level,
+                    "source": package.source,
+                },
+            )
+        except Exception:
+            pass
 
         warnings = [i for i in issues if "WARNING" in i or "contains" in i]
         return True, f"'{package.name}' v{package.version} installed from marketplace", warnings
@@ -373,6 +628,7 @@ class SkillMarketplace:
             required_tools=kwargs.get("required_tools", []),
             dependencies=kwargs.get("dependencies", []),
             python_dependencies=kwargs.get("python_dependencies", []),
+            os_dependencies=kwargs.get("os_dependencies", []),
             post_install=kwargs.get("post_install", []),
             trust_level=kwargs.get("trust_level", "curated"),
             source=kwargs.get("source", "marketplace"),

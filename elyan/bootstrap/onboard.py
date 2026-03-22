@@ -21,6 +21,7 @@ from .init import init_workspace
 SETUP_MARKER_VERSION = 1
 SETUP_MARKER_PATH = Path.home() / ".elyan" / "setup_complete.json"
 SETUP_SKIP_ENV_KEYS = ("ELYAN_SKIP_SETUP", "ELYAN_SKIP_ONBOARD")
+STARTER_OLLAMA_MODEL = "llama3.2:3b"
 
 
 def _env_truthy(name: str) -> bool:
@@ -150,12 +151,12 @@ def _ensure_full_autonomy_defaults() -> None:
     except Exception:
         pass
 
-    _set_provider_and_model("ollama", "qwen2.5vl:7b")
+    _set_provider_and_model("ollama", STARTER_OLLAMA_MODEL)
     elyan_config.set("models.default.provider", "ollama")
-    elyan_config.set("models.default.model", normalize_model_name("ollama", "qwen2.5vl:7b"))
+    elyan_config.set("models.default.model", normalize_model_name("ollama", STARTER_OLLAMA_MODEL))
     elyan_config.set("models.local.provider", "ollama")
-    elyan_config.set("models.local.model", normalize_model_name("ollama", "llama3.2"))
-    elyan_config.set("models.roles", _build_role_map("ollama", "qwen2.5vl:7b", has_ollama=True))
+    elyan_config.set("models.local.model", normalize_model_name("ollama", STARTER_OLLAMA_MODEL))
+    elyan_config.set("models.roles", _build_role_map("ollama", STARTER_OLLAMA_MODEL, has_ollama=True))
     elyan_config.set("router.enabled", True)
     elyan_config.set("sandbox.enabled", True)
     elyan_config.set("agent.response_style.mode", "friendly")
@@ -167,18 +168,19 @@ def _ensure_full_autonomy_defaults() -> None:
     elyan_config.set("agent.multi_agent.enabled", True)
 
 
-def _run_elyan(args: list[str]) -> None:
+def _run_elyan(args: list[str]) -> int | None:
     launcher = shutil.which("elyan")
     if launcher:
         try:
-            subprocess.run([launcher, *args], check=False)
-            return
+            completed = subprocess.run([launcher, *args], check=False)
+            return completed.returncode
         except FileNotFoundError:
             pass
     try:
-        subprocess.run([sys.executable, "-m", "cli.main", *args], check=False)
+        completed = subprocess.run([sys.executable, "-m", "cli.main", *args], check=False)
+        return completed.returncode
     except FileNotFoundError:
-        pass
+        return None
 
 
 def onboard(
@@ -195,11 +197,19 @@ def onboard(
 ) -> bool:
     try:
         workspace_path = Path(workspace or os.environ.get("ELYAN_PROJECT_DIR") or Path.cwd()).expanduser().resolve()
-        print("🚀 Elyan Onboarding v2 (unified) başlıyor...")
+        print("🚀 Elyan Onboarding v2 (unified) başlıyor...", flush=True)
+        print(
+            f"  • Workspace: {workspace_path}\n"
+            f"  • Profil: local-first / model: ollama / {STARTER_OLLAMA_MODEL}\n"
+            f"  • Kanal: {str(channel or 'webchat')}\n"
+            f"  • Dashboard: {'açık' if open_dashboard and not headless else 'kapalı'}",
+            flush=True,
+        )
 
         _ensure_full_autonomy_defaults()
         init_workspace(workspace_path, role=role, force=force, dry_run=dry_run)
 
+        dependency_summary: dict[str, Any] | None = None
         if not skip_dependencies:
             dependency_manager = DependencyManager(
                 workspace=workspace_path,
@@ -208,16 +218,16 @@ def onboard(
                 dry_run=dry_run,
             )
             if not dry_run:
-                dependency_manager.bootstrap_all()
+                dependency_summary = dependency_manager.bootstrap_all()
             else:
-                print("[DRY-RUN] DependencyManager.bootstrap_all() atlanıyor")
+                print("[DRY-RUN] DependencyManager.bootstrap_all() atlanıyor", flush=True)
 
         if not dry_run:
             _run_elyan(["skills", "enable", "browser", "desktop", "calendar", "--quiet"])
             if install_daemon:
                 _run_elyan(["service", "install"])
 
-        if open_dashboard and not dry_run and not headless:
+        if skip_dependencies and open_dashboard and not dry_run and not headless:
             _run_elyan(["dashboard", "--no-browser"])
 
         if channel:
@@ -236,10 +246,36 @@ def onboard(
                 }
             )
 
-        print("✅ Onboarding tamamlandı! Artık 'elyan status' veya dashboard'dan devam edebilirsiniz.")
+        if isinstance(dependency_summary, dict):
+            parts: list[str] = []
+            for key in ("docker", "screenpipe", "ollama", "realtime_actuator", "skills", "dashboard"):
+                step = dependency_summary.get(key)
+                if isinstance(step, dict):
+                    state = "ok" if bool(step.get("ok")) else "partial"
+                    parts.append(f"{key}={state}")
+            if parts:
+                print(f"  • Durum: {', '.join(parts)}", flush=True)
+
+            ollama_step = dependency_summary.get("ollama")
+            if isinstance(ollama_step, dict):
+                timed_out = [
+                    str(item.get("model", "")).strip()
+                    for item in list(ollama_step.get("pulls", []) or [])
+                    if isinstance(item, dict) and bool(item.get("timed_out"))
+                ]
+                if timed_out:
+                    print(
+                        f"  • Ollama model indirmesi zaman aşımına uğradı: {', '.join(timed_out)}",
+                        flush=True,
+                    )
+
+        print(
+            "✅ Onboarding tamamlandı! Artık 'elyan status', 'elyan chat' veya dashboard'dan devam edebilirsiniz.",
+            flush=True,
+        )
         return True
     except Exception as exc:
-        print(f"❌ Onboarding hatası: {exc}")
+        print(f"❌ Onboarding hatası: {exc}", flush=True)
         return False
 
 
@@ -250,17 +286,21 @@ class OnboardingWizard:
         headless: bool = False,
         channel: str | None = None,
         install_daemon: bool = False,
+        skip_dependencies: bool = False,
+        open_dashboard: bool = True,
         force: bool = False,
     ) -> bool:
         if is_setup_complete() and not force:
-            print("✅ Elyan kurulum sihirbazı zaten tamamlanmış.")
-            print("Yeniden çalıştırmak için: `elyan setup --force`")
+            print("✅ Elyan kurulum sihirbazı zaten tamamlanmış.", flush=True)
+            print("Yeniden çalıştırmak için: `elyan setup --force`", flush=True)
             return True
         return onboard(
             workspace=Path.cwd(),
             headless=headless,
             channel=channel,
             install_daemon=install_daemon,
+            skip_dependencies=skip_dependencies,
+            open_dashboard=open_dashboard,
             force=force,
         )
 
@@ -268,7 +308,7 @@ class OnboardingWizard:
 def ensure_first_run_setup(command: str = "", non_interactive: bool = False) -> bool:
     if is_setup_complete():
         return True
-    print("⚙️ İlk kurulum henüz tamamlanmamış. Setup sihirbazı başlatılıyor...")
+    print("⚙️ İlk kurulum henüz tamamlanmamış. Setup sihirbazı başlatılıyor...", flush=True)
     return start_onboarding(headless=bool(non_interactive), force=False)
 
 
@@ -277,6 +317,8 @@ def start_onboarding(
     headless: bool = False,
     channel: str | None = None,
     install_daemon: bool = False,
+    skip_dependencies: bool = False,
+    open_dashboard: bool = True,
     force: bool = False,
 ) -> bool:
     try:
@@ -285,13 +327,15 @@ def start_onboarding(
             headless=bool(headless),
             channel=channel,
             install_daemon=bool(install_daemon),
+            skip_dependencies=bool(skip_dependencies),
+            open_dashboard=bool(open_dashboard),
             force=bool(force),
         )
     except KeyboardInterrupt:
-        print("\n\n👋 Kurulum iptal edildi.")
+        print("\n\n👋 Kurulum iptal edildi.", flush=True)
         return False
     except Exception as exc:
-        print(f"\n❌ Beklenmedik kurulum hatası: {exc}")
+        print(f"\n❌ Beklenmedik kurulum hatası: {exc}", flush=True)
         return False
 
 

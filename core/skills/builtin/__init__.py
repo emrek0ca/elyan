@@ -51,4 +51,9 @@ def get_builtin_skills() -> List:
         skills.append(QuivrSkill())
     except Exception:
         pass
+    try:
+        from .opengauss_skill import OpenGaussSkill
+        skills.append(OpenGaussSkill())
+    except Exception:
+        pass
     return skills

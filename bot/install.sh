@@ -160,11 +160,14 @@ echo -e "  ${BLUE}elyan dashboard${NC}             # Web panelini aç"
 echo -e "  ${BLUE}$HOME/.local/bin/elyan version${NC}  # PATH olmadan doğrulama"
 echo ""
 
-# ── 10. Onboarding (headless değilse) ────────────────────────────────
-if [[ "$HEADLESS" == "0" ]]; then
+# ── 10. Onboarding (canonical bootstrap) ─────────────────────────────
+if [[ "$HEADLESS" == "1" || "$NO_UI" == "1" ]]; then
+  log "Headless modda bootstrap onboarding başlatılıyor..."
+  .venv/bin/elyan bootstrap onboard --headless || warn "Bootstrap onboarding tamamlanamadı."
+else
   read -rp "Kurulum sihirbazını şimdi başlatmak ister misiniz? (E/h): " ans
   ans_lc=$(printf '%s' "$ans" | tr '[:upper:]' '[:lower:]')
   if [[ "$ans_lc" != "h" ]]; then
-    .venv/bin/python3 main.py --onboard
+    .venv/bin/elyan bootstrap onboard
   fi
 fi

@@ -122,7 +122,7 @@ _elyan() {
         models) _values 'eylem' list status test use set-default set-fallback cost ollama ;;
         cron) _values 'eylem' list status add rm enable disable run history next ;;
         security) _values 'eylem' audit status events sandbox ;;
-        skills) _values 'eylem' list info install enable disable update remove search check ;;
+        skills) _values 'eylem' list info install enable disable update edit remove search check ;;
         config) _values 'eylem' show get set unset validate reset export import edit ;;
         memory) _values 'eylem' status index search export import clear stats ;;
         webhooks) _values 'eylem' list add remove test logs ;;
@@ -149,7 +149,7 @@ complete -c elyan -n "__fish_seen_subcommand_from channels" -a "list status add 
 complete -c elyan -n "__fish_seen_subcommand_from models" -a "list status test use set-default set-fallback cost ollama"
 complete -c elyan -n "__fish_seen_subcommand_from cron" -a "list status add rm enable disable run history next"
 complete -c elyan -n "__fish_seen_subcommand_from security" -a "audit status events sandbox"
-complete -c elyan -n "__fish_seen_subcommand_from skills" -a "list info install enable disable update remove search check"
+complete -c elyan -n "__fish_seen_subcommand_from skills" -a "list info install enable disable update edit remove search check"
 complete -c elyan -n "__fish_seen_subcommand_from memory" -a "status index search export import clear stats"
 complete -c elyan -n "__fish_seen_subcommand_from config" -a "show get set unset validate reset export import edit"
 '''

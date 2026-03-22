@@ -1,9 +1,8 @@
 """
 Browser Automation Tools
 
-Provides web automation capabilities using Playwright-like operations
-For now, uses simple HTTP requests and parsing
-Can be enhanced with actual Playwright integration later
+Provides web automation capabilities using Playwright-backed runtime when
+available, with HTTP parsing as a lightweight fallback for text extraction.
 """
 
 import asyncio
@@ -21,7 +20,7 @@ class SimpleBrowser:
     Simple browser automation using HTTP requests
     
     For basic web scraping and data extraction
-    Can be enhanced with Playwright for full browser automation
+    Uses the browser runtime for screenshots when a live page is available.
     """
     
     def __init__(self, timeout: int = 30):
@@ -207,7 +206,7 @@ class SimpleBrowser:
     
     async def screenshot(self, file_path: str) -> Dict[str, Any]:
         """
-        Take a screenshot (placeholder - requires Playwright)
+        Take a screenshot of the current page using the browser runtime.
         
         Args:
             file_path: Where to save screenshot
@@ -215,11 +214,38 @@ class SimpleBrowser:
         Returns:
             Result
         """
-        return {
-            "success": False,
-            "error": "Screenshot requires Playwright integration (not yet implemented)",
-            "suggestion": "Install playwright: pip install playwright && playwright install"
-        }
+        target_url = str(self.current_url or "").strip()
+        if not target_url:
+            return {
+                "success": False,
+                "error": "No page loaded",
+                "suggestion": "Call goto(url) first before requesting a screenshot.",
+            }
+        try:
+            from core.capabilities.browser import run_browser_runtime
+
+            result = await run_browser_runtime(action="open", url=target_url, screenshot=True)
+            screenshots = [str(path).strip() for path in list(result.get("screenshots") or []) if str(path).strip()]
+            if file_path and screenshots:
+                from pathlib import Path
+                import shutil
+
+                target = Path(file_path).expanduser().resolve()
+                target.parent.mkdir(parents=True, exist_ok=True)
+                source = Path(screenshots[-1]).expanduser().resolve()
+                if source != target:
+                    shutil.copyfile(source, target)
+                else:
+                    target = source
+                result = dict(result)
+                result["screenshot_path"] = str(target)
+                result["screenshots"] = [str(target)]
+            return result
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Screenshot error: {e}",
+            }
     
     async def close(self):
         """Close the browser client"""

@@ -27,6 +27,29 @@ def _contains(text: str, *candidates: str) -> bool:
     return any(str(candidate).lower().strip() in low for candidate in candidates if str(candidate).strip())
 
 
+def _infer_provider_from_app_name(app_name: str) -> str:
+    low = _normalize_text(app_name)
+    if not low:
+        return ""
+    if any(token in low for token in ("gmail", "google mail", "mail.google.com", "google workspace", "google drive", "google docs", "google sheets", "google slides", "google chat")):
+        return "google"
+    if any(token in low for token in ("calendar", "takvim", "schedule", "remind", "hatırlat", "hatirlat")):
+        return "google"
+    if any(token in low for token in ("whatsapp",)):
+        return "whatsapp"
+    if any(token in low for token in ("instagram",)):
+        return "instagram"
+    if any(token in low for token in ("x ", " x", "twitter", "tweet", "x.com")):
+        return "x"
+    if any(token in low for token in ("mail", "email", "posta", "outlook", "exchange")):
+        return "email"
+    if any(token in low for token in ("browser", "web", "website", "site", "chrome", "safari", "firefox")):
+        return "browser"
+    if any(token in low for token in ("vscode", "excel", "word", "finder", "desktop", "terminal", "app")):
+        return "desktop"
+    return ""
+
+
 def _safe_integration_type(value: Any, default: IntegrationType = IntegrationType.DESKTOP) -> IntegrationType:
     raw = str(value or "").strip().lower()
     try:
@@ -56,7 +79,7 @@ class IntegrationRegistry:
         self._router = CapabilityRouter()
 
     @staticmethod
-    def _provider_and_type(text: str, skill: dict[str, Any], route_domain: str) -> tuple[str, IntegrationType, AuthStrategy, FallbackPolicy, list[str], list[str], str]:
+    def _provider_and_type(text: str, skill: dict[str, Any], route_domain: str) -> tuple[str, IntegrationType, AuthStrategy, FallbackPolicy, list[str], list[str], str, dict[str, Any]]:
         low = _normalize_text(text)
         skill_type = _safe_integration_type(skill.get("integration_type"), IntegrationType.UNKNOWN)
 
@@ -96,11 +119,32 @@ class IntegrationRegistry:
         fallback_policy = _safe_fallback_policy(skill.get("fallback_policy"), FallbackPolicy.AUTO)
         auth_strategy = _safe_auth_strategy(skill.get("auth_strategy"), AuthStrategy.NONE)
         integration_type = skill_type
+        auth_resolution: dict[str, Any] = {}
 
         if provider in {"google"}:
             if any(token in low for token in ("gmail", "mail", "inbox")):
                 integration_type = IntegrationType.EMAIL
                 required_scopes = required_scopes or ["email.read", "email.send"]
+                auth_strategy = auth_strategy if auth_strategy != AuthStrategy.NONE else AuthStrategy.OAUTH
+                dependencies = dependencies or ["google-api-python-client", "google-auth", "google-auth-oauthlib", "httplib2"]
+            elif any(token in low for token in ("docs", "document", "workspace doc", "google docs")):
+                integration_type = IntegrationType.API
+                required_scopes = required_scopes or ["docs.read", "docs.write"]
+                auth_strategy = auth_strategy if auth_strategy != AuthStrategy.NONE else AuthStrategy.OAUTH
+                dependencies = dependencies or ["google-api-python-client", "google-auth", "google-auth-oauthlib", "httplib2"]
+            elif any(token in low for token in ("sheets", "spreadsheet", "table", "excel", "google sheets")):
+                integration_type = IntegrationType.API
+                required_scopes = required_scopes or ["sheets.read", "sheets.write"]
+                auth_strategy = auth_strategy if auth_strategy != AuthStrategy.NONE else AuthStrategy.OAUTH
+                dependencies = dependencies or ["google-api-python-client", "google-auth", "google-auth-oauthlib", "httplib2"]
+            elif any(token in low for token in ("slides", "presentation", "sunum", "google slides")):
+                integration_type = IntegrationType.API
+                required_scopes = required_scopes or ["slides.read", "slides.write"]
+                auth_strategy = auth_strategy if auth_strategy != AuthStrategy.NONE else AuthStrategy.OAUTH
+                dependencies = dependencies or ["google-api-python-client", "google-auth", "google-auth-oauthlib", "httplib2"]
+            elif any(token in low for token in ("chat", "google chat", "spaces", "space")):
+                integration_type = IntegrationType.API
+                required_scopes = required_scopes or ["chat.read", "chat.write"]
                 auth_strategy = auth_strategy if auth_strategy != AuthStrategy.NONE else AuthStrategy.OAUTH
                 dependencies = dependencies or ["google-api-python-client", "google-auth", "google-auth-oauthlib", "httplib2"]
             elif any(token in low for token in ("calendar", "takvim", "event", "remind", "hatırlat", "hatirlat")):
@@ -116,7 +160,12 @@ class IntegrationRegistry:
             fallback_policy = fallback_policy if fallback_policy != FallbackPolicy.AUTO else FallbackPolicy.WEB
         elif provider in {"whatsapp", "instagram", "x"}:
             integration_type = IntegrationType.SOCIAL
-            required_scopes = required_scopes or [f"{provider}.read", f"{provider}.write"]
+            if provider == "whatsapp":
+                required_scopes = required_scopes or ["whatsapp.read", "whatsapp.write"]
+            elif provider == "instagram":
+                required_scopes = required_scopes or ["instagram.read", "instagram.write"]
+            elif provider == "x":
+                required_scopes = required_scopes or ["x.read", "x.write"]
             auth_strategy = auth_strategy if auth_strategy != AuthStrategy.NONE else AuthStrategy.OAUTH
             dependencies = dependencies or ["playwright", "playwright-stealth"]
             fallback_policy = fallback_policy if fallback_policy != FallbackPolicy.AUTO else FallbackPolicy.WEB
@@ -145,7 +194,42 @@ class IntegrationRegistry:
         if integration_type == IntegrationType.DESKTOP and not os_dependencies:
             os_dependencies = []
 
-        return provider, integration_type, auth_strategy, fallback_policy, required_scopes, list(dict.fromkeys([*dependencies, *python_dependencies])), connector_name
+        try:
+            from .auth import oauth_broker
+
+            if provider and auth_strategy not in {AuthStrategy.NONE, AuthStrategy.BROWSER_SESSION}:
+                accounts = oauth_broker.list_accounts(provider)
+                chosen = None
+                scope_set = set(required_scopes or [])
+                for account in accounts:
+                    granted = set(account.granted_scopes or [])
+                    if account.is_ready and (not scope_set or scope_set.issubset(granted)):
+                        chosen = account
+                        break
+                if chosen is None and accounts:
+                    chosen = accounts[0]
+                if chosen is not None:
+                    auth_resolution = {
+                        "account_alias": chosen.account_alias,
+                        "display_name": chosen.display_name,
+                        "email": chosen.email,
+                        "auth_state": str(chosen.status),
+                        "fallback_mode": str(chosen.fallback_mode.value if hasattr(chosen.fallback_mode, "value") else chosen.fallback_mode),
+                        "granted_scopes": list(chosen.granted_scopes or []),
+                        "missing_scopes": sorted(list(scope_set.difference(set(chosen.granted_scopes or [])))) if scope_set else [],
+                    }
+                else:
+                    auth_resolution = {
+                        "account_alias": "default",
+                        "auth_state": "needs_input",
+                        "fallback_mode": str(fallback_policy.value),
+                        "granted_scopes": [],
+                        "missing_scopes": list(required_scopes or []),
+                    }
+        except Exception:
+            auth_resolution = {}
+
+        return provider, integration_type, auth_strategy, fallback_policy, required_scopes, list(dict.fromkeys([*dependencies, *python_dependencies])), connector_name, auth_resolution
 
     def resolve(self, intent: Any, request_context: dict[str, Any] | None = None) -> IntegrationCapability:
         context = dict(request_context or {})
@@ -161,7 +245,7 @@ class IntegrationRegistry:
         if not route_domain:
             route_domain = str(getattr(route, "domain", "") or "").strip().lower()
 
-        provider, integration_type, auth_strategy, fallback_policy, required_scopes, dependencies, connector_name = self._provider_and_type(
+        provider, integration_type, auth_strategy, fallback_policy, required_scopes, dependencies, connector_name, auth_resolution = self._provider_and_type(
             text,
             skill,
             route_domain,
@@ -198,10 +282,25 @@ class IntegrationRegistry:
             api_base_urls = ["https://gmail.googleapis.com", "https://graph.microsoft.com/v1.0"]
         elif integration_type == IntegrationType.SOCIAL:
             browser_urls = ["https://x.com", "https://www.instagram.com", "https://web.whatsapp.com"]
-            api_base_urls = ["https://api.x.com", "https://graph.facebook.com"]
+            if provider == "x":
+                api_base_urls = ["https://api.x.com", "https://api.twitter.com"]
+            elif provider == "instagram":
+                api_base_urls = ["https://graph.facebook.com", "https://graph.instagram.com"]
+            elif provider == "whatsapp":
+                api_base_urls = ["https://graph.facebook.com"]
+            else:
+                api_base_urls = ["https://api.x.com", "https://graph.facebook.com"]
         elif integration_type == IntegrationType.API:
             if provider == "google":
-                if any(token in low for token in ("drive", "docs", "sheets", "slides", "workspace", "file", "document")):
+                if any(token in low for token in ("docs", "document", "workspace")):
+                    api_base_urls = ["https://docs.googleapis.com", "https://www.googleapis.com/drive"]
+                elif any(token in low for token in ("sheets", "spreadsheet", "sheet")):
+                    api_base_urls = ["https://sheets.googleapis.com", "https://www.googleapis.com/drive"]
+                elif any(token in low for token in ("slides", "presentation", "deck")):
+                    api_base_urls = ["https://slides.googleapis.com", "https://www.googleapis.com/drive"]
+                elif any(token in low for token in ("chat", "workspace chat")):
+                    api_base_urls = ["https://chat.googleapis.com", "https://www.googleapis.com"]
+                elif any(token in low for token in ("drive", "file", "document")):
                     api_base_urls = ["https://www.googleapis.com/drive", "https://docs.googleapis.com", "https://sheets.googleapis.com"]
                 elif any(token in low for token in ("calendar", "takvim", "event", "remind", "hatırlat", "hatirlat")):
                     api_base_urls = ["https://www.googleapis.com/calendar"]
@@ -242,6 +341,7 @@ class IntegrationRegistry:
                 "route_domain": route_domain,
                 "workflow_id": str(workflow.get("id") or getattr(route, "workflow_id", "") or ""),
                 "multi_agent_recommended": multi_agent_recommended,
+                "auth_resolution": dict(auth_resolution or {}),
             },
         )
 
@@ -281,9 +381,72 @@ class IntegrationRegistry:
                 "workflow": workflow,
                 "route": route.model_dump() if hasattr(route, "model_dump") else {},
                 "multi_agent_recommended": multi_agent_recommended,
+                "auth_resolution": dict(auth_resolution or {}),
             },
         )
         return capability
+
+    def resolve_connection_plan(
+        self,
+        *,
+        app_name: str = "",
+        provider: str = "",
+        scopes: list[str] | None = None,
+        mode: str = "auto",
+        account_alias: str = "default",
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        requested_app = str(app_name or "").strip()
+        requested_provider = str(provider or "").strip().lower()
+        requested_scopes = normalize_items(scopes or [])
+        inferred_provider = _infer_provider_from_app_name(requested_app)
+        skill_context = {
+            "provider": requested_provider or inferred_provider,
+            "required_scopes": list(requested_scopes),
+            "account_alias": account_alias,
+            "mode": mode,
+            "name": requested_app or requested_provider,
+            **dict(extra or {}),
+        }
+        capability = self.resolve(requested_app or requested_provider or "", {"skill": skill_context})
+        resolved_provider = requested_provider or inferred_provider or str(capability.provider or "").strip().lower()
+        if resolved_provider == "gmail":
+            resolved_provider = "google"
+        resolved_app = requested_app or str(capability.name or capability.connector_name or resolved_provider or "integration").strip()
+        resolved_scopes = list(requested_scopes or list(capability.required_scopes or []))
+        auth_resolution = dict((capability.metadata or {}).get("auth_resolution") or {})
+        suggested_alias = str(auth_resolution.get("account_alias") or account_alias or "default").strip() or "default"
+        if suggested_alias == "default" and account_alias and account_alias != "default":
+            suggested_alias = str(account_alias or "default").strip() or "default"
+        return {
+            "app_name": resolved_app,
+            "provider": resolved_provider,
+            "connector_name": str(capability.connector_name or resolved_provider or "connector").strip(),
+            "integration_type": capability.integration_type,
+            "required_scopes": resolved_scopes,
+            "auth_strategy": capability.auth_strategy,
+            "fallback_policy": capability.fallback_policy,
+            "account_alias": suggested_alias,
+            "multi_agent_recommended": bool(capability.multi_agent_recommended),
+            "real_time": bool(capability.real_time),
+            "approval_level": int(capability.approval_level or 0),
+            "supported_platforms": list(capability.supported_platforms or []),
+            "dependencies": list(capability.dependencies or []),
+            "python_dependencies": list(capability.python_dependencies or []),
+            "os_dependencies": list(capability.os_dependencies or []),
+            "post_install": list(capability.post_install or []),
+            "trust_level": str(capability.trust_level or "trusted"),
+            "workflow_bundle": capability.workflow_bundle,
+            "capability": capability,
+            "auth_resolution": auth_resolution,
+            "mode": mode,
+            "resolved_from": {
+                "input": requested_app or requested_provider,
+                "provider": requested_provider,
+                "scopes": list(requested_scopes),
+            },
+            "metadata": dict(extra or {}),
+        }
 
 
 integration_registry = IntegrationRegistry()

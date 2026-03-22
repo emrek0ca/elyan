@@ -21,6 +21,31 @@ def _provider_key(provider: str, account_alias: str = "default") -> str:
     return f"oauth_accounts::{str(provider or '').strip().lower()}::{str(account_alias or 'default').strip().lower()}"
 
 
+def _default_redirect_uri(provider: str) -> str:
+    provider = str(provider or "").strip().lower()
+    if provider in {"google", "gmail", "calendar", "drive", "workspace"}:
+        return "http://localhost:8765/callback"
+    if provider in {"x", "instagram", "whatsapp"}:
+        return "http://localhost:8765/callback"
+    return "http://localhost:8765/callback"
+
+
+def _default_auth_url(provider: str) -> str:
+    provider = str(provider or "").strip().lower()
+    defaults = {
+        "google": "https://accounts.google.com/signin/v2/identifier",
+        "gmail": "https://accounts.google.com/signin/v2/identifier",
+        "calendar": "https://accounts.google.com/signin/v2/identifier",
+        "drive": "https://accounts.google.com/signin/v2/identifier",
+        "workspace": "https://accounts.google.com/signin/v2/identifier",
+        "x": "https://x.com/i/flow/login",
+        "instagram": "https://www.instagram.com/accounts/login/",
+        "whatsapp": "https://web.whatsapp.com/",
+        "email": "https://mail.google.com/",
+    }
+    return defaults.get(provider, "")
+
+
 class OAuthBroker:
     """
     Provider-agnostic OAuth broker with encrypted persistence.
@@ -60,13 +85,52 @@ class OAuthBroker:
         try:
             self.vault.store_secret(key, payload)
         except Exception as exc:
-            logger.warning("oauth_account_persistence_failed", extra={"provider": account.provider, "alias": account.account_alias, "error": str(exc)})
+                logger.warning("oauth_account_persistence_failed", extra={"provider": account.provider, "alias": account.account_alias, "error": str(exc)})
+        try:
+            from core.integration_trace import get_integration_trace_store
+
+            get_integration_trace_store().record_trace(
+                operation="oauth_store",
+                provider=account.provider,
+                connector_name=f"{account.provider}_oauth",
+                integration_type="api" if account.provider else "",
+                status=str(account.status),
+                success=account.is_ready,
+                auth_state=str(account.status),
+                auth_strategy=str(account.auth_strategy),
+                account_alias=account.account_alias,
+                fallback_used=account.fallback_mode != FallbackPolicy.AUTO,
+                fallback_reason=str(account.fallback_mode.value if hasattr(account.fallback_mode, "value") else account.fallback_mode),
+                metadata={
+                    "email": account.email,
+                    "display_name": account.display_name,
+                    "granted_scopes": list(account.granted_scopes or []),
+                },
+            )
+        except Exception:
+            pass
         return account
 
     def delete_account(self, provider: str, account_alias: str = "default") -> bool:
         key = _provider_key(provider, account_alias)
         try:
             self.vault.delete_secret(key)
+            try:
+                from core.integration_trace import get_integration_trace_store
+
+                get_integration_trace_store().record_trace(
+                    operation="oauth_revoke",
+                    provider=str(provider or "").strip().lower(),
+                    connector_name=f"{str(provider or '').strip().lower()}_oauth",
+                    integration_type="api" if str(provider or "").strip() else "",
+                    status="revoked",
+                    success=True,
+                    auth_state="revoked",
+                    account_alias=str(account_alias or "default"),
+                    metadata={"revoke": True},
+                )
+            except Exception:
+                pass
             return True
         except Exception:
             return False
@@ -141,7 +205,7 @@ class OAuthBroker:
                 data={
                     "grant_type": "authorization_code",
                     "code": authorization_code,
-                    "redirect_uri": redirect_uri or config.get("redirect_uri") or "http://localhost",
+                    "redirect_uri": redirect_uri or config.get("redirect_uri") or _default_redirect_uri(provider),
                     "client_id": config.get("client_id"),
                     "client_secret": config.get("client_secret"),
                 },
@@ -184,8 +248,8 @@ class OAuthBroker:
     ) -> OAuthAccount:
         auth_url = str(config.get("auth_url") or "").strip()
         if not auth_url and provider:
-            # Generic placeholder to make the UI actionable.
-            auth_url = f"https://{provider}.com/"
+            auth_url = _default_auth_url(provider) or f"https://{provider}.com/"
+        redirect_uri = str(config.get("redirect_uri") or _default_redirect_uri(provider) or "").strip()
         return OAuthAccount(
             provider=provider,
             account_alias=account_alias,
@@ -195,7 +259,7 @@ class OAuthBroker:
             fallback_mode=FallbackPolicy(str(config.get("fallback_policy") or mode or "web").strip().lower() or "web"),
             granted_scopes=normalize_items(scopes),
             auth_url=auth_url,
-            redirect_uri=str(config.get("redirect_uri") or ""),
+            redirect_uri=redirect_uri,
             status=ConnectorState.NEEDS_INPUT,
             metadata={
                 **dict(extra or {}),
@@ -258,6 +322,30 @@ class OAuthBroker:
             account.fallback_mode = FallbackPolicy.WEB
         elif str(config.get("fallback_policy") or "").strip().lower() == "native":
             account.fallback_mode = FallbackPolicy.NATIVE
+        try:
+            from core.integration_trace import get_integration_trace_store
+
+            get_integration_trace_store().record_trace(
+                operation="oauth_needs_input",
+                provider=provider,
+                connector_name=f"{provider}_oauth",
+                integration_type="api" if provider else "",
+                status=str(account.status),
+                success=False,
+                auth_state=str(account.status),
+                auth_strategy=str(account.auth_strategy),
+                account_alias=account_alias,
+                fallback_used=True,
+                fallback_reason=str(account.fallback_mode.value if hasattr(account.fallback_mode, "value") else account.fallback_mode),
+                metadata={
+                    "auth_url": account.auth_url,
+                    "redirect_uri": account.redirect_uri,
+                    "granted_scopes": list(account.granted_scopes or []),
+                    "needs_input": True,
+                },
+            )
+        except Exception:
+            pass
         return self._save_account(account)
 
 

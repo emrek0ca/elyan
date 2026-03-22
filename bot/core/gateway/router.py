@@ -71,7 +71,7 @@ class GatewayRouter:
                 push_activity("error", message.channel_type, str(e)[:60], success=False)
             except Exception:
                 pass
-            error_resp = UnifiedResponse(text="Üzgünüm, bu isteği işlerken bir hata oluştu.")
+            error_resp = UnifiedResponse(text="Mesajını aldım ama şu an yanıt üretemedim. Lütfen tekrar dener misin?")
             await self.send_outgoing_response(message.channel_type, message.channel_id, error_resp)
 
 

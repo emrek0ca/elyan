@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
+from core.skills.registry import skill_registry as _skill_registry
 from core.skills.manager import skill_manager
 
 
@@ -30,6 +32,7 @@ def handle_skills(args):
             print("Hata: beceri adı gerekli.")
             return
         ok, msg, _ = skill_manager.install_skill(name)
+        _refresh_skill_registry()
         print(("✅  " if ok else "❌  ") + msg)
         return
 
@@ -38,6 +41,7 @@ def handle_skills(args):
             print("Hata: beceri adı gerekli.")
             return
         ok, msg, _ = skill_manager.set_enabled(name, True)
+        _refresh_skill_registry()
         print(("✅  " if ok else "❌  ") + msg)
         return
 
@@ -46,6 +50,7 @@ def handle_skills(args):
             print("Hata: beceri adı gerekli.")
             return
         ok, msg, _ = skill_manager.set_enabled(name, False)
+        _refresh_skill_registry()
         print(("✅  " if ok else "❌  ") + msg)
         return
 
@@ -66,6 +71,27 @@ def handle_skills(args):
                 print(f"  - {s}")
         if not updated and not skipped:
             print("Güncellenecek beceri bulunamadı.")
+        _refresh_skill_registry()
+        return
+
+    if action == "edit":
+        if not name:
+            print("Hata: beceri adı gerekli.")
+            return
+        try:
+            updates = _parse_edit_updates(getattr(args, "set_values", []) or [], getattr(args, "file", None))
+        except Exception as exc:
+            print(f"Hata: güncelleme okunamadı: {exc}")
+            return
+        if not updates:
+            print("Hata: en az bir --set key=value veya --file JSON dosyası gerekli.")
+            return
+        ok, msg, info = skill_manager.edit_skill(name, updates, replace=bool(getattr(args, "replace", False)))
+        if ok:
+            _refresh_skill_registry()
+        print(("✅  " if ok else "❌  ") + msg)
+        if ok and getattr(args, "json", False):
+            print(json.dumps(info or {}, indent=2, ensure_ascii=False))
         return
 
     if action == "remove":
@@ -73,6 +99,8 @@ def handle_skills(args):
             print("Hata: beceri adı gerekli.")
             return
         ok, msg = skill_manager.remove_skill(name)
+        if ok:
+            _refresh_skill_registry()
         print(("✅  " if ok else "❌  ") + msg)
         return
 
@@ -86,7 +114,39 @@ def handle_skills(args):
         return
 
     print(f"Bilinmeyen eylem: {action}")
-    print("Usage: elyan skills [list|info|install|enable|disable|update|remove|search|check] <name>")
+    print("Usage: elyan skills [list|info|install|enable|disable|update|edit|remove|search|check] <name>")
+
+
+def _parse_edit_updates(set_values: list[Any], file_path: str | None) -> dict[str, Any]:
+    updates: dict[str, Any] = {}
+    if file_path:
+        data = json.loads(Path(file_path).expanduser().read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            updates.update(data)
+    for item in set_values:
+        if not item:
+            continue
+        text = str(item).strip()
+        if not text or "=" not in text:
+            continue
+        key, _, raw_value = text.partition("=")
+        key = key.strip()
+        raw_value = raw_value.strip()
+        if not key:
+            continue
+        try:
+            value: Any = json.loads(raw_value)
+        except Exception:
+            value = raw_value
+        updates[key] = value
+    return updates
+
+
+def _refresh_skill_registry() -> None:
+    try:
+        _skill_registry.refresh()
+    except Exception:
+        pass
 
 
 def _list_skills(*, available: bool = False, enabled_only: bool = False):

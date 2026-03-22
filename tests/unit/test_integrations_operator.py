@@ -10,6 +10,7 @@ from core.realtime_actuator import RealTimeActuator
 from integrations import (
     AuthStrategy,
     ConnectorFactory,
+    ConnectorState,
     FallbackPolicy,
     IntegrationRegistry,
     IntegrationType,
@@ -190,6 +191,10 @@ def test_oauth_broker_handles_persistence_failure_gracefully(tmp_path, monkeypat
 def test_integration_registry_resolves_oauth_first_capabilities():
     email_capability = integration_registry.resolve("Gmail'de son mesajları oku")
     calendar_capability = integration_registry.resolve("Google Calendar'a toplantı ekle")
+    docs_capability = integration_registry.resolve("Google Docs'ta doküman yaz")
+    sheets_capability = integration_registry.resolve("Google Sheets'te tablo güncelle")
+    slides_capability = integration_registry.resolve("Google Slides sunumu hazırla")
+    chat_capability = integration_registry.resolve("Google Chat'te mesaj gönder")
     social_capability = integration_registry.resolve("Instagram'a story at")
 
     assert str(email_capability.integration_type) == IntegrationType.EMAIL.value
@@ -204,9 +209,23 @@ def test_integration_registry_resolves_oauth_first_capabilities():
     assert str(calendar_capability.fallback_policy) == FallbackPolicy.WEB.value
     assert calendar_capability.multi_agent_recommended is True or len(calendar_capability.workflow_bundle.steps) >= 2
 
+    assert str(docs_capability.integration_type) == IntegrationType.API.value
+    assert "docs.read" in list(docs_capability.required_scopes)
+    assert str(sheets_capability.integration_type) == IntegrationType.API.value
+    assert "sheets.write" in list(sheets_capability.required_scopes)
+    assert str(slides_capability.integration_type) == IntegrationType.API.value
+    assert "slides.read" in list(slides_capability.required_scopes)
+    assert str(chat_capability.integration_type) == IntegrationType.API.value
+    assert "chat.write" in list(chat_capability.required_scopes)
+
     assert str(social_capability.integration_type) == IntegrationType.SOCIAL.value
     assert str(social_capability.fallback_policy) == FallbackPolicy.WEB.value
     assert any(scope.startswith("instagram.") for scope in list(social_capability.required_scopes))
+
+    quick_plan = integration_registry.resolve_connection_plan(app_name="Gmail")
+    assert quick_plan["provider"] == "google"
+    assert "email.read" in list(quick_plan["required_scopes"])
+    assert str(quick_plan["integration_type"]) == IntegrationType.EMAIL.value
 
 
 @pytest.mark.asyncio
@@ -230,6 +249,44 @@ async def test_email_connector_uses_google_oauth_when_env_is_missing(monkeypatch
     assert result.success is True
     assert result.status == "ready"
     assert connector.auth_account.provider == "google"
+
+
+@pytest.mark.asyncio
+async def test_social_connector_prefers_api_execution_when_available(monkeypatch):
+    connector = SocialConnector(provider="x", connector_name="x")
+    monkeypatch.setattr("integrations.connectors.social.oauth_broker.provider_config", lambda provider: {"api_base_url": "https://api.example.com"})
+    monkeypatch.setattr(
+        "integrations.connectors.social.oauth_broker.authorize",
+        lambda *args, **kwargs: OAuthAccount(
+            provider="x",
+            account_alias="default",
+            status=ConnectorState.READY,
+            access_token="token-x",
+            granted_scopes=["x.read", "x.write"],
+        ),
+    )
+    connector.auth_account = OAuthAccount(
+        provider="x",
+        account_alias="default",
+        status=ConnectorState.READY,
+        access_token="token-x",
+        granted_scopes=["x.read", "x.write"],
+    )
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": True, "message": "sent"}
+
+    monkeypatch.setattr("integrations.connectors.social.requests.request", lambda *args, **kwargs: _Resp())
+
+    result = await connector.execute({"endpoint": "posts", "method": "POST", "json": {"text": "hello"}})
+
+    assert result.success is True
+    assert result.fallback_used is False
+    assert result.result["ok"] is True
 
 
 def test_connector_factory_maps_integration_types_to_correct_connectors():

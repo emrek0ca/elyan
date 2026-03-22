@@ -3,6 +3,7 @@
 import pytest
 import httpx
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 from tools.browser_automation import SimpleBrowser
@@ -71,3 +72,31 @@ def test_browser_automation_lazy_installs_httpx(monkeypatch):
     assert browser_automation._ensure_httpx() is fake_httpx
     assert calls["kwargs"]["install_spec"] == "httpx"
     assert calls["kwargs"]["skill_name"] == "browser"
+
+
+@pytest.mark.asyncio
+async def test_simple_browser_screenshot_uses_runtime(monkeypatch, tmp_path):
+    browser = SimpleBrowser()
+    browser.current_url = "https://example.com"
+    source = tmp_path / "runtime.png"
+    source.write_bytes(b"binary-image")
+
+    async def fake_run_browser_runtime(**kwargs):
+        assert kwargs["action"] == "open"
+        assert kwargs["url"] == "https://example.com"
+        assert kwargs["screenshot"] is True
+        return {
+            "success": True,
+            "screenshots": [str(source)],
+            "artifacts": [{"path": str(source), "type": "image"}],
+        }
+
+    monkeypatch.setattr("core.capabilities.browser.run_browser_runtime", fake_run_browser_runtime)
+
+    target = tmp_path / "copied.png"
+    result = await browser.screenshot(str(target))
+
+    assert result["success"] is True
+    assert Path(result["screenshot_path"]).exists()
+    assert Path(result["screenshot_path"]).read_bytes() == b"binary-image"
+    assert target.exists()

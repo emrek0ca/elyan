@@ -21,6 +21,13 @@ def test_quick_intent_uses_normalized_input_for_chat_variants():
     detector = QuickIntentDetector()
     result = detector.detect("napıosun")
     assert result.category == IntentCategory.CHAT
+    assert result.requires_llm is False
+
+
+def test_quick_intent_routes_identity_and_followup_as_fast_chat():
+    detector = QuickIntentDetector()
+    assert detector.detect("adın").category == IntentCategory.CHAT
+    assert detector.detect("hangi alanlarda mesela").category == IntentCategory.CHAT
 
 
 def test_fast_response_uses_normalized_input_for_chat_variants():

@@ -215,3 +215,25 @@ def test_browser_extract_returns_success_when_ssl_retry_recovers(monkeypatch, ca
 
     assert code == 0
     assert "ssl tamam" in captured.out
+
+
+def test_browser_screenshot_command_uses_runtime_output(monkeypatch, capsys):
+    calls = {}
+
+    class FakeBrowser:
+        async def navigate(self, url):
+            calls["navigate"] = url
+
+        async def screenshot(self, output_path=None, full_page=True):
+            calls["screenshot"] = {"output_path": output_path, "full_page": full_page}
+            return {"success": True, "screenshot_path": output_path or "/tmp/browser-shot.png"}
+
+    monkeypatch.setattr(browser, "_get_browser", lambda: FakeBrowser())
+
+    browser.browser_screenshot.callback("https://example.com", "/tmp/browser-shot.png", True)
+    captured = capsys.readouterr()
+
+    assert calls["navigate"] == "https://example.com"
+    assert calls["screenshot"]["output_path"] == "/tmp/browser-shot.png"
+    assert "Playwright entegrasyonu" not in captured.out
+    assert "Ekran görüntüsü" in captured.out

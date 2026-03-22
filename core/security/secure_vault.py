@@ -11,6 +11,7 @@ import json
 import time
 import hashlib
 import base64
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Dict
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -105,6 +106,48 @@ class SecureVault:
     def list_keys(self):
         """List all stored secret keys (NOT values)."""
         return list(self._load_secrets().keys())
+
+    def export_bundle(self, output_path: str | None = None) -> Dict[str, Any]:
+        """Export decrypted secrets to a portable bundle.
+
+        The bundle is intended for explicit user-driven restore flows.
+        """
+        if self._master_key is None:
+            try:
+                self.unlock()
+            except Exception:
+                pass
+        bundle = {
+            "version": 1,
+            "created_at": datetime.now(timezone.utc).astimezone().replace(microsecond=0).isoformat(),
+            "secrets": self._load_secrets(),
+        }
+        if output_path:
+            path = Path(output_path).expanduser()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(bundle, ensure_ascii=False, indent=2), encoding="utf-8")
+        return bundle
+
+    def import_bundle(self, bundle: Dict[str, Any] | str) -> Dict[str, Any]:
+        """Restore secrets from a portable bundle."""
+        if self._master_key is None:
+            try:
+                self.unlock()
+            except Exception:
+                pass
+        payload: Dict[str, Any]
+        if isinstance(bundle, str):
+            payload = json.loads(Path(bundle).expanduser().read_text(encoding="utf-8"))
+        else:
+            payload = dict(bundle or {})
+        secrets = payload.get("secrets") if isinstance(payload.get("secrets"), dict) else {}
+        restored = 0
+        for key, value in secrets.items():
+            if value is None:
+                continue
+            self.store_secret(str(key), str(value))
+            restored += 1
+        return {"ok": True, "restored": restored, "version": int(payload.get("version") or 1)}
     
     def _load_secrets(self) -> Dict[str, str]:
         if not self._vault_file.exists():

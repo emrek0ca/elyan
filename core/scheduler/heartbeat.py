@@ -33,12 +33,12 @@ class HeartbeatManager:
             try:
                 await asyncio.sleep(interval)
                 logger.info("Heartbeat: Waking up for self-maintenance...")
-                
-                # Perform maintenance tasks
-                # 1. Check disk space
-                # 2. Rotate logs
-                # 3. Process deferred tasks
-                await self.agent.process("internal:heartbeat_maintenance")
+                try:
+                    from core.autopilot import get_autopilot
+
+                    await get_autopilot().run_tick(agent=self.agent, reason="heartbeat")
+                except Exception as autopilot_exc:
+                    logger.warning(f"Heartbeat autopilot tick failed: {autopilot_exc}")
                 
             except asyncio.CancelledError:
                 break

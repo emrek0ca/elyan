@@ -4,6 +4,7 @@ import base64
 import json
 import time
 from email.mime.text import MIMEText
+from pathlib import Path
 from typing import Any
 
 from core.dependencies import get_dependency_runtime
@@ -242,6 +243,201 @@ class GoogleConnector(BaseConnector):
                     evidence=[{"kind": "drive_api", "action": kind}],
                     auth_state=self.auth_account.status if self.auth_account else ConnectorState.NEEDS_INPUT,
                 )
+            if kind in {"drive_upload", "upload_drive", "upload_file"}:
+                file_path = str(payload.get("file_path") or payload.get("path") or "").strip()
+                if not file_path:
+                    return self._result(
+                        success=False,
+                        status="failed",
+                        message="file_path_missing",
+                        error="file_path_missing",
+                        auth_state=self.auth_account.status if self.auth_account else ConnectorState.NEEDS_INPUT,
+                    )
+                try:
+                    from googleapiclient.http import MediaFileUpload
+                except Exception:
+                    return self._result(
+                        success=False,
+                        status="blocked",
+                        message="google_drive_upload_dependency_missing",
+                        error="google_drive_upload_dependency_missing",
+                        retryable=True,
+                        auth_state=self.auth_account.status if self.auth_account else ConnectorState.NEEDS_INPUT,
+                    )
+                metadata: dict[str, Any] = {"name": str(payload.get("name") or Path(file_path).name)}
+                parent_id = str(payload.get("parent_id") or payload.get("folder_id") or "").strip()
+                if parent_id:
+                    metadata["parents"] = [parent_id]
+                media = MediaFileUpload(file_path, resumable=True)
+                data = service.files().create(body=metadata, media_body=media, fields="id,name,webViewLink,mimeType").execute()
+                snapshot = await self.snapshot()
+                return self._result(
+                    success=True,
+                    status="success",
+                    message="drive_uploaded",
+                    latency_ms=(time.perf_counter() - started) * 1000.0,
+                    snapshot=snapshot,
+                    result=dict(data),
+                    evidence=[{"kind": "drive_api", "action": kind, "file_path": file_path}],
+                    auth_state=self.auth_account.status if self.auth_account else ConnectorState.NEEDS_INPUT,
+                )
+        if service_name in {"docs", "document", "workspace_docs"} or any(token in kind for token in ("docs", "document", "word", "doc")):
+            service = self._service("docs", "v1")
+            if service is None:
+                return await self._browser_fallback_action(payload, started, service_url="https://docs.google.com")
+            document_id = str(payload.get("document_id") or payload.get("id") or "").strip()
+            if kind in {"docs_get", "document_get", "read_doc"} and document_id:
+                data = service.documents().get(documentId=document_id).execute()
+                snapshot = await self.snapshot()
+                return self._result(
+                    success=True,
+                    status="success",
+                    message="docs_fetched",
+                    latency_ms=(time.perf_counter() - started) * 1000.0,
+                    snapshot=snapshot,
+                    result=dict(data),
+                    evidence=[{"kind": "docs_api", "action": kind}],
+                    auth_state=self.auth_account.status if self.auth_account else ConnectorState.NEEDS_INPUT,
+                )
+            if kind in {"docs_update", "update_doc", "append_doc", "write_doc"} and document_id:
+                body = dict(payload.get("body") or {})
+                if not body:
+                    body = {
+                        "requests": payload.get("requests") or [],
+                    }
+                data = service.documents().batchUpdate(documentId=document_id, body=body).execute()
+                snapshot = await self.snapshot()
+                return self._result(
+                    success=True,
+                    status="success",
+                    message="docs_updated",
+                    latency_ms=(time.perf_counter() - started) * 1000.0,
+                    snapshot=snapshot,
+                    result=dict(data),
+                    evidence=[{"kind": "docs_api", "action": kind}],
+                    auth_state=self.auth_account.status if self.auth_account else ConnectorState.NEEDS_INPUT,
+                )
+            return await self._browser_fallback_action(payload, started, service_url="https://docs.google.com")
+        if service_name in {"sheets", "sheet", "spreadsheet"} or any(token in kind for token in ("sheet", "spreadsheet", "table")):
+            service = self._service("sheets", "v4")
+            if service is None:
+                return await self._browser_fallback_action(payload, started, service_url="https://sheets.google.com")
+            spreadsheet_id = str(payload.get("spreadsheet_id") or payload.get("sheet_id") or "").strip()
+            if kind in {"sheets_get", "sheet_get", "read_sheet"} and spreadsheet_id:
+                data = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+                snapshot = await self.snapshot()
+                return self._result(
+                    success=True,
+                    status="success",
+                    message="sheets_fetched",
+                    latency_ms=(time.perf_counter() - started) * 1000.0,
+                    snapshot=snapshot,
+                    result=dict(data),
+                    evidence=[{"kind": "sheets_api", "action": kind}],
+                    auth_state=self.auth_account.status if self.auth_account else ConnectorState.NEEDS_INPUT,
+                )
+            if kind in {"sheets_get_values", "sheet_values_get", "read_sheet_values"} and spreadsheet_id:
+                range_name = str(payload.get("range") or payload.get("sheet_range") or "A1:Z100").strip()
+                data = service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=range_name).execute()
+                snapshot = await self.snapshot()
+                return self._result(
+                    success=True,
+                    status="success",
+                    message="sheets_values_fetched",
+                    latency_ms=(time.perf_counter() - started) * 1000.0,
+                    snapshot=snapshot,
+                    result=dict(data),
+                    evidence=[{"kind": "sheets_api", "action": kind}],
+                    auth_state=self.auth_account.status if self.auth_account else ConnectorState.NEEDS_INPUT,
+                )
+            if kind in {"sheets_update", "sheet_values_update", "write_sheet"} and spreadsheet_id:
+                range_name = str(payload.get("range") or payload.get("sheet_range") or "A1").strip()
+                body = dict(payload.get("body") or {"values": payload.get("values") or []})
+                value_input = str(payload.get("value_input_option") or "USER_ENTERED")
+                data = service.spreadsheets().values().update(
+                    spreadsheetId=spreadsheet_id,
+                    range=range_name,
+                    valueInputOption=value_input,
+                    body=body,
+                ).execute()
+                snapshot = await self.snapshot()
+                return self._result(
+                    success=True,
+                    status="success",
+                    message="sheets_values_updated",
+                    latency_ms=(time.perf_counter() - started) * 1000.0,
+                    snapshot=snapshot,
+                    result=dict(data),
+                    evidence=[{"kind": "sheets_api", "action": kind}],
+                    auth_state=self.auth_account.status if self.auth_account else ConnectorState.NEEDS_INPUT,
+                )
+            return await self._browser_fallback_action(payload, started, service_url="https://sheets.google.com")
+        if service_name in {"slides", "presentation", "deck"} or any(token in kind for token in ("slide", "presentation", "deck")):
+            service = self._service("slides", "v1")
+            if service is None:
+                return await self._browser_fallback_action(payload, started, service_url="https://slides.google.com")
+            presentation_id = str(payload.get("presentation_id") or payload.get("deck_id") or "").strip()
+            if kind in {"slides_get", "presentation_get", "read_slides"} and presentation_id:
+                data = service.presentations().get(presentationId=presentation_id).execute()
+                snapshot = await self.snapshot()
+                return self._result(
+                    success=True,
+                    status="success",
+                    message="slides_fetched",
+                    latency_ms=(time.perf_counter() - started) * 1000.0,
+                    snapshot=snapshot,
+                    result=dict(data),
+                    evidence=[{"kind": "slides_api", "action": kind}],
+                    auth_state=self.auth_account.status if self.auth_account else ConnectorState.NEEDS_INPUT,
+                )
+            if kind in {"slides_update", "presentation_update", "write_slides"} and presentation_id:
+                body = dict(payload.get("body") or {"requests": payload.get("requests") or []})
+                data = service.presentations().batchUpdate(presentationId=presentation_id, body=body).execute()
+                snapshot = await self.snapshot()
+                return self._result(
+                    success=True,
+                    status="success",
+                    message="slides_updated",
+                    latency_ms=(time.perf_counter() - started) * 1000.0,
+                    snapshot=snapshot,
+                    result=dict(data),
+                    evidence=[{"kind": "slides_api", "action": kind}],
+                    auth_state=self.auth_account.status if self.auth_account else ConnectorState.NEEDS_INPUT,
+                )
+            return await self._browser_fallback_action(payload, started, service_url="https://slides.google.com")
+        if service_name in {"chat", "workspace_chat"} or any(token in kind for token in ("chat", "message_space")):
+            service = self._service("chat", "v1")
+            if service is None:
+                return await self._browser_fallback_action(payload, started, service_url="https://chat.google.com")
+            space = str(payload.get("space") or payload.get("space_id") or "").strip()
+            message = str(payload.get("message") or payload.get("text") or "").strip()
+            if kind in {"chat_list", "list_spaces"}:
+                data = service.spaces().list(pageSize=int(payload.get("limit", 10) or 10)).execute()
+                snapshot = await self.snapshot()
+                return self._result(
+                    success=True,
+                    status="success",
+                    message="chat_spaces_listed",
+                    latency_ms=(time.perf_counter() - started) * 1000.0,
+                    snapshot=snapshot,
+                    result=dict(data),
+                    evidence=[{"kind": "chat_api", "action": kind}],
+                    auth_state=self.auth_account.status if self.auth_account else ConnectorState.NEEDS_INPUT,
+                )
+            if kind in {"chat_post", "send_chat", "send_message"} and space and message:
+                data = service.spaces().messages().create(parent=space, body={"text": message}).execute()
+                snapshot = await self.snapshot()
+                return self._result(
+                    success=True,
+                    status="success",
+                    message="chat_message_sent",
+                    latency_ms=(time.perf_counter() - started) * 1000.0,
+                    snapshot=snapshot,
+                    result=dict(data),
+                    evidence=[{"kind": "chat_api", "action": kind}],
+                    auth_state=self.auth_account.status if self.auth_account else ConnectorState.NEEDS_INPUT,
+                )
+            return await self._browser_fallback_action(payload, started, service_url="https://chat.google.com")
         return await self._browser_fallback_action(payload, started)
 
     async def _browser_fallback_action(self, payload: dict[str, Any], started: float, *, service_url: str = "") -> ConnectorResult:

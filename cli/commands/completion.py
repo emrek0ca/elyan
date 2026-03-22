@@ -15,7 +15,7 @@ _elyan_completion() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    local commands="chat doctor health logs status routines config gateway channels skills security models cron memory webhooks agents browser voice message service dashboard lean packs quivr cloudflare-agents opengauss onboard setup update version completion subscription quota"
+    local commands="chat doctor health logs status routines config gateway channels skills security models cron memory webhooks agents browser voice message service dashboard launch lean packs quivr cloudflare-agents opengauss onboard setup update version completion subscription quota"
 
     case "$prev" in
         elyan)
@@ -23,6 +23,9 @@ _elyan_completion() {
             return ;;
         gateway)
             COMPREPLY=($(compgen -W "start stop status restart logs reload health" -- "$cur"))
+            return ;;
+        launch)
+            COMPREPLY=($(compgen -W "--port --no-browser --ops" -- "$cur"))
             return ;;
         routines)
             COMPREPLY=($(compgen -W "list templates add rm enable disable run history" -- "$cur"))
@@ -133,6 +136,7 @@ _elyan() {
     'message:Mesaj gönder'
     'service:Sistem servisi'
     'dashboard:Web paneli aç'
+    'launch:Gateway başlat ve panel aç'
     'onboard:Kurulum sihirbazı'
     'setup:Kurulum sihirbazı'
     'update:Güncelle'
@@ -151,6 +155,10 @@ _elyan() {
     args)
       case $words[1] in
         gateway) _values 'eylem' start stop status restart logs reload health ;;
+        launch) _arguments \
+          '--port[Gateway port]:port:' \
+          '--no-browser[Open without browser]' \
+          '--ops[Open ops console]' ;;
         routines) _values 'eylem' list templates suggest add rm enable disable run history ;;
         channels) _values 'eylem' list status add remove enable disable test login logout info sync ;;
         models) _values 'eylem' list status test use set-default set-fallback cost ollama ;;
@@ -184,10 +192,11 @@ fi
 _FISH_SCRIPT = '''# Elyan CLI — Fish completion
 # Kopyala: ~/.config/fish/completions/elyan.fish
 
-set -l elyan_commands chat doctor health logs status routines config gateway channels skills security models cron memory webhooks agents browser lean packs quivr cloudflare-agents opengauss voice message service dashboard onboard setup update version completion subscription quota
+set -l elyan_commands chat doctor health logs status routines config gateway channels skills security models cron memory webhooks agents browser voice message service dashboard launch lean packs quivr cloudflare-agents opengauss onboard setup update version completion subscription quota
 
 complete -c elyan -f -n __fish_use_subcommand -a "$elyan_commands"
 complete -c elyan -n "__fish_seen_subcommand_from gateway" -a "start stop status restart logs reload health"
+complete -c elyan -n "__fish_seen_subcommand_from launch" -a "--port --no-browser --ops"
 complete -c elyan -n "__fish_seen_subcommand_from routines" -a "list templates suggest add rm enable disable run history"
 complete -c elyan -n "__fish_seen_subcommand_from channels" -a "list status add remove enable disable test login logout info sync"
 complete -c elyan -n "__fish_seen_subcommand_from models" -a "list status test use set-default set-fallback cost ollama"

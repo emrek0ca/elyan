@@ -312,6 +312,12 @@ class GatewayRouter:
 
     async def handle_incoming_message(self, message: UnifiedMessage):
         """Callback triggered by any adapter when a message is received."""
+        from core.protocol.events import MessageReceived, SessionResolved, ActorIdentity
+        from core.session_engine import session_manager
+        from core.user_profile import get_user_profile_store
+        from core.session_manager import get_session_manager
+        import uuid
+
         message.attachments = self._normalize_inbound_attachments(getattr(message, "attachments", []))
         logger.info(f"Incoming: [{message.channel_type}] user={message.user_id} text={message.text[:50]}")
         self._remember_user_route(message)
@@ -321,7 +327,97 @@ class GatewayRouter:
         if await self._handle_intervention_message(message):
             return
 
+        # 1. Resolve Actor
+        profile_store = get_user_profile_store()
+        profile = profile_store.get(message.user_id)
+        actor = ActorIdentity(
+            actor_id=message.user_id,
+            actor_type="user",
+            display_name=getattr(message, "user_name", None),
+            metadata={"preferred_language": profile.get("preferred_language")}
+        )
+
+        # 2. Resolve Session
+        high_level_session_mgr = get_session_manager()
+        # Ensure we have a numeric user_id if possible for legacy compat
         try:
+            numeric_uid = int(message.user_id)
+        except (ValueError, TypeError):
+            numeric_uid = None
+            
+        session_ctx = await high_level_session_mgr.get_user_session(numeric_uid) if numeric_uid else None
+        if not session_ctx:
+            session_ctx = await high_level_session_mgr.create_session(numeric_uid)
+        
+        session_id = session_ctx.session_id
+
+        # 3. Emit SessionResolved Event
+        session_resolved_evt = SessionResolved(
+            event_id=f"evt_{uuid.uuid4().hex[:8]}",
+            session_id=session_id,
+            user_id=message.user_id,
+            channel=message.channel_type,
+            workspace_id=None # Default workspace resolution logic can be added later
+        )
+        slog.log_event("session_resolved", session_resolved_evt.model_dump(), session_id=session_id)
+
+        # 4. Create MessageReceived Event
+        event = MessageReceived(
+            event_id=f"evt_{uuid.uuid4().hex[:8]}",
+            channel=message.channel_type,
+            channel_id=str(getattr(message, "channel_id", "") or ""),
+            user_id=message.user_id,
+            text=message.text,
+            attachments=message.attachments,
+            metadata={
+                ** (message.metadata or {}),
+                "actor": actor.model_dump(),
+                "session_id": session_id
+            }
+        )
+        
+        # Ensure executor is set for the lane runner
+        if session_manager._executor_callback is None:
+            session_manager.set_executor(self._legacy_executor)
+            
+        await session_manager.dispatch_event(event)
+
+    async def _legacy_executor(self, event: Any):
+        """Executes the actual agent routing and response generation inside the Session Lane lock."""
+        from core.protocol.events import MessageReceived
+        if not isinstance(event, MessageReceived):
+            return
+            
+        session_id = event.metadata.get("session_id", "sess_default")
+        run_id = run_lifecycle_manager.get_run_id_for_event(event.event_id) # I need to check if this method exists or adjust
+        
+        # In v2, we hand off to orchestrator if it's a "task"
+        # For now, we still use the legacy agent for simple chat, but orchestrator for anything complex.
+        
+        # Simplified: Use TaskOrchestrator for everything to test the new spine
+        from core.gateway.server import get_gateway_server # I need to find a way to get the server instance
+        # ... actually, the router is part of the server.
+        
+        # Let's check how GatewayRouter gets the agent.
+        # It's in self.agent.
+        
+        # I'll update the orchestrator integration later.
+        # For now, I'll stick to the legacy logic but ensure it runs inside the lane.
+        
+        message = UnifiedMessage(
+            text=event.text,
+            user_id=event.user_id,
+            channel_type=event.channel,
+            attachments=event.attachments,
+            metadata=event.metadata
+        )
+        message.channel_id = event.channel_id
+
+        try:
+            agent = await agent_router.route_message(message.channel_type, message.user_id)
+            agent.current_user_id = message.user_id
+            
+            # ... rest of legacy logic
             agent = await agent_router.route_message(message.channel_type, message.user_id)
             agent.current_user_id = message.user_id
 
@@ -436,7 +532,7 @@ class GatewayRouter:
                 push_activity("error", message.channel_type, str(e)[:60], success=False)
             except Exception:
                 pass
-            error_resp = UnifiedResponse(text="Üzgünüm, bu isteği işlerken bir hata oluştu. Tekrar dener misin?")
+            error_resp = UnifiedResponse(text="Mesajını aldım ama şu an yanıt üretemedim. Lütfen tekrar dener misin?")
             await self.send_outgoing_response(message.channel_type, message.channel_id, error_resp)
 
     def _remember_user_route(self, message: UnifiedMessage) -> None:

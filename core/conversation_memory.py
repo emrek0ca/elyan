@@ -18,7 +18,7 @@ class ConversationMemory:
     
     def __init__(self, db_path: str = None):
         if db_path is None:
-            db_path = str(Path.home() / ".config" / "cdacs-bot" / "conversation.db")
+            db_path = str(Path.home() / ".elyan" / "conversation.db")
         
         self.db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)

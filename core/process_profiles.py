@@ -11,7 +11,7 @@ from typing import Any, Dict, Iterable, List
 from core.text_artifacts import write_json_artifact, write_text_artifact
 
 
-CODING_SUPERPOWERS_DOMAINS = frozenset({"code", "debug", "api_integration", "full_stack_delivery", "lean", "cloudflare_agents", "quivr"})
+CODING_SUPERPOWERS_DOMAINS = frozenset({"code", "debug", "api_integration", "full_stack_delivery", "lean", "cloudflare_agents", "quivr", "opengauss"})
 APPROVAL_MARKERS = (
     "onay",
     "go",
@@ -114,6 +114,8 @@ def normalize_workflow_profile(value: Any) -> str:
         return "lean"
     if raw in {"cloudflare_agents", "cloudflare-agents", "cloudflare agents"}:
         return "cloudflare_agents"
+    if raw in {"opengauss", "openGauss", "open-gauss", "database"}:
+        return "opengauss"
     return "default"
 
 
@@ -177,6 +179,8 @@ def get_process_profile(profile: str, *, nexus_mode: str = "micro", allowed_doma
         return ProcessProfile(id="default", enabled_domains=list(allowed_domains or []))
     workspace_policy = "require_worktree" if normalized in {"superpowers_strict", "lean"} else "auto"
     if normalized == "cloudflare_agents":
+        workspace_policy = "require_worktree"
+    if normalized == "opengauss":
         workspace_policy = "require_worktree"
     return ProcessProfile(
         id=normalized,

@@ -69,6 +69,10 @@ class SkillRegistry:
             "drive": "office",
             "code": "office",
             "automation": "system",
+            "database": "opengauss",
+            "sql": "opengauss",
+            "db": "opengauss",
+            "opengauss": "opengauss",
         }
         skill_name = aliases.get(normalized, normalized)
         return skill_manager.get_skill(skill_name)

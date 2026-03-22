@@ -17,6 +17,13 @@ def _truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except Exception:
+        return float(default)
+
+
 def _read_json(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -45,6 +52,8 @@ class DependencyManager:
         self.headless = bool(headless)
         self.open_dashboard_flag = bool(open_dashboard)
         self.dry_run = bool(dry_run or _truthy(os.environ.get("ELYAN_BOOTSTRAP_DRY_RUN")))
+        self.command_timeout_s = max(60.0, _float_env("ELYAN_BOOTSTRAP_COMMAND_TIMEOUT", 600.0))
+        self.ollama_pull_timeout_s = max(60.0, _float_env("ELYAN_BOOTSTRAP_OLLAMA_PULL_TIMEOUT", 300.0))
         self.runtime_dir = self.home / ".elyan"
         self.logs_dir = self.runtime_dir / "logs"
         self.cursor_dir = self.workspace / ".cursor"
@@ -276,10 +285,32 @@ class DependencyManager:
             }
 
         if self.system in {"darwin", "linux"} and shutil.which("curl") and shutil.which("sh") and not shutil.which("screenpipe"):
-            self._run(["/bin/sh", "-lc", "curl -fsSL https://get.screenpi.pe/cli | sh"], check=False)
+            try:
+                self._run(["/bin/sh", "-lc", "curl -fsSL https://get.screenpi.pe/cli | sh"], check=False, timeout=self.command_timeout_s)
+            except subprocess.TimeoutExpired:
+                return {
+                    "ok": False,
+                    "installed": False,
+                    "running": False,
+                    "node": node_state,
+                    "message": "Screenpipe kurulumu zaman aşımına uğradı.",
+                }
             installed = True
         elif self.system == "windows" and shutil.which("powershell") and not shutil.which("screenpipe"):
-            self._run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "iwr get.screenpi.pe/cli.ps1 | iex"], check=False)
+            try:
+                self._run(
+                    ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "iwr get.screenpi.pe/cli.ps1 | iex"],
+                    check=False,
+                    timeout=self.command_timeout_s,
+                )
+            except subprocess.TimeoutExpired:
+                return {
+                    "ok": False,
+                    "installed": False,
+                    "running": False,
+                    "node": node_state,
+                    "message": "Screenpipe kurulumu zaman aşımına uğradı.",
+                }
             installed = True
         else:
             installed = bool(shutil.which("screenpipe"))
@@ -316,10 +347,14 @@ class DependencyManager:
             return {"ok": False, "installed": False, "running": False, "message": "Ollama kurulumu atlandı (dry-run)."}
 
         ready = self._http_ready("http://localhost:11434/api/tags")
+        install_notes: list[str] = []
 
         if not ready and not shutil.which("ollama"):
             if self.system in {"darwin", "linux"} and shutil.which("curl") and shutil.which("sh"):
-                self._run(["/bin/sh", "-lc", "curl -fsSL https://ollama.com/install.sh | sh"], check=False)
+                try:
+                    self._run(["/bin/sh", "-lc", "curl -fsSL https://ollama.com/install.sh | sh"], check=False, timeout=self.command_timeout_s)
+                except subprocess.TimeoutExpired:
+                    install_notes.append("Ollama kurulumu zaman aşımına uğradı.")
             elif self.system == "windows":
                 return {
                     "ok": False,
@@ -337,27 +372,43 @@ class DependencyManager:
                 pass
 
         pulls = []
-        for model in ("qwen2.5vl:7b", "llama3.2"):
+        for model in ("llama3.2:3b",):
             if not shutil.which("ollama"):
                 pulls.append({"model": model, "ok": False, "message": "ollama binary missing"})
                 continue
-            completed = self._run(["ollama", "pull", model], timeout=None, check=False)
-            pulls.append(
-                {
-                    "model": model,
-                    "ok": completed.returncode == 0,
-                    "stdout": str(completed.stdout or "").strip(),
-                    "stderr": str(completed.stderr or "").strip(),
-                }
+            print(f"    • Ollama modeli indiriliyor: {model}", flush=True)
+            try:
+                completed = self._run(["ollama", "pull", model], timeout=self.ollama_pull_timeout_s, check=False)
+                pulls.append(
+                    {
+                        "model": model,
+                        "ok": completed.returncode == 0,
+                        "timed_out": False,
+                        "stdout": str(completed.stdout or "").strip(),
+                        "stderr": str(completed.stderr or "").strip(),
+                    }
                 )
+            except subprocess.TimeoutExpired as exc:
+                pulls.append(
+                    {
+                        "model": model,
+                        "ok": False,
+                        "timed_out": True,
+                        "stdout": str(getattr(exc, "output", "") or "").strip(),
+                        "stderr": str(getattr(exc, "stderr", "") or "").strip() or f"timeout after {self.ollama_pull_timeout_s:.0f}s",
+                    }
+                )
+                print(f"      Zaman aşımı: {model}", flush=True)
 
         ready = ready or self._http_ready("http://localhost:11434/api/tags")
+        if install_notes:
+            install_notes.append("Model kurulumu kısmen devam ediyor olabilir.")
         return {
             "ok": ready,
             "installed": bool(shutil.which("ollama")),
             "running": ready,
             "pulls": pulls,
-            "message": "Ollama hazır." if ready else "Ollama başlatılamadı.",
+            "message": ("Ollama hazır." if ready else "Ollama başlatılamadı.") + (f" {' '.join(install_notes)}" if install_notes else ""),
         }
 
     def install_realtime_actuator_service(self) -> dict[str, Any]:
@@ -497,12 +548,49 @@ WantedBy=default.target
             return {"ok": False, "message": str(exc)}
 
     def bootstrap_all(self) -> dict[str, Any]:
-        steps = {
-            "docker": self.ensure_docker(),
-            "screenpipe": self.ensure_screenpipe(),
-            "ollama": self.ensure_ollama(),
-            "realtime_actuator": self.install_realtime_actuator_service(),
-            "skills": self.enable_initial_skills(),
-        }
-        steps["dashboard"] = self.open_dashboard()
+        steps: dict[str, Any] = {}
+        ordered_steps = [
+            ("docker", "Docker doğrulanıyor", self.ensure_docker),
+            ("screenpipe", "Screenpipe hazırlanıyor", self.ensure_screenpipe),
+            ("ollama", "Ollama ve başlangıç modeli hazırlanıyor", self.ensure_ollama),
+            ("realtime_actuator", "Arka plan servisi kuruluyor", self.install_realtime_actuator_service),
+            ("skills", "Başlangıç becerileri etkinleştiriliyor", self.enable_initial_skills),
+        ]
+
+        total = len(ordered_steps) + 1
+        for index, (name, label, runner) in enumerate(ordered_steps, start=1):
+            print(f"  [{index}/{total}] {label}...", flush=True)
+            started = time.monotonic()
+            try:
+                result = runner()
+            except Exception as exc:
+                result = {"ok": False, "message": str(exc)}
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            payload = dict(result) if isinstance(result, dict) else {"ok": bool(result)}
+            payload.setdefault("elapsed_ms", elapsed_ms)
+            steps[name] = payload
+            status = "tamamlandı" if bool(payload.get("ok")) else "kısmen tamamlandı"
+            message = str(payload.get("message") or "").strip()
+            if message:
+                print(f"      {status}: {message}", flush=True)
+            else:
+                print(f"      {status}", flush=True)
+
+        print(f"  [{total}/{total}] Dashboard hazır hale getiriliyor...", flush=True)
+        started = time.monotonic()
+        try:
+            dashboard_result = self.open_dashboard()
+        except Exception as exc:
+            dashboard_result = {"ok": False, "message": str(exc)}
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        dashboard_payload = dict(dashboard_result) if isinstance(dashboard_result, dict) else {"ok": bool(dashboard_result)}
+        dashboard_payload.setdefault("elapsed_ms", elapsed_ms)
+        steps["dashboard"] = dashboard_payload
+        dashboard_status = "tamamlandı" if bool(dashboard_payload.get("ok")) else "kısmen tamamlandı"
+        dashboard_message = str(dashboard_payload.get("message") or "").strip()
+        if dashboard_message:
+            print(f"      {dashboard_status}: {dashboard_message}", flush=True)
+        else:
+            print(f"      {dashboard_status}", flush=True)
+
         return steps

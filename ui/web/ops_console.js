@@ -30,12 +30,18 @@ const els = {
   laneExecutionCount: qs("#lane-execution-count"),
   laneAttentionCount: qs("#lane-attention-count"),
   laneDoneCount: qs("#lane-done-count"),
+  nodeList: qs("#node-list"),
+  nodeCountNote: qs("#node-count-note"),
+  approvalList: qs("#approval-list"),
+  approvalCountNote: qs("#approval-count-note"),
   tierButtons: Array.from(document.querySelectorAll(".tier-btn")),
 };
 
 const state = {
   users: [],
   plans: [],
+  nodes: [],
+  approvals: [],
   overview: {},
   selectedUserId: "",
   selectedPlanId: "",
@@ -162,6 +168,63 @@ function renderUsers() {
     : `<div class="empty-state">Aramaya uyan kullanici yok.</div>`;
 }
 
+function renderNodes() {
+  const nodes = state.nodes || [];
+  els.nodeCountNote.textContent = `${nodes.length} node aktif.`;
+  els.nodeList.innerHTML = nodes.length
+    ? nodes.map((node) => {
+        const healthy = node.status === "healthy";
+        return `
+          <article class="user-card">
+            <div class="user-card-head">
+              <strong>${h(node.node_id)}</strong>
+              <span class="pill ${healthy ? "ok" : "err"}">${h(node.status)}</span>
+            </div>
+            <div class="meta-line">CPU: ${h(node.cpu_usage)}% | RAM: ${h(node.memory_usage)}%</div>
+            <div class="meta-line">Host: ${h(node.hostname)} | OS: ${h(node.platform)}</div>
+            <div class="meta-line">Caps: ${h((node.capabilities || []).join(", "))}</div>
+          </article>
+        `;
+      }).join("")
+    : `<div class="empty-state">Aktif node bulunamadi.</div>`;
+}
+
+function renderApprovals() {
+  const approvals = state.approvals || [];
+  els.approvalCountNote.textContent = `${approvals.length} onay bekliyor.`;
+  els.approvalList.innerHTML = approvals.length
+    ? approvals.map((appr) => `
+          <article class="user-card">
+            <div class="user-card-head">
+              <strong>${h(appr.action)}</strong>
+              <span class="pill err">${h(appr.risk)}</span>
+            </div>
+            <div class="meta-line">Session: ${h(appr.session_id)}</div>
+            <div class="meta-line">Reason: ${h(appr.reason)}</div>
+            <div class="meta-line">Payload: <code>${h(JSON.stringify(appr.payload))}</code></div>
+            <div class="tier-actions" style="margin-top: 0.5rem;">
+              <button class="btn ok" onclick="resolveApproval('${appr.id}', true)">ONAYLA</button>
+              <button class="btn err" onclick="resolveApproval('${appr.id}', false)">REDDET</button>
+            </div>
+          </article>
+        `).join("")
+    : `<div class="empty-state">Bekleyen onay yok.</div>`;
+}
+
+async function resolveApproval(id, approved) {
+  try {
+    await api("/api/security/approve", {
+      method: "POST",
+      body: JSON.stringify({ id, approved })
+    });
+    await loadAll();
+  } catch (err) {
+    alert("Approval error: " + err.message);
+  }
+}
+
+window.resolveApproval = resolveApproval;
+
 function planCard(plan) {
   const active = state.selectedPlanId === plan.task_id ? "active" : "";
   const summary = plan.kind === "background" && plan.result_summary
@@ -174,7 +237,10 @@ function planCard(plan) {
     <article class="plan-card ${active}" data-plan-id="${h(plan.task_id)}">
       <div class="plan-card-head">
         <strong>${h(plan.task_id)}</strong>
-        <span class="${statePillClass(plan.state)}">${h(plan.state)}</span>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <a href="/inspector?run_id=${h(plan.task_id)}" class="pill" style="text-decoration: none; background: #444;">DEBUG</a>
+          <span class="${statePillClass(plan.state)}">${h(plan.state)}</span>
+        </div>
       </div>
       <div class="chip-row meta-line">
         <span>${h(plan.user_id || "local")}</span>
@@ -290,6 +356,8 @@ function renderSelectedPlan() {
 function renderAll() {
   renderOverview();
   renderUsers();
+  renderNodes();
+  renderApprovals();
   renderBoard();
   renderSelectedUser();
   renderSelectedPlan();
@@ -310,14 +378,18 @@ async function loadAll() {
   els.syncPill.textContent = "Senkronize ediliyor";
   els.syncPill.className = "pill warn";
   try {
-    const [overview, users, plans] = await Promise.all([
+    const [overview, users, plans, nodes, approvals] = await Promise.all([
       api("/api/admin/overview"),
       api("/api/admin/users"),
       api("/api/admin/plans?limit=200"),
+      api("/api/v2/nodes"),
+      api("/api/security/pending")
     ]);
     state.overview = overview || {};
     state.users = Array.isArray(users?.users) ? users.users : [];
     state.plans = Array.isArray(plans?.plans) ? plans.plans : [];
+    state.nodes = Array.isArray(nodes?.nodes) ? nodes.nodes : [];
+    state.approvals = Array.isArray(approvals?.pending) ? approvals.pending : [];
     chooseDefaultSelections();
     renderAll();
     els.syncPill.textContent = "Ops console online";

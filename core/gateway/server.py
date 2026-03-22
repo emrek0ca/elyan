@@ -683,6 +683,17 @@ class ElyanGatewayServer:
         self.cron = CronEngine(agent)
         self.heartbeat = HeartbeatManager(agent)
         self.cron.set_report_callback(self._on_cron_report)
+        self.connected_nodes: Dict[str, web.WebSocketResponse] = {}
+        
+        from core.runtime.execution_hub import RemoteExecutionHub
+        self.execution_hub = RemoteExecutionHub(self)
+        
+        from core.runtime.orchestrator import TaskOrchestrator
+        self.orchestrator = TaskOrchestrator(self)
+        
+        from core.runtime.scheduler import MissionScheduler
+        self.scheduler = MissionScheduler(self.orchestrator)
+        
         self._setup_routes()
         self.runner: Optional[web.AppRunner] = None
         self._telemetry_task: Optional[asyncio.Task] = None
@@ -962,6 +973,7 @@ class ElyanGatewayServer:
         self.app.router.add_get('/canvas', self.handle_canvas_page)
         self.app.router.add_get('/ws/chat', self.handle_webchat_ws)
         self.app.router.add_get('/ws/dashboard', self.handle_dashboard_ws)
+        self.app.router.add_get('/ws/node', self.handle_node_ws)
 
         # ── Webhook ───────────────────────────────────────────────────────────
         self.app.router.add_post('/hook/{event}', self.handle_webhook)
@@ -977,6 +989,41 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/interventions', self.handle_interventions_get)
         self.app.router.add_post('/api/interventions/resolve', self.handle_interventions_resolve)
         self.app.router.add_get('/api/health/telemetry', self.handle_health_telemetry)
+        
+        # ── V2 API ──────────────────────────────────────────────────────────
+        self.app.router.add_get('/api/v2/nodes', self.handle_v2_list_nodes)
+        self.app.router.add_get('/api/v2/runs', self.handle_v2_list_runs)
+        self.app.router.add_get('/api/v2/sessions', self.handle_v2_list_sessions)
+        self.app.router.add_get('/inspector', self.handle_inspector_page)
+
+    async def handle_v2_list_nodes(self, request):
+        from core.runtime.node_manager import node_manager
+        nodes = node_manager.list_nodes()
+        return web.json_response({"ok": True, "nodes": [n.model_dump() for n in nodes]})
+
+    async def handle_v2_list_runs(self, request):
+        from core.runtime.lifecycle import run_lifecycle_manager
+        runs = list(run_lifecycle_manager._active_runs.values())
+        return web.json_response({"ok": True, "runs": [r.model_dump() for n, r in run_lifecycle_manager._active_runs.items()]})
+
+    async def handle_v2_list_sessions(self, request):
+        from core.session_engine import session_manager
+        sessions = []
+        for sid, lane in session_manager._lanes.items():
+            sessions.append({
+                "session_id": sid,
+                "is_locked": lane.is_locked,
+                "pending_events": len(lane.get_pending_events()),
+                "last_activity": lane._last_activity
+            })
+        return web.json_response({"ok": True, "sessions": sessions})
+
+    async def handle_inspector_page(self, request):
+        base = Path(__file__).resolve().parent.parent.parent
+        p = base / 'ui' / 'web' / 'run_inspector.html'
+        if not p.exists():
+            return web.Response(text="Inspector UI not found", status=404)
+        return web.FileResponse(p)
 
     # ── Page handlers ─────────────────────────────────────────────────────────
     async def handle_dashboard_page(self, request):
@@ -5322,6 +5369,66 @@ class ElyanGatewayServer:
             logger.info(f"Dashboard WS disconnected ({len(_dashboard_ws_clients)} clients)")
         return ws
 
+    # ── WebSocket: Node connection (new for v2) ───────────────────────────────
+    async def handle_node_ws(self, request):
+        ws = web.WebSocketResponse(heartbeat=30)
+        await ws.prepare(request)
+        
+        node_id = None
+        logger.info("Node WS connecting...")
+        
+        try:
+            async for msg in ws:
+                if msg.type == WSMsgType.TEXT:
+                    try:
+                        event = json.loads(msg.data)
+                        event_type = event.get("event_type")
+                        data = event.get("data", {})
+                        
+                        if event_type == "NodeRegistered":
+                            node_id = data.get("node_id")
+                            if node_id:
+                                self.connected_nodes[node_id] = ws
+                                
+                                from core.runtime.node_manager import node_manager, NodeInfo
+                                from core.protocol.shared_types import NodeType
+                                node_manager.register_node(NodeInfo(
+                                    node_id=node_id,
+                                    node_type=NodeType(data.get("node_type", "desktop")),
+                                    capabilities=data.get("capabilities", []),
+                                    hostname=data.get("hostname", "unknown"),
+                                    platform=data.get("platform", "unknown"),
+                                    metadata=data
+                                ))
+                                
+                                logger.info(f"Node registered and connected: {node_id}")
+                                push_activity("node_connect", "system", f"Node {node_id} online", True)
+                        
+                        elif event_type == "ActionResult":
+                            action_id = data.get("action_id")
+                            if action_id:
+                                self.execution_hub.resolve_action(action_id, data)
+                                logger.info(f"Action result from {node_id}: {action_id} -> {data.get('status')}")
+                            
+                        elif event_type == "Pong":
+                            pass
+                            
+                    except Exception as e:
+                        logger.error(f"Error processing node message: {e}")
+                        
+                elif msg.type == WSMsgType.ERROR:
+                    logger.debug(f"Node WS error: {ws.exception()}")
+        finally:
+            if node_id:
+                self.connected_nodes.pop(node_id, None)
+                from core.runtime.node_manager import node_manager
+                from core.protocol.shared_types import HealthStatus
+                node_manager.update_health(node_id, HealthStatus.UNAVAILABLE)
+                logger.info(f"Node disconnected: {node_id}")
+                push_activity("node_disconnect", "system", f"Node {node_id} offline", False)
+        
+        return ws
+
     # ── Security endpoints ────────────────────────────────────────────────────
     async def handle_security_events(self, request):
         """Audit log events for Security tab."""
@@ -5351,20 +5458,20 @@ class ElyanGatewayServer:
         return web.json_response({"events": events, "total": len(events)})
 
     async def handle_pending_approvals(self, request):
-        """Pending approval requests."""
+        """Pending approval requests (v2 integrated)."""
+        from core.security.approval_engine import approval_engine
         pending = []
-        try:
-            from elyan.approval.legacy_adapter import approval_manager
-            if hasattr(approval_manager, "pending_requests"):
-                for rid, req in approval_manager.pending_requests.items():
-                    pending.append({
-                        "id": rid,
-                        "action": str(req.action) if hasattr(req, "action") else str(req),
-                        "user_id": str(req.user_id) if hasattr(req, "user_id") else "?",
-                        "ts": str(req.timestamp) if hasattr(req, "timestamp") else "",
-                    })
-        except Exception:
-            pass
+        for rid, req in approval_engine._pending.items():
+            pending.append({
+                "id": rid,
+                "session_id": req.session_id,
+                "run_id": req.run_id,
+                "action": req.action_type,
+                "risk": req.risk_level.value,
+                "reason": req.reason,
+                "payload": req.payload,
+                "ts": req.created_at
+            })
         return web.json_response({"pending": pending})
 
     async def handle_interventions_get(self, request):
@@ -5388,14 +5495,16 @@ class ElyanGatewayServer:
             return web.json_response({"ok": False, "error": str(e)}, status=500)
 
     async def handle_approve_action(self, request):
-        """Approve or reject a pending action."""
+        """Approve or reject a pending action (v2 integrated)."""
         try:
             data = await request.json()
             request_id = data.get("id")
             approved = bool(data.get("approved", False))
-            from elyan.approval.legacy_adapter import approval_manager
-            if hasattr(approval_manager, "resolve"):
-                approval_manager.resolve(request_id, approved)
+            resolver_id = "admin_ui" # Placeholder for actual admin user id
+            
+            from core.security.approval_engine import approval_engine
+            approval_engine.resolve_approval(request_id, approved, resolver_id)
+            
             return web.json_response({"ok": True})
         except Exception as e:
             return web.json_response({"ok": False, "error": str(e)}, status=400)
@@ -5572,6 +5681,7 @@ class ElyanGatewayServer:
             channels = []
 
         cid = str(incoming.get("id") or "").strip() or ctype
+        original_id = str(incoming.get("original_id") or data.get("original_id") or "").strip()
         idx = None
         existing: dict = {}
         for i, ch in enumerate(channels):
@@ -5579,7 +5689,7 @@ class ElyanGatewayServer:
                 continue
             ch_id = _channel_id(ch)
             ch_type = _normalize_channel_type(ch.get("type"))
-            if cid == ch_id or (ch_type == ctype and not incoming.get("id")):
+            if (original_id and original_id == ch_id) or cid == ch_id or (ch_type == ctype and not incoming.get("id")):
                 idx = i
                 existing = dict(ch)
                 break
@@ -5597,7 +5707,7 @@ class ElyanGatewayServer:
         # Merge non-secret fields first.
         for k, v in incoming.items():
             key = str(k or "").strip()
-            if not key or key in {"type", "id"}:
+            if not key or key in {"type", "id", "original_id", "original_type", "clear_secret_fields"}:
                 continue
             if key in {"token", "bot_token", "app_token", "bridge_token", "access_token", "verify_token", "password"}:
                 continue
@@ -5958,6 +6068,9 @@ class ElyanGatewayServer:
 
         # Phase 21: Start Dashboard Telemetry Broadcast
         self._telemetry_task = asyncio.create_task(self._telemetry_broadcast_loop())
+
+        # v2: Start Mission Scheduler
+        await self.scheduler.start()
 
     async def stop(self):
         logger.info("Stopping Gateway Server...")

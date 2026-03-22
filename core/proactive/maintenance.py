@@ -29,6 +29,8 @@ class MaintenanceEngine:
         self.proofs_dir = resolve_proofs_root()
         self.archive_dir = base_dir / "archive"
         self.archive_dir.mkdir(parents=True, exist_ok=True)
+        self._last_run_at: float = 0.0
+        self._last_result: Dict[str, Any] = {"success": False, "tasks_completed": 0, "total_freed_mb": 0.0, "details": {}}
 
     async def run_full_maintenance(self) -> Dict[str, Any]:
         """Run all maintenance tasks."""
@@ -43,11 +45,34 @@ class MaintenanceEngine:
         results["artifact_cleanup"] = await self.cleanup_artifacts()
         
         total_freed = sum(r.get("freed_mb", 0) for r in results.values())
-        return {
+        payload = {
             "success": True,
             "tasks_completed": len(results),
             "total_freed_mb": round(total_freed, 2),
             "details": results,
+        }
+        self._last_run_at = time.time()
+        self._last_result = dict(payload)
+        return payload
+
+    def get_summary(self) -> Dict[str, Any]:
+        """Return a compact maintenance status snapshot."""
+        try:
+            log_count = len(list(self.log_dir.rglob("*.log"))) if self.log_dir.exists() else 0
+        except Exception:
+            log_count = 0
+        try:
+            cache_count = len([p for p in self.cache_dir.rglob("*") if p.is_file()]) if self.cache_dir.exists() else 0
+        except Exception:
+            cache_count = 0
+        return {
+            "status": "ok" if bool(self._last_result.get("success")) else "idle",
+            "last_run_at": self._last_run_at,
+            "last_result": dict(self._last_result),
+            "log_files": log_count,
+            "cache_files": cache_count,
+            "proofs_path": str(self.proofs_dir),
+            "archive_path": str(self.archive_dir),
         }
 
     async def cleanup_logs(self, max_age_days: int = 7) -> Dict[str, Any]:

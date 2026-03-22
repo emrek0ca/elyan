@@ -189,16 +189,19 @@ class IntegrationHub:
 
         if not integration or integration.type != IntegrationType.EMAIL:
             return {"success": False, "error": "Invalid email integration"}
+        try:
+            from tools.email_tools import EmailManager
 
-        # Email sending implementation (SMTP)
-        # This is a placeholder - actual implementation would use smtplib or email service API
-
-        return {
-            "success": True,
-            "note": "Email sending not yet fully implemented",
-            "to": to,
-            "subject": subject
-        }
+            manager = EmailManager()
+            manager.smtp_server = str(integration.config.get("smtp_server") or integration.credentials.get("smtp_server") or manager.smtp_server)
+            manager.smtp_port = int(integration.config.get("smtp_port") or integration.credentials.get("smtp_port") or manager.smtp_port)
+            manager.imap_server = str(integration.config.get("imap_server") or integration.credentials.get("imap_server") or manager.imap_server)
+            manager.email_address = str(integration.credentials.get("email_address") or integration.credentials.get("username") or integration.config.get("email_address") or manager.email_address)
+            manager.email_password = str(integration.credentials.get("email_password") or integration.credentials.get("password") or integration.config.get("email_password") or manager.email_password)
+            return await manager.send_email(to, subject, body, html=html)
+        except Exception as e:
+            logger.error(f"Email sending error: {e}")
+            return {"success": False, "error": str(e)}
 
     async def create_calendar_event(
         self,
@@ -213,19 +216,47 @@ class IntegrationHub:
 
         if not integration or integration.type != IntegrationType.CALENDAR:
             return {"success": False, "error": "Invalid calendar integration"}
+        try:
+            from integrations.base import AuthStrategy, ConnectorState, FallbackPolicy, IntegrationCapability, IntegrationType as CanonicalIntegrationType, OAuthAccount
+            from integrations.connectors.google import GoogleConnector
 
-        # Google Calendar API integration
-        # This is a placeholder
-
-        return {
-            "success": True,
-            "note": "Calendar integration not yet fully implemented",
-            "event": {
-                "title": title,
-                "start": start_time,
-                "end": end_time
-            }
-        }
+            capability = IntegrationCapability(
+                name=str(integration.name or "calendar"),
+                provider="google",
+                integration_type=CanonicalIntegrationType.API,
+                required_scopes=["calendar.read", "calendar.write"],
+                auth_strategy=AuthStrategy.OAUTH,
+                fallback_policy=FallbackPolicy.WEB,
+                connector_name="google",
+            )
+            scopes = list(integration.credentials.get("scopes") or integration.config.get("scopes") or ["calendar.read", "calendar.write"])
+            account = OAuthAccount(
+                provider="google",
+                account_alias=str(integration.credentials.get("account_alias") or integration.name or "default"),
+                display_name=str(integration.credentials.get("display_name") or integration.name or "Google"),
+                email=str(integration.credentials.get("email") or integration.credentials.get("email_address") or ""),
+                access_token=str(integration.credentials.get("access_token") or ""),
+                refresh_token=str(integration.credentials.get("refresh_token") or ""),
+                granted_scopes=scopes,
+                status=ConnectorState.READY if (integration.credentials.get("access_token") or integration.credentials.get("refresh_token")) else ConnectorState.NEEDS_INPUT,
+                auth_strategy=AuthStrategy.OAUTH,
+            )
+            connector = GoogleConnector(capability=capability, auth_account=account, provider="google", connector_name="google")
+            result = await connector.execute(
+                {
+                    "kind": "calendar_create",
+                    "event": {
+                        "summary": title,
+                        "description": description or "",
+                        "start": {"dateTime": start_time},
+                        "end": {"dateTime": end_time},
+                    },
+                }
+            )
+            return result.model_dump() if hasattr(result, "model_dump") else dict(result)
+        except Exception as e:
+            logger.error(f"Calendar event error: {e}")
+            return {"success": False, "error": str(e)}
 
     async def upload_to_cloud(
         self,
@@ -238,15 +269,47 @@ class IntegrationHub:
 
         if not integration or integration.type != IntegrationType.CLOUD_STORAGE:
             return {"success": False, "error": "Invalid cloud storage integration"}
+        try:
+            from integrations.base import AuthStrategy, ConnectorState, FallbackPolicy, IntegrationCapability, IntegrationType as CanonicalIntegrationType, OAuthAccount
+            from integrations.connectors.google import GoogleConnector
 
-        # Cloud storage API integration (Google Drive, Dropbox, etc.)
-        # This is a placeholder
-
-        return {
-            "success": True,
-            "note": "Cloud storage upload not yet fully implemented",
-            "file": file_path
-        }
+            provider = str(integration.config.get("provider") or integration.credentials.get("provider") or "google").strip().lower()
+            if provider not in {"google", "drive"}:
+                return {"success": False, "error": f"Unsupported cloud provider: {provider}"}
+            capability = IntegrationCapability(
+                name=str(integration.name or "cloud_storage"),
+                provider="google",
+                integration_type=CanonicalIntegrationType.API,
+                required_scopes=["drive.read", "drive.write"],
+                auth_strategy=AuthStrategy.OAUTH,
+                fallback_policy=FallbackPolicy.WEB,
+                connector_name="google",
+            )
+            scopes = list(integration.credentials.get("scopes") or integration.config.get("scopes") or ["drive.read", "drive.write"])
+            account = OAuthAccount(
+                provider="google",
+                account_alias=str(integration.credentials.get("account_alias") or integration.name or "default"),
+                display_name=str(integration.credentials.get("display_name") or integration.name or "Google Drive"),
+                email=str(integration.credentials.get("email") or integration.credentials.get("email_address") or ""),
+                access_token=str(integration.credentials.get("access_token") or ""),
+                refresh_token=str(integration.credentials.get("refresh_token") or ""),
+                granted_scopes=scopes,
+                status=ConnectorState.READY if (integration.credentials.get("access_token") or integration.credentials.get("refresh_token")) else ConnectorState.NEEDS_INPUT,
+                auth_strategy=AuthStrategy.OAUTH,
+            )
+            connector = GoogleConnector(capability=capability, auth_account=account, provider="google", connector_name="google")
+            result = await connector.execute(
+                {
+                    "kind": "drive_upload",
+                    "file_path": file_path,
+                    "name": str(remote_path or Path(file_path).name),
+                    "parent_id": str(integration.config.get("folder_id") or integration.credentials.get("folder_id") or ""),
+                }
+            )
+            return result.model_dump() if hasattr(result, "model_dump") else dict(result)
+        except Exception as e:
+            logger.error(f"Cloud upload error: {e}")
+            return {"success": False, "error": str(e)}
 
     async def trigger_webhook(
         self,

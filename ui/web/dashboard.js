@@ -52,6 +52,14 @@ document.addEventListener("DOMContentLoaded", function () {
     traces: [],
     summary: { accounts_total: 0, trace_total: 0, fallback_count: 0 }
   };
+  var channelState = {
+    items: [],
+    catalog: [],
+    selectedId: "",
+    selectedType: "",
+    isDraft: false,
+    summary: { total: 0, enabled: 0, connected: 0, degraded: 0 }
+  };
   var autopilotState = {
     enabled: false,
     running: false,
@@ -65,6 +73,13 @@ document.addEventListener("DOMContentLoaded", function () {
   var packState = {
     packs: [],
     lastLoadedAt: 0
+  };
+  var toolsPolicyState = {
+    allow: [],
+    deny: [],
+    requireApproval: [],
+    defaultDeny: true,
+    defaults: {}
   };
   var initialMissionId = "";
   var initialTraceId = "";
@@ -262,6 +277,56 @@ document.addEventListener("DOMContentLoaded", function () {
     setTimeout(function () { window.URL.revokeObjectURL(url); }, 500);
   }
 
+  function safeDomId(value) {
+    return String(value || "").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  }
+
+  function parseCsvList(value) {
+    return String(value || "")
+      .split(/[\n,]/)
+      .map(function (item) { return String(item || "").trim(); })
+      .filter(Boolean);
+  }
+
+  function joinCsvList(items) {
+    return (Array.isArray(items) ? items : []).map(function (item) {
+      return String(item || "").trim();
+    }).filter(Boolean).join(", ");
+  }
+
+  function normalizeChannelType(value) {
+    return String(value || "").trim().toLowerCase();
+  }
+
+  function channelCatalogEntry(type) {
+    var wanted = normalizeChannelType(type);
+    var items = Array.isArray(channelState.catalog) ? channelState.catalog : [];
+    for (var i = 0; i < items.length; i++) {
+      if (normalizeChannelType(items[i] && items[i].type) === wanted) {
+        return items[i];
+      }
+    }
+    return null;
+  }
+
+  function channelItemLabel(item) {
+    var label = String((item && item.label) || (channelCatalogEntry(item && item.type) || {}).label || item.type || "Channel");
+    var ctype = String((item && item.type) || "");
+    return label + (ctype ? " · " + ctype : "");
+  }
+
+  function channelFieldValue(item, field) {
+    if (!item || !field) return "";
+    if (field.secret) return "";
+    var value = item[field.name];
+    if (value == null) return "";
+    return String(value);
+  }
+
+  function channelFieldInputId(fieldName) {
+    return "channel-field-" + safeDomId(fieldName);
+  }
+
   function providerReadyNote(ready, total, connected) {
     var providerText = total ? ready + " reachable" : "no providers";
     return providerText + " • " + connected + " connected";
@@ -275,14 +340,20 @@ document.addEventListener("DOMContentLoaded", function () {
     var connectedAccounts = (integrationState.accounts || []).filter(function (item) {
       return String(item.status || "").toLowerCase() === "ready";
     }).length;
+    var connectedChannels = (channelState.items || []).filter(function (item) {
+      return !!item.connected;
+    }).length;
+    var enabledChannels = (channelState.items || []).filter(function (item) {
+      return !!item.enabled;
+    }).length;
     var skillsEnabled = Number((skillCatalogState.summary && skillCatalogState.summary.enabled) || 0);
     var evidenceCount = Number((traceState.evidence || []).length || 0);
     var activeMissions = Number((missionState.overview && missionState.overview.active) || 0);
     var completedMissions = Number((missionState.overview && missionState.overview.completed) || 0);
     var autopilotRunning = !!autopilotState.running;
-    var demoReady = providersReady > 0 && skillsEnabled > 0;
-    var readiness = demoReady ? "Investor-ready" : (providersReady > 0 || skillsEnabled > 0 ? "Warming up" : "Setup needed");
-    var readinessNote = (autopilotRunning ? "Autopilot on" : "Autopilot idle") + " • " + activeMissions + " aktif • " + completedMissions + " tamamlanan";
+    var demoReady = providersReady > 0 && skillsEnabled > 0 && connectedChannels > 0;
+    var readiness = demoReady ? "Investor-ready" : ((providersReady > 0 || skillsEnabled > 0 || enabledChannels > 0) ? "Warming up" : "Setup needed");
+    var readinessNote = (autopilotRunning ? "Autopilot on" : "Autopilot idle") + " • " + activeMissions + " aktif • " + completedMissions + " tamamlanan • " + connectedChannels + "/" + enabledChannels + " channels";
     $("#hero-readiness").textContent = readiness;
     var noteEl = $("#hero-readiness-note");
     if (noteEl) noteEl.textContent = readinessNote;
@@ -305,6 +376,12 @@ document.addEventListener("DOMContentLoaded", function () {
     var connectedAccounts = (integrationState.accounts || []).filter(function (item) {
       return String(item.status || "").toLowerCase() === "ready";
     }).length;
+    var connectedChannels = (channelState.items || []).filter(function (item) {
+      return !!item.connected;
+    }).length;
+    var enabledChannels = (channelState.items || []).filter(function (item) {
+      return !!item.enabled;
+    }).length;
     var skillsEnabled = Number((skillCatalogState.summary && skillCatalogState.summary.enabled) || 0);
     var evidenceCount = Number((traceState.evidence || []).length || 0);
     var autopilotRunning = !!autopilotState.running;
@@ -318,6 +395,11 @@ document.addEventListener("DOMContentLoaded", function () {
         label: "Skills enabled",
         ok: skillsEnabled > 0,
         note: skillsEnabled ? skillsEnabled + " workflows active" : "Enable browser, desktop, calendar"
+      },
+      {
+        label: "Channels connected",
+        ok: connectedChannels > 0,
+        note: connectedChannels ? connectedChannels + " channel connected" : (enabledChannels ? enabledChannels + " enabled, runtime sync bekliyor" : "No messaging channel configured")
       },
       {
         label: "Integrations connected",
@@ -349,6 +431,8 @@ document.addEventListener("DOMContentLoaded", function () {
       next: next,
       providersReady: providersReady,
       providerTotal: providerTotal,
+      connectedChannels: connectedChannels,
+      enabledChannels: enabledChannels,
       connectedAccounts: connectedAccounts,
       skillsEnabled: skillsEnabled,
       evidenceCount: evidenceCount,
@@ -367,6 +451,7 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!next) return "Demo-ready: run a live mission, export the trace and share the link.";
     if (next.label === "Local model reachable") return "Connect a provider or start Ollama so the operator can run locally.";
     if (next.label === "Skills enabled") return "Enable browser, desktop and calendar skills for the first demo.";
+    if (next.label === "Channels connected") return "Configure Telegram, Slack, WhatsApp or WebChat from the Channels tab and sync runtime.";
     if (next.label === "Integrations connected") return "Connect one account such as Gmail or Calendar for a richer flow.";
     if (next.label === "Evidence trail present") return "Run a short demo to capture screenshots, video and artifacts.";
     if (next.label === "Autopilot running") return "Start autopilot so the system can brief, maintain and suggest proactively.";
@@ -1296,6 +1381,454 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
+  /* ================================================================
+     CHANNELS
+     ================================================================ */
+  function selectedChannelItem() {
+    var items = Array.isArray(channelState.items) ? channelState.items : [];
+    if (channelState.selectedId) {
+      for (var i = 0; i < items.length; i++) {
+        if (String(items[i].id || items[i].type || "") === String(channelState.selectedId)) {
+          return items[i];
+        }
+      }
+    }
+    if (channelState.isDraft) {
+      return null;
+    }
+    if (channelState.selectedType) {
+      for (var j = 0; j < items.length; j++) {
+        if (normalizeChannelType(items[j].type) === normalizeChannelType(channelState.selectedType)) {
+          return items[j];
+        }
+      }
+      return null;
+    }
+    return items.length ? items[0] : null;
+  }
+
+  function channelActionTone(item) {
+    if (!item) return "warn";
+    if (item.connected) return "ok";
+    if (item.enabled) return "warn";
+    return "warn";
+  }
+
+  function renderChannelsKPIs() {
+    var items = Array.isArray(channelState.items) ? channelState.items : [];
+    var total = items.length;
+    var enabled = items.filter(function (item) { return !!item.enabled; }).length;
+    var connected = items.filter(function (item) { return !!item.connected; }).length;
+    var degraded = items.filter(function (item) { return !!item.enabled && !item.connected; }).length;
+    channelState.summary = { total: total, enabled: enabled, connected: connected, degraded: degraded };
+    var el = $("#channel-kpis");
+    if (el) {
+      el.innerHTML =
+        mkKPI("Toplam", total) +
+        mkKPI("Enabled", enabled) +
+        mkKPI("Connected", connected) +
+        mkKPI("Degraded", degraded);
+    }
+    renderInvestorHero();
+  }
+
+  function renderChannelCatalog() {
+    var root = $("#channel-catalog");
+    if (!root) return;
+    var catalog = Array.isArray(channelState.catalog) ? channelState.catalog : [];
+    if (!catalog.length) {
+      root.innerHTML = '<div class="channel-empty">Catalog yüklenemedi.</div>';
+      return;
+    }
+    root.innerHTML = catalog.map(function (item) {
+      var fieldCount = Array.isArray(item.fields) ? item.fields.length : 0;
+      return (
+        '<article class="channel-catalog-item">' +
+          '<div class="channel-list-top">' +
+            '<div>' +
+              '<strong>' + esc(item.label || item.type || "Channel") + '</strong>' +
+              '<div class="channel-note">' + esc(item.notes || "") + '</div>' +
+            '</div>' +
+            '<span class="pill warn">' + esc(fieldCount) + ' fields</span>' +
+          '</div>' +
+          '<div class="channel-list-meta">' +
+            '<span>' + esc(item.type || "-") + '</span>' +
+            '<span>' + esc(fieldCount) + ' field</span>' +
+          '</div>' +
+          '<div class="btn-row">' +
+            '<button class="btn btn-p btn-sm js-channel-new" data-type="' + esc(item.type || "") + '">Yeni</button>' +
+          '</div>' +
+        '</article>'
+      );
+    }).join("");
+    root.querySelectorAll(".js-channel-new").forEach(function (btn) {
+      btn.addEventListener("click", function (evt) {
+        evt.preventDefault();
+        evt.stopPropagation();
+        startChannelDraft(btn.getAttribute("data-type"));
+      });
+    });
+  }
+
+  function renderChannelList() {
+    var root = $("#channel-list");
+    if (!root) return;
+    var items = Array.isArray(channelState.items) ? channelState.items : [];
+    if (!items.length) {
+      root.innerHTML = '<div class="channel-empty">Henüz kanal yok. Catalog’dan yeni kanal ekle.</div>';
+      return;
+    }
+    root.innerHTML = items.map(function (item) {
+      var active = String(item.id || item.type || "") === String(channelState.selectedId || "");
+      var tone = channelActionTone(item);
+      var statusText = item.connected ? "connected" : (item.enabled ? "enabled" : "disabled");
+      var metrics = item.message_metrics || {};
+      var meta = [
+        "status: " + String(item.status || "-"),
+        "fail: " + String(item.failure_rate_pct != null ? item.failure_rate_pct + "%" : "-"),
+        "last: " + String(item.last_activity || "-")
+      ];
+      return (
+        '<article class="channel-list-item' + (active ? " active" : "") + '" data-channel-id="' + esc(item.id || item.type || "") + '">' +
+          '<div class="channel-list-top">' +
+            '<div>' +
+              '<strong>' + esc(channelItemLabel(item)) + '</strong>' +
+              '<div class="channel-list-meta">' + meta.map(function (value) { return '<span>' + esc(value) + '</span>'; }).join("") + '</div>' +
+            '</div>' +
+            '<span class="pill ' + tone + '">' + esc(statusText) + '</span>' +
+          '</div>' +
+          '<div class="channel-list-meta">' +
+            '<span>recv ' + esc(metrics.received || 0) + '</span>' +
+            '<span>sent ' + esc(metrics.sent || 0) + '</span>' +
+            '<span>errors ' + esc((metrics.send_failures || 0) + (metrics.processing_errors || 0)) + '</span>' +
+          '</div>' +
+          '<div class="btn-row">' +
+            '<button class="btn btn-s btn-sm js-channel-edit" data-channel-id="' + esc(item.id || item.type || "") + '">Edit</button>' +
+            '<button class="btn btn-s btn-sm js-channel-test" data-channel-id="' + esc(item.id || item.type || "") + '">Test</button>' +
+            '<button class="btn btn-s btn-sm js-channel-toggle" data-channel-id="' + esc(item.id || item.type || "") + '" data-enabled="' + esc(!item.enabled) + '">' + (item.enabled ? "Disable" : "Enable") + '</button>' +
+            '<button class="btn btn-d btn-sm js-channel-delete" data-channel-id="' + esc(item.id || item.type || "") + '">Delete</button>' +
+          '</div>' +
+        '</article>'
+      );
+    }).join("");
+    root.querySelectorAll(".channel-list-item").forEach(function (card) {
+      card.addEventListener("click", function () {
+        selectChannel(card.getAttribute("data-channel-id"));
+      });
+    });
+    root.querySelectorAll(".js-channel-edit").forEach(function (btn) {
+      btn.addEventListener("click", function (evt) {
+        evt.preventDefault();
+        evt.stopPropagation();
+        selectChannel(btn.getAttribute("data-channel-id"));
+      });
+    });
+    root.querySelectorAll(".js-channel-test").forEach(function (btn) {
+      btn.addEventListener("click", function (evt) {
+        evt.preventDefault();
+        evt.stopPropagation();
+        testChannel(btn.getAttribute("data-channel-id"));
+      });
+    });
+    root.querySelectorAll(".js-channel-toggle").forEach(function (btn) {
+      btn.addEventListener("click", function (evt) {
+        evt.preventDefault();
+        evt.stopPropagation();
+        toggleChannel(btn.getAttribute("data-channel-id"), String(btn.getAttribute("data-enabled")) === "true");
+      });
+    });
+    root.querySelectorAll(".js-channel-delete").forEach(function (btn) {
+      btn.addEventListener("click", function (evt) {
+        evt.preventDefault();
+        evt.stopPropagation();
+        deleteChannel(btn.getAttribute("data-channel-id"));
+      });
+    });
+  }
+
+  function renderChannelEditor() {
+    var typeSelect = $("#channel-type");
+    var idInput = $("#channel-id");
+    var enabledInput = $("#channel-enabled");
+    var statusEl = $("#channel-editor-status");
+    var notesEl = $("#channel-notes");
+    var fieldsRoot = $("#channel-field-list");
+    if (!typeSelect || !idInput || !enabledInput || !statusEl || !notesEl || !fieldsRoot) return;
+
+    var catalog = Array.isArray(channelState.catalog) ? channelState.catalog : [];
+    if (!catalog.length) {
+      typeSelect.innerHTML = '<option value="">Loading...</option>';
+      fieldsRoot.innerHTML = '<div class="channel-empty">Channel catalog yükleniyor.</div>';
+      notesEl.textContent = "Catalog bekleniyor.";
+      return;
+    }
+
+    var current = selectedChannelItem();
+    var type = normalizeChannelType(channelState.selectedType || (current && current.type) || catalog[0].type);
+    var currentCatalog = channelCatalogEntry(type) || catalog[0];
+    if (!channelState.selectedType) {
+      channelState.selectedType = type;
+    }
+
+    typeSelect.innerHTML = catalog.map(function (item) {
+      return '<option value="' + esc(item.type || "") + '">' + esc((item.label || item.type || "Channel") + " — " + (item.type || "")) + '</option>';
+    }).join("");
+    typeSelect.value = type;
+
+    var editingId = String(channelState.selectedId || (current && (current.id || current.type)) || "");
+    var editingExisting = !!editingId && !!current;
+    if (editingExisting) {
+      idInput.value = String(current.id || current.type || type);
+      enabledInput.checked = !!current.enabled;
+      statusEl.textContent = "Editing";
+      statusEl.className = "pill " + channelActionTone(current);
+    } else {
+      if (!idInput.value || String(idInput.value).trim() === "") {
+        idInput.value = type;
+      }
+      enabledInput.checked = true;
+      statusEl.textContent = "New";
+      statusEl.className = "pill warn";
+    }
+
+    notesEl.textContent = String(currentCatalog && currentCatalog.notes ? currentCatalog.notes : "Secret alanları boş bırakırsan mevcut değer korunur.");
+
+    var fieldHtml = [];
+    var fields = Array.isArray(currentCatalog && currentCatalog.fields) ? currentCatalog.fields : [];
+    fields.forEach(function (field) {
+      if (!field || field.name === "id") return;
+      var name = String(field.name || "").trim();
+      if (!name) return;
+      var fieldId = channelFieldInputId(name);
+      var secret = !!field.secret;
+      var required = !!field.required;
+      var currentValue = channelFieldValue(current || {}, field);
+      var inputType = secret ? "password" : ((/port$/i.test(name) || /_port$/i.test(name)) ? "number" : "text");
+      var hint = secret ? "Boş bırakmak mevcut değeri korur." : (required ? "Zorunlu alan." : "Opsiyonel.");
+      var inputHtml = "";
+      if (type === "whatsapp" && name === "mode") {
+        inputHtml =
+          '<select class="sel" id="' + esc(fieldId) + '">' +
+            '<option value="bridge">bridge</option>' +
+            '<option value="cloud">cloud</option>' +
+          '</select>';
+      } else {
+        inputHtml = '<input class="sel" id="' + esc(fieldId) + '" type="' + esc(inputType) + '" placeholder="' + esc(field.label || name) + '" />';
+      }
+      fieldHtml.push(
+        '<label class="field">' +
+          '<span class="field-label">' + esc(field.label || name) + '</span>' +
+          inputHtml +
+          '<span class="field-hint">' + esc(hint) + '</span>' +
+        '</label>'
+      );
+    });
+    fieldsRoot.innerHTML = fieldHtml.length ? fieldHtml.join("") : '<div class="channel-empty">Bu kanal tipi için ekstra alan yok.</div>';
+
+    fields.forEach(function (field) {
+      if (!field || field.name === "id") return;
+      var name = String(field.name || "").trim();
+      var el = document.getElementById(channelFieldInputId(name));
+      if (!el) return;
+      if (type === "whatsapp" && name === "mode") {
+        el.value = String((current || {}).mode || "bridge");
+      } else if (!field.secret) {
+        el.value = channelFieldValue(current || {}, field);
+      } else {
+        el.value = "";
+      }
+    });
+  }
+
+  function selectChannel(channelId) {
+    var items = Array.isArray(channelState.items) ? channelState.items : [];
+    var found = null;
+    for (var i = 0; i < items.length; i++) {
+      if (String(items[i].id || items[i].type || "") === String(channelId || "")) {
+        found = items[i];
+        break;
+      }
+    }
+    if (found) {
+      channelState.selectedId = String(found.id || found.type || "");
+      channelState.selectedType = String(found.type || channelState.selectedType || "");
+      channelState.isDraft = false;
+    } else {
+      channelState.selectedId = "";
+      if (channelId) {
+        channelState.selectedType = String(channelId);
+      }
+      channelState.isDraft = true;
+    }
+    renderChannelList();
+    renderChannelEditor();
+  }
+
+  function startChannelDraft(type) {
+    channelState.selectedId = "";
+    channelState.selectedType = normalizeChannelType(type || channelState.selectedType || (channelState.catalog[0] && channelState.catalog[0].type) || "");
+    channelState.isDraft = true;
+    renderChannelList();
+    renderChannelEditor();
+  }
+
+  function readChannelDraft() {
+    var type = normalizeChannelType((document.getElementById("channel-type") || {}).value || channelState.selectedType || "");
+    var catalog = channelCatalogEntry(type) || { fields: [] };
+    var id = String((document.getElementById("channel-id") || {}).value || "").trim() || type;
+    var enabled = !!((document.getElementById("channel-enabled") || {}).checked);
+    var payload = {
+      type: type,
+      id: id,
+      enabled: enabled
+    };
+    (catalog.fields || []).forEach(function (field) {
+      if (!field || field.name === "id") return;
+      var name = String(field.name || "").trim();
+      if (!name) return;
+      var el = document.getElementById(channelFieldInputId(name));
+      if (!el) return;
+      var value = String(el.value || "").trim();
+      if (!value) {
+        return;
+      }
+      if (el.type === "number") {
+        var numeric = Number(value);
+        if (!Number.isNaN(numeric)) {
+          payload[name] = numeric;
+          return;
+        }
+      }
+      payload[name] = value;
+    });
+    return { channel: payload, clear_secret_fields: [] };
+  }
+
+  function saveChannel() {
+    var draft = readChannelDraft();
+    var current = selectedChannelItem();
+    if (!draft.channel.type) {
+      toast("Channel type gerekli", "err");
+      return Promise.resolve({ ok: false });
+    }
+    if (!draft.channel.id) {
+      toast("Channel id gerekli", "err");
+      return Promise.resolve({ ok: false });
+    }
+    var saveBtn = $("#channel-save");
+    if (saveBtn) saveBtn.disabled = true;
+    if (current && !channelState.isDraft) {
+      draft.original_id = String(current.id || current.type || "");
+      draft.original_type = String(current.type || "");
+    }
+    return POST("/api/channels/upsert", draft).then(function (res) {
+      if (res && res.ok) {
+        toast((res.channel && (res.channel.id || res.channel.type)) + " kaydedildi", "ok");
+        channelState.selectedId = String((res.channel && (res.channel.id || res.channel.type)) || draft.channel.id);
+        channelState.selectedType = String((res.channel && res.channel.type) || draft.channel.type);
+        channelState.isDraft = false;
+        return loadChannels();
+      }
+      toast((res && res.error) || "Channel kaydedilemedi", "err");
+      return res;
+    }).finally(function () {
+      if (saveBtn) saveBtn.disabled = false;
+    });
+  }
+
+  function toggleChannel(channelId, enabled) {
+    if (!channelId) {
+      toast("Channel seç", "err");
+      return Promise.resolve();
+    }
+    return POST("/api/channels/toggle", { id: channelId, enabled: !!enabled }).then(function (res) {
+      if (res && res.ok) {
+        toast(channelId + " " + (enabled ? "enabled" : "disabled"), "ok");
+        return loadChannels();
+      }
+      toast((res && res.error) || "Channel toggle başarısız", "err");
+      return res;
+    });
+  }
+
+  function deleteChannel(channelId) {
+    if (!channelId) {
+      toast("Channel seç", "err");
+      return Promise.resolve();
+    }
+    if (!confirm(channelId + " silinsin mi?")) return Promise.resolve();
+    return api("/api/channels/" + encodeURIComponent(channelId), { method: "DELETE", timeoutMs: timeoutMs }).then(function (res) {
+      if (res && res.ok) {
+        toast(channelId + " silindi", "info");
+        if (String(channelState.selectedId || "") === String(channelId)) {
+          channelState.selectedId = "";
+          channelState.isDraft = false;
+        }
+        return loadChannels();
+      }
+      toast((res && res.error) || "Channel silinemedi", "err");
+      return res;
+    });
+  }
+
+  function testChannel(channelId) {
+    var payload = {};
+    if (channelId) {
+      payload.channel = channelId;
+    } else {
+      payload.channel = "all";
+    }
+    return POST("/api/channels/test", payload).then(function (res) {
+      if (res && res.ok) {
+        toast(res.message || "Channel test tamamlandı", "ok");
+      } else {
+        toast((res && res.message) || (res && res.error) || "Channel test başarısız", "err");
+      }
+      return res;
+    });
+  }
+
+  function syncChannels() {
+    return POST("/api/channels/sync", {}).then(function (res) {
+      if (res && res.ok) {
+        toast("Channel runtime sync edildi", "ok");
+        return loadChannels();
+      }
+      toast((res && res.message) || (res && res.error) || "Channel sync başarısız", "err");
+      return res;
+    });
+  }
+
+  function loadChannels() {
+    return Promise.all([GET("/api/channels"), GET("/api/channels/catalog")]).then(function (results) {
+      var data = results[0] || {};
+      var catalogData = results[1] || {};
+      channelState.items = Array.isArray(data.channels) ? data.channels : [];
+      channelState.catalog = Array.isArray(catalogData.catalog) ? catalogData.catalog : [];
+      if (channelState.selectedId) {
+        var selectedExists = false;
+        for (var i = 0; i < channelState.items.length; i++) {
+          if (String(channelState.items[i].id || channelState.items[i].type || "") === String(channelState.selectedId)) {
+            selectedExists = true;
+            break;
+          }
+        }
+        if (!selectedExists) {
+          channelState.selectedId = channelState.items.length ? String(channelState.items[0].id || channelState.items[0].type || "") : "";
+        }
+        channelState.isDraft = false;
+      }
+      if (!channelState.selectedType) {
+        channelState.selectedType = String((selectedChannelItem() && selectedChannelItem().type) || (channelState.catalog[0] && channelState.catalog[0].type) || "");
+      }
+      renderChannelsKPIs();
+      renderChannelCatalog();
+      renderChannelList();
+      renderChannelEditor();
+      return data;
+    });
+  }
+
   function connectIntegration(options) {
     var opts = options || {};
     var providerEl = $("#integration-provider");
@@ -1817,7 +2350,7 @@ document.addEventListener("DOMContentLoaded", function () {
   /* ================================================================
      TABS
      ================================================================ */
-  var tabMap = { mission: "p-mission", trace: "p-trace", tools: "p-tools", integrations: "p-integrations", settings: "p-settings" };
+  var tabMap = { mission: "p-mission", trace: "p-trace", tools: "p-tools", integrations: "p-integrations", channels: "p-channels", settings: "p-settings" };
 
   function activateTab(name) {
     var key = String(name || "mission");
@@ -1911,6 +2444,7 @@ document.addEventListener("DOMContentLoaded", function () {
       var text = [
         "Elyan readiness: " + status + " (" + snapshot.complete + "/" + snapshot.total + ")",
         "Providers: " + snapshot.providersReady + "/" + snapshot.providerTotal,
+        "Channels: " + snapshot.connectedChannels + "/" + snapshot.enabledChannels,
         "Skills: " + snapshot.skillsEnabled,
         "Integrations: " + snapshot.connectedAccounts,
         "Evidence: " + snapshot.evidenceCount,
@@ -2009,6 +2543,34 @@ document.addEventListener("DOMContentLoaded", function () {
       if (integrationScopesInput) integrationScopesInput.value = integrationQuickConnectPlan(appName).scopes || integrationProviderPresetScopes(provider);
       connectIntegration({ appName: appName, provider: provider });
     });
+  });
+
+  var settingsRefreshBtn = $("#settings-refresh");
+  if (settingsRefreshBtn) settingsRefreshBtn.addEventListener("click", function () { loadSettings(); });
+  var channelsRefreshBtn = $("#channels-refresh");
+  if (channelsRefreshBtn) channelsRefreshBtn.addEventListener("click", function () { loadChannels(); });
+  var channelsSyncBtn = $("#channels-sync");
+  if (channelsSyncBtn) channelsSyncBtn.addEventListener("click", function () { syncChannels(); });
+  var channelTypeSelect = $("#channel-type");
+  if (channelTypeSelect) {
+    channelTypeSelect.addEventListener("change", function () {
+      channelState.selectedType = normalizeChannelType(channelTypeSelect.value || "");
+      channelState.selectedId = "";
+      channelState.isDraft = true;
+      renderChannelList();
+      renderChannelEditor();
+    });
+  }
+  var channelSaveBtn = $("#channel-save");
+  if (channelSaveBtn) channelSaveBtn.addEventListener("click", function () { saveChannel(); });
+  var channelTestBtn = $("#channel-test");
+  if (channelTestBtn) channelTestBtn.addEventListener("click", function () {
+    var current = selectedChannelItem();
+    testChannel(current ? (current.id || current.type) : (channelState.selectedType || ""));
+  });
+  var channelResetBtn = $("#channel-reset");
+  if (channelResetBtn) channelResetBtn.addEventListener("click", function () {
+    startChannelDraft(channelState.selectedType || (channelState.catalog[0] && channelState.catalog[0].type) || "");
   });
 
   /* ================================================================
@@ -2337,30 +2899,108 @@ document.addEventListener("DOMContentLoaded", function () {
     sel.value = cur;
   }
 
+  function renderToolPolicy() {
+    var allow = $("#s-policy-allow");
+    var deny = $("#s-policy-deny");
+    var approval = $("#s-policy-approval");
+    var defaultDeny = $("#s-default-deny");
+    var badge = $("#policy-default-deny");
+    if (allow) allow.value = joinCsvList(toolsPolicyState.allow || []);
+    if (deny) deny.value = joinCsvList(toolsPolicyState.deny || []);
+    if (approval) approval.value = joinCsvList(toolsPolicyState.requireApproval || []);
+    if (defaultDeny) defaultDeny.checked = !!toolsPolicyState.defaultDeny;
+    if (badge) {
+      badge.textContent = toolsPolicyState.defaultDeny ? "default deny" : "default allow";
+      badge.className = "pill " + (toolsPolicyState.defaultDeny ? "warn" : "ok");
+    }
+  }
+
   function loadSettings() {
-    return Promise.all([GET("/api/models"), GET("/api/agent/profile")]).then(function (rows) {
+    return Promise.all([GET("/api/models"), GET("/api/agent/profile"), GET("/api/tools/policy")]).then(function (rows) {
       var models = rows && rows[0] && rows[0].ok ? rows[0] : {};
       var profile = rows && rows[1] && rows[1].ok ? rows[1].profile || {} : {};
+      var policy = rows && rows[2] && rows[2].ok ? rows[2].policy || {} : {};
       var runtime = profile.runtime_policy || {};
       var rawStrategy = String(runtime.dashboard_strategy || "balanced").toLowerCase();
       var normalizedStrategy = rawStrategy;
       if (rawStrategy === "hızlı" || rawStrategy === "hizli") normalizedStrategy = "fast";
       else if (rawStrategy === "kalite") normalizedStrategy = "best";
       else if (rawStrategy === "dengeli") normalizedStrategy = "balanced";
+      var userProfile = profile.user_profile || {};
       settingsState = {
         primaryLLM: String(((models.default || {}).provider) || ""),
         strategy: normalizedStrategy || "balanced",
         language: String(profile.language || "tr"),
-        localFirst: !!runtime.model_local_first
+        localFirst: !!runtime.model_local_first,
+        name: String(profile.name || "Elyan"),
+        personality: String(profile.personality || "professional"),
+        preset: String(runtime.preset || "balanced"),
+        responseMode: String(runtime.response_mode || "friendly"),
+        responseLengthBias: String(userProfile.response_length_bias || "short"),
+        autonomous: !!profile.autonomous,
+        defaultRole: String(runtime.default_user_role || "operator"),
+        kvkkStrict: !!runtime.kvkk_strict_mode,
+        redactCloudPrompts: !!runtime.redact_cloud_prompts,
+        allowCloudFallback: !!runtime.allow_cloud_fallback,
+        enforceRBAC: !!runtime.enforce_rbac,
+        pathGuardEnabled: !!runtime.path_guard_enabled,
+        dangerousToolsEnabled: !!runtime.dangerous_tools_enabled,
+        requireConfirmationForRisky: !!runtime.require_confirmation_for_risky,
+        requireEvidenceForDangerous: !!runtime.require_evidence_for_dangerous,
+        shareManifestDefault: !!runtime.share_manifest_default,
+        shareAttachmentsDefault: !!runtime.share_attachments_default
       };
       var el = $("#s-primary");
       if (el) el.value = settingsState.primaryLLM || "";
+      var elName = $("#s-name");
+      if (elName) elName.value = settingsState.name || "";
+      var elPersonality = $("#s-personality");
+      if (elPersonality) elPersonality.value = settingsState.personality || "professional";
+      var elPreset = $("#s-preset");
+      if (elPreset) elPreset.value = settingsState.preset || "balanced";
       var el2 = $("#s-strategy");
       if (el2) el2.value = settingsState.strategy || "balanced";
+      var elResponseMode = $("#s-response-mode");
+      if (elResponseMode) elResponseMode.value = settingsState.responseMode || "friendly";
+      var elResponseLength = $("#s-response-length");
+      if (elResponseLength) elResponseLength.value = settingsState.responseLengthBias || "short";
       var el3 = $("#s-lang");
       if (el3) el3.value = settingsState.language || "tr";
+      var elRole = $("#s-role");
+      if (elRole) elRole.value = settingsState.defaultRole || "operator";
       var el4 = $("#s-local");
       if (el4) el4.checked = !!settingsState.localFirst;
+      var el5 = $("#s-autonomous");
+      if (el5) el5.checked = !!settingsState.autonomous;
+      var el6 = $("#s-kvkk");
+      if (el6) el6.checked = !!settingsState.kvkkStrict;
+      var el7 = $("#s-redact");
+      if (el7) el7.checked = !!settingsState.redactCloudPrompts;
+      var el8 = $("#s-cloud-fallback");
+      if (el8) el8.checked = !!settingsState.allowCloudFallback;
+      var el9 = $("#s-rbac");
+      if (el9) el9.checked = !!settingsState.enforceRBAC;
+      var el10 = $("#s-path-guard");
+      if (el10) el10.checked = !!settingsState.pathGuardEnabled;
+      var el11 = $("#s-dangerous");
+      if (el11) el11.checked = !!settingsState.dangerousToolsEnabled;
+      var el12 = $("#s-confirm-risk");
+      if (el12) el12.checked = !!settingsState.requireConfirmationForRisky;
+      var el13 = $("#s-evidence");
+      if (el13) el13.checked = !!settingsState.requireEvidenceForDangerous;
+      var el14 = $("#s-share-manifest");
+      if (el14) el14.checked = !!settingsState.shareManifestDefault;
+      var el15 = $("#s-share-attachments");
+      if (el15) el15.checked = !!settingsState.shareAttachmentsDefault;
+      toolsPolicyState = {
+        allow: Array.isArray(policy.allow) ? policy.allow : [],
+        deny: Array.isArray(policy.deny) ? policy.deny : [],
+        requireApproval: Array.isArray(policy.requireApproval) ? policy.requireApproval : [],
+        defaultDeny: !!policy.defaultDeny,
+        defaults: rows && rows[2] && rows[2].defaults ? rows[2].defaults : {}
+      };
+      renderToolPolicy();
+      renderInvestorHero();
     });
   }
 
@@ -2368,10 +3008,27 @@ document.addEventListener("DOMContentLoaded", function () {
   if (saveBtn) {
     saveBtn.addEventListener("click", function () {
       var s = {
+        name: ($("#s-name") || {}).value || "",
+        personality: ($("#s-personality") || {}).value || "professional",
         primaryLLM: ($("#s-primary") || {}).value || "",
+        preset: ($("#s-preset") || {}).value || "balanced",
         strategy: ($("#s-strategy") || {}).value || "balanced",
+        responseMode: ($("#s-response-mode") || {}).value || "friendly",
+        responseLengthBias: ($("#s-response-length") || {}).value || "short",
         language: ($("#s-lang") || {}).value || "tr",
-        localFirst: !!($("#s-local") || {}).checked
+        localFirst: !!($("#s-local") || {}).checked,
+        autonomous: !!($("#s-autonomous") || {}).checked,
+        defaultRole: ($("#s-role") || {}).value || "operator",
+        kvkkStrict: !!($("#s-kvkk") || {}).checked,
+        redactCloudPrompts: !!($("#s-redact") || {}).checked,
+        allowCloudFallback: !!($("#s-cloud-fallback") || {}).checked,
+        enforceRBAC: !!($("#s-rbac") || {}).checked,
+        pathGuardEnabled: !!($("#s-path-guard") || {}).checked,
+        dangerousToolsEnabled: !!($("#s-dangerous") || {}).checked,
+        requireConfirmationForRisky: !!($("#s-confirm-risk") || {}).checked,
+        requireEvidenceForDangerous: !!($("#s-evidence") || {}).checked,
+        shareManifestDefault: !!($("#s-share-manifest") || {}).checked,
+        shareAttachmentsDefault: !!($("#s-share-attachments") || {}).checked
       };
       var selectedProvider = s.primaryLLM || settingsState.primaryLLM || "";
       var selectedModel = "";
@@ -2379,15 +3036,45 @@ document.addEventListener("DOMContentLoaded", function () {
         if (!selectedModel && p && p.provider === selectedProvider) selectedModel = String(p.model || "");
       });
       if (!selectedModel && selectedProvider === "ollama") selectedModel = "llama3.2:3b";
+      var runtimePayload = {
+        name: s.name,
+        personality: s.personality,
+        autonomous: s.autonomous,
+        language: s.language,
+        response_mode: s.responseMode,
+        response_length_bias: s.responseLengthBias,
+        runtime_policy: {
+          preset: s.preset,
+          model_local_first: !!s.localFirst,
+          dashboard_strategy: s.strategy,
+          response_mode: s.responseMode,
+          response_friendly: s.responseMode === "friendly",
+          share_manifest_default: !!s.shareManifestDefault,
+          share_attachments_default: !!s.shareAttachmentsDefault,
+          kvkk_strict_mode: !!s.kvkkStrict,
+          redact_cloud_prompts: !!s.redactCloudPrompts,
+          allow_cloud_fallback: !!s.allowCloudFallback,
+          default_user_role: s.defaultRole,
+          enforce_rbac: !!s.enforceRBAC,
+          path_guard_enabled: !!s.pathGuardEnabled,
+          dangerous_tools_enabled: !!s.dangerousToolsEnabled,
+          require_confirmation_for_risky: !!s.requireConfirmationForRisky,
+          require_evidence_for_dangerous: !!s.requireEvidenceForDangerous
+        },
+        user_profile: {
+          response_length_bias: s.responseLengthBias
+        }
+      };
+      var policyPayload = {
+        defaultDeny: !!($("#s-default-deny") || {}).checked,
+        allow: parseCsvList(($("#s-policy-allow") || {}).value || ""),
+        deny: parseCsvList(($("#s-policy-deny") || {}).value || ""),
+        requireApproval: parseCsvList(($("#s-policy-approval") || {}).value || "")
+      };
       Promise.all([
         POST("/api/models", selectedProvider ? { provider: selectedProvider, model: selectedModel, sync_roles: true } : {}),
-        POST("/api/agent/profile", {
-          language: s.language,
-          runtime_policy: {
-            model_local_first: !!s.localFirst,
-            dashboard_strategy: s.strategy
-          }
-        })
+        POST("/api/agent/profile", runtimePayload),
+        POST("/api/tools/policy", policyPayload)
       ]).then(function (rows) {
         var failed = (rows || []).some(function (row) { return !row || row.ok === false; });
         if (failed) {
@@ -2395,8 +3082,15 @@ document.addEventListener("DOMContentLoaded", function () {
           return;
         }
         settingsState = s;
+        toolsPolicyState = {
+          allow: policyPayload.allow,
+          deny: policyPayload.deny,
+          requireApproval: policyPayload.requireApproval,
+          defaultDeny: !!policyPayload.defaultDeny,
+          defaults: toolsPolicyState.defaults || {}
+        };
         toast("Ayarlar kaydedildi", "ok");
-        refreshAll().then(function () { return loadSettings(); });
+        return refreshAll();
       });
     });
   }
@@ -2437,8 +3131,14 @@ document.addEventListener("DOMContentLoaded", function () {
             loadProviders();
           } else if (msg.event === "mission_event" || msg.event === "mission_overview" || msg.event === "mission_list") {
             loadMissionControl();
+          } else if (msg.event === "activity" && payload && payload.type && String(payload.type).indexOf("channel_") === 0) {
+            loadChannels();
           } else if (msg.event === "autopilot" || msg.event === "autopilot_action" || msg.event === "briefing" || msg.event === "suggestion" || msg.event === "task_review" || msg.event === "intervention" || msg.event === "automation_health" || msg.event === "reconcile") {
             loadAutopilot();
+          } else if (msg.event === "activity" && payload && payload.type === "agent_profile") {
+            loadSettings();
+          } else if (msg.event === "activity" && payload && payload.type === "tools_policy") {
+            loadSettings();
           }
           if (activeTab === "trace" && (msg.event === "mission_event" || msg.event === "activity" || msg.event === "tool_event" || msg.event === "telemetry" || msg.event === "history")) {
             appendTraceLive(msg.event || "event", payload);
@@ -2454,7 +3154,20 @@ document.addEventListener("DOMContentLoaded", function () {
      REFRESH & BOOT
      ================================================================ */
   function refreshAll() {
-    return Promise.all([loadMissionControl(), loadPackOverview("all"), loadProviders(), loadOllama(), loadHealth(), loadSkillCatalog(), loadMarketplace(""), refreshIntegrations(), loadAutopilot()]);
+    return Promise.all([
+      loadMissionControl(),
+      loadPackOverview("all"),
+      loadProviders(),
+      loadOllama(),
+      loadHealth(),
+      loadSkillCatalog(),
+      loadMarketplace(""),
+      refreshIntegrations(),
+      loadAutopilot(),
+      loadChannels()
+    ]).then(function () {
+      return loadSettings();
+    });
   }
 
   var refreshBtn = $("#g-refresh");
@@ -2491,7 +3204,6 @@ document.addEventListener("DOMContentLoaded", function () {
   // Boot
   refreshAll().then(function () {
     renderInvestorHero();
-    return loadSettings();
   });
   connectWS();
 

@@ -25,10 +25,14 @@ def browser_snapshot(output):
     async def _run():
         b = _get_browser()
         result = await b.screenshot(output_path=output)
-        if output:
-            click.echo(f"✓ Ekran görüntüsü kaydedildi: {output}")
+        if result.get("success"):
+            saved_path = str(result.get("screenshot_path") or output or "").strip()
+            if output:
+                click.echo(f"✓ Ekran görüntüsü kaydedildi: {saved_path or output}")
+            else:
+                click.echo(f"✓ Snapshot alındı: {result}")
         else:
-            click.echo(f"✓ Snapshot alındı: {result}")
+            click.echo(f"✗ {result.get('error', 'Ekran görüntüsü alınamadı.')}", err=True)
     try:
         asyncio.run(_run())
     except Exception as e:
@@ -46,7 +50,11 @@ def browser_screenshot(url, output, full_page):
         if url:
             await b.navigate(url)
         result = await b.screenshot(output_path=output, full_page=full_page)
-        click.echo(f"✓ Ekran görüntüsü: {output}")
+        if result.get("success"):
+            saved_path = str(result.get("screenshot_path") or output or "").strip()
+            click.echo(f"✓ Ekran görüntüsü: {saved_path or output}")
+        else:
+            click.echo(f"✗ {result.get('error', 'Ekran görüntüsü alınamadı.')}", err=True)
     try:
         asyncio.run(_run())
     except Exception as e:
@@ -236,11 +244,11 @@ def handle_browser(args) -> int:
                     print(f"Sayfa acildi: {result.get('url')}")
                     if title:
                         print(f"Baslik: {title}")
-                    print("Not: CLI browser screenshot su anda Playwright entegrasyonu olmadan goruntu dosyasi uretemiyor.")
+                    print("Ekran görüntüsü browser runtime ile alinabilir; output yolu verilirse dosya kaydedilir.")
                     return 0
                 print(result.get("error", "Sayfa acilamadi."))
                 return 1
-            print("URL verildiginde sayfa acilip ozetlenir. Tam screenshot icin operator/browser tool akisi kullanilmali.")
+            print("URL verilmedi. Mevcut browser oturumu varsa ekran görüntüsü alinabilir; yoksa önce browser navigate kullanin.")
             return 0
 
         if action in {"profiles", "list-profiles"}:

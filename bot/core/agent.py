@@ -220,7 +220,14 @@ class Agent:
         quick_intent = self.quick_intent.detect(user_input)
         if self._should_route_to_llm_chat(user_input, parsed_intent, quick_intent):
             full_prompt = f"Docs: {context_docs}\n\nUser: {user_input}" if context_docs else user_input
-            chat_resp = await self.llm.generate(full_prompt, role=role, history=history)
+            try:
+                if self.llm and hasattr(self.llm, "generate"):
+                    chat_resp = await self.llm.generate(full_prompt, role=role, history=history)
+                else:
+                    chat_resp = "Bu soruyu şu an yanıtlayamadım, lütfen tekrar dener misin?"
+            except Exception as exc:
+                logger.warning(f"Chat fallback failed: {exc}")
+                chat_resp = "Bu soruyu şu an yanıtlayamadım, lütfen tekrar dener misin?"
             await self._finalize_turn(
                 user_input=user_input,
                 response_text=chat_resp,
@@ -233,8 +240,35 @@ class Agent:
             return status_prefix + chat_resp
 
         # 8. Strategic Planning & Execution (Registry-based)
-        plan = await self.planner.create_plan(user_input, {})
-        
+        try:
+            plan = await self.planner.create_plan(user_input, {})
+        except Exception as exc:
+            logger.warning(f"Planner creation failed, falling back: {exc}")
+            if self._is_likely_chat_message(user_input) or self._is_information_question(user_input):
+                full_prompt = f"Docs: {context_docs}\n\nUser: {user_input}" if context_docs else user_input
+                try:
+                    if self.llm and hasattr(self.llm, "generate"):
+                        chat_resp = await self.llm.generate(full_prompt, role=role, history=history)
+                    else:
+                        chat_resp = "Bu soruyu şu an yanıtlayamadım, lütfen tekrar dener misin?"
+                except Exception:
+                    chat_resp = "Bu soruyu şu an yanıtlayamadım, lütfen tekrar dener misin?"
+                await self._finalize_turn(
+                    user_input=user_input,
+                    response_text=chat_resp,
+                    action="chat_fallback_planner_error",
+                    success=True,
+                    started_at=started_at,
+                    context={"route_role": role, "fallback": "planner_error_to_chat"},
+                )
+                _push("chat", "agent", user_input[:60], success=True)
+                if action_lock.is_locked:
+                    action_lock.unlock()
+                return status_prefix + chat_resp
+            if action_lock.is_locked:
+                action_lock.unlock()
+            return "Üzgünüm, bu isteği güvenli bir şekilde planlayamadım."
+
         quality = self.planner.evaluate_plan_quality(getattr(plan, "subtasks", []) or [], user_input)
         if not quality.get("safe_to_run", True):
             if self._is_information_question(user_input):
@@ -939,6 +973,8 @@ class Agent:
         if category in (_IC.CHAT, _IC.GREETING):
             return True
         if category == _IC.QUESTION and action in {"", "chat", "show_help", "unknown"}:
+            return True
+        if action in {"", "chat", "unknown"} and Agent._is_likely_chat_message(user_input):
             return True
         if action in {"", "chat", "unknown"} and Agent._is_information_question(user_input):
             return True

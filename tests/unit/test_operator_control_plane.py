@@ -24,6 +24,15 @@ class _RuntimeControl:
         }
 
 
+class _RuntimeControlWorkflow(_RuntimeControl):
+    async def prepare_turn(self, **kwargs):
+        payload = await super().prepare_turn(**kwargs)
+        payload["request_class"] = "workflow"
+        payload["execution_path"] = "deep"
+        payload["operator_trace"] = {"route_domain": "workflow"}
+        return payload
+
+
 class _ModelOrchestrator:
     def get_best_available(self, role):
         return {"provider": "ollama", "model": "llama3.2", "role": role}
@@ -147,3 +156,56 @@ def test_operator_control_plane_handle_returns_operator_outcome():
     assert outcome.artifacts[0]["path"] == "/tmp/out.txt"
     assert outcome.execution_path == "fast"
     assert outcome.model_runtime["selected_model"]["provider"] == "ollama"
+
+
+def test_operator_control_plane_attaches_task_plan_and_autonomy():
+    plane = OperatorControlPlane(
+        runtime_control=_RuntimeControlWorkflow(),
+        model_orchestrator=_ModelOrchestrator(),
+        policy_engine=_PolicyEngine(),
+        real_time_actuator=_Actuator(),
+    )
+
+    result = asyncio.run(
+        plane.plan_request(
+            request_id="req-3",
+            user_id="u1",
+            request="Araştırma yapıp kısa bir rapor hazırla",
+            channel="telegram",
+            device_id="mac",
+            context={"request_id": "req-3", "device_id": "mac", "provider": "ollama", "model": "llama3.2"},
+            capability_plan=SimpleNamespace(
+                domain="workflow",
+                confidence=0.89,
+                objective="research report",
+                workflow_id="research_report",
+                primary_action="research_document_delivery",
+                preferred_tools=["advanced_research"],
+                output_artifacts=["report"],
+                quality_checklist=["verify"],
+                learning_tags=["research"],
+                complexity_tier="medium",
+                suggested_job_type="workflow",
+                multi_agent_recommended=True,
+                orchestration_mode="multi_agent",
+                workflow_profile_applicable=True,
+                requires_design_phase=True,
+                requires_worktree=False,
+                content_kind="research_delivery",
+                output_formats=["md"],
+                style_profile="executive",
+                source_policy="trusted",
+                quality_contract=["citations"],
+                memory_scope="task_routed",
+                preview="research report",
+                requires_real_time=False,
+            ),
+            metadata={"channel": "telegram"},
+        )
+    )
+
+    assert result["autonomy"]["mode"] in {"auto", "auto-with-resume", "needs-consent", "needs-approval", "block"}
+    assert isinstance(result["task_plan"], dict)
+    assert isinstance(result["task_card"], dict)
+    assert result["operator_trace"]["task_plan_ready"] is True
+    assert result["task_plan"]["steps"]

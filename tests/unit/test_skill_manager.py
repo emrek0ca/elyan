@@ -50,6 +50,33 @@ def test_disable_skill_updates_enabled_set(tmp_path: Path, monkeypatch):
     assert "files" not in set(store.get("skills.enabled", []))
 
 
+def test_edit_skill_updates_manifest_and_enabled_state(tmp_path: Path, monkeypatch):
+    store = _mock_config(monkeypatch)
+    mgr = SkillManager()
+    mgr.skills_dir = tmp_path
+    mgr.skills_dir.mkdir(parents=True, exist_ok=True)
+    mgr.install_skill("files")
+
+    ok, msg, info = mgr.edit_skill(
+        "files",
+        {
+            "description": "Yeni açıklama",
+            "approval_level": 2,
+            "enabled": False,
+            "required_tools": ["write_file"],
+        },
+    )
+
+    assert ok is True
+    assert "güncellendi" in msg
+    assert info is not None
+    assert info["description"] == "Yeni açıklama"
+    assert info["approval_level"] == 2
+    assert info["required_tools"] == ["write_file"]
+    assert info["enabled"] is False
+    assert "files" not in set(store.get("skills.enabled", []))
+
+
 def test_check_reports_missing_tools(tmp_path: Path, monkeypatch):
     _mock_config(monkeypatch)
     mgr = SkillManager()

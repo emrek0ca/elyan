@@ -69,6 +69,8 @@ class QuickIntentDetector:
                 r'^(gerek yok|gerek yok|lazım değil|lazım degil|hayır gerek yok)\b',
                 r'^(elyan|abi|bro|kanka|dostum|arkadaş)\s*$',
                 r'^(dur|bekle|tamam tamam|okeyy|okey|heh|hı|hii|ha|ahh|ohh|eee|eeee)\b',
+                r'^(adın|adin|adın ne|adin ne|ismin|ismin ne|kimsin|kimsin|sen kimsin|sen kimsin|sen nesin|nesin sen)\b',
+                r'^(ne yapabiliyorsun|neler yapabiliyorsun|ne iş yapıyorsun|ne is yapıyorsun|hangi alanlarda|hangi alanlarda mesela|mesela|örnek ver|ornek ver|örnekler|ornekler)\b',
             ],
             IntentCategory.COMMAND: [
                 r'^/(status|help|stats|cancel|reset|screenshot)',
@@ -103,7 +105,7 @@ class QuickIntentDetector:
         # LLM requirement rules
         self.llm_required = {
             IntentCategory.GREETING: False,
-            IntentCategory.CHAT: True,  # Needs LLM but lightweight chat()
+            IntentCategory.CHAT: False,  # Quick conversational replies should stay on the fast path
             IntentCategory.COMMAND: False,
             IntentCategory.CALCULATION: False,
             IntentCategory.QUESTION: True,
@@ -152,13 +154,36 @@ class QuickIntentDetector:
             "ne yapıyorsun",
             "ne yaptın",
             "elyan",
+            "adın",
+            "adin",
+            "adın ne",
+            "adin ne",
+            "ismin",
+            "ismin ne",
+            "kimsin",
+            "kimsin",
+            "sen kimsin",
+            "sen kimsin",
+            "sen nesin",
+            "nesin sen",
+            "ne yapabiliyorsun",
+            "neler yapabiliyorsun",
+            "ne iş yapıyorsun",
+            "ne is yapıyorsun",
+            "hangi alanlarda",
+            "hangi alanlarda mesela",
+            "mesela",
+            "örnek ver",
+            "ornek ver",
+            "örnekler",
+            "ornekler",
         }
         if text_lower in direct_chat_phrases:
             detection_time = time.time() - start_time
             return QuickIntent(
                 category=IntentCategory.CHAT,
                 confidence=0.96,
-                requires_llm=True,
+                requires_llm=False,
                 estimated_complexity="trivial",
                 detection_time=detection_time,
             )

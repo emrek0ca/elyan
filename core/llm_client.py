@@ -14,7 +14,8 @@ from .intent_parser import IntentParser
 from .intent_classifier import get_classifier
 from .llm_optimizer import get_llm_optimizer
 from .pricing_tracker import get_pricing_tracker
-from .fast_response import FastResponseSystem, QuestionType
+from .fast_response import FastResponseSystem
+from core.conversation_context import get_conversation_context_manager
 from core.nlu_normalizer import normalize_turkish_text
 from core.command_hardening import (
     build_chat_fallback_message,
@@ -1146,8 +1147,30 @@ class LLMClient:
 
     async def chat(self, text: str, history: list = None, user_id: str = "local", system_prompt: str | None = None) -> str:
         """Kısa sohbet yanıtı üretir. cost_guard açıksa token bütçesini kısıtlar."""
-        fast = self.fast_response.get_fast_response(text)
-        if fast and fast.question_type == QuestionType.GREETING:
+        ctx_mgr = None
+        conversation_context = {}
+        try:
+            from core.conversation_context import get_conversation_context_manager
+            ctx_mgr = get_conversation_context_manager()
+            normalized_history = []
+            for item in list(history or []):
+                if not isinstance(item, dict):
+                    continue
+                if item.get("role") in {"user", "assistant"} and item.get("content"):
+                    normalized_history.append({"role": str(item.get("role")), "content": str(item.get("content") or "")})
+                    continue
+                user_message = str(item.get("user_message") or "").strip()
+                bot_response = str(item.get("bot_response") or "").strip()
+                if user_message:
+                    normalized_history.append({"role": "user", "content": user_message})
+                if bot_response:
+                    normalized_history.append({"role": "assistant", "content": bot_response})
+            conversation_context = ctx_mgr.extract_context(normalized_history)
+        except Exception:
+            conversation_context = {}
+
+        fast = self.fast_response.get_fast_response(text, context=conversation_context)
+        if fast and str(getattr(fast, "answer", "") or "").strip():
             answer = self._sanitize_chat_output(fast.answer)
             if answer:
                 return answer
@@ -1157,6 +1180,13 @@ class LLMClient:
         system = str(system_prompt or self._chat_system_prompt()).strip()
         history_block = build_chat_history_block(history, max_pairs=4)
         prompt_parts = [system]
+        context_block = ""
+        try:
+            context_block = ctx_mgr.build_context_prompt(conversation_context) if ctx_mgr and conversation_context else ""
+        except Exception:
+            context_block = ""
+        if context_block:
+            prompt_parts.append(f"Konuşma Bağlamı:\n{context_block}")
         if history_block:
             prompt_parts.append(history_block)
         prompt_parts.append(f"Kullanıcı: {text}")

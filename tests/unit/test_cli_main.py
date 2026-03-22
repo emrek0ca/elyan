@@ -46,6 +46,7 @@ def test_main_without_args_prints_cli_home(monkeypatch, capsys):
 
     assert code == 0
     assert "Elyan CLI hazir." in captured.out
+    assert "elyan launch" in captured.out
     assert "elyan gateway start --daemon" in captured.out
     assert "Router modeli: ollama / llama3.1:8b" in captured.out
 
@@ -88,6 +89,42 @@ def test_main_chat_command_starts_chat_session(monkeypatch):
 
     assert code == 0
     assert captured["prompt"] == "merhaba elyan"
+
+
+def test_setup_command_forwards_skip_deps_and_no_dashboard(monkeypatch):
+    captured = {}
+
+    def fake_start_onboarding(**kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr("cli.onboard.start_onboarding", fake_start_onboarding)
+
+    code = cli_main.main(["setup", "--skip-deps", "--no-dashboard"])
+
+    assert code == 0
+    assert captured["skip_dependencies"] is True
+    assert captured["open_dashboard"] is False
+
+
+def test_main_routes_launch_command(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)
+
+    def fake_run(args):
+        captured["port"] = getattr(args, "port", None)
+        captured["no_browser"] = getattr(args, "no_browser", False)
+        captured["ops"] = getattr(args, "ops", False)
+        return 0
+
+    monkeypatch.setattr("cli.commands.launch.run", fake_run, raising=False)
+
+    code = cli_main.main(["launch", "--port", "18888", "--no-browser", "--ops"])
+
+    assert code == 0
+    assert captured["port"] == 18888
+    assert captured["no_browser"] is True
+    assert captured["ops"] is True
 
 
 def test_main_rejects_desktop_command_and_suggests_dashboard(monkeypatch, capsys):

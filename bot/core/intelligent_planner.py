@@ -168,7 +168,10 @@ Return JSON array:
         match = re.search(r"\[[\s\S]*\]", str(response_text), re.DOTALL)
         if not match:
             return subtasks
-        actions = json.loads(match.group())
+        try:
+            actions = json.loads(match.group())
+        except Exception:
+            return subtasks
         if not isinstance(actions, list):
             return subtasks
 

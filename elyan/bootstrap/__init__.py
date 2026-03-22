@@ -29,8 +29,8 @@ def _workspace_metadata(workspace: Path, role: str, metadata: dict[str, Any] | N
         "source": "elyan-bootstrap",
         "enabled_skills": ["browser", "desktop", "calendar"],
         "default_models": {
-            "vision": "qwen2.5vl:7b",
-            "reasoning": "llama3.2",
+            "vision": "llava:7b",
+            "reasoning": "llama3.2:3b",
         },
     }
     if isinstance(metadata, dict):

@@ -38,6 +38,7 @@ TOP_LEVEL_COMMANDS = [
     "message",
     "service",
     "dashboard",
+    "launch",
     "autopilot",
     "lean",
     "packs",
@@ -160,16 +161,17 @@ def _print_cli_home() -> None:
 
     print("")
     print("Hizli baslangic:")
+    print("  elyan launch")
     if not gateway_running:
         print("  elyan gateway start --daemon")
     print("  elyan bootstrap status")
     print("  elyan bootstrap onboard")
+    print("  elyan chat")
+    print("  elyan doctor")
     print("  elyan packs list")
     print("  elyan quivr status")
     print("  elyan cloudflare-agents status")
     print("  elyan opengauss status")
-    print("  elyan chat")
-    print("  elyan doctor")
     print("  elyan status")
     print("  elyan setup --force")
 
@@ -288,6 +290,8 @@ def main(argv: list[str] | None = None):
         target.add_argument("--channel", metavar="CHANNEL")
         target.add_argument("--install-daemon", action="store_true")
         target.add_argument("--force", action="store_true")
+        target.add_argument("--skip-deps", action="store_true")
+        target.add_argument("--no-dashboard", action="store_true")
 
     # ── doctor ──────────────────────────────────────────────────────────
     p = sub.add_parser("doctor", help="Sistem tanılaması")
@@ -510,6 +514,12 @@ def main(argv: list[str] | None = None):
 
     # ── dashboard ───────────────────────────────────────────────────────
     p = sub.add_parser("dashboard", help="Web kontrol panelini aç")
+    p.add_argument("--port", type=int)
+    p.add_argument("--no-browser", action="store_true")
+    p.add_argument("--ops", action="store_true", help="Admin ops console ac")
+
+    # ── launch ─────────────────────────────────────────────────────────
+    p = sub.add_parser("launch", help="Gateway'i başlatıp dashboard'u aç")
     p.add_argument("--port", type=int)
     p.add_argument("--no-browser", action="store_true")
     p.add_argument("--ops", action="store_true", help="Admin ops console ac")
@@ -842,6 +852,12 @@ def main(argv: list[str] | None = None):
             ops=getattr(args, "ops", False),
         )
 
+    elif args.command == "launch":
+        from cli.commands import launch
+        result = launch.run(args)
+        if isinstance(result, int):
+            return result
+
     elif args.command == "autopilot":
         from cli.commands import autopilot
         result = autopilot.run_autopilot(args)
@@ -884,6 +900,8 @@ def main(argv: list[str] | None = None):
             headless=getattr(args, "headless", False),
             channel=getattr(args, "channel", None),
             install_daemon=getattr(args, "install_daemon", False),
+            skip_dependencies=getattr(args, "skip_deps", False),
+            open_dashboard=not getattr(args, "no_dashboard", False),
             force=getattr(args, "force", False),
         )
         if not ok:

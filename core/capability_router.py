@@ -162,6 +162,7 @@ class CapabilityRouter:
         "lean": "formal_methods",
         "cloudflare_agents": "code_project",
         "quivr": "code_project",
+        "opengauss": "database_ops",
         "general": "communication",
     }
 
@@ -255,6 +256,11 @@ class CapabilityRouter:
             "quivr", "quivr-core", "second brain", "brain.from_files",
             "retrievalconfig", "retrieval config", "megaparse", "ask your brain",
             "knowledge base", "personal assistant",
+        ],
+        "opengauss": [
+            "opengauss", "openGauss", "gaussdb", "database", "db", "sql",
+            "schema", "migration", "migrate", "migrations", "query", "gsql",
+            "backup", "restore", "replication",
         ],
         "full_stack_delivery": [
             "full stack", "uçtan uca", "uctan uca", "production", "deployment",
@@ -361,6 +367,22 @@ class CapabilityRouter:
             "output_artifacts": ["brain_py", "quivr_chat_py", "basic_rag_workflow_yaml", "requirements_txt", "sample_docs"],
             "quality_checklist": ["grounded_answers", "retrieval_config", "source_coverage", "file_ingestion", "deployability"],
             "learning_tags": ["rag", "knowledge_base", "second_brain", "documents"],
+        },
+        "opengauss": {
+            "objective": "provision_containerized_database_workspace",
+            "workflow_id": "opengauss_database_workflow",
+            "primary_action": "opengauss_scaffold",
+            "preferred_tools": [
+                "opengauss_status",
+                "opengauss_project",
+                "opengauss_scaffold",
+                "opengauss_query",
+                "opengauss_workflow",
+                "create_software_project_pack",
+            ],
+            "output_artifacts": ["docker_compose", "schema_sql", "env_example", "query_script", "backup_script", "restore_script"],
+            "quality_checklist": ["schema_integrity", "connection_safety", "migration_safety", "rollback_plan", "traceability"],
+            "learning_tags": ["database", "sql", "opengauss", "devops"],
         },
         "email": {
             "objective": "manage_email_workflow_with_traceability",
@@ -585,6 +607,8 @@ class CapabilityRouter:
             return "code_project"
         if domain == "quivr":
             return "code_project"
+        if domain == "opengauss":
+            return "database_project"
         return "task"
 
     @staticmethod
@@ -639,6 +663,10 @@ class CapabilityRouter:
             add("md")
         if domain == "quivr" and not formats:
             add("md")
+        if domain == "opengauss" and not formats:
+            add("yml")
+            add("sql")
+            add("sh")
         return formats or ["docx"]
 
     @staticmethod
@@ -660,6 +688,8 @@ class CapabilityRouter:
             return "implementation"
         if domain == "quivr":
             return "implementation"
+        if domain == "opengauss":
+            return "operational"
         if any(marker in low for marker in ("analitik", "analytical", "detaylı", "detayli", "scientific", "bilimsel")):
             return "analytical"
         if any(marker in low for marker in ("brief", "kısa", "kisa", "özet", "ozet", "summary")):
@@ -734,6 +764,14 @@ class CapabilityRouter:
                 "source_coverage",
                 "file_ingestion",
                 "deployability",
+            ]
+        if domain == "opengauss":
+            return [
+                "schema_integrity",
+                "migration_safety",
+                "connection_safety",
+                "rollback_plan",
+                "traceability",
             ]
         if content_kind == "web_project":
             return [
@@ -959,9 +997,9 @@ class CapabilityRouter:
             suggested_job_type=suggested_job_type,
             multi_agent_recommended=multi_agent_recommended,
             orchestration_mode="multi_agent" if multi_agent_recommended else "single_agent",
-            workflow_profile_applicable=best_domain in {"code", "api_integration", "full_stack_delivery", "lean", "cloudflare_agents", "quivr"},
-            requires_design_phase=best_domain in {"code", "api_integration", "full_stack_delivery", "lean", "cloudflare_agents", "quivr"},
-            requires_worktree=best_domain in {"full_stack_delivery", "cloudflare_agents", "quivr"},
+            workflow_profile_applicable=best_domain in {"code", "api_integration", "full_stack_delivery", "lean", "cloudflare_agents", "quivr", "opengauss"},
+            requires_design_phase=best_domain in {"code", "api_integration", "full_stack_delivery", "lean", "cloudflare_agents", "quivr", "opengauss"},
+            requires_worktree=best_domain in {"full_stack_delivery", "cloudflare_agents", "quivr", "opengauss"},
             content_kind=request_contract.content_kind,
             output_formats=list(request_contract.output_formats or []),
             style_profile=request_contract.style_profile,

@@ -143,11 +143,15 @@ def main(argv: list[str] | None = None):
     # ── skills ──────────────────────────────────────────────────────────
     p = sub.add_parser("skills", help="Beceri yönetimi")
     p.add_argument("action", nargs="?",
-                   choices=["list", "info", "install", "enable", "disable", "update", "remove", "search", "check"])
+                   choices=["list", "info", "install", "enable", "disable", "update", "edit", "remove", "search", "check"])
     p.add_argument("name", nargs="?")
     p.add_argument("--available", action="store_true")
     p.add_argument("--enabled", dest="enabled_only", action="store_true")
     p.add_argument("--all", dest="update_all", action="store_true")
+    p.add_argument("--set", dest="set_values", action="append", default=[], help="key=value manifest alanı güncelle")
+    p.add_argument("--file", dest="file", metavar="JSON_FILE", help="Manifest güncellemesi için JSON dosyası")
+    p.add_argument("--replace", action="store_true", help="Manifesti tamamen verilen alanlarla değiştir")
+    p.add_argument("--json", action="store_true")
 
     # ── security ────────────────────────────────────────────────────────
     p = sub.add_parser("security", help="Güvenlik araçları")

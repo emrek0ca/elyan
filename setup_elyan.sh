@@ -240,7 +240,7 @@ REPO_DIR="${INSTALL_DIR}/repo"
 
 source "$VENV_DIR/bin/activate"
 cd "$REPO_DIR"
-python3 -m core.agent "$@"
+python3 -m cli.main "$@"
 EOF
 
         chmod +x "$LAUNCHER"
@@ -263,7 +263,7 @@ fi
 
 source "$VENV_DIR/bin/activate"
 cd "$REPO_DIR"
-python3 "$REPO_DIR/scripts/cli.py" "$@"
+python3 -m cli.main "$@"
 EOF
 
     chmod +x "$CLI_WRAPPER"
@@ -536,6 +536,17 @@ main() {
     create_activation_script
     create_launch_script
     verify_installation
+
+    print_header "Bootstrapping Canonical Elyan Runtime"
+    if [ -x "$VENV_DIR/bin/elyan" ]; then
+        if "$VENV_DIR/bin/elyan" bootstrap onboard --headless; then
+            success "Canonical bootstrap onboarding completed"
+        else
+            warning "Canonical bootstrap onboarding could not complete"
+        fi
+    else
+        warning "Canonical Elyan launcher not found, skipping bootstrap onboarding"
+    fi
 
     # Run tests
     if command -v pytest &> /dev/null; then

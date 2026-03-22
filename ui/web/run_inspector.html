@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Elyan Run Inspector</title>
+  <link rel="stylesheet" href="/ui/web/ops_console.css" />
+  <style>
+    .run-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; }
+    .step-card { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    .step-header { display: flex; justify-content: space-between; margin-bottom: 0.5rem; }
+    .step-details { font-family: monospace; font-size: 0.9rem; background: #000; padding: 0.5rem; border-radius: 4px; overflow-x: auto; }
+    .verification-tag { margin-top: 0.5rem; font-weight: bold; }
+    .log-entry { font-family: monospace; font-size: 0.85rem; border-left: 2px solid #444; padding-left: 1rem; margin-bottom: 0.25rem; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="run-header">
+      <div>
+        <p class="eyebrow"><a href="/ops" style="color: inherit; text-decoration: none;">&larr; BACK TO OPS</a></p>
+        <h1 id="run-title">Run Inspector</h1>
+        <p id="run-meta" class="muted">Loading run data...</p>
+      </div>
+      <div id="run-status-pill" class="pill">PENDING</div>
+    </header>
+
+    <div class="workspace" style="grid-template-columns: 1fr 350px;">
+      <main class="panel">
+        <div class="panel-head">
+          <h2>Execution Timeline</h2>
+        </div>
+        <div id="execution-timeline">
+          <!-- Steps will be rendered here -->
+        </div>
+      </main>
+
+      <aside class="panel">
+        <div class="panel-head">
+          <h2>Run Metadata</h2>
+        </div>
+        <div id="run-details" class="detail-block">
+          <!-- Metadata details -->
+        </div>
+        
+        <div class="panel-head" style="margin-top: 2rem;">
+          <h2>Structured Logs</h2>
+        </div>
+        <div id="structured-logs" style="max-height: 500px; overflow-y: auto;">
+          <!-- Logs will be rendered here -->
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    const runId = new URLSearchParams(window.location.search).get('run_id');
+    
+    async function loadRun() {
+      if (!runId) return;
+      
+      try {
+        const response = await fetch(`/api/v2/runs`);
+        const data = await response.json();
+        const run = data.runs.find(r => r.run_id === runId);
+        
+        if (!run) {
+          document.getElementById('run-title').textContent = "Run Not Found";
+          return;
+        }
+        
+        renderRun(run);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    function renderRun(run) {
+      document.getElementById('run-title').textContent = `Run ${run.run_id}`;
+      document.getElementById('run-meta').textContent = `Session: ${run.session_id} | Created: ${new Date(run.created_at * 1000).toLocaleString()}`;
+      
+      const pill = document.getElementById('run-status-pill');
+      pill.textContent = run.status.toUpperCase();
+      pill.className = `pill ${run.status === 'completed' ? 'ok' : (run.status === 'failed' ? 'err' : 'warn')}`;
+      
+      const details = document.getElementById('run-details');
+      details.innerHTML = `
+        <p><strong>Run ID:</strong> ${run.run_id}</p>
+        <p><strong>Session ID:</strong> ${run.session_id}</p>
+        <p><strong>Started:</strong> ${run.started_at ? new Date(run.started_at * 1000).toLocaleTimeString() : '-'}</p>
+        <p><strong>Finished:</strong> ${run.finished_at ? new Date(run.finished_at * 1000).toLocaleTimeString() : '-'}</p>
+        <p><strong>Event IDs:</strong> ${run.event_ids.join(', ')}</p>
+      `;
+      
+      if (run.error) {
+        details.innerHTML += `<div class="pill err" style="margin-top: 1rem;">Error: ${run.error.message}</div>`;
+      }
+    }
+
+    // In a real implementation, we'd also fetch specific run logs and steps
+    loadRun();
+    setInterval(loadRun, 5000);
+  </script>
+</body>
+</html>

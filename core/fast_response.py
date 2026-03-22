@@ -74,20 +74,33 @@ class FastResponseSystem:
 
         # Identity patterns
         self.identity_patterns = [
-            (r'\b(sen kimsin|adın ne|kimsin sen|nesin sen)\b',
-             "Ben Elyan, senin akilli asistaninim. Dosya islemleri, uygulama kontrolu, "
-             "web arastirma, ekran goruntusu ve daha bircok konuda yardimci olabilirim."),
-            (r'\b(ne yapabilirsin|yeteneklerin|neler yapabilirsin|ozelliklerin)\b',
+            (r'^(sen kimsin|adın ne|adin ne|adın|adin|kimsin sen|kimsin|sen nesin|nesin sen|ismin ne|ismin)\b',
+             "Ben Elyan'ım. Bilgisayarda dosya işlemleri, uygulama kontrolü, web araştırma, entegrasyon bağlama, ekran kontrolü ve çok adımlı görev planlama yapabilirim."),
+            (r'\b(ne yapabilirsin|yeteneklerin|neler yapabilirsin|özelliklerin|ozelliklerin|ne iş yapıyorsun|ne is yapıyorsun|hangi alanlarda)\b',
              "Yapabileceklerim:\n"
-             "- Uygulama acma/kapatma\n"
-             "- Dosya okuma/yazma/arama\n"
-             "- Web arastirma\n"
-             "- Ekran goruntusu alma\n"
-             "- Sistem bilgisi\n"
-             "- Not ve animsatici\n"
-             "- Belge ozeti ve analizi\n"
-             "- Ses/parlaklik/WiFi kontrolu"),
+             "- Dosya okuma, yazma, düzenleme ve arama\n"
+             "- Uygulama açma/kapatma ve pencere yönetimi\n"
+             "- Web araştırma ve özetleme\n"
+             "- Google, e-posta ve sosyal entegrasyonlar\n"
+             "- Takvim, hatırlatıcı ve scheduler işleri\n"
+             "- Ekran kontrolü ve gerçek zamanlı otomasyon\n"
+             "- Çok adımlı görev planlama ve sub-agent orkestrasyonu"),
         ]
+
+        self.followup_patterns = [
+            r'\b(hangi alanlarda|hangi alanlarda mesela|mesela|örnek ver|ornek ver|örnekler|ornekler|birkaç örnek|bir kac ornek|biraz daha|daha fazla örnek|daha fazla ornek|ne gibi|nerelerde|nerelerde kullanılır|nerelerde kullanilir)\b',
+        ]
+
+        self.capability_overview = (
+            "Yapabileceklerim:\n"
+            "- Dosya okuma, yazma, düzenleme ve arama\n"
+            "- Uygulama açma/kapatma ve pencere yönetimi\n"
+            "- Web araştırma ve özetleme\n"
+            "- Google, e-posta ve sosyal entegrasyonlar\n"
+            "- Takvim, hatırlatıcı ve scheduler işleri\n"
+            "- Ekran kontrolü ve gerçek zamanlı otomasyon\n"
+            "- Çok adımlı görev planlama ve sub-agent orkestrasyonu"
+        )
 
         # Time/Date patterns
         self.time_patterns = [
@@ -146,6 +159,11 @@ class FastResponseSystem:
             if re.search(pattern, question_lower):
                 return True, QuestionType.DEFINITION
 
+        # Check capability follow-ups and examples
+        for pattern in self.followup_patterns:
+            if re.search(pattern, question_lower):
+                return True, QuestionType.DEFINITION
+
         # Check time/date
         for pattern, _ in self.time_patterns:
             if re.search(pattern, question_lower):
@@ -167,7 +185,7 @@ class FastResponseSystem:
 
         return False, QuestionType.UNKNOWN
 
-    def get_fast_response(self, question: str) -> Optional[FastResponse]:
+    def get_fast_response(self, question: str, context: Optional[Dict[str, Any]] = None) -> Optional[FastResponse]:
         """Get fast response if possible"""
         start_time = time.time()
         self.stats["total_requests"] += 1
@@ -177,6 +195,11 @@ class FastResponseSystem:
 
         if not can_answer:
             return None
+
+        if q_type == QuestionType.DEFINITION and context:
+            contextual_answer = self._build_topic_answer_from_context(question_lower, context=context)
+            if contextual_answer:
+                return self._finalize_fast_response(contextual_answer, q_type, start_time)
 
         answer = None
         from .response_tone import get_varied_greeting, natural_response
@@ -240,16 +263,60 @@ class FastResponseSystem:
         if not answer and q_type == QuestionType.CALCULATION:
             answer = self._calculate(question_lower)
 
+        if not answer and q_type == QuestionType.DEFINITION and context:
+            answer = self._build_topic_answer_from_context(question_lower, context=context)
+
         if not answer:
             return None
 
+        return self._finalize_fast_response(answer, q_type, start_time)
+
+    def _build_topic_answer_from_context(self, question: str, context: Optional[Dict[str, Any]] = None) -> str:
+        ctx = dict(context or {})
+        low = normalize_turkish_text(question)
+        last_topic = str(ctx.get("last_topic") or "").strip().lower()
+        last_task = str(ctx.get("last_task") or "").strip()
+        last_app = str(ctx.get("last_app") or "").strip()
+        last_url = str(ctx.get("last_url") or "").strip()
+        last_file = str(ctx.get("last_file") or "").strip()
+
+        if not last_topic and not (last_task or last_app or last_url or last_file):
+            return ""
+
+        if any(marker in low for marker in ("hangi alanlarda", "mesela", "örnek", "ornek", "hangi alanlarda mesela", "ne gibi", "nerelerde")):
+            if last_topic:
+                if any(marker in last_topic for marker in ("yapay zeka", "ai", "machine learning", "makine öğrenmesi", "makine ogrenmesi")):
+                    return (
+                        "Örneğin sağlık, eğitim, finans, müşteri hizmetleri, ulaşım, üretim ve yazılım geliştirmede kullanılıyor. "
+                        "İstersen bunlardan birini seçip kısa örneklerle açayım."
+                    )
+                if any(marker in last_topic for marker in ("dosya", "file", "klasör", "folder")):
+                    return "Dosya tarafında klasör tarama, içerik okuma, yazma, toplu düzenleme, yeniden adlandırma ve yedekleme örnekleri verebilirim."
+                if any(marker in last_topic for marker in ("google", "gmail", "calendar", "drive", "docs", "sheets", "slides", "chat")):
+                    return "Google tarafında Gmail, Calendar, Drive, Docs, Sheets, Slides ve Chat üzerinden örnekler verebilirim."
+                if any(marker in last_topic for marker in ("browser", "web", "internet", "site", "tarayıcı", "tarayici")):
+                    return "Tarayıcı tarafında site açma, form doldurma, veri çekme, ekran doğrulama ve otomatik akış örnekleri verebilirim."
+                return f"{last_topic} için örnekler, avantajlar, riskler ve otomasyon akışı üzerinden devam edebilirim."
+
+            if last_task or last_app or last_url or last_file:
+                return "Önceki konuya göre örnekleri uyarlayabilirim. İstersen bunu dosya işlemleri, uygulama kontrolü, web araştırma, entegrasyonlar veya gerçek zamanlı ekran otomasyonu üzerinden açayım."
+
+            return self.capability_overview
+
+        if any(marker in low for marker in ("sen kimsin", "adın ne", "adin ne", "adın", "adin", "ismin ne", "ismin", "kimsin sen", "kimsin", "sen nesin", "nesin sen")):
+            return "Ben Elyan'ım. Bilgisayarda dosya işlemleri, uygulama kontrolü, web araştırma, entegrasyon bağlama, takvim/e-posta yönetimi, gerçek zamanlı ekran kontrolü ve çok adımlı görev planlama yapabilirim."
+
+        if last_topic or last_task or last_app or last_url or last_file:
+            return "Bu konuya göre dosya işlemleri, uygulama kontrolü, web araştırma, entegrasyonlar ve çok adımlı görevlerde yardımcı olabilirim. İstersen örnekleri son konuya göre uyarlayayım."
+
+        return self.capability_overview
+
+    def _finalize_fast_response(self, answer: str, q_type: QuestionType, start_time: float) -> FastResponse:
         response_time = time.time() - start_time
 
-        # Update stats
         self.stats["fast_responses"] += 1
         self.stats["by_type"][q_type.value] = self.stats["by_type"].get(q_type.value, 0) + 1
 
-        # Update average response time
         total_fast = self.stats["fast_responses"]
         old_avg = self.stats["avg_response_time"]
         self.stats["avg_response_time"] = (old_avg * (total_fast - 1) + response_time) / total_fast
@@ -262,6 +329,59 @@ class FastResponseSystem:
             response_time=response_time,
             question_type=q_type
         )
+
+    def _build_contextual_capability_answer(self, question: str, context: Optional[Dict[str, Any]] = None) -> str:
+        """Answer capability/follow-up questions with conversation context when possible."""
+        ctx = dict(context or {})
+        low = normalize_turkish_text(question)
+        last_topic = str(ctx.get("last_topic") or "").strip()
+        last_task = str(ctx.get("last_task") or "").strip()
+        last_app = str(ctx.get("last_app") or "").strip()
+        last_url = str(ctx.get("last_url") or "").strip()
+        last_file = str(ctx.get("last_file") or "").strip()
+
+        if any(marker in low for marker in ("hangi alanlarda", "mesela", "örnek", "ornek", "hangi alanlarda mesela", "ne gibi", "nerelerde")):
+            if last_topic:
+                topic = last_topic.lower()
+                if any(marker in topic for marker in ("yapay zeka", "ai", "machine learning", "makine öğrenmesi", "makine ogrenmesi")):
+                    return (
+                        "Örneğin sağlık, eğitim, finans, müşteri hizmetleri, ulaşım, üretim ve yazılım geliştirmede kullanılıyor. "
+                        "İstersen bunlardan birini seçip kısa örneklerle açayım."
+                    )
+                if any(marker in topic for marker in ("dosya", "file", "klasör", "folder")):
+                    return (
+                        "Dosya tarafında klasör tarama, içerik okuma, yazma, toplu düzenleme, yeniden adlandırma ve yedekleme örnekleri verebilirim."
+                    )
+                if any(marker in topic for marker in ("google", "gmail", "calendar", "drive", "docs", "sheets", "slides", "chat")):
+                    return (
+                        "Google tarafında Gmail, Calendar, Drive, Docs, Sheets, Slides ve Chat üzerinden örnekler verebilirim."
+                    )
+                if any(marker in topic for marker in ("browser", "web", "internet", "site", "tarayıcı", "tarayici")):
+                    return (
+                        "Tarayıcı tarafında site açma, form doldurma, veri çekme, ekran doğrulama ve otomatik akış örnekleri verebilirim."
+                    )
+                return f"{last_topic} için örnekler, avantajlar, riskler ve otomasyon akışı üzerinden devam edebilirim."
+
+            if last_task or last_app or last_url or last_file:
+                return (
+                    "Önceki konuya göre örnekleri uyarlayabilirim. İstersen bunu dosya işlemleri, uygulama kontrolü, web araştırma, entegrasyonlar veya gerçek zamanlı ekran otomasyonu üzerinden açayım."
+                )
+
+            return self.capability_overview
+
+        if any(marker in low for marker in ("sen kimsin", "adın ne", "adin ne", "adın", "adin", "ismin ne", "ismin", "kimsin sen", "kimsin", "sen nesin", "nesin sen")):
+            return (
+                "Ben Elyan'ım. Bilgisayarda dosya işlemleri, uygulama kontrolü, web araştırma, entegrasyon bağlama, takvim/e-posta yönetimi, "
+                "gerçek zamanlı ekran kontrolü ve çok adımlı görev planlama yapabilirim."
+            )
+
+        if last_topic or last_task or last_app or last_url or last_file:
+            return (
+                "Bu konuya göre dosya işlemleri, uygulama kontrolü, web araştırma, entegrasyonlar ve çok adımlı görevlerde yardımcı olabilirim. "
+                "İstersen örnekleri son konuya göre uyarlayayım."
+            )
+
+        return self.capability_overview
 
     def _is_calculation(self, question: str) -> bool:
         """Check if question is a calculation"""
