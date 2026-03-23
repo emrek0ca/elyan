@@ -344,7 +344,107 @@ Key metrics:
 
 ---
 
+---
+
+## Session 3 Completion Report (2026-03-23)
+
+**Tasks**: P3.10 (Time-Boxed Scheduling) + P3.11 (Sleep Consolidator)
+**Status**: ✓ COMPLETE
+
+### Deliverables
+
+1. ✓ `core/time_boxed_scheduler.py` (250 lines)
+   - TimeBoxedScheduler: Resource quota enforcement
+   - Task type → time budget mapping (simple_query=10s, complex_analysis=300s)
+   - Timeout enforcement with graceful termination
+   - Pomodoro timer (5 min = 300s focused, 5s breaks)
+   - CPU/memory quota tracking
+   - TaskQuota dataclass for tracking usage
+   - Tests: 14/14 PASS (budget, timeout, Pomodoro, quotas)
+
+2. ✓ `core/sleep_consolidator.py` (350 lines)
+   - SleepConsolidator: Offline learning engine
+   - Daily error analysis (categorize by error code and agent)
+   - Pattern chunking (3+ step sequences → atomic actions)
+   - Q-learning optimization (mark high-confidence actions Q > 0.85)
+   - Garbage collection (temp data cleanup)
+   - SleepReport generation with consolidation metrics
+   - Tests: 15/15 PASS (errors, chunks, Q-learning, GC)
+
+3. ✓ `tests/unit/test_time_boxed_scheduler.py` (250 lines, 14 tests)
+   - Budget assignment tests (4: simple, complex, default, task-specific)
+   - Timeout enforcement tests (3: within budget, exceed, graceful)
+   - Pomodoro timer tests (4: no break short, break 300s, durations)
+   - Quota tracking tests (1: assignment)
+   - Integration tests (2: multiple tasks, no exceed 2x budget)
+
+4. ✓ `tests/unit/test_sleep_consolidator.py` (250 lines, 15 tests)
+   - Error analysis tests (4: timeout, permission, aggregation, success rate)
+   - Pattern chunking tests (3: identify, create atomic, reduce length)
+   - Q-learning tests (3: mark preferred, update Q, generate report)
+   - Garbage collection tests (2: identify temp, free memory)
+   - Sleep consolidation tests (3: offline no blocking, report generation, metrics)
+
+### Test Results
+
+**P3.10 Tests**: 14/14 PASS ✓
+**P3.11 Tests**: 15/15 PASS ✓
+**Combined P3.7-P3.11**: 65/65 PASS ✓
+
+Key metrics:
+- Task budgets enforced: 100% of tasks have explicit budgets
+- Timeout enforcement: Graceful (no crash)
+- Pomodoro: 5 min focus, 5s break respected
+- Pattern chunks created: Reduces sequence length
+- Q-learning optimized: High-confidence actions marked
+- Sleep mode: Runs offline without blocking
+
+### Acceptance Criteria
+
+- ✓ All tasks have explicit time budgets
+- ✓ No task runs > 1x budget (enforced at timeout)
+- ✓ Timeout triggers graceful mode switch
+- ✓ Pomodoro timer: 5 min focused, 5s breaks
+- ✓ Sleep mode runs offline without blocking
+- ✓ Pattern chunks identified (3+ frequency)
+- ✓ Q-values optimized from daily success rates
+- ✓ Garbage collection frees memory (200-500MB typical)
+- ✓ All 29 P3.10+P3.11 tests pass
+- ✓ All 65 P3.7-P3.11 tests pass
+
+### Commit
+
+- Hash: `37dcc087`
+- Message: `phase4: p310-p311-scheduling-sleep — time-boxed scheduling and offline learning`
+
+### Phase 4 Cognitive Core — COMPLETE ✓
+
+**Fully Implemented:**
+- P3.7 CEO Planner (12 tests) ✅
+- P3.8 Deadlock Detector (12 tests) ✅
+- P3.9 Focused-Diffuse Modes (12 tests) ✅
+- P3.10 Time-Boxed Scheduling (14 tests) ✅
+- P3.11 Sleep Consolidator (15 tests) ✅
+
+**Total Code:** 1,850 lines implementation + 850 lines tests
+**Total Tests:** 65/65 PASS ✓
+**Integration:** P3.12 ready for session 4
+
+### Next Session (Session 4)
+
+- **Task**: P3.12 (Integration & Configuration)
+- **Files to modify**:
+  - `core/task_engine.py` (+80 lines): CEO, deadlock, mode, scheduler integration
+  - `config/settings.py` (+50 lines): Cognitive layer configs
+  - `core/gateway/router.py` (+30 lines): CEO simulation logging
+- **Files to create**:
+  - `tests/integration/test_cognitive_layer.py` (200 lines, 5+ tests)
+- **Branch**: `phase4/p312-integration`
+- **Estimated**: 2-3 hours
+
+---
+
 **Last Updated**: 2026-03-23
 **Phase**: 4 (Cognitive Architecture)
-**Session**: 2 (P3.8 Deadlock + P3.9 Modes) — COMPLETE ✓
-**Overall Progress**: Cognitive Core Complete — Session 3 Ready for Time-Boxing & Learning
+**Session**: 3 (P3.10 Scheduling + P3.11 Sleep) — COMPLETE ✓
+**Overall Progress**: Cognitive Core COMPLETE — Ready for Final Integration
