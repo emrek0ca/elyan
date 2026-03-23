@@ -13,10 +13,13 @@ from core.multi_agent.router import agent_router
 from core.proactive.intervention import get_intervention_manager
 from .channel_capabilities import resolve_channel_capabilities
 from core.channel_delivery import channel_delivery_bridge
+from core.runtime.lifecycle import run_lifecycle_manager
 from config.settings import ELYAN_DIR
 from utils.logger import get_logger
+from core.observability.logger import get_structured_logger
 
 logger = get_logger("gateway_router")
+slog = get_structured_logger("gateway_router")
 
 class GatewayRouter:
     """Orchestrates message flow between adapters and the AI Agent pool."""
@@ -311,6 +314,33 @@ class GatewayRouter:
         logger.info(f"Adapter registered: {channel_type}")
 
     async def handle_incoming_message(self, message: UnifiedMessage):
+        """Safe wrapper for message processing that guarantees a response on critical failure."""
+        try:
+            await self._handle_incoming_message_unsafe(message)
+        except Exception as e:
+            logger.error(f"Global unhandled error in gateway router: {e}", exc_info=True)
+            try:
+                self._increment_counter(message.channel_type, "processing_errors")
+            except Exception:
+                pass
+            
+            try:
+                from core.gateway.server import push_activity
+                push_activity("error", message.channel_type, f"Critical: {e}"[:60], success=False)
+            except Exception:
+                pass
+
+            error_resp = UnifiedResponse(
+                text="⚠️ Sistemde anlık bir teknik arıza oluştu (Gateway Error). Lütfen logları kontrol edin veya daha sonra tekrar deneyin.",
+                format="plain"
+            )
+            try:
+                channel_id = str(getattr(message, "channel_id", "") or "")
+                await self.send_outgoing_response(message.channel_type, channel_id, error_resp)
+            except Exception as final_e:
+                logger.error(f"Failed to send global error response: {final_e}")
+
+    async def _handle_incoming_message_unsafe(self, message: UnifiedMessage):
         """Callback triggered by any adapter when a message is received."""
         from core.protocol.events import MessageReceived, SessionResolved, ActorIdentity
         from core.session_engine import session_manager
@@ -389,29 +419,28 @@ class GatewayRouter:
             return
             
         session_id = event.metadata.get("session_id", "sess_default")
-        run_id = run_lifecycle_manager.get_run_id_for_event(event.event_id) # I need to check if this method exists or adjust
+        run_id = None
+        # Note: run_lifecycle_manager.get_run_id_for_event() doesn't exist, need to track runs differently
+        # For now, create new run if needed
+        if run_lifecycle_manager:
+            run = run_lifecycle_manager.create_run(session_id, event.event_id)
+            run_id = run.run_id
         
         # In v2, we hand off to orchestrator if it's a "task"
         # For now, we still use the legacy agent for simple chat, but orchestrator for anything complex.
-        
-        # Simplified: Use TaskOrchestrator for everything to test the new spine
-        from core.gateway.server import get_gateway_server # I need to find a way to get the server instance
-        # ... actually, the router is part of the server.
-        
-        # Let's check how GatewayRouter gets the agent.
-        # It's in self.agent.
-        
-        # I'll update the orchestrator integration later.
-        # For now, I'll stick to the legacy logic but ensure it runs inside the lane.
+        # Note: TaskOrchestrator integration deferred - use legacy agent path for now
+        # Router is part of the server, agent accessible via self.default_agent or agent_router
         
         message = UnifiedMessage(
+            id=event.event_id or secrets.token_hex(12),
             text=event.text,
             user_id=event.user_id,
+            user_name=event.user_id,  # Fallback: use user_id as user_name
             channel_type=event.channel,
-            attachments=event.attachments,
-            metadata=event.metadata
+            channel_id=event.channel_id,
+            attachments=event.attachments or [],
+            metadata=event.metadata or {}
         )
-        message.channel_id = event.channel_id
 
         try:
             agent = await agent_router.route_message(message.channel_type, message.user_id)

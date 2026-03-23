@@ -43,6 +43,9 @@ from .task_contract import build_task_contract
 from .artifact_quality_engine import get_artifact_quality_engine
 from .goal_graph import get_goal_graph_planner
 from .operator_policy import get_operator_policy_engine
+from .cognitive_layer_integrator import get_cognitive_integrator
+from .adaptive_tuning import get_adaptive_tuning
+from .performance_cache import get_cache
 from config.settings_manager import SettingsPanel
 from security.validator import validate_input, sanitize_input
 from security.audit import get_audit_logger
@@ -96,6 +99,7 @@ class TaskDefinition:
     dependencies: List[str] = field(default_factory=list)
     is_risky: bool = False
     requires_approval: bool = False
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class TaskEngine:
@@ -123,12 +127,53 @@ class TaskEngine:
         self.goal_graph_planner = get_goal_graph_planner()
         self.operator_policy_engine = get_operator_policy_engine()
 
+        # Phase 4: Cognitive Layer Integration
+        self.cognitive_integrator = get_cognitive_integrator()
+
+        # Phase 5: Adaptive Tuning & Performance Optimization
+        self.adaptive_tuning = get_adaptive_tuning()
+        self.cache = get_cache()
+
+        # Cognitive tracing for all tasks
+        self.cognitive_traces: Dict[str, Any] = {}
+
     def _privacy_flags(self) -> Dict[str, bool]:
         return {
             "strict": bool(self.settings.get("privacy_mode_strict", True)),
             "redact_storage": bool(self.settings.get("privacy_redact_storage", True)),
             "redact_logs": bool(self.settings.get("privacy_redact_logs", True)),
         }
+
+    def _infer_task_type(self, action: str) -> str:
+        """
+        Map action name to task type for time budgeting.
+
+        Task types:
+        - simple_query: <2s (search, info, calculation)
+        - file_operation: ~30s (file read/write, directory ops)
+        - api_call: ~20s (network requests, API calls)
+        - complex_analysis: ~300s (ML, data processing, synthesis)
+        """
+        action_lower = (action or "").lower()
+
+        # File operations (check first - has highest precedence)
+        if any(x in action_lower for x in ["file", "directory", "folder", "list_files", "read_file", "write_file", "copy_file", "move_file", "delete_file"]):
+            return "file_operation"
+
+        # API calls (check before generic patterns)
+        if any(x in action_lower for x in ["api", "http", "request", "fetch", "fetch_", "upload_", "download_"]):
+            return "api_call"
+
+        # Complex operations (requires LLM or heavy processing)
+        if any(x in action_lower for x in ["analyze", "process", "generate", "create_", "transform", "convert", "compile", "synthesis", "research", "learn"]):
+            return "complex_analysis"
+
+        # Simple queries (fast, no heavy processing)
+        if any(x in action_lower for x in ["search", "info", "get_", "calculate", "time", "date", "weather", "ask", "tell"]):
+            return "simple_query"
+
+        # Default
+        return "general"
 
     def _should_redact_for_cloud_llm(self) -> bool:
         if not self.llm:
@@ -326,8 +371,15 @@ class TaskEngine:
             capability_domain = str(execution_req.get("capability_domain", "general"))
             capability_objective = str(execution_req.get("primary_objective", "solve_user_task_reliably"))
 
-            # 2. Intent Analysis
-            intent_result = await self._analyze_intent(user_input, local_context)
+            # 2. Intent Analysis (with caching)
+            intent_cache_key = f"intent:{user_input[:100]}"
+            cached_intent = self.cache.get(intent_cache_key)
+            if cached_intent:
+                logger.info(f"Cache HIT: Intent for '{user_input[:50]}...'")
+                intent_result = cached_intent
+            else:
+                intent_result = await self._analyze_intent(user_input, local_context)
+                self.cache.set(intent_cache_key, intent_result)
             decompose_tried = False
             planner_route_used = False
 
@@ -353,6 +405,38 @@ class TaskEngine:
                     metadata={"type": "chat", "intent": intent_result},
                     execution_time_ms=elapsed_ms
                 )
+
+            # 2.5. Phase 4: CEO Planner Simulation (Cognitive Layer)
+            # CEO simulates execution before running (neurobiology: prefrontal cortex)
+            if self.settings.get("cognitive_layer_enabled", True):
+                action = intent_result.get("action", "unknown")
+                params = intent_result.get("params", {})
+
+                # Phase 5: Get adaptive tuning recommendations for budget
+                task_type = self._infer_task_type(action)
+                default_budget = 120.0  # Default 120 seconds
+                recommended_budget = self.adaptive_tuning.get_recommended_budget(task_type, default_budget)
+                preferred_mode = self.adaptive_tuning.get_preferred_mode(task_type)
+
+                local_context["adaptive_budget_recommendation"] = recommended_budget
+                local_context["adaptive_mode_preference"] = preferred_mode
+                local_context["adaptive_budget_ms"] = int(recommended_budget * 1000)
+
+                ceo_result = await self.cognitive_integrator.simulate_task_execution(
+                    task_id=f"ceo_sim_{action[:20]}",
+                    action=action,
+                    params=params,
+                    context=local_context
+                )
+                if ceo_result.get("success"):
+                    if ceo_result.get("conflicts_detected"):
+                        logger.warning(f"CEO: Conflicts detected - {ceo_result['conflicts_detected']}")
+                        local_context["ceo_conflicts"] = ceo_result["conflicts_detected"]
+                    if ceo_result.get("error_scenarios"):
+                        logger.info(f"CEO: Predicted error scenarios - {ceo_result['error_scenarios']}")
+                        local_context["ceo_errors"] = ceo_result["error_scenarios"]
+                else:
+                    logger.warning(f"CEO simulation failed: {ceo_result.get('reason')}")
 
             # 3. Task Decomposition or Cognitive Bypass (v15.0/v16.0)
             is_complex = self._is_complex_query(user_input)
@@ -383,7 +467,16 @@ class TaskEngine:
                 if tasks:
                     logger.info(f"Goal-graph deterministic workflow selected ({len(tasks)} tasks)")
                 else:
-                    tasks = await self._decompose_tasks(user_input, intent_result, local_context)
+                    # Task decomposition with caching
+                    decomp_cache_key = f"decompose:{user_input[:100]}:{intent_result.get('action', 'unknown')}"
+                    cached_tasks = self.cache.get(decomp_cache_key)
+                    if cached_tasks:
+                        logger.info(f"Cache HIT: Task decomposition for '{user_input[:50]}...'")
+                        tasks = cached_tasks
+                    else:
+                        tasks = await self._decompose_tasks(user_input, intent_result, local_context)
+                        if tasks:
+                            self.cache.set(decomp_cache_key, tasks)
 
             if not tasks:
                 # İlk deneme başarısızsa bir kez daha LLM decomposition dene (zorla)
@@ -468,6 +561,20 @@ class TaskEngine:
                         "plan_preview": plan_preview,
                     }
                 )
+
+            # 5.5. Phase 4: Time-Boxed Scheduler - Assign budgets
+            if self.settings.get("cognitive_layer_enabled", True):
+                for task in ordered_tasks:
+                    task_type = self._infer_task_type(task.action)
+                    budget_result = self.cognitive_integrator.assign_time_budget(
+                        task_id=task.id,
+                        action=task.action,
+                        task_type=task_type
+                    )
+                    if budget_result.get("success"):
+                        task.metadata = task.metadata or {}
+                        task.metadata["cognitive_budget_seconds"] = budget_result.get("budget_seconds")
+                        logger.info(f"Scheduler: {task.id} budget = {budget_result.get('budget_seconds')}s ({task_type})")
 
             pipeline_id = self.pipeline_state.start(
                 user_id=str(user_id or "unknown"),
@@ -589,6 +696,16 @@ class TaskEngine:
                 )
             except Exception as learning_exc:
                 logger.debug(f"learning record_outcome failed: {learning_exc}")
+
+            # Phase 5: Sleep Consolidation - Check if offline learning should happen
+            if self.settings.get("cognitive_layer_enabled", True) and self.settings.get("sleep_consolidation_enabled", False):
+                try:
+                    # Check if consolidation is due (e.g., daily, after N tasks, etc.)
+                    # For now, we log that it's available
+                    logger.debug("Sleep consolidation available for offline learning")
+                    # In production, would schedule based on time/task count
+                except Exception as sleep_exc:
+                    logger.debug(f"Sleep consolidation check failed: {sleep_exc}")
 
             return TaskResult(
                 success=execution_result["success"],
@@ -1813,7 +1930,68 @@ JSON ciktisi (baska hicbir sey yazma):
                             )
                         if notify_callback:
                             await self._emit_notify(notify_callback, f" {task_def.description} hatası: {result.get('error')}")
-                            
+
+                    # Phase 4: Cognitive Layer - Monitor execution for deadlocks and mode switching
+                    if self.settings.get("cognitive_layer_enabled", True):
+                        execution_duration_ms = result.get("execution_time_ms", 0) if isinstance(result, dict) else 0
+                        if execution_duration_ms == 0:
+                            # Estimate duration if not provided
+                            execution_duration_ms = 1000  # Default to 1 second
+
+                        error_code = result.get("error") if not result.get("success") else None
+
+                        # Check for deadlock
+                        deadlock_result = await self.cognitive_integrator.monitor_execution(
+                            task_id=task_def.id,
+                            execution_success=result.get("success", False),
+                            execution_duration_ms=execution_duration_ms,
+                            error_code=error_code,
+                            agent_id=task_def.action
+                        )
+
+                        if deadlock_result.get("deadlock_detected"):
+                            logger.warning(f"Deadlock detected for {task_def.id}: {deadlock_result.get('recovery_action')}")
+                            result["cognitive_deadlock_detected"] = True
+                            result["cognitive_recovery_action"] = deadlock_result.get("recovery_action")
+
+                        # Check timeout
+                        timeout_result = await self.cognitive_integrator.check_execution_timeout(
+                            task_id=task_def.id,
+                            duration_ms=execution_duration_ms
+                        )
+                        if timeout_result.get("timeout"):
+                            logger.warning(f"Task {task_def.id} exceeded budget: {execution_duration_ms}ms")
+                            result["cognitive_timeout"] = True
+
+                        # Evaluate mode switch
+                        mode_result = await self.cognitive_integrator.evaluate_mode_switch(
+                            execution_success=result.get("success", False),
+                            execution_duration_ms=execution_duration_ms,
+                            error_code=error_code
+                        )
+                        if mode_result.get("switched"):
+                            logger.info(f"Mode switch: {mode_result.get('reason')}")
+                            result["cognitive_mode_switched"] = True
+                            result["cognitive_mode_before"] = mode_result.get("mode_before")
+                            result["cognitive_mode_after"] = mode_result.get("mode_after")
+
+                    # Phase 5: Adaptive Tuning - Record task outcome for learning
+                    try:
+                        task_type = self._infer_task_type(task_def.action)
+                        current_mode = getattr(self.cognitive_integrator, 'current_mode', 'FOCUSED')
+                        deadlock = deadlock_result.get("deadlock_detected", False) if self.settings.get("cognitive_layer_enabled", True) else False
+
+                        self.adaptive_tuning.record_task_outcome(
+                            task_type=task_type,
+                            actual_duration=execution_duration_ms / 1000.0,  # Convert to seconds
+                            budgeted_duration=120.0,  # Default budget (can be refined)
+                            mode=current_mode,
+                            success=result.get("success", False),
+                            deadlock_detected=deadlock
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to record adaptive tuning: {e}")
+
                     return {
                         "task_id": task_def.id,
                         "action": task_def.action,
