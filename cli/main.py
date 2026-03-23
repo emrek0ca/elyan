@@ -8,6 +8,11 @@ import sys
 from difflib import get_close_matches
 from pathlib import Path
 
+try:
+    import typer
+except ImportError:
+    typer = None
+
 from core.dependencies.autoinstall_hook import activate as _activate_autoinstall_hook
 
 _activate_autoinstall_hook()
@@ -60,6 +65,8 @@ TOP_LEVEL_COMMANDS = [
     "code",
     "workflow",
     "ux",
+    "approve",
+    "runs",
 ]
 
 COMMAND_SUGGESTION_OVERRIDES = {
@@ -752,6 +759,34 @@ def main(argv: list[str] | None = None):
     p.add_argument("--multimodal", nargs="*", help="Multimodal inputs (images, audio, docs)")
     p.add_argument("--yes", action="store_true")
 
+    # ── approve ──────────────────────────────────────────────────────────
+    p = sub.add_parser("approve", help="Approval System — Beklemeye alan onayları yönet")
+    sub_approve = p.add_subparsers(dest="subcommand", help="Subcommand")
+
+    p_pending = sub_approve.add_parser("pending", help="Beklemede olan onayları listele")
+    p_pending.add_argument("--output", "-o", choices=["json", "table"], help="Output formatı")
+
+    p_approve = sub_approve.add_parser("approve", help="Onay isteğini onayla")
+    p_approve.add_argument("request_id", help="Approval request ID")
+
+    p_deny = sub_approve.add_parser("deny", help="Onay isteğini reddet")
+    p_deny.add_argument("request_id", help="Approval request ID")
+
+    # ── runs ─────────────────────────────────────────────────────────────
+    p = sub.add_parser("runs", help="Run Inspector — Çalıştırma geçmişini görüntüle")
+    sub_runs = p.add_subparsers(dest="subcommand", help="Subcommand")
+
+    p_list = sub_runs.add_parser("list", help="Çalıştırmaları listele")
+    p_list.add_argument("--limit", "-l", type=int, default=20, help="Maksimum çalıştırma sayısı")
+    p_list.add_argument("--status", "-s", help="Status'e göre filtrele")
+    p_list.add_argument("--output", "-o", choices=["json", "table"], help="Output formatı")
+
+    p_inspect = sub_runs.add_parser("inspect", help="Çalıştırma detaylarını görüntüle")
+    p_inspect.add_argument("run_id", help="Run ID")
+
+    p_cancel = sub_runs.add_parser("cancel", help="Çalıştırmayı iptal et")
+    p_cancel.add_argument("run_id", help="Run ID")
+
     # ════════════════════════════════════════════════════════════════════
     if argv:
         first = str(argv[0]).strip()
@@ -1192,6 +1227,42 @@ def main(argv: list[str] | None = None):
             level=getattr(args, "level", "all"),
             filter_term=getattr(args, "filter", None),
         )
+
+    elif args.command == "approve":
+        from cli.commands import approve
+        try:
+            if args.subcommand == "pending":
+                approve.pending(output=getattr(args, "output", None))
+            elif args.subcommand == "approve":
+                approve.approve(request_id=args.request_id)
+            elif args.subcommand == "deny":
+                approve.deny(request_id=args.request_id)
+            else:
+                approve.pending(output=None)
+        except Exception as e:
+            if typer and isinstance(e, typer.Exit):
+                return e.exit_code or 0
+            raise
+
+    elif args.command == "runs":
+        from cli.commands import runs
+        try:
+            if args.subcommand == "list":
+                runs.list_runs(
+                    limit=args.limit,
+                    status=getattr(args, "status", None),
+                    output=getattr(args, "output", None)
+                )
+            elif args.subcommand == "inspect":
+                runs.inspect(run_id=args.run_id)
+            elif args.subcommand == "cancel":
+                runs.cancel(run_id=args.run_id)
+            else:
+                runs.list_runs(limit=20, status=None, output=None)
+        except Exception as e:
+            if typer and isinstance(e, typer.Exit):
+                return e.exit_code or 0
+            raise
 
     else:
         parser.print_help()

@@ -362,6 +362,425 @@ class DashboardAPIv1:
                 "error": str(e)
             }
 
+    # ===== Approval System Endpoints =====
+
+    def get_pending_approvals(self) -> Dict[str, Any]:
+        """GET /api/v1/approvals/pending"""
+        try:
+            from core.security.approval_engine import get_approval_engine
+            engine = get_approval_engine()
+            pending = engine.get_pending_approvals()
+            return {
+                "success": True,
+                "count": len(pending),
+                "approvals": pending
+            }
+        except Exception as e:
+            logger.error(f"Error getting pending approvals: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def resolve_approval(self, request_id: str, approved: bool, resolver_id: str) -> Dict[str, Any]:
+        """POST /api/v1/approvals/resolve"""
+        try:
+            from core.security.approval_engine import get_approval_engine
+            engine = get_approval_engine()
+            success = engine.resolve_approval(request_id, approved, resolver_id)
+            if success:
+                return {
+                    "success": True,
+                    "message": f"Approval {'approved' if approved else 'denied'}"
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "Approval request not found or already resolved"
+                }
+        except Exception as e:
+            logger.error(f"Error resolving approval: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def bulk_resolve_approvals(self, request_ids: List[str], approved: bool, resolver_id: str) -> Dict[str, Any]:
+        """POST /api/v1/approvals/bulk-resolve — Resolve multiple approvals at once"""
+        try:
+            from core.security.approval_engine import get_approval_engine
+            engine = get_approval_engine()
+            results = engine.bulk_resolve(request_ids, approved, resolver_id)
+            return {
+                "success": True,
+                "summary": results
+            }
+        except Exception as e:
+            logger.error(f"Error bulk resolving approvals: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def get_approval_workflow_metrics(self) -> Dict[str, Any]:
+        """GET /api/v1/approvals/workflow-metrics — Get approval workflow metrics"""
+        try:
+            from core.security.approval_engine import get_approval_engine
+            engine = get_approval_engine()
+            metrics = engine.get_approval_metrics()
+            return {
+                "success": True,
+                "metrics": metrics
+            }
+        except Exception as e:
+            logger.error(f"Error getting approval metrics: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    # ===== Run Inspector Endpoints =====
+
+    async def get_run(self, run_id: str) -> Dict[str, Any]:
+        """GET /api/v1/runs/<run_id>"""
+        try:
+            from core.run_store import get_run_store
+            store = get_run_store()
+            run = await store.get_run(run_id)
+            if run:
+                return {
+                    "success": True,
+                    "run": run.to_dict()
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "Run not found"
+                }
+        except Exception as e:
+            logger.error(f"Error getting run {run_id}: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def list_runs(self, limit: int = 20, status: Optional[str] = None) -> Dict[str, Any]:
+        """GET /api/v1/runs?limit=20&status=*"""
+        try:
+            from core.run_store import get_run_store
+            store = get_run_store()
+            runs = await store.list_runs(limit, status)
+            return {
+                "success": True,
+                "count": len(runs),
+                "runs": [r.to_dict() for r in runs]
+            }
+        except Exception as e:
+            logger.error(f"Error listing runs: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def cancel_run(self, run_id: str) -> Dict[str, Any]:
+        """POST /api/v1/runs/<run_id>/cancel"""
+        try:
+            from core.run_store import get_run_store
+            store = get_run_store()
+            success = await store.cancel_run(run_id)
+            if success:
+                return {
+                    "success": True,
+                    "message": "Run cancelled"
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "Run not found"
+                }
+        except Exception as e:
+            logger.error(f"Error cancelling run {run_id}: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def get_step_timeline(self, run_id: str) -> Dict[str, Any]:
+        """GET /api/v1/runs/<run_id>/timeline — Get step timeline for Gantt visualization"""
+        try:
+            from core.run_store import get_run_store
+            store = get_run_store()
+            timeline = await store.get_step_timeline(run_id)
+            if timeline:
+                return {
+                    "success": True,
+                    "timeline": timeline
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "Run not found"
+                }
+        except Exception as e:
+            logger.error(f"Error getting step timeline for {run_id}: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    # ===== Memory Timeline Endpoint =====
+
+    # ===== Analytics Endpoints =====
+
+    async def get_approval_metrics(self, days: int = 7) -> Dict[str, Any]:
+        """GET /api/v1/analytics/approvals"""
+        try:
+            from core.run_store import get_run_store
+            import time
+
+            store = get_run_store()
+            runs = await store.list_runs(limit=1000)
+
+            now = time.time()
+            cutoff = now - (days * 86400)
+
+            # Filter recent runs
+            recent_runs = [r for r in runs if r.started_at >= cutoff]
+
+            # Calculate metrics
+            total = len(recent_runs)
+            completed = len([r for r in recent_runs if r.status == "completed"])
+            errors = len([r for r in recent_runs if r.status == "error"])
+
+            success_rate = (completed / total * 100) if total > 0 else 0
+            avg_duration = sum([r.duration_seconds() or 0 for r in recent_runs]) / total if total > 0 else 0
+
+            # Top intents
+            intent_counts = {}
+            for run in recent_runs:
+                intent = run.intent or "unknown"
+                intent_counts[intent] = intent_counts.get(intent, 0) + 1
+
+            top_intents = sorted(intent_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+
+            return {
+                "success": True,
+                "period_days": days,
+                "total_runs": total,
+                "completed": completed,
+                "errors": errors,
+                "success_rate_pct": round(success_rate, 1),
+                "avg_duration_seconds": round(avg_duration, 2),
+                "top_intents": [{"intent": i, "count": c} for i, c in top_intents]
+            }
+        except Exception as e:
+            logger.error(f"Error getting approval metrics: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_approval_trends(self, days: int = 7) -> Dict[str, Any]:
+        """GET /api/v1/analytics/approval-trends"""
+        try:
+            from core.run_store import get_run_store
+            from datetime import datetime, timedelta
+            import time
+
+            store = get_run_store()
+            runs = await store.list_runs(limit=1000)
+
+            # Group by day
+            daily_stats = {}
+            for run in runs:
+                ts = datetime.fromtimestamp(run.started_at)
+                day = ts.strftime("%Y-%m-%d")
+
+                if day not in daily_stats:
+                    daily_stats[day] = {"total": 0, "completed": 0, "errors": 0}
+
+                daily_stats[day]["total"] += 1
+                if run.status == "completed":
+                    daily_stats[day]["completed"] += 1
+                elif run.status == "error":
+                    daily_stats[day]["errors"] += 1
+
+            # Calculate rates
+            trend_data = []
+            for day in sorted(daily_stats.keys())[-days:]:
+                stats = daily_stats[day]
+                rate = (stats["completed"] / stats["total"] * 100) if stats["total"] > 0 else 0
+                trend_data.append({
+                    "date": day,
+                    "runs": stats["total"],
+                    "success_rate": round(rate, 1),
+                    "errors": stats["errors"]
+                })
+
+            return {
+                "success": True,
+                "period_days": days,
+                "trend": trend_data
+            }
+        except Exception as e:
+            logger.error(f"Error getting approval trends: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_memory_timeline(self, limit: int = 20) -> Dict[str, Any]:
+        """GET /api/v1/memory/timeline?limit=20"""
+        try:
+            from core.run_store import get_run_store
+            import os
+            from pathlib import Path
+
+            store = get_run_store()
+            events = []
+
+            # Get recent runs
+            runs = await store.list_runs(limit)
+            for run in runs:
+                events.append({
+                    "type": "run_completed",
+                    "timestamp": run.completed_at or run.started_at,
+                    "summary": f"{run.intent} ({run.status})",
+                    "run_id": run.run_id
+                })
+
+            # Get daily summaries from memory
+            memory_path = Path(os.path.expanduser("~/.elyan/memory/daily"))
+            if memory_path.exists():
+                for file_path in sorted(memory_path.glob("*.md"), reverse=True)[:7]:
+                    try:
+                        with open(file_path, "r") as f:
+                            content = f.read()
+                            # Extract first line as summary
+                            first_line = content.split("\n")[0]
+                            events.append({
+                                "type": "daily_summary",
+                                "timestamp": file_path.stat().st_mtime,
+                                "summary": first_line.replace("#", "").strip()[:100],
+                                "file": file_path.name
+                            })
+                    except Exception:
+                        pass
+
+            # Sort by timestamp descending
+            events.sort(key=lambda e: e["timestamp"], reverse=True)
+            events = events[:limit]
+
+            return {
+                "success": True,
+                "count": len(events),
+                "events": events
+            }
+        except Exception as e:
+            logger.error(f"Error getting memory timeline: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def get_smart_suggestions(self, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """GET /api/v1/suggestions/smart?context={json}
+
+        Provides intelligent suggestions based on user behavior patterns,
+        time of day, and previous actions using the adaptive engine.
+        """
+        try:
+            from core.adaptive_engine import get_adaptive_engine
+
+            engine = get_adaptive_engine()
+            if context is None:
+                context = {}
+
+            # Add current time and session context
+            context.setdefault("time_of_day", self._get_time_of_day())
+            context.setdefault("timestamp", datetime.now().isoformat())
+
+            suggestions = engine.get_smart_suggestions(context)
+
+            return {
+                "success": True,
+                "count": len(suggestions),
+                "suggestions": suggestions
+            }
+        except Exception as e:
+            logger.error(f"Error getting smart suggestions: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def get_adaptive_response(
+        self,
+        intent: str,
+        available_actions: List[str],
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """POST /api/v1/suggestions/adaptive
+
+        Recommends best action for a given intent based on adaptive learning.
+        Returns recommended action with confidence score and alternatives.
+        """
+        try:
+            from core.adaptive_engine import get_adaptive_engine
+
+            engine = get_adaptive_engine()
+            if context is None:
+                context = {}
+
+            response = engine.get_adaptive_response(intent, context, available_actions)
+            return response
+        except Exception as e:
+            logger.error(f"Error getting adaptive response: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def learn_interaction(
+        self,
+        intent: str,
+        action: str,
+        success: bool,
+        context: Optional[Dict[str, Any]] = None,
+        duration: float = 0.0
+    ) -> Dict[str, Any]:
+        """POST /api/v1/learning/record
+
+        Records user interaction for the adaptive engine to learn from.
+        Updates pattern data for future suggestions.
+        """
+        try:
+            from core.adaptive_engine import get_adaptive_engine
+
+            engine = get_adaptive_engine()
+            if context is None:
+                context = {}
+
+            engine.learn_from_interaction(intent, action, success, context, duration)
+
+            return {
+                "success": True,
+                "message": f"Learned: {intent} -> {action} ({'success' if success else 'failed'})"
+            }
+        except Exception as e:
+            logger.error(f"Error recording learning: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    @staticmethod
+    def _get_time_of_day() -> str:
+        """Get current time of day category."""
+        hour = datetime.now().hour
+        if 5 <= hour < 12:
+            return "morning"
+        elif 12 <= hour < 17:
+            return "afternoon"
+        elif 17 <= hour < 21:
+            return "evening"
+        else:
+            return "night"
+
 
 # Global API instance
 _dashboard_api: Optional[DashboardAPIv1] = None

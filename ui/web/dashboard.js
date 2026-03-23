@@ -2350,7 +2350,352 @@ document.addEventListener("DOMContentLoaded", function () {
   /* ================================================================
      TABS
      ================================================================ */
-  var tabMap = { mission: "p-mission", trace: "p-trace", tools: "p-tools", integrations: "p-integrations", channels: "p-channels", settings: "p-settings" };
+  var tabMap = { mission: "p-mission", trace: "p-trace", tools: "p-tools", integrations: "p-integrations", channels: "p-channels", approvals: "p-approvals", memory: "p-memory", analytics: "p-analytics", runs: "p-runs", settings: "p-settings" };
+
+  function loadApprovalsTab() {
+    var container = document.getElementById("approvals-container");
+    if (!container) return;
+    container.innerHTML = "<p style='color: #666; text-align: center; padding: 40px;'>Loading approvals...</p>";
+
+    Promise.all([
+      fetch("http://localhost:18789/api/v1/approvals/pending").then(r => r.json()),
+      fetch("http://localhost:18789/api/v1/approvals/workflow-metrics").then(r => r.json())
+    ])
+      .then(([data, metricsData]) => {
+        if (!data.success) {
+          container.innerHTML = "<p style='color: #999;'>Error: " + (data.error || "Unknown error") + "</p>";
+          return;
+        }
+        var approvals = data.approvals || [];
+        var metrics = metricsData.success ? metricsData.metrics : null;
+        var pendingCount = approvals.length;
+        var badge = document.getElementById("approvals-badge");
+        if (badge) {
+          badge.style.display = pendingCount > 0 ? "inline-block" : "none";
+          badge.textContent = pendingCount;
+        }
+
+        var html = "";
+
+        // Workflow metrics
+        if (metrics) {
+          html += "<div style='background: rgba(15,23,42,0.7); border: 1px solid rgba(148,163,184,0.2); border-radius: 12px; padding: 16px; margin-bottom: 16px; backdrop-filter: blur(20px);'>";
+          html += "<div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px;'>";
+          html += "<div><div style='font-size: 11px; color: #94a3b8; margin-bottom: 4px;'>Pending</div><div style='font-size: 20px; font-weight: 700; color: #f97316;'>" + metrics.pending_count + "</div></div>";
+          if (metrics.oldest_age_seconds > 0) {
+            html += "<div><div style='font-size: 11px; color: #94a3b8; margin-bottom: 4px;'>Oldest</div><div style='font-size: 20px; font-weight: 700; color: #ef4444;'>" + Math.round(metrics.oldest_age_seconds) + "s</div></div>";
+          }
+          if (metrics.avg_age_seconds > 0) {
+            html += "<div><div style='font-size: 11px; color: #94a3b8; margin-bottom: 4px;'>Avg Age</div><div style='font-size: 20px; font-weight: 700; color: #60a5fa;'>" + Math.round(metrics.avg_age_seconds) + "s</div></div>";
+          }
+          html += "</div></div>";
+        }
+
+        if (pendingCount === 0) {
+          html += "<div style='background: #f0f9ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 40px; text-align: center;'><p style='color: #0c4a6e; font-weight: 600;'>✓ No pending approvals</p></div>";
+          container.innerHTML = html;
+          return;
+        }
+
+        // Bulk action toolbar
+        html += "<div style='background: rgba(15,23,42,0.5); border: 1px solid rgba(148,163,184,0.2); border-radius: 8px; padding: 12px; margin-bottom: 12px; display: flex; gap: 8px; align-items: center;'>";
+        html += "<label style='display: flex; align-items: center; gap: 6px; color: #94a3b8; cursor: pointer;'>";
+        html += "<input type='checkbox' id='select-all-approvals' style='cursor: pointer;' onchange='toggleSelectAllApprovals(this)'> Select All";
+        html += "</label>";
+        html += "<span id='selected-count' style='color: #94a3b8; font-size: 12px;'></span>";
+        html += "<div style='flex: 1;'></div>";
+        html += "<button id='bulk-approve-btn' style='padding: 6px 12px; background: #10b981; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; display: none;' onclick='bulkApprove()'>✓ Approve All Selected</button>";
+        html += "<button id='bulk-deny-btn' style='padding: 6px 12px; background: #ef4444; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; display: none;' onclick='bulkDeny()'>✗ Deny All Selected</button>";
+        html += "</div>";
+
+        // Approvals list with checkboxes
+        html += "<div style='display: grid; gap: 12px;'>";
+        html += approvals.map(appr => {
+          var risk = (appr.risk_level || "UNKNOWN").toUpperCase();
+          var riskColor = { SYSTEM_CRITICAL: "#dc2626", DESTRUCTIVE: "#f97316", WRITE_SENSITIVE: "#eab308", WRITE_SAFE: "#06b6d4", READ_ONLY: "#10b981" }[appr.risk_level] || "#999";
+          return "<div style='border: 1px solid #ddd; border-radius: 8px; padding: 12px; background: #f9fafb; display: flex; gap: 12px;'><input type='checkbox' class='approval-checkbox' value='" + appr.request_id + "' style='cursor: pointer; margin-top: 4px;' onchange='updateBulkButtons()'><div style='flex: 1;'><div style='display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;'><div><div style='font-weight: 600;'>" + (appr.action_type || "Unknown") + "</div><div style='font-size: 13px; color: #666;'>" + (appr.reason || "") + "</div></div><span style='background: " + riskColor + "; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;'>" + appr.risk_level.replace(/_/g, " ") + "</span></div><div style='display: flex; gap: 6px;'><button style='padding: 6px 10px; background: #10b981; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;' onclick='approveApproval(\"" + appr.request_id + "\")'>Approve</button><button style='padding: 6px 10px; background: #ef4444; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;' onclick='denyApproval(\"" + appr.request_id + "\")'>Deny</button></div></div></div>";
+        }).join("");
+        html += "</div>";
+
+        container.innerHTML = html;
+      })
+      .catch(err => {
+        container.innerHTML = "<p style='color: #dc2626;'>Failed to load approvals: " + err.message + "</p>";
+      });
+  }
+
+  function toggleSelectAllApprovals(checkbox) {
+    var checkboxes = document.querySelectorAll(".approval-checkbox");
+    checkboxes.forEach(function (cb) {
+      cb.checked = checkbox.checked;
+    });
+    updateBulkButtons();
+  }
+
+  function updateBulkButtons() {
+    var checkboxes = document.querySelectorAll(".approval-checkbox:checked");
+    var approveBtn = document.getElementById("bulk-approve-btn");
+    var denyBtn = document.getElementById("bulk-deny-btn");
+    var selectedCount = document.getElementById("selected-count");
+
+    if (approveBtn) approveBtn.style.display = checkboxes.length > 0 ? "inline-block" : "none";
+    if (denyBtn) denyBtn.style.display = checkboxes.length > 0 ? "inline-block" : "none";
+    if (selectedCount) selectedCount.textContent = checkboxes.length + " selected";
+  }
+
+  function bulkApprove() {
+    var checkboxes = document.querySelectorAll(".approval-checkbox:checked");
+    var requestIds = Array.from(checkboxes).map(function (cb) { return cb.value; });
+    if (requestIds.length === 0) return;
+
+    fetch("http://localhost:18789/api/v1/approvals/bulk-resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request_ids: requestIds, approved: true, resolver_id: "web_ui" })
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          loadApprovalsTab();
+        } else {
+          alert("Error: " + (data.error || "Unknown error"));
+        }
+      });
+  }
+
+  function bulkDeny() {
+    var checkboxes = document.querySelectorAll(".approval-checkbox:checked");
+    var requestIds = Array.from(checkboxes).map(function (cb) { return cb.value; });
+    if (requestIds.length === 0) return;
+
+    fetch("http://localhost:18789/api/v1/approvals/bulk-resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request_ids: requestIds, approved: false, resolver_id: "web_ui" })
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          loadApprovalsTab();
+        } else {
+          alert("Error: " + (data.error || "Unknown error"));
+        }
+      });
+  }
+
+  function loadMemoryTab() {
+    var container = document.getElementById("memory-container");
+    if (!container) return;
+    container.innerHTML = "<p style='color: #666; text-align: center; padding: 40px;'>Loading memory timeline...</p>";
+    fetch("http://localhost:18789/api/v1/memory/timeline?limit=20")
+      .then(r => r.json())
+      .then(data => {
+        if (!data.success) {
+          container.innerHTML = "<p style='color: #999;'>Error: " + (data.error || "Unknown error") + "</p>";
+          return;
+        }
+        var events = data.events || [];
+        if (events.length === 0) {
+          container.innerHTML = "<div style='background: #f0f9ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 40px; text-align: center;'><p style='color: #0c4a6e;'>No memory events yet</p></div>";
+          return;
+        }
+        var html = "<div style='display: grid; gap: 12px;'>" + events.map(evt => {
+          var time = new Date(evt.timestamp * 1000).toLocaleString();
+          var icon = evt.type === "run_completed" ? "▶" : "📅";
+          return "<div style='border-left: 3px solid #3b82f6; padding: 12px 16px; background: #f9fafb; border-radius: 4px;'><div style='font-size: 12px; color: #666;'>" + time + "</div><div style='font-weight: 600;'>" + icon + " " + (evt.summary || "Event") + "</div></div>";
+        }).join("") + "</div>";
+        container.innerHTML = html;
+      })
+      .catch(err => {
+        container.innerHTML = "<p style='color: #dc2626;'>Failed to load memory: " + err.message + "</p>";
+      });
+  }
+
+  function loadRunsTab() {
+    var container = document.getElementById("runs-container");
+    if (!container) return;
+    container.innerHTML = "<p style='color: #666; text-align: center; padding: 40px;'>Loading runs...</p>";
+
+    fetch("http://localhost:18789/api/v1/runs?limit=10")
+      .then(r => r.json())
+      .then(data => {
+        if (!data.success) {
+          container.innerHTML = "<p style='color: #999;'>Error: " + (data.error || "Failed to load runs") + "</p>";
+          return;
+        }
+
+        var runs = data.runs || [];
+        if (runs.length === 0) {
+          container.innerHTML = "<div style='background: #f0f9ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 40px; text-align: center;'><p style='color: #0c4a6e;'>No runs recorded yet</p></div>";
+          return;
+        }
+
+        var html = "<div style='display: grid; gap: 12px;'>";
+        html += "<div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; margin-bottom: 20px;'>";
+
+        runs.forEach(run => {
+          var statusColor = {
+            'completed': '#10b981',
+            'running': '#3b82f6',
+            'error': '#dc2626',
+            'pending': '#f59e0b',
+            'cancelled': '#6b7280'
+          }[run.status] || '#94a3b8';
+
+          var duration = run.duration || 0;
+          html += "<div style='background: rgba(15,23,42,0.7); border: 1px solid rgba(148,163,184,0.2); border-radius: 8px; padding: 12px; backdrop-filter: blur(20px); cursor: pointer;' onclick=\"showRunVisualizer('" + run.run_id + "')\">";
+          html += "<div style='display: flex; justify-content: space-between; margin-bottom: 8px;'>";
+          html += "<div style='font-weight: 600; color: #cbd5e1;'>" + run.run_id + "</div>";
+          html += "<span style='background: " + statusColor + "; color: white; padding: 3px 6px; border-radius: 3px; font-size: 10px; font-weight: 600;'>" + run.status.toUpperCase() + "</span>";
+          html += "</div>";
+          html += "<div style='font-size: 11px; color: #94a3b8; margin-bottom: 8px;'>" + (run.intent || "Unknown intent") + "</div>";
+          html += "<div style='display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8;'>";
+          html += "<span>Duration: <strong style='color: #cbd5e1;'>" + duration.toFixed(2) + "s</strong></span>";
+          html += "<span>Steps: <strong style='color: #cbd5e1;'>" + (run.steps?.length || 0) + "</strong></span>";
+          html += "</div>";
+          html += "</div>";
+        });
+
+        html += "</div>";
+        html += "<div style='padding: 20px; background: rgba(59,130,246,0.2); border-radius: 8px; border-left: 3px solid #3b82f6;'>";
+        html += "<p style='color: #60a5fa; font-size: 12px;'><strong>📊 Click any run card to view detailed visualization</strong> — Gantt charts, waterfall diagrams, and performance metrics.</p>";
+        html += "</div>";
+        html += "</div>";
+
+        container.innerHTML = html;
+      })
+      .catch(err => {
+        container.innerHTML = "<p style='color: #dc2626;'>Failed to load runs: " + err.message + "</p>";
+      });
+  }
+
+  function showRunVisualizer(runId) {
+    var container = document.getElementById("runs-container");
+    container.innerHTML = "<div id='visualizer-container'></div>";
+    // Load run_visualizer.js and initialize
+    var script = document.createElement('script');
+    script.src = '/ui/web/run_visualizer.js';
+    script.onload = function() {
+      initRunVisualizer('visualizer-container', runId);
+    };
+    document.head.appendChild(script);
+  }
+
+  function loadAnalyticsTab() {
+    var container = document.getElementById("analytics-container");
+    if (!container) return;
+    container.innerHTML = "<p style='color: #666; text-align: center; padding: 40px;'>Loading analytics...</p>";
+
+    Promise.all([
+      fetch("http://localhost:18789/api/v1/analytics/approvals?days=7").then(r => r.json()),
+      fetch("http://localhost:18789/api/v1/analytics/approval-trends?days=7").then(r => r.json())
+    ])
+      .then(([metricsData, trendsData]) => {
+        if (!metricsData.success || !trendsData.success) {
+          container.innerHTML = "<p style='color: #999;'>Error loading analytics</p>";
+          return;
+        }
+
+        var metrics = metricsData;
+        var trends = trendsData.trend || [];
+
+        var html = "<div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px;'>";
+
+        // KPI Cards
+        html += "<div style='background: rgba(15,23,42,0.7); border: 1px solid rgba(148,163,184,0.2); border-radius: 12px; padding: 16px; backdrop-filter: blur(20px);'>";
+        html += "<div style='font-size: 12px; color: #94a3b8; margin-bottom: 8px;'>Success Rate</div>";
+        html += "<div style='font-size: 28px; font-weight: 700; color: #10b981;'>" + metrics.success_rate_pct + "%</div>";
+        html += "</div>";
+
+        html += "<div style='background: rgba(15,23,42,0.7); border: 1px solid rgba(148,163,184,0.2); border-radius: 12px; padding: 16px; backdrop-filter: blur(20px);'>";
+        html += "<div style='font-size: 12px; color: #94a3b8; margin-bottom: 8px;'>Avg Duration</div>";
+        html += "<div style='font-size: 28px; font-weight: 700; color: #3b82f6;'>" + metrics.avg_duration_seconds.toFixed(1) + "s</div>";
+        html += "</div>";
+
+        html += "<div style='background: rgba(15,23,42,0.7); border: 1px solid rgba(148,163,184,0.2); border-radius: 12px; padding: 16px; backdrop-filter: blur(20px);'>";
+        html += "<div style='font-size: 12px; color: #94a3b8; margin-bottom: 8px;'>Total Runs</div>";
+        html += "<div style='font-size: 28px; font-weight: 700; color: #60a5fa;'>" + metrics.total_runs + "</div>";
+        html += "</div>";
+
+        html += "<div style='background: rgba(15,23,42,0.7); border: 1px solid rgba(148,163,184,0.2); border-radius: 12px; padding: 16px; backdrop-filter: blur(20px);'>";
+        html += "<div style='font-size: 12px; color: #94a3b8; margin-bottom: 8px;'>Errors</div>";
+        html += "<div style='font-size: 28px; font-weight: 700; color: #ef4444;'>" + metrics.errors + "</div>";
+        html += "</div>";
+
+        html += "</div>";
+
+        // Trends Chart
+        html += "<div style='background: rgba(15,23,42,0.7); border: 1px solid rgba(148,163,184,0.2); border-radius: 12px; padding: 20px; backdrop-filter: blur(20px);'>";
+        html += "<h3 style='color: #60a5fa; margin-bottom: 16px;'>7-Day Trend</h3>";
+        html += "<table style='width: 100%; font-size: 13px; color: #cbd5e1;'>";
+        html += "<tr style='border-bottom: 1px solid rgba(148,163,184,0.1);'><th style='text-align: left; padding: 8px;'>Date</th><th style='text-align: right; padding: 8px;'>Runs</th><th style='text-align: right; padding: 8px;'>Success</th></tr>";
+        trends.forEach(day => {
+          html += "<tr style='border-bottom: 1px solid rgba(148,163,184,0.05);'>";
+          html += "<td style='padding: 8px;'>" + day.date + "</td>";
+          html += "<td style='text-align: right; padding: 8px;'>" + day.runs + "</td>";
+          html += "<td style='text-align: right; padding: 8px;'><span style='color: #10b981;'>" + day.success_rate + "%</span></td>";
+          html += "</tr>";
+        });
+        html += "</table>";
+        html += "</div>";
+
+        // Top Intents
+        if (metrics.top_intents && metrics.top_intents.length > 0) {
+          html += "<div style='background: rgba(15,23,42,0.7); border: 1px solid rgba(148,163,184,0.2); border-radius: 12px; padding: 20px; backdrop-filter: blur(20px); margin-top: 16px;'>";
+          html += "<h3 style='color: #60a5fa; margin-bottom: 16px;'>Top Intents</h3>";
+          metrics.top_intents.forEach(intent => {
+            html += "<div style='padding: 10px; background: rgba(255,255,255,0.04); border-radius: 8px; margin-bottom: 8px; display: flex; justify-content: space-between;'>";
+            html += "<span>" + intent.intent + "</span>";
+            html += "<span style='color: #60a5fa; font-weight: 600;'>" + intent.count + "</span>";
+            html += "</div>";
+          });
+          html += "</div>";
+        }
+
+        container.innerHTML = html;
+      })
+      .catch(err => {
+        container.innerHTML = "<p style='color: #dc2626;'>Failed to load analytics: " + err.message + "</p>";
+      });
+  }
+
+  window.approveApproval = function(requestId) {
+    if (!confirm("Approve this request?")) return;
+    fetch("http://localhost:18789/api/v1/approvals/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request_id: requestId, approved: true, resolver_id: "web_ui" })
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          loadApprovalsTab();
+          toast("Approval accepted", "ok");
+        } else {
+          toast("Error: " + (data.error || "Unknown error"), "err");
+        }
+      })
+      .catch(err => toast("Error approving: " + err.message, "err"));
+  };
+
+  window.denyApproval = function(requestId) {
+    if (!confirm("Deny this request?")) return;
+    fetch("http://localhost:18789/api/v1/approvals/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request_id: requestId, approved: false, resolver_id: "web_ui" })
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          loadApprovalsTab();
+          toast("Approval denied", "ok");
+        } else {
+          toast("Error: " + (data.error || "Unknown error"), "err");
+        }
+      })
+      .catch(err => toast("Error denying: " + err.message, "err"));
+  };
 
   function activateTab(name) {
     var key = String(name || "mission");
@@ -2364,6 +2709,14 @@ document.addEventListener("DOMContentLoaded", function () {
     if (el) el.classList.add("show");
     if (key === "trace") {
       loadTrace();
+    } else if (key === "approvals") {
+      loadApprovalsTab();
+    } else if (key === "memory") {
+      loadMemoryTab();
+    } else if (key === "analytics") {
+      loadAnalyticsTab();
+    } else if (key === "runs") {
+      loadRunsTab();
     }
   }
 
@@ -2416,6 +2769,14 @@ document.addEventListener("DOMContentLoaded", function () {
   }
   var traceRefreshBtn = $("#trace-refresh");
   if (traceRefreshBtn) traceRefreshBtn.addEventListener("click", function () { loadTrace(); });
+  var approvalsRefreshBtn = $("#approvals-refresh");
+  if (approvalsRefreshBtn) approvalsRefreshBtn.addEventListener("click", function () { loadApprovalsTab(); });
+  var memoryRefreshBtn = $("#memory-refresh");
+  if (memoryRefreshBtn) memoryRefreshBtn.addEventListener("click", function () { loadMemoryTab(); });
+  var analyticsRefreshBtn = $("#analytics-refresh");
+  if (analyticsRefreshBtn) analyticsRefreshBtn.addEventListener("click", function () { loadAnalyticsTab(); });
+  var runsRefreshBtn = $("#runs-refresh");
+  if (runsRefreshBtn) runsRefreshBtn.addEventListener("click", function () { loadRunsTab(); });
   var packsRefreshBtn = $("#packs-refresh");
   if (packsRefreshBtn) packsRefreshBtn.addEventListener("click", function () { refreshPackOverview("all"); });
   var traceOpenBtn = $("#trace-open-full");
@@ -3117,37 +3478,134 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   /* ================================================================
-     WEBSOCKET
+     WEBSOCKET (Socket.IO + Native WebSocket)
      ================================================================ */
-  function connectWS() {
+  var socketIO = null;
+  var nativeWS = null;
+
+  function handleSocketMessage(msg) {
+    try {
+      var payload = msg.data || msg.payload || msg;
+
+      // Handle approval events
+      if (msg.event_type === "approval_pending") {
+        loadApprovalsTab();
+      } else if (msg.event_type === "approval_resolved") {
+        loadApprovalsTab();
+      }
+      // Handle run events
+      else if (msg.event_type === "run_started" || msg.event_type === "run_completed" || msg.event_type === "run_failed") {
+        if (activeTab === "memory") {
+          loadMemoryTab();
+        }
+      }
+      // Handle system alerts
+      else if (msg.event_type === "system_alert") {
+        console.warn("System alert:", payload);
+      }
+      // Handle legacy events
+      else if (msg.event === "llm_update" || msg.event === "provider_change") {
+        loadProviders();
+      } else if (msg.event === "mission_event" || msg.event === "mission_overview" || msg.event === "mission_list") {
+        loadMissionControl();
+      } else if (msg.event === "activity" && payload && payload.type && String(payload.type).indexOf("channel_") === 0) {
+        loadChannels();
+      } else if (msg.event === "autopilot" || msg.event === "autopilot_action" || msg.event === "briefing" || msg.event === "suggestion" || msg.event === "task_review" || msg.event === "intervention" || msg.event === "automation_health" || msg.event === "reconcile") {
+        loadAutopilot();
+      } else if (msg.event === "activity" && payload && payload.type === "agent_profile") {
+        loadSettings();
+      } else if (msg.event === "activity" && payload && payload.type === "tools_policy") {
+        loadSettings();
+      }
+      if (activeTab === "trace" && (msg.event === "mission_event" || msg.event === "activity" || msg.event === "tool_event" || msg.event === "telemetry" || msg.event === "history")) {
+        appendTraceLive(msg.event || "event", payload);
+      }
+    } catch (ex) { console.debug("Message parse error:", ex); }
+  }
+
+  function connectSocketIO() {
+    if (typeof io === "undefined") {
+      // Socket.IO not loaded, use native WebSocket
+      connectNativeWS();
+      return;
+    }
+    try {
+      socketIO = io(location.protocol + "//" + location.host, {
+        reconnection: true,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        reconnectionAttempts: 5
+      });
+
+      socketIO.on("connect", function () {
+        console.log("Socket.IO connected");
+        socketIO.emit("subscribe", { event_type: "all" });
+      });
+
+      socketIO.on("disconnect", function () {
+        console.log("Socket.IO disconnected");
+      });
+
+      // Listen for custom events
+      socketIO.on("message", handleSocketMessage);
+
+      // Handle approval events
+      socketIO.on("approval_pending", function (data) {
+        handleSocketMessage({ event_type: "approval_pending", data: data });
+      });
+      socketIO.on("approval_resolved", function (data) {
+        handleSocketMessage({ event_type: "approval_resolved", data: data });
+      });
+
+      // Handle run events
+      socketIO.on("run_started", function (data) {
+        handleSocketMessage({ event_type: "run_started", data: data });
+      });
+      socketIO.on("run_completed", function (data) {
+        handleSocketMessage({ event_type: "run_completed", data: data });
+      });
+      socketIO.on("run_failed", function (data) {
+        handleSocketMessage({ event_type: "run_failed", data: data });
+      });
+
+      // Handle system alerts
+      socketIO.on("system_alert", function (data) {
+        handleSocketMessage({ event_type: "system_alert", data: data });
+      });
+
+      // Request event history
+      socketIO.emit("get_history", { event_type: null, limit: 20 });
+      socketIO.on("history", function (data) {
+        console.log("Received event history:", data.events);
+      });
+
+      socketIO.on("error", function (error) {
+        console.error("Socket.IO error:", error);
+        setTimeout(connectSocketIO, 5000);
+      });
+    } catch (ex) {
+      console.debug("Socket.IO connection failed:", ex);
+      connectNativeWS();
+    }
+  }
+
+  function connectNativeWS() {
     try {
       var proto = location.protocol === "https:" ? "wss:" : "ws:";
-      var ws = new WebSocket(proto + "//" + location.host + "/ws/dashboard");
-      ws.onmessage = function (e) {
+      nativeWS = new WebSocket(proto + "//" + location.host + "/ws/dashboard");
+      nativeWS.onmessage = function (e) {
         try {
           var msg = JSON.parse(e.data);
-          var payload = msg.data || msg.payload || msg;
-          if (msg.event === "llm_update" || msg.event === "provider_change") {
-            loadProviders();
-          } else if (msg.event === "mission_event" || msg.event === "mission_overview" || msg.event === "mission_list") {
-            loadMissionControl();
-          } else if (msg.event === "activity" && payload && payload.type && String(payload.type).indexOf("channel_") === 0) {
-            loadChannels();
-          } else if (msg.event === "autopilot" || msg.event === "autopilot_action" || msg.event === "briefing" || msg.event === "suggestion" || msg.event === "task_review" || msg.event === "intervention" || msg.event === "automation_health" || msg.event === "reconcile") {
-            loadAutopilot();
-          } else if (msg.event === "activity" && payload && payload.type === "agent_profile") {
-            loadSettings();
-          } else if (msg.event === "activity" && payload && payload.type === "tools_policy") {
-            loadSettings();
-          }
-          if (activeTab === "trace" && (msg.event === "mission_event" || msg.event === "activity" || msg.event === "tool_event" || msg.event === "telemetry" || msg.event === "history")) {
-            appendTraceLive(msg.event || "event", payload);
-          }
+          handleSocketMessage(msg);
         } catch (ex) { /* ignore */ }
       };
-      ws.onclose = function () { setTimeout(connectWS, 5000); };
-      ws.onerror = function () { /* ws.onclose will handle reconnect */ };
+      nativeWS.onclose = function () { setTimeout(connectWS, 5000); };
+      nativeWS.onerror = function () { /* nativeWS.onclose will handle reconnect */ };
     } catch (ex) { /* no WS — rely on polling */ }
+  }
+
+  function connectWS() {
+    connectSocketIO();
   }
 
   /* ================================================================
@@ -3200,6 +3658,174 @@ document.addEventListener("DOMContentLoaded", function () {
       }
     });
   }
+
+  // ════════════════════════════════════════════════════════════
+  // COMMAND PALETTE (Cmd+K)
+  // ════════════════════════════════════════════════════════════
+  var commands = [
+    { id: "mission", label: "📋 Go to Mission", desc: "View mission control" },
+    { id: "trace", label: "🔍 Go to Trace", desc: "Inspect task execution" },
+    { id: "tools", label: "🔧 Go to Tools", desc: "Manage tools & skills" },
+    { id: "approvals", label: "✓ Go to Approvals", desc: "Review pending approvals" },
+    { id: "memory", label: "🧠 Go to Memory", desc: "View session timeline" },
+    { id: "settings", label: "⚙️ Go to Settings", desc: "Configure agent behavior" },
+    { id: "refresh", label: "🔄 Refresh All", desc: "Reload dashboard data" },
+    { id: "clear-cache", label: "🗑 Clear Cache", desc: "Clear all caches" }
+  ];
+
+  var paletteOverlay = $("#cmd-palette-overlay");
+  var palette = $("#cmd-palette");
+  var input = $("#cmd-input");
+  var results = $("#cmd-results");
+
+  function showPalette() {
+    paletteOverlay.style.display = "block";
+    palette.style.display = "block";
+    input.focus();
+    input.value = "";
+    filterCommands("");
+  }
+
+  function hidePalette() {
+    paletteOverlay.style.display = "none";
+    palette.style.display = "none";
+  }
+
+  function filterCommands(query) {
+    var q = String(query || "").toLowerCase();
+    var filtered = commands.filter(c =>
+      c.label.toLowerCase().indexOf(q) >= 0 ||
+      c.desc.toLowerCase().indexOf(q) >= 0
+    );
+
+    if (filtered.length === 0) {
+      results.innerHTML = "<div style='padding:20px;text-align:center;color:#94a3b8;'>No commands found</div>";
+      return;
+    }
+
+    results.innerHTML = filtered.map(cmd => `
+      <div style="padding:12px 16px;border-radius:8px;cursor:pointer;transition:all .2s;margin:4px;background:rgba(255,255,255,0.04);border:1px solid transparent;"
+           onmouseover="this.style.background='rgba(59,130,246,0.15)';this.style.borderColor='rgba(59,130,246,0.3)'"
+           onmouseout="this.style.background='rgba(255,255,255,0.04)';this.style.borderColor='transparent'"
+           onclick="executePaletteCommand('${cmd.id}')">
+        <div style="font-weight:600;color:#f1f5f9;font-size:14px;">${cmd.label}</div>
+        <div style="font-size:12px;color:#94a3b8;margin-top:4px;">${cmd.desc}</div>
+      </div>
+    `).join("");
+  }
+
+  window.executePaletteCommand = function(cmdId) {
+    hidePalette();
+    if (cmdId === "mission" || cmdId === "trace" || cmdId === "tools" ||
+        cmdId === "approvals" || cmdId === "memory" || cmdId === "settings") {
+      activateTab(cmdId);
+    } else if (cmdId === "refresh") {
+      refreshAll().then(() => toast("Dashboard refreshed", "ok"));
+    } else if (cmdId === "clear-cache") {
+      localStorage.clear();
+      toast("Cache cleared", "ok");
+    }
+  };
+
+  if (input) {
+    input.addEventListener("input", function() {
+      filterCommands(this.value);
+    });
+
+    input.addEventListener("keydown", function(e) {
+      if (e.key === "Escape") {
+        hidePalette();
+      } else if (e.key === "Enter") {
+        var first = results.querySelector("div");
+        if (first) first.click();
+      }
+    });
+  }
+
+  if (paletteOverlay) {
+    paletteOverlay.addEventListener("click", hidePalette);
+  }
+
+  document.addEventListener("keydown", function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+      e.preventDefault();
+      var isHidden = paletteOverlay.style.display === "none";
+      if (isHidden) showPalette();
+      else hidePalette();
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════
+  // MOBILE TOUCH & SWIPE SUPPORT
+  // ════════════════════════════════════════════════════════════
+
+  // Detect touch device
+  var isTouchDevice = function() {
+    return (('ontouchstart' in window) ||
+            (navigator.maxTouchPoints > 0) ||
+            (navigator.msMaxTouchPoints > 0));
+  };
+
+  // Swipe navigation for tabs
+  var touchStartX = 0;
+  var touchEndX = 0;
+  var tabsContainer = $("#nav-tabs");
+
+  if (tabsContainer && isTouchDevice()) {
+    tabsContainer.addEventListener('touchstart', function(e) {
+      touchStartX = e.changedTouches[0].screenX;
+    }, false);
+
+    tabsContainer.addEventListener('touchend', function(e) {
+      touchEndX = e.changedTouches[0].screenX;
+      handleSwipe();
+    }, false);
+  }
+
+  function handleSwipe() {
+    var swipeThreshold = 50;
+    var diff = touchStartX - touchEndX;
+
+    if (Math.abs(diff) > swipeThreshold) {
+      var tabs = Array.from($$(".nav-tab"));
+      var activeTab = tabs.find(function(t) { return t.classList.contains("active"); });
+      if (activeTab) {
+        var currentIndex = tabs.indexOf(activeTab);
+        if (diff > 0 && currentIndex < tabs.length - 1) {
+          // Swiped left - next tab
+          tabs[currentIndex + 1].click();
+        } else if (diff < 0 && currentIndex > 0) {
+          // Swiped right - prev tab
+          tabs[currentIndex - 1].click();
+        }
+      }
+    }
+  }
+
+  // Mobile-specific: Disable transform on touch to prevent janky animations
+  if (isTouchDevice()) {
+    $$("button").forEach(function(btn) {
+      btn.addEventListener("touchstart", function() {
+        this.style.transform = "scale(0.98)";
+      });
+      btn.addEventListener("touchend", function() {
+        this.style.transform = "scale(1)";
+      });
+    });
+  }
+
+  // Prevent double-tap zoom on buttons
+  var lastTap = 0;
+  $$("button, .nav-tab").forEach(function(el) {
+    el.addEventListener("touchend", function(e) {
+      var currentTime = new Date().getTime();
+      var tapLength = currentTime - lastTap;
+      if (tapLength < 300 && tapLength > 0) {
+        e.preventDefault();
+      }
+      lastTap = currentTime;
+    });
+  });
 
   // Boot
   refreshAll().then(function () {

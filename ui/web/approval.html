@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Approval System - ELYAN</title>
+    <style>
+        /* ═══════════════════════════════════════════════════════════
+           GLASSMORPHISM DESIGN SYSTEM
+           Transparent backgrounds, blur effects, layered depth
+           ═══════════════════════════════════════════════════════════ */
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --glass-bg: rgba(15, 23, 42, 0.7);
+            --glass-border: rgba(148, 163, 184, 0.2);
+            --glass-hover: rgba(30, 41, 59, 0.8);
+            --accent-blue: #3b82f6;
+            --accent-green: #10b981;
+            --accent-red: #ef4444;
+            --accent-yellow: #f59e0b;
+            --text-primary: #f1f5f9;
+            --text-secondary: #cbd5e1;
+            --text-muted: #94a3b8;
+            --shadow-sm: 0 4px 6px rgba(0, 0, 0, 0.1);
+            --shadow-md: 0 10px 15px rgba(0, 0, 0, 0.15);
+            --shadow-lg: 0 20px 25px rgba(0, 0, 0, 0.2);
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            padding: 24px;
+            overflow-x: hidden;
+        }
+
+        /* Animated gradient background */
+        @keyframes gradient-shift {
+            0%, 100% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+        }
+
+        /* ═════ CONTAINER ════════════════════════════════════════════ */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        /* ═════ HEADER ══════════════════════════════════════════════ */
+        header {
+            margin-bottom: 32px;
+            padding: 32px;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            backdrop-filter: blur(20px);
+            box-shadow: var(--shadow-lg);
+            position: relative;
+            overflow: hidden;
+        }
+
+        header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, transparent 100%);
+            pointer-events: none;
+        }
+
+        h1 {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 12px;
+            background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            position: relative;
+            z-index: 1;
+        }
+
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-top: 20px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .status-item {
+            padding: 12px 16px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .status-item:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(148, 163, 184, 0.3);
+        }
+
+        .status-item-value {
+            font-weight: 600;
+            color: #60a5fa;
+            font-size: 18px;
+        }
+
+        /* ═════ CONTROLS ════════════════════════════════════════════ */
+        .controls {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 10px 20px;
+            background: linear-gradient(135deg, var(--accent-blue), #2563eb);
+            color: white;
+            border: 1px solid rgba(59, 130, 246, 0.5);
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 16px rgba(59, 130, 246, 0.2);
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 24px rgba(59, 130, 246, 0.3);
+            background: linear-gradient(135deg, #60a5fa, #3b82f6);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        /* ═════ APPROVALS SECTION ═══════════════════════════════════ */
+        .approvals-section {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            overflow: hidden;
+            backdrop-filter: blur(20px);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .section-header {
+            padding: 20px 24px;
+            background: linear-gradient(90deg, rgba(59, 130, 246, 0.15) 0%, transparent 100%);
+            border-bottom: 1px solid var(--glass-border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: #60a5fa;
+        }
+
+        .section-count {
+            background: rgba(59, 130, 246, 0.2);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #93c5fd;
+        }
+
+        /* ═════ APPROVALS LIST ═════════════════════════════════════ */
+        .approvals-list {
+            display: flex;
+            flex-direction: column;
+            max-height: calc(100vh - 400px);
+            overflow-y: auto;
+            gap: 12px;
+            padding: 16px;
+        }
+
+        .approvals-list::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .approvals-list::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+        }
+
+        .approvals-list::-webkit-scrollbar-thumb {
+            background: rgba(59, 130, 246, 0.4);
+            border-radius: 4px;
+        }
+
+        .approvals-list::-webkit-scrollbar-thumb:hover {
+            background: rgba(59, 130, 246, 0.6);
+        }
+
+        /* ═════ APPROVAL ITEM ══════════════════════════════════════ */
+        .approval-item {
+            padding: 16px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            display: grid;
+            grid-template-columns: 1fr auto 120px;
+            gap: 16px;
+            align-items: center;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .approval-item::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(90deg, rgba(59, 130, 246, 0.1) 0%, transparent 100%);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+        }
+
+        .approval-item:hover {
+            background: var(--glass-hover);
+            border-color: rgba(148, 163, 184, 0.3);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+        }
+
+        .approval-item:hover::before {
+            opacity: 1;
+        }
+
+        .approval-content {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            position: relative;
+            z-index: 1;
+            min-width: 0;
+        }
+
+        .approval-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .approval-action {
+            font-weight: 700;
+            color: var(--text-primary);
+            font-size: 15px;
+        }
+
+        .risk-badge {
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border: 1px solid;
+        }
+
+        .risk-critical {
+            background: rgba(239, 68, 68, 0.15);
+            color: #fca5a5;
+            border-color: rgba(239, 68, 68, 0.3);
+        }
+
+        .risk-high {
+            background: rgba(249, 115, 22, 0.15);
+            color: #fdba74;
+            border-color: rgba(249, 115, 22, 0.3);
+        }
+
+        .risk-medium {
+            background: rgba(234, 179, 8, 0.15);
+            color: #fcd34d;
+            border-color: rgba(234, 179, 8, 0.3);
+        }
+
+        .risk-low {
+            background: rgba(34, 197, 94, 0.15);
+            color: #86efac;
+            border-color: rgba(34, 197, 94, 0.3);
+        }
+
+        .approval-meta {
+            display: flex;
+            gap: 16px;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .approval-reason {
+            color: var(--text-secondary);
+            font-size: 13px;
+            line-height: 1.4;
+            opacity: 0.8;
+        }
+
+        .approval-session {
+            font-family: 'Monaco', monospace;
+            font-size: 11px;
+            color: #60a5fa;
+            opacity: 0.7;
+        }
+
+        /* ═════ ACTIONS ═════════════════════════════════════════════ */
+        .approval-actions {
+            display: flex;
+            gap: 8px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .btn-approve, .btn-deny {
+            padding: 8px 14px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 700;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .btn-approve {
+            background: linear-gradient(135deg, var(--accent-green), #059669);
+            color: white;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2);
+        }
+
+        .btn-approve:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 16px rgba(16, 185, 129, 0.3);
+        }
+
+        .btn-deny {
+            background: linear-gradient(135deg, var(--accent-red), #dc2626);
+            color: white;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
+        }
+
+        .btn-deny:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 16px rgba(239, 68, 68, 0.3);
+        }
+
+        /* ═════ EMPTY STATE ═════════════════════════════════════════ */
+        .empty-state {
+            padding: 60px 40px;
+            text-align: center;
+            color: var(--text-muted);
+        }
+
+        .empty-icon {
+            font-size: 56px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+            animation: float 3s ease-in-out infinite;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+
+        .empty-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+
+        .empty-subtitle {
+            font-size: 14px;
+            opacity: 0.8;
+        }
+
+        /* ═════ LOADING STATE ═══════════════════════════════════════ */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-muted);
+        }
+
+        .loading::after {
+            content: '';
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: var(--accent-blue);
+            border-radius: 50%;
+            animation: pulse 1.5s ease-in-out infinite;
+            margin-left: 8px;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        /* ═════ ERROR ═══════════════════════════════════════════════ */
+        .error-message {
+            padding: 16px 20px;
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #fca5a5;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            backdrop-filter: blur(10px);
+        }
+
+        /* ═════ RESPONSIVE ═════════════════════════════════════════ */
+        /* Tablet and smaller screens */
+        @media (max-width: 768px) {
+            body {
+                padding: 16px;
+            }
+
+            .container {
+                max-width: 100%;
+            }
+
+            header {
+                padding: 20px;
+                margin-bottom: 20px;
+            }
+
+            h1 {
+                font-size: 24px;
+                margin-bottom: 16px;
+            }
+
+            .status-grid {
+                grid-template-columns: 1fr;
+                gap: 12px;
+                margin-top: 16px;
+            }
+
+            .status-item {
+                padding: 10px 12px;
+                font-size: 13px;
+            }
+
+            .approval-item {
+                grid-template-columns: 1fr;
+                gap: 12px;
+                padding: 16px;
+            }
+
+            .approval-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
+            }
+
+            .risk-badge {
+                align-self: flex-start;
+            }
+
+            .approval-actions {
+                width: 100%;
+                flex-direction: column;
+                gap: 8px;
+            }
+
+            .btn-approve, .btn-deny {
+                width: 100%;
+                padding: 12px 16px;
+                font-size: 14px;
+                min-height: 44px;
+            }
+
+            button {
+                padding: 12px 16px;
+                min-height: 44px;
+                font-size: 14px;
+            }
+
+            .controls {
+                gap: 8px;
+            }
+
+            .toolbar {
+                flex-direction: column;
+                gap: 12px;
+            }
+
+            .toolbar > * {
+                width: 100%;
+            }
+        }
+
+        /* Mobile phones */
+        @media (max-width: 480px) {
+            body {
+                padding: 12px;
+            }
+
+            header {
+                padding: 16px;
+                margin-bottom: 16px;
+            }
+
+            h1 {
+                font-size: 20px;
+                margin-bottom: 12px;
+            }
+
+            .status-grid {
+                gap: 8px;
+                margin-top: 12px;
+            }
+
+            .status-item {
+                padding: 8px 10px;
+                font-size: 12px;
+            }
+
+            .status-item-value {
+                font-size: 16px;
+            }
+
+            .approval-item {
+                padding: 12px;
+                gap: 8px;
+                border-radius: 12px;
+            }
+
+            .approval-actions {
+                gap: 6px;
+            }
+
+            .btn-approve, .btn-deny {
+                padding: 10px 12px;
+                font-size: 13px;
+            }
+
+            button {
+                padding: 10px 12px;
+                min-height: 44px;
+                border-radius: 8px;
+            }
+
+            .approval-list {
+                gap: 12px;
+            }
+
+            .empty-state {
+                padding: 40px 20px;
+            }
+
+            .empty-icon {
+                font-size: 48px;
+            }
+
+            .empty-title {
+                font-size: 16px;
+            }
+
+            .empty-subtitle {
+                font-size: 13px;
+            }
+        }
+
+        /* Touch device optimizations */
+        @media (hover: none) and (pointer: coarse) {
+            button {
+                min-height: 44px;
+                min-width: 44px;
+                border-radius: 10px;
+            }
+
+            button:active {
+                transform: scale(0.98);
+            }
+
+            .approval-item {
+                padding: 14px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔐 Approval System</h1>
+            <div class="status-grid">
+                <div class="status-item">
+                    <span>Pending Requests</span>
+                    <span class="status-item-value" id="pending-count">0</span>
+                </div>
+                <div class="status-item">
+                    <span>Auto-Refresh</span>
+                    <span class="status-item-value">3s</span>
+                </div>
+                <div class="status-item">
+                    <span>Last Update</span>
+                    <span class="status-item-value" id="last-update">--:--</span>
+                </div>
+            </div>
+        </header>
+
+        <div class="controls">
+            <button onclick="refreshApprovals()">🔄 Refresh</button>
+            <button onclick="toggleAutoRefresh()" id="toggle-auto">⏸ Pause Auto-Refresh</button>
+        </div>
+
+        <div id="error-message"></div>
+
+        <div class="approvals-section">
+            <div class="section-header">
+                <span class="section-title">Pending Approvals</span>
+                <span class="section-count" id="approval-count">0</span>
+            </div>
+            <div class="approvals-list" id="approvals-list">
+                <div class="loading">Loading approvals...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:18789/api/v1';
+        let approvalData = [];
+        let autoRefreshInterval;
+        let autoRefreshEnabled = true;
+
+        function updateLastUpdate() {
+            const now = new Date();
+            document.getElementById('last-update').textContent = now.toLocaleTimeString();
+        }
+
+        function formatAge(timestamp) {
+            const now = Date.now() / 1000;
+            const age = Math.floor(now - timestamp);
+            if (age < 60) return `${age}s ago`;
+            if (age < 3600) return `${Math.floor(age / 60)}m ago`;
+            return `${Math.floor(age / 3600)}h ago`;
+        }
+
+        function getRiskClass(riskLevel) {
+            const risk = (riskLevel || 'UNKNOWN').toUpperCase();
+            if (risk.includes('CRITICAL') || risk.includes('SYSTEM')) return 'risk-critical';
+            if (risk.includes('DESTRUCTIVE') || risk.includes('HIGH')) return 'risk-high';
+            if (risk.includes('WRITE_SENSITIVE') || risk.includes('MEDIUM')) return 'risk-medium';
+            return 'risk-low';
+        }
+
+        async function refreshApprovals() {
+            try {
+                const response = await fetch(`${API_URL}/approvals/pending`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                const data = await response.json();
+                if (!data.success) throw new Error(data.error || 'Unknown error');
+
+                approvalData = data.approvals || [];
+                renderApprovals();
+                updateLastUpdate();
+                document.getElementById('error-message').innerHTML = '';
+
+            } catch (error) {
+                console.error('Error fetching approvals:', error);
+                showError(`Failed to fetch approvals: ${error.message}`);
+            }
+        }
+
+        function renderApprovals() {
+            const container = document.getElementById('approvals-list');
+            const pendingCount = approvalData.length;
+
+            document.getElementById('pending-count').textContent = pendingCount;
+            document.getElementById('approval-count').textContent = pendingCount;
+
+            if (pendingCount === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">✓</div>
+                        <div class="empty-title">All Caught Up!</div>
+                        <div class="empty-subtitle">No pending approvals at the moment</div>
+                    </div>
+                `;
+                return;
+            }
+
+            // Sort by risk level (critical first)
+            const sorted = [...approvalData].sort((a, b) => {
+                const riskOrder = { system_critical: 0, destructive: 1, write_sensitive: 2, write_safe: 3, read_only: 4 };
+                return (riskOrder[a.risk_level] || 5) - (riskOrder[b.risk_level] || 5);
+            });
+
+            container.innerHTML = sorted.map(appr => `
+                <div class="approval-item" data-request-id="${appr.request_id}">
+                    <div class="approval-content">
+                        <div class="approval-header">
+                            <span class="approval-action">${appr.action_type}</span>
+                            <span class="risk-badge ${getRiskClass(appr.risk_level)}">
+                                ${(appr.risk_level || 'unknown').toUpperCase()}
+                            </span>
+                        </div>
+                        <div class="approval-reason">${appr.reason || 'No reason provided'}</div>
+                        <div class="approval-meta">
+                            <span class="approval-session">${appr.session_id}</span>
+                            <span>${formatAge(appr.created_at)}</span>
+                        </div>
+                    </div>
+                    <div class="approval-actions">
+                        <button class="btn-approve" onclick="approveRequest('${appr.request_id}')">✓ Approve</button>
+                        <button class="btn-deny" onclick="denyRequest('${appr.request_id}')">✗ Deny</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function approveRequest(requestId) {
+            if (!confirm('Approve this request?')) return;
+
+            try {
+                const response = await fetch(`${API_URL}/approvals/resolve`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        request_id: requestId,
+                        approved: true,
+                        resolver_id: 'web_ui'
+                    })
+                });
+
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+
+                if (data.success) {
+                    await refreshApprovals();
+                } else {
+                    showError(data.error || 'Failed to approve request');
+                }
+            } catch (error) {
+                showError(`Error approving request: ${error.message}`);
+            }
+        }
+
+        async function denyRequest(requestId) {
+            if (!confirm('Deny this request?')) return;
+
+            try {
+                const response = await fetch(`${API_URL}/approvals/resolve`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        request_id: requestId,
+                        approved: false,
+                        resolver_id: 'web_ui'
+                    })
+                });
+
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+
+                if (data.success) {
+                    await refreshApprovals();
+                } else {
+                    showError(data.error || 'Failed to deny request');
+                }
+            } catch (error) {
+                showError(`Error denying request: ${error.message}`);
+            }
+        }
+
+        function showError(message) {
+            const container = document.getElementById('error-message');
+            container.innerHTML = `<div class="error-message">⚠️ ${message}</div>`;
+            setTimeout(() => {
+                container.innerHTML = '';
+            }, 6000);
+        }
+
+        function toggleAutoRefresh() {
+            autoRefreshEnabled = !autoRefreshEnabled;
+            const btn = document.getElementById('toggle-auto');
+            if (autoRefreshEnabled) {
+                btn.textContent = '⏸ Pause Auto-Refresh';
+                startAutoRefresh();
+            } else {
+                btn.textContent = '▶ Resume Auto-Refresh';
+                if (autoRefreshInterval) clearInterval(autoRefreshInterval);
+            }
+        }
+
+        function startAutoRefresh() {
+            if (autoRefreshInterval) clearInterval(autoRefreshInterval);
+            autoRefreshInterval = setInterval(() => {
+                if (autoRefreshEnabled) {
+                    refreshApprovals();
+                }
+            }, 3000);
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            refreshApprovals();
+            startAutoRefresh();
+        });
+
+        // Refresh on visibility change
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                refreshApprovals();
+            }
+        });
+
+        // Cleanup
+        window.addEventListener('beforeunload', () => {
+            if (autoRefreshInterval) clearInterval(autoRefreshInterval);
+        });
+    </script>
+</body>
+</html>

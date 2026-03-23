@@ -54,51 +54,109 @@
   </div>
 
   <script>
+    const API_URL = 'http://localhost:18789/api/v1';
     const runId = new URLSearchParams(window.location.search).get('run_id');
-    
+
     async function loadRun() {
-      if (!runId) return;
-      
+      if (!runId) {
+        document.getElementById('run-title').textContent = "No Run ID Specified";
+        return;
+      }
+
       try {
-        const response = await fetch(`/api/v2/runs`);
-        const data = await response.json();
-        const run = data.runs.find(r => r.run_id === runId);
-        
-        if (!run) {
+        const response = await fetch(`${API_URL}/runs/${runId}`);
+        if (!response.ok) {
           document.getElementById('run-title').textContent = "Run Not Found";
           return;
         }
-        
-        renderRun(run);
+
+        const data = await response.json();
+        if (!data.success) {
+          document.getElementById('run-title').textContent = `Error: ${data.error}`;
+          return;
+        }
+
+        renderRun(data.run);
       } catch (err) {
-        console.error(err);
+        console.error('Error loading run:', err);
+        document.getElementById('run-title').textContent = "Error Loading Run";
       }
+    }
+
+    function formatDate(timestamp) {
+      if (!timestamp) return '-';
+      return new Date(timestamp * 1000).toLocaleString();
+    }
+
+    function formatDuration(seconds) {
+      if (!seconds) return '-';
+      if (seconds < 60) return `${Math.floor(seconds)}s`;
+      if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
+      return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
     }
 
     function renderRun(run) {
       document.getElementById('run-title').textContent = `Run ${run.run_id}`;
-      document.getElementById('run-meta').textContent = `Session: ${run.session_id} | Created: ${new Date(run.created_at * 1000).toLocaleString()}`;
-      
+      document.getElementById('run-meta').textContent = `Session: ${run.session_id} | Intent: ${run.intent}`;
+
       const pill = document.getElementById('run-status-pill');
       pill.textContent = run.status.toUpperCase();
-      pill.className = `pill ${run.status === 'completed' ? 'ok' : (run.status === 'failed' ? 'err' : 'warn')}`;
-      
+      const statusClass = run.status === 'completed' ? 'ok' : (run.status === 'error' ? 'err' : 'warn');
+      pill.className = `pill ${statusClass}`;
+
       const details = document.getElementById('run-details');
+      const duration = run.completed_at ? formatDuration(run.completed_at - run.started_at) : 'Running';
+
       details.innerHTML = `
-        <p><strong>Run ID:</strong> ${run.run_id}</p>
-        <p><strong>Session ID:</strong> ${run.session_id}</p>
-        <p><strong>Started:</strong> ${run.started_at ? new Date(run.started_at * 1000).toLocaleTimeString() : '-'}</p>
-        <p><strong>Finished:</strong> ${run.finished_at ? new Date(run.finished_at * 1000).toLocaleTimeString() : '-'}</p>
-        <p><strong>Event IDs:</strong> ${run.event_ids.join(', ')}</p>
+        <p><strong>Run ID:</strong> <code>${run.run_id}</code></p>
+        <p><strong>Session:</strong> ${run.session_id}</p>
+        <p><strong>Intent:</strong> ${run.intent}</p>
+        <p><strong>Status:</strong> ${run.status}</p>
+        <p><strong>Started:</strong> ${formatDate(run.started_at)}</p>
+        <p><strong>Duration:</strong> ${duration}</p>
+        <p><strong>Steps:</strong> ${run.steps ? run.steps.length : 0}</p>
+        <p><strong>Tool Calls:</strong> ${run.tool_calls ? run.tool_calls.length : 0}</p>
       `;
-      
+
       if (run.error) {
-        details.innerHTML += `<div class="pill err" style="margin-top: 1rem;">Error: ${run.error.message}</div>`;
+        details.innerHTML += `<div class="pill err" style="margin-top: 1rem;">⚠️ Error: ${run.error}</div>`;
+      }
+
+      // Render execution timeline (steps)
+      const timeline = document.getElementById('execution-timeline');
+      if (run.steps && run.steps.length > 0) {
+        timeline.innerHTML = run.steps.map((step, idx) => `
+          <div class="step-card">
+            <div class="step-header">
+              <span><strong>Step ${idx + 1}:</strong> ${step.type || 'Unknown'}</span>
+              ${step.status ? `<span class="pill ${step.status === 'completed' ? 'ok' : 'warn'}">${step.status}</span>` : ''}
+            </div>
+            ${step.description ? `<p>${step.description}</p>` : ''}
+            ${step.data ? `<div class="step-details">${JSON.stringify(step.data, null, 2)}</div>` : ''}
+          </div>
+        `).join('');
+      } else {
+        timeline.innerHTML = '<p class="muted">No steps recorded</p>';
+      }
+
+      // Render tool calls (as logs)
+      const logs = document.getElementById('structured-logs');
+      if (run.tool_calls && run.tool_calls.length > 0) {
+        logs.innerHTML = run.tool_calls.map(call => `
+          <div class="log-entry">
+            <span style="color: #60a5fa;">${call.tool}</span>
+            <span style="color: #999;">${call.status === 'success' ? '✓' : '✗'}</span>
+            ${call.error ? `<span style="color: #ef4444;">${call.error}</span>` : ''}
+          </div>
+        `).join('');
+      } else {
+        logs.innerHTML = '<p class="muted">No tool calls</p>';
       }
     }
 
-    // In a real implementation, we'd also fetch specific run logs and steps
+    // Load run on page load
     loadRun();
+    // Auto-refresh every 5 seconds
     setInterval(loadRun, 5000);
   </script>
 </body>

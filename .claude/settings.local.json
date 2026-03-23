@@ -84,7 +84,8 @@
       "Bash(lsof:*)",
       "Bash(git:*)",
       "Bash(npx --version)",
-      "Bash(npm --version)"
+      "Bash(npm --version)",
+      "Bash(node:*)"
     ]
   }
 }
