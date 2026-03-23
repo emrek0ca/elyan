@@ -99,6 +99,7 @@ class TaskDefinition:
     dependencies: List[str] = field(default_factory=list)
     is_risky: bool = False
     requires_approval: bool = False
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class TaskEngine:
@@ -419,13 +420,13 @@ class TaskEngine:
 
                 local_context["adaptive_budget_recommendation"] = recommended_budget
                 local_context["adaptive_mode_preference"] = preferred_mode
+                local_context["adaptive_budget_ms"] = int(recommended_budget * 1000)
 
                 ceo_result = await self.cognitive_integrator.simulate_task_execution(
                     task_id=f"ceo_sim_{action[:20]}",
                     action=action,
                     params=params,
-                    context=local_context,
-                    budget_ms=int(recommended_budget * 1000)
+                    context=local_context
                 )
                 if ceo_result.get("success"):
                     if ceo_result.get("conflicts_detected"):
