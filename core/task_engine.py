@@ -1011,7 +1011,13 @@ class TaskEngine:
         if any(k in t for k in ["plan", "parcala", "parçala", "görev", "alt görev", "decompose"]):
             return "create_plan"
         if any(k in t for k in ["araştır", "research", "incele", "detaylı bilgi"]):
-            return "advanced_research"
+            # Check if research is enabled in operator mode
+            from core.capability_gating import get_capability_gate
+            if get_capability_gate().check_research_enabled():
+                return "advanced_research"
+            else:
+                # Fall back to basic web search in operator mode
+                return "web_search"
         if any(k in t for k in ["ara ", "arat", "google", "search"]):
             return "web_search"
         if any(k in t for k in ["mail", "e-posta", "email", "gönder"]):
@@ -1052,13 +1058,27 @@ class TaskEngine:
             description = f"Stage {idx}: {stage_text}"
 
             if domain == "research":
-                action = "advanced_research"
-                params = {"topic": stage_text, "depth": "medium"}
+                # Capability gating: research only in advanced mode
+                from core.capability_gating import get_capability_gate
+                gate = get_capability_gate()
+                if gate.check_research_enabled():
+                    action = "advanced_research"
+                    params = {"topic": stage_text, "depth": "medium"}
+                else:
+                    # Skip research in operator mode
+                    continue
             elif domain == "website":
                 action = "create_web_project_scaffold"
                 params = {"project_name": stage_text[:80], "stack": "react", "output_dir": "~/Desktop"}
             elif domain == "code":
-                action = "create_software_project_pack"
+                # Capability gating: code features only in advanced mode
+                from core.capability_gating import get_capability_gate
+                gate = get_capability_gate()
+                if gate.check_code_intel_enabled():
+                    action = "create_software_project_pack"
+                else:
+                    # Skip code features in operator mode
+                    continue
                 project_type = "game" if any(k in stage_text.lower() for k in ["oyun", "game", "pygame", "unity"]) else "app"
                 params = {
                     "project_name": stage_text[:80],
