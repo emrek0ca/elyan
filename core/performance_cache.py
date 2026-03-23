@@ -128,6 +128,11 @@ _cognitive_cache = PerformanceCache("cognitive_metrics")
 _security_cache = PerformanceCache("security_policy")
 
 
+def get_cache() -> PerformanceCache:
+    """Get general purpose cache (intent cache)"""
+    return _intent_cache
+
+
 def get_intent_cache() -> PerformanceCache:
     """Get intent analysis cache"""
     return _intent_cache

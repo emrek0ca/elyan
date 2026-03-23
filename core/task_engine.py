@@ -44,6 +44,8 @@ from .artifact_quality_engine import get_artifact_quality_engine
 from .goal_graph import get_goal_graph_planner
 from .operator_policy import get_operator_policy_engine
 from .cognitive_layer_integrator import get_cognitive_integrator
+from .adaptive_tuning import get_adaptive_tuning
+from .performance_cache import get_cache
 from config.settings_manager import SettingsPanel
 from security.validator import validate_input, sanitize_input
 from security.audit import get_audit_logger
@@ -126,6 +128,10 @@ class TaskEngine:
 
         # Phase 4: Cognitive Layer Integration
         self.cognitive_integrator = get_cognitive_integrator()
+
+        # Phase 5: Adaptive Tuning & Performance Optimization
+        self.adaptive_tuning = get_adaptive_tuning()
+        self.cache = get_cache()
 
         # Cognitive tracing for all tasks
         self.cognitive_traces: Dict[str, Any] = {}
@@ -364,8 +370,15 @@ class TaskEngine:
             capability_domain = str(execution_req.get("capability_domain", "general"))
             capability_objective = str(execution_req.get("primary_objective", "solve_user_task_reliably"))
 
-            # 2. Intent Analysis
-            intent_result = await self._analyze_intent(user_input, local_context)
+            # 2. Intent Analysis (with caching)
+            intent_cache_key = f"intent:{user_input[:100]}"
+            cached_intent = self.cache.get(intent_cache_key)
+            if cached_intent:
+                logger.info(f"Cache HIT: Intent for '{user_input[:50]}...'")
+                intent_result = cached_intent
+            else:
+                intent_result = await self._analyze_intent(user_input, local_context)
+                self.cache.set(intent_cache_key, intent_result)
             decompose_tried = False
             planner_route_used = False
 
@@ -397,11 +410,22 @@ class TaskEngine:
             if self.settings.get("cognitive_layer_enabled", True):
                 action = intent_result.get("action", "unknown")
                 params = intent_result.get("params", {})
+
+                # Phase 5: Get adaptive tuning recommendations for budget
+                task_type = self._infer_task_type(action)
+                default_budget = 120.0  # Default 120 seconds
+                recommended_budget = self.adaptive_tuning.get_recommended_budget(task_type, default_budget)
+                preferred_mode = self.adaptive_tuning.get_preferred_mode(task_type)
+
+                local_context["adaptive_budget_recommendation"] = recommended_budget
+                local_context["adaptive_mode_preference"] = preferred_mode
+
                 ceo_result = await self.cognitive_integrator.simulate_task_execution(
                     task_id=f"ceo_sim_{action[:20]}",
                     action=action,
                     params=params,
-                    context=local_context
+                    context=local_context,
+                    budget_ms=int(recommended_budget * 1000)
                 )
                 if ceo_result.get("success"):
                     if ceo_result.get("conflicts_detected"):
@@ -442,7 +466,16 @@ class TaskEngine:
                 if tasks:
                     logger.info(f"Goal-graph deterministic workflow selected ({len(tasks)} tasks)")
                 else:
-                    tasks = await self._decompose_tasks(user_input, intent_result, local_context)
+                    # Task decomposition with caching
+                    decomp_cache_key = f"decompose:{user_input[:100]}:{intent_result.get('action', 'unknown')}"
+                    cached_tasks = self.cache.get(decomp_cache_key)
+                    if cached_tasks:
+                        logger.info(f"Cache HIT: Task decomposition for '{user_input[:50]}...'")
+                        tasks = cached_tasks
+                    else:
+                        tasks = await self._decompose_tasks(user_input, intent_result, local_context)
+                        if tasks:
+                            self.cache.set(decomp_cache_key, tasks)
 
             if not tasks:
                 # İlk deneme başarısızsa bir kez daha LLM decomposition dene (zorla)
@@ -1940,6 +1973,23 @@ JSON ciktisi (baska hicbir sey yazma):
                             result["cognitive_mode_switched"] = True
                             result["cognitive_mode_before"] = mode_result.get("mode_before")
                             result["cognitive_mode_after"] = mode_result.get("mode_after")
+
+                    # Phase 5: Adaptive Tuning - Record task outcome for learning
+                    try:
+                        task_type = self._infer_task_type(task_def.action)
+                        current_mode = getattr(self.cognitive_integrator, 'current_mode', 'FOCUSED')
+                        deadlock = deadlock_result.get("deadlock_detected", False) if self.settings.get("cognitive_layer_enabled", True) else False
+
+                        self.adaptive_tuning.record_task_outcome(
+                            task_type=task_type,
+                            actual_duration=execution_duration_ms / 1000.0,  # Convert to seconds
+                            budgeted_duration=120.0,  # Default budget (can be refined)
+                            mode=current_mode,
+                            success=result.get("success", False),
+                            deadlock_detected=deadlock
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to record adaptive tuning: {e}")
 
                     return {
                         "task_id": task_def.id,
