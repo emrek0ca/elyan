@@ -55,6 +55,11 @@ TOP_LEVEL_COMMANDS = [
     "completion",
     "subscription",
     "quota",
+    "research",
+    "screen",
+    "code",
+    "workflow",
+    "ux",
 ]
 
 COMMAND_SUGGESTION_OVERRIDES = {
@@ -690,6 +695,63 @@ def main(argv: list[str] | None = None):
     p.add_argument("subcommand", nargs="?", choices=["status", "check"], default="status")
     p.add_argument("--user", metavar="USER_ID")
 
+    # ── research ─────────────────────────────────────────────────────────
+    p = sub.add_parser("research", help="🔬 Araştırma Motoru — Multi-kaynak, atıf")
+    p.add_argument("command", nargs="?", choices=["search", "session", "list"], default="search")
+    p.add_argument("query", nargs="*", help="Araştırma sorgusu")
+    p.add_argument("--depth", choices=["basic", "standard", "deep", "academic"], default="standard")
+    p.add_argument("--format", choices=["text", "json", "md"], default="text")
+    p.add_argument("--session", metavar="SESSION_ID", help="Oturum ID'si (kaydetmek için)")
+
+    # ── screen ───────────────────────────────────────────────────────────
+    p = sub.add_parser("screen", help="👁️ Gorsel Analiz — OCR, erisilebilirlik")
+    p.add_argument("subcommand", nargs="?",
+                   choices=["analyze", "ocr", "accessibility", "session", "list"],
+                   default="analyze")
+    p.add_argument("target", nargs="?", help="Goruntu dosyasi (yoksa ekran goruntusu alinir)")
+    p.add_argument("--prompt", metavar="PROMPT")
+    p.add_argument("--type", dest="analysis_type",
+                   choices=["comprehensive", "ocr", "ui", "diff"],
+                   default="comprehensive")
+    p.add_argument("--app", metavar="APP")
+    p.add_argument("--format", choices=["text", "json", "md"], default="text")
+    p.add_argument("--session", metavar="SESSION_ID")
+
+    # ── code ─────────────────────────────────────────────────────────────
+    p = sub.add_parser("code", help="🔍 Kod Analizi — Tarama, calistirma, test uretimi")
+    p.add_argument("subcommand", nargs="?",
+                   choices=["analyze", "run", "scan", "test"],
+                   default="analyze")
+    p.add_argument("target", nargs="?", help="Dosya yolu veya '-' (stdin)")
+    p.add_argument("--language", "-l", default="auto", metavar="LANG")
+    p.add_argument("--timeout", type=int, default=10)
+    p.add_argument("--severity",
+                   choices=["low", "medium", "high", "critical"],
+                   default=None)
+    p.add_argument("--format", choices=["text", "json", "md"], default="text")
+
+    # ── workflow ─────────────────────────────────────────────────────────
+    p = sub.add_parser("workflow", help="⚙️ Adim Adim İş Akışı — Otomasyonu")
+    p.add_argument("subcommand", nargs="?",
+                   choices=["run", "create", "list", "status", "delete"],
+                   default="list")
+    p.add_argument("target", nargs="?", help="Workflow ID veya JSON spec dosyasi")
+    p.add_argument("--name", metavar="NAME")
+    p.add_argument("--format", choices=["text", "json", "md"], default="text")
+    p.add_argument("--yes", action="store_true")
+
+    # ── ux ───────────────────────────────────────────────────────────────
+    p = sub.add_parser("ux", help="✨ Premium UX — Sohbet, öneriler, bağlam sürekliliği")
+    p.add_argument("subcommand", nargs="?",
+                   choices=["message", "session", "sessions", "clear"],
+                   default="sessions")
+    p.add_argument("target", nargs="?", help="Mesaj veya Session ID")
+    p.add_argument("--session", metavar="ID", default="default")
+    p.add_argument("--stream", action="store_true", help="Real-time streaming")
+    p.add_argument("--format", choices=["text", "json", "md"], default="text")
+    p.add_argument("--multimodal", nargs="*", help="Multimodal inputs (images, audio, docs)")
+    p.add_argument("--yes", action="store_true")
+
     # ════════════════════════════════════════════════════════════════════
     if argv:
         first = str(argv[0]).strip()
@@ -762,6 +824,167 @@ def main(argv: list[str] | None = None):
     elif args.command == "quota":
         from cli.commands import quota
         quota.run(args)
+
+    elif args.command == "research":
+        from cli.commands import research
+        research_cmd = getattr(args, "command", "search").strip().lower()
+        query = " ".join(getattr(args, "query", []) or []).strip()
+
+        if research_cmd == "search":
+            if not query:
+                print("Hata: Sorgu gerekli (örn: elyan research 'Python nedir')", file=sys.stderr)
+                return 1
+            research.research_search(
+                query,
+                depth=getattr(args, "depth", "standard"),
+                format=getattr(args, "format", "text"),
+                session=getattr(args, "session", None),
+            )
+        elif research_cmd == "session":
+            if not query:
+                print("Hata: Oturum ID gerekli (örn: elyan research session abc123)", file=sys.stderr)
+                return 1
+            research.research_session(query, format=getattr(args, "format", "text"))
+        elif research_cmd == "list":
+            research.research_list(format=getattr(args, "format", "text"))
+
+    elif args.command == "screen":
+        from cli.commands import screen
+        screen_cmd = getattr(args, "subcommand", "analyze").strip().lower()
+        target = getattr(args, "target", "") or ""
+
+        if screen_cmd == "analyze":
+            screen.screen_analyze(
+                target,
+                prompt=getattr(args, "prompt", None),
+                analysis_type=getattr(args, "analysis_type", "comprehensive"),
+                format=getattr(args, "format", "text"),
+                session=getattr(args, "session", None),
+            )
+        elif screen_cmd == "ocr":
+            screen.screen_ocr(target, format=getattr(args, "format", "text"))
+        elif screen_cmd == "accessibility":
+            screen.screen_accessibility(
+                app=getattr(args, "app", None),
+                format=getattr(args, "format", "text"),
+            )
+        elif screen_cmd == "session":
+            if not target:
+                print("Hata: Oturum ID gerekli", file=sys.stderr)
+                return 1
+            screen.screen_session(target, format=getattr(args, "format", "text"))
+        elif screen_cmd == "list":
+            screen.screen_list(format=getattr(args, "format", "text"))
+
+    elif args.command == "code":
+        from cli.commands import code
+        code_cmd = getattr(args, "subcommand", "analyze").strip().lower()
+        target = getattr(args, "target", "") or ""
+
+        if not target and code_cmd != "help":
+            print("Hata: TARGET gerekli (dosya yolu veya '-' stdin için)", file=sys.stderr)
+            return 1
+
+        if code_cmd == "analyze":
+            code.code_analyze(
+                target,
+                language=getattr(args, "language", "auto"),
+                format=getattr(args, "format", "text"),
+            )
+        elif code_cmd == "run":
+            code.code_run(
+                target,
+                language=getattr(args, "language", "auto"),
+                timeout=getattr(args, "timeout", 10),
+            )
+        elif code_cmd == "scan":
+            code.code_scan(
+                target,
+                language=getattr(args, "language", "auto"),
+                severity=getattr(args, "severity", None),
+                format=getattr(args, "format", "text"),
+            )
+        elif code_cmd == "test":
+            code.code_test(
+                target,
+                language=getattr(args, "language", "python"),
+                format=getattr(args, "format", "text"),
+            )
+
+    elif args.command == "workflow":
+        from cli.commands import workflow
+        wf_cmd = getattr(args, "subcommand", "list").strip().lower()
+        target = getattr(args, "target", "") or ""
+
+        if wf_cmd == "run":
+            if not target:
+                print("Hata: Workflow ID veya dosya gerekli", file=sys.stderr)
+                return 1
+            workflow.workflow_run(
+                target,
+                format=getattr(args, "format", "text"),
+            )
+        elif wf_cmd == "create":
+            if not target:
+                print("Hata: Spec dosyasi gerekli", file=sys.stderr)
+                return 1
+            workflow.workflow_create(
+                target,
+                name=getattr(args, "name", None),
+            )
+        elif wf_cmd == "list":
+            workflow.workflow_list(format=getattr(args, "format", "text"))
+        elif wf_cmd == "status":
+            if not target:
+                print("Hata: Workflow ID gerekli", file=sys.stderr)
+                return 1
+            workflow.workflow_status(
+                target,
+                format=getattr(args, "format", "text"),
+            )
+        elif wf_cmd == "delete":
+            if not target:
+                print("Hata: Workflow ID gerekli", file=sys.stderr)
+                return 1
+            workflow.workflow_delete(
+                target,
+                yes=getattr(args, "yes", False),
+            )
+
+    elif args.command == "ux":
+        from cli.commands import ux
+        ux_cmd = getattr(args, "subcommand", "sessions").strip().lower()
+        target = getattr(args, "target", "") or ""
+
+        if ux_cmd == "message":
+            if not target:
+                print("Hata: Mesaj gerekli", file=sys.stderr)
+                return 1
+            ux.ux_message(
+                target,
+                session=getattr(args, "session", "default"),
+                stream=getattr(args, "stream", False),
+                format=getattr(args, "format", "text"),
+                multimodal=getattr(args, "multimodal", None),
+            )
+        elif ux_cmd == "session":
+            if not target:
+                print("Hata: Session ID gerekli", file=sys.stderr)
+                return 1
+            ux.ux_session(
+                target,
+                format=getattr(args, "format", "text"),
+            )
+        elif ux_cmd == "sessions":
+            ux.ux_sessions(format=getattr(args, "format", "text"))
+        elif ux_cmd == "clear":
+            if not target:
+                print("Hata: Session ID gerekli", file=sys.stderr)
+                return 1
+            ux.ux_clear(
+                target,
+                yes=getattr(args, "yes", False),
+            )
 
     elif args.command == "routines":
         from cli.commands import routines
