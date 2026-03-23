@@ -523,6 +523,7 @@ def main(argv: list[str] | None = None):
     p.add_argument("--port", type=int)
     p.add_argument("--no-browser", action="store_true")
     p.add_argument("--ops", action="store_true", help="Admin ops console ac")
+    p.add_argument("-f", "--force", action="store_true", help="Eski süreçleri öldürüp temiz başlatır")
 
     # ── autopilot ───────────────────────────────────────────────────────
     p = sub.add_parser("autopilot", help="Otonom otomasyon motoru")

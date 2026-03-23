@@ -7,9 +7,15 @@ def run(args) -> int:
     port = getattr(args, "port", None)
     no_browser = bool(getattr(args, "no_browser", False))
     ops = bool(getattr(args, "ops", False))
+    force = bool(getattr(args, "force", False))
 
     print("🚀  Elyan launch başlıyor...")
-    gateway.start_gateway(daemon=True, port=port)
+    
+    if force:
+        print("🔄  Eski süreçler temizleniyor (--force)...")
+        gateway.restart_gateway(daemon=True, port=port)
+    else:
+        gateway.start_gateway(daemon=True, port=port)
 
     gateway_port = int(port or gateway.DEFAULT_PORT)
     runtime = gateway._fetch_gateway_status(gateway_port)

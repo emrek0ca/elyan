@@ -91,7 +91,31 @@ DEFAULT_SETTINGS = {
     "vision_quality": "balanced",
     "media_polling": True,
     "glass_opacity": 0.8,
-    "log_level": "INFO"
+    "log_level": "INFO",
+    # Phase 4: Cognitive Layer Configuration
+    "cognitive_layer_enabled": True,
+    "ceo_simulation_enabled": True,
+    "ceo_max_simulation_depth": 4,
+    "deadlock_detection_enabled": True,
+    "deadlock_failure_threshold": 3,
+    "deadlock_failure_rate_threshold": 0.7,
+    "execution_mode_default": "FOCUSED",
+    "focused_mode_timeout_seconds": 300,
+    "diffuse_mode_probability": 0.3,
+    "einstellung_detection_enabled": True,
+    "einstellung_failure_threshold": 3,
+    "time_boxed_scheduler_enabled": True,
+    "simple_query_budget_seconds": 10,
+    "file_operation_budget_seconds": 30,
+    "api_call_budget_seconds": 20,
+    "complex_analysis_budget_seconds": 300,
+    "pomodoro_focus_duration_seconds": 300,
+    "pomodoro_break_duration_seconds": 5,
+    "sleep_consolidation_enabled": False,
+    "sleep_consolidation_schedule": "daily",
+    "sleep_consolidation_time": "02:00",
+    "cognitive_trace_logging_enabled": True,
+    "cognitive_trace_log_path": "~/.elyan/logs/cognitive_trace.log",
 }
 
 class SettingsPanel:

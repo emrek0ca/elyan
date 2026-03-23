@@ -15,8 +15,10 @@ from .channel_capabilities import resolve_channel_capabilities
 from core.channel_delivery import channel_delivery_bridge
 from config.settings import ELYAN_DIR
 from utils.logger import get_logger
+from core.observability.logger import get_structured_logger
 
 logger = get_logger("gateway_router")
+slog = get_structured_logger("gateway_router")
 
 class GatewayRouter:
     """Orchestrates message flow between adapters and the AI Agent pool."""
@@ -311,6 +313,33 @@ class GatewayRouter:
         logger.info(f"Adapter registered: {channel_type}")
 
     async def handle_incoming_message(self, message: UnifiedMessage):
+        """Safe wrapper for message processing that guarantees a response on critical failure."""
+        try:
+            await self._handle_incoming_message_unsafe(message)
+        except Exception as e:
+            logger.error(f"Global unhandled error in gateway router: {e}", exc_info=True)
+            try:
+                self._increment_counter(message.channel_type, "processing_errors")
+            except Exception:
+                pass
+            
+            try:
+                from core.gateway.server import push_activity
+                push_activity("error", message.channel_type, f"Critical: {e}"[:60], success=False)
+            except Exception:
+                pass
+
+            error_resp = UnifiedResponse(
+                text="⚠️ Sistemde anlık bir teknik arıza oluştu (Gateway Error). Lütfen logları kontrol edin veya daha sonra tekrar deneyin.",
+                format="plain"
+            )
+            try:
+                channel_id = str(getattr(message, "channel_id", "") or "")
+                await self.send_outgoing_response(message.channel_type, channel_id, error_resp)
+            except Exception as final_e:
+                logger.error(f"Failed to send global error response: {final_e}")
+
+    async def _handle_incoming_message_unsafe(self, message: UnifiedMessage):
         """Callback triggered by any adapter when a message is received."""
         from core.protocol.events import MessageReceived, SessionResolved, ActorIdentity
         from core.session_engine import session_manager
