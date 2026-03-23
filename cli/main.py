@@ -21,6 +21,7 @@ TOP_LEVEL_COMMANDS = [
     "health",
     "logs",
     "status",
+    "cognitive",
     "routines",
     "config",
     "gateway",
@@ -313,6 +314,17 @@ def main(argv: list[str] | None = None):
     # ── status ──────────────────────────────────────────────────────────
     p = sub.add_parser("status", help="Genel durum")
     p.add_argument("--deep", action="store_true")
+    p.add_argument("--json", action="store_true")
+
+    # ── cognitive ───────────────────────────────────────────────────────
+    p = sub.add_parser("cognitive", help="Bilişsel katman (Phase 4)")
+    p.add_argument("subcommand", nargs="?",
+                   choices=["status", "insights", "diagnostics", "mode", "schedule-sleep"])
+    p.add_argument("task_id", nargs="?", help="Task ID (for insights)")
+    p.add_argument("--set-mode", dest="set_mode", metavar="MODE",
+                   help="Set execution mode (FOCUSED or DIFFUSE)")
+    p.add_argument("--time", metavar="HH:MM", help="Schedule time for sleep consolidation")
+    p.add_argument("--deep", action="store_true", help="Deep diagnostics")
     p.add_argument("--json", action="store_true")
 
     # ── routines ────────────────────────────────────────────────────────
@@ -729,6 +741,10 @@ def main(argv: list[str] | None = None):
         else:
             print("Status komutu bulunamadı.")
             return 1
+
+    elif args.command == "cognitive":
+        from cli.commands import cognitive
+        cognitive.run(args)
 
     elif args.command == "subscription":
         from cli.commands import subscription
