@@ -39,6 +39,7 @@ TOP_LEVEL_COMMANDS = [
     "message",
     "service",
     "dashboard",
+    "dashboard-api",
     "launch",
     "autopilot",
     "lean",
@@ -530,6 +531,14 @@ def main(argv: list[str] | None = None):
     p.add_argument("--no-browser", action="store_true")
     p.add_argument("--ops", action="store_true", help="Admin ops console ac")
 
+    # ── dashboard-api ───────────────────────────────────────────────────
+    p = sub.add_parser("dashboard-api", help="Real-time Dashboard API (Phase 5-3)")
+    p.add_argument("subcommand", nargs="?", choices=["start", "status", "metrics"], default="start")
+    p.add_argument("metric_name", nargs="?")
+    p.add_argument("--host", default="127.0.0.1", help="API sunucu adresi")
+    p.add_argument("--port", type=int, default=5000, help="API port")
+    p.add_argument("--debug", action="store_true", help="Debug modunda başlat")
+
     # ── launch ─────────────────────────────────────────────────────────
     p = sub.add_parser("launch", help="Gateway'i başlatıp dashboard'u aç")
     p.add_argument("--port", type=int)
@@ -868,6 +877,18 @@ def main(argv: list[str] | None = None):
             no_browser=getattr(args, "no_browser", False),
             ops=getattr(args, "ops", False),
         )
+
+    elif args.command == "dashboard-api":
+        from cli.commands import dashboard_api
+        result = dashboard_api.handle_dashboard_api_command(args)
+        if isinstance(result, dict):
+            if result.get("success"):
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+            else:
+                print(f"Error: {result.get('error')}", file=sys.stderr)
+                return 1
+        elif isinstance(result, int):
+            return result
 
     elif args.command == "launch":
         from cli.commands import launch
