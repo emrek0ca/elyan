@@ -4,7 +4,25 @@ from pathlib import Path
 from typing import Iterable, List
 
 
-ALLOWED_MARKDOWN_PATHS = frozenset({"PROGRESS.md"})
+ALLOWED_MARKDOWN_PATHS = frozenset({
+    "PROGRESS.md",
+    "README.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "OPERATING_MODES.md",
+    "SKILLS.md",
+    "TOOLS.md",
+    "AGENTS.md",
+    "DECISIONS.md",
+    "ROADMAP.md",
+    "SYSTEM_ARCHITECTURE.md",
+    "TASKS.md",
+    "CHANNELS.md",
+    "HANDOFF.md",
+    "v0.1.0_RELEASE_STATUS.md",
+    "PHASE4_SESSION5_SUMMARY.md",
+    "PHASE5_SESSION1_SUMMARY.md",
+})
 IGNORED_PREFIXES = (".git/", "venv/", ".venv/")
 
 
