@@ -101,12 +101,11 @@ class ComputerUseTool:
         self.max_steps = max_steps
         self.model = model
 
-        # NOTE: Actual components will be injected when available
-        # For now, this is a skeleton
-        self.actuator = None      # Will import RealTimeActuator
-        self.vision = None        # Will import VisionAnalyzer
-        self.planner = None       # Will import ActionPlanner
-        self.executor = None      # Will import ActionExecutor
+        # Components (lazy-loaded on first use)
+        self.actuator = None      # RealTimeActuator
+        self.vision = None        # VisionAnalyzer
+        self.planner = None       # ActionPlanner
+        self.executor = None      # ActionExecutor
 
         self.step_count = 0
         self.evidence = []
@@ -116,6 +115,20 @@ class ComputerUseTool:
             "max_steps": max_steps,
             "model": model
         })
+
+    async def _ensure_components(self):
+        """Lazy-load all components"""
+        if self.vision is None:
+            from elyan.computer_use.vision.analyzer import get_vision_analyzer
+            self.vision = await get_vision_analyzer(model=self.model)
+
+        if self.planner is None:
+            from elyan.computer_use.planning.action_planner import get_action_planner
+            self.planner = await get_action_planner()
+
+        if self.executor is None:
+            from elyan.computer_use.executor.action_executor import get_action_executor
+            self.executor = get_action_executor()
 
     async def execute_task(
         self,
@@ -128,12 +141,12 @@ class ComputerUseTool:
 
         Args:
             user_intent: Natural language instruction
-            initial_screenshot: Optional initial screenshot
-            approval_callback: Approval function for actions
+            initial_screenshot: Optional initial screenshot (bytes)
+            approval_callback: Approval function for actions (async)
 
         Returns:
             {
-                "status": "completed|failed|max_steps_reached",
+                "status": "completed|failed|max_steps_reached|cancelled",
                 "result": "extracted_data",
                 "steps": 7,
                 "evidence": ["ss_1", "ss_2", ...],
@@ -149,49 +162,65 @@ class ComputerUseTool:
         )
 
         try:
+            # Ensure all components loaded
+            await self._ensure_components()
+
             task.status = "running"
+            slog.log_event("computer_use_task_start", {
+                "task_id": task_id,
+                "intent": user_intent[:50]
+            })
 
             for self.step_count in range(self.max_steps):
                 # Step 1: Take screenshot
-                # TODO: Replace with actual screenshot
-                screenshot = b"placeholder"
-                screenshot_id = f"ss_{self.step_count}"
+                if self.step_count == 0 and initial_screenshot:
+                    screenshot = initial_screenshot
+                else:
+                    # TODO: Get from RealTimeActuator when available
+                    screenshot = await self._get_screenshot()
+
+                screenshot_id = f"ss_{self.step_count}_{int(time.time() * 1000)}"
                 self.evidence.append(screenshot_id)
 
                 # Step 2: Analyze with VLM
-                # TODO: Call self.vision.analyze(screenshot)
-                screen_analysis = {
-                    "elements": [],
-                    "description": "placeholder analysis"
-                }
-
-                # Step 3: Plan action
-                # TODO: Call self.planner.plan_next_action()
-                action = ComputerAction(
-                    action_type="wait",
-                    reasoning="Skeleton implementation"
+                screen_analysis = await self.vision.analyze(
+                    screenshot=screenshot,
+                    task_context=user_intent
                 )
 
-                # Step 4: Check approval
+                # Step 3: Plan next action
+                action = await self.planner.plan_next_action(
+                    user_intent=user_intent,
+                    screen_analysis=screen_analysis,
+                    previous_actions=self.action_trace
+                )
+
+                # Step 4: Check approval (if required)
                 if approval_callback:
                     approved = await approval_callback(action, screenshot)
                     if not approved:
-                        return {
-                            "status": "cancelled",
-                            "reason": "user_rejected_action",
-                            "steps": self.step_count,
-                            "evidence": self.evidence
-                        }
+                        task.status = "cancelled"
+                        task.error = "user_rejected_action"
+                        task.steps = self.action_trace
+                        task.evidence = self.evidence
+                        task.completed_at = time.time()
+                        return task.model_dump()
 
                 # Step 5: Execute action
-                # TODO: Call self.executor.execute(action)
-                execution_result = {"success": True}
+                execution_result = await self.executor.execute(action)
 
                 self.action_trace.append({
                     "step": self.step_count,
                     "action": action.model_dump(),
                     "result": execution_result,
                     "screenshot_id": screenshot_id
+                })
+
+                slog.log_event("action_executed", {
+                    "task_id": task_id,
+                    "step": self.step_count,
+                    "action_type": action.action_type,
+                    "success": execution_result.get("success")
                 })
 
                 # Step 6: Check if task complete
@@ -210,15 +239,20 @@ class ComputerUseTool:
 
                     return task.model_dump()
 
-                # Step 7: Natural delay
+                # Step 7: Natural delay before next step
                 await asyncio.sleep(action.wait_ms / 1000.0)
 
-            # Max steps reached
-            task.status = "failed"
-            task.error = "max_steps_reached"
+            # Max steps reached without completion
+            task.status = "max_steps_reached"
+            task.error = "exceeded_maximum_steps"
             task.steps = self.action_trace
             task.evidence = self.evidence
             task.completed_at = time.time()
+
+            slog.log_event("computer_use_task_max_steps", {
+                "task_id": task_id,
+                "steps": self.max_steps
+            })
 
             return task.model_dump()
 
@@ -236,6 +270,27 @@ class ComputerUseTool:
             }, level="error")
 
             return task.model_dump()
+
+    async def _get_screenshot(self) -> bytes:
+        """
+        Get screenshot from screen (placeholder)
+
+        TODO: Replace with RealTimeActuator.take_screenshot() when available
+        """
+        # For now, return dummy screenshot
+        # Will be replaced with actual screen capture
+        try:
+            from PIL import ImageGrab
+            img = ImageGrab.grab()
+            from io import BytesIO
+            buf = BytesIO()
+            img.save(buf, format='PNG')
+            return buf.getvalue()
+        except Exception as e:
+            slog.log_event("screenshot_error", {
+                "error": str(e)
+            }, level="warning")
+            return b""
 
 
 # ============================================================================
