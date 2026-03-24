@@ -109,10 +109,10 @@ Modern AI evolution follows a three-book framework:
 
 | Layer | Components | Stability | Owner |
 |-------|-----------|-----------|-------|
-| **Session & Policy** | SessionMgr, PolicyEngine, MemoryEngine | ⭐⭐⭐⭐⭐ | Core Team |
+| **Session & Policy** | SessionMgr, EncryptedVault, SessionSecurity, ApprovalAuditLog, PolicyEngine, MemoryEngine | ⭐⭐⭐⭐⭐ | Core Team |
 | **Intent & Routing** | IntentParser, Quick Detector, LLM Orchestrator | ⭐⭐⭐⭐ | Intent Team |
-| **Execution & Agents** | TaskEngine, Tool Exec, Approval Workflow | ⭐⭐⭐ | Executive Team |
-| **Advanced Features** | DeliveryEngine, ComputerUse, CognitiveLayers | ⭐⭐ | Innovation Team |
+| **Execution & Agents** | TaskEngine, Tool Exec, Approval Workflow, RunStore | ⭐⭐⭐ | Executive Team |
+| **Advanced Features** | DeliveryEngine, ComputerUse, CognitiveLayers, CacheManager, AsyncExecutor | ⭐⭐ | Innovation Team |
 
 ---
 
