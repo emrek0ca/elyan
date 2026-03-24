@@ -130,6 +130,14 @@ class ComputerUseTool:
             from elyan.computer_use.executor.action_executor import get_action_executor
             self.executor = get_action_executor()
 
+        if self.actuator is None:
+            # Try to get RealTimeActuator if available
+            try:
+                from core.actuator.realtime import get_realtime_actuator
+                self.actuator = get_realtime_actuator()
+            except (ImportError, AttributeError):
+                pass  # Optional, use fallback screenshot capture
+
     async def execute_task(
         self,
         user_intent: str,
@@ -164,6 +172,10 @@ class ComputerUseTool:
         try:
             # Ensure all components loaded
             await self._ensure_components()
+
+            # Initialize evidence recorder
+            from elyan.computer_use.evidence.recorder import get_evidence_recorder
+            evidence_recorder = await get_evidence_recorder()
 
             task.status = "running"
             slog.log_event("computer_use_task_start", {
@@ -213,8 +225,16 @@ class ComputerUseTool:
                     "step": self.step_count,
                     "action": action.model_dump(),
                     "result": execution_result,
-                    "screenshot_id": screenshot_id
+                    "screenshot_id": screenshot_id,
+                    "timestamp": time.time()
                 })
+
+                # Save screenshot to evidence
+                await evidence_recorder.save_screenshot(
+                    task_id=task_id,
+                    screenshot_id=screenshot_id,
+                    screenshot_bytes=screenshot
+                )
 
                 slog.log_event("action_executed", {
                     "task_id": task_id,
@@ -231,10 +251,18 @@ class ComputerUseTool:
                     task.evidence = self.evidence
                     task.completed_at = time.time()
 
+                    # Record evidence
+                    evidence_result = await evidence_recorder.record_task(task.model_dump())
+                    if evidence_result.get("success"):
+                        task.metadata = {
+                            "evidence_dir": evidence_result.get("evidence_dir")
+                        }
+
                     slog.log_event("computer_use_task_completed", {
                         "task_id": task_id,
                         "steps": self.step_count + 1,
-                        "duration_ms": int((task.completed_at - task.created_at) * 1000)
+                        "duration_ms": int((task.completed_at - task.created_at) * 1000),
+                        "evidence_recorded": evidence_result.get("success", False)
                     })
 
                     return task.model_dump()
@@ -249,6 +277,9 @@ class ComputerUseTool:
             task.evidence = self.evidence
             task.completed_at = time.time()
 
+            # Record evidence even on max steps
+            await evidence_recorder.record_task(task.model_dump())
+
             slog.log_event("computer_use_task_max_steps", {
                 "task_id": task_id,
                 "steps": self.max_steps
@@ -262,6 +293,9 @@ class ComputerUseTool:
             task.steps = self.action_trace
             task.evidence = self.evidence
             task.completed_at = time.time()
+
+            # Record evidence even on error
+            await evidence_recorder.record_task(task.model_dump())
 
             slog.log_event("computer_use_task_error", {
                 "task_id": task_id,

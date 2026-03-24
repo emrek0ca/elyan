@@ -413,6 +413,57 @@ class DashboardHTTPServer:
             status = 200 if result.get("success") else 400
             return result, status
 
+        # Computer Use endpoints
+        @self.app.route("/api/v1/computer_use/tasks", methods=["POST"])
+        def start_computer_use_task() -> Tuple[Dict[str, Any], int]:
+            from api.computer_use_api import get_computer_use_api
+            import asyncio
+
+            data = request.get_json() or {}
+            user_intent = data.get("user_intent", "")
+            approval_level = data.get("approval_level", "CONFIRM")
+
+            if not user_intent:
+                return {"success": False, "error": "Missing user_intent"}, 400
+
+            api = get_computer_use_api()
+            result = asyncio.run(api.start_task(user_intent, approval_level))
+            status = 200 if result.get("success") else 400
+            return result, status
+
+        @self.app.route("/api/v1/computer_use/tasks/<task_id>", methods=["GET"])
+        def get_computer_use_task_status(task_id: str) -> Tuple[Dict[str, Any], int]:
+            from api.computer_use_api import get_computer_use_api
+            import asyncio
+
+            api = get_computer_use_api()
+            result = asyncio.run(api.get_task_status(task_id))
+            status = 200 if result.get("success") else 404
+            return result, status
+
+        @self.app.route("/api/v1/computer_use/tasks/<task_id>/evidence", methods=["GET"])
+        def get_computer_use_task_evidence(task_id: str) -> Tuple[Dict[str, Any], int]:
+            from api.computer_use_api import get_computer_use_api
+            import asyncio
+
+            api = get_computer_use_api()
+            result = asyncio.run(api.get_task_evidence(task_id))
+            status = 200 if result.get("success") else 404
+            return result, status
+
+        @self.app.route("/api/v1/computer_use/tasks", methods=["GET"])
+        def list_computer_use_tasks() -> Tuple[Dict[str, Any], int]:
+            from api.computer_use_api import get_computer_use_api
+            import asyncio
+
+            status_filter = request.args.get("status")
+            limit = request.args.get("limit", 20, type=int)
+
+            api = get_computer_use_api()
+            result = asyncio.run(api.list_tasks(status=status_filter, limit=limit))
+            status = 200 if result.get("success") else 400
+            return result, status
+
         # API documentation
         @self.app.route("/api/v1/docs", methods=["GET"])
         def api_docs() -> Dict[str, Any]:
@@ -440,7 +491,11 @@ class DashboardHTTPServer:
                     "memory_timeline": "GET /api/v1/memory/timeline?limit=20",
                     "smart_suggestions": "GET /api/v1/suggestions/smart?context={json}",
                     "adaptive_response": "POST /api/v1/suggestions/adaptive",
-                    "learning_record": "POST /api/v1/learning/record"
+                    "learning_record": "POST /api/v1/learning/record",
+                    "start_computer_use_task": "POST /api/v1/computer_use/tasks",
+                    "get_task_status": "GET /api/v1/computer_use/tasks/<task_id>",
+                    "get_task_evidence": "GET /api/v1/computer_use/tasks/<task_id>/evidence",
+                    "list_tasks": "GET /api/v1/computer_use/tasks?status=*&limit=20"
                 }
             }
 
