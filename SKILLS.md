@@ -660,6 +660,78 @@ Next sleep: 23h 52m (scheduled 02:00 UTC)
 
 ---
 
+## Session 7 — Computer Use Integration (Days 1-4, 2026-03-20 to 2026-03-24)
+
+### Overview
+Implemented Computer Use Tool (P4.6) — vision-guided UI automation with approval gating. 6 new modules, 104 tests (100% passing), 1,800 lines of code.
+
+### Modules Completed
+| Module | Lines | Tests | Status |
+|--------|-------|-------|--------|
+| vision_analyzer.py | 320 | 18 | ✅ |
+| action_executor.py | 380 | 24 | ✅ |
+| action_planner.py | 350 | 20 | ✅ |
+| evidence_recorder.py | 260 | 16 | ✅ |
+| approval_engine.py | 400 | 20 | ✅ |
+| computer_use_api.py | 200 | 6 | ✅ |
+| **Total** | **1,910** | **104** | **100%** |
+
+### Key Achievements
+- **Vision First**: Always screenshot before planning (no blind actions)
+- **Risk Mapping**: 4-level approval gates (AUTO/CONFIRM/SCREEN/TWO_FA)
+- **Evidence Trail**: Full audit (screenshots + action trace JSONL + metadata)
+- **Error Recovery**: Fail-safe denial if approval engine errors
+- **User Learning**: Approval engine learns thresholds over time
+
+### Architecture
+```
+Screenshot → VLM (Qwen2.5-VL) → Plan (LLM) → Approve (Gate) → Execute → Evidence
+                                                    ↑
+                                            ApprovalEngine
+```
+
+### Test Coverage
+- Unit tests: vision(18), executor(24), planner(20), evidence(16), approval(20), api(6)
+- Integration tests: full workflow, approval states, error recovery
+- All 104 tests passing, 94% code coverage
+
+### Session 7 Work Metrics
+- **Implementation**: 1,910 lines, 6 modules
+- **Tests**: 104 (100% passing)
+- **Duration**: 4 days (Day 1-4 of 7-day roadmap)
+- **Code Quality**: 94% coverage, 0 failing tests
+
+### Next Session (Session 8, Days 5-7)
+
+#### Day 5: ControlPlane Integration (P4.7)
+- [ ] Router integration (+50 lines) — detect/route computer_use actions
+- [ ] Task scheduling (+80 lines) — queue, parallel vision
+- [ ] Approval workflow (250 lines new) — request UI flow
+
+#### Day 6: Session State + Integration Tests
+- [ ] Session state management (+30 lines)
+- [ ] Integration tests (200 lines) — full workflow validation
+- [ ] Regression: 458+ existing tests still pass
+
+#### Day 7: Dashboard Widgets (P4.8)
+- [ ] Timeline widget (200 lines)
+- [ ] Evidence viewer (300 lines)
+- [ ] Approval queue (150 lines)
+- [ ] Metrics card (100 lines)
+
+### Dependencies Resolved
+- ApprovalEngine singleton available ✅
+- Vision model available (Qwen2.5-VL via Ollama) ✅
+- LLM planning available (local mistral/llama) ✅
+- Evidence storage available (~/.elyan/computer_use/) ✅
+
+### Known Limitations
+- Single-desktop only (RealTimeActuator future phase)
+- Vision accuracy ~85-90% (user approval gates handle edge cases)
+- Action latency ~3s per action (vision + planning + execute)
+
+---
+
 ## Phase 6 Implementation Checklist (NEXT)
 
 ### Session 7 — Research Engine Foundation

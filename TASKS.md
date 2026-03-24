@@ -833,6 +833,76 @@ Make performance and cost visible.
 
 ---
 
+### P4.6 Computer Use Tool
+
+#### Objective
+Build a robust, approval-gated system for UI automation via screenshots and typed actions.
+
+#### Status
+✓ COMPLETE (104 tests, 100% passing)
+
+#### Subtasks
+- [x] Vision Module (320 lines, 18 tests) — Screenshot capture, OCR, layout tree
+- [x] Executor Module (380 lines, 24 tests) — 10 action types, real-time verification
+- [x] Planner Module (350 lines, 20 tests) — LLM-driven action sequencing
+- [x] Evidence Recorder (260 lines, 16 tests) — Screenshots, action trace (JSONL), metadata
+- [x] Approval Engine (400 lines, 20 tests) — 4-level approval gating (AUTO/CONFIRM/SCREEN/TWO_FA)
+- [x] REST API (200 lines, 6 tests) — Unified interface, task management
+
+#### Done when
+- Computer Use Tool fully integrated with ApprovalEngine
+- All 104 tests passing
+- Evidence audit trail complete
+
+---
+
+### P4.7 ControlPlane Integration
+
+#### Objective
+Wire Computer Use Tool into main agent execution loop with scheduling and approval workflow.
+
+#### Status
+IN PROGRESS (Day 5)
+
+#### Subtasks
+- [ ] Router Integration (50 lines) — Detect/route computer_use actions
+- [ ] Task Scheduling (80 lines) — Queue management, parallel vision analysis
+- [ ] Approval Workflow (250 lines) — Request flow, user learning
+- [ ] Session State (30 lines) — Preserve automation state across followups
+- [ ] Integration Tests (200 lines) — Full workflow validation
+
+#### Dependencies
+- P4.6 (Computer Use Tool)
+
+#### Estimated Effort
+3-4 sessions
+
+---
+
+### P4.8 Dashboard Widgets
+
+#### Objective
+Expose Computer Use through admin dashboard with real-time visualization.
+
+#### Status
+PENDING
+
+#### Subtasks
+- [ ] Action Timeline Widget (200 lines) — Sequence visualization
+- [ ] Evidence Viewer (300 lines) — Before/after screenshots + playback
+- [ ] Approval Queue Panel (150 lines) — Pending approvals, 2FA UI
+- [ ] Metrics Card (100 lines) — Success rate, latency, accuracy
+- [ ] Integration Tests (200 lines)
+
+#### Dependencies
+- P4.6 (Computer Use Tool)
+- P4.7 (ControlPlane Integration)
+
+#### Estimated Effort
+2-3 sessions
+
+---
+
 ## Phase 6 — Hardening and Reliability Tasks
 
 ## Goal

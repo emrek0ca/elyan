@@ -431,7 +431,55 @@ progress events
 local audit logging
 local capability registry
 health heartbeat
-Filesystem Safety Rules
+## Computer Use Tool Architecture
+
+### Overview
+
+The Computer Use Tool enables Elyan to interact with graphical applications and UI elements through a vision-guided action loop:
+
+**Vision → Planning → Execution → Verification**
+
+This architecture mirrors desktop automation but adds LLM-driven reasoning instead of brittle pixel-matching or recording playback.
+
+### Core Flow
+
+1. **VisionAnalyzer** (Qwen2.5-VL, 320 lines): Screenshot → parsed layout tree + element detection
+2. **ActionPlanner** (LLM integration, 350 lines): Task intent + visual context → action sequence
+3. **ActionExecutor** (pynput/pyautogui, 380 lines): Type-safe action execution with verification
+4. **EvidenceRecorder** (260 lines): Screenshots, action trace (JSONL), metadata
+5. **ApprovalEngine** (400 lines): Risk-based gating with 4 levels
+
+### 10 Action Types
+
+| Action | Risk | Example |
+|--------|------|---------|
+| left_click, right_click | LOW | Click button, context menu |
+| type | MEDIUM | Input text field |
+| hotkey | MEDIUM | Ctrl+S (save) |
+| drag | MEDIUM | Move window |
+| scroll, select_all | LOW | Scroll page, select text |
+| copy, paste | MEDIUM | Clipboard ops |
+| wait | LOW | Wait for load |
+| screenshot | LOW | Capture screen |
+
+### Approval Levels
+
+| Level | Requirement | Actions |
+|-------|------------|---------|
+| AUTO | None | screenshot, scroll, select_all |
+| CONFIRM | Vision accuracy check | type, click, hotkey |
+| SCREEN | User preview + approve | drag, system changes |
+| TWO_FA | 2-person approval | Destructive operations |
+
+### Integration Points
+
+- **ApprovalEngine Singleton**: Shared approval workflow
+- **RealTimeActuator** (future): Multi-desktop support
+- **Evidence Storage**: `~/.elyan/computer_use/evidence/`
+
+---
+
+## Filesystem Safety Rules
 
 Elyan must treat filesystem changes as high-importance operations.
 
