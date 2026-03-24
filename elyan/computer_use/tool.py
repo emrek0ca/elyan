@@ -68,6 +68,7 @@ class ComputerUseTask(BaseModel):
     status: Literal["pending", "running", "completed", "failed"] = "pending"
     steps: list[dict] = field(default_factory=list)
     evidence: list[str] = field(default_factory=list)
+    approval_requests: list[dict] = field(default_factory=list)  # Track approval requests
     result: Optional[str] = None
     error: Optional[str] = None
     completed_at: Optional[float] = None
@@ -142,7 +143,9 @@ class ComputerUseTool:
         self,
         user_intent: str,
         initial_screenshot: Optional[bytes] = None,
-        approval_callback: Optional[callable] = None
+        approval_callback: Optional[callable] = None,
+        session_id: Optional[str] = None,
+        approval_level: str = "CONFIRM"
     ) -> dict:
         """
         Execute a computer use task
@@ -151,6 +154,8 @@ class ComputerUseTool:
             user_intent: Natural language instruction
             initial_screenshot: Optional initial screenshot (bytes)
             approval_callback: Approval function for actions (async)
+            session_id: Session identifier for approval tracking
+            approval_level: Approval gating level (AUTO/CONFIRM/SCREEN/TWO_FA)
 
         Returns:
             {
@@ -158,14 +163,19 @@ class ComputerUseTool:
                 "result": "extracted_data",
                 "steps": 7,
                 "evidence": ["ss_1", "ss_2", ...],
-                "action_trace": [...]
+                "action_trace": [...],
+                "approval_requests": [...]
             }
         """
         task_id = f"task_{int(time.time())}"
+        if session_id is None:
+            session_id = f"session_{int(time.time())}"
+
         task = ComputerUseTask(
             task_id=task_id,
             user_intent=user_intent,
             max_steps=self.max_steps,
+            approval_level=approval_level,
             created_at=time.time()
         )
 
@@ -177,10 +187,19 @@ class ComputerUseTool:
             from elyan.computer_use.evidence.recorder import get_evidence_recorder
             evidence_recorder = await get_evidence_recorder()
 
+            # Initialize approval gate
+            from elyan.computer_use.approval import ApprovalGateFactory
+            approval_gate = ApprovalGateFactory.create_gate(
+                session_id=session_id,
+                run_id=task_id,
+                approval_level=approval_level
+            )
+
             task.status = "running"
             slog.log_event("computer_use_task_start", {
                 "task_id": task_id,
-                "intent": user_intent[:50]
+                "intent": user_intent[:50],
+                "approval_level": approval_level
             })
 
             for self.step_count in range(self.max_steps):
@@ -207,18 +226,51 @@ class ComputerUseTool:
                     previous_actions=self.action_trace
                 )
 
-                # Step 4: Check approval (if required)
-                if approval_callback:
-                    approved = await approval_callback(action, screenshot)
-                    if not approved:
-                        task.status = "cancelled"
-                        task.error = "user_rejected_action"
-                        task.steps = self.action_trace
-                        task.evidence = self.evidence
-                        task.completed_at = time.time()
-                        return task.model_dump()
+                # Step 4: Check approval (ApprovalEngine + callback)
+                approval_result = await approval_gate.evaluate_action(
+                    action=action,
+                    task_context=user_intent,
+                    screenshot_bytes=screenshot
+                )
 
-                # Step 5: Execute action
+                # Track approval request if one was made
+                if approval_result.request_id:
+                    task.approval_requests.append({
+                        "request_id": approval_result.request_id,
+                        "step": self.step_count,
+                        "action_type": action.action_type,
+                        "timestamp": approval_result.timestamp,
+                        "approved": approval_result.approved
+                    })
+
+                # Also check legacy callback if provided
+                if not approval_result.approved:
+                    if approval_callback:
+                        approved = await approval_callback(action, screenshot)
+                        if approved:
+                            # Callback override
+                            approval_result.approved = True
+                            approval_result.reason = "Approved via callback"
+
+                # Deny action if not approved
+                if not approval_result.approved:
+                    task.status = "cancelled"
+                    task.error = f"Action denied: {approval_result.reason}"
+                    task.steps = self.action_trace
+                    task.evidence = self.evidence
+                    task.approval_requests = task.approval_requests  # already updated
+                    task.completed_at = time.time()
+
+                    slog.log_event("computer_use_action_denied", {
+                        "task_id": task_id,
+                        "step": self.step_count,
+                        "action_type": action.action_type,
+                        "reason": approval_result.reason
+                    })
+
+                    return task.model_dump()
+
+                # Step 5: Execute action (approved)
                 execution_result = await self.executor.execute(action)
 
                 self.action_trace.append({
@@ -253,10 +305,6 @@ class ComputerUseTool:
 
                     # Record evidence
                     evidence_result = await evidence_recorder.record_task(task.model_dump())
-                    if evidence_result.get("success"):
-                        task.metadata = {
-                            "evidence_dir": evidence_result.get("evidence_dir")
-                        }
 
                     slog.log_event("computer_use_task_completed", {
                         "task_id": task_id,
