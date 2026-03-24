@@ -464,6 +464,58 @@ class DashboardHTTPServer:
             status = 200 if result.get("success") else 400
             return result, status
 
+        # ControlPlane Integration Routes
+        @self.app.route("/api/v1/computer_use/controlplane/tasks", methods=["POST"])
+        def controlplane_start_task() -> Tuple[Dict[str, Any], int]:
+            from api.computer_use_controlplane import get_computer_use_controlplane_api
+            import asyncio
+
+            data = request.get_json() or {}
+            user_intent = data.get("user_intent", "")
+            approval_level = data.get("approval_level", "CONFIRM")
+            session_id = data.get("session_id")
+
+            api = get_computer_use_controlplane_api()
+            result = asyncio.run(api.start_task(
+                user_intent=user_intent,
+                approval_level=approval_level,
+                session_id=session_id
+            ))
+            status = 200 if result.get("status") else 400
+            return result, status
+
+        @self.app.route("/api/v1/computer_use/controlplane/tasks", methods=["GET"])
+        def controlplane_list_tasks() -> Tuple[Dict[str, Any], int]:
+            from api.computer_use_controlplane import get_computer_use_controlplane_api
+            import asyncio
+
+            limit = request.args.get("limit", 20, type=int)
+
+            api = get_computer_use_controlplane_api()
+            result = asyncio.run(api.list_tasks(limit=limit))
+            status = 200 if result.get("success") else 400
+            return result, status
+
+        @self.app.route("/api/v1/computer_use/controlplane/tasks/<task_id>", methods=["GET"])
+        def controlplane_get_task_status(task_id: str) -> Tuple[Dict[str, Any], int]:
+            from api.computer_use_controlplane import get_computer_use_controlplane_api
+            import asyncio
+
+            api = get_computer_use_controlplane_api()
+            result = asyncio.run(api.get_task_status(task_id))
+            status = 200 if "error" not in result else 404
+            return result, status
+
+        @self.app.route("/api/v1/computer_use/controlplane/tasks/<task_id>/cancel", methods=["POST"])
+        def controlplane_cancel_task(task_id: str) -> Tuple[Dict[str, Any], int]:
+            from api.computer_use_controlplane import get_computer_use_controlplane_api
+            import asyncio
+
+            api = get_computer_use_controlplane_api()
+            result = asyncio.run(api.cancel_task(task_id))
+            status = 200 if result.get("success") else 404
+            return result, status
+
         # API documentation
         @self.app.route("/api/v1/docs", methods=["GET"])
         def api_docs() -> Dict[str, Any]:
@@ -495,7 +547,11 @@ class DashboardHTTPServer:
                     "start_computer_use_task": "POST /api/v1/computer_use/tasks",
                     "get_task_status": "GET /api/v1/computer_use/tasks/<task_id>",
                     "get_task_evidence": "GET /api/v1/computer_use/tasks/<task_id>/evidence",
-                    "list_tasks": "GET /api/v1/computer_use/tasks?status=*&limit=20"
+                    "list_tasks": "GET /api/v1/computer_use/tasks?status=*&limit=20",
+                    "controlplane_start_task": "POST /api/v1/computer_use/controlplane/tasks",
+                    "controlplane_list_tasks": "GET /api/v1/computer_use/controlplane/tasks?limit=20",
+                    "controlplane_get_status": "GET /api/v1/computer_use/controlplane/tasks/<task_id>",
+                    "controlplane_cancel_task": "POST /api/v1/computer_use/controlplane/tasks/<task_id>/cancel"
                 }
             }
 
