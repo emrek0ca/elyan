@@ -45,6 +45,14 @@ class SessionContext:
     current_step: int = 0
     total_steps: int = 0
 
+    # Computer Use task tracking (Phase 5.1)
+    computer_use_active: bool = False
+    computer_use_task_id: Optional[str] = None
+    computer_use_started_at: Optional[str] = None
+    computer_use_approval_level: str = "CONFIRM"
+    computer_use_actions_executed: int = 0
+    computer_use_evidence_dir: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization"""
         return asdict(self)
@@ -257,6 +265,86 @@ class SessionManager:
             del self.active_sessions[session_id]
 
         return len(to_remove)
+
+    # Computer Use task tracking (Phase 5.1)
+    async def start_computer_use_task(
+        self,
+        session_id: str,
+        task_id: str,
+        approval_level: str = "CONFIRM",
+        evidence_dir: Optional[str] = None
+    ) -> bool:
+        """Start tracking a Computer Use task in session"""
+        session = self.active_sessions.get(session_id)
+        if not session:
+            return False
+
+        session.computer_use_active = True
+        session.computer_use_task_id = task_id
+        session.computer_use_started_at = datetime.now().isoformat()
+        session.computer_use_approval_level = approval_level
+        session.computer_use_actions_executed = 0
+        session.computer_use_evidence_dir = evidence_dir
+
+        session.update_activity()
+        await self._save_session(session)
+
+        logger.info(f"Computer Use task started: {task_id} in session {session_id}")
+        return True
+
+    async def update_computer_use_progress(
+        self,
+        session_id: str,
+        actions_executed: int
+    ) -> bool:
+        """Update Computer Use task progress"""
+        session = self.active_sessions.get(session_id)
+        if not session or not session.computer_use_active:
+            return False
+
+        session.computer_use_actions_executed = actions_executed
+        session.update_activity()
+        await self._save_session(session)
+
+        return True
+
+    async def complete_computer_use_task(self, session_id: str) -> bool:
+        """Mark Computer Use task as complete"""
+        session = self.active_sessions.get(session_id)
+        if not session:
+            return False
+
+        session.computer_use_active = False
+        session.computer_use_task_id = None
+        session.computer_use_started_at = None
+        session.computer_use_actions_executed = 0
+
+        session.update_activity()
+        await self._save_session(session)
+
+        logger.info(f"Computer Use task completed for session {session_id}")
+        return True
+
+    def get_computer_use_status(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get current Computer Use task status"""
+        session = self.active_sessions.get(session_id)
+        if not session or not session.computer_use_active:
+            return None
+
+        duration = None
+        if session.computer_use_started_at:
+            start = datetime.fromisoformat(session.computer_use_started_at)
+            duration = (datetime.now() - start).total_seconds()
+
+        return {
+            "task_id": session.computer_use_task_id,
+            "active": session.computer_use_active,
+            "approval_level": session.computer_use_approval_level,
+            "actions_executed": session.computer_use_actions_executed,
+            "started_at": session.computer_use_started_at,
+            "duration_seconds": duration,
+            "evidence_dir": session.computer_use_evidence_dir,
+        }
 
     # Persistence methods
     async def _save_session(self, session: SessionContext):
