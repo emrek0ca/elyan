@@ -1,0 +1,559 @@
+# Documentation Consolidation Plan — Elyan Bot
+
+## Overview
+This plan outlines the merge strategy for consolidating 14 markdown files into 4 canonical files (AGENTS.md, SKILLS.md, WHY.md, PROGRESS.md) while maintaining clarity, eliminating duplication, and preserving all critical information.
+
+---
+
+## AGENTS.md (System Architecture, Components, Layers)
+
+### Current Content (936 lines):
+- **Overview** — What Elyan is (operator runtime, not chatbot)
+- **Product Vision** — Strategic goals
+- **North Star** — 8 optimization priorities
+- **Non-Goals** — What NOT to build
+- **Core Principles** — 8 fundamental rules (LLM decides/runtime executes, stable core, etc.)
+- **High-Level Architecture** — 8 layers (Gateway, Protocol, Session, Context, Runtime, Capability, Memory, UI)
+- **Execution Model** — 13-step mental model
+- **Session Model** — Session identity, lane rules, queue policies
+- **Context Assembly Rules** — Priority order for building context
+- **Memory Model** — 4 memory types + storage rules
+- **Capability Model** — Operational domains and example actions
+- **Computer Control Architecture** — Desktop Agent design
+- **Computer Use Tool Architecture** — Vision-guided action loop (VisionAnalyzer, ActionPlanner, etc.)
+- **Filesystem Safety Rules** — Atomic writes, safe delete, dry-run, verification, rollback, sensitive path protection
+- **Terminal Execution Rules** — Controlled adapter, working directory, environment filtering, approval
+- **Approval and Safety Model** — Risk levels and approval guidance
+- **Plugin Model** — Extensibility contract
+- **Model Usage Rules** — Role separation (planner/executor/validator/summarizer)
+- **Observability Requirements** — Event logs, run logs, tool calls, errors, metrics
+- **Code Standards** — General practices and required patterns
+- **Repo Structure Guidance** — Suggested monorepo layout
+- **File Editing Rules for Agents** — Sensitivity markers for architectural changes
+- **Development Workflow** — Feature implementation order
+- **Definition of Done** — Completion criteria
+- **Quality Gates** — Pre-merge checks
+- **First-Class Priorities** — 5-tier priority model
+- **Immediate Build Priorities** — 5 phases
+- **Required Event Types** — All lifecycle events
+- **Planning Guidance for Agents** — Categories + process
+- **Behavior Expectations for All Coding Agents** — Must/Must-not rules
+- **Final Directive** — Build as infrastructure, not toy
+
+### Adding from:
+
+#### 1. **CHANNELS.md** (437 lines) → New "Channel Adapters & Gateway" Section (~400 lines)
+- **Location**: After "High-Level Architecture" (Layer 1 detail)
+- **Content to merge**:
+  - Core Principle (channel adapter doesn't decide)
+  - System Diagram (flowchart + sequence)
+  - Channel Classes (Messaging, Control, Machine)
+  - Fast & Frictionless Execution Algorithm (ingress + pseudocode)
+  - Routing Decisions (score logic, fast/slow path conditions)
+  - LLM Connectivity Architecture (provider selection)
+  - Prompt Trimming & Context Management
+  - Streaming & Chunked Responses
+  - Channel-Based Response Policy (Telegram/WhatsApp/Slack/CLI/Dashboard/Email)
+  - Risk, Approval, Sandbox
+  - Data Contract (payload structs)
+  - Performance Budget & Fault Tolerance
+  - Checklist for Adding New Channel
+  - Guide to Keeping Fast/Seamless
+  - Brief Summary
+  - Project Packs Surface (optional: dashboard-specific, may go to PROGRESS instead)
+- **Conflicts/Duplicates**: None; CHANNELS.md complements AGENTS.md's Layer 1
+- **Integration Point**: After "Layer 1: Gateway / Orchestrator" subsection
+
+#### 2. **OPERATING_MODES.md** (164 lines) → New "Execution Modes & Feature Gating" Section (~200 lines)
+- **Location**: After "Execution Model"
+- **Content to merge**:
+  - Default OPERATOR Mode v0.1.0 (production-ready core)
+  - Optional ADVANCED Mode (Phase 6 experimental)
+  - Feature Isolation (capability gating mechanism)
+  - Environment Variables (`ELYAN_OPERATOR_MODE`)
+  - Migration Path (v0.1→v0.2)
+  - Summary table
+  - Switching Modes at runtime
+- **Conflicts/Duplicates**: None; clarifies which features are stable vs experimental
+- **Integration Point**: New section at top-level alongside Execution Model
+
+#### 3. **SYSTEM_ARCHITECTURE.md** (first 200 lines available) → "Layers & Boundaries" Details (~800 lines total)
+- **Location**: Expand existing "High-Level Architecture" section
+- **Content to merge**:
+  - Overview (8 layers, distributed runtime model)
+  - Architecture Goals (7 goals: stable execution, safe autonomy, local-first, session integrity, auditable memory, extensibility, premium UX)
+  - System Model (diagram)
+  - Top-Level Architecture (diagram)
+  - Core Architectural Principles (7 principles: typed boundaries, isolated side effects, explicit state, policy before execution, verification after, local execution, hybrid memory, modular features)
+  - Major Components (8 major components + their responsibilities)
+  - **PARTIAL**: Read lines 1-200, requires continuation for full content
+- **Conflicts/Duplicates**: Overlaps with AGENTS.md's "High-Level Architecture" — MERGE into single comprehensive "Architecture" section
+- **Integration Point**: Replace/expand existing "High-Level Architecture" section
+
+#### 4. **README.md** (Executive Summary + Quick Start) → New "Quick Start & Intro" Section (~150 lines)
+- **Location**: Move to top as "How to Get Started" subsection
+- **Content to merge**:
+  - Quick Start (prerequisites, installation, running)
+  - Features table (v0.1.0 core vs Phase 6)
+  - Architecture diagram (simplified)
+  - Operating Modes subsection (reference to full doc)
+  - Configuration (env vars)
+  - Status table
+- **Conflicts/Duplicates**: Overlaps with AGENTS.md intro — consolidate
+- **Integration Point**: New "Quick Start & Operational Overview" section at top
+
+#### 5. **TOOLS.md** (190 lines) → New "Capabilities & Tool Registry" Appendix (~300 lines)
+- **Location**: End of AGENTS.md (new subsection)
+- **Content to merge**:
+  - Tool Categories (8 categories: Core Intelligence, Cognitive Architecture, UI, Desktop Control, Communication Channels, LLM Providers, Security & Safety, Monitoring & Analytics)
+  - Tool Interaction Flow (diagram)
+  - Phase 6+ Tool Pipeline (planned)
+  - Tool Development Guidelines
+  - Total Active Tools/Channels/Providers summary
+- **Conflicts/Duplicates**: None; complements capability model
+- **Integration Point**: New "Available Capabilities & Tools" section at end
+
+### Conflicts/Duplicates to Resolve:
+
+1. **AGENTS.md § "Capability Model" vs TOOLS.md — "Category 1: Core Intelligence"**
+   - AGENTS.md defines conceptual framework (capabilities = operational domains, actions = specific operations)
+   - TOOLS.md provides concrete registry (72 tools, 10 channels, 3 LLM providers)
+   - **Resolution**: Keep AGENTS.md's framework, add TOOLS.md registry as "Implementation Inventory" subsection
+
+2. **AGENTS.md § "Execution Model" vs CHANNELS.md § "Fast & Frictionless Execution Algorithm"**
+   - AGENTS.md: 13-step mental model (user input → validation → normalize → resolve session → ... → log → respond)
+   - CHANNELS.md: 13-step ingress algorithm (similar but channel-focused)
+   - **Resolution**: Keep AGENTS.md's as primary, show CHANNELS.md as "Channel-Specific Refinement" with diagram
+
+3. **AGENTS.md § "Computer Control Architecture" vs CHANNELS.md § "System Diagram" (flowchart)**
+   - Both show flow from user through adapters/gateway
+   - **Resolution**: Combine into single unified diagram showing all layers + channel routing
+
+### Final Structure for AGENTS.md:
+
+```
+1. Elyan Overview & Vision
+2. Product Vision & North Star
+3. Non-Goals
+4. Core Principles (8)
+5. High-Level Architecture (8 Layers)
+   ├─ Channel Adapters & Gateway [FROM CHANNELS.md]
+   ├─ Protocol Layer
+   ├─ Session Engine
+   ├─ Context Engine
+   ├─ Runtime / Planner / Executor
+   ├─ Capability Runtime
+   ├─ Memory & Persistence
+   └─ UI / Command Center
+6. Execution Modes & Feature Gating [FROM OPERATING_MODES.md]
+7. Execution Model (13 steps)
+8. Session Model
+9. Context Assembly Rules
+10. Memory Model
+11. Capability Model
+12. Computer Control Architecture
+13. Computer Use Tool Architecture
+14. Filesystem Safety Rules
+15. Terminal Execution Rules
+16. Approval & Safety Model
+17. Plugin Model
+18. Model Usage Rules
+19. Observability Requirements
+20. Code Standards
+21. Repo Structure Guidance
+22. File Editing Rules
+23. Development Workflow
+24. Definition of Done
+25. Quality Gates
+26. First-Class Priorities
+27. Immediate Build Priorities
+28. Required Event Types
+29. Planning Guidance
+30. Behavior Expectations
+31. Available Capabilities & Tools [FROM TOOLS.md]
+32. Final Directive
+```
+
+**Estimated final size**: ~1,800 lines (vs current 936)
+
+---
+
+## SKILLS.md (Implementation Protocol, Session Handling, Testing)
+
+### Current Content (150 lines, Session Protocol + 3 completed sessions):
+- **Purpose** — Track progress, prevent context loss
+- **Session Protocol** — 7 rules for each session
+- **Session 0 — Planning** (completed)
+- **Session 1 — P3.7 CEO Planner** (completed, 500 lines implementation)
+- **Session 2 — P3.8+P3.9 Deadlock/Modes** (completed, 850 lines implementation)
+
+### Adding from:
+
+#### 1. **HANDOFF.md** (81 lines) → "Current Session State" Section (~100 lines)
+- **Location**: Top of SKILLS.md, after Purpose
+- **Content to merge**:
+  - Current state snapshot (last updated date, recent work)
+  - Verified facts (doc audits, ADR additions, file name alignment)
+  - Current next step (immediate actions)
+  - Continuity rules (don't revert unrelated changes, prefer smallest diff, etc.)
+  - Relevant files list (critical file paths for quick lookup)
+- **Conflicts/Duplicates**: None; complements session tracking
+- **Integration Point**: "Live Handoff Summary" section before "Session Protocol"
+
+#### 2. **PHASE4_SESSION5_SUMMARY.md** (403 lines) → "Session 3 — Cognitive Layer Integration" (~450 lines)
+- **Location**: After Session 2
+- **Content to merge**:
+  - Session Overview (cognitive integration with task engine)
+  - What Was Accomplished (5 subsections: integrator, task engine, task type inference, cognitive settings, tests)
+  - Test Results (103 cognitive tests passing)
+  - Architecture (cognitive flow diagram)
+  - Configuration Hierarchy
+  - Cognitive Decision Logging
+  - Key Integration Points
+  - Features Enabled
+  - Next Steps
+  - Files Modified/Created
+  - Completion Checklist
+- **Conflicts/Duplicates**: None; continuation of Phase 4 progress
+- **Integration Point**: Session 3 summary
+
+#### 3. **PHASE5_SESSION1_SUMMARY.md** (450 lines) → "Session 4 — Cognitive CLI Commands" (~480 lines)
+- **Location**: After Session 3
+- **Content to merge**:
+  - Session Overview (Phase 5 CLI interface)
+  - What Was Accomplished (5 subcommands: status, diagnostics, mode, insights, schedule-sleep)
+  - CLI Main Integration
+  - Comprehensive CLI Tests (22 tests)
+  - Test Results (125 cognitive tests total)
+  - CLI Usage Examples (status, JSON output, diagnostics, insights, mode, schedule)
+  - Architecture (CLI layer integration diagram)
+  - Data Flow (diagram)
+  - Features Enabled (for users + operators + system)
+  - Next Steps (dashboard, extended monitoring, adaptive tuning)
+  - Files Created/Modified
+  - Session Completion Checklist
+  - Example Workflows
+  - Phase 4 Integration notes
+- **Conflicts/Duplicates**: None; continuation of Phase 5 progress
+- **Integration Point**: Session 4 summary
+
+### Conflicts/Duplicates to Resolve:
+
+1. **PHASE4_SESSION5_SUMMARY.md § "Cognitive Settings Configuration" mentions config keys that probably exist in config/settings.py**
+   - Both files document cognitive configuration
+   - **Resolution**: SKILLS.md references config file, keeps summary of what was added
+
+2. **PHASE5_SESSION1_SUMMARY.md § "All 125 Cognitive Tests Passing" mentions tests from Session 3**
+   - Cumulative test count across sessions
+   - **Resolution**: Keep cumulative counts, but note which session added which tests
+
+### Final Structure for SKILLS.md:
+
+```
+1. Purpose & Session Protocol
+2. Live Handoff Summary [FROM HANDOFF.md]
+   ├─ Current State Snapshot
+   ├─ Verified Facts
+   ├─ Current Next Step
+   ├─ Continuity Rules
+   └─ Relevant Files
+3. Session 0 — Planning Phase 4
+4. Session 1 — P3.7 CEO Planner
+5. Session 2 — P3.8+P3.9 Deadlock Detector & Execution Modes
+6. Session 3 — Cognitive Layer Integration [FROM PHASE4_SESSION5_SUMMARY.md]
+7. Session 4 — Cognitive CLI Commands [FROM PHASE5_SESSION1_SUMMARY.md]
+8. Next Session Starter Template
+```
+
+**Estimated final size**: ~1,100 lines (vs current 150)
+
+---
+
+## WHY.md (Philosophy, Decisions, Values, Agency)
+
+### Current Content (should exist as canonical, do NOT modify per instructions)
+- **Assumption**: Already created with philosophy, values, decision-making framework
+- **Status**: "Do not modify" per task instructions
+- **Action**: Verify it exists; if not present, will note in report
+
+### Adding from:
+
+#### 1. **CODE_OF_CONDUCT.md** (93 lines) → "Community Standards" Section (~100 lines)
+- **Location**: New section in WHY.md
+- **Content to merge**:
+  - Our Commitment (welcoming, inclusive environment)
+  - Our Standards (examples of positive behavior: respectful, inclusive, constructive, honest, professional)
+  - Unacceptable Behavior (harassment, discrimination, intimidation, disrespect, bad faith, trolling, spam)
+  - Scope (applies to GitHub, PRs, comments, emails, social media, events)
+  - Enforcement (warnings, suspension, removal)
+  - Reporting process
+  - Appeal Process
+  - Our Responsibility
+  - Acknowledgments & Questions
+- **Conflicts/Duplicates**: None; adds community standards dimension
+- **Integration Point**: New "Community Values & Code of Conduct" section
+
+#### 2. **CONTRIBUTING.md** (315 lines) → "How to Contribute" Section (~350 lines)
+- **Location**: New section in WHY.md
+- **Content to merge**:
+  - Code of Conduct reference
+  - How to Contribute (reporting bugs, suggesting features, pull requests)
+  - Code Style Guidelines (Python 3.11+, type hints, docstrings, Black formatting, PEP 8)
+  - Documentation Standards (Google-style docstrings, module docs)
+  - Testing Requirements (coverage targets, test organization, naming)
+  - Development Setup (prerequisites, local development, before submitting)
+  - Commit Message Guidelines (conventional commits format)
+  - Release Process
+  - Questions & Resources
+- **Conflicts/Duplicates**: Code of Conduct appears in both files — reference single version
+- **Integration Point**: New "Contributing Guidelines" section
+
+#### 3. **DECISIONS.md** (1025 lines) → "Architectural Decision Records" Section (~1,000 lines)
+- **Location**: New section in WHY.md (or possibly keep as separate reference)
+- **Content to merge**:
+  - Purpose & Usage
+  - Status Values (proposed, accepted, in_progress, deprecated, replaced, rejected)
+  - Decision Template
+  - Decision-Making Principles (8 principles)
+  - Active Decisions (ADR-001 through ADR-020: operator runtime, desktop agent, lane locking, typing, side effects isolation, policy engine, filesystem safety, terminal execution, hybrid memory, selective memory, capability prioritization, browser/app secondary, observability, command center, extensibility, TypeScript, WebSocket transport, approval-first autonomy, readable project memory, open questions)
+  - Open Decisions (6 unresolved questions)
+  - Deprecated or Replaced Decisions (template, none yet)
+  - Contributor Rules for Decisions
+  - Final Directive
+- **Conflicts/Duplicates**: None; standalone decision log
+- **Integration Point**: Large "ADRs — Architectural Decisions" section (may reference separate file or include summary)
+
+### Conflicts/Duplicates to Resolve:
+
+1. **CODE_OF_CONDUCT.md and CONTRIBUTING.md both mention "Code of Conduct"**
+   - CONTRIBUTING.md has a reference section; CODE_OF_CONDUCT.md is detailed
+   - **Resolution**: Single source of truth in WHY.md; CONTRIBUTING.md links to it
+
+2. **DECISIONS.md is very large (1025 lines)**
+   - Could make WHY.md unwieldy
+   - **Options**: 
+     - Option A: Include full ADRs in WHY.md (comprehensive)
+     - Option B: Include ADR summary + links to external DECISIONS.md reference
+   - **Recommendation**: Include full ADRs in WHY.md (makes WHY.md the authoritative philosophy source)
+
+### Final Structure for WHY.md:
+
+```
+1. Philosophy [EXISTING]
+2. Core Values [EXISTING]
+3. Agency & Decision-Making Framework [EXISTING]
+4. Architectural Decision Records (ADR-001 through ADR-020) [FROM DECISIONS.md]
+   ├─ Decision-Making Principles
+   ├─ ADR Template
+   ├─ Active Decisions (20 entries)
+   ├─ Open Decisions (6 tracking)
+   └─ Contributor Rules
+5. Community Standards & Code of Conduct [FROM CODE_OF_CONDUCT.md]
+   ├─ Our Commitment
+   ├─ Standards
+   ├─ Scope
+   ├─ Enforcement
+   ├─ Reporting
+   └─ Appeal Process
+6. Contributing Guidelines [FROM CONTRIBUTING.md]
+   ├─ How to Contribute
+   ├─ Code Style
+   ├─ Documentation Standards
+   ├─ Testing Requirements
+   ├─ Development Setup
+   ├─ Commit Guidelines
+   ├─ Release Process
+   └─ Getting Help
+```
+
+**Estimated final size**: ~2,200+ lines (if including full ADRs)
+
+---
+
+## PROGRESS.md (Status, Roadmap, What's Done/Pending)
+
+### Current Content (assumed to exist; needs verification)
+- **Status**: "Already current, only enhance if needed" per instructions
+- **Assumption**: Contains version history, milestone tracking, high-level status
+
+### Adding from:
+
+#### 1. **ROADMAP.md** (970 lines) → Comprehensive roadmap expansion or reference
+- **Location**: "Strategic Roadmap" section (new or expand existing)
+- **Content to merge**:
+  - Purpose (evolve from prototype to production)
+  - Roadmap Design Principles (7 rules: core before cosmetics, safe before autonomy, local before distributed, typed before improvisation, observability before scale, memory quality before volume, extensibility without corruption)
+  - Current Strategic Objective
+  - Roadmap Structure (Stage 0-7 definitions)
+  - Detailed Stage Descriptions (Stage 0-7, each with objective, scope, deliverables, success criteria, exit condition)
+  - Cross-Stage Technical Priorities (5 areas: Session Integrity, Safety, Observability, Memory Quality, Extensibility)
+  - Roadmap Milestones (M1-M7)
+  - Suggested Release Framing (v0.1-v2.0)
+  - Key Risks (6 failure modes with mitigations)
+  - Definition of Roadmap Success
+  - Immediate Focus (12-step sequence)
+  - Final Directive
+- **Conflicts/Duplicates**: None; complements progress tracking
+- **Integration Point**: New "Product Roadmap & Strategic Vision" section
+
+#### 2. **TASKS.md** (200+ lines, partial read) → "Task Registry & Implementation Queue" Section (~400 lines)
+- **Location**: "Active Tasks & Implementation Tracking" section
+- **Content to merge**:
+  - Purpose (translate architecture into concrete implementation tasks)
+  - Global Task Rules (5 rules: respect boundaries, prefer small strong implementations, control side effects, no shortcuts, observability)
+  - Task Status Conventions ([ ], [-], [x], [!], [?] markers)
+  - Priority Model (P0-P4: core correctness, safe local operation, continuity, extensibility, premium experience)
+  - Phase 1 Tasks (Protocol Package, Shared Types, Gateway Skeleton, Session Engine v1, etc.)
+  - **Partial content visible**: Tasks from P0.1 through P0.4
+- **Conflicts/Duplicates**: Some overlap with ROADMAP.md's "Deliverables" — cross-reference
+- **Integration Point**: "Implementation Task Queue" section in PROGRESS.md
+
+#### 3. **PHASE4_SESSION5_SUMMARY.md** (excerpt on test results) → Session completion history
+- **Location**: "Phase Completion Status" or "Historical Session Log"
+- **Content to merge**:
+  - Phase 4 completion markers (✅ COGNITIVE LAYER FULLY INTEGRATED)
+  - Session 5 status (103 tests passing, 0 regressions)
+  - Files modified/created counts
+- **Conflicts/Duplicates**: Also in SKILLS.md — PROGRESS.md shows high-level summary, SKILLS.md shows detail
+- **Integration Point**: Phase history timeline
+
+#### 4. **PHASE5_SESSION1_SUMMARY.md** (excerpt) → Session completion history
+- **Location**: "Phase Completion Status"
+- **Content to merge**:
+  - Phase 5 Session 1 completion (✅ CLI INTERFACE COMPLETE)
+  - 125 cognitive tests total
+  - Files created/modified summary
+- **Integration Point**: Phase history timeline
+
+#### 5. **v0.1.0_RELEASE_STATUS.md** (188 lines) → "Version Status & Release Tracking" Section (~250 lines)
+- **Location**: New section at top of PROGRESS.md
+- **Content to merge**:
+  - What is v0.1.0 (minimal viable operator)
+  - Validation Status (✅ Passed: 8/8 E2E tests; ⚠️ Gaps: session continuity, approval gates, audit trail)
+  - Test Coverage (core operator tests, Phase 6 optional tests)
+  - Code Isolation Status (Phase 6 isolation via capability gating)
+  - What You Can Do (working features, partially working, not available)
+  - Running v0.1.0 (operator vs advanced modes)
+  - Release Decision (RC with caveats)
+  - Next Steps for Production (5 validation items)
+  - Summary table
+- **Conflicts/Duplicates**: Some overlap with OPERATING_MODES.md — PROGRESS.md shows release-specific status, OPERATING_MODES.md shows runtime configuration
+- **Integration Point**: New "Release Status & Version Tracking" section at top
+
+### Conflicts/Duplicates to Resolve:
+
+1. **ROADMAP.md "Deliverables" vs TASKS.md "Tasks"**
+   - ROADMAP.md: high-level strategic deliverables
+   - TASKS.md: concrete implementation checklist
+   - **Resolution**: Both in PROGRESS.md — roadmap is strategic, tasks are operational
+
+2. **Multiple files mention Phase 4 & Phase 5 completion**
+   - PHASE4_SESSION5_SUMMARY.md, PHASE5_SESSION1_SUMMARY.md, v0.1.0_RELEASE_STATUS.md
+   - **Resolution**: PROGRESS.md aggregates timeline; SKILLS.md maintains session detail
+
+3. **v0.1.0_RELEASE_STATUS.md mentions "Awaiting Final Validation" vs "Recommend Release as RC"**
+   - State may have changed since file was written
+   - **Resolution**: Note as of date; update when actual status changes
+
+### Final Structure for PROGRESS.md:
+
+```
+1. Overview & Current Status Summary
+2. Release Status & Version Tracking (v0.1.0) [FROM v0.1.0_RELEASE_STATUS.md]
+   ├─ What is v0.1.0
+   ├─ Validation Status
+   ├─ Test Coverage
+   ├─ Code Isolation
+   ├─ What You Can Do
+   ├─ Running v0.1.0
+   └─ Next Steps for Production
+3. Phase Completion History [FROM PHASE4_SESSION5_SUMMARY, PHASE5_SESSION1_SUMMARY]
+   ├─ Phase 4 — Cognitive Architecture (✅ Complete)
+   └─ Phase 5 — CLI Interface (✅ Complete)
+4. Product Roadmap & Strategic Vision [FROM ROADMAP.md]
+   ├─ Roadmap Design Principles
+   ├─ Current Strategic Objective
+   ├─ Roadmap Structure (Stages 0-7)
+   ├─ Stage Details
+   ├─ Cross-Stage Priorities
+   ├─ Milestones
+   ├─ Release Framing
+   ├─ Key Risks & Mitigations
+   ├─ Success Definition
+   └─ Immediate Focus
+5. Implementation Task Queue [FROM TASKS.md, partial]
+   ├─ Task Rules & Conventions
+   ├─ Priority Model (P0-P4)
+   ├─ Phase 1 Tasks (P0.1-P0.4 sample)
+   ├─ [Additional phases as implemented]
+6. Session History & Continuity [FROM SKILLS.md summary]
+   ├─ Recent Sessions (links to SKILLS.md detail)
+   ├─ Current Blockers
+   └─ Next Steps
+7. Metrics & Health Dashboard (optional, if tracking enabled)
+```
+
+**Estimated final size**: ~2,000 lines (vs assumed current size)
+
+---
+
+## Cross-Cutting Consolidation Notes
+
+### Files to DELETE (content fully merged):
+- CHANNELS.md (content → AGENTS.md)
+- CODE_OF_CONDUCT.md (content → WHY.md)
+- CONTRIBUTING.md (content → WHY.md)
+- DECISIONS.md (content → WHY.md, unless kept as reference)
+- HANDOFF.md (content → SKILLS.md)
+- OPERATING_MODES.md (content → AGENTS.md + PROGRESS.md)
+- PHASE4_SESSION5_SUMMARY.md (content → SKILLS.md + PROGRESS.md)
+- PHASE5_SESSION1_SUMMARY.md (content → SKILLS.md + PROGRESS.md)
+- README.md (content → AGENTS.md, keep as lightweight index)
+- ROADMAP.md (content → PROGRESS.md, unless kept as reference)
+- SYSTEM_ARCHITECTURE.md (content → AGENTS.md)
+- TASKS.md (content → PROGRESS.md, unless kept as working document)
+- TOOLS.md (content → AGENTS.md)
+- v0.1.0_RELEASE_STATUS.md (content → PROGRESS.md)
+
+### Files to KEEP (canonical, not modified):
+- AGENTS.md ✓ (enhanced)
+- SKILLS.md ✓ (enhanced)
+- WHY.md ✓ (not modified per instructions)
+- PROGRESS.md ✓ (enhanced if needed)
+
+### Internal Cross-References Strategy:
+1. AGENTS.md → Link to SKILLS.md for implementation details
+2. SKILLS.md → Link to AGENTS.md for architecture, WHY.md for decisions
+3. WHY.md → Reference AGENTS.md for implementation, PROGRESS.md for status
+4. PROGRESS.md → Reference AGENTS.md for architecture, SKILLS.md for session history, WHY.md for decisions
+
+### Deduplication Strategy:
+- **Repeated Concepts** (e.g., "operator runtime not chatbot"): Keep one authoritative version (AGENTS.md intro), reference from others
+- **Repeated Tables** (e.g., feature status): Single source of truth with cross-links
+- **Repeated Code Examples**: Keep in implementation section (SKILLS.md), reference conceptual (AGENTS.md)
+
+### Image/Diagram Strategy:
+- AGENTS.md: Architecture diagrams (8 layers, channel flow, computer control, top-level)
+- CHANNELS.md diagrams: Merge into AGENTS.md §Channel Adapters
+- PROGRESS.md: Roadmap timeline/stages
+- SKILLS.md: Session flow timeline
+
+---
+
+## Validation Checklist
+
+After consolidation, verify:
+
+- [ ] All 14 source files' content appears in target files
+- [ ] No critical information lost
+- [ ] Cross-references between canonical files work
+- [ ] Sections have clear hierarchy
+- [ ] Table of contents is accurate
+- [ ] Duplicate content eliminated
+- [ ] File sizes reasonable (no file >2,500 lines)
+- [ ] README.md still serves as lightweight entry point
+- [ ] Agents can read any canonical file and understand system
+- [ ] Session continuity rules in SKILLS.md are clear
+- [ ] Decisions are auditable in WHY.md
+- [ ] Roadmap is navigable from PROGRESS.md
+
