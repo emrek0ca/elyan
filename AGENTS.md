@@ -1,3 +1,121 @@
+# AGENTS.md — System Architecture, Design Philosophy, and Architectural Decisions
+
+---
+
+## Philosophy & Core Design Principles
+
+### Three-Layer Learning Hierarchy
+
+Modern AI evolution follows a three-book framework:
+
+1. **Deep Learning Layer** (Goodfellow et al.)
+   - Mathematical brain: neural networks, transformers, vision models
+   - Pattern recognition and knowledge representation
+
+2. **Reinforcement Learning Layer** (Sutton & Barto)
+   - Strategic decision-making from experience
+   - Reward signals, temporal-difference learning, goal pursuit
+
+3. **Agency Layer** (Michael Lanham, AI Agents in Action)
+   - Autonomous operation with external tools
+   - Perception → Planning → Action → Learning cycle
+   - Multi-agent coordination, tool integration (MCP)
+
+**Elyan implements all three layers**:
+- LLM provides perception & memory (Deep Learning)
+- CEO Planner + execution modes provide strategy (Reinforcement Learning)
+- Agent loop + Computer Use provides autonomy (Agency)
+
+### Seven Core Design Principles
+
+1. **Correctness > Speed**
+   - Mathematical rigor over "fast enough"
+   - Every decision reversible or has safety exit
+   - Tests drive implementation
+
+2. **Safety > Feature Velocity**
+   - Approval gates before risky actions
+   - Risk-level mapping for all action types
+   - Audit trails and evidence recording mandatory
+   - Local-first execution (no required cloud)
+
+3. **Observability > Hidden Behavior**
+   - Structured logging in every component
+   - Metrics stored locally
+   - Session persistence for debugging
+   - Evidence directories for forensics
+
+4. **Modularity > Convenience Hacks**
+   - Each layer independent and testable
+   - Clear interfaces between systems
+   - Singleton patterns for dependency injection
+   - No spaghetti async
+
+5. **Explicit Policy > Implicit Trust**
+   - Configuration-driven behavior
+   - Intent parsing rules transparent
+   - Approval levels explicit
+   - Rate limits and quotas enforced
+
+6. **Local-First for Machine Control**
+   - All vision processing local (Qwen2.5-VL via Ollama)
+   - Action execution never phones home
+   - Evidence stays on user's machine
+   - Zero-cloud Computer Use mode
+
+7. **Fail-Safe Design**
+   - Deny-by-default for risky actions
+   - Approval gates non-optional
+   - Secrets protected
+   - Full rollback capability
+
+### Architectural Decision Records (ADRs)
+
+**ADR-001:** Elyan is an **Operator Runtime**, not a Chatbot
+- Separates Intent → Task Engine → Delivery → Agent
+- Session state is critical
+- Approval workflow is non-optional
+
+**ADR-002:** Three-Tier Intent Routing (Tier 1: Rules, Tier 2: Fuzzy, Tier 3: LLM)
+- 90%+ routed in <50ms
+- Deterministic for routine tasks
+- LLM only for novel requests
+
+**ADR-003:** Singleton Pattern for Core Systems
+- Single source of truth
+- Clean dependency injection
+- Easy to mock in tests
+
+**ADR-004:** Evidence Mandatory for Operator Actions
+- Pre/post screenshots
+- Action trace (JSONL)
+- Full forensics capability
+
+**ADR-005:** Approval Levels (AUTO, CONFIRM, SCREEN, TWO_FA)
+- Risk-aware approval mapping
+- Secure by default
+
+**ADR-006:** Delivery Engine for Complex Projects
+- Multi-step projects use INTAKE→PLAN→EXECUTE→VERIFY→DELIVER
+- Checkpoints prevent cascading failures
+- Better error recovery
+
+**ADR-007:** Local-Only Vision for Computer Use
+- Qwen2.5-VL via Ollama
+- Privacy-first
+- Cost-free at scale
+
+### Strategic Boundaries & Layer Ownership
+
+| Layer | Components | Stability | Owner |
+|-------|-----------|-----------|-------|
+| **Session & Policy** | SessionMgr, PolicyEngine, MemoryEngine | ⭐⭐⭐⭐⭐ | Core Team |
+| **Intent & Routing** | IntentParser, Quick Detector, LLM Orchestrator | ⭐⭐⭐⭐ | Intent Team |
+| **Execution & Agents** | TaskEngine, Tool Exec, Approval Workflow | ⭐⭐⭐ | Executive Team |
+| **Advanced Features** | DeliveryEngine, ComputerUse, CognitiveLayers | ⭐⭐ | Innovation Team |
+
+---
+
 ## Elyan Overview
 
 Elyan is not a simple chatbot.  
