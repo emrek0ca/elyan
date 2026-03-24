@@ -4,1489 +4,1030 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Elyan Dashboard</title>
-  <link rel="stylesheet" href="/ui/web/dashboard.css?v=20260322-1">
   <style>
-/* ===== INLINE CSS — guarantees styles load even if external CSS fails ===== */
-*{margin:0;padding:0;box-sizing:border-box}
-:root{
-  --bg:#f5f7fa;--sf:#ffffff;--sf2:#eef2f7;--bd:#dbe2ea;
-  --tx:#111827;--tx2:#4b5563;--tx3:#94a3b8;
-  --blue:#111827;--blue2:#374151;
-  --green:#15803d;--yellow:#d97706;--red:#dc2626;
-  --r:12px;--r2:8px;
-  --sh:0 1px 3px rgba(15,23,42,.06),0 1px 2px rgba(15,23,42,.03);
-  --sh2:0 8px 24px rgba(15,23,42,.08);
-}
-html{height:100%}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background:var(--bg);color:var(--tx);line-height:1.5;min-height:100%;-webkit-font-smoothing:antialiased}
+    /* ═══════════════════════════════════════════════════════════════ */
+    /* Dashboard — Clean, Minimal, Typography-First Design */
+    /* ═══════════════════════════════════════════════════════════════ */
 
-/* === NAVBAR === */
-.navbar{display:flex;align-items:center;height:56px;background:var(--sf);border-bottom:1px solid var(--bd);padding:0 24px;gap:20px;position:sticky;top:0;z-index:100;box-shadow:var(--sh)}
-.nav-brand{display:flex;align-items:center;gap:10px;flex-shrink:0}
-.nav-logo{width:32px;height:32px;background:rgba(255,255,255,.92);border:1px solid var(--bd);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--tx);font-weight:700;font-size:16px;box-shadow:var(--sh)}
-.nav-brand span{font-size:17px;font-weight:600}
-.nav-tabs{display:flex;gap:4px;margin:0 auto;background:var(--sf2);border-radius:10px;padding:4px}
-.nav-tab{border:none;background:transparent;color:var(--tx2);font-size:13px;font-weight:500;padding:7px 18px;border-radius:8px;cursor:pointer;transition:all .15s ease;white-space:nowrap}
-.nav-tab:hover{color:var(--tx);background:rgba(0,0,0,.04)}
-.nav-tab.active{background:var(--sf);color:var(--tx);box-shadow:var(--sh)}
-.nav-right{display:flex;align-items:center;gap:12px;flex-shrink:0}
-.nav-pill{display:flex;align-items:center;gap:6px;padding:5px 12px;background:var(--sf2);border-radius:20px;font-size:12px;font-weight:500;color:var(--tx2)}
-.status-dot{width:8px;height:8px;border-radius:50%;background:var(--yellow);transition:background .3s}
-.status-dot.ok{background:var(--green)}.status-dot.err{background:var(--red)}
-.nav-btn{border:none;background:transparent;color:var(--tx2);font-size:18px;cursor:pointer;width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:8px;transition:background .15s}
-.nav-btn:hover{background:var(--sf2)}
+    * { margin: 0; padding: 0; box-sizing: border-box; }
 
-/* === MAIN === */
-.main{max-width:1200px;margin:0 auto;padding:28px 24px 48px}
-.page{display:none}.page.show{display:block;animation:fadeUp .2s ease}
-@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+    :root {
+      --bg:     #ffffff;
+      --sf:     #f8fafc;
+      --bd:     #e2e8f0;
+      --tx:     #0f172a;
+      --tx2:    #475569;
+      --tx3:    #94a3b8;
+      --accent: #0f172a;
+      --green:  #15803d;
+      --yellow: #b45309;
+      --red:    #be123c;
+    }
 
-/* === PAGE HEADER === */
-.pg-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px}
-.pg-head h2{font-size:24px;font-weight:600;letter-spacing:-.3px}
-.pg-sub{font-size:14px;color:var(--tx2);margin-top:4px}
+    html, body {
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--tx);
+      line-height: 1.6;
+    }
 
-/* === KPI ROW === */
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:24px}
-.kpi-box{background:var(--sf);border:1px solid var(--bd);border-radius:var(--r);padding:20px;box-shadow:var(--sh)}
-.kpi-label{font-size:11px;font-weight:600;color:var(--tx3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
-.kpi-val{font-size:26px;font-weight:700;color:var(--blue)}
+    body {
+      display: flex;
+      flex-direction: column;
+      -webkit-font-smoothing: antialiased;
+    }
 
-/* === GRID / CARD === */
-.cgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px}
-.card{background:var(--sf);border:1px solid var(--bd);border-radius:var(--r);padding:20px;box-shadow:var(--sh);transition:border-color .2s,box-shadow .2s}
-.card:hover{border-color:var(--blue);box-shadow:var(--sh2)}
-.card.dim{opacity:.5}
-.card-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px}
-.card-top h3{font-size:15px;font-weight:600}
-.card-desc{font-size:12px;color:var(--tx2);margin-top:2px}
-.pill{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:12px;font-size:11px;font-weight:600}
-.pill.ok{background:rgba(30,142,62,.1);color:var(--green)}
-.pill.err{background:rgba(217,48,37,.1);color:var(--red)}
-.pill.warn{background:rgba(249,171,0,.1);color:var(--yellow)}
-.pdot{width:6px;height:6px;border-radius:50%;background:currentColor}
+    /* NAVBAR */
+    nav {
+      display: flex;
+      align-items: center;
+      height: 60px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--bd);
+      padding: 0 32px;
+      gap: 24px;
+      flex-shrink: 0;
+    }
 
-/* stat rows */
-.row{display:flex;justify-content:space-between;padding:8px 0;font-size:13px;border-bottom:1px solid var(--bd)}
-.row:last-child{border-bottom:none}
-.row-k{color:var(--tx3)}.row-v{font-weight:600}
+    .nav-brand {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--tx);
+      flex-shrink: 0;
+    }
 
-/* === MISSION CONTROL === */
-.mission-hero{display:grid;grid-template-columns:1fr;gap:16px;margin-bottom:18px}
-.investor-hero{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(260px,.75fr);gap:0;overflow:hidden;background:linear-gradient(135deg,#0f172a 0%,#111827 45%,#1d4ed8 120%);color:#fff;border:1px solid rgba(148,163,184,.2);border-radius:var(--r);box-shadow:0 18px 44px rgba(15,23,42,.16);margin-bottom:16px}
-.investor-copy{padding:24px 22px 22px}
-.hero-kicker{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:#93c5fd}
-.hero-kicker::before{content:'';width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 6px rgba(34,197,94,.18)}
-.investor-copy h3{margin:12px 0 10px;font-size:28px;line-height:1.08;letter-spacing:-.04em;max-width:14ch}
-.investor-copy p{max-width:68ch;color:rgba(226,232,240,.88);font-size:14px;line-height:1.6}
-.hero-band{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
-.hero-band span{display:inline-flex;align-items:center;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);font-size:11px;font-weight:600;color:#e2e8f0}
-.hero-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
-.investor-hero .btn{font-size:12px}
-.investor-hero .btn-s{background:rgba(255,255,255,.08);color:#e2e8f0;border-color:rgba(255,255,255,.12)}
-.investor-hero .btn-s:hover:not(:disabled){background:rgba(255,255,255,.14);color:#fff;border-color:rgba(255,255,255,.2)}
-.investor-hero .btn-p{background:linear-gradient(135deg,#38bdf8,#2563eb);color:#fff;box-shadow:0 10px 26px rgba(37,99,235,.25)}
-.hero-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:22px;background:rgba(15,23,42,.28);border-left:1px solid rgba(148,163,184,.14);backdrop-filter:blur(14px)}
-.hero-metric{padding:14px;border-radius:14px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12)}
-.hero-metric span{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:#93c5fd}
-.hero-metric strong{display:block;margin-top:8px;font-size:24px;line-height:1.05}
-.hero-metric small{display:block;margin-top:4px;color:rgba(226,232,240,.72);font-size:12px;line-height:1.45}
-.readiness-panel{margin-bottom:16px;border:1px solid rgba(148,163,184,.18);border-radius:var(--r);background:linear-gradient(180deg,#fff 0%,#f8fafc 100%);box-shadow:0 12px 30px rgba(15,23,42,.08);padding:18px 20px}
-.readiness-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
-.readiness-head h3{font-size:18px;line-height:1.15}
-.readiness-score{min-width:104px;text-align:right}
-.readiness-score span{display:block;font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--tx3)}
-.readiness-score strong{display:block;margin-top:4px;font-size:26px;line-height:1}
-.readiness-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}
-.readiness-item{display:flex;gap:10px;padding:12px;border:1px solid var(--bd);border-radius:14px;background:var(--sf2)}
-.readiness-item.ok{border-color:rgba(21,128,61,.18);background:rgba(21,128,61,.05)}
-.readiness-item.warn{border-color:rgba(217,119,6,.18);background:rgba(217,119,6,.05)}
-.readiness-item strong{display:block;font-size:13px;margin-bottom:4px}
-.readiness-item p{font-size:12px;color:var(--tx2);line-height:1.5}
-.readiness-dot{width:10px;height:10px;border-radius:50%;margin-top:4px;background:var(--yellow);flex-shrink:0;box-shadow:0 0 0 6px rgba(217,119,6,.08)}
-.readiness-item.ok .readiness-dot{background:var(--green);box-shadow:0 0 0 6px rgba(21,128,61,.08)}
-.readiness-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px solid var(--bd)}
-.readiness-next{font-size:12px;color:var(--tx2)}
-.mission-compose{display:flex;flex-direction:column;gap:12px}
-.mission-input{width:100%;min-height:116px;padding:14px 16px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2);color:var(--tx);font-size:14px;resize:vertical}
-.mission-input:focus{outline:none;border-color:var(--blue);background:var(--sf);box-shadow:0 0 0 3px rgba(26,115,232,.12)}
-.mission-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.mission-presets{display:flex;gap:8px;flex-wrap:wrap}
-.mission-preset{padding:7px 12px;border:1px solid var(--bd);background:var(--sf2);border-radius:999px;color:var(--tx2);font-size:12px;font-weight:600;cursor:pointer}
-.mission-preset:hover{border-color:var(--blue);color:var(--blue)}
-.pack-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px}
-.pack-card{display:flex;flex-direction:column;gap:10px;padding:14px;border:1px solid var(--bd);border-radius:16px;background:linear-gradient(180deg,#fff 0%,#f8fafc 100%)}
-.pack-card strong{font-size:14px}
-.pack-card p{font-size:12px;color:var(--tx2);line-height:1.5}
-.pack-snippet{padding:8px 10px;border-radius:10px;background:#0f172a;color:#e2e8f0;font-size:11px;line-height:1.45;word-break:break-word}
-.pack-actions{display:flex;flex-wrap:wrap;gap:8px}
-.pack-actions .btn{font-size:11px;padding:6px 10px}
-.pack-meta{display:flex;gap:8px;flex-wrap:wrap}
-.pack-meta span{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;background:rgba(15,23,42,.05);font-size:11px;color:var(--tx2)}
-.pack-live{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--bd);border-radius:14px;background:rgba(15,23,42,.02)}
-.pack-live-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
-.pack-status-badge{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
-.pack-status-badge.ok{background:rgba(21,128,61,.12);color:var(--green)}
-.pack-status-badge.warn{background:rgba(217,119,6,.12);color:var(--yellow)}
-.pack-status-badge.err{background:rgba(217,48,37,.12);color:var(--red)}
-.pack-live-row{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--tx2)}
-.pack-live-note{font-size:11px;line-height:1.5;color:var(--tx2)}
-.pack-live-features{display:flex;gap:6px;flex-wrap:wrap}
-.pack-live-features span{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;background:rgba(15,23,42,.05);font-size:11px;color:var(--tx2)}
-.pack-command-rail{display:flex;gap:8px;flex-wrap:wrap}
-.pack-command-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--bd);border-radius:999px;background:#fff;font-size:11px;font-weight:600;color:var(--tx2);cursor:pointer;transition:all .15s ease}
-.pack-command-chip:hover{border-color:var(--blue);color:var(--blue);box-shadow:0 4px 12px rgba(15,23,42,.08)}
-.pack-command-highlight{background:rgba(37,99,235,.08);border-color:rgba(37,99,235,.22);color:var(--blue)}
-.mission-grid{display:grid;grid-template-columns:minmax(280px,1fr) minmax(420px,1.4fr) minmax(280px,.95fr);gap:16px;align-items:start}
-.mission-stack{display:flex;flex-direction:column;gap:12px}
-.mission-list,.mission-timeline,.stack-list,.memory-list{display:flex;flex-direction:column;gap:10px}
-.mission-card{padding:14px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2);cursor:pointer;transition:border-color .15s, background .15s}
-.mission-card:hover,.mission-card.active{border-color:var(--blue);background:var(--sf)}
-.mission-card h4{font-size:14px;margin-bottom:6px}
-.mission-meta{display:flex;gap:8px;flex-wrap:wrap;color:var(--tx3);font-size:12px;margin-top:6px}
-.mission-filters{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0 14px}
-.mission-filter{padding:6px 10px;border:1px solid var(--bd);border-radius:999px;background:var(--sf2);color:var(--tx2);font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
-.mission-filter:hover{border-color:var(--blue);color:var(--blue)}
-.mission-filter.active{background:rgba(26,115,232,.08);border-color:rgba(26,115,232,.25);color:var(--blue)}
-.control-strip{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 10px}
-.control-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--bd);border-radius:999px;background:var(--sf2);font-size:12px;color:var(--tx2);font-weight:600}
-.control-chip strong{color:var(--tx)}
-.control-chip.ok{background:rgba(30,142,62,.08);border-color:rgba(30,142,62,.18);color:var(--green)}
-.control-chip.warn{background:rgba(249,171,0,.08);border-color:rgba(249,171,0,.2);color:var(--yellow)}
-.control-chip.err{background:rgba(217,48,37,.08);border-color:rgba(217,48,37,.18);color:var(--red)}
-.node-rail{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:14px}
-.node-pill{padding:12px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2)}
-.node-pill strong{display:block;font-size:12px;margin-bottom:6px}
-.node-pill span{font-size:12px;color:var(--tx2)}
-.node-pill.completed{border-color:rgba(30,142,62,.35);background:rgba(30,142,62,.06)}
-.node-pill.running{border-color:rgba(26,115,232,.4);background:rgba(26,115,232,.08)}
-.node-pill.waiting_approval,.node-pill.waiting-approval{border-color:rgba(249,171,0,.35);background:rgba(249,171,0,.08)}
-.node-pill.failed{border-color:rgba(217,48,37,.35);background:rgba(217,48,37,.08)}
-.quality-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}
-.quality-card{padding:12px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2)}
-.quality-card strong{display:block;font-size:12px;margin-bottom:4px}
-.quality-card span{font-size:12px;color:var(--tx2);word-break:break-word}
-.quality-card.ok{border-color:rgba(30,142,62,.18);background:rgba(30,142,62,.06)}
-.quality-card.warn{border-color:rgba(249,171,0,.18);background:rgba(249,171,0,.06)}
-.quality-card.err{border-color:rgba(217,48,37,.18);background:rgba(217,48,37,.06)}
-.detail-box{display:flex;flex-direction:column;gap:10px}
-.detail-lead{font-size:13px;color:var(--tx2)}
-.detail-pre{white-space:pre-wrap;background:var(--sf2);border:1px solid var(--bd);border-radius:var(--r2);padding:14px;font-size:13px;line-height:1.55}
-.timeline-item,.stack-item,.memory-item,.approval-item{padding:12px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2)}
-.timeline-item strong,.stack-item strong,.memory-item strong,.approval-item strong{display:block;font-size:12px;margin-bottom:4px}
-.timeline-item p,.stack-item p,.memory-item p,.approval-item p{font-size:12px;color:var(--tx2);word-break:break-word}
-.approval-actions{display:flex;gap:8px;margin-top:10px}
-.muted-sm{font-size:12px;color:var(--tx3)}
-.empty{padding:16px;border:1px dashed var(--bd);border-radius:var(--r2);color:var(--tx3);font-size:13px;text-align:center}
-.legacy-contract{display:none}
+    .nav-tabs {
+      display: flex;
+      gap: 2px;
+      margin: 0 auto;
+    }
 
-/* === BUTTONS === */
-.btn{display:inline-flex;align-items:center;justify-content:center;padding:8px 16px;border:none;border-radius:var(--r2);font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;gap:6px}
-.btn:disabled{opacity:.4;cursor:default}
-.btn-p{background:var(--blue);color:#fff}.btn-p:hover:not(:disabled){background:var(--blue2)}
-.btn-s{background:var(--sf2);color:var(--tx);border:1px solid var(--bd)}.btn-s:hover:not(:disabled){border-color:var(--tx3)}
-.btn-d{background:rgba(217,48,37,.06);color:var(--red);border:1px solid rgba(217,48,37,.2)}.btn-d:hover:not(:disabled){background:rgba(217,48,37,.12)}
-.btn-sm{padding:6px 12px;font-size:12px}
-.btn-row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+    .nav-tab {
+      border: none;
+      background: transparent;
+      color: var(--tx2);
+      font-size: 14px;
+      font-weight: 500;
+      padding: 8px 16px;
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+      position: relative;
+    }
 
-/* === KEY INPUT === */
-.key-input{display:flex;gap:8px;margin-top:12px}
-.key-input input{flex:1;padding:8px 12px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2);color:var(--tx);font-size:13px;min-width:0}
-.key-input input:focus{outline:none;border-color:var(--blue);background:var(--sf);box-shadow:0 0 0 3px rgba(26,115,232,.12)}
-.key-input input::placeholder{color:var(--tx3)}
+    .nav-tab:hover {
+      color: var(--tx);
+    }
 
-/* === OLLAMA BAR === */
-.oll-bar{padding:16px 20px;border-radius:var(--r);font-size:14px;font-weight:500;margin-bottom:20px}
-.oll-bar.on{background:rgba(30,142,62,.06);color:var(--green);border:1px solid rgba(30,142,62,.15)}
-.oll-bar.off{background:rgba(217,48,37,.06);color:var(--red);border:1px solid rgba(217,48,37,.15)}
-.sec-title{font-size:16px;font-weight:600;margin:24px 0 12px}
+    .nav-tab.active {
+      color: var(--tx);
+      font-weight: 600;
+    }
 
-/* === TABLE (status page) === */
-.stbl{width:100%;border-collapse:collapse;font-size:13px}
-.stbl th{text-align:left;font-weight:600;color:var(--tx3);padding:10px 8px;border-bottom:2px solid var(--bd);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
-.stbl td{padding:10px 8px;border-bottom:1px solid var(--bd)}
-.stbl tr:last-child td{border-bottom:none}
+    .nav-tab.active::after {
+      content: '';
+      position: absolute;
+      bottom: -1px;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--tx);
+    }
 
-/* === SETTINGS === */
-.settings-card{max-width:520px;display:flex;flex-direction:column;gap:20px}
-.field{display:flex;flex-direction:column;gap:6px}
-.field-label{font-size:13px;font-weight:600;color:var(--tx2)}
-.field-hint{font-size:12px;color:var(--tx3)}
-.sel{padding:10px 12px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2);color:var(--tx);font-size:14px;width:100%}
-.sel:focus{outline:none;border-color:var(--blue);background:var(--sf)}
-.toggle-row{display:flex;justify-content:space-between;align-items:center}
-.switch{position:relative;width:44px;height:26px;flex-shrink:0}
-.switch input{opacity:0;width:0;height:0;position:absolute}
-.slider{position:absolute;inset:0;background:var(--bd);border-radius:26px;cursor:pointer;transition:.25s}
-.slider::before{content:'';position:absolute;width:20px;height:20px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.25s;box-shadow:0 1px 3px rgba(0,0,0,.15)}
-.switch input:checked+.slider{background:var(--green)}
-.switch input:checked+.slider::before{transform:translateX(18px)}
-.integration-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
-.integration-form{display:flex;flex-direction:column;gap:14px}
-.integration-advanced{border:1px solid var(--bd);border-radius:var(--r2);padding:10px 12px;background:var(--sf2)}
-.integration-advanced summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--tx2);list-style:none}
-.integration-advanced summary::-webkit-details-marker{display:none}
-.integration-advanced[open]{background:var(--sf)}
-.integration-logo{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:6px;font-size:10px;font-weight:700;color:#fff;line-height:1;flex-shrink:0}
-.integration-logo.google{background:#4285f4}
-.integration-logo.gmail{background:#db4437}
-.integration-logo.calendar{background:#1a73e8}
-.integration-logo.drive{background:#0f9d58}
-.integration-logo.docs{background:#2962ff}
-.integration-logo.sheets{background:#188038}
-.integration-logo.slides{background:#f4b400}
-.integration-logo.chat{background:#5f6368}
-.integration-logo.whatsapp{background:#25d366}
-.integration-logo.instagram{background:linear-gradient(135deg,#f58529,#dd2a7b,#8134af,#515bd4)}
-.integration-logo.x{background:#111827}
-.integration-logo.email{background:#6b7280}
-.integration-logo.scheduler{background:#7c3aed}
-.integration-account{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2)}
-.integration-account strong{font-size:13px}
-.integration-account .meta{font-size:12px;color:var(--tx2);word-break:break-word}
-.trace-item{display:flex;flex-direction:column;gap:6px;padding:12px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2)}
-.trace-item .meta{font-size:12px;color:var(--tx2);word-break:break-word}
-.trace-meta{display:flex;gap:8px;flex-wrap:wrap}
-.trace-meta span,.account-meta span{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border-radius:999px;background:rgba(0,0,0,.04);font-size:11px;color:var(--tx2)}
-.trace-shell{display:flex;flex-direction:column;gap:14px}
-.trace-toolbar{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:center}
-.trace-note{font-size:12px;color:var(--tx3)}
-.trace-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
-.trace-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(320px,.9fr);gap:16px}
-.trace-bottom-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(320px,.95fr);gap:16px}
-.trace-split{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
-.trace-evidence-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
-.trace-evidence-card{display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2)}
-.trace-preview{width:100%;aspect-ratio:16/10;object-fit:cover;display:block;background:#0f172a;border-bottom:1px solid var(--bd)}
-.trace-preview-fallback{display:flex;align-items:center;justify-content:center;min-height:160px;font-weight:700;color:var(--blue);background:var(--sf2)}
-.trace-live-feed{display:flex;flex-direction:column;gap:10px;max-height:520px;overflow:auto}
-.trace-live-item{padding:12px;border:1px solid var(--bd);border-radius:var(--r2);background:var(--sf2)}
-.trace-live-item strong{display:block;margin-bottom:4px}
-.trace-live-item p{font-size:12px;color:var(--tx2);word-break:break-word}
-.trace-live-item pre{margin-top:8px;white-space:pre-wrap;word-break:break-word;background:var(--sf);border:1px solid var(--bd);border-radius:var(--r2);padding:12px;font-size:12px;line-height:1.5;max-height:220px;overflow:auto}
-.trace-brief{display:flex;flex-direction:column;gap:8px}
-.trace-brief p{font-size:12px;color:var(--tx2)}
-.code-box{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+    .nav-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      background: var(--sf);
+      border-radius: 20px;
+      font-size: 12px;
+      color: var(--tx2);
+      flex-shrink: 0;
+      margin-left: auto;
+    }
 
-/* === TOAST === */
-.toasts{position:fixed;bottom:20px;right:20px;display:flex;flex-direction:column;gap:8px;z-index:9999;pointer-events:none}
-.toast{padding:12px 18px;border-radius:var(--r2);font-size:13px;font-weight:500;color:#fff;pointer-events:auto;animation:tIn .25s ease;box-shadow:0 6px 20px rgba(0,0,0,.15)}
-.toast.ok{background:var(--green)}.toast.err{background:var(--red)}.toast.info{background:var(--blue)}
-@keyframes tIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+    .nav-pill .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--yellow);
+      animation: pulse 2s infinite;
+    }
 
-/* === RESPONSIVE === */
-@media(max-width:768px){
-  .navbar{flex-wrap:wrap;height:auto;padding:12px 16px;gap:8px}
-  .nav-tabs{order:10;width:100%}
-  .nav-tab{flex:1;text-align:center;padding:7px 8px}
-  .main{padding:16px}
-  .cgrid{grid-template-columns:1fr}
-  .kpis{grid-template-columns:repeat(2,1fr)}
-  .investor-hero{grid-template-columns:1fr}
-  .investor-copy h3{max-width:none;font-size:24px}
-  .hero-metrics{grid-template-columns:1fr 1fr}
-  .pack-grid{grid-template-columns:1fr}
-  .mission-hero,.mission-grid{grid-template-columns:1fr}
-}
-@media(max-width:480px){
-  .nav-brand span{display:none}
-  .kpis{grid-template-columns:1fr}
-  .hero-metrics{grid-template-columns:1fr}
-  .pack-grid{grid-template-columns:1fr}
-  .settings-card{max-width:100%}
-}
+    .nav-pill .dot.ok { background: var(--green); animation: none; }
+    .nav-pill .dot.err { background: var(--red); }
 
-/* === MINIMAL DASHBOARD OVERRIDES === */
-body{
-  background:#f4f6f8;
-  color:#0f172a;
-  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Arial,sans-serif;
-}
-.navbar{
-  height:60px;
-  padding:0 20px;
-  background:rgba(255,255,255,.82);
-  backdrop-filter:saturate(180%) blur(18px);
-  border-bottom:1px solid rgba(15,23,42,.08);
-  box-shadow:none;
-}
-.nav-logo{
-  background:#0f172a;
-  color:#fff;
-  border-color:#0f172a;
-}
-.nav-tabs{
-  background:rgba(15,23,42,.05);
-  padding:3px;
-  border-radius:12px;
-}
-.nav-tab{
-  padding:7px 14px;
-  color:#475569;
-}
-.nav-tab:hover{
-  background:rgba(255,255,255,.7);
-  color:#0f172a;
-}
-.nav-tab.active{
-  background:#fff;
-  box-shadow:0 1px 2px rgba(15,23,42,.06);
-}
-.nav-pill{
-  background:rgba(15,23,42,.05);
-  color:#334155;
-}
-.main{
-  max-width:1320px;
-  padding:22px 20px 56px;
-}
-.pg-head h2{
-  font-size:22px;
-  font-weight:650;
-  letter-spacing:-.02em;
-}
-.pg-sub{color:#64748b}
-.card,
-.kpi-box,
-.readiness-panel,
-.integration-account,
-.stack-item,
-.mission-card,
-.quality-card,
-.trace-item,
-.trace-live-item,
-.approval-item,
-.timeline-item,
-.memory-item,
-.channel-list-item,
-.channel-catalog-item,
-.settings-card{
-  background:#fff;
-  border-color:#e5e7eb;
-  box-shadow:none;
-}
-.card:hover{
-  border-color:#cbd5e1;
-  box-shadow:none;
-}
-.btn{border-radius:10px}
-.btn-p{
-  background:#0f172a;
-  color:#fff;
-}
-.btn-p:hover:not(:disabled){background:#111827}
-.btn-s{
-  background:#fff;
-  border-color:#d7dee8;
-  color:#0f172a;
-}
-.btn-s:hover:not(:disabled){border-color:#cbd5e1}
-.btn-d{
-  background:#fff1f2;
-  border-color:#fecdd3;
-  color:#be123c;
-}
-.sel,
-.key-input input,
-.mission-input{
-  background:#fff;
-  border-color:#d7dee8;
-  box-shadow:none;
-}
-.sel:focus,
-.key-input input:focus,
-.mission-input:focus{
-  border-color:#0f172a;
-  box-shadow:0 0 0 3px rgba(15,23,42,.08);
-}
-.mission-input{min-height:104px}
-.investor-hero{
-  grid-template-columns:minmax(0,1fr) minmax(260px,340px);
-  background:linear-gradient(180deg,#ffffff 0%,#f8fafc 100%);
-  color:#0f172a;
-  border-color:#e5e7eb;
-  box-shadow:none;
-}
-.investor-copy{padding:20px}
-.hero-kicker{color:#475569}
-.hero-kicker::before{
-  background:#0ea5e9;
-  box-shadow:0 0 0 6px rgba(14,165,233,.14);
-}
-.investor-copy h3{
-  font-size:24px;
-  color:#0f172a;
-  max-width:18ch;
-}
-.investor-copy p{color:#475569}
-.hero-band span{
-  background:#fff;
-  border-color:#e5e7eb;
-  color:#475569;
-}
-.hero-metrics{
-  background:#f8fafc;
-  border-left:1px solid #e5e7eb;
-}
-.hero-metric{
-  background:#fff;
-  border-color:#e5e7eb;
-}
-.hero-metric span{color:#64748b}
-.hero-metric small{color:#64748b}
-.readiness-panel{background:#fff}
-.readiness-item{
-  background:#f8fafc;
-}
-.readiness-item.ok{
-  background:#f0fdf4;
-  border-color:#bbf7d0;
-}
-.readiness-item.warn{
-  background:#fffbeb;
-  border-color:#fde68a;
-}
-.oll-bar.on{
-  background:#f0fdf4;
-  color:#166534;
-  border-color:#bbf7d0;
-}
-.oll-bar.off{
-  background:#fff1f2;
-  color:#be123c;
-  border-color:#fecdd3;
-}
-.pack-card{
-  background:#fff;
-  border-color:#e5e7eb;
-  box-shadow:none;
-}
-.pack-snippet{
-  background:#f8fafc;
-  color:#0f172a;
-  border:1px solid #e5e7eb;
-}
-.pack-command-chip{
-  background:#fff;
-  border-color:#d7dee8;
-  color:#475569;
-}
-.pack-command-chip:hover{
-  border-color:#0f172a;
-  color:#0f172a;
-}
-.trace-preview-fallback{
-  background:#f8fafc;
-  color:#0f172a;
-}
-.trace-live-item pre{background:#f8fafc}
-.empty{
-  background:#fff;
-  border-color:#e5e7eb;
-  color:#64748b;
-}
-.settings-grid,
-.channel-grid{
-  display:grid;
-  grid-template-columns:repeat(2,minmax(0,1fr));
-  gap:16px;
-}
-.settings-wide{grid-column:1/-1}
-.channel-catalog{
-  display:grid;
-  grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
-  gap:12px;
-}
-.channel-list{
-  display:flex;
-  flex-direction:column;
-  gap:10px;
-}
-.channel-list-item{
-  padding:14px;
-  border:1px solid #e5e7eb;
-  border-radius:14px;
-  background:#fff;
-  display:flex;
-  flex-direction:column;
-  gap:10px;
-}
-.channel-list-item.active{
-  border-color:#0f172a;
-  background:#f8fafc;
-}
-.channel-list-item:hover{
-  border-color:#cbd5e1;
-}
-.channel-list-top{
-  display:flex;
-  justify-content:space-between;
-  gap:12px;
-  align-items:flex-start;
-}
-.channel-list-top strong{font-size:14px}
-.channel-list-meta{
-  display:flex;
-  gap:8px;
-  flex-wrap:wrap;
-  font-size:12px;
-  color:#475569;
-}
-.channel-field-grid{
-  display:grid;
-  grid-template-columns:repeat(2,minmax(0,1fr));
-  gap:12px;
-}
-.channel-field-grid .field{
-  padding:12px;
-  border:1px solid #e5e7eb;
-  border-radius:14px;
-  background:#f8fafc;
-}
-.channel-field-grid .field .sel{width:100%}
-.channel-catalog-item{
-  padding:14px;
-  border:1px solid #e5e7eb;
-  border-radius:14px;
-  background:#fff;
-  display:flex;
-  flex-direction:column;
-  gap:10px;
-}
-.channel-catalog-item:hover{
-  border-color:#cbd5e1;
-}
-.channel-catalog-item .btn-row{margin-top:0}
-.channel-toolbar{
-  display:flex;
-  justify-content:space-between;
-  gap:12px;
-  align-items:center;
-  flex-wrap:wrap;
-}
-.channel-note{
-  font-size:12px;
-  color:#64748b;
-}
-.channel-empty{
-  padding:18px;
-  border:1px dashed #d7dee8;
-  border-radius:14px;
-  color:#64748b;
-  background:#fff;
-}
-.policy-summary{
-  display:flex;
-  gap:8px;
-  flex-wrap:wrap;
-}
-.policy-summary .pill{
-  background:#f8fafc;
-  border:1px solid #e5e7eb;
-  color:#475569;
-}
-@media(max-width:1024px){
-  .settings-grid,
-  .channel-grid{grid-template-columns:1fr}
-  .channel-field-grid{grid-template-columns:1fr}
-}
-@media(max-width:768px){
-  .navbar{height:auto;padding:12px 16px;gap:8px}
-  .nav-tabs{order:10;width:100%}
-  .nav-tab{flex:1;text-align:center;padding:7px 8px}
-  .main{padding:16px}
-  .cgrid,
-  .settings-grid,
-  .channel-grid,
-  .channel-field-grid{grid-template-columns:1fr}
-  .kpis{grid-template-columns:repeat(2,1fr)}
-  .investor-hero{grid-template-columns:1fr}
-  .investor-copy h3{max-width:none;font-size:22px}
-  .hero-metrics{grid-template-columns:1fr 1fr}
-  .pack-grid{grid-template-columns:1fr}
-  .mission-hero,.mission-grid{grid-template-columns:1fr}
-}
-@media(max-width:480px){
-  .nav-brand span{display:none}
-  .kpis{grid-template-columns:1fr}
-  .hero-metrics{grid-template-columns:1fr}
-  .pack-grid{grid-template-columns:1fr}
-  .settings-card{max-width:100%}
-  .channel-list-top,
-  .channel-toolbar{
-    flex-direction:column;
-    align-items:stretch;
-  }
-}
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+
+    /* MAIN */
+    main {
+      flex: 1;
+      max-width: 900px;
+      margin: 0 auto;
+      width: 100%;
+      padding: 40px 20px;
+      overflow-y: auto;
+    }
+
+    .page {
+      display: none;
+    }
+
+    .page.show {
+      display: block;
+      animation: fadeUp 0.3s ease;
+    }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    h1 {
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      margin-bottom: 12px;
+    }
+
+    h2 {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .sub {
+      font-size: 14px;
+      font-style: italic;
+      color: var(--tx2);
+      margin-bottom: 28px;
+    }
+
+    /* KONTROL TAB */
+    .hero {
+      display: grid;
+      gap: 20px;
+      margin-bottom: 40px;
+    }
+
+    .prompt-box {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: end;
+    }
+
+    textarea {
+      padding: 12px;
+      border: 1px solid var(--bd);
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 14px;
+      color: var(--tx);
+      background: var(--bg);
+      resize: vertical;
+      min-height: 60px;
+    }
+
+    textarea::placeholder {
+      color: var(--tx3);
+    }
+
+    button {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: var(--tx);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: var(--tx2);
+    }
+
+    .btn-secondary {
+      background: var(--sf);
+      color: var(--tx);
+      border: 1px solid var(--bd);
+    }
+
+    .btn-secondary:hover {
+      background: var(--bd);
+    }
+
+    .btn-success {
+      background: var(--green);
+      color: white;
+    }
+
+    .btn-danger {
+      background: var(--red);
+      color: white;
+    }
+
+    /* ACTIVITY */
+    .activity {
+      margin-top: 32px;
+    }
+
+    .activity h2 {
+      margin-bottom: 16px;
+    }
+
+    .activity-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .activity-item {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 12px;
+      align-items: center;
+      padding: 12px;
+      background: var(--sf);
+      border-radius: 4px;
+      border-left: 3px solid var(--bd);
+      font-size: 14px;
+    }
+
+    .activity-item.running {
+      border-left-color: var(--yellow);
+    }
+
+    .activity-item.done {
+      border-left-color: var(--green);
+    }
+
+    .activity-item.failed {
+      border-left-color: var(--red);
+    }
+
+    .activity-time {
+      font-size: 12px;
+      color: var(--tx3);
+      white-space: nowrap;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .badge.ok {
+      background: rgba(21, 128, 61, 0.1);
+      color: var(--green);
+    }
+
+    .badge.warn {
+      background: rgba(180, 83, 9, 0.1);
+      color: var(--yellow);
+    }
+
+    .badge.err {
+      background: rgba(190, 18, 60, 0.1);
+      color: var(--red);
+    }
+
+    /* APPROVAL LIST */
+    .approvals-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .approval-card {
+      background: var(--sf);
+      border: 1px solid var(--bd);
+      border-radius: 4px;
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .approval-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: start;
+      gap: 12px;
+    }
+
+    .approval-desc {
+      font-size: 14px;
+      color: var(--tx);
+    }
+
+    .approval-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .approval-actions button {
+      padding: 7px 12px;
+      font-size: 12px;
+    }
+
+    /* RUN LIST */
+    .runs-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .run-item {
+      background: var(--sf);
+      border: 1px solid var(--bd);
+      border-radius: 4px;
+      padding: 16px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .run-item:hover {
+      border-color: var(--tx);
+      background: var(--bg);
+    }
+
+    .run-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .run-title {
+      font-weight: 600;
+      color: var(--tx);
+    }
+
+    .run-time {
+      font-size: 12px;
+      color: var(--tx3);
+    }
+
+    .run-desc {
+      font-size: 13px;
+      color: var(--tx2);
+      margin-bottom: 8px;
+    }
+
+    .run-meta {
+      display: flex;
+      gap: 16px;
+      font-size: 12px;
+      color: var(--tx3);
+    }
+
+    .run-detail {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--bd);
+      display: none;
+    }
+
+    .run-detail.show {
+      display: block;
+    }
+
+    .run-step {
+      padding: 8px 0;
+      font-size: 12px;
+      color: var(--tx2);
+    }
+
+    /* MEMORY */
+    .timeline {
+      display: grid;
+      gap: 16px;
+    }
+
+    .timeline-item {
+      padding: 16px;
+      background: var(--sf);
+      border-left: 2px solid var(--bd);
+      border-radius: 4px;
+    }
+
+    .timeline-date {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--tx3);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+
+    .timeline-text {
+      font-size: 14px;
+      color: var(--tx);
+      line-height: 1.6;
+    }
+
+    /* SETTINGS */
+    .settings-grid {
+      display: grid;
+      gap: 20px;
+    }
+
+    .collapse {
+      background: var(--sf);
+      border: 1px solid var(--bd);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .collapse-header {
+      padding: 14px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--bd);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      user-select: none;
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    .collapse-header:hover {
+      background: var(--sf);
+    }
+
+    .collapse-icon {
+      display: inline-block;
+      transition: transform 0.2s;
+    }
+
+    .collapse-icon.open {
+      transform: rotate(180deg);
+    }
+
+    .collapse-body {
+      display: none;
+      padding: 16px;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .collapse-body.show {
+      display: block;
+    }
+
+    .collapse-body p {
+      margin-bottom: 8px;
+    }
+
+    /* EMPTY STATE */
+    .empty-state {
+      text-align: center;
+      padding: 48px 20px;
+      color: var(--tx3);
+    }
+
+    .empty-state p {
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    /* LOADING */
+    .loading {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid var(--bd);
+      border-top-color: var(--tx);
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* RESPONSIVE */
+    @media (max-width: 640px) {
+      nav {
+        padding: 0 16px;
+        gap: 12px;
+      }
+
+      main {
+        padding: 24px 16px;
+      }
+
+      h1 {
+        font-size: 24px;
+      }
+
+      h2 {
+        font-size: 16px;
+      }
+
+      .nav-tabs {
+        flex-wrap: wrap;
+        margin: 0 auto 0 0;
+      }
+
+      .nav-pill {
+        margin-left: auto;
+      }
+    }
   </style>
 </head>
 <body>
-
   <!-- NAVBAR -->
-  <nav class="navbar">
-    <div class="nav-brand">
-      <div class="nav-logo">E</div>
-      <span>Elyan</span>
+  <nav>
+    <div class="nav-brand">Elyan</div>
+    <div class="nav-tabs">
+      <button class="nav-tab active" data-tab="kontrol">Kontrol</button>
+      <button class="nav-tab" data-tab="onaylar">Onaylar <span id="approval-count" style="display: none;"></span></button>
+      <button class="nav-tab" data-tab="calisma">Çalışmalar</button>
+      <button class="nav-tab" data-tab="bellek">Bellek</button>
+      <button class="nav-tab" data-tab="ayarlar">Ayarlar</button>
     </div>
-    <div class="nav-tabs" id="nav-tabs">
-      <button class="nav-tab active" data-t="mission">Mission</button>
-      <button class="nav-tab" data-t="trace">Trace</button>
-      <button class="nav-tab" data-t="tools">Tools</button>
-      <button class="nav-tab" data-t="integrations">Integrations</button>
-      <button class="nav-tab" data-t="channels">Channels</button>
-      <button class="nav-tab" data-t="approvals">Approvals</button>
-      <button class="nav-tab" data-t="memory">Memory</button>
-      <button class="nav-tab" data-t="analytics">Analytics</button>
-      <button class="nav-tab" data-t="runs">📊 Runs</button>
-      <button class="nav-tab" data-t="settings">Settings</button>
-    </div>
-    <div class="nav-right">
-      <div class="nav-pill"><span class="status-dot" id="g-dot"></span><span id="g-txt">...</span><span id="approvals-badge" style="background:#ef4444;color:white;padding:2px 6px;border-radius:10px;font-size:10px;margin-left:6px;display:none;">0</span></div>
-      <button class="nav-btn" id="g-refresh" title="Yenile">&#x21bb;</button>
+    <div class="nav-pill">
+      <div class="dot ok"></div>
+      <span id="status-text">Hazır</span>
     </div>
   </nav>
 
-  <!-- MAIN CONTENT -->
-  <div class="main">
+  <!-- MAIN -->
+  <main>
+    <!-- KONTROL TAB -->
+    <div id="kontrol" class="page show">
+      <h1>Elyan</h1>
+      <p class="sub">Operasyonel yapay zeka asistanınız</p>
 
-    <!-- ===== MISSION PAGE ===== -->
-    <div class="page show" id="p-mission">
-      <div class="pg-head">
-        <div>
-          <h2>Mission</h2>
-          <p class="pg-sub">Görevi başlat, kanıtı izle, teslimi al.</p>
+      <div class="hero">
+        <div class="prompt-box">
+          <textarea id="prompt-input" placeholder="Ne yapmamı istersin?"></textarea>
+          <button class="btn-primary" id="start-btn">Başlat</button>
         </div>
       </div>
 
-      <div class="investor-hero">
-        <div class="investor-copy">
-          <div class="hero-kicker">Operator Console</div>
-          <h3>Natural language to trusted computer action.</h3>
-          <p>Local-first execution, live trace, approval gates and evidence. Kanallar, ayarlar ve mission akışı tek bir yüzeyde yönetilir.</p>
-          <div class="hero-band">
-            <span>Local-first</span>
-            <span>Evidence-backed</span>
-            <span>Approval-gated</span>
-            <span>Autopilot ready</span>
-          </div>
-          <div class="hero-actions">
-            <button class="btn btn-p btn-sm js-mission-preset" data-prompt="Bir browser demo çalıştır: OpenAI sitesini aç, sonucu kanıtla ve 3 maddeyle özetle.">Browser demo</button>
-            <button class="btn btn-s btn-sm js-mission-preset" data-prompt="Bir research brief hazırla: konuyu kısa araştır, kaynakları doğrula ve kanıt paketi oluştur.">Research brief</button>
-            <button class="btn btn-s btn-sm js-mission-preset" data-prompt="Inbox triage yap: gelen kutusunu sınıflandır, öncelikleri çıkar ve kısa bir takip listesi üret.">Inbox triage</button>
-            <button class="btn btn-s btn-sm js-mission-preset" data-prompt="Bir landing page üret, doğrula, ekran kanıtı al ve teslim formatında özetle.">Landing demo</button>
-          </div>
-        </div>
-        <div class="hero-metrics">
-          <div class="hero-metric"><span>Readiness</span><strong id="hero-readiness">—</strong><small id="hero-readiness-note">Yükleniyor</small></div>
-          <div class="hero-metric"><span>Providers</span><strong id="hero-providers">—</strong><small id="hero-providers-note">LLM + local models</small></div>
-          <div class="hero-metric"><span>Evidence</span><strong id="hero-evidence">—</strong><small>trace artifacts</small></div>
-          <div class="hero-metric"><span>Skills</span><strong id="hero-skills">—</strong><small id="hero-skills-note">enabled workflows</small></div>
-        </div>
-      </div>
-
-      <div class="readiness-panel">
-        <div class="readiness-head">
-          <div>
-            <h3>Board Readiness</h3>
-            <div class="card-desc">Yatırımcı demo’su için ne hazır, ne eksik, bir sonraki en iyi adım ne.</div>
-          </div>
-          <div class="readiness-score">
-            <span id="readiness-score-label">Yükleniyor</span>
-            <strong id="readiness-score-value">0/5</strong>
-          </div>
-        </div>
-        <div id="readiness-items" class="readiness-list"></div>
-        <div class="readiness-footer">
-          <div id="readiness-next" class="readiness-next">Hazırlık kontrol ediliyor...</div>
-          <div class="btn-row" style="margin-top:0">
-            <button class="btn btn-s btn-sm" id="readiness-copy" type="button">Copy Status</button>
-            <button class="btn btn-p btn-sm" id="readiness-open-trace" type="button">Open Trace</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="mission-hero">
-        <div class="card mission-compose">
-          <textarea id="mission-input" class="mission-input" placeholder="Outcome yaz: örn. 'OpenAI sitesini aç, ekran kanıtı al ve kısa demo özeti oluştur.'"></textarea>
-          <div class="mission-row">
-            <select class="sel" id="mission-mode" style="max-width:220px">
-              <option value="Sprint">Sprint — En hızlı taslak</option>
-              <option value="Balanced" selected>Balanced — Varsayılan</option>
-              <option value="Audit">Audit — Ek doğrulama</option>
-            </select>
-            <button class="btn btn-p" id="mission-run">Mission Başlat</button>
-          </div>
-          <div class="mission-presets">
-            <button class="mission-preset js-mission-preset" data-prompt="Bir browser demo çalıştır: OpenAI sitesini aç, sonucu kanıtla ve 3 maddeyle özetle.">Browser demo</button>
-            <button class="mission-preset js-mission-preset" data-prompt="Bir research brief hazırla: konuyu kısa araştır, kaynakları doğrula ve kanıt paketi oluştur.">Research brief</button>
-            <button class="mission-preset js-mission-preset" data-prompt="Inbox triage yap: gelen kutusunu sınıflandır, öncelikleri çıkar ve kısa bir takip listesi üret.">Inbox triage</button>
-            <button class="mission-preset js-mission-preset" data-prompt="Bir landing page üret, doğrula, ekran kanıtı al ve teslim formatında özetle.">Landing demo</button>
-          </div>
-          <div class="sec-title" style="margin:6px 0 0;display:flex;align-items:center;justify-content:space-between;gap:10px">
-            <span>Project Packs</span>
-            <button class="btn btn-s btn-sm" id="packs-refresh" type="button">Refresh Live</button>
-          </div>
-          <div class="pack-grid">
-            <article class="pack-card" data-pack="quivr">
-              <div class="pack-meta"><span>Knowledge</span><span>Quivr</span></div>
-              <strong>Second-brain pack</strong>
-              <p>Grounded Q&A, local fallback RAG ve sample docs ile kur.</p>
-              <div class="pack-snippet">elyan packs scaffold quivr --path ./quivr</div>
-              <div class="pack-live">
-                <div class="pack-live-head">
-                  <span class="pack-status-badge warn" id="pack-quivr-status">Loading</span>
-                  <span class="pack-live-note" id="pack-quivr-command">elyan packs status quivr</span>
-                </div>
-                <div class="pack-live-row">
-                  <span id="pack-quivr-root">root: -</span>
-                  <span id="pack-quivr-bundle">bundle: -</span>
-                  <span id="pack-quivr-readiness">readiness: -</span>
-                  <span id="pack-quivr-score">score: -</span>
-                  <span id="pack-quivr-count">features: -</span>
-                  <span id="pack-quivr-missing">missing: -</span>
-                </div>
-                <div class="pack-live-note" id="pack-quivr-next">Live durum bekleniyor...</div>
-                <div class="pack-live-features" id="pack-quivr-features"></div>
-                <div class="pack-command-rail" id="pack-quivr-commands"></div>
-              </div>
-              <div class="pack-actions">
-                <button class="btn btn-p btn-sm js-pack-refresh" data-pack="quivr">Status</button>
-                <button class="btn btn-s btn-sm js-pack-mission" data-pack="quivr" data-action="scaffold">Scaffold</button>
-                <button class="btn btn-s btn-sm js-pack-mission" data-pack="quivr" data-action="workflow">Workflow</button>
-                <button class="btn btn-s btn-sm js-copy-command" data-command="elyan packs scaffold quivr --path ./quivr">Copy CLI</button>
-              </div>
-            </article>
-            <article class="pack-card" data-pack="cloudflare-agents">
-              <div class="pack-meta"><span>Cloud</span><span>Agents</span></div>
-              <strong>Edge agents pack</strong>
-              <p>Worker app scaffold, realtime sync ve MCP notlarıyla edge runtime hazırla.</p>
-              <div class="pack-snippet">elyan packs scaffold cloudflare-agents --path ./worker</div>
-              <div class="pack-live">
-                <div class="pack-live-head">
-                  <span class="pack-status-badge warn" id="pack-cloudflare-agents-status">Loading</span>
-                  <span class="pack-live-note" id="pack-cloudflare-agents-command">elyan packs status cloudflare-agents</span>
-                </div>
-                <div class="pack-live-row">
-                  <span id="pack-cloudflare-agents-root">root: -</span>
-                  <span id="pack-cloudflare-agents-bundle">bundle: -</span>
-                  <span id="pack-cloudflare-agents-readiness">readiness: -</span>
-                  <span id="pack-cloudflare-agents-score">score: -</span>
-                  <span id="pack-cloudflare-agents-count">features: -</span>
-                  <span id="pack-cloudflare-agents-missing">missing: -</span>
-                </div>
-                <div class="pack-live-note" id="pack-cloudflare-agents-next">Live durum bekleniyor...</div>
-                <div class="pack-live-features" id="pack-cloudflare-agents-features"></div>
-                <div class="pack-command-rail" id="pack-cloudflare-agents-commands"></div>
-              </div>
-              <div class="pack-actions">
-                <button class="btn btn-p btn-sm js-pack-refresh" data-pack="cloudflare-agents">Status</button>
-                <button class="btn btn-s btn-sm js-pack-mission" data-pack="cloudflare-agents" data-action="scaffold">Scaffold</button>
-                <button class="btn btn-s btn-sm js-pack-mission" data-pack="cloudflare-agents" data-action="workflow">Workflow</button>
-                <button class="btn btn-s btn-sm js-copy-command" data-command="elyan packs scaffold cloudflare-agents --path ./worker">Copy CLI</button>
-              </div>
-            </article>
-            <article class="pack-card" data-pack="opengauss">
-              <div class="pack-meta"><span>Database</span><span>OpenGauss</span></div>
-              <strong>Database workspace pack</strong>
-              <p>Docker compose, schema bootstrap, query loop ve backup/restore akışı hazırla.</p>
-              <div class="pack-snippet">elyan packs scaffold opengauss --path ./db</div>
-              <div class="pack-live">
-                <div class="pack-live-head">
-                  <span class="pack-status-badge warn" id="pack-opengauss-status">Loading</span>
-                  <span class="pack-live-note" id="pack-opengauss-command">elyan packs status opengauss</span>
-                </div>
-                <div class="pack-live-row">
-                  <span id="pack-opengauss-root">root: -</span>
-                  <span id="pack-opengauss-bundle">bundle: -</span>
-                  <span id="pack-opengauss-readiness">readiness: -</span>
-                  <span id="pack-opengauss-score">score: -</span>
-                  <span id="pack-opengauss-count">features: -</span>
-                  <span id="pack-opengauss-missing">missing: -</span>
-                </div>
-                <div class="pack-live-note" id="pack-opengauss-next">Live durum bekleniyor...</div>
-                <div class="pack-live-features" id="pack-opengauss-features"></div>
-                <div class="pack-command-rail" id="pack-opengauss-commands"></div>
-              </div>
-              <div class="pack-actions">
-                <button class="btn btn-p btn-sm js-pack-refresh" data-pack="opengauss">Status</button>
-                <button class="btn btn-s btn-sm js-pack-mission" data-pack="opengauss" data-action="scaffold">Scaffold</button>
-                <button class="btn btn-s btn-sm js-pack-mission" data-pack="opengauss" data-action="query">Query</button>
-                <button class="btn btn-s btn-sm js-copy-command" data-command="elyan packs scaffold opengauss --path ./db">Copy CLI</button>
-              </div>
-            </article>
-          </div>
-        </div>
-      </div>
-
-      <div class="kpis" id="mission-kpis"></div>
-
-      <div class="mission-grid">
-        <div class="mission-stack">
-          <div class="card">
-            <div class="card-top">
-              <div><h3>Aktif Missionlar</h3><div class="card-desc">Görevler ve durum.</div></div>
-            </div>
-            <div id="mission-filters" class="mission-filters">
-              <button class="mission-filter active js-mission-filter" data-filter="all">Tümü</button>
-              <button class="mission-filter js-mission-filter" data-filter="active">Aktif</button>
-              <button class="mission-filter js-mission-filter" data-filter="waiting_approval">Approval</button>
-              <button class="mission-filter js-mission-filter" data-filter="completed">Tamamlanan</button>
-              <button class="mission-filter js-mission-filter" data-filter="failed">Başarısız</button>
-            </div>
-            <div id="mission-list" class="mission-list"></div>
-          </div>
-          <div class="card">
-            <div class="card-top">
-              <div><h3>Skills</h3><div class="card-desc">SOP olarak sakla.</div></div>
-            </div>
-            <div id="mission-skills" class="stack-list"></div>
-          </div>
-        </div>
-
-        <div class="mission-stack">
-        <div class="card">
-          <div class="card-top">
-              <div><h3>Misyon Detayı</h3><div class="card-desc">Graph, timeline, deliverable.</div></div>
-              <div class="btn-row" style="margin-top:0">
-                <button class="btn btn-s btn-sm" id="mission-open-trace" type="button">Trace Aç</button>
-              </div>
-            </div>
-            <div id="mission-detail" class="detail-box"></div>
-            <div id="mission-control-strip" class="control-strip"></div>
-            <div id="mission-rail" class="node-rail"></div>
-            <div class="sec-title" style="margin:20px 0 10px">Quality</div>
-            <div id="mission-quality" class="quality-grid"></div>
-            <div class="sec-title" style="margin:20px 0 10px">Timeline</div>
-            <div id="mission-timeline" class="mission-timeline"></div>
-            <div class="sec-title" style="margin:20px 0 10px">Deliverable</div>
-            <div id="mission-deliverable" class="detail-pre">Henüz bir mission seçilmedi.</div>
-          </div>
-        </div>
-
-        <div class="mission-stack">
-          <div class="card">
-            <div class="card-top">
-              <div><h3>Approval Inbox</h3><div class="card-desc">Onay bekleyen işlemler.</div></div>
-            </div>
-            <div id="mission-approvals" class="stack-list"></div>
-          </div>
-          <div class="card">
-            <div class="card-top">
-              <div><h3>Evidence Panel</h3><div class="card-desc">Manifest ve artefactlar.</div></div>
-            </div>
-            <div id="mission-evidence" class="stack-list"></div>
-          </div>
-          <div class="card">
-            <div class="card-top">
-              <div><h3>Memory Studio</h3><div class="card-desc">Kısa hafıza.</div></div>
-            </div>
-            <div id="mission-memory" class="memory-list"></div>
-          </div>
+      <div class="activity">
+        <h2>Son Aktivite</h2>
+        <div id="activity-list" class="activity-list">
+          <p style="color: var(--tx3); font-size: 14px;">Henüz görev yok</p>
         </div>
       </div>
     </div>
 
-    <!-- ===== CHANNELS PAGE ===== -->
-    <div class="page" id="p-channels">
-      <div class="pg-head">
-        <div>
-          <h2>Channels</h2>
-          <p class="pg-sub">Mesaj kanallarını tek yerden ekle, test et, toggle et ve runtime'a senkronize et.</p>
-        </div>
-        <div class="btn-row" style="margin-top:0">
-          <button class="btn btn-s" id="channels-refresh" type="button">Yenile</button>
-          <button class="btn btn-p" id="channels-sync" type="button">Sync Runtime</button>
-        </div>
-      </div>
-      <div class="kpis" id="channel-kpis"></div>
-      <div class="channel-grid">
-        <div class="card channel-list-card">
-          <div class="card-top">
-            <div><h3>Configured Channels</h3><div class="card-desc">Enabled, connected, degraded.</div></div>
-          </div>
-          <div id="channel-list" class="channel-list"></div>
-        </div>
-        <div class="card channel-editor-card">
-          <div class="card-top">
-            <div><h3>Channel Editor</h3><div class="card-desc">Yeni kanal ekle ya da seçili olanı güncelle.</div></div>
-            <span class="pill warn" id="channel-editor-status">Yeni kayıt</span>
-          </div>
-          <div class="field">
-            <label class="field-label">Channel Type</label>
-            <select class="sel" id="channel-type"></select>
-            <span class="field-hint">Tip değişirse form otomatik güncellenir.</span>
-          </div>
-          <div class="field">
-            <label class="field-label">Channel ID</label>
-            <input class="sel" id="channel-id" placeholder="telegram-prod" />
-          </div>
-          <div class="field toggle-row">
-            <div>
-              <div class="field-label">Enabled</div>
-              <span class="field-hint">Runtime'a dahil et.</span>
-            </div>
-            <label class="switch"><input type="checkbox" id="channel-enabled"><span class="slider"></span></label>
-          </div>
-          <div id="channel-field-list" class="channel-field-grid"></div>
-          <div class="field-hint" id="channel-notes"></div>
-          <div class="btn-row">
-            <button class="btn btn-p" id="channel-save" type="button">Kaydet</button>
-            <button class="btn btn-s" id="channel-test" type="button">Test</button>
-            <button class="btn btn-s" id="channel-reset" type="button">Yeni</button>
-          </div>
-        </div>
-      </div>
-      <div class="card channel-catalog-card" style="margin-top:16px">
-        <div class="card-top">
-          <div><h3>Channel Catalog</h3><div class="card-desc">Hızlı başlangıç kartları.</div></div>
-        </div>
-        <div id="channel-catalog" class="channel-catalog"></div>
-      </div>
-    </div>
+    <!-- ONAYLAR TAB -->
+    <div id="onaylar" class="page">
+      <h2>Onay Bekleyenler</h2>
+      <p class="sub">Bu aksiyonlar senin onayını bekliyor</p>
 
-    <!-- ===== TRACE PAGE ===== -->
-    <div class="page" id="p-trace">
-      <div class="pg-head">
-        <div>
-          <h2>Trace</h2>
-          <p class="pg-sub">Decision trace, evidence gallery ve canlı olay akışı.</p>
-        </div>
-        <div class="btn-row" style="margin-top:0">
-          <button class="btn btn-s" id="trace-refresh" type="button">Yenile</button>
-          <button class="btn btn-p" id="trace-open-full" type="button">Full Page</button>
-          <button class="btn btn-s" id="trace-copy-link" type="button">Link Kopyala</button>
-          <button class="btn btn-s" id="trace-download" type="button">JSON İndir</button>
-        </div>
-      </div>
-      <div class="card trace-shell">
-        <div class="trace-toolbar">
-          <input class="mission-input" id="trace-task-id" placeholder="Task / Mission ID" style="min-height:44px;resize:none" />
-          <button class="btn btn-p" id="trace-load" type="button">Load Trace</button>
-          <div class="trace-note">Canlı akış /ws/dashboard üzerinden gelir.</div>
-        </div>
-        <div class="kpis" id="trace-kpis"></div>
-        <div class="trace-summary" id="trace-summary"></div>
-      </div>
-      <div class="trace-grid" style="margin-top:16px">
-        <div class="card">
-          <div class="card-top">
-            <div><h3>Decision Trace</h3><div class="card-desc">Graph ve kontrol özeti.</div></div>
-          </div>
-          <pre id="trace-decision" class="detail-pre">Henüz trace yüklenmedi.</pre>
-        </div>
-        <div class="card">
-          <div class="card-top">
-            <div><h3>Evidence Gallery</h3><div class="card-desc">Ekran görüntüsü, video ve artifactler.</div></div>
-          </div>
-          <div id="trace-evidence" class="trace-evidence-grid"></div>
-        </div>
-      </div>
-      <div class="trace-bottom-grid" style="margin-top:16px">
-        <div class="card">
-          <div class="card-top">
-            <div><h3>Timeline & Approvals</h3><div class="card-desc">Tam yürütme sırası.</div></div>
-          </div>
-          <div class="trace-split">
-            <div>
-              <div class="sec-title">Timeline</div>
-              <div id="trace-timeline" class="stack-list"></div>
-            </div>
-            <div>
-              <div class="sec-title">Approvals</div>
-              <div id="trace-approvals" class="stack-list"></div>
-            </div>
-          </div>
-        </div>
-        <div class="card">
-          <div class="card-top">
-            <div><h3>Live Stream</h3><div class="card-desc">Dashboard WebSocket olayları.</div></div>
-          </div>
-          <div id="trace-live" class="trace-live-feed"></div>
+      <div id="approvals-container">
+        <div class="empty-state">
+          <p>Bekleyen onay yok. Elyan özgürce çalışıyor.</p>
         </div>
       </div>
     </div>
 
-    <!-- ===== TOOLS PAGE ===== -->
-    <div class="page" id="p-tools">
-      <div class="pg-head">
-        <div>
-          <h2>Tools</h2>
-          <p class="pg-sub">Provider, local model ve health.</p>
-        </div>
-        <button class="btn btn-s" id="g-refresh-tools" type="button">Yenile</button>
-      </div>
-      <div class="kpis" id="llm-kpis"></div>
-      <div class="card">
-        <div class="card-top">
-          <div><h3>LLM</h3></div>
-        </div>
-        <div class="cgrid" id="llm-grid"></div>
-      </div>
-      <div class="card" style="margin-top:16px">
-        <div class="card-top">
-          <div><h3>Local</h3></div>
-        </div>
-        <div id="oll-bar" class="oll-bar off">Kontrol ediliyor...</div>
-        <div class="sec-title">Yüklü</div>
-        <div class="cgrid" id="oll-installed"></div>
-        <div class="sec-title">Önerilen</div>
-        <div class="cgrid" id="oll-recommended"></div>
-      </div>
-      <div class="card" style="margin-top:16px">
-        <div class="card-top">
-          <div><h3>Health</h3></div>
-        </div>
-        <div class="kpis" id="st-kpis"></div>
-        <div id="st-table" style="overflow-x:auto; margin-top:12px"></div>
-      </div>
-      <div class="card" style="margin-top:16px">
-        <div class="card-top">
-          <div><h3>Autopilot</h3><div class="card-desc">Proaktif bakım, briefing ve otomatik eylem döngüsü.</div></div>
-          <div class="btn-row" style="margin-top:0">
-            <button class="btn btn-s btn-sm" id="autopilot-refresh" type="button">Yenile</button>
-            <button class="btn btn-p btn-sm" id="autopilot-start" type="button">Başlat</button>
-            <button class="btn btn-s btn-sm" id="autopilot-tick" type="button">Tick</button>
-            <button class="btn btn-d btn-sm" id="autopilot-stop" type="button">Durdur</button>
-          </div>
-        </div>
-        <div class="kpis" id="autopilot-kpis"></div>
-        <div id="autopilot-summary" class="stack-list"></div>
-      </div>
-      <div class="card" style="margin-top:16px">
-        <div class="card-top">
-          <div><h3>Skills</h3><div class="card-desc">Registry, workflow ve hot-reload.</div></div>
-          <button class="btn btn-s" id="skills-refresh" type="button">Yenile</button>
-        </div>
-        <div class="kpis" id="skills-kpis"></div>
-        <div class="sec-title">Registry</div>
-        <div class="stack-list" id="skills-list"></div>
-        <div class="sec-title">Workflows</div>
-        <div class="stack-list" id="skills-workflow-list"></div>
-      </div>
-      <div class="card" style="margin-top:16px">
-        <div class="card-top">
-          <div><h3>Skill Store</h3><div class="card-desc">Community skill ara, kur, dışa aktar.</div></div>
-          <button class="btn btn-s" id="marketplace-refresh" type="button">Yenile</button>
-        </div>
-        <div class="mission-row">
-          <input class="mission-input" id="marketplace-query" placeholder="Skill ara..." style="min-height:44px;resize:none;flex:1" />
-          <button class="btn btn-p" id="marketplace-search" type="button">Ara</button>
-        </div>
-        <div class="kpis" id="marketplace-kpis"></div>
-        <div class="stack-list" id="marketplace-list"></div>
-      </div>
-    </div>
+    <!-- ÇALIŞMALAR TAB -->
+    <div id="calisma" class="page">
+      <h2>Görev Geçmişi</h2>
+      <p class="sub">Geçmiş ve devam eden görevler</p>
 
-    <!-- ===== INTEGRATIONS PAGE ===== -->
-    <div class="page" id="p-integrations">
-      <div class="pg-head">
-        <div>
-          <h2>Integrations</h2>
-          <p class="pg-sub">OAuth, fallback, connector trace ve hesap yönetimi.</p>
-        </div>
-        <button class="btn btn-s" id="integrations-refresh" type="button">Yenile</button>
+      <div style="margin-bottom: 16px;">
+        <button class="btn-secondary" data-filter="all" style="margin-right: 4px;">Tümü</button>
+        <button class="btn-secondary" data-filter="running" style="margin-right: 4px;">Devam Ediyor</button>
+        <button class="btn-secondary" data-filter="completed" style="margin-right: 4px;">Tamamlandı</button>
+        <button class="btn-secondary" data-filter="failed">Başarısız</button>
       </div>
-      <div class="kpis" id="integration-kpis"></div>
-      <div class="card" style="margin-top:16px">
-        <div class="card-top">
-          <div><h3>Integration Summary</h3><div class="card-desc">Provider, status ve fallback dağılımı.</div></div>
-        </div>
-        <div class="stack-list" id="integration-summary"></div>
-      </div>
-      <div class="integration-grid">
-        <div class="card">
-          <div class="card-top">
-            <div><h3>OAuth / API Bağla</h3><div class="card-desc">İlk bağlantı, re-auth ve revoke.</div></div>
-          </div>
-          <div class="integration-form">
-            <div class="field">
-              <label class="field-label">App / One-click connect</label>
-              <input class="sel" id="integration-app" placeholder="Gmail, Google Docs, WhatsApp..." />
-              <span class="field-hint">Uygulama adını yaz veya aşağıdaki hızlı butonlardan birini seç.</span>
-            </div>
-            <div class="field-hint" style="margin:2px 0 4px 2px">
-              Uygulamayı seç, Elyan sağlayıcıyı, scope'ları ve redirect akışını otomatik yönetir.
-            </div>
-            <div class="mission-presets" id="integration-quick-presets">
-              <button class="mission-preset js-integration-quick" data-app="Gmail" data-provider="google"><span class="integration-logo gmail">G</span><span>Gmail</span></button>
-              <button class="mission-preset js-integration-quick" data-app="Google Calendar" data-provider="google"><span class="integration-logo calendar">C</span><span>Calendar</span></button>
-              <button class="mission-preset js-integration-quick" data-app="Google Drive" data-provider="google"><span class="integration-logo drive">D</span><span>Drive</span></button>
-              <button class="mission-preset js-integration-quick" data-app="Google Docs" data-provider="google"><span class="integration-logo docs">D</span><span>Docs</span></button>
-              <button class="mission-preset js-integration-quick" data-app="Google Sheets" data-provider="google"><span class="integration-logo sheets">S</span><span>Sheets</span></button>
-              <button class="mission-preset js-integration-quick" data-app="Google Slides" data-provider="google"><span class="integration-logo slides">S</span><span>Slides</span></button>
-              <button class="mission-preset js-integration-quick" data-app="Google Chat" data-provider="google"><span class="integration-logo chat">C</span><span>Chat</span></button>
-              <button class="mission-preset js-integration-quick" data-app="WhatsApp" data-provider="whatsapp"><span class="integration-logo whatsapp">W</span><span>WhatsApp</span></button>
-              <button class="mission-preset js-integration-quick" data-app="Instagram" data-provider="instagram"><span class="integration-logo instagram">I</span><span>Instagram</span></button>
-              <button class="mission-preset js-integration-quick" data-app="X" data-provider="x"><span class="integration-logo x">X</span><span>X</span></button>
-            </div>
-            <div class="integration-advanced" hidden aria-hidden="true">
-              <div class="integration-form" style="margin-top:12px">
-                <div class="field">
-                  <label class="field-label">Provider</label>
-                  <select class="sel" id="integration-provider">
-                    <option value="google">Google</option>
-                    <option value="gmail">Gmail</option>
-                    <option value="calendar">Calendar</option>
-                    <option value="drive">Drive</option>
-                    <option value="docs">Docs</option>
-                    <option value="sheets">Sheets</option>
-                    <option value="slides">Slides</option>
-                    <option value="chat">Chat</option>
-                    <option value="x">X</option>
-                    <option value="instagram">Instagram</option>
-                    <option value="whatsapp">WhatsApp</option>
-                    <option value="email">Email</option>
-                    <option value="scheduler">Scheduler</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label class="field-label">Account alias</label>
-                  <input class="sel" id="integration-account-alias" placeholder="default" />
-                </div>
-                <div class="field">
-                  <label class="field-label">Scopes</label>
-                  <input class="sel code-box" id="integration-scopes" placeholder="scope1, scope2" />
-                  <span class="field-hint">Otomatik eşleşen hesap yoksa isteği başlatmak için scope ekleyebilirsin.</span>
-                </div>
-                <div class="field">
-                  <label class="field-label">Auth mode</label>
-                  <select class="sel" id="integration-mode">
-                    <option value="auto">Auto</option>
-                    <option value="oauth">OAuth</option>
-                    <option value="web">Web fallback</option>
-                    <option value="native">Native</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label class="field-label">Authorization code</label>
-                  <input class="sel code-box" id="integration-auth-code" placeholder="(opsiyonel) OAuth code" />
-                </div>
-                <input type="hidden" id="integration-redirect-uri" value="http://localhost:8765/callback" />
-                <div class="field-hint">Redirect URI Elyan tarafından otomatik yönetilir.</div>
-              </div>
-            </div>
-            <div class="btn-row">
-              <button class="btn btn-p" id="integration-connect" type="button">Bağla</button>
-              <button class="btn btn-s" id="integration-revoke" type="button">Revoke</button>
-            </div>
-            <div id="integration-auth-note" class="empty">OAuth durumu burada görünecek.</div>
-          </div>
-        </div>
-        <div class="card">
-          <div class="card-top">
-            <div><h3>Hesaplar</h3><div class="card-desc">Provider bazlı bağlanmış hesaplar.</div></div>
-          </div>
-          <div id="integration-accounts" class="stack-list"></div>
-        </div>
-        <div class="card" style="grid-column:1/-1">
-          <div class="card-top">
-            <div><h3>Integration Traces</h3><div class="card-desc">Connector seçimi, auth state, fallback ve latency.</div></div>
-          </div>
-          <div class="mission-row" style="margin-bottom:12px">
-            <input class="mission-input" id="integration-trace-filter" placeholder="provider / connector / user filtresi" style="min-height:44px;resize:none;flex:1" />
-            <button class="btn btn-p" id="integration-trace-search" type="button">Filtrele</button>
-          </div>
-          <div class="kpis" id="integration-trace-kpis"></div>
-          <div id="integration-traces" class="stack-list"></div>
+
+      <div id="runs-container">
+        <div class="empty-state">
+          <p>Henüz görev yok</p>
         </div>
       </div>
     </div>
 
-    <!-- ===== SETTINGS PAGE ===== -->
-    <div class="page" id="p-settings">
-      <div class="pg-head">
-        <div>
-          <h2>Settings</h2>
-          <p class="pg-sub">Agent davranışı, güvenlik ve tool policy tek ekranda.</p>
-        </div>
-        <div class="btn-row" style="margin-top:0">
-          <button class="btn btn-s" id="settings-refresh" type="button">Yenile</button>
-          <button class="btn btn-p" id="s-save" type="button">Kaydet</button>
+    <!-- BELLEK TAB -->
+    <div id="bellek" class="page">
+      <h2>Bellek</h2>
+      <p class="sub">Elyan'ın öğrendikleri ve hatırladıkları</p>
+
+      <div id="memory-container" class="timeline">
+        <div class="empty-state">
+          <p>Bellek boş</p>
         </div>
       </div>
+    </div>
+
+    <!-- AYARLAR TAB -->
+    <div id="ayarlar" class="page">
+      <h2>Ayarlar</h2>
+      <p class="sub">Yapılandırma ve istatistikler</p>
+
       <div class="settings-grid">
-        <div class="card settings-card">
-          <div class="card-top">
-            <div><h3>Runtime</h3><div class="card-desc">Model, dil ve davranış.</div></div>
+        <div class="collapse">
+          <div class="collapse-header">
+            <span>LLM Modeli</span>
+            <span class="collapse-icon">▼</span>
           </div>
-          <div class="field">
-            <label class="field-label">Agent Name</label>
-            <input class="sel" id="s-name" placeholder="Elyan" />
-          </div>
-          <div class="field">
-            <label class="field-label">Personality</label>
-            <select class="sel" id="s-personality">
-              <option value="professional">Professional</option>
-              <option value="technical">Technical</option>
-              <option value="friendly">Friendly</option>
-              <option value="concise">Concise</option>
-              <option value="creative">Creative</option>
-            </select>
-          </div>
-          <div class="field">
-            <label class="field-label">Primary LLM</label>
-            <select class="sel" id="s-primary"></select>
-            <span class="field-hint">Otomatik seçim varsayılan.</span>
-          </div>
-          <div class="field">
-            <label class="field-label">Runtime preset</label>
-            <select class="sel" id="s-preset">
-              <option value="strict">Strict</option>
-              <option value="balanced" selected>Balanced</option>
-              <option value="full-autonomy">Full autonomy</option>
-            </select>
-          </div>
-          <div class="field">
-            <label class="field-label">Dashboard strategy</label>
-            <select class="sel" id="s-strategy">
-              <option value="fast">Hızlı</option>
-              <option value="best">Kalite</option>
-              <option value="balanced" selected>Dengeli</option>
-            </select>
-          </div>
-          <div class="field">
-            <label class="field-label">Response mode</label>
-            <select class="sel" id="s-response-mode">
-              <option value="friendly">Friendly</option>
-              <option value="concise">Concise</option>
-              <option value="formal">Formal</option>
-            </select>
-          </div>
-          <div class="field">
-            <label class="field-label">Response length</label>
-            <select class="sel" id="s-response-length">
-              <option value="short">Short</option>
-              <option value="medium">Medium</option>
-              <option value="detailed">Detailed</option>
-            </select>
-          </div>
-          <div class="field">
-            <label class="field-label">Language</label>
-            <select class="sel" id="s-lang">
-              <option value="tr">Türkçe</option>
-              <option value="en">English</option>
-            </select>
-          </div>
-          <div class="field toggle-row">
-            <div>
-              <div class="field-label">Autonomous</div>
-              <span class="field-hint">Agent kendi başına aksiyon üretsin.</span>
-            </div>
-            <label class="switch"><input type="checkbox" id="s-autonomous"><span class="slider"></span></label>
-          </div>
-          <div class="field toggle-row">
-            <div>
-              <div class="field-label">Local-first</div>
-              <span class="field-hint">Önce yerel modeli kullan.</span>
-            </div>
-            <label class="switch"><input type="checkbox" id="s-local"><span class="slider"></span></label>
+          <div class="collapse-body">
+            <p>Claude Haiku 4.5 kullanılıyor.</p>
           </div>
         </div>
-        <div class="card settings-card">
-          <div class="card-top">
-            <div><h3>Safety</h3><div class="card-desc">Veri koruma ve yetki katmanı.</div></div>
+
+        <div class="collapse">
+          <div class="collapse-header">
+            <span>Kanallar</span>
+            <span class="collapse-icon">▼</span>
           </div>
-          <div class="field">
-            <label class="field-label">Default user role</label>
-            <select class="sel" id="s-role">
-              <option value="operator">Operator</option>
-              <option value="admin">Admin</option>
-              <option value="viewer">Viewer</option>
-            </select>
-          </div>
-          <div class="field toggle-row">
-            <div>
-              <div class="field-label">KVKK strict</div>
-              <span class="field-hint">Katı gizlilik modu.</span>
-            </div>
-            <label class="switch"><input type="checkbox" id="s-kvkk"><span class="slider"></span></label>
-          </div>
-          <div class="field toggle-row">
-            <div>
-              <div class="field-label">Redact cloud prompts</div>
-              <span class="field-hint">Bulut isteklerini maskele.</span>
-            </div>
-            <label class="switch"><input type="checkbox" id="s-redact"><span class="slider"></span></label>
-          </div>
-          <div class="field toggle-row">
-            <div>
-              <div class="field-label">Allow cloud fallback</div>
-              <span class="field-hint">Yerel yetmezse buluta geç.</span>
-            </div>
-            <label class="switch"><input type="checkbox" id="s-cloud-fallback"><span class="slider"></span></label>
-          </div>
-          <div class="field toggle-row">
-            <div>
-              <div class="field-label">Enforce RBAC</div>
-              <span class="field-hint">Rol tabanlı erişim.</span>
-            </div>
-            <label class="switch"><input type="checkbox" id="s-rbac"><span class="slider"></span></label>
-          </div>
-          <div class="field toggle-row">
-            <div>
-              <div class="field-label">Path guard</div>
-              <span class="field-hint">Dosya yollarını koru.</span>
-            </div>
-            <label class="switch"><input type="checkbox" id="s-path-guard"><span class="slider"></span></label>
-          </div>
-          <div class="field toggle-row">
-            <div>
-              <div class="field-label">Dangerous tools</div>
-              <span class="field-hint">Riskli araçlara izin ver.</span>
-            </div>
-            <label class="switch"><input type="checkbox" id="s-dangerous"><span class="slider"></span></label>
-          </div>
-          <div class="field toggle-row">
-            <div>
-              <div class="field-label">Require confirmation</div>
-              <span class="field-hint">Riskli işler ön onay ister.</span>
-            </div>
-            <label class="switch"><input type="checkbox" id="s-confirm-risk"><span class="slider"></span></label>
-          </div>
-          <div class="field toggle-row">
-            <div>
-              <div class="field-label">Require evidence</div>
-              <span class="field-hint">Tehlikeli işler kanıtla bitsin.</span>
-            </div>
-            <label class="switch"><input type="checkbox" id="s-evidence"><span class="slider"></span></label>
-          </div>
-          <div class="field toggle-row">
-            <div>
-              <div class="field-label">Share manifest default</div>
-              <span class="field-hint">Varsayılan manifest paylaşımı.</span>
-            </div>
-            <label class="switch"><input type="checkbox" id="s-share-manifest"><span class="slider"></span></label>
-          </div>
-          <div class="field toggle-row">
-            <div>
-              <div class="field-label">Share attachments default</div>
-              <span class="field-hint">Varsayılan ek paylaşımı.</span>
-            </div>
-            <label class="switch"><input type="checkbox" id="s-share-attachments"><span class="slider"></span></label>
+          <div class="collapse-body">
+            <p>Telegram, Discord, Slack entegrasyonu kullanılabilir.</p>
           </div>
         </div>
-        <div class="card settings-card settings-wide">
-          <div class="card-top">
-            <div><h3>Tool Policy</h3><div class="card-desc">Allow / deny / approval listeleri.</div></div>
-            <span class="pill warn" id="policy-default-deny">default deny</span>
+
+        <div class="collapse">
+          <div class="collapse-header">
+            <span>Araçlar</span>
+            <span class="collapse-icon">▼</span>
           </div>
-          <div class="field toggle-row">
-            <div>
-              <div class="field-label">Default deny</div>
-              <span class="field-hint">Tanımsız araçlar kapalı başlasın.</span>
-            </div>
-            <label class="switch"><input type="checkbox" id="s-default-deny"><span class="slider"></span></label>
+          <div class="collapse-body">
+            <p>Computer Use, Web Search, API Entegrasyonları aktif.</p>
           </div>
-          <div class="field">
-            <label class="field-label">Allow list</label>
-            <textarea class="mission-input" id="s-policy-allow" style="min-height:84px"></textarea>
+        </div>
+
+        <div class="collapse">
+          <div class="collapse-header">
+            <span>Onay Politikası</span>
+            <span class="collapse-icon">▼</span>
           </div>
-          <div class="field">
-            <label class="field-label">Deny list</label>
-            <textarea class="mission-input" id="s-policy-deny" style="min-height:84px"></textarea>
+          <div class="collapse-body">
+            <p>Hassas görevler senin onayını bekliyor.</p>
           </div>
-          <div class="field">
-            <label class="field-label">Require approval</label>
-            <textarea class="mission-input" id="s-policy-approval" style="min-height:84px"></textarea>
+        </div>
+
+        <div class="collapse">
+          <div class="collapse-header">
+            <span>İstatistikler</span>
+            <span class="collapse-icon">▼</span>
           </div>
-          <div class="field-hint">Liste değerlerini virgülle ayır. Tool policy doğrudan runtime'a uygulanır.</div>
+          <div class="collapse-body" id="stats-body">
+            <p><span class="loading"></span> Yükleniyor...</p>
+          </div>
         </div>
       </div>
     </div>
+  </main>
 
-    <!-- ===== APPROVALS PAGE ===== -->
-    <div class="page" id="p-approvals">
-      <div class="pg-head">
-        <div>
-          <h2>Approvals</h2>
-          <p class="pg-sub">Pending approval requests for sensitive actions.</p>
+  <script>
+    /* ═══════════════════════════════════════════════════════════════ */
+    /* Dashboard JavaScript — Minimal, Fetch-based, No Socket.IO */
+    /* ═══════════════════════════════════════════════════════════════ */
+
+    const API_BASE = '/api/v1';
+    const REFRESH_INTERVAL = 5000; // 5 sn
+
+    let state = {
+      currentTab: 'kontrol',
+      runs: [],
+      approvals: [],
+      memory: [],
+      filter: 'all'
+    };
+
+    // ─ TAB SWITCHING ─
+    document.querySelectorAll('.nav-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tab = btn.dataset.tab;
+        switchTab(tab);
+      });
+    });
+
+    function switchTab(tabName) {
+      // Hide all pages
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('show'));
+
+      // Show selected page
+      document.getElementById(tabName).classList.add('show');
+
+      // Update nav
+      document.querySelectorAll('.nav-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === tabName);
+      });
+
+      state.currentTab = tabName;
+
+      // Load data for this tab
+      if (tabName === 'onaylar') {
+        loadApprovals();
+        // Auto-refresh onaylar
+        setInterval(() => {
+          if (state.currentTab === 'onaylar') loadApprovals();
+        }, REFRESH_INTERVAL);
+      } else if (tabName === 'calisma') {
+        loadRuns();
+      } else if (tabName === 'bellek') {
+        loadMemory();
+      } else if (tabName === 'ayarlar') {
+        loadStats();
+      }
+    }
+
+    // ─ API CALLS ─
+    async function apiCall(endpoint, options = {}) {
+      try {
+        const url = `${API_BASE}${endpoint}`;
+        const response = await fetch(url, {
+          headers: { 'Content-Type': 'application/json' },
+          ...options
+        });
+
+        if (!response.ok) {
+          console.warn(`API ${endpoint} returned ${response.status}`);
+          return null;
+        }
+
+        return await response.json();
+      } catch (err) {
+        console.error(`API error on ${endpoint}:`, err);
+        return null;
+      }
+    }
+
+    // ─ KONTROL TAB ─
+    document.getElementById('start-btn').addEventListener('click', async () => {
+      const prompt = document.getElementById('prompt-input').value.trim();
+      if (!prompt) return;
+
+      console.log('User prompt:', prompt);
+      document.getElementById('prompt-input').value = '';
+
+      // Simulate running a task
+      loadActivity();
+    });
+
+    async function loadActivity() {
+      const data = await apiCall('/runs?limit=10');
+      if (!data || !data.runs) {
+        document.getElementById('activity-list').innerHTML = '<p style="color: var(--tx3); font-size: 14px;">Henüz aktivite yok</p>';
+        return;
+      }
+
+      const html = data.runs.map(run => {
+        const status = run.status || 'running';
+        const statusClass = status === 'completed' ? 'done' : status === 'failed' ? 'failed' : 'running';
+        const statusText = status === 'completed' ? '✓' : status === 'failed' ? '✗' : '◐';
+        const time = new Date(run.started_at).toLocaleTimeString('tr-TR');
+
+        return `
+          <div class="activity-item ${statusClass}">
+            <div>${statusText} ${run.intent || 'Görev'}</div>
+            <div class="activity-time">${time}</div>
+            <div class="badge ${statusClass.replace('done', 'ok').replace('failed', 'err')}">${status}</div>
+          </div>
+        `;
+      }).join('');
+
+      document.getElementById('activity-list').innerHTML = html;
+    }
+
+    // ─ ONAYLAR TAB ─
+    async function loadApprovals() {
+      const data = await apiCall('/approvals/pending');
+      if (!data || !data.approvals) {
+        document.getElementById('approvals-container').innerHTML = `
+          <div class="empty-state">
+            <p>Bekleyen onay yok. Elyan özgürce çalışıyor.</p>
+          </div>
+        `;
+        updateApprovalCount(0);
+        return;
+      }
+
+      const approvals = data.approvals || [];
+      updateApprovalCount(approvals.length);
+
+      if (approvals.length === 0) {
+        document.getElementById('approvals-container').innerHTML = `
+          <div class="empty-state">
+            <p>Bekleyen onay yok. Elyan özgürce çalışıyor.</p>
+          </div>
+        `;
+        return;
+      }
+
+      const html = approvals.map(approval => `
+        <div class="approval-card">
+          <div class="approval-head">
+            <div>
+              <p class="approval-desc">${escapeHtml(approval.description || approval.action || 'Onay Gerekli')}</p>
+              <div style="margin-top: 4px;">
+                <span class="badge warn">${approval.priority || 'Normal'}</span>
+              </div>
+            </div>
+          </div>
+          <div class="approval-actions">
+            <button class="btn-success" onclick="resolveApproval('${approval.id}', true)">✓ Onayla</button>
+            <button class="btn-danger" onclick="resolveApproval('${approval.id}', false)">✗ Reddet</button>
+          </div>
         </div>
-        <button class="btn btn-s" id="approvals-refresh" type="button">🔄 Refresh</button>
-      </div>
-      <div id="approvals-container" style="min-height: 200px;">
-        <p style="color: #666; text-align: center; padding: 40px;">Loading approvals...</p>
-      </div>
-    </div>
+      `).join('');
 
-    <!-- ===== MEMORY PAGE ===== -->
-    <div class="page" id="p-memory">
-      <div class="pg-head">
-        <div>
-          <h2>Memory & Timeline</h2>
-          <p class="pg-sub">Recent runs and daily summaries from your session history.</p>
+      document.getElementById('approvals-container').innerHTML = html;
+    }
+
+    async function resolveApproval(requestId, approved) {
+      const data = await apiCall('/approvals/resolve', {
+        method: 'POST',
+        body: JSON.stringify({
+          request_id: requestId,
+          approved: approved,
+          resolver_id: 'user'
+        })
+      });
+
+      if (data) {
+        loadApprovals();
+      }
+    }
+
+    function updateApprovalCount(count) {
+      const badge = document.getElementById('approval-count');
+      if (count > 0) {
+        badge.textContent = count;
+        badge.style.display = 'inline';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+
+    // ─ ÇALIŞMALAR TAB ─
+    async function loadRuns() {
+      const data = await apiCall('/runs?limit=20');
+      if (!data || !data.runs) {
+        document.getElementById('runs-container').innerHTML = `
+          <div class="empty-state">
+            <p>Henüz görev yok</p>
+          </div>
+        `;
+        return;
+      }
+
+      state.runs = data.runs || [];
+      renderRuns('all');
+
+      // Filter buttons
+      document.querySelectorAll('[data-filter]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const filter = btn.dataset.filter;
+          document.querySelectorAll('[data-filter]').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          renderRuns(filter);
+        });
+      });
+    }
+
+    function renderRuns(filter) {
+      let filtered = state.runs;
+
+      if (filter === 'running') {
+        filtered = state.runs.filter(r => r.status === 'running');
+      } else if (filter === 'completed') {
+        filtered = state.runs.filter(r => r.status === 'completed');
+      } else if (filter === 'failed') {
+        filtered = state.runs.filter(r => r.status === 'failed');
+      }
+
+      if (filtered.length === 0) {
+        document.getElementById('runs-container').innerHTML = `
+          <div class="empty-state">
+            <p>Bu kategoride görev yok</p>
+          </div>
+        `;
+        return;
+      }
+
+      const html = filtered.map(run => {
+        const status = run.status || 'running';
+        const statusClass = status === 'completed' ? 'ok' : status === 'failed' ? 'err' : 'warn';
+        const started = new Date(run.started_at).toLocaleTimeString('tr-TR');
+        const duration = run.completed_at
+          ? ((new Date(run.completed_at) - new Date(run.started_at)) / 1000).toFixed(1) + 's'
+          : '-';
+
+        const steps = (run.steps || []).slice(0, 3).map(step =>
+          `<div class="run-step">• ${escapeHtml(step.name)}</div>`
+        ).join('');
+
+        return `
+          <div class="run-item" onclick="toggleDetail(this)">
+            <div class="run-head">
+              <div class="run-title">${escapeHtml(run.intent || 'Görev')}</div>
+              <div class="run-time">${started}</div>
+            </div>
+            <div class="run-meta">
+              <span>Süre: ${duration}</span>
+              <span class="badge ${statusClass}">${status}</span>
+            </div>
+            <div class="run-detail">
+              <div style="font-weight: 600; margin-bottom: 8px;">Adımlar:</div>
+              ${steps || '<p style="color: var(--tx3);">Adım yok</p>'}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      document.getElementById('runs-container').innerHTML = html;
+    }
+
+    function toggleDetail(elem) {
+      const detail = elem.querySelector('.run-detail');
+      detail.classList.toggle('show');
+    }
+
+    // ─ BELLEK TAB ─
+    async function loadMemory() {
+      const data = await apiCall('/memory/timeline');
+      if (!data || !data.timeline) {
+        document.getElementById('memory-container').innerHTML = `
+          <div class="empty-state">
+            <p>Bellek boş</p>
+          </div>
+        `;
+        return;
+      }
+
+      const timeline = data.timeline || [];
+      if (timeline.length === 0) {
+        document.getElementById('memory-container').innerHTML = `
+          <div class="empty-state">
+            <p>Bellek boş</p>
+          </div>
+        `;
+        return;
+      }
+
+      const html = timeline.map(item => `
+        <div class="timeline-item">
+          <div class="timeline-date">${escapeHtml(item.date || '')}</div>
+          <div class="timeline-text">${escapeHtml(item.text || item.summary || '')}</div>
         </div>
-        <button class="btn btn-s" id="memory-refresh" type="button">🔄 Refresh</button>
-      </div>
-      <div id="memory-container" style="min-height: 200px;">
-        <p style="color: #666; text-align: center; padding: 40px;">Loading memory timeline...</p>
-      </div>
-    </div>
+      `).join('');
 
-    <!-- ===== ANALYTICS PAGE ===== -->
-    <div class="page" id="p-analytics">
-      <div class="pg-head">
-        <div>
-          <h2>Analytics & Metrics</h2>
-          <p class="pg-sub">Performance trends, success rates, and key metrics over the last 7 days.</p>
-        </div>
-        <button class="btn btn-s" id="analytics-refresh" type="button">🔄 Refresh</button>
-      </div>
-      <div id="analytics-container" style="min-height: 200px;">
-        <p style="color: #666; text-align: center; padding: 40px;">Loading analytics...</p>
-      </div>
-    </div>
+      document.getElementById('memory-container').innerHTML = html;
+    }
 
-    <div class="page" id="p-runs">
-      <div class="pg-head">
-        <div>
-          <h2>Run Visualizer</h2>
-          <p class="pg-sub">Interactive Gantt charts, waterfall diagrams, and performance analysis.</p>
-        </div>
-        <button class="btn btn-s" id="runs-refresh" type="button">🔄 Refresh</button>
-      </div>
-      <div id="runs-container" style="min-height: 200px;">
-        <p style="color: #666; text-align: center; padding: 40px;">Loading runs...</p>
-      </div>
-    </div>
+    // ─ AYARLAR TAB ─
+    async function loadStats() {
+      const data = await apiCall('/approvals/workflow-metrics');
+      if (!data) {
+        document.getElementById('stats-body').innerHTML = '<p>İstatistikler yüklenemedi</p>';
+        return;
+      }
 
-  </div>
+      const metrics = data.metrics || {};
+      const html = `
+        <p><strong>Toplam Onay İsteği:</strong> ${metrics.total_requests || 0}</p>
+        <p><strong>Onaylanan:</strong> ${metrics.approved_count || 0}</p>
+        <p><strong>Reddedilen:</strong> ${metrics.denied_count || 0}</p>
+        <p><strong>Onay Oranı:</strong> ${metrics.approval_rate ? (metrics.approval_rate * 100).toFixed(1) : 0}%</p>
+      `;
+      document.getElementById('stats-body').innerHTML = html;
+    }
 
-  <!-- COMMAND PALETTE (Cmd+K) -->
-  <div id="cmd-palette-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);z-index:10000;"></div>
-  <div id="cmd-palette" style="display:none;position:fixed;top:20%;left:50%;transform:translateX(-50%);width:90%;max-width:600px;background:rgba(15,23,42,0.95);border:1px solid rgba(148,163,184,0.2);border-radius:12px;backdrop-filter:blur(20px);box-shadow:0 25px 50px rgba(0,0,0,0.3);z-index:10001;padding:0;overflow:hidden;">
-    <input type="text" id="cmd-input" placeholder="Search commands, navigate, or perform actions... (type to search)" style="width:100%;padding:16px 20px;background:transparent;border:none;border-bottom:1px solid rgba(148,163,184,0.1);color:#f1f5f9;font-size:15px;outline:none;font-family:inherit;">
-    <div id="cmd-results" style="max-height:400px;overflow-y:auto;padding:8px;"></div>
-  </div>
+    // ─ COLLAPSE TOGGLES ─
+    document.querySelectorAll('.collapse-header').forEach(header => {
+      header.addEventListener('click', () => {
+        const body = header.nextElementSibling;
+        const icon = header.querySelector('.collapse-icon');
+        body.classList.toggle('show');
+        icon.classList.toggle('open');
+      });
+    });
 
-  <!-- TOASTS -->
-  <div class="toasts" id="toasts"></div>
+    // ─ HELPER ─
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
 
-  <div class="legacy-contract">
-    <span>Save as Skill</span>
-    <div id="task-list"></div>
-    <div id="workflow-preset-list"></div>
-    <div id="workflow-report"></div>
-    <div id="benchmark-summary"></div>
-    <div id="setup-list"></div>
-    <div id="onboarding-list"></div>
-    <div id="release-list"></div>
-    <div id="model-registry-list"></div>
-    <div id="model-pool-summary"></div>
-    <button id="model-add-btn" type="button"></button>
-    <button id="collab-save-btn" type="button"></button>
-    <button id="profile-save-btn" type="button"></button>
-    <input id="agent-name-input" />
-    <div id="profile-summary"></div>
-    <div id="status-note"></div>
-    <div id="status-detail"></div>
-    <button data-quick-prompt="quick"></button>
-  </div>
-
-  <!-- JS — loaded after DOM -->
-  <!-- Socket.IO client (optional, graceful fallback to native WebSocket) -->
-  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
-  <!-- Run Visualizer (Gantt, Waterfall, Performance charts) -->
-  <script src="/ui/web/run_visualizer.js"></script>
-  <script src="/ui/web/dashboard.js?v=20260322-1"></script>
+    // ─ INIT ─
+    document.addEventListener('DOMContentLoaded', () => {
+      loadActivity();
+    });
+  </script>
 </body>
 </html>
