@@ -6,6 +6,7 @@
 
 ---
 
+
 ## Overview
 
 Elyan Phase 4 introduces **Cognitive Architecture** — transforming the system from reactive to predictive execution.
