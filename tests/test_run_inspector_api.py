@@ -28,7 +28,7 @@ class TestRunInspectorAPI:
             tool_calls=[{"tool": "ls", "status": "success"}]
         )
 
-        with patch("api.dashboard_api.get_run_store") as mock_store:
+        with patch("core.run_store.get_run_store") as mock_store:
             mock_store_instance = AsyncMock()
             mock_store_instance.get_run = AsyncMock(return_value=mock_record)
             mock_store.return_value = mock_store_instance
@@ -43,7 +43,7 @@ class TestRunInspectorAPI:
         """Test retrieving non-existent run."""
         api = DashboardAPIv1()
 
-        with patch("api.dashboard_api.get_run_store") as mock_store:
+        with patch("core.run_store.get_run_store") as mock_store:
             mock_store_instance = AsyncMock()
             mock_store_instance.get_run = AsyncMock(return_value=None)
             mock_store.return_value = mock_store_instance
@@ -67,7 +67,7 @@ class TestRunInspectorAPI:
             for i in range(3)
         ]
 
-        with patch("api.dashboard_api.get_run_store") as mock_store:
+        with patch("core.run_store.get_run_store") as mock_store:
             mock_store_instance = AsyncMock()
             mock_store_instance.list_runs = AsyncMock(return_value=mock_records)
             mock_store.return_value = mock_store_instance
@@ -97,7 +97,7 @@ class TestRunInspectorAPI:
             )
         ]
 
-        with patch("api.dashboard_api.get_run_store") as mock_store:
+        with patch("core.run_store.get_run_store") as mock_store:
             mock_store_instance = AsyncMock()
             mock_store_instance.list_runs = AsyncMock(return_value=mock_records)
             mock_store.return_value = mock_store_instance
@@ -113,7 +113,7 @@ class TestRunInspectorAPI:
         """Test canceling a run."""
         api = DashboardAPIv1()
 
-        with patch("api.dashboard_api.get_run_store") as mock_store:
+        with patch("core.run_store.get_run_store") as mock_store:
             mock_store_instance = AsyncMock()
             mock_store_instance.cancel_run = AsyncMock(return_value=True)
             mock_store.return_value = mock_store_instance
@@ -128,7 +128,7 @@ class TestRunInspectorAPI:
         """Test canceling non-existent run."""
         api = DashboardAPIv1()
 
-        with patch("api.dashboard_api.get_run_store") as mock_store:
+        with patch("core.run_store.get_run_store") as mock_store:
             mock_store_instance = AsyncMock()
             mock_store_instance.cancel_run = AsyncMock(return_value=False)
             mock_store.return_value = mock_store_instance
@@ -161,12 +161,12 @@ class TestMemoryTimelineAPI:
             )
         ]
 
-        with patch("api.dashboard_api.get_run_store") as mock_store:
+        with patch("core.run_store.get_run_store") as mock_store:
             mock_store_instance = AsyncMock()
             mock_store_instance.list_runs = AsyncMock(return_value=mock_records)
             mock_store.return_value = mock_store_instance
 
-            with patch("api.dashboard_api.Path") as mock_path:
+            with patch("pathlib.Path") as mock_path:
                 mock_memory_path = MagicMock()
                 mock_memory_path.exists.return_value = False
                 mock_path.return_value = mock_memory_path
