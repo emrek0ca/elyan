@@ -85,7 +85,9 @@
       "Bash(git:*)",
       "Bash(npx --version)",
       "Bash(npm --version)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Read(//private/tmp/**)",
+      "Bash(cp /tmp/consolidation_plan.md /Users/emrekoca/Desktop/bot/CONSOLIDATION_PLAN.md)"
     ]
   }
 }
