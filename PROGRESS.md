@@ -756,8 +756,21 @@ Screenshot → VLM → LLM Plan → Approval Gate → Execute → Evidence
                             (AUTO/CONFIRM/SCREEN/TWO_FA)
 ```
 
-#### Next (Day 5-7)
-- Day 5: ControlPlane integration (wire Computer Use into router)
+#### Day 5: ControlPlane Integration (IN PROGRESS)
+
+**Completed**:
+- `core/computer_use_integration.py` (180 lines) — Task orchestration
+- `api/computer_use_controlplane.py` (200 lines) — REST API layer
+- Integration tests (18 tests, 100% passing)
+- API tests (14 tests, 100% passing)
+- Total: 32 new tests, 380 lines code
+
+**Remaining (Day 5)**:
+- [ ] HTTP route registration in api/http_server.py
+- [ ] Router integration in core/gateway/router.py
+- [ ] Session state management updates
+
+#### Next (Day 6-7)
 - Day 6: Full E2E demo (Chrome → Elon's tweet reading)
 - Day 7: Dashboard integration + production hardening
 
