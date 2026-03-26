@@ -145,4 +145,22 @@ class TeamMessageBus:
             return None
 
 
-__all__ = ["TeamTask", "TeamMessage", "SharedTaskBoard", "TeamMessageBus"]
+# Process-level singleton AgentBus
+_agent_bus: Optional["TeamMessageBus"] = None
+
+
+def get_agent_bus() -> "TeamMessageBus":
+    """Get or create the process-level singleton AgentBus."""
+    global _agent_bus
+    if _agent_bus is None:
+        _agent_bus = TeamMessageBus()
+    return _agent_bus
+
+
+def reset_agent_bus() -> None:
+    """Reset the singleton AgentBus (for testing/teardown)."""
+    global _agent_bus
+    _agent_bus = None
+
+
+__all__ = ["TeamTask", "TeamMessage", "SharedTaskBoard", "TeamMessageBus", "get_agent_bus", "reset_agent_bus"]

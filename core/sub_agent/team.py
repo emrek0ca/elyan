@@ -10,7 +10,7 @@ from utils.logger import get_logger
 
 from .manager import SubAgentManager
 from .session import SubAgentTask
-from .shared_state import SharedTaskBoard, TeamMessage, TeamMessageBus, TeamTask
+from .shared_state import SharedTaskBoard, TeamMessage, TeamMessageBus, TeamTask, get_agent_bus
 from .validator import SubAgentValidator
 
 logger = get_logger("agent_team")
@@ -52,7 +52,7 @@ class AgentTeam:
         self.agent = agent
         self.config = config or TeamConfig()
         self.board = SharedTaskBoard()
-        self.bus = TeamMessageBus()
+        self.bus = get_agent_bus()  # Use process-level singleton
         self.validator = SubAgentValidator()
 
     @staticmethod

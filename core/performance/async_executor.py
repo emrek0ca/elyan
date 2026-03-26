@@ -112,10 +112,10 @@ class AsyncExecutor:
         logger.debug(f"Task {task_id} submitted (priority={priority.name})")
 
     async def execute_all(self) -> dict:
-        """Execute all queued tasks with concurrency control"""
+        """Execute all queued tasks with concurrency control using asyncio.gather"""
         results = {}
 
-        for task in self._queue:
+        async def _run_one(task):
             async with self._semaphore:
                 try:
                     import time
@@ -152,6 +152,7 @@ class AsyncExecutor:
                     }
                     self._stats["failed"] += 1
 
+        await asyncio.gather(*[_run_one(task) for task in self._queue])
         self._queue.clear()
         return results
 

@@ -95,6 +95,16 @@ ACTION_ALIASES: Dict[str, str] = {
     "api_check": "api_health_check",
 }
 
+# Domain → LLM role mapping for role-aware LLM selection
+_DOMAIN_TO_ROLE: Dict[str, str] = {
+    "code": "code",
+    "research": "research_worker",
+    "api": "code_worker",
+    "office": "reasoning",
+    "automation": "code_worker",
+    "filesystem": "reasoning",
+}
+
 
 class TaskPriority(Enum):
     """Task execution priority"""
@@ -241,7 +251,8 @@ class IntelligentPlanner:
         context: Optional[Dict[str, Any]] = None,
         use_llm: bool = True,
         user_id: str = "local",
-        preferred_tools: Optional[List[str]] = None
+        preferred_tools: Optional[List[str]] = None,
+        llm_role: str = "planning"
     ) -> List[SubTask]:
         """
         Decompose a complex task into executable subtasks
@@ -253,6 +264,14 @@ class IntelligentPlanner:
         # LLM-assisted decomposition first
         if use_llm and client:
             try:
+                # Determine effective role based on domain
+                domain = self._infer_domain_from_request(
+                    task_description,
+                    preferred_tools=preferred_tools,
+                    context=context,
+                )
+                effective_role = _DOMAIN_TO_ROLE.get(domain, llm_role)
+
                 context_hint = self._format_context_for_planner(context or {})
                 pref_hint = f"\nPreferred tools for this domain: {', '.join(preferred_tools)}" if preferred_tools else ""
                 json_contract = (
@@ -265,11 +284,6 @@ class IntelligentPlanner:
                     "- Her adım şu alanları içermeli: id, name, action, params, depends_on.\n"
                     "- action değeri çalıştırılabilir tool adı olmalı.\n"
                     "- Her adım bir önceki adımla mantıksal olarak tutarlı olmalı.\n"
-                )
-                domain = self._infer_domain_from_request(
-                    task_description,
-                    preferred_tools=preferred_tools,
-                    context=context,
                 )
                 fewshot_hint = ""
                 fewshots = get_domain_fewshot(domain)
@@ -373,7 +387,7 @@ Return JSON array:
                 if context_hint:
                     prompt += f"\nContext: {context_hint}"
 
-                resp = await client.generate(prompt, max_tokens=600, user_id=user_id)
+                resp = await client.generate(prompt, max_tokens=600, user_id=user_id, role=effective_role)
                 subtasks = self._parse_subtasks_from_response(resp, task_description, limit=self.max_subtasks)
 
                 # LLM serbest metin döndürürse ikinci pas: metni JSON'a zorla.
@@ -383,7 +397,7 @@ Return JSON array:
                         "Sadece JSON döndür. Format: [{id,name,action,params,depends_on}].\n\n"
                         f"Metin:\n{resp}"
                     )
-                    salvage_resp = await client.generate(salvage_prompt, max_tokens=500, user_id=user_id)
+                    salvage_resp = await client.generate(salvage_prompt, max_tokens=500, user_id=user_id, role=effective_role)
                     subtasks = self._parse_subtasks_from_response(salvage_resp, task_description, limit=self.max_subtasks)
             except Exception as e:
                 logger.debug(f"LLM decomposition failed, fallback heuristic: {e}")
@@ -899,7 +913,7 @@ Return JSON array:
             if context_hint:
                 prompt += f"\nContext: {context_hint}"
 
-            resp = await client.generate(prompt, max_tokens=650, user_id=user_id)
+            resp = await client.generate(prompt, max_tokens=650, user_id=user_id, role="planning")
             revised = self._parse_subtasks_from_response(resp, goal, limit=self.max_subtasks)
             if revised:
                 return self._sanitize_subtasks(revised, goal)

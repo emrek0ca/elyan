@@ -1030,6 +1030,115 @@ mix UI logic with execution logic
 bypass logging or policy layers
 write code that “only works on the happy path”
 weaken system safety to make demos easier
+---
+
+## Known Issues & Technical Debt (Updated: 2026-03-26)
+
+> Bu bölüm gerçek codebase analizi sonucunda yazılmıştır. Codex veya diğer agent'lar çalışmaya başlamadan önce bu listeyi okuyun.
+
+### CRITICAL — Production'ı Bloke Eden Sorunlar
+
+**[C-1] Çift `run_store.py` — Farklı API'lar**
+- `/core/run_store.py` → async tabanlı, dataclass, JSON persistence
+- `/core/evidence/run_store.py` → senkron, farklı constructor, telemetry entegrasyonu
+- `agent.py` evidence versiyonunu import ediyor, `dashboard_api.py` async versiyonunu bekliyor
+- **Fix**: `/core/run_store.py` canonical olarak kalmalı, `/core/evidence/run_store.py` kaldırılmalı, tüm import'lar güncellenmeli
+- **Neden fark eder**: `test_attachment_wallpaper_flow` bu yüzden fail ediyor (`data["steps"]` boş dönüyor)
+
+**[C-2] Var Olmayan Fonksiyon/Widget Çağrıları**
+`dashboard_api.py` şunları çağırıyor ama hiçbiri tanımlı değil:
+- `get_cognitive_integrator()` — fonksiyon yok
+- `DeadlockPreventionWidget` — class yok
+- `SleepConsolidationWidget` — class yok
+- Silent `except` ile yutuluyorlar → metrics sistemi sessizce kırık
+
+**[C-3] `run_visualizer.js` Hardcoded Localhost**
+- `http://localhost:18789/api/v1/...` hâlâ hardcoded
+- Phase 5.2.3'te `dashboard.html` relative path'e geçildi ama bu dosya atlandı
+
+**[C-4] Threading vs Async Lock Karışıklığı**
+- `core/performance/cache_manager.py`: `asyncio.Lock()` ✓
+- `core/performance_cache.py`: `threading.RLock()` ✗ → async context'te deadlock riski
+
+### HIGH — Release Öncesi Düzeltilmeli
+
+**[H-1] `core/agent.py` Monolith**
+- 14.766 satır, tek dosya, 254 fonksiyon
+- Refactor hedefi: `AgentRouter`, `AgentExecutor`, `AgentValidator` olarak bölünmeli
+- Şu an touch edilmesi çok riskli
+
+**[H-2] Stub Modüller (NotImplementedError fırlatıyor)**
+- `core/health_checks.py` — altyapı, hiçbir şey implement edilmemiş
+- `core/realtime_actuator/` — tamamen stub, agent path'ine bağlı değil
+- `core/alerting.py` — core metodlar boş
+
+**[H-3] Üç Ayrı Real-Time Sistem — Entegre Değil**
+- `MetricsStore` (threading.Lock tabanlı)
+- Socket.IO (`http_server.py` içinde)
+- `EventBroadcaster` (ayrı singleton)
+→ Birleştirilmeli, hiçbiri dashboard'a tam entegre değil
+
+**[H-4] Approval Requests Kalıcı Değil**
+- `approval_engine.py` pending request'leri in-memory `dict`'te tutuyor
+- Process crash = bekleyen onaylar kaybolur
+- Fix: SQLite veya dosya tabanlı persistence (audit trail altyapısı zaten var)
+
+**[H-5] Web UI'da Güvenlik Eksiklikleri**
+- `dashboard.html`'de CSRF token, CSP header, XSS sanitization yok
+
+**[H-6] Run Store Payload'ları Şifresiz**
+- JSON'a düz yazılıyor, içinde hassas veri (API key, token) olabilir
+- Encrypted vault altyapısı var, entegre edilmeli
+
+### MEDIUM — Teknik Borç
+
+**[M-1] Tutarsız Response Formatları**
+- `dashboard_api.py`: `{"success": bool, "data": ...}`
+- `http_server.py`: `(dict, int)` tuple
+- `EventBroadcaster`: dataclass
+→ Birleşik ResponseContract şart
+
+**[M-2] Config Layer Yok**
+- Port (`18789`), path (`~/.elyan/runs`), timeout (`600.0`) her yere hardcoded
+- `.env` veya `config.py` singleton ile merkezi yönetim gerekli
+
+**[M-3] Integration Test Eksiklikleri**
+- HTTP Flask route'ları test edilmiyor
+- WebSocket delivery test edilmiyor
+- Dashboard JS endpoint'leri test edilmiyor
+- Metrics collector background thread test edilmiyor
+
+**[M-4] `asyncio.run()` Flask Handler'da**
+- `http_server.py` Flask route'larından async fonksiyonları `asyncio.run()` ile çağırıyor
+- Flask thread pool'u bloke ediyor
+- Fix: async Flask (quart) veya background task queue
+
+### LOW — Temizlik
+
+**[L-1] Dead Code**
+- `core/health_checks.py` — implement edilmemiş, import edilmiyor → sil veya implement et
+- `core/realtime_actuator/` — hiçbir yere bağlı değil → sil veya implement et
+
+**[L-2] Lazy Import Anti-Pattern**
+- Her yerde `try: import X; except: pass` → hataları gizliyor, fail fast gerekli
+
+**[L-3] Unused Imports**
+- `dashboard_api.py`'de `Event`, `timedelta` import edilmiş ama kullanılmıyor
+
+**[L-4] Debug Kodu Production'da**
+- `agent.py` satır 252-253: developer note yanlışlıkla f-string olarak kalmış
+
+**[L-5] Metrics Collector Blocking Sleep**
+- `dashboard_api.py`'de `time.sleep(5)` daemon thread içinde — `asyncio.sleep()` olmalı
+
+### Test Durumu (2026-03-26)
+- **Toplam**: 2781 test toplandı
+- **Geçen**: 81 test
+- **Başarısız**: 1 test (`test_attachment_wallpaper_flow` — `data["steps"]` boş, C-1 nedeniyle)
+- **Event Loop Warning**: Async subprocess cleanup düzgün değil
+
+---
+
 Final Directive
 
 Elyan is a serious operator system.

@@ -629,6 +629,28 @@ class AgentOrchestrator:
             )
 
         results = await manager.spawn_parallel(jobs, timeout=90)
+
+        # Broadcast successful results to the agent bus for inter-agent communication
+        try:
+            from core.sub_agent import get_agent_bus
+            bus = get_agent_bus()
+            for (owner, step), result in zip(candidates, results):
+                if result.status == "completed":
+                    from core.sub_agent.shared_state import TeamMessage
+                    msg = TeamMessage(
+                        from_agent=f"orchestrator:{owner}",
+                        to_agent="*",  # Broadcast to all agents
+                        body=f"Step {step.get('id')} completed successfully",
+                        payload={
+                            "step_id": step.get("id"),
+                            "owner": owner,
+                            "result": result.result if isinstance(result.result, dict) else {},
+                        }
+                    )
+                    await bus.broadcast(f"orchestrator:{owner}", msg)
+        except Exception as e:
+            logger.debug(f"Failed to broadcast results to agent bus: {e}")
+
         for (owner, step), result in zip(candidates, results):
             step.setdefault("_sub_agent", {})
             payload = result.result if isinstance(result.result, dict) else {}

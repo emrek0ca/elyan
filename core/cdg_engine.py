@@ -128,51 +128,34 @@ class CDGEngine:
 
     async def execute(self, plan: CDGPlan, executor_fn: Callable) -> CDGPlan:
         """
-        DAG'ı topolojik sırayla yürüt.
-        
+        DAG'ı wave-based paralel yürütme ile çalıştır.
+
         executor_fn(node: DAGNode) -> Dict[str, Any]
         """
         plan.status = "running"
 
-        # Topolojik sıra
-        order = self._topological_sort(plan.nodes)
+        # Topological waves — bağımsız düğümler aynı wavede
+        waves = self._topological_sort_waves(plan.nodes)
 
-        for node_id in order:
-            node = self._get_node(plan, node_id)
-            if not node:
-                continue
+        for wave_idx, wave in enumerate(waves):
+            # Wavede çalıştırılabilir düğümleri filtrele
+            runnable = []
+            for node_id in wave:
+                node = self._get_node(plan, node_id)
+                if not node:
+                    continue
+                if self._deps_satisfied(plan, node):
+                    runnable.append(node)
+                else:
+                    node.state = NodeState.SKIPPED
+                    node.error = "Dependency failed"
 
-            # Bağımlılık kontrolü
-            if not self._deps_satisfied(plan, node):
-                node.state = NodeState.SKIPPED
-                node.error = "Dependency failed"
-                continue
-
-            # Yürüt
-            await self._execute_node(node, executor_fn)
-
-            # Node-level QA gate
-            if node.state == NodeState.PASSED:
-                gates = plan.node_qa_gates.get(node_id, [])
-                await self._run_qa_gates(gates, node)
-
-                # QA fail → retry
-                any_failed = any(g.passed is False for g in gates)
-                if any_failed and node.retry_count < node.max_retries:
-                    node.retry_count += 1
-                    node.state = NodeState.RETRYING
-                    logger.info(f"Node {node_id} QA failed, retrying ({node.retry_count}/{node.max_retries})")
-                    
-                    # 🔥 AUTO-PATCH TRIGGER
-                    failed_gates = [g for g in gates if g.passed is False]
-                    try:
-                        from core.auto_patch import auto_patch
-                        if auto_patch.apply_patch(node, failed_gates):
-                            logger.info(f"Auto-patched node {node_id} before retry.")
-                    except Exception as e:
-                        logger.error(f"Auto-patch failed: {e}")
-
-                    await self._execute_node(node, executor_fn)
+            # Wave'deki tüm düğümleri paralel yürüt
+            if runnable:
+                await asyncio.gather(*[
+                    self._execute_node_with_qa(plan, node, executor_fn)
+                    for node in runnable
+                ])
 
         # E2E QA
         if plan.e2e_qa_gates:
@@ -187,6 +170,34 @@ class CDGEngine:
         plan.status = "passed" if (all_passed and e2e_ok) else "failed"
         logger.info(f"CDG plan {plan.job_id}: {plan.status}")
         return plan
+
+    async def _execute_node_with_qa(self, plan: CDGPlan, node: DAGNode, executor_fn: Callable):
+        """Execute a node and run its QA gates, with retry logic."""
+        # Yürüt
+        await self._execute_node(node, executor_fn)
+
+        # Node-level QA gate
+        if node.state == NodeState.PASSED:
+            gates = plan.node_qa_gates.get(node.id, [])
+            await self._run_qa_gates(gates, node)
+
+            # QA fail → retry
+            any_failed = any(g.passed is False for g in gates)
+            if any_failed and node.retry_count < node.max_retries:
+                node.retry_count += 1
+                node.state = NodeState.RETRYING
+                logger.info(f"Node {node.id} QA failed, retrying ({node.retry_count}/{node.max_retries})")
+
+                # 🔥 AUTO-PATCH TRIGGER
+                failed_gates = [g for g in gates if g.passed is False]
+                try:
+                    from core.auto_patch import auto_patch
+                    if auto_patch.apply_patch(node, failed_gates):
+                        logger.info(f"Auto-patched node {node.id} before retry.")
+                except Exception as e:
+                    logger.error(f"Auto-patch failed: {e}")
+
+                await self._execute_node(node, executor_fn)
 
     async def _execute_node(self, node: DAGNode, executor_fn: Callable):
         """Tek bir düğümü yürüt."""
@@ -295,6 +306,38 @@ class CDGEngine:
         return evidence
 
     # ── DAG Utilities ─────────────────────────────────────────
+
+    def _topological_sort_waves(self, nodes: List[DAGNode]) -> List[List[str]]:
+        """
+        Topolojik sıralama ama 'waves' olarak — her wave'de bağımsız düğümler.
+        Bağımsız düğümler aynı wavede paralel çalışabilir.
+        """
+        in_degree: Dict[str, int] = {n.id: 0 for n in nodes}
+        adj: Dict[str, List[str]] = {n.id: [] for n in nodes}
+        node_ids = {n.id for n in nodes}
+
+        for n in nodes:
+            for dep in n.depends_on:
+                if dep in node_ids:
+                    adj[dep].append(n.id)
+                    in_degree[n.id] += 1
+
+        waves = []
+        while any(deg == 0 for deg in in_degree.values()):
+            # Bu wavede çalıştırılabilir tüm düğümleri bul
+            current_wave = [nid for nid, deg in in_degree.items() if deg == 0]
+            if not current_wave:
+                break
+
+            waves.append(current_wave)
+
+            # Wavede olan düğümleri işaretle (removed)
+            for nid in current_wave:
+                in_degree[nid] = -1  # "processed" marker
+                for child in adj.get(nid, []):
+                    in_degree[child] -= 1
+
+        return waves
 
     def _topological_sort(self, nodes: List[DAGNode]) -> List[str]:
         """Topolojik sıralama (Kahn's algorithm)."""
