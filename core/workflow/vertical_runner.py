@@ -12,7 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 
-from core.persistence import get_runtime_database
+from core.persistence import get_runtime_database, sync_runtime_outbox_once
 from core.run_store import RunRecord, RunStore, get_run_store
 from tools.pro_workflows import create_web_project_scaffold, generate_document_pack
 from utils.logger import get_logger
@@ -82,162 +82,168 @@ class VerticalWorkflowRunner:
             return None
         return getattr(self._runtime_db, "execution", None)
 
-    async def _exec_db_call(self, method_name: str, **payload: Any) -> None:
+    async def _exec_db_call(self, method_name: str, **payload: Any) -> Any:
         repo = self._execution_repo()
         if repo is None:
-            return
+            return None
         method = getattr(repo, method_name, None)
         if method is None:
-            return
+            return None
         try:
             result = method(**payload)
             if inspect.isawaitable(result):
-                await result
+                return await result
+            return result
         except TypeError:
             try:
                 result = method(payload)
                 if inspect.isawaitable(result):
-                    await result
+                    return await result
+                return result
             except Exception:
-                return
+                return None
         except Exception:
-            return
+            return None
 
-    async def _record_plan(self, *, record: RunRecord, workflow_id: str, step_name: str, payload: dict[str, Any]) -> None:
+    @staticmethod
+    def _step_name_for_state(state: WorkflowLifecycleState) -> str:
+        mapping = {
+            WorkflowLifecycleState.CLASSIFIED: "classify_request",
+            WorkflowLifecycleState.SCOPED: "scope_workflow",
+            WorkflowLifecycleState.PLANNED: "build_plan",
+            WorkflowLifecycleState.GATHERING_CONTEXT: "gather_context",
+            WorkflowLifecycleState.EXECUTING: "execute_artifact_flow",
+            WorkflowLifecycleState.REVIEWING: "review_artifact_output",
+            WorkflowLifecycleState.READY_FOR_APPROVAL: "ready_for_approval",
+            WorkflowLifecycleState.EXPORTING: "finalize_export_manifest",
+        }
+        return mapping.get(state, state.value)
+
+    def _build_execution_plan(self, *, record: RunRecord, template, artifact_targets: list[str]) -> list[dict[str, Any]]:
+        steps: list[dict[str, Any]] = []
+        for index, stage in enumerate(template.stages, start=1):
+            if stage.state == WorkflowLifecycleState.RECEIVED:
+                continue
+            step_name = self._step_name_for_state(stage.state)
+            steps.append(
+                {
+                    "planned_step_id": f"plan_{record.run_id}_{step_name}",
+                    "sequence_number": index,
+                    "step_type": "workflow_stage",
+                    "objective": step_name.replace("_", " "),
+                    "expected_artifacts": list(artifact_targets if stage.state in {WorkflowLifecycleState.EXECUTING, WorkflowLifecycleState.EXPORTING} else []),
+                    "verification_method": "artifact_review" if stage.state == WorkflowLifecycleState.REVIEWING else "stage_status",
+                    "rollback_strategy": "retry_stage" if stage.retry_budget else "none",
+                    "state": stage.state.value,
+                    "owner": stage.owner.value,
+                }
+            )
+        return steps
+
+    async def _record_plan(self, *, record: RunRecord, steps: list[dict[str, Any]]) -> None:
         await self._exec_db_call(
             "persist_plan",
             run_id=record.run_id,
-            workflow_id=workflow_id,
-            step_name=step_name,
-            task_type=record.task_type or "",
-            session_id=record.session_id,
-            workspace_id=str(record.metadata.get("workspace_id") or ""),
-            title=record.intent,
-            payload=dict(payload or {}),
-            metadata=dict(record.metadata or {}),
+            steps=list(steps or []),
         )
 
-    async def _record_execution_step_start(self, *, record: RunRecord, state: WorkflowLifecycleState, step_name: str) -> None:
-        await self._exec_db_call(
-            "start_execution_step",
-            run_id=record.run_id,
-            step_name=step_name,
-            workflow_state=state.value,
-            task_type=record.task_type or "",
-            session_id=record.session_id,
-            workspace_id=str(record.metadata.get("workspace_id") or ""),
-            metadata=dict(record.metadata or {}),
-        )
-
-    async def _record_execution_step_complete(
+    async def _record_execution_step_start(
         self,
         *,
         record: RunRecord,
         state: WorkflowLifecycleState,
+        planned_step_id: str,
         step_name: str,
+        payload: dict[str, Any] | None = None,
+    ) -> str:
+        result = await self._exec_db_call(
+            "start_execution_step",
+            run_id=record.run_id,
+            planned_step_id=str(planned_step_id or ""),
+            step_name=step_name,
+            workflow_state=state.value,
+            payload=dict(payload or {}),
+        )
+        return str(result or "")
+
+    async def _record_execution_step_complete(
+        self,
+        *,
+        execution_step_id: str,
         payload: dict[str, Any],
         success: bool = True,
-        error: str = "",
     ) -> None:
         await self._exec_db_call(
             "complete_execution_step",
-            run_id=record.run_id,
-            step_name=step_name,
-            workflow_state=state.value,
+            execution_step_id=str(execution_step_id or ""),
             status="completed" if success else "failed",
-            payload=dict(payload or {}),
-            error=str(error or ""),
-            task_type=record.task_type or "",
-            session_id=record.session_id,
-            workspace_id=str(record.metadata.get("workspace_id") or ""),
-            metadata=dict(record.metadata or {}),
+            result=dict(payload or {}),
         )
 
     async def _record_verification(
         self,
         *,
         record: RunRecord,
-        state: WorkflowLifecycleState,
-        step_name: str,
+        execution_step_id: str,
+        method: str,
         payload: dict[str, Any],
         success: bool,
-    ) -> None:
-        await self._exec_db_call(
+    ) -> str:
+        result = await self._exec_db_call(
             "record_verification",
             run_id=record.run_id,
-            step_name=step_name,
-            workflow_state=state.value,
+            execution_step_id=str(execution_step_id or ""),
+            method=str(method or "stage_verification"),
             status="passed" if success else "failed",
             payload=dict(payload or {}),
-            task_type=record.task_type or "",
-            session_id=record.session_id,
-            workspace_id=str(record.metadata.get("workspace_id") or ""),
-            metadata=dict(record.metadata or {}),
         )
+        return str(result or "")
 
     async def _record_recovery(
         self,
         *,
         record: RunRecord,
-        state: WorkflowLifecycleState,
-        step_name: str,
+        verification_id: str,
         decision: str,
         payload: dict[str, Any],
     ) -> None:
         await self._exec_db_call(
             "record_recovery",
             run_id=record.run_id,
-            step_name=step_name,
-            workflow_state=state.value,
+            verification_id=str(verification_id or ""),
             decision=str(decision or "retry"),
             payload=dict(payload or {}),
-            task_type=record.task_type or "",
-            session_id=record.session_id,
-            workspace_id=str(record.metadata.get("workspace_id") or ""),
-            metadata=dict(record.metadata or {}),
         )
 
     async def _record_checkpoint(
         self,
         *,
-        record: RunRecord,
+        run_id: str,
         state: WorkflowLifecycleState,
-        step_name: str,
+        step_id: str,
         payload: dict[str, Any],
-        status: str,
     ) -> None:
         await self._exec_db_call(
             "record_checkpoint",
-            run_id=record.run_id,
-            step_name=step_name,
+            run_id=str(run_id),
+            step_id=str(step_id or ""),
             workflow_state=state.value,
-            status=str(status or "completed"),
-            payload=dict(payload or {}),
-            task_type=record.task_type or "",
-            session_id=record.session_id,
-            workspace_id=str(record.metadata.get("workspace_id") or ""),
-            metadata=dict(record.metadata or {}),
+            summary=dict(payload or {}),
         )
 
     async def _drain_runtime_outbox(self) -> None:
         try:
-            runtime_db = get_runtime_database()
+            runtime_db = self._runtime_db
+            if runtime_db is False:
+                runtime_db = None
+            elif runtime_db is None:
+                try:
+                    runtime_db = get_runtime_database()
+                except Exception:
+                    runtime_db = None
+            await sync_runtime_outbox_once(runtime_db=runtime_db, limit=100)
         except Exception:
             return
-        outbox = getattr(runtime_db, "outbox", None)
-        sync = getattr(runtime_db, "workspace_sync", None)
-        if outbox is None or sync is None:
-            return
-        try:
-            pending = list(outbox.list_pending(limit=100))
-        except Exception:
-            return
-        for event in pending:
-            try:
-                if sync.accept_outbox_event(dict(event or {})):
-                    outbox.mark_delivered(str(event.get("event_id") or ""))
-            except Exception:
-                continue
 
     async def start_workflow(
         self,
@@ -367,6 +373,16 @@ class VerticalWorkflowRunner:
             task_type=task_type,
             routing_profile=normalized_routing_profile,
         )
+        execution_plan = self._build_execution_plan(
+            record=record,
+            template=template,
+            artifact_targets=requested_artifact_targets,
+        )
+        planned_step_ids = {
+            str(step.get("objective") or self._step_name_for_state(WorkflowLifecycleState.PLANNED)).replace(" ", "_"): str(step.get("planned_step_id") or "")
+            for step in execution_plan
+        }
+        execution_step_ids: dict[str, str] = {}
 
         try:
             per_run_store.write_task(
@@ -400,6 +416,8 @@ class VerticalWorkflowRunner:
                     review_strictness=normalized_review_strictness,
                     candidate_chain=candidate_chain,
                 ),
+                planned_step_id=planned_step_ids.get("classify_request", ""),
+                execution_step_ids=execution_step_ids,
             )
             scoped_payload = await self._run_stage(
                 workflow_run=workflow_run,
@@ -419,6 +437,8 @@ class VerticalWorkflowRunner:
                     project_template_id=str(project_template_id or "").strip(),
                     project_name=resolved_project_name,
                 ),
+                planned_step_id=planned_step_ids.get("scope_workflow", ""),
+                execution_step_ids=execution_step_ids,
             )
             await self._run_stage(
                 workflow_run=workflow_run,
@@ -426,6 +446,9 @@ class VerticalWorkflowRunner:
                 state=WorkflowLifecycleState.PLANNED,
                 step_name="build_plan",
                 action=lambda: self._plan_payload(task_type=task_type, preferred_formats=requested_artifact_targets),
+                planned_steps=execution_plan,
+                planned_step_id=planned_step_ids.get("build_plan", ""),
+                execution_step_ids=execution_step_ids,
             )
             await self._run_stage(
                 workflow_run=workflow_run,
@@ -433,6 +456,8 @@ class VerticalWorkflowRunner:
                 state=WorkflowLifecycleState.GATHERING_CONTEXT,
                 step_name="gather_context",
                 action=lambda: self._context_payload(task_type=task_type, brief=brief, scoped_payload=scoped_payload),
+                planned_step_id=planned_step_ids.get("gather_context", ""),
+                execution_step_ids=execution_step_ids,
             )
 
             execution_result = await self._run_stage(
@@ -451,6 +476,8 @@ class VerticalWorkflowRunner:
                     preferred_formats=requested_artifact_targets,
                     artifact_root=artifact_root,
                 ),
+                planned_step_id=planned_step_ids.get("execute_artifact_flow", ""),
+                execution_step_ids=execution_step_ids,
             )
 
             review_report = await self._run_stage(
@@ -464,29 +491,29 @@ class VerticalWorkflowRunner:
                     preferred_formats=requested_artifact_targets,
                     review_strictness=normalized_review_strictness,
                 ),
+                planned_step_id=planned_step_ids.get("review_artifact_output", ""),
+                execution_step_ids=execution_step_ids,
             )
             record.review_report = dict(review_report or {})
-            await self._record_verification(
+            review_verification_id = await self._record_verification(
                 record=record,
-                state=WorkflowLifecycleState.REVIEWING,
-                step_name="review_artifact_output",
+                execution_step_id=execution_step_ids.get("review_artifact_output", ""),
+                method="artifact_review",
                 payload=dict(review_report or {}),
                 success=str(review_report.get("status") or "") == "passed",
             )
             if str(review_report.get("status") or "") != "passed":
                 await self._record_recovery(
                     record=record,
-                    state=WorkflowLifecycleState.REVIEWING,
-                    step_name="review_artifact_output",
+                    verification_id=review_verification_id,
                     decision=str(review_report.get("recommended_action") or "revise"),
                     payload=dict(review_report or {}),
                 )
                 await self._record_checkpoint(
-                    record=record,
+                    run_id=record.run_id,
                     state=WorkflowLifecycleState.REVIEWING,
-                    step_name="review_artifact_output",
+                    step_id="review_artifact_output",
                     payload=dict(review_report or {}),
-                    status="failed",
                 )
                 record.status = WorkflowLifecycleState.FAILED.value
                 record.workflow_state = WorkflowLifecycleState.FAILED.value
@@ -513,6 +540,8 @@ class VerticalWorkflowRunner:
                     state=WorkflowLifecycleState.EXPORTING,
                     step_name="finalize_export_manifest",
                     action=lambda: self._export_payload(task_type=task_type, execution_result=execution_result),
+                    planned_step_id=planned_step_ids.get("finalize_export_manifest", ""),
+                    execution_step_ids=execution_step_ids,
                 )
             else:
                 export_payload = self._export_payload(task_type=task_type, execution_result=execution_result)
@@ -574,19 +603,24 @@ class VerticalWorkflowRunner:
             )
         except Exception as exc:
             logger.error(f"vertical workflow failed for {record.run_id}: {exc}")
+            failure_verification_id = await self._record_verification(
+                record=record,
+                execution_step_id=execution_step_ids.get("workflow_failed", ""),
+                method="workflow_exception",
+                payload={"error": str(exc), "task_type": task_type.value},
+                success=False,
+            )
             await self._record_recovery(
                 record=record,
-                state=WorkflowLifecycleState.FAILED,
-                step_name="workflow_failed",
+                verification_id=failure_verification_id,
                 decision="failed",
                 payload={"error": str(exc), "task_type": task_type.value},
             )
             await self._record_checkpoint(
-                record=record,
+                run_id=record.run_id,
                 state=WorkflowLifecycleState.FAILED,
-                step_name="workflow_failed",
+                step_id="workflow_failed",
                 payload={"error": str(exc), "task_type": task_type.value},
-                status="failed",
             )
             record.completed_at = time.time()
             record.error = str(exc)
@@ -645,6 +679,9 @@ class VerticalWorkflowRunner:
         state: WorkflowLifecycleState,
         step_name: str,
         action: Callable[[], Coroutine[Any, Any, dict[str, Any]] | dict[str, Any]],
+        planned_step_id: str = "",
+        planned_steps: list[dict[str, Any]] | None = None,
+        execution_step_ids: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         workflow_run.transition_to(WorkflowState(state.value), {"task_type": record.task_type or ""})
         record.workflow_state = state.value
@@ -684,14 +721,17 @@ class VerticalWorkflowRunner:
         }
         record.steps.append(step)
         await self._persist_record(workflow_run, record)
-        await self._record_execution_step_start(record=record, state=state, step_name=step_name)
-        if step_name == "build_plan":
-            await self._record_plan(
-                record=record,
-                workflow_id=str(workflow_run.workflow_id or ""),
-                step_name=step_name,
-                payload={"workflow_state": state.value, "task_type": record.task_type or ""},
-            )
+        execution_step_id = await self._record_execution_step_start(
+            record=record,
+            state=state,
+            planned_step_id=planned_step_id,
+            step_name=step_name,
+            payload={"workflow_state": state.value, "task_type": record.task_type or ""},
+        )
+        if execution_step_ids is not None and execution_step_id:
+            execution_step_ids[step_name] = execution_step_id
+        if step_name == "build_plan" and planned_steps:
+            await self._record_plan(record=record, steps=planned_steps)
 
         try:
             result = action()
@@ -703,18 +743,15 @@ class VerticalWorkflowRunner:
             step["result"] = payload
             await self._persist_record(workflow_run, record)
             await self._record_execution_step_complete(
-                record=record,
-                state=state,
-                step_name=step_name,
+                execution_step_id=execution_step_id,
                 payload=payload,
                 success=True,
             )
             await self._record_checkpoint(
-                record=record,
+                run_id=record.run_id,
                 state=state,
-                step_name=step_name,
+                step_id=step_name,
                 payload=payload,
-                status="completed",
             )
             _publish_workflow_tool_event(
                 stage="end",
@@ -751,26 +788,28 @@ class VerticalWorkflowRunner:
                 record.workflow_state = WorkflowLifecycleState.FAILED.value
             await self._persist_record(workflow_run, record)
             await self._record_execution_step_complete(
-                record=record,
-                state=state,
-                step_name=step_name,
+                execution_step_id=execution_step_id,
                 payload={"error": str(exc)},
                 success=False,
-                error=str(exc),
+            )
+            verification_id = await self._record_verification(
+                record=record,
+                execution_step_id=execution_step_id,
+                method="stage_execution",
+                payload={"error": str(exc), "stage": state.value},
+                success=False,
             )
             await self._record_recovery(
                 record=record,
-                state=WorkflowLifecycleState.FAILED,
-                step_name=step_name,
+                verification_id=verification_id,
                 decision="retry",
                 payload={"error": str(exc), "stage": state.value},
             )
             await self._record_checkpoint(
-                record=record,
+                run_id=record.run_id,
                 state=WorkflowLifecycleState.FAILED,
-                step_name=step_name,
+                step_id=step_name,
                 payload={"error": str(exc), "stage": state.value},
-                status="failed",
             )
             _publish_workflow_activity(
                 event_type="workflow_stage_failed",

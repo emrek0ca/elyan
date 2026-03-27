@@ -217,7 +217,7 @@ def test_integration_trace_store_prefers_runtime_db_when_jsonl_missing(monkeypat
 
     runtime_db = _RuntimeDb()
     monkeypatch.setattr("core.integration_trace.get_runtime_database", lambda: runtime_db)
-    store = IntegrationTraceStore(storage_root=tmp_path / "trace")
+    store = IntegrationTraceStore(storage_root=tmp_path / "trace", use_runtime_db=True)
 
     rows = store.list_traces(limit=10, provider="google")
     assert len(rows) == 2

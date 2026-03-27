@@ -73,8 +73,6 @@ def _workspace_id_from_metadata(*sources: dict[str, Any] | None) -> str:
 def _merge_account_public_state(account: OAuthAccount, payload: dict[str, Any]) -> OAuthAccount:
     merged = account.model_dump()
     for key, value in dict(payload or {}).items():
-        if key in {"access_token", "refresh_token"}:
-            continue
         if key == "metadata" and isinstance(value, dict):
             base = dict(merged.get("metadata") or {})
             base.update(value)
@@ -480,7 +478,7 @@ class OAuthBroker:
         scope_list = normalize_items(scopes or [])
         config = self.provider_config(provider)
         existing = self._load_account(provider, account_alias=account_alias)
-        if existing and existing.is_ready:
+        if existing and existing.is_ready and bool(existing.access_token or existing.refresh_token):
             granted = set(existing.granted_scopes or [])
             if not scope_list or set(scope_list).issubset(granted):
                 if existing.expires_at and existing.expires_at <= time.time() and existing.refresh_token:

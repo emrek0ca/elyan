@@ -394,6 +394,57 @@ audit_events_table = Table(
 )
 Index("ix_audit_events_type_created", audit_events_table.c.event_type, audit_events_table.c.created_at)
 
+local_connector_accounts_table = Table(
+    "connector_accounts",
+    LOCAL_METADATA,
+    Column("account_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), nullable=False, default="local-workspace"),
+    Column("provider", String(64), nullable=False, default=""),
+    Column("connector_name", String(64), nullable=False, default=""),
+    Column("account_alias", String(128), nullable=False, default="default"),
+    Column("display_name", String(256), nullable=False, default=""),
+    Column("email", String(256), nullable=False, default=""),
+    Column("status", String(64), nullable=False, default="needs_input"),
+    Column("auth_strategy", String(64), nullable=False, default="oauth"),
+    Column("auth_url", Text, nullable=False, default=""),
+    Column("redirect_uri", Text, nullable=False, default=""),
+    Column("scopes_json", Text, nullable=False, default="[]"),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("updated_at", Float, nullable=False, default=_now),
+)
+Index("ix_local_connector_accounts_workspace_updated", local_connector_accounts_table.c.workspace_id, local_connector_accounts_table.c.updated_at)
+Index("ix_local_connector_accounts_provider_alias", local_connector_accounts_table.c.provider, local_connector_accounts_table.c.account_alias)
+
+local_connector_health_table = Table(
+    "connector_health",
+    LOCAL_METADATA,
+    Column("health_id", String(128), primary_key=True),
+    Column("account_id", String(128), nullable=False),
+    Column("workspace_id", String(128), nullable=False, default="local-workspace"),
+    Column("status", String(64), nullable=False, default="healthy"),
+    Column("payload_json", Text, nullable=False, default="{}"),
+    Column("updated_at", Float, nullable=False, default=_now),
+)
+Index("ix_local_connector_health_workspace_updated", local_connector_health_table.c.workspace_id, local_connector_health_table.c.updated_at)
+
+local_connector_action_traces_table = Table(
+    "connector_action_traces",
+    LOCAL_METADATA,
+    Column("trace_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), nullable=False, default="local-workspace"),
+    Column("connector_account_id", String(128), nullable=False, default=""),
+    Column("provider", String(64), nullable=False, default=""),
+    Column("connector_name", String(64), nullable=False, default=""),
+    Column("integration_type", String(64), nullable=False, default=""),
+    Column("event_type", String(128), nullable=False, default="connector"),
+    Column("status", String(64), nullable=False, default=""),
+    Column("success", Boolean, nullable=False, default=False),
+    Column("latency_ms", Float, nullable=False, default=0.0),
+    Column("payload_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+)
+Index("ix_local_connector_traces_workspace_created", local_connector_action_traces_table.c.workspace_id, local_connector_action_traces_table.c.created_at)
+
 workspaces_table = Table(
     "workspaces",
     WORKSPACE_METADATA,
@@ -646,6 +697,23 @@ class OutboxRepository:
                 outbox_events_table.update()
                 .where(outbox_events_table.c.event_id == str(event_id))
                 .values(sync_state="delivered", updated_at=_now())
+            )
+
+    def mark_retry(self, event_id: str, *, error: str) -> None:
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(outbox_events_table.c.delivery_attempts).where(outbox_events_table.c.event_id == str(event_id))
+            ).first()
+            attempts = int(row[0] or 0) + 1 if row else 1
+            conn.execute(
+                outbox_events_table.update()
+                .where(outbox_events_table.c.event_id == str(event_id))
+                .values(
+                    sync_state="pending",
+                    delivery_attempts=attempts,
+                    last_error=str(error or "")[:2000],
+                    updated_at=_now(),
+                )
             )
 
 
@@ -1003,6 +1071,511 @@ class BillingRepository:
         )
 
 
+class ConnectorRepository:
+    def __init__(self, db: "RuntimeDatabase") -> None:
+        self._db = db
+
+    @staticmethod
+    def _account_id(provider: str, account_alias: str) -> str:
+        return f"{str(provider or '').strip().lower()}::{str(account_alias or 'default').strip() or 'default'}"
+
+    def backfill_account(self, account_payload: dict[str, Any]) -> None:
+        with self._db.local_engine.begin() as conn:
+            self._upsert_account(conn, account_payload, enqueue=False)
+
+    def upsert_account(self, account_payload: dict[str, Any]) -> None:
+        with self._db.local_engine.begin() as conn:
+            self._upsert_account(conn, account_payload, enqueue=True)
+
+    def _upsert_account(self, conn: Connection, account_payload: dict[str, Any], *, enqueue: bool) -> None:
+        provider = str(account_payload.get("provider") or "").strip().lower()
+        account_alias = str(account_payload.get("account_alias") or "default").strip() or "default"
+        if not provider:
+            return
+        workspace_id = str(
+            account_payload.get("workspace_id")
+            or account_payload.get("metadata", {}).get("workspace_id")
+            or "local-workspace"
+        )
+        account_id = str(account_payload.get("account_id") or self._account_id(provider, account_alias))
+        connector_name = str(account_payload.get("connector_name") or account_payload.get("metadata", {}).get("connector") or provider).strip().lower()
+        values = {
+            "account_id": account_id,
+            "workspace_id": workspace_id,
+            "provider": provider,
+            "connector_name": connector_name,
+            "account_alias": account_alias,
+            "display_name": str(account_payload.get("display_name") or provider.title()),
+            "email": str(account_payload.get("email") or ""),
+            "status": str(account_payload.get("status") or "needs_input"),
+            "auth_strategy": str(account_payload.get("auth_strategy") or "oauth"),
+            "auth_url": str(account_payload.get("auth_url") or ""),
+            "redirect_uri": str(account_payload.get("redirect_uri") or ""),
+            "scopes_json": _json_dumps(list(account_payload.get("granted_scopes") or account_payload.get("scopes") or [])),
+            "metadata_json": _json_dumps(dict(account_payload.get("metadata") or {})),
+            "updated_at": float(account_payload.get("updated_at") or _now()),
+        }
+        existing = conn.execute(
+            select(local_connector_accounts_table.c.account_id).where(local_connector_accounts_table.c.account_id == account_id)
+        ).first()
+        if existing:
+            conn.execute(
+                local_connector_accounts_table.update()
+                .where(local_connector_accounts_table.c.account_id == account_id)
+                .values(**values)
+            )
+        else:
+            conn.execute(local_connector_accounts_table.insert().values(**values))
+
+        health_payload = {
+            "auth_state": values["status"],
+            "scopes": _json_loads(values["scopes_json"], []),
+            "connector_name": connector_name,
+        }
+        self._upsert_health(conn, account_id=account_id, workspace_id=workspace_id, status=values["status"], payload=health_payload)
+
+        if enqueue:
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=workspace_id,
+                aggregate_type="connector_account",
+                aggregate_id=account_id,
+                event_type="connector.account.updated",
+                payload={
+                    "workspace_id": workspace_id,
+                    "account_id": account_id,
+                    "provider": provider,
+                    "connector_name": connector_name,
+                    "account_alias": account_alias,
+                    "status": values["status"],
+                    "display_name": values["display_name"],
+                    "email": values["email"],
+                    "scopes": _json_loads(values["scopes_json"], []),
+                    "auth_strategy": values["auth_strategy"],
+                    "metadata": _json_loads(values["metadata_json"], {}),
+                },
+            )
+
+    def _upsert_health(self, conn: Connection, *, account_id: str, workspace_id: str, status: str, payload: dict[str, Any]) -> None:
+        health_id = f"health::{account_id}"
+        values = {
+            "health_id": health_id,
+            "account_id": account_id,
+            "workspace_id": workspace_id,
+            "status": str(status or "healthy"),
+            "payload_json": _json_dumps(dict(payload or {})),
+            "updated_at": _now(),
+        }
+        existing = conn.execute(
+            select(local_connector_health_table.c.health_id).where(local_connector_health_table.c.health_id == health_id)
+        ).first()
+        if existing:
+            conn.execute(
+                local_connector_health_table.update()
+                .where(local_connector_health_table.c.health_id == health_id)
+                .values(**values)
+            )
+        else:
+            conn.execute(local_connector_health_table.insert().values(**values))
+
+    def list_accounts(self, *, workspace_id: str = "local-workspace", provider: str = "", include_revoked: bool = False) -> list[dict[str, Any]]:
+        with self._db.local_engine.begin() as conn:
+            stmt = select(local_connector_accounts_table).where(local_connector_accounts_table.c.workspace_id == str(workspace_id or "local-workspace"))
+            if provider:
+                stmt = stmt.where(local_connector_accounts_table.c.provider == str(provider).strip().lower())
+            if not include_revoked:
+                stmt = stmt.where(local_connector_accounts_table.c.status != "revoked")
+            rows = conn.execute(stmt.order_by(local_connector_accounts_table.c.updated_at.desc())).mappings().all()
+        return [self._db._decode_connector_account_row(row) for row in rows]
+
+    def get_account(self, provider: str, account_alias: str = "default", workspace_id: str = "local-workspace") -> dict[str, Any] | None:
+        account_id = self._account_id(provider, account_alias)
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(local_connector_accounts_table)
+                .where(local_connector_accounts_table.c.account_id == account_id)
+                .where(local_connector_accounts_table.c.workspace_id == str(workspace_id or "local-workspace"))
+            ).mappings().first()
+        return self._db._decode_connector_account_row(row) if row else None
+
+    def delete_account(self, provider: str, account_alias: str = "default", workspace_id: str = "local-workspace") -> bool:
+        account_id = self._account_id(provider, account_alias)
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(local_connector_accounts_table).where(local_connector_accounts_table.c.account_id == account_id)
+            ).mappings().first()
+            if row is None:
+                return False
+            conn.execute(
+                local_connector_accounts_table.update()
+                .where(local_connector_accounts_table.c.account_id == account_id)
+                .values(status="revoked", updated_at=_now())
+            )
+            self._upsert_health(
+                conn,
+                account_id=account_id,
+                workspace_id=str(workspace_id or row.get("workspace_id") or "local-workspace"),
+                status="revoked",
+                payload={"auth_state": "revoked"},
+            )
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=str(workspace_id or row.get("workspace_id") or "local-workspace"),
+                aggregate_type="connector_account",
+                aggregate_id=account_id,
+                event_type="connector.account.revoked",
+                payload={
+                    "workspace_id": str(workspace_id or row.get("workspace_id") or "local-workspace"),
+                    "account_id": account_id,
+                    "provider": str(provider or "").strip().lower(),
+                    "account_alias": str(account_alias or "default"),
+                    "status": "revoked",
+                },
+            )
+        return True
+
+    def record_trace(self, trace_payload: dict[str, Any]) -> dict[str, Any]:
+        trace_id = str(trace_payload.get("trace_id") or f"itr_{uuid.uuid4().hex[:12]}")
+        workspace_id = str(
+            trace_payload.get("workspace_id")
+            or trace_payload.get("metadata", {}).get("workspace_id")
+            or "local-workspace"
+        )
+        provider = str(trace_payload.get("provider") or "").strip().lower()
+        connector_name = str(trace_payload.get("connector_name") or provider or "").strip().lower()
+        account_alias = str(trace_payload.get("account_alias") or "default").strip() or "default"
+        account_id = str(trace_payload.get("connector_account_id") or self._account_id(provider, account_alias))
+        values = {
+            "trace_id": trace_id,
+            "workspace_id": workspace_id,
+            "connector_account_id": account_id,
+            "provider": provider,
+            "connector_name": connector_name,
+            "integration_type": str(trace_payload.get("integration_type") or ""),
+            "event_type": str(trace_payload.get("operation") or trace_payload.get("event_type") or "connector"),
+            "status": str(trace_payload.get("status") or ""),
+            "success": bool(trace_payload.get("success")),
+            "latency_ms": float(trace_payload.get("latency_ms") or 0.0),
+            "payload_json": _json_dumps(
+                {
+                    "request_id": str(trace_payload.get("request_id") or ""),
+                    "user_id": str(trace_payload.get("user_id") or ""),
+                    "session_id": str(trace_payload.get("session_id") or ""),
+                    "channel": str(trace_payload.get("channel") or ""),
+                    "auth_state": str(trace_payload.get("auth_state") or ""),
+                    "auth_strategy": str(trace_payload.get("auth_strategy") or ""),
+                    "fallback_used": bool(trace_payload.get("fallback_used")),
+                    "fallback_reason": str(trace_payload.get("fallback_reason") or ""),
+                    "install_state": str(trace_payload.get("install_state") or ""),
+                    "retry_count": int(trace_payload.get("retry_count") or 0),
+                    "evidence": list(trace_payload.get("evidence") or []),
+                    "artifacts": list(trace_payload.get("artifacts") or []),
+                    "verification": dict(trace_payload.get("verification") or {}),
+                    "metadata": dict(trace_payload.get("metadata") or {}),
+                }
+            ),
+            "created_at": float(trace_payload.get("created_at") or _now()),
+        }
+        with self._db.local_engine.begin() as conn:
+            conn.execute(local_connector_action_traces_table.insert().values(**values))
+            self._upsert_health(
+                conn,
+                account_id=account_id,
+                workspace_id=workspace_id,
+                status=str(values["status"] or ("healthy" if values["success"] else "degraded")),
+                payload={
+                    "latest_trace_id": trace_id,
+                    "connector_name": connector_name,
+                    "provider": provider,
+                    "status": values["status"],
+                    "success": values["success"],
+                },
+            )
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=workspace_id,
+                aggregate_type="connector_trace",
+                aggregate_id=trace_id,
+                event_type="connector.trace.recorded",
+                payload={
+                    "workspace_id": workspace_id,
+                    "trace_id": trace_id,
+                    "connector_account_id": account_id,
+                    "provider": provider,
+                    "connector_name": connector_name,
+                    "integration_type": values["integration_type"],
+                    "event_type": values["event_type"],
+                    "status": values["status"],
+                    "success": values["success"],
+                    "latency_ms": values["latency_ms"],
+                    "payload": _json_loads(values["payload_json"], {}),
+                },
+            )
+        out = dict(trace_payload)
+        out["trace_id"] = trace_id
+        out["workspace_id"] = workspace_id
+        out["connector_account_id"] = account_id
+        return out
+
+    def list_traces(
+        self,
+        *,
+        limit: int = 100,
+        workspace_id: str = "local-workspace",
+        provider: str = "",
+        user_id: str = "",
+        operation: str = "",
+        connector_name: str = "",
+        integration_type: str = "",
+    ) -> list[dict[str, Any]]:
+        with self._db.local_engine.begin() as conn:
+            stmt = select(local_connector_action_traces_table).where(
+                local_connector_action_traces_table.c.workspace_id == str(workspace_id or "local-workspace")
+            )
+            if provider:
+                stmt = stmt.where(local_connector_action_traces_table.c.provider == str(provider).strip().lower())
+            if connector_name:
+                stmt = stmt.where(local_connector_action_traces_table.c.connector_name == str(connector_name).strip().lower())
+            if operation:
+                stmt = stmt.where(local_connector_action_traces_table.c.event_type == str(operation).strip().lower())
+            if integration_type:
+                stmt = stmt.where(local_connector_action_traces_table.c.integration_type == str(integration_type).strip().lower())
+            rows = conn.execute(
+                stmt.order_by(local_connector_action_traces_table.c.created_at.desc()).limit(max(1, int(limit or 100)))
+            ).mappings().all()
+        decoded = [self._db._decode_connector_trace_row(row) for row in rows]
+        if user_id:
+            low_user = str(user_id or "").strip().lower()
+            decoded = [item for item in decoded if str(item.get("user_id") or "").strip().lower() == low_user]
+        return decoded
+
+    def summary(self, *, workspace_id: str = "local-workspace", limit: int = 200) -> dict[str, Any]:
+        rows = self.list_traces(workspace_id=workspace_id, limit=limit)
+        by_provider: dict[str, int] = {}
+        by_operation: dict[str, int] = {}
+        by_status: dict[str, int] = {}
+        fallback_count = 0
+        for row in rows:
+            provider = str(row.get("provider") or "unknown")
+            operation = str(row.get("operation") or "connector")
+            status = str(row.get("status") or "unknown")
+            by_provider[provider] = int(by_provider.get(provider, 0)) + 1
+            by_operation[operation] = int(by_operation.get(operation, 0)) + 1
+            by_status[status] = int(by_status.get(status, 0)) + 1
+            if bool(row.get("fallback_used")):
+                fallback_count += 1
+        avg_latency = sum(float(row.get("latency_ms") or 0.0) for row in rows) / len(rows) if rows else 0.0
+        return {
+            "total": len(rows),
+            "avg_latency_ms": round(avg_latency, 2),
+            "fallback_count": fallback_count,
+            "by_provider": by_provider,
+            "by_operation": by_operation,
+            "by_status": by_status,
+            "recent": rows[:20],
+            "trace_path": str(self._db.db_path),
+        }
+
+
+class ExecutionRepository:
+    def __init__(self, db: "RuntimeDatabase") -> None:
+        self._db = db
+
+    def persist_plan(self, *, run_id: str, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        with self._db.local_engine.begin() as conn:
+            conn.execute(planned_steps_table.delete().where(planned_steps_table.c.run_id == str(run_id)))
+            rows: list[dict[str, Any]] = []
+            for index, step in enumerate(list(steps or []), start=1):
+                planned_step_id = str(step.get("planned_step_id") or f"plan_{run_id}_{index}")
+                values = {
+                    "planned_step_id": planned_step_id,
+                    "run_id": str(run_id),
+                    "sequence_number": max(1, int(step.get("sequence_number") or index)),
+                    "step_type": str(step.get("step_type") or "workflow_stage"),
+                    "objective": str(step.get("objective") or step.get("title") or planned_step_id),
+                    "expected_artifacts_json": _json_dumps(list(step.get("expected_artifacts") or [])),
+                    "verification_method": str(step.get("verification_method") or ""),
+                    "rollback_strategy": str(step.get("rollback_strategy") or ""),
+                    "created_at": float(step.get("created_at") or _now()),
+                }
+                conn.execute(planned_steps_table.insert().values(**values))
+                rows.append({**step, "planned_step_id": planned_step_id})
+        return rows
+
+    def start_execution_step(
+        self,
+        *,
+        run_id: str,
+        planned_step_id: str,
+        step_name: str,
+        workflow_state: str,
+        payload: dict[str, Any] | None = None,
+    ) -> str:
+        execution_step_id = f"exec_{uuid.uuid4().hex[:12]}"
+        with self._db.local_engine.begin() as conn:
+            conn.execute(
+                execution_steps_table.insert().values(
+                    execution_step_id=execution_step_id,
+                    run_id=str(run_id),
+                    planned_step_id=str(planned_step_id or ""),
+                    status="running",
+                    tool_name=str(step_name or "workflow_stage"),
+                    payload_json=_json_dumps({"workflow_state": str(workflow_state or ""), "payload": dict(payload or {})}),
+                    result_json="{}",
+                    started_at=_now(),
+                    completed_at=0.0,
+                )
+            )
+        return execution_step_id
+
+    def complete_execution_step(
+        self,
+        execution_step_id: str,
+        *,
+        status: str,
+        result: dict[str, Any] | None = None,
+        completed_at: float | None = None,
+    ) -> None:
+        with self._db.local_engine.begin() as conn:
+            conn.execute(
+                execution_steps_table.update()
+                .where(execution_steps_table.c.execution_step_id == str(execution_step_id))
+                .values(
+                    status=str(status or "completed"),
+                    result_json=_json_dumps(dict(result or {})),
+                    completed_at=float(completed_at or _now()),
+                )
+            )
+
+    def record_verification(
+        self,
+        *,
+        run_id: str,
+        execution_step_id: str,
+        method: str,
+        status: str,
+        payload: dict[str, Any] | None = None,
+    ) -> str:
+        verification_id = f"verify_{uuid.uuid4().hex[:12]}"
+        with self._db.local_engine.begin() as conn:
+            conn.execute(
+                verification_results_table.insert().values(
+                    verification_id=verification_id,
+                    run_id=str(run_id),
+                    execution_step_id=str(execution_step_id or ""),
+                    status=str(status or "pending"),
+                    method=str(method or ""),
+                    payload_json=_json_dumps(dict(payload or {})),
+                    created_at=_now(),
+                )
+            )
+            workspace_row = conn.execute(
+                select(task_runs_table.c.workspace_id).where(task_runs_table.c.run_id == str(run_id))
+            ).first()
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=str(workspace_row[0] if workspace_row else "local-workspace"),
+                aggregate_type="verification",
+                aggregate_id=verification_id,
+                event_type="verification.recorded",
+                payload={"run_id": str(run_id), "verification_id": verification_id, "status": str(status or "pending"), "method": str(method or ""), "payload": dict(payload or {})},
+            )
+        return verification_id
+
+    def record_recovery(self, *, run_id: str, verification_id: str, decision: str, payload: dict[str, Any] | None = None) -> str:
+        recovery_id = f"recovery_{uuid.uuid4().hex[:12]}"
+        with self._db.local_engine.begin() as conn:
+            conn.execute(
+                recovery_actions_table.insert().values(
+                    recovery_id=recovery_id,
+                    run_id=str(run_id),
+                    verification_id=str(verification_id or ""),
+                    decision=str(decision or "retry"),
+                    payload_json=_json_dumps(dict(payload or {})),
+                    created_at=_now(),
+                )
+            )
+            workspace_row = conn.execute(
+                select(task_runs_table.c.workspace_id).where(task_runs_table.c.run_id == str(run_id))
+            ).first()
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=str(workspace_row[0] if workspace_row else "local-workspace"),
+                aggregate_type="recovery",
+                aggregate_id=recovery_id,
+                event_type="recovery.recorded",
+                payload={"run_id": str(run_id), "verification_id": str(verification_id or ""), "decision": str(decision or "retry"), "payload": dict(payload or {})},
+            )
+        return recovery_id
+
+    def record_checkpoint(self, *, run_id: str, step_id: str, workflow_state: str, summary: dict[str, Any] | None = None, created_at: float | None = None) -> str:
+        with self._db.local_engine.begin() as conn:
+            existing = conn.execute(
+                select(func.max(replay_checkpoints_table.c.sequence_number)).where(replay_checkpoints_table.c.run_id == str(run_id))
+            ).scalar_one()
+            sequence_number = int(existing or 0) + 1
+            checkpoint_id = f"chk_{run_id}_{sequence_number}"
+            conn.execute(
+                replay_checkpoints_table.insert().values(
+                    checkpoint_id=checkpoint_id,
+                    run_id=str(run_id),
+                    step_id=str(step_id or ""),
+                    sequence_number=sequence_number,
+                    workflow_state=str(workflow_state or ""),
+                    summary_json=_json_dumps(dict(summary or {})),
+                    created_at=float(created_at or _now()),
+                )
+            )
+            workspace_row = conn.execute(
+                select(task_runs_table.c.workspace_id).where(task_runs_table.c.run_id == str(run_id))
+            ).first()
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=str(workspace_row[0] if workspace_row else "local-workspace"),
+                aggregate_type="replay_checkpoint",
+                aggregate_id=checkpoint_id,
+                event_type="replay.checkpoint.recorded",
+                payload={"run_id": str(run_id), "checkpoint_id": checkpoint_id, "step_id": str(step_id or ""), "workflow_state": str(workflow_state or ""), "summary": dict(summary or {})},
+            )
+        return checkpoint_id
+
+    def list_execution_steps(self, run_id: str) -> list[dict[str, Any]]:
+        with self._db.local_engine.begin() as conn:
+            rows = conn.execute(
+                select(execution_steps_table)
+                .where(execution_steps_table.c.run_id == str(run_id))
+                .order_by(execution_steps_table.c.started_at.asc())
+            ).mappings().all()
+        return [self._db._decode_execution_step_row(row) for row in rows]
+
+    def list_verifications(self, run_id: str) -> list[dict[str, Any]]:
+        with self._db.local_engine.begin() as conn:
+            rows = conn.execute(
+                select(verification_results_table)
+                .where(verification_results_table.c.run_id == str(run_id))
+                .order_by(verification_results_table.c.created_at.asc())
+            ).mappings().all()
+        return [self._db._decode_verification_row(row) for row in rows]
+
+    def list_recovery_actions(self, run_id: str) -> list[dict[str, Any]]:
+        with self._db.local_engine.begin() as conn:
+            rows = conn.execute(
+                select(recovery_actions_table)
+                .where(recovery_actions_table.c.run_id == str(run_id))
+                .order_by(recovery_actions_table.c.created_at.asc())
+            ).mappings().all()
+        return [self._db._decode_recovery_row(row) for row in rows]
+
+    def list_checkpoints(self, run_id: str) -> list[dict[str, Any]]:
+        with self._db.local_engine.begin() as conn:
+            rows = conn.execute(
+                select(replay_checkpoints_table)
+                .where(replay_checkpoints_table.c.run_id == str(run_id))
+                .order_by(replay_checkpoints_table.c.sequence_number.asc())
+            ).mappings().all()
+        return [self._db._decode_checkpoint_row(row) for row in rows]
+
+
 class RunIndexRepository:
     def __init__(self, db: "RuntimeDatabase") -> None:
         self._db = db
@@ -1057,32 +1630,35 @@ class RunIndexRepository:
                     )
                 )
 
-            conn.execute(replay_checkpoints_table.delete().where(replay_checkpoints_table.c.run_id == run_id))
-            sequence_number = 0
-            for step in list(run_payload.get("steps") or []):
-                if not isinstance(step, dict):
-                    continue
-                if str(step.get("status") or "") not in {"completed", "passed"}:
-                    continue
-                sequence_number += 1
-                conn.execute(
-                    replay_checkpoints_table.insert().values(
-                        checkpoint_id=f"chk_{run_id}_{sequence_number}",
-                        run_id=run_id,
-                        step_id=str(step.get("step_id") or f"step_{sequence_number}"),
-                        sequence_number=sequence_number,
-                        workflow_state=str(values["workflow_state"] or values["status"] or ""),
-                        summary_json=_json_dumps(
-                            {
-                                "name": str(step.get("name") or "step"),
-                                "status": str(step.get("status") or "completed"),
-                                "result": step.get("result") if isinstance(step.get("result"), dict) else {},
-                                "rollback_available": bool(step.get("rollback_available") or False),
-                            }
-                        ),
-                        created_at=float(step.get("completed_at") or step.get("started_at") or _now()),
+            existing_checkpoints = conn.execute(
+                select(func.count()).select_from(replay_checkpoints_table).where(replay_checkpoints_table.c.run_id == run_id)
+            ).scalar_one()
+            if not int(existing_checkpoints or 0):
+                sequence_number = 0
+                for step in list(run_payload.get("steps") or []):
+                    if not isinstance(step, dict):
+                        continue
+                    if str(step.get("status") or "") not in {"completed", "passed"}:
+                        continue
+                    sequence_number += 1
+                    conn.execute(
+                        replay_checkpoints_table.insert().values(
+                            checkpoint_id=f"chk_{run_id}_{sequence_number}",
+                            run_id=run_id,
+                            step_id=str(step.get("step_id") or f"step_{sequence_number}"),
+                            sequence_number=sequence_number,
+                            workflow_state=str(values["workflow_state"] or values["status"] or ""),
+                            summary_json=_json_dumps(
+                                {
+                                    "name": str(step.get("name") or "step"),
+                                    "status": str(step.get("status") or "completed"),
+                                    "result": step.get("result") if isinstance(step.get("result"), dict) else {},
+                                    "rollback_available": bool(step.get("rollback_available") or False),
+                                }
+                            ),
+                            created_at=float(step.get("completed_at") or step.get("started_at") or _now()),
+                        )
                     )
-                )
 
             self._db.outbox.enqueue(
                 conn,
@@ -1218,16 +1794,109 @@ class WorkspaceSyncAdapter:
                     )
                 else:
                     conn.execute(subscriptions_table.insert().values(**subscription_values))
-            elif aggregate_type == "task_run":
-                conn.execute(
-                    workspace_audit_index_table.insert().values(
-                        event_id=event_id,
-                        workspace_id=workspace_id,
-                        event_type=event_type,
-                        payload_json=_json_dumps(payload),
-                        created_at=float(event_payload.get("created_at") or _now()),
+            elif aggregate_type == "usage":
+                usage_id = str(event_payload.get("aggregate_id") or event_id)
+                usage_values = {
+                    "usage_id": usage_id,
+                    "workspace_id": workspace_id,
+                    "metric": str(payload.get("metric") or "unknown"),
+                    "amount": max(0, int(payload.get("amount") or 0)),
+                    "payload_json": _json_dumps(payload),
+                    "created_at": float(event_payload.get("created_at") or _now()),
+                }
+                existing_usage = conn.execute(
+                    select(workspace_usage_ledger_table.c.usage_id).where(workspace_usage_ledger_table.c.usage_id == usage_id)
+                ).first()
+                if existing_usage:
+                    conn.execute(
+                        workspace_usage_ledger_table.update()
+                        .where(workspace_usage_ledger_table.c.usage_id == usage_id)
+                        .values(**usage_values)
                     )
-                )
+                else:
+                    conn.execute(workspace_usage_ledger_table.insert().values(**usage_values))
+            elif aggregate_type == "connector_account":
+                account_values = {
+                    "account_id": str(payload.get("account_id") or event_payload.get("aggregate_id") or ""),
+                    "workspace_id": workspace_id,
+                    "connector_name": str(payload.get("connector_name") or payload.get("provider") or ""),
+                    "provider": str(payload.get("provider") or ""),
+                    "display_name": str(payload.get("display_name") or ""),
+                    "status": str(payload.get("status") or "connected"),
+                    "scopes_json": _json_dumps(list(payload.get("scopes") or [])),
+                    "metadata_json": _json_dumps(dict(payload.get("metadata") or {})),
+                    "updated_at": _now(),
+                }
+                existing_account = conn.execute(
+                    select(connector_accounts_table.c.account_id).where(connector_accounts_table.c.account_id == account_values["account_id"])
+                ).first()
+                if existing_account:
+                    conn.execute(
+                        connector_accounts_table.update()
+                        .where(connector_accounts_table.c.account_id == account_values["account_id"])
+                        .values(**account_values)
+                    )
+                else:
+                    conn.execute(connector_accounts_table.insert().values(**account_values))
+                health_values = {
+                    "health_id": f"health::{account_values['account_id']}",
+                    "account_id": account_values["account_id"],
+                    "workspace_id": workspace_id,
+                    "status": str(payload.get("status") or "healthy"),
+                    "payload_json": _json_dumps(payload),
+                    "updated_at": _now(),
+                }
+                existing_health = conn.execute(
+                    select(connector_health_table.c.health_id).where(connector_health_table.c.health_id == health_values["health_id"])
+                ).first()
+                if existing_health:
+                    conn.execute(
+                        connector_health_table.update()
+                        .where(connector_health_table.c.health_id == health_values["health_id"])
+                        .values(**health_values)
+                    )
+                else:
+                    conn.execute(connector_health_table.insert().values(**health_values))
+            elif aggregate_type == "connector_trace":
+                trace_values = {
+                    "trace_id": str(payload.get("trace_id") or event_payload.get("aggregate_id") or event_id),
+                    "workspace_id": workspace_id,
+                    "connector_account_id": str(payload.get("connector_account_id") or ""),
+                    "connector_name": str(payload.get("connector_name") or ""),
+                    "event_type": str(payload.get("event_type") or "connector"),
+                    "payload_json": _json_dumps(dict(payload.get("payload") or {})),
+                    "created_at": float(event_payload.get("created_at") or _now()),
+                }
+                existing_trace = conn.execute(
+                    select(connector_action_traces_table.c.trace_id).where(connector_action_traces_table.c.trace_id == trace_values["trace_id"])
+                ).first()
+                if existing_trace:
+                    conn.execute(
+                        connector_action_traces_table.update()
+                        .where(connector_action_traces_table.c.trace_id == trace_values["trace_id"])
+                        .values(**trace_values)
+                    )
+                else:
+                    conn.execute(connector_action_traces_table.insert().values(**trace_values))
+            elif aggregate_type in {"verification", "recovery", "replay_checkpoint", "task_run"}:
+                audit_values = {
+                    "event_id": event_id,
+                    "workspace_id": workspace_id,
+                    "event_type": event_type,
+                    "payload_json": _json_dumps(payload),
+                    "created_at": float(event_payload.get("created_at") or _now()),
+                }
+                existing_audit = conn.execute(
+                    select(workspace_audit_index_table.c.event_id).where(workspace_audit_index_table.c.event_id == event_id)
+                ).first()
+                if existing_audit:
+                    conn.execute(
+                        workspace_audit_index_table.update()
+                        .where(workspace_audit_index_table.c.event_id == event_id)
+                        .values(**audit_values)
+                    )
+                else:
+                    conn.execute(workspace_audit_index_table.insert().values(**audit_values))
             conn.execute(sync_receipts_table.insert().values(event_id=event_id, workspace_id=workspace_id, accepted_at=_now()))
         return True
 
@@ -1249,6 +1918,8 @@ class RuntimeDatabase:
         self.threads = ThreadRepository(self)
         self.approvals = ApprovalRepository(self)
         self.billing = BillingRepository(self)
+        self.connectors = ConnectorRepository(self)
+        self.execution = ExecutionRepository(self)
         self.run_index = RunIndexRepository(self)
         self.workspace_sync = WorkspaceSyncAdapter()
 
@@ -1390,6 +2061,97 @@ class RuntimeDatabase:
         }
 
     @staticmethod
+    def _decode_connector_account_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "account_id": str(row["account_id"]),
+            "workspace_id": str(row["workspace_id"] or "local-workspace"),
+            "provider": str(row["provider"] or ""),
+            "connector_name": str(row["connector_name"] or ""),
+            "account_alias": str(row["account_alias"] or "default"),
+            "display_name": str(row["display_name"] or ""),
+            "email": str(row["email"] or ""),
+            "status": str(row["status"] or "needs_input"),
+            "auth_strategy": str(row["auth_strategy"] or "oauth"),
+            "auth_url": str(row["auth_url"] or ""),
+            "redirect_uri": str(row["redirect_uri"] or ""),
+            "granted_scopes": _json_loads(row["scopes_json"], []),
+            "metadata": _json_loads(row["metadata_json"], {}),
+            "updated_at": float(row["updated_at"] or 0.0),
+        }
+
+    @staticmethod
+    def _decode_connector_trace_row(row: dict[str, Any]) -> dict[str, Any]:
+        payload = _json_loads(row["payload_json"], {})
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        return {
+            "trace_id": str(row["trace_id"]),
+            "workspace_id": str(row["workspace_id"] or "local-workspace"),
+            "connector_account_id": str(row["connector_account_id"] or ""),
+            "request_id": str(payload.get("request_id") or ""),
+            "user_id": str(payload.get("user_id") or ""),
+            "session_id": str(payload.get("session_id") or ""),
+            "channel": str(payload.get("channel") or ""),
+            "provider": str(row["provider"] or ""),
+            "connector_name": str(row["connector_name"] or ""),
+            "integration_type": str(row["integration_type"] or ""),
+            "operation": str(row["event_type"] or "connector"),
+            "status": str(row["status"] or ""),
+            "success": bool(row["success"]),
+            "auth_state": str(payload.get("auth_state") or ""),
+            "auth_strategy": str(payload.get("auth_strategy") or ""),
+            "account_alias": str(metadata.get("account_alias") or payload.get("account_alias") or "default"),
+            "fallback_used": bool(payload.get("fallback_used")),
+            "fallback_reason": str(payload.get("fallback_reason") or ""),
+            "install_state": str(payload.get("install_state") or ""),
+            "retry_count": int(payload.get("retry_count") or 0),
+            "latency_ms": float(row["latency_ms"] or 0.0),
+            "evidence": list(payload.get("evidence") or []),
+            "artifacts": list(payload.get("artifacts") or []),
+            "verification": dict(payload.get("verification") or {}),
+            "metadata": metadata,
+            "created_at": float(row["created_at"] or 0.0),
+        }
+
+    @staticmethod
+    def _decode_execution_step_row(row: dict[str, Any]) -> dict[str, Any]:
+        payload = _json_loads(row["payload_json"], {})
+        return {
+            "execution_step_id": str(row["execution_step_id"]),
+            "run_id": str(row["run_id"]),
+            "planned_step_id": str(row["planned_step_id"] or ""),
+            "status": str(row["status"] or "queued"),
+            "tool_name": str(row["tool_name"] or ""),
+            "payload": dict(payload.get("payload") or {}) if isinstance(payload, dict) else {},
+            "workflow_state": str(payload.get("workflow_state") or "") if isinstance(payload, dict) else "",
+            "result": _json_loads(row["result_json"], {}),
+            "started_at": float(row["started_at"] or 0.0),
+            "completed_at": float(row["completed_at"] or 0.0),
+        }
+
+    @staticmethod
+    def _decode_verification_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "verification_id": str(row["verification_id"]),
+            "run_id": str(row["run_id"]),
+            "execution_step_id": str(row["execution_step_id"] or ""),
+            "status": str(row["status"] or "pending"),
+            "method": str(row["method"] or ""),
+            "payload": _json_loads(row["payload_json"], {}),
+            "created_at": float(row["created_at"] or 0.0),
+        }
+
+    @staticmethod
+    def _decode_recovery_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "recovery_id": str(row["recovery_id"]),
+            "run_id": str(row["run_id"]),
+            "verification_id": str(row["verification_id"] or ""),
+            "decision": str(row["decision"] or "retry"),
+            "payload": _json_loads(row["payload_json"], {}),
+            "created_at": float(row["created_at"] or 0.0),
+        }
+
+    @staticmethod
     def _decode_outbox_row(row: dict[str, Any]) -> dict[str, Any]:
         return {
             "event_id": str(row["event_id"]),
@@ -1428,6 +2190,8 @@ def reset_runtime_database() -> None:
 __all__ = [
     "ApprovalRepository",
     "BillingRepository",
+    "ConnectorRepository",
+    "ExecutionRepository",
     "OutboxRepository",
     "RunIndexRepository",
     "RuntimeDatabase",

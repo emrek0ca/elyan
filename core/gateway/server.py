@@ -733,6 +733,7 @@ class ElyanGatewayServer:
         self._setup_routes()
         self.runner: Optional[web.AppRunner] = None
         self._telemetry_task: Optional[asyncio.Task] = None
+        self._runtime_sync_worker = None
 
     def _on_mission_event(self, payload: dict[str, Any]):
         mission_id = str(payload.get("mission_id") or "").strip()
@@ -6838,8 +6839,23 @@ class ElyanGatewayServer:
         # v2: Start Mission Scheduler
         await self.scheduler.start()
 
+        try:
+            from core.persistence import RuntimeSyncWorker
+
+            self._runtime_sync_worker = RuntimeSyncWorker()
+            await self._runtime_sync_worker.start()
+        except Exception as e:
+            logger.error(f"Runtime sync worker start failed: {e}")
+
     async def stop(self):
         logger.info("Stopping Gateway Server...")
+        if self._runtime_sync_worker:
+            try:
+                await self._runtime_sync_worker.stop()
+            except Exception as e:
+                logger.error(f"Runtime sync worker stop failed: {e}")
+            finally:
+                self._runtime_sync_worker = None
         if self._telemetry_task:
             self._telemetry_task.cancel()
         try:

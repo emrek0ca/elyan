@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from core.persistence import reset_runtime_database
+from core.persistence import get_runtime_database, reset_runtime_database
 import core.run_store as run_store_module
 import core.workflow.vertical_runner as vertical_runner_module
 from core.workflow.vertical_runner import VerticalWorkflowRunner
@@ -64,6 +64,7 @@ class _FakeOutbox:
 
 class _FakeWorkspaceSync:
     def __init__(self):
+        self.enabled = True
         self.received: list[dict[str, object]] = []
 
     def accept_outbox_event(self, payload):
@@ -92,6 +93,7 @@ class _FakeExecutionRepo:
 
     def start_execution_step(self, **payload):
         self._record("start_execution_step", payload)
+        return f"exec_{len(self.calls)}"
 
     def complete_execution_step(self, **payload):
         self._record("complete_execution_step", payload)
@@ -273,13 +275,18 @@ async def test_vertical_runner_writes_execution_persistence_and_drains_outbox(tm
     assert fake_runtime_db.outbox.delivered
 
     verification = next(payload for name, payload in calls if name == "record_verification")
-    checkpoint = next(payload for name, payload in calls if name == "record_checkpoint")
+    checkpoint = next(
+        payload
+        for name, payload in calls
+        if name == "record_checkpoint" and payload["step_id"] == "review_artifact_output"
+    )
     plan = next(payload for name, payload in calls if name == "persist_plan")
 
     assert verification["status"] == "passed"
-    assert checkpoint["status"] == "completed"
-    assert plan["step_name"] == "build_plan"
-    assert plan["workflow_id"] == "document_flow"
+    assert checkpoint["step_id"] == "review_artifact_output"
+    assert checkpoint["workflow_state"] == "reviewing"
+    assert plan["steps"]
+    assert any(step["planned_step_id"].startswith(f"plan_{record.run_id}_") for step in plan["steps"])
     assert any(event["event_type"] == "workflow.record_verification" for event in fake_runtime_db.workspace_sync.received)
     assert any(event["event_type"] == "workflow.record_checkpoint" for event in fake_runtime_db.workspace_sync.received)
 
@@ -306,11 +313,34 @@ async def test_vertical_runner_records_recovery_and_failure_checkpoint(tmp_path,
     checkpoint = next(
         payload
         for name, payload in fake_runtime_db.execution.calls
-        if name == "record_checkpoint" and payload["status"] == "failed"
+        if name == "record_checkpoint" and payload["workflow_state"] == "reviewing"
     )
     verification = next(payload for name, payload in fake_runtime_db.execution.calls if name == "record_verification")
 
     assert recovery["decision"] == "revise"
-    assert recovery["workflow_state"] == "reviewing"
-    assert checkpoint["status"] == "failed"
+    assert checkpoint["step_id"] == "review_artifact_output"
+    assert checkpoint["summary"]["status"] == "failed"
     assert verification["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_vertical_runner_persists_execution_rows_to_runtime_db(tmp_path):
+    runner = VerticalWorkflowRunner()
+    record = await runner.start_workflow(
+        task_type="document",
+        title="Persistent brief",
+        brief="Create a concise technical brief for Elyan runtime persistence.",
+        output_dir=str(tmp_path / "artifacts"),
+        background=False,
+    )
+
+    execution_repo = get_runtime_database().execution
+    steps = execution_repo.list_execution_steps(record.run_id)
+    verifications = execution_repo.list_verifications(record.run_id)
+    checkpoints = execution_repo.list_checkpoints(record.run_id)
+
+    assert record.status == "completed"
+    assert any(step["tool_name"] == "execute_artifact_flow" and step["status"] == "completed" for step in steps)
+    assert any(step["tool_name"] == "review_artifact_output" for step in steps)
+    assert any(item["method"] == "artifact_review" and item["status"] == "passed" for item in verifications)
+    assert any(item["step_id"] == "review_artifact_output" for item in checkpoints)

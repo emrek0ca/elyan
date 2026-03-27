@@ -24,14 +24,6 @@ def _safe_json(value: Any) -> Any:
         return str(value)
 
 
-def _runtime_connectors_repo():
-    try:
-        repo = getattr(get_runtime_database(), "connectors", None)
-    except Exception:
-        return None
-    return repo
-
-
 def _workspace_id_from_payload(payload: dict[str, Any]) -> str:
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
     workspace_id = str(payload.get("workspace_id") or metadata.get("workspace_id") or "").strip()
@@ -75,11 +67,20 @@ class IntegrationTraceRecord:
 
 
 class IntegrationTraceStore:
-    def __init__(self, storage_root: Path | None = None) -> None:
+    def __init__(self, storage_root: Path | None = None, *, use_runtime_db: bool | None = None) -> None:
         self.storage_root = Path(storage_root or (resolve_elyan_data_dir() / "integrations")).expanduser()
         self.storage_root.mkdir(parents=True, exist_ok=True)
         self.trace_path = self.storage_root / "integration_traces.jsonl"
         self._lock = threading.Lock()
+        self._use_runtime_db = bool(use_runtime_db) if use_runtime_db is not None else storage_root is None
+
+    def _runtime_connectors_repo(self):
+        if not self._use_runtime_db:
+            return None
+        try:
+            return getattr(get_runtime_database(), "connectors", None)
+        except Exception:
+            return None
 
     def record_trace(
         self,
@@ -133,7 +134,7 @@ class IntegrationTraceStore:
         )
         payload = record.to_dict()
         payload["workspace_id"] = _workspace_id_from_payload(payload)
-        repo = _runtime_connectors_repo()
+        repo = self._runtime_connectors_repo()
         if repo is not None:
             try:
                 repo.record_trace(payload)
@@ -160,7 +161,7 @@ class IntegrationTraceStore:
         low_operation = str(operation or "").strip().lower()
         low_connector = str(connector_name or "").strip().lower()
         low_type = str(integration_type or "").strip().lower()
-        repo = _runtime_connectors_repo()
+        repo = self._runtime_connectors_repo()
         if repo is not None:
             try:
                 rows = repo.list_traces(
@@ -217,7 +218,7 @@ class IntegrationTraceStore:
         return rows
 
     def summary(self, *, limit: int = 200) -> dict[str, Any]:
-        repo = _runtime_connectors_repo()
+        repo = self._runtime_connectors_repo()
         if repo is not None:
             try:
                 summary = repo.summary(limit=limit)
