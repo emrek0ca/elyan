@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Elyan",
+  "version": "0.1.0",
+  "identifier": "ai.elyan.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Elyan",
+        "width": 1440,
+        "height": 920,
+        "minWidth": 1280,
+        "minHeight": 820,
+        "resizable": true,
+        "maximized": false,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://127.0.0.1:1420 http://localhost:1420; font-src 'self' data:; connect-src 'self' http://127.0.0.1:1420 http://localhost:1420 http://127.0.0.1:18789 http://localhost:18789 ws://127.0.0.1:1420 ws://localhost:1420 ws://127.0.0.1:18789 ws://localhost:18789 tauri: asset:;"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all"
+  }
+}

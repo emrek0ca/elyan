@@ -5,27 +5,42 @@ Workflow State Machine — Manage workflow run states and transitions.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Optional, List
 from datetime import datetime
+from enum import Enum
+from typing import List, Optional
 
 from utils.logger import get_logger
+
+from .contracts import WorkflowLifecycleState, get_allowed_transitions
 
 logger = get_logger("workflow.state_machine")
 
 
 class WorkflowState(Enum):
-    """Workflow run state."""
-    IDLE = "idle"
-    RUNNING = "running"
-    PAUSED = "paused"
-    DONE = "done"
-    FAILED = "failed"
+    """Workflow run state with canonical lifecycle values and legacy aliases."""
+
+    IDLE = WorkflowLifecycleState.RECEIVED.value
+    RECEIVED = WorkflowLifecycleState.RECEIVED.value
+    CLASSIFIED = WorkflowLifecycleState.CLASSIFIED.value
+    SCOPED = WorkflowLifecycleState.SCOPED.value
+    PLANNED = WorkflowLifecycleState.PLANNED.value
+    GATHERING_CONTEXT = WorkflowLifecycleState.GATHERING_CONTEXT.value
+    RUNNING = WorkflowLifecycleState.EXECUTING.value
+    EXECUTING = WorkflowLifecycleState.EXECUTING.value
+    REVIEWING = WorkflowLifecycleState.REVIEWING.value
+    REVISING = WorkflowLifecycleState.REVISING.value
+    READY_FOR_APPROVAL = WorkflowLifecycleState.READY_FOR_APPROVAL.value
+    EXPORTING = WorkflowLifecycleState.EXPORTING.value
+    PAUSED = WorkflowLifecycleState.PAUSED.value
+    DONE = WorkflowLifecycleState.COMPLETED.value
+    COMPLETED = WorkflowLifecycleState.COMPLETED.value
+    FAILED = WorkflowLifecycleState.FAILED.value
 
 
 @dataclass
 class WorkflowRun:
     """Represents a workflow execution run."""
+
     run_id: str
     workflow_id: str
     state: WorkflowState
@@ -37,8 +52,11 @@ class WorkflowRun:
     def transition_to(self, new_state: WorkflowState, metadata: Optional[dict] = None):
         """Transition to new state."""
         old_state = self.state
-        self.state = new_state
+        allowed = get_allowed_transitions(old_state.value)
+        if old_state != new_state and new_state.value not in allowed:
+            raise ValueError(f"Illegal workflow transition: {old_state.value} -> {new_state.value}")
 
+        self.state = new_state
         history_entry = {
             "timestamp": datetime.now().isoformat(),
             "from": old_state.value,
@@ -46,7 +64,6 @@ class WorkflowRun:
             "metadata": metadata or {},
         }
         self.history.append(history_entry)
-
         logger.info(f"Run {self.run_id}: {old_state.value} → {new_state.value}")
 
     def to_dict(self) -> dict:
@@ -66,12 +83,13 @@ class WorkflowStateMachine:
     """Manage workflow run states."""
 
     def __init__(self):
-        self.runs = {}  # run_id -> WorkflowRun
+        self.runs = {}
 
     def start_run(self, workflow_id: str, run_id: Optional[str] = None) -> WorkflowRun:
         """Start a new workflow run."""
         if not run_id:
             import uuid
+
             run_id = str(uuid.uuid4())[:12]
 
         run = WorkflowRun(
@@ -100,8 +118,12 @@ class WorkflowStateMachine:
             logger.warning(f"Run not found: {run_id}")
             return False
 
-        run.transition_to(new_state, metadata)
-        return True
+        try:
+            run.transition_to(new_state, metadata)
+            return True
+        except ValueError as exc:
+            logger.warning(str(exc))
+            return False
 
 
 __all__ = [

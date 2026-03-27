@@ -1,0 +1,542 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use serde::Serialize;
+use std::{
+    collections::VecDeque,
+    env,
+    io::{BufRead, BufReader, Read, Write},
+    net::TcpStream,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    sync::{Arc, Mutex},
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+const DEFAULT_PORT: u16 = 18789;
+const MAX_LOG_LINES: usize = 240;
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SidecarHealth {
+    status: String,
+    managed: bool,
+    port: u16,
+    runtime_url: String,
+    admin_token: Option<String>,
+    pid: Option<u32>,
+    project_dir: Option<String>,
+    retries: u32,
+    last_error: Option<String>,
+    last_started_at: Option<String>,
+    last_ready_at: Option<String>,
+}
+
+impl Default for SidecarHealth {
+    fn default() -> Self {
+        Self {
+            status: "offline".to_string(),
+            managed: false,
+            port: DEFAULT_PORT,
+            runtime_url: runtime_url(DEFAULT_PORT),
+            admin_token: None,
+            pid: None,
+            project_dir: None,
+            retries: 0,
+            last_error: None,
+            last_started_at: None,
+            last_ready_at: None,
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct SidecarSupervisor {
+    child: Arc<Mutex<Option<Child>>>,
+    logs: Arc<Mutex<VecDeque<String>>>,
+    health: Arc<Mutex<SidecarHealth>>,
+}
+
+impl SidecarSupervisor {
+    fn boot(&self) -> Result<SidecarHealth, String> {
+        self.reconcile_child_state();
+
+        if self.health_probe(DEFAULT_PORT) {
+            return Ok(self.set_health(|health| {
+                health.status = "healthy".to_string();
+                health.port = DEFAULT_PORT;
+                health.runtime_url = runtime_url(DEFAULT_PORT);
+                if health.pid.is_none() {
+                    health.managed = false;
+                }
+                if health.last_ready_at.is_none() {
+                    health.last_ready_at = Some(now_stamp());
+                }
+                health.clone()
+            }));
+        }
+
+        {
+            let child = self.child.lock().expect("sidecar child lock poisoned");
+            if child.is_some() {
+                return Ok(self.health_snapshot());
+            }
+        }
+
+        let project_dir = resolve_project_dir()
+            .ok_or_else(|| "Elyan project root could not be resolved for the managed runtime".to_string())?;
+        let admin_token = self
+            .health_snapshot()
+            .admin_token
+            .unwrap_or_else(generate_admin_token);
+        let mut child = spawn_runtime_process(&project_dir, DEFAULT_PORT, &admin_token)?;
+        let pid = child.id();
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        if let Some(reader) = stdout {
+            spawn_log_reader(self.logs.clone(), "stdout", reader);
+        }
+        if let Some(reader) = stderr {
+            spawn_log_reader(self.logs.clone(), "stderr", reader);
+        }
+
+        {
+            let mut slot = self.child.lock().expect("sidecar child lock poisoned");
+            *slot = Some(child);
+        }
+
+        self.push_log_line("supervisor", format!("managed runtime launched on port {}", DEFAULT_PORT));
+
+        let project_dir_str = project_dir.to_string_lossy().to_string();
+        self.set_health(|health| {
+            health.status = "starting".to_string();
+            health.managed = true;
+            health.port = DEFAULT_PORT;
+            health.admin_token = Some(admin_token.clone());
+            health.pid = Some(pid);
+            health.project_dir = Some(project_dir_str.clone());
+            health.runtime_url = runtime_url(DEFAULT_PORT);
+            health.last_started_at = Some(now_stamp());
+            health.last_error = None;
+            health.clone()
+        });
+
+        for _ in 0..60 {
+            thread::sleep(Duration::from_millis(250));
+            self.reconcile_child_state();
+            if self.health_probe(DEFAULT_PORT) {
+                return Ok(self.set_health(|health| {
+                    health.status = "healthy".to_string();
+                    health.last_ready_at = Some(now_stamp());
+                    health.clone()
+                }));
+            }
+        }
+
+        Ok(self.set_health(|health| {
+            health.status = "degraded".to_string();
+            health.last_error = Some("Runtime launch timed out before readiness probe passed".to_string());
+            health.clone()
+        }))
+    }
+
+    fn stop(&self) -> Result<SidecarHealth, String> {
+        self.reconcile_child_state();
+        let mut child_slot = self.child.lock().expect("sidecar child lock poisoned");
+        if let Some(child) = child_slot.as_mut() {
+            child.kill().map_err(|err| err.to_string())?;
+            let _ = child.wait();
+            self.push_log_line("supervisor", "managed runtime stopped".to_string());
+        }
+        *child_slot = None;
+        drop(child_slot);
+
+        if self.health_probe(DEFAULT_PORT) {
+            return Ok(self.set_health(|health| {
+                health.status = "healthy".to_string();
+                health.managed = false;
+                health.pid = None;
+                health.clone()
+            }));
+        }
+
+        Ok(self.set_health(|health| {
+            health.status = "stopped".to_string();
+            health.managed = false;
+            health.pid = None;
+            health.clone()
+        }))
+    }
+
+    fn restart(&self) -> Result<SidecarHealth, String> {
+        self.stop()?;
+        self.set_health(|health| {
+            health.retries = health.retries.saturating_add(1);
+            health.clone()
+        });
+        self.boot()
+    }
+
+    fn get_health(&self) -> SidecarHealth {
+        self.reconcile_child_state();
+        if self.health_probe(DEFAULT_PORT) {
+            return self.set_health(|health| {
+                if health.status != "healthy" {
+                    health.status = "healthy".to_string();
+                    health.last_ready_at = Some(now_stamp());
+                }
+                health.runtime_url = runtime_url(DEFAULT_PORT);
+                if health.pid.is_none() {
+                    health.managed = false;
+                }
+                health.clone()
+            });
+        }
+        self.health_snapshot()
+    }
+
+    fn get_logs(&self) -> Vec<String> {
+        let logs = self.logs.lock().expect("sidecar logs lock poisoned");
+        logs.iter().cloned().collect()
+    }
+
+    fn reconcile_child_state(&self) {
+        let mut child_slot = self.child.lock().expect("sidecar child lock poisoned");
+        let mut exit_message = None;
+
+        if let Some(child) = child_slot.as_mut() {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    exit_message = Some(format!(
+                        "managed runtime exited with code {}",
+                        status.code().unwrap_or(-1)
+                    ));
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    exit_message = Some(format!("managed runtime status check failed: {err}"));
+                }
+            }
+        }
+
+        if let Some(message) = exit_message {
+            *child_slot = None;
+            drop(child_slot);
+            self.push_log_line("supervisor", message.clone());
+            self.set_health(|health| {
+                health.status = "error".to_string();
+                health.managed = false;
+                health.pid = None;
+                health.last_error = Some(message.clone());
+                health.clone()
+            });
+        }
+    }
+
+    fn health_probe(&self, port: u16) -> bool {
+        let addr = format!("127.0.0.1:{port}");
+        let Ok(mut stream) = TcpStream::connect_timeout(
+            &addr.parse().unwrap_or_else(|_| "127.0.0.1:18789".parse().expect("valid default addr")),
+            Duration::from_millis(300),
+        ) else {
+            return false;
+        };
+
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+        let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+        if stream
+            .write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+            .is_err()
+        {
+            return true;
+        }
+
+        let mut buffer = [0_u8; 256];
+        match stream.read(&mut buffer) {
+            Ok(bytes) if bytes > 0 => String::from_utf8_lossy(&buffer[..bytes]).contains("200"),
+            _ => true,
+        }
+    }
+
+    fn health_snapshot(&self) -> SidecarHealth {
+        self.health.lock().expect("sidecar health lock poisoned").clone()
+    }
+
+    fn set_health(&self, mutate: impl FnOnce(&mut SidecarHealth) -> SidecarHealth) -> SidecarHealth {
+        let mut health = self.health.lock().expect("sidecar health lock poisoned");
+        mutate(&mut health)
+    }
+
+    fn push_log_line(&self, prefix: &str, line: String) {
+        let mut logs = self.logs.lock().expect("sidecar logs lock poisoned");
+        while logs.len() >= MAX_LOG_LINES {
+            logs.pop_front();
+        }
+        logs.push_back(format!("[{}] {}", prefix, line.trim_end()));
+    }
+}
+
+fn spawn_log_reader<R: Read + Send + 'static>(logs: Arc<Mutex<VecDeque<String>>>, prefix: &'static str, reader: R) {
+    thread::spawn(move || {
+        let lines = BufReader::new(reader).lines();
+        for line in lines {
+            let Ok(line) = line else {
+                break;
+            };
+            let mut locked = logs.lock().expect("sidecar logs lock poisoned");
+            while locked.len() >= MAX_LOG_LINES {
+                locked.pop_front();
+            }
+            locked.push_back(format!("[{}] {}", prefix, line.trim_end()));
+        }
+    });
+}
+
+fn resolve_project_dir() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(path) = env::var("ELYAN_PROJECT_DIR") {
+        candidates.push(PathBuf::from(path));
+    }
+
+    if let Ok(path) = env::current_dir() {
+        candidates.push(path);
+    }
+
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+
+    if let Ok(path) = env::current_exe() {
+        if let Some(parent) = path.parent() {
+            candidates.push(parent.to_path_buf());
+        }
+    }
+
+    for candidate in candidates {
+        for ancestor in candidate.ancestors() {
+            if is_project_root(ancestor) {
+                return Some(ancestor.to_path_buf());
+            }
+        }
+    }
+
+    None
+}
+
+fn is_project_root(path: &Path) -> bool {
+    path.join("elyan_entrypoint.py").exists() && path.join("main.py").exists()
+}
+
+fn spawn_runtime_process(project_dir: &Path, port: u16, admin_token: &str) -> Result<Child, String> {
+    let launcher = project_dir.join("elyan_entrypoint.py");
+    let port_str = port.to_string();
+
+    let mut attempts: Vec<(String, Vec<String>)> = Vec::new();
+    if let Ok(python) = env::var("ELYAN_PYTHON") {
+        attempts.push((
+            python,
+            vec![
+                launcher.to_string_lossy().to_string(),
+                "start".to_string(),
+                "--port".to_string(),
+                port_str.clone(),
+            ],
+        ));
+    }
+
+    if cfg!(target_os = "windows") {
+        attempts.push((
+            "py".to_string(),
+            vec![
+                "-3".to_string(),
+                launcher.to_string_lossy().to_string(),
+                "start".to_string(),
+                "--port".to_string(),
+                port_str.clone(),
+            ],
+        ));
+        attempts.push((
+            "python".to_string(),
+            vec![
+                launcher.to_string_lossy().to_string(),
+                "start".to_string(),
+                "--port".to_string(),
+                port_str.clone(),
+            ],
+        ));
+    } else {
+        attempts.push((
+            "python3".to_string(),
+            vec![
+                launcher.to_string_lossy().to_string(),
+                "start".to_string(),
+                "--port".to_string(),
+                port_str.clone(),
+            ],
+        ));
+        attempts.push((
+            "python".to_string(),
+            vec![
+                launcher.to_string_lossy().to_string(),
+                "start".to_string(),
+                "--port".to_string(),
+                port_str.clone(),
+            ],
+        ));
+    }
+
+    let mut last_error = String::from("No Python launcher candidate succeeded");
+
+    for (program, args) in attempts {
+        let mut command = Command::new(&program);
+        command
+            .args(args)
+            .current_dir(project_dir)
+            .env("ELYAN_PROJECT_DIR", project_dir)
+            .env("ELYAN_ADMIN_TOKEN", admin_token)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        match command.spawn() {
+            Ok(child) => return Ok(child),
+            Err(err) => {
+                last_error = format!("{program}: {err}");
+            }
+        }
+    }
+
+    Err(last_error)
+}
+
+fn runtime_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}")
+}
+
+fn now_stamp() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .to_string()
+}
+
+fn generate_admin_token() -> String {
+    let epoch_nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("elyan-desktop-{}-{}", std::process::id(), epoch_nanos)
+}
+
+fn open_path(path: &str) -> bool {
+    let path = PathBuf::from(path);
+    if !path.exists() {
+        return false;
+    }
+
+    let status = if cfg!(target_os = "macos") {
+        Command::new("open").arg(&path).status()
+    } else if cfg!(target_os = "windows") {
+        Command::new("cmd")
+            .args(["/C", "start", "", path.to_string_lossy().as_ref()])
+            .status()
+    } else {
+        Command::new("xdg-open").arg(&path).status()
+    };
+
+    status.map(|value| value.success()).unwrap_or(false)
+}
+
+fn open_external(target: &str) -> bool {
+    let url = target.trim();
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return false;
+    }
+
+    let status = if cfg!(target_os = "macos") {
+        Command::new("open").arg(url).status()
+    } else if cfg!(target_os = "windows") {
+        Command::new("cmd").args(["/C", "start", "", url]).status()
+    } else {
+        Command::new("xdg-open").arg(url).status()
+    };
+
+    status.map(|value| value.success()).unwrap_or(false)
+}
+
+fn reveal_path(path: &str) -> bool {
+    let path = PathBuf::from(path);
+    if !path.exists() {
+        return false;
+    }
+
+    let status = if cfg!(target_os = "macos") {
+        Command::new("open").args(["-R", path.to_string_lossy().as_ref()]).status()
+    } else if cfg!(target_os = "windows") {
+        Command::new("explorer")
+            .arg(format!("/select,{}", path.to_string_lossy()))
+            .status()
+    } else {
+        let folder = path.parent().unwrap_or_else(|| Path::new("/"));
+        Command::new("xdg-open").arg(folder).status()
+    };
+
+    status.map(|value| value.success()).unwrap_or(false)
+}
+
+#[tauri::command]
+fn boot_runtime(supervisor: tauri::State<'_, SidecarSupervisor>) -> Result<SidecarHealth, String> {
+    supervisor.boot()
+}
+
+#[tauri::command]
+fn stop_runtime(supervisor: tauri::State<'_, SidecarSupervisor>) -> Result<SidecarHealth, String> {
+    supervisor.stop()
+}
+
+#[tauri::command]
+fn restart_runtime(supervisor: tauri::State<'_, SidecarSupervisor>) -> Result<SidecarHealth, String> {
+    supervisor.restart()
+}
+
+#[tauri::command]
+fn get_runtime_health(supervisor: tauri::State<'_, SidecarSupervisor>) -> SidecarHealth {
+    supervisor.get_health()
+}
+
+#[tauri::command]
+fn get_runtime_logs(supervisor: tauri::State<'_, SidecarSupervisor>) -> Vec<String> {
+    supervisor.get_logs()
+}
+
+#[tauri::command]
+fn open_artifact(path: String) -> bool {
+    open_path(&path)
+}
+
+#[tauri::command]
+fn reveal_in_folder(path: String) -> bool {
+    reveal_path(&path)
+}
+
+#[tauri::command]
+fn open_external_url(url: String) -> bool {
+    open_external(&url)
+}
+
+fn main() {
+    tauri::Builder::default()
+        .manage(SidecarSupervisor::default())
+        .invoke_handler(tauri::generate_handler![
+            boot_runtime,
+            stop_runtime,
+            restart_runtime,
+            get_runtime_health,
+            get_runtime_logs,
+            open_artifact,
+            reveal_in_folder,
+            open_external_url
+        ])
+        .run(tauri::generate_context!())
+        .expect("failed to run Elyan desktop shell");
+}

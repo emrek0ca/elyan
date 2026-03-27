@@ -46,6 +46,7 @@ from core.project_packs import build_pack_overview, normalize_pack
 from core.confidence import coerce_confidence
 from core.mission_control import get_mission_runtime
 from core.storage_paths import resolve_elyan_data_dir, resolve_runs_root
+from core.security.ingress_guard import blocked_ingress_text, inspect_ingress
 from elyan.dashboard.routes.trace import render_trace_page
 from elyan.verifier.evidence import build_trace_bundle, resolve_evidence_path
 from core.text_artifacts import existing_text_path
@@ -63,6 +64,7 @@ logger = get_logger("gateway_server")
 _dashboard_ws_clients: Set[web.WebSocketResponse] = set()
 _activity_log: list = []  # Rolling buffer of last 50 events
 _tool_event_log: list = []  # Rolling buffer of last 200 tool events
+_cowork_event_log: list = []  # Rolling buffer of last 200 cowork events
 _start_time: float = time.time()
 _tool_health_cache: dict = {
     "ts": 0.0,
@@ -82,6 +84,9 @@ _ADMIN_READ_PATHS = {
     "/api/logs",
     "/api/security/events",
     "/api/security/pending",
+    "/api/v1/security/events",
+    "/api/v1/security/summary",
+    "/api/v1/approvals/pending",
     "/api/privacy/export",
     "/api/interventions",
     "/api/tool-requests",
@@ -90,12 +95,31 @@ _ADMIN_READ_PATHS = {
     "/api/integrations/accounts",
     "/api/integrations/traces",
     "/api/integrations/summary",
+    "/api/v1/cowork/home",
+    "/api/v1/cowork/threads",
+    "/api/v1/billing/workspace",
+    "/api/v1/billing/usage",
+    "/api/v1/billing/entitlements",
+    "/api/v1/connectors",
+    "/api/v1/connectors/accounts",
+    "/api/v1/connectors/traces",
+    "/api/v1/connectors/health",
     "/api/autopilot/status",
 }
 _LOCAL_DASHBOARD_WRITE_PATHS = {
     "/api/missions",
     "/api/missions/approvals/resolve",
     "/api/missions/skills/save",
+    "/api/v1/cowork/threads",
+    "/api/v1/cowork/approvals/resolve",
+    "/api/v1/billing/checkout-session",
+    "/api/v1/billing/portal-session",
+    "/api/v1/billing/webhooks/stripe",
+    "/api/v1/connectors/google_drive/connect",
+    "/api/v1/connectors/gmail/connect",
+    "/api/v1/connectors/google_calendar/connect",
+    "/api/v1/connectors/slack/connect",
+    "/api/v1/connectors/github/connect",
     "/api/models",
     "/api/agent/profile",
     "/api/autopilot/start",
@@ -239,6 +263,18 @@ def push_hint(text: str, icon: str = "lightbulb", color: str = "yellow"):
         "ts": time.strftime("%H:%M:%S")
     }
     _schedule_background(_broadcast_event, "hint", payload)
+
+
+def push_cowork_event(event_type: str, payload: dict[str, Any]):
+    entry = {
+        "ts": time.strftime("%H:%M:%S"),
+        "event_type": str(event_type or "cowork.delta").strip() or "cowork.delta",
+        "payload": _sanitize_stream_payload(payload or {}),
+    }
+    _cowork_event_log.append(entry)
+    if len(_cowork_event_log) > 200:
+        _cowork_event_log.pop(0)
+    _schedule_background(_broadcast_event, entry["event_type"], entry["payload"])
 
 
 def _schedule_background(coro_func, *args):
@@ -690,7 +726,7 @@ class ElyanGatewayServer:
         
         from core.runtime.orchestrator import TaskOrchestrator
         self.orchestrator = TaskOrchestrator(self)
-        
+
         from core.runtime.scheduler import MissionScheduler
         self.scheduler = MissionScheduler(self.orchestrator)
         
@@ -708,6 +744,35 @@ class ElyanGatewayServer:
             detail += f" ({status})"
         push_activity("mission", "dashboard", detail[:80], status not in {"failed", "denied"})
         _schedule_background(_broadcast_event, "mission_event", _sanitize_stream_payload(payload))
+        mission = self._mission_store().get_mission(mission_id) if mission_id else None
+        metadata = mission.metadata if mission and isinstance(mission.metadata, dict) else {}
+        thread_id = str(metadata.get("thread_id") or "").strip()
+        if not thread_id:
+            return
+        workspace_id = str(metadata.get("workspace_id") or "").strip()
+        raw_event_type = str(payload.get("event_type") or event.get("event_type") or "").strip().lower()
+        cowork_event_type = "cowork.thread.updated"
+        if raw_event_type == "approval.requested":
+            cowork_event_type = "cowork.approval.requested"
+        elif raw_event_type == "approval.resolved":
+            cowork_event_type = "cowork.approval.resolved"
+        elif raw_event_type == "mission.running":
+            cowork_event_type = "cowork.turn.started"
+        elif raw_event_type in {"mission.completed", "mission.failed"}:
+            cowork_event_type = "cowork.turn.completed"
+        push_cowork_event(
+            cowork_event_type,
+            {
+                "thread_id": thread_id,
+                "workspace_id": workspace_id,
+                "mission_id": mission_id,
+                "status": status or (mission.status if mission else ""),
+                "label": label,
+                "event_type": raw_event_type or "mission_event",
+                "pending_approvals": len([item for item in mission.approvals if item.status == "pending"]) if mission else 0,
+                "current_mode": str(metadata.get("current_mode") or "cowork"),
+            },
+        )
 
     def _mission_store(self):
         store = getattr(self, "mission_runtime", None)
@@ -715,6 +780,102 @@ class ElyanGatewayServer:
             store = get_mission_runtime()
             self.mission_runtime = store
         return store
+
+    def _cowork_store(self):
+        from core.cowork_threads import get_cowork_thread_store
+
+        return get_cowork_thread_store()
+
+    def _workspace_billing(self):
+        from core.billing.workspace_billing import get_workspace_billing_store
+
+        return get_workspace_billing_store()
+
+    @staticmethod
+    def _workspace_id(request, payload: dict[str, Any] | None = None) -> str:
+        query_workspace = str(request.rel_url.query.get("workspace_id", "") or "").strip()
+        body_workspace = str((payload or {}).get("workspace_id") or "").strip()
+        return body_workspace or query_workspace or "local-workspace"
+
+    @staticmethod
+    def _connector_catalog() -> list[dict[str, Any]]:
+        return [
+            {
+                "connector": "google_drive",
+                "provider": "drive",
+                "label": "Google Drive",
+                "category": "work_suite",
+                "integration_type": "api",
+                "capabilities": ["search_files", "read_docs", "upload_file"],
+                "scopes": ["https://www.googleapis.com/auth/drive.file"],
+            },
+            {
+                "connector": "gmail",
+                "provider": "gmail",
+                "label": "Gmail",
+                "category": "work_suite",
+                "integration_type": "email",
+                "capabilities": ["search_mail", "read_thread", "draft_reply"],
+                "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+            },
+            {
+                "connector": "google_calendar",
+                "provider": "calendar",
+                "label": "Google Calendar",
+                "category": "work_suite",
+                "integration_type": "api",
+                "capabilities": ["list_events", "create_event", "check_availability"],
+                "scopes": ["https://www.googleapis.com/auth/calendar"],
+            },
+            {
+                "connector": "slack",
+                "provider": "slack",
+                "label": "Slack",
+                "category": "work_suite",
+                "integration_type": "api",
+                "capabilities": ["list_channels", "read_messages", "post_message"],
+                "scopes": ["channels:read", "chat:write", "channels:history"],
+            },
+            {
+                "connector": "github",
+                "provider": "github",
+                "label": "GitHub",
+                "category": "work_suite",
+                "integration_type": "api",
+                "capabilities": ["read_repo", "issues", "pull_requests"],
+                "scopes": ["repo", "read:user"],
+            },
+        ]
+
+    @classmethod
+    def _connector_lookup(cls, connector_name: str) -> dict[str, Any] | None:
+        target = str(connector_name or "").strip().lower()
+        for item in cls._connector_catalog():
+            if str(item.get("connector") or "").strip().lower() == target:
+                return dict(item)
+        return None
+
+    @staticmethod
+    def _filter_workspace_accounts(accounts: list[dict[str, Any]], workspace_id: str) -> list[dict[str, Any]]:
+        if not workspace_id:
+            return accounts
+        filtered: list[dict[str, Any]] = []
+        for item in accounts:
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            if str(metadata.get("workspace_id") or "").strip() == workspace_id:
+                filtered.append(item)
+        return filtered
+
+    @staticmethod
+    def _filter_workspace_traces(traces: list[dict[str, Any]], workspace_id: str) -> list[dict[str, Any]]:
+        if not workspace_id:
+            return traces
+        filtered: list[dict[str, Any]] = []
+        for item in traces:
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            if str(metadata.get("workspace_id") or "").strip() == workspace_id:
+                filtered.append(item)
+        return filtered
 
     def _configured_cors_origins(self) -> set[str]:
         configured = elyan_config.get("gateway.cors.origins", []) or []
@@ -779,6 +940,8 @@ class ElyanGatewayServer:
             return True
         if path.startswith("/api/trace/") or path == "/api/evidence/file":
             return True
+        if path.startswith("/api/v1/cowork/") or path.startswith("/api/v1/billing/") or path.startswith("/api/v1/connectors/"):
+            return True
         if method in {"POST", "PUT", "PATCH", "DELETE"}:
             return True
         if method == "GET" and path in _ADMIN_READ_PATHS:
@@ -797,7 +960,7 @@ class ElyanGatewayServer:
                 resp.headers["Access-Control-Allow-Origin"] = allowed_origin
                 resp.headers["Access-Control-Allow-Credentials"] = "true"
             resp.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-            resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Elyan-Admin-Token"
+            resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Elyan-Admin-Token, X-Elyan-Session-Token, X-Elyan-CSRF"
             resp.headers["Vary"] = "Origin"
             return resp
         resp = await handler(request)
@@ -891,6 +1054,38 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/memory/profile', self.handle_get_profile)
         self.app.router.add_get('/api/activity', self.handle_activity_log)
         self.app.router.add_get('/api/runs/recent', self.handle_recent_runs)
+        self.app.router.add_get('/api/v1/runs', self.handle_v1_list_runs)
+        self.app.router.add_get('/api/v1/runs/{run_id}', self.handle_v1_get_run)
+        self.app.router.add_get('/api/v1/runs/{run_id}/timeline', self.handle_v1_get_run_timeline)
+        self.app.router.add_post('/api/v1/runs/{run_id}/cancel', self.handle_v1_cancel_run)
+        self.app.router.add_get('/api/v1/approvals/pending', self.handle_v1_pending_approvals)
+        self.app.router.add_post('/api/v1/approvals/resolve', self.handle_v1_resolve_approval)
+        self.app.router.add_post('/api/v1/approvals/bulk-resolve', self.handle_v1_bulk_resolve_approvals)
+        self.app.router.add_get('/api/v1/metrics/tools', self.handle_v1_tool_metrics)
+        self.app.router.add_get('/api/v1/metrics/multi-agent', self.handle_v1_multi_agent_metrics)
+        self.app.router.add_get('/api/v1/system/backends', self.handle_v1_runtime_backends)
+        self.app.router.add_get('/api/v1/security/summary', self.handle_v1_security_summary)
+        self.app.router.add_get('/api/v1/security/events', self.handle_v1_security_events)
+        self.app.router.add_post('/api/v1/workflows/start', self.handle_v1_start_workflow)
+        self.app.router.add_get('/api/v1/cowork/home', self.handle_v1_cowork_home)
+        self.app.router.add_get('/api/v1/cowork/threads', self.handle_v1_cowork_threads)
+        self.app.router.add_post('/api/v1/cowork/threads', self.handle_v1_cowork_threads)
+        self.app.router.add_get('/api/v1/cowork/threads/{thread_id}', self.handle_v1_cowork_thread_detail)
+        self.app.router.add_post('/api/v1/cowork/threads/{thread_id}/turns', self.handle_v1_cowork_thread_turn)
+        self.app.router.add_post('/api/v1/cowork/approvals/{approval_id}/resolve', self.handle_v1_cowork_resolve_approval)
+        self.app.router.add_get('/api/v1/billing/workspace', self.handle_v1_billing_workspace)
+        self.app.router.add_get('/api/v1/billing/usage', self.handle_v1_billing_usage)
+        self.app.router.add_get('/api/v1/billing/entitlements', self.handle_v1_billing_entitlements)
+        self.app.router.add_post('/api/v1/billing/checkout-session', self.handle_v1_billing_checkout)
+        self.app.router.add_post('/api/v1/billing/portal-session', self.handle_v1_billing_portal)
+        self.app.router.add_post('/api/v1/billing/webhooks/stripe', self.handle_v1_billing_webhook)
+        self.app.router.add_get('/api/v1/connectors', self.handle_v1_connectors)
+        self.app.router.add_get('/api/v1/connectors/accounts', self.handle_v1_connector_accounts)
+        self.app.router.add_post('/api/v1/connectors/{connector}/connect', self.handle_v1_connector_connect)
+        self.app.router.add_post('/api/v1/connectors/accounts/{account_id}/refresh', self.handle_v1_connector_refresh)
+        self.app.router.add_post('/api/v1/connectors/accounts/{account_id}/revoke', self.handle_v1_connector_revoke)
+        self.app.router.add_get('/api/v1/connectors/traces', self.handle_v1_connector_traces)
+        self.app.router.add_get('/api/v1/connectors/health', self.handle_v1_connector_health)
         self.app.router.add_get('/api/product/home', self.handle_product_home)
         self.app.router.add_get('/api/product/workflows', self.handle_product_workflows)
         self.app.router.add_get('/api/product/workflows/reports', self.handle_product_workflow_reports)
@@ -962,7 +1157,7 @@ class ElyanGatewayServer:
         self.app.router.add_post('/api/llm/setup/ollama-delete', self.handle_llm_setup_ollama_delete)
         self.app.router.add_get('/api/llm/setup/recommend', self.handle_llm_setup_recommend)
 
-        # ── Dashboard & Web UI ────────────────────────────────────────────────
+        # ── Dashboard & Web UI (deprecated: desktop-first) ───────────────────
         self.app.router.add_get('/', self.handle_dashboard_page)
         self.app.router.add_get('/dashboard', self.handle_dashboard_page)
         self.app.router.add_get('/trace/{task_id}', self.handle_trace_page)
@@ -1018,6 +1213,520 @@ class ElyanGatewayServer:
             })
         return web.json_response({"ok": True, "sessions": sessions})
 
+    def _dashboard_api(self):
+        from api.dashboard_api import get_dashboard_api
+
+        return get_dashboard_api()
+
+    async def handle_v1_list_runs(self, request):
+        try:
+            limit = int(request.rel_url.query.get("limit", 20))
+        except Exception:
+            limit = 20
+        status = str(request.rel_url.query.get("status", "") or "").strip() or None
+        return web.json_response(await self._dashboard_api().list_runs(limit=limit, status=status))
+
+    async def handle_v1_get_run(self, request):
+        run_id = str(request.match_info.get("run_id") or "").strip()
+        if not run_id:
+            return web.json_response({"success": False, "error": "run_id required"}, status=400)
+        return web.json_response(await self._dashboard_api().get_run(run_id))
+
+    async def handle_v1_get_run_timeline(self, request):
+        run_id = str(request.match_info.get("run_id") or "").strip()
+        if not run_id:
+            return web.json_response({"success": False, "error": "run_id required"}, status=400)
+        return web.json_response(await self._dashboard_api().get_step_timeline(run_id))
+
+    async def handle_v1_cancel_run(self, request):
+        run_id = str(request.match_info.get("run_id") or "").strip()
+        if not run_id:
+            return web.json_response({"success": False, "error": "run_id required"}, status=400)
+        return web.json_response(await self._dashboard_api().cancel_run(run_id))
+
+    async def handle_v1_pending_approvals(self, request):
+        return web.json_response(self._dashboard_api().get_pending_approvals())
+
+    async def handle_v1_resolve_approval(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"success": False, "error": "invalid json"}, status=400)
+        request_id = str(data.get("request_id") or data.get("id") or "").strip()
+        if not request_id:
+            return web.json_response({"success": False, "error": "request_id required"}, status=400)
+        approved = bool(data.get("approved", False))
+        resolver_id = str(data.get("resolver_id") or "desktop_operator").strip()
+        return web.json_response(self._dashboard_api().resolve_approval(request_id, approved, resolver_id))
+
+    async def handle_v1_bulk_resolve_approvals(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"success": False, "error": "invalid json"}, status=400)
+        request_ids = [str(item).strip() for item in (data.get("request_ids") or []) if str(item).strip()]
+        if not request_ids:
+            return web.json_response({"success": False, "error": "request_ids required"}, status=400)
+        approved = bool(data.get("approved", False))
+        resolver_id = str(data.get("resolver_id") or "desktop_operator").strip()
+        return web.json_response(self._dashboard_api().bulk_resolve_approvals(request_ids, approved, resolver_id))
+
+    async def handle_v1_tool_metrics(self, request):
+        return web.json_response(await self._dashboard_api().get_tool_metrics())
+
+    async def handle_v1_multi_agent_metrics(self, request):
+        return web.json_response(await self._dashboard_api().get_multi_agent_metrics())
+
+    async def handle_v1_runtime_backends(self, request):
+        return web.json_response(await self._dashboard_api().get_runtime_backends())
+
+    async def handle_v1_security_summary(self, request):
+        return web.json_response(await self._dashboard_api().get_security_summary())
+
+    async def handle_v1_security_events(self, request):
+        try:
+            limit = int(request.rel_url.query.get("limit", 40))
+        except Exception:
+            limit = 40
+        return web.json_response(await self._dashboard_api().get_security_events(limit=limit))
+
+    async def handle_v1_start_workflow(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"success": False, "error": "invalid json"}, status=400)
+
+        task_type = str(data.get("task_type") or data.get("workflow") or "").strip().lower()
+        brief = str(data.get("brief") or data.get("prompt") or "").strip()
+        if not task_type:
+            return web.json_response({"success": False, "error": "task_type required"}, status=400)
+        if not brief:
+            return web.json_response({"success": False, "error": "brief required"}, status=400)
+
+        from core.workflow.vertical_runner import get_vertical_workflow_runner
+
+        try:
+            record = await get_vertical_workflow_runner().start_workflow(
+                task_type=task_type,
+                brief=brief,
+                session_id=str(data.get("session_id") or "desktop").strip() or "desktop",
+                title=str(data.get("title") or data.get("project_name") or "").strip(),
+                audience=str(data.get("audience") or "executive").strip() or "executive",
+                language=str(data.get("language") or "tr").strip() or "tr",
+                theme=str(data.get("theme") or "premium").strip() or "premium",
+                stack=str(data.get("stack") or "react").strip() or "react",
+                preferred_formats=data.get("preferred_formats"),
+                project_template_id=str(data.get("project_template_id") or "").strip(),
+                project_name=str(data.get("project_name") or data.get("title") or "").strip(),
+                routing_profile=str(data.get("routing_profile") or "balanced").strip() or "balanced",
+                review_strictness=str(data.get("review_strictness") or "balanced").strip() or "balanced",
+                output_dir=str(data.get("output_dir") or "").strip(),
+                thread_id=str(data.get("thread_id") or "").strip(),
+                workspace_id=self._workspace_id(request, data),
+                background=True,
+            )
+        except ValueError as exc:
+            return web.json_response({"success": False, "error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"success": False, "error": str(exc)}, status=500)
+
+        push_activity("workflow_run", "desktop", f"{task_type} flow started", True)
+        return web.json_response(
+            {
+                "success": True,
+                "accepted": True,
+                "run_id": record.run_id,
+                "task_type": record.task_type,
+                "workflow_state": record.workflow_state,
+                "run": record.to_dict(),
+            }
+        )
+
+    async def handle_v1_cowork_home(self, request):
+        workspace_id = self._workspace_id(request)
+        home = await self._cowork_store().home_snapshot(workspace_id=workspace_id, limit=8)
+        approvals = self._mission_store().pending_approvals(owner=workspace_id)
+        billing = self._workspace_billing().get_workspace_summary(workspace_id)
+        return web.json_response(
+            {
+                "success": True,
+                "workspace_id": workspace_id,
+                "recent_threads": home.get("recent_threads", []),
+                "last_thread": home.get("last_thread"),
+                "active_count": home.get("active_count", 0),
+                "pending_approvals": approvals[:12],
+                "billing": billing,
+            }
+        )
+
+    async def handle_v1_cowork_threads(self, request):
+        workspace_id = self._workspace_id(request)
+        if request.method == "GET":
+            try:
+                limit = int(request.rel_url.query.get("limit", 20))
+            except Exception:
+                limit = 20
+            threads = await self._cowork_store().list_threads(workspace_id=workspace_id, limit=limit)
+            return web.json_response({"success": True, "threads": threads, "workspace_id": workspace_id})
+
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"success": False, "error": "invalid json"}, status=400)
+        prompt = str(data.get("prompt") or data.get("brief") or "").strip()
+        if not prompt:
+            return web.json_response({"success": False, "error": "prompt required"}, status=400)
+        limit_state = self._workspace_billing().enforce_limit(
+            workspace_id,
+            metric="max_threads",
+            current_value=await self._cowork_store().count_threads(workspace_id=workspace_id),
+        )
+        if not limit_state.get("allowed", True):
+            return web.json_response({"success": False, "error": str(limit_state.get("reason") or "thread limit reached"), "limit": limit_state}, status=402)
+        detail = await self._cowork_store().create_thread(
+            prompt=prompt,
+            workspace_id=workspace_id,
+            session_id=str(data.get("session_id") or "desktop").strip() or "desktop",
+            preferred_mode=str(data.get("current_mode") or data.get("mode") or "").strip(),
+            project_template_id=str(data.get("project_template_id") or "").strip(),
+            routing_profile=str(data.get("routing_profile") or "balanced").strip() or "balanced",
+            review_strictness=str(data.get("review_strictness") or "balanced").strip() or "balanced",
+            user_id=workspace_id,
+            agent=self.agent,
+            metadata={
+                "project_template_id": str(data.get("project_template_id") or "").strip(),
+                "project_name": str(data.get("project_name") or "").strip(),
+            },
+        )
+        self._workspace_billing().record_usage(
+            workspace_id,
+            "cowork_threads",
+            1,
+            metadata={"thread_id": detail.get("thread_id"), "mode": detail.get("current_mode")},
+        )
+        push_cowork_event("cowork.thread.updated", detail)
+        return web.json_response({"success": True, "thread": detail, "workspace_id": workspace_id})
+
+    async def handle_v1_cowork_thread_detail(self, request):
+        thread_id = str(request.match_info.get("thread_id") or "").strip()
+        if not thread_id:
+            return web.json_response({"success": False, "error": "thread_id required"}, status=400)
+        try:
+            detail = await self._cowork_store().get_thread_detail(thread_id)
+        except KeyError:
+            return web.json_response({"success": False, "error": "thread not found"}, status=404)
+        return web.json_response({"success": True, "thread": detail})
+
+    async def handle_v1_cowork_thread_turn(self, request):
+        thread_id = str(request.match_info.get("thread_id") or "").strip()
+        if not thread_id:
+            return web.json_response({"success": False, "error": "thread_id required"}, status=400)
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"success": False, "error": "invalid json"}, status=400)
+        prompt = str(data.get("prompt") or "").strip()
+        if not prompt:
+            return web.json_response({"success": False, "error": "prompt required"}, status=400)
+        try:
+            detail = await self._cowork_store().add_turn(
+                thread_id,
+                prompt=prompt,
+                preferred_mode=str(data.get("current_mode") or data.get("mode") or "").strip(),
+                project_template_id=str(data.get("project_template_id") or "").strip(),
+                routing_profile=str(data.get("routing_profile") or "balanced").strip() or "balanced",
+                review_strictness=str(data.get("review_strictness") or "balanced").strip() or "balanced",
+                user_id=self._workspace_id(request, data),
+                agent=self.agent,
+            )
+        except KeyError:
+            return web.json_response({"success": False, "error": "thread not found"}, status=404)
+        except ValueError as exc:
+            return web.json_response({"success": False, "error": str(exc)}, status=400)
+        push_cowork_event("cowork.thread.updated", detail)
+        return web.json_response({"success": True, "thread": detail})
+
+    async def handle_v1_cowork_resolve_approval(self, request):
+        approval_id = str(request.match_info.get("approval_id") or "").strip()
+        if not approval_id:
+            return web.json_response({"success": False, "error": "approval_id required"}, status=400)
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        mission = await self._mission_store().resolve_approval(
+            approval_id,
+            bool(data.get("approved", False)),
+            note=str(data.get("note") or "").strip(),
+            agent=self.agent,
+        )
+        if mission is None:
+            return web.json_response({"success": False, "error": "approval not found"}, status=404)
+        thread_id = str((mission.metadata or {}).get("thread_id") or "").strip()
+        detail = await self._cowork_store().get_thread_detail(thread_id) if thread_id else None
+        if detail is not None:
+            push_cowork_event("cowork.approval.resolved", detail)
+        return web.json_response({"success": True, "mission": mission.to_dict(), "thread": detail})
+
+    async def handle_v1_billing_workspace(self, request):
+        workspace_id = self._workspace_id(request)
+        return web.json_response({"success": True, "workspace": self._workspace_billing().get_workspace_summary(workspace_id)})
+
+    async def handle_v1_billing_usage(self, request):
+        workspace_id = self._workspace_id(request)
+        try:
+            limit = int(request.rel_url.query.get("limit", 100))
+        except Exception:
+            limit = 100
+        return web.json_response({"success": True, "usage": self._workspace_billing().get_usage(workspace_id, limit=limit)})
+
+    async def handle_v1_billing_entitlements(self, request):
+        workspace_id = self._workspace_id(request)
+        return web.json_response({"success": True, "entitlements": self._workspace_billing().get_entitlements(workspace_id)})
+
+    async def handle_v1_billing_checkout(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"success": False, "error": "invalid json"}, status=400)
+        workspace_id = self._workspace_id(request, data)
+        try:
+            payload = self._workspace_billing().create_checkout_session(
+                workspace_id=workspace_id,
+                plan_id=str(data.get("plan_id") or "pro").strip() or "pro",
+                success_url=str(data.get("success_url") or "https://tauri.localhost/billing/success").strip(),
+                cancel_url=str(data.get("cancel_url") or "https://tauri.localhost/billing/cancel").strip(),
+            )
+        except RuntimeError as exc:
+            return web.json_response({"success": False, "error": str(exc)}, status=503)
+        return web.json_response({"success": True, "checkout": payload})
+
+    async def handle_v1_billing_portal(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        workspace_id = self._workspace_id(request, data)
+        try:
+            payload = self._workspace_billing().create_portal_session(
+                workspace_id=workspace_id,
+                return_url=str(data.get("return_url") or "https://tauri.localhost/settings").strip(),
+            )
+        except RuntimeError as exc:
+            return web.json_response({"success": False, "error": str(exc)}, status=503)
+        return web.json_response({"success": True, "portal": payload})
+
+    async def handle_v1_billing_webhook(self, request):
+        payload = await request.read()
+        signature = str(request.headers.get("Stripe-Signature", "") or "").strip()
+        try:
+            result = self._workspace_billing().handle_webhook(payload, signature)
+        except RuntimeError as exc:
+            return web.json_response({"success": False, "error": str(exc)}, status=503)
+        return web.json_response({"success": True, "event": result})
+
+    async def handle_v1_connectors(self, request):
+        workspace_id = self._workspace_id(request)
+        accounts_response = await self.handle_v1_connector_accounts(request)
+        accounts_payload = json.loads(accounts_response.text)
+        traces_response = await self.handle_v1_connector_traces(request)
+        traces_payload = json.loads(traces_response.text)
+        accounts = list(accounts_payload.get("accounts") or [])
+        traces = list(traces_payload.get("traces") or [])
+        rows = []
+        for definition in self._connector_catalog():
+            provider = str(definition.get("provider") or "")
+            provider_accounts = [item for item in accounts if str(item.get("provider") or "").strip().lower() == provider]
+            provider_traces = [item for item in traces if str(item.get("provider") or "").strip().lower() == provider]
+            state = "connected" if any(str(item.get("status") or "").strip().lower() == "ready" for item in provider_accounts) else ("pending" if provider_accounts else "offline")
+            rows.append(
+                {
+                    **definition,
+                    "workspace_id": workspace_id,
+                    "account_count": len(provider_accounts),
+                    "trace_count": len(provider_traces),
+                    "status": state,
+                    "latest_trace": provider_traces[0] if provider_traces else None,
+                }
+            )
+        return web.json_response({"success": True, "connectors": rows})
+
+    async def handle_v1_connector_accounts(self, request):
+        from integrations import oauth_broker
+
+        workspace_id = self._workspace_id(request)
+        provider = str(request.rel_url.query.get("provider", "") or "").strip().lower()
+        accounts = [account.public_dump() for account in oauth_broker.list_accounts(provider or None)]
+        filtered = self._filter_workspace_accounts(accounts, workspace_id)
+        rows = []
+        for item in filtered:
+            account_id = f"{str(item.get('provider') or '').strip().lower()}::{str(item.get('account_alias') or 'default').strip()}"
+            rows.append({**item, "account_id": account_id, "workspace_id": workspace_id})
+        return web.json_response({"success": True, "accounts": rows, "workspace_id": workspace_id})
+
+    async def handle_v1_connector_connect(self, request):
+        connector_name = str(request.match_info.get("connector") or "").strip().lower()
+        connector = self._connector_lookup(connector_name)
+        if connector is None:
+            return web.json_response({"success": False, "error": "connector not found"}, status=404)
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        workspace_id = self._workspace_id(request, data)
+        current_accounts_response = await self.handle_v1_connector_accounts(request)
+        current_accounts_payload = json.loads(current_accounts_response.text)
+        limit_state = self._workspace_billing().enforce_limit(
+            workspace_id,
+            metric="max_connectors",
+            current_value=len(list(current_accounts_payload.get("accounts") or [])),
+        )
+        if not limit_state.get("allowed", True):
+            return web.json_response({"success": False, "error": str(limit_state.get("reason") or "connector limit reached"), "limit": limit_state}, status=402)
+        merged = {
+            "provider": connector.get("provider"),
+            "app_name": connector.get("label"),
+            "scopes": list(connector.get("scopes") or []),
+            "mode": str(data.get("mode") or "auto"),
+            "account_alias": str(data.get("account_alias") or "default"),
+            "display_name": str(data.get("display_name") or connector.get("label") or ""),
+            "email": str(data.get("email") or ""),
+            "authorization_code": str(data.get("authorization_code") or ""),
+            "workspace_id": workspace_id,
+        }
+        from integrations import connector_factory, integration_registry, oauth_broker
+        from core.integration_trace import get_integration_trace_store
+
+        plan = integration_registry.resolve_connection_plan(
+            app_name=str(merged.get("app_name") or ""),
+            provider=str(merged.get("provider") or ""),
+            scopes=list(merged.get("scopes") or []),
+            mode=str(merged.get("mode") or "auto"),
+            account_alias=str(merged.get("account_alias") or "default"),
+            extra={"display_name": str(merged.get("display_name") or ""), "email": str(merged.get("email") or "")},
+        )
+        trace_store = get_integration_trace_store()
+        account = oauth_broker.authorize(
+            str(plan.get("provider") or merged.get("provider") or ""),
+            list(plan.get("required_scopes") or merged.get("scopes") or []),
+            mode=str(merged.get("mode") or "auto"),
+            account_alias=str(merged.get("account_alias") or "default"),
+            authorization_code=str(merged.get("authorization_code") or ""),
+            redirect_uri=str(data.get("redirect_uri") or "http://localhost:8765/callback"),
+            extra={
+                "display_name": str(merged.get("display_name") or ""),
+                "email": str(merged.get("email") or ""),
+                "workspace_id": workspace_id,
+                "connector": connector_name,
+            },
+        )
+        connector_result = None
+        if account.is_ready:
+            try:
+                capability = plan.get("capability")
+                connector_instance = connector_factory.get(
+                    getattr(plan.get("integration_type"), "value", plan.get("integration_type") or "unknown"),
+                    auth_state={
+                        "capability": capability.model_dump() if hasattr(capability, "model_dump") else dict(capability or {}),
+                        "auth_account": account.model_dump() if hasattr(account, "model_dump") else account.public_dump(),
+                        "provider": str(plan.get("provider") or merged.get("provider") or ""),
+                        "connector_name": str(plan.get("connector_name") or connector_name),
+                    },
+                )
+                connector_result = await connector_instance.connect(str(merged.get("app_name") or connector_name), mode=str(merged.get("mode") or "auto"))
+            except Exception as exc:
+                connector_result = {"success": False, "status": "failed", "error": str(exc)}
+        trace_store.record_trace(
+            operation="workspace_connector_connect",
+            provider=str(plan.get("provider") or merged.get("provider") or ""),
+            connector_name=str(plan.get("connector_name") or connector_name),
+            integration_type=str((plan.get("integration_type").value if hasattr(plan.get("integration_type"), "value") else plan.get("integration_type")) or ""),
+            status=str((connector_result.get("status") if isinstance(connector_result, dict) else getattr(connector_result, "status", "")) or account.status),
+            success=bool(account.is_ready),
+            auth_state=str(account.status),
+            auth_strategy=str(plan.get("auth_strategy") or ""),
+            account_alias=str(account.account_alias or "default"),
+            metadata={
+                "workspace_id": workspace_id,
+                "connector": connector_name,
+                "capabilities": list(connector.get("capabilities") or []),
+            },
+        )
+        self._workspace_billing().record_usage(workspace_id, "connectors", 1, metadata={"connector": connector_name})
+        result_payload = connector_result.model_dump() if hasattr(connector_result, "model_dump") else (dict(connector_result) if isinstance(connector_result, dict) else {})
+        return web.json_response(
+            {
+                "success": True,
+                "connector": connector,
+                "account": {**account.public_dump(), "workspace_id": workspace_id, "account_id": f"{account.provider}::{account.account_alias}"},
+                "connect_result": result_payload,
+                "launch_url": str(account.auth_url or ""),
+            }
+        )
+
+    async def handle_v1_connector_refresh(self, request):
+        from integrations import oauth_broker
+
+        account_id = str(request.match_info.get("account_id") or "").strip()
+        provider, _, account_alias = account_id.partition("::")
+        if not provider:
+            return web.json_response({"success": False, "error": "account_id required"}, status=400)
+        account = next(
+            (
+                item for item in oauth_broker.list_accounts(provider)
+                if str(item.account_alias or "default").strip() == (account_alias or "default")
+            ),
+            None,
+        )
+        if account is None:
+            return web.json_response({"success": False, "error": "account not found"}, status=404)
+        refreshed = oauth_broker.authorize(
+            provider,
+            list(account.granted_scopes or []),
+            mode="auto",
+            account_alias=account_alias or "default",
+            extra=dict(account.metadata or {}),
+        )
+        return web.json_response({"success": True, "account": {**refreshed.public_dump(), "account_id": account_id}})
+
+    async def handle_v1_connector_revoke(self, request):
+        from integrations import oauth_broker
+
+        account_id = str(request.match_info.get("account_id") or "").strip()
+        provider, _, account_alias = account_id.partition("::")
+        if not provider:
+            return web.json_response({"success": False, "error": "account_id required"}, status=400)
+        ok = oauth_broker.delete_account(provider, account_alias or "default")
+        return web.json_response({"success": ok, "account_id": account_id})
+
+    async def handle_v1_connector_traces(self, request):
+        from core.integration_trace import get_integration_trace_store
+
+        workspace_id = self._workspace_id(request)
+        try:
+            limit = int(request.rel_url.query.get("limit", 100))
+        except Exception:
+            limit = 100
+        traces = get_integration_trace_store().list_traces(limit=limit)
+        filtered = self._filter_workspace_traces(traces, workspace_id)
+        return web.json_response({"success": True, "traces": filtered[:limit], "workspace_id": workspace_id})
+
+    async def handle_v1_connector_health(self, request):
+        connectors_response = await self.handle_v1_connectors(request)
+        payload = json.loads(connectors_response.text)
+        rows = []
+        for item in list(payload.get("connectors") or []):
+            rows.append(
+                {
+                    "connector": str(item.get("connector") or ""),
+                    "status": str(item.get("status") or "offline"),
+                    "account_count": int(item.get("account_count") or 0),
+                    "trace_count": int(item.get("trace_count") or 0),
+                    "provider": str(item.get("provider") or ""),
+                }
+            )
+        return web.json_response({"success": True, "health": rows})
+
     async def handle_inspector_page(self, request):
         base = Path(__file__).resolve().parent.parent.parent
         p = base / 'ui' / 'web' / 'run_inspector.html'
@@ -1027,21 +1736,17 @@ class ElyanGatewayServer:
 
     # ── Page handlers ─────────────────────────────────────────────────────────
     async def handle_dashboard_page(self, request):
-        base = Path(__file__).resolve().parent.parent.parent
-        p = base / 'ui' / 'web' / 'dashboard.html'
-        if not p.exists():
-            return web.Response(text="Dashboard file not found", status=404)
-        response = web.FileResponse(p)
-        if _is_loopback_request(request):
-            response.set_cookie(
-                "elyan_admin_session",
-                _ensure_admin_access_token(),
-                httponly=True,
-                samesite="Strict",
-                secure=False,
-                path="/",
-            )
-        return response
+        return web.Response(
+            text=(
+                "<html><body style='font-family:-apple-system,Segoe UI,sans-serif;padding:24px;'>"
+                "<h2>Elyan Desktop-First Runtime</h2>"
+                "<p>Web dashboard kaldırıldı.</p>"
+                "<p>Desktop uygulamayı açmak için terminalde <code>elyan desktop</code> çalıştırın.</p>"
+                "</body></html>"
+            ),
+            content_type="text/html",
+            status=410,
+        )
 
     async def handle_trace_page(self, request):
         task_id = str(request.match_info.get("task_id", "") or "").strip()
@@ -1092,16 +1797,15 @@ class ElyanGatewayServer:
         return web.FileResponse(p)
 
     async def handle_web_asset(self, request):
-        filename = str(request.match_info.get("filename", "")).strip()
-        if not filename or "/" in filename or "\\" in filename or ".." in filename:
-            return web.Response(text="Invalid asset path", status=400)
-        base = (Path(__file__).resolve().parent.parent.parent / "ui" / "web").resolve()
-        asset_path = (base / filename).resolve()
-        if asset_path.parent != base or not asset_path.exists() or not asset_path.is_file():
-            return web.Response(text="Asset file not found", status=404)
-        resp = web.FileResponse(asset_path)
-        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
-        return resp
+        _ = request
+        return web.json_response(
+            {
+                "ok": False,
+                "error": "web_dashboard_removed",
+                "message": "Web dashboard assets removed. Use `elyan desktop`.",
+            },
+            status=410,
+        )
 
     async def handle_trace_api(self, request):
         task_id = str(request.match_info.get("task_id", "") or "").strip()
@@ -2318,18 +3022,18 @@ class ElyanGatewayServer:
             },
             "release": {
                 "version": str(status_payload.get("version") or ""),
-                "entrypoint": "/dashboard",
-                "entrypoint_aliases": ["/", "/dashboard"],
+                "entrypoint": "elyan desktop",
+                "entrypoint_aliases": ["elyan desktop", "elyan launch"],
                 "health_endpoint": "/healthz",
                 "health_status": str(status_payload.get("health_status") or ""),
                 "benchmark_green": benchmark_green,
                 "last_sync": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "quickstart_checks": [
                     {"label": "Gateway status", "value": str(status_payload.get("status") or "unknown")},
-                    {"label": "Dashboard entrypoint", "value": "/dashboard"},
+                    {"label": "Desktop entrypoint", "value": "elyan desktop"},
                     {"label": "Health page", "value": "/healthz"},
-                    {"label": "CLI quickstart", "value": f"{cli_mod} dashboard"},
-                    {"label": "Dashboard start script", "value": "bash scripts/start_product.sh"},
+                    {"label": "CLI quickstart", "value": f"{cli_mod} desktop"},
+                    {"label": "Desktop start script", "value": "bash scripts/start_product.sh"},
                     {
                         "label": "Production benchmark gate",
                         "value": "python scripts/run_production_path_benchmarks.py --min-pass-count 20 --require-perfect",
@@ -2362,7 +3066,7 @@ class ElyanGatewayServer:
                 "status": "ready" if readiness.get("elyan_ready") else "degraded",
                 "version": str(release.get("version") or ""),
                 "health_status": str(release.get("health_status") or ""),
-                "entrypoint": str(release.get("entrypoint") or "/dashboard"),
+                "entrypoint": str(release.get("entrypoint") or "elyan desktop"),
                 "benchmark": benchmark,
                 "readiness": readiness,
                 "system_dependencies": system_dependencies,
@@ -5350,23 +6054,46 @@ class ElyanGatewayServer:
 
     # ── WebSocket: Dashboard push (new) ───────────────────────────────────────
     async def handle_dashboard_ws(self, request):
+        allowed, error = self._require_admin_access(request, allow_cookie=True)
+        if not allowed:
+            return web.json_response({"ok": False, "error": error}, status=403)
+
         ws = web.WebSocketResponse(heartbeat=30)
         await ws.prepare(request)
         _dashboard_ws_clients.add(ws)
-        logger.info(f"Dashboard WS connected ({len(_dashboard_ws_clients)} clients)")
-        # Send recent activity on connect
-        await ws.send_json({"event": "history", "data": list(reversed(_activity_log[-10:]))})
-        await ws.send_json({"event": "tool_history", "data": list(reversed(_tool_event_log[-40:]))})
-        mission_store = self._mission_store()
-        await ws.send_json({"event": "mission_overview", "data": mission_store.overview(owner="local")})
-        await ws.send_json({"event": "mission_list", "data": mission_store.list_missions(owner="local", limit=12)})
+
         try:
+            await ws.send_json(
+                {
+                    "type": "connected",
+                    "event": "connected",
+                    "data": {
+                        "runtime": "elyan_gateway",
+                        "connected_at": time.time(),
+                        "activity_buffer_size": len(_activity_log),
+                        "tool_event_buffer_size": len(_tool_event_log),
+                    },
+                }
+            )
+
+            for entry in list(_activity_log)[-12:]:
+                await ws.send_json({"type": "activity", "event": "activity", "data": entry})
+
+            for entry in list(_tool_event_log)[-24:]:
+                await ws.send_json({"type": "tool_event", "event": "tool_event", "data": entry})
+
+            for entry in list(_cowork_event_log)[-24:]:
+                await ws.send_json({"type": entry.get("event_type", "cowork.delta"), "event": entry.get("event_type", "cowork.delta"), "data": entry.get("payload", {})})
+
             async for msg in ws:
-                if msg.type == WSMsgType.ERROR:
+                if msg.type == WSMsgType.TEXT:
+                    if str(msg.data).strip().lower() == "ping":
+                        await ws.send_str('{"type":"pong","event":"pong","data":{"ok":true}}')
+                elif msg.type in {WSMsgType.ERROR, WSMsgType.CLOSE, WSMsgType.CLOSED}:
                     break
         finally:
             _dashboard_ws_clients.discard(ws)
-            logger.info(f"Dashboard WS disconnected ({len(_dashboard_ws_clients)} clients)")
+
         return ws
 
     # ── WebSocket: Node connection (new for v2) ───────────────────────────────
@@ -5926,6 +6653,21 @@ class ElyanGatewayServer:
 
         if wait_response:
             try:
+                verdict = await inspect_ingress(
+                    str(text),
+                    platform_origin=f"api:{channel}",
+                    agent=self.agent,
+                    metadata={
+                        **metadata,
+                        "channel_type": channel,
+                        "user_id": str(metadata.get("user_id") or ""),
+                    },
+                )
+                if not verdict.get("allowed", True):
+                    return web.json_response(
+                        {"status": "blocked", "error": blocked_ingress_text(verdict), "reason": verdict.get("reason", "blocked")},
+                        status=403,
+                    )
                 out = await asyncio.wait_for(
                     self.agent.process(
                         str(text),
@@ -5939,6 +6681,22 @@ class ElyanGatewayServer:
                 return web.json_response({"status": "timeout", "error": f"message processing timed out ({timeout_s}s)"}, status=504)
             except Exception as e:
                 return web.json_response({"status": "error", "error": str(e)}, status=500)
+
+        verdict = await inspect_ingress(
+            str(text),
+            platform_origin=f"api:{channel}",
+            agent=self.agent,
+            metadata={
+                **metadata,
+                "channel_type": channel,
+                "user_id": str(metadata.get("user_id") or ""),
+            },
+        )
+        if not verdict.get("allowed", True):
+            return web.json_response(
+                {"status": "blocked", "error": blocked_ingress_text(verdict), "reason": verdict.get("reason", "blocked")},
+                status=403,
+            )
 
         asyncio.create_task(
             self.agent.process(
@@ -5955,6 +6713,14 @@ class ElyanGatewayServer:
         try:
             data = await request.json()
             logger.info(f"Webhook received: {event}")
+            verdict = await inspect_ingress(
+                f"webhook_event: {event} data: {data}",
+                platform_origin=f"webhook:{event}",
+                agent=self.agent,
+                metadata={"channel_type": "webhook", "event": str(event or "")},
+            )
+            if not verdict.get("allowed", True):
+                return web.json_response({"status": "blocked", "error": blocked_ingress_text(verdict)}, status=403)
             asyncio.create_task(self.agent.process(f"webhook_event: {event} data: {data}"))
             push_activity("webhook", event, str(data)[:60])
             return web.json_response({"status": "ok"})

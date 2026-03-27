@@ -8,10 +8,11 @@ Part of RELIABILITY FOUNDATION integration.
 """
 
 from typing import Dict, Any, Optional, List
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 import re
 
+from core.security.contracts import ApprovalPolicy, CloudEligibility, DataClassification, ExecutionTier, execution_tier_for
 from utils.logger import get_logger
 
 logger = get_logger("tool_schemas_registry")
@@ -107,9 +108,52 @@ class ToolSchema:
     name: str
     parameters: Dict[str, ParameterSchema]
     description: str = ""
+    purpose: str = ""
     timeout_seconds: int = 30
+    timeout_budget: Optional[int] = None
     risk_level: str = "low"  # low, medium, high
     requires_approval: bool = False
+    data_classification: str = DataClassification.INTERNAL.value
+    approval_policy: str = ApprovalPolicy.CONDITIONAL.value
+    cloud_eligibility: str = CloudEligibility.LOCAL_ONLY.value
+    audit_requirement: str = "standard"
+    execution_tier: str = ""
+    required_permissions: List[str] = field(default_factory=list)
+    preconditions: List[str] = field(default_factory=list)
+    expected_artifacts: List[str] = field(default_factory=list)
+    verification_method: str = ""
+    rollback_strategy: str = "not_required"
+    idempotency: str = "best_effort"
+    verification_policy: Dict[str, Any] = None
+
+    def __post_init__(self) -> None:
+        if not self.purpose:
+            self.purpose = self.description
+        if self.timeout_budget is None:
+            self.timeout_budget = self.timeout_seconds
+        if self.verification_policy is None:
+            self.verification_policy = {
+                "requires_verification": self.risk_level != "low",
+                "requires_preview": self.requires_approval or self.risk_level == "high",
+                "requires_rollback_metadata": self.risk_level in {"medium", "high"},
+            }
+        if self.requires_approval and self.approval_policy == ApprovalPolicy.CONDITIONAL.value:
+            self.approval_policy = ApprovalPolicy.REQUIRED.value
+        if self.risk_level == "low" and self.cloud_eligibility == CloudEligibility.LOCAL_ONLY.value:
+            self.cloud_eligibility = CloudEligibility.ALLOW_REDACTED.value
+        if not self.execution_tier:
+            classification = DataClassification(self.data_classification)
+            normalized_risk = {
+                "low": "read_only",
+                "medium": "write_safe",
+                "high": "write_sensitive" if self.requires_approval else "write_safe",
+                "dangerous": "destructive",
+            }.get(self.risk_level, self.risk_level)
+            self.execution_tier = execution_tier_for(normalized_risk, classification).value
+        if not self.verification_method:
+            self.verification_method = "validate result payload against schema and confirm observed side effects"
+        if self.rollback_strategy == "not_required" and self.risk_level in {"medium", "high", "dangerous"}:
+            self.rollback_strategy = "persist rollback metadata before execution and restore if verification fails"
 
     def validate_params(self, params: Dict[str, Any]) -> tuple[bool, List[str]]:
         """Validate all parameters"""
@@ -154,6 +198,27 @@ class ToolSchema:
 
         return sanitized
 
+    def to_contract(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "purpose": self.purpose,
+            "description": self.description,
+            "required_permissions": list(self.required_permissions),
+            "risk_level": self.risk_level,
+            "execution_tier": self.execution_tier,
+            "preconditions": list(self.preconditions),
+            "expected_artifacts": list(self.expected_artifacts),
+            "verification_method": self.verification_method,
+            "rollback_strategy": self.rollback_strategy,
+            "timeout_budget": self.timeout_budget,
+            "idempotency": self.idempotency,
+            "data_classification": self.data_classification,
+            "approval_policy": self.approval_policy,
+            "cloud_eligibility": self.cloud_eligibility,
+            "audit_requirement": self.audit_requirement,
+            "verification_policy": dict(self.verification_policy or {}),
+        }
+
 
 class SchemaRegistry:
     """Registry for all tool schemas"""
@@ -169,6 +234,7 @@ class SchemaRegistry:
         self.register(ToolSchema(
             name="write_file",
             description="Write content to a file",
+            purpose="Persist new or updated text content inside an allowed workspace path",
             parameters={
                 "path": ParameterSchema("path", ParameterType.PATH, True, "File path"),
                 "content": ParameterSchema("content", ParameterType.STRING, True, "Content to write", max_length=1_000_000),
@@ -176,28 +242,47 @@ class SchemaRegistry:
             },
             timeout_seconds=30,
             risk_level="medium",
+            required_permissions=["filesystem.write"],
+            preconditions=["target path must resolve inside allowed roots", "existing content should be snapshotted before overwrite"],
+            expected_artifacts=["file_write"],
+            verification_method="verify path exists and persisted content matches requested payload",
+            rollback_strategy="restore previous file content from snapshot if verification fails",
+            idempotency="conditional",
         ))
 
         self.register(ToolSchema(
             name="read_file",
             description="Read content from a file",
+            purpose="Load text content from a workspace file without mutating host state",
             parameters={
                 "path": ParameterSchema("path", ParameterType.PATH, True, "File path"),
                 "lines": ParameterSchema("lines", ParameterType.INTEGER, False, "Number of lines to read", min_value=1),
             },
             timeout_seconds=30,
             risk_level="low",
+            required_permissions=["filesystem.read"],
+            preconditions=["path must exist and be readable"],
+            expected_artifacts=["file_content"],
+            verification_method="verify path exists and read succeeds without mutation",
+            idempotency="idempotent",
         ))
 
         self.register(ToolSchema(
             name="delete_file",
             description="Delete a file",
+            purpose="Remove a file only through reversible delete semantics",
             parameters={
                 "path": ParameterSchema("path", ParameterType.PATH, True, "File path"),
             },
             timeout_seconds=30,
             risk_level="high",
             requires_approval=True,
+            required_permissions=["filesystem.delete"],
+            preconditions=["target path must resolve inside allowed roots", "trash or rollback snapshot must be available"],
+            expected_artifacts=["trash_record", "rollback_metadata"],
+            verification_method="verify original path no longer exists and rollback metadata was recorded",
+            rollback_strategy="restore file from trash or rollback snapshot",
+            idempotency="non_idempotent",
         ))
 
         self.register(ToolSchema(
@@ -247,6 +332,7 @@ class SchemaRegistry:
         self.register(ToolSchema(
             name="search_files",
             description="Search for files",
+            purpose="Find matching files inside an approved directory tree",
             parameters={
                 "directory": ParameterSchema("directory", ParameterType.PATH, True, "Search directory"),
                 "pattern": ParameterSchema("pattern", ParameterType.STRING, True, "Search pattern"),
@@ -254,6 +340,11 @@ class SchemaRegistry:
             },
             timeout_seconds=60,
             risk_level="low",
+            required_permissions=["filesystem.read"],
+            preconditions=["directory must exist and be indexable"],
+            expected_artifacts=["search_results"],
+            verification_method="verify result paths are reachable under the requested directory",
+            idempotency="idempotent",
         ))
 
         # System Controls
@@ -270,17 +361,24 @@ class SchemaRegistry:
         self.register(ToolSchema(
             name="take_screenshot",
             description="Take screenshot",
+            purpose="Capture current screen state as verifiable visual evidence",
             parameters={
                 "save_path": ParameterSchema("save_path", ParameterType.PATH, False, "Path to save screenshot"),
                 "delay": ParameterSchema("delay", ParameterType.INTEGER, False, "Delay in seconds", min_value=0),
             },
             timeout_seconds=10,
             risk_level="medium",
+            required_permissions=["screen.capture"],
+            preconditions=["screen capture permission must be available"],
+            expected_artifacts=["screenshot"],
+            verification_method="verify screenshot file exists and has non-zero size",
+            idempotency="best_effort",
         ))
 
         self.register(ToolSchema(
             name="vision_automate",
             description="Vision-guided automation: analyze screen and perform UI actions autonomously",
+            purpose="Execute bounded UI automation through a vision-guided, approval-gated runtime",
             parameters={
                 "goal": ParameterSchema("goal", ParameterType.STRING, True, "What to achieve on screen"),
                 "max_steps": ParameterSchema("max_steps", ParameterType.INTEGER, False, "Max automation steps", min_value=1, max_value=10),
@@ -288,6 +386,12 @@ class SchemaRegistry:
             timeout_seconds=60,
             risk_level="high",
             requires_approval=True,
+            required_permissions=["screen.capture", "applications.control", "input.simulation"],
+            preconditions=["sandbox or hardened runtime must be available", "approval and evidence capture must be active"],
+            expected_artifacts=["action_trace", "evidence_screenshots"],
+            verification_method="verify post-action UI state against goal and persist evidence for each step",
+            rollback_strategy="halt automation, restore previous UI state where supported, and persist failure evidence",
+            idempotency="non_idempotent",
         ))
 
         self.register(ToolSchema(
@@ -302,12 +406,18 @@ class SchemaRegistry:
         self.register(ToolSchema(
             name="open_app",
             description="Open application",
+            purpose="Launch a known application through the controlled desktop runtime",
             parameters={
                 "app_name": ParameterSchema("app_name", ParameterType.STRING, True, "Application name"),
                 "args": ParameterSchema("args", ParameterType.STRING, False, "Command arguments"),
             },
             timeout_seconds=10,
             risk_level="medium",
+            required_permissions=["applications.open"],
+            preconditions=["application must be allowlisted for the current runtime policy"],
+            expected_artifacts=["process_handle", "window_reference"],
+            verification_method="verify process launch or window focus succeeds",
+            idempotency="conditional",
         ))
 
         # Add more tools...
@@ -349,6 +459,12 @@ class SchemaRegistry:
         """Get risk level for tool"""
         schema = self.get(tool_name)
         return schema.risk_level if schema else "low"
+
+    def get_contract(self, tool_name: str) -> Dict[str, Any]:
+        schema = self.get(tool_name)
+        if not schema:
+            return {}
+        return schema.to_contract()
 
 
 # Global registry instance

@@ -1,8 +1,8 @@
 # PROGRESS.md — Phase 5.2 Optimization & v0.2.0 Premium Operator UX
 
-**Latest Session**: 2026-03-24
-**Date**: 2026-03-24
-**Status**: Phase 5.2.2 Security Hardening ✓ COMPLETE
+**Latest Session**: 2026-03-27
+**Date**: 2026-03-27
+**Status**: Core stabilization + security hardening + cowork-first TS desktop transition in progress
 
 ---
 
@@ -39,10 +39,87 @@
 
 - **Total**: 22 tests passing
 
+### Intent Routing Sync
+- Shared 3-tier intent router artık agent, task engine, mission_control, pipeline ve LLMClient fallback yüzeylerinde aynı payload sözleşmesini kullanıyor.
+- Legacy parser yalnızca fallback olarak kalıyor; clarification ve multi-task çıktıları ortak serializer üzerinden taşınıyor.
+
 ### Overall Status
 - **Total Tests**: 63 passing (13 perf + 10 approval + 11 run + 7 inspector + 22 security)
 - **Phases Complete**: 5.2.1, v0.2.0, 5.2.2
 - **Next Phase**: 5.2.3 Dashboard Integration
+
+### Current Session Notes
+- `core/cowork_threads.py` eklendi; canonical `CoworkThread` modeli artık `thread_id`, `workspace_id`, `session_id`, active mission/run, turns, approvals, artifacts ve review state'i tek store içinde taşır.
+- `core/workflow/vertical_runner.py` thread-aware hale getirildi; workflow run metadata artık `thread_id` ve `workspace_id` taşır, completion/review/artifact olayları cowork delta event olarak gateway telemetry hattına yazılır.
+- `core/security/contracts.py` artık execution tier (`observe`, `safe_sandbox`, `sensitive_host`, `destructive`) üretir; dry validation ve recovery expectation security decision sözleşmesine girdi.
+- `core/tool_schemas_registry.py` tool'ları operational contract olarak taşımaya başladı; permission, precondition, expected artifact, verification, rollback ve idempotency metadata'sı registry üstünde görünür.
+- Gateway aiohttp server artık resmi cowork API ailesini sunuyor: thread create/list/detail, follow-up turn ve in-pane approval resolve rotaları desktop için hazır.
+- Command center canonical cowork screen'e döndü; sol tarafta thread listesi, merkezde workstream + artifacts + follow-up composer, sağ tarafta approvals + lane summary + security inspection çalışıyor.
+- Home ekranı artık gerçek `createCoworkThread()` çağrısı ile `document`, `presentation`, `website` veya genel cowork thread başlatıyor; `Continue last thread` lane'i aynı surface'e eklendi.
+- `core/billing/workspace_billing.py` eklendi; workspace/team-owned hybrid billing, entitlements, usage ledger, Stripe checkout/portal/webhook doğrulama ve quota enforcement aynı katmanda toplandı.
+- Settings ekranı workspace billing özeti, entitlement görünürlüğü ve `upgrade` / `billing portal` eylemlerini taşıyor; external checkout/portal URL'leri Tauri üzerinden açılıyor.
+- Connector platform `/api/v1/connectors/*` altında canonical hale getirildi; workspace-owned account ownership, capability/health görünürlüğü, reconnect/revoke ve trace logging aynı API ailesinden geliyor.
+- Integrations ekranı artık gerçek connector data kullanıyor; Google Drive, Gmail, Google Calendar, Slack ve GitHub için account/scope/status/trace yüzeyi var.
+- Desktop live sync query invalidation ötesine taşındı; cowork delta event geldiğinde selected thread state'i hedefli patch alıyor, reconnect sonrası snapshot refetch korunuyor.
+- Targeted validation: `pytest -q tests/test_cowork_threads.py tests/test_workspace_billing.py tests/test_vertical_workflow_runner.py` geçti (`9 passed`); `npm run build` ve `cargo check` geçti.
+
+- Gateway API base URL artık `config/settings.py` üzerinden çözülüyor.
+- Desktop/Telegram/CLI komut yüzeyleri aynı normalized agent turn akışını kullanıyor.
+- `core/task_engine.py` 3-tier intent router'ı ilk tercih olarak kullanıyor; legacy parser yalnızca fallback.
+- `core/agent.py` de intent parser yerine shared intent router'ı kullanmaya başladı.
+- `core/runtime_backends.py` eklendi; Rust core, Go gateway, TypeScript dashboard ve Swift desktop için opsiyonel backend registry oluştu.
+- `core/unified_model_gateway.py` eklendi; specialist tercihleri, local-first routing ve config-driven LiteLLM/native transport tek facade altında toplandı.
+- `core/multi_agent/specialists.py` Next-Gen dört çekirdek profile genişletildi: `code_agent`, `research_agent`, `document_agent`, `thinking_agent`.
+- `core/multi_agent/handoff.py` typed handoff packet sözleşmesini ekledi; handoff store SQLite-backed hale geldi ve bus hydrate desteği var.
+- `core/elyan_runtime.py` artık specialist registry ve unified model gateway’i singleton runtime içinde taşıyor.
+- `core/multi_agent/orchestrator.py` ve `core/sub_agent/executor.py` specialist bazlı model seçimini unified gateway üzerinden çözüyor.
+- `core/semantic_memory.py` opsiyonel Qdrant backend, SQLite fallback ve audit text ile yeniden bağlandı.
+- Dashboard multi-agent metrics artık handoff, semantic memory ve model gateway sağlığını raporluyor.
+- `core/events/event_store.py` native event store adapter contract'ını tanıyor; Rust backend yoksa mevcut Python SQLite path'i aynen çalışıyor.
+- Dashboard API ve HTTP server'a `/api/v1/system/backends` eklendi; runtime backend/fallback durumu artık görünür.
+- Fast-match yanlış pozitifleri multi-step girişlerde daha az tetikliyor.
+- Tool execution öncesi schema validation ve sanitization agent `_execute_tool` yoluna bağlandı.
+- Complex task execution artık checkpoint yazıyor; resume için pipeline id context'i kabul ediliyor.
+- `pipeline_state.mark_task` eklendi; task ilerlemesi artık gerçek pipeline kaydında tutuluyor.
+- Approval uncertainty fallback artık sessiz değil; debug event üretiyor.
+- Web run inspector ve approval sayfaları runtime config helper ile relative API çözümüne geçti.
+- `core/security/contracts.py` eklendi; runtime guard ve tool policy artık risk/classification/cloud metadata döndürüyor.
+- `core/security/encrypted_vault.py` master key leakage riskini kapattı; typed vault errors var.
+- `core/security/session_security.py` disk-backed encrypted token persistence aldı.
+- `core/run_store.py` hassas alanları (`steps`, `tool_calls`, `error`) encrypted envelope ile saklıyor.
+- `core/multi_agent/handoff.py` integrity hash, provenance, classification ve cloud flags taşıyor.
+- `core/unified_model_gateway.py` sensitive context için local-only default ve cloud redaction path uyguluyor.
+- `api/http_server.py` explicit CORS allowlist, security headers ve browser mutation guard aldı.
+- `api/dashboard_api.py` yeni `/api/v1/security/summary` verisini üretiyor.
+- Desktop home snapshot artık security posture, data locality ve approval queue sinyalini gösteriyor.
+- `core/security/prompt_firewall.py` audit jsonl + security event logging ile sertleştirildi.
+- `core/security/zero_trust_runtime.py` mevcut sandbox selector ile hizalandı.
+- `core/security/ingress_guard.py` eklendi; gateway router, Telegram text, Telegram voice, voice agent ve direct API/webhook girişleri artık ortak prompt firewall karar hattını kullanıyor.
+- `api/http_server.py` session token cookie/header köprüsü üretiyor; mutation rotaları auth-required ve browser flow CSRF taşıyor.
+- `/api/v1/security/events` eklendi; security event ailesi desktop logs ve command center inspection yüzeylerine bağlandı.
+- `apps/desktop` command center artık security posture, locality, cloud redaction ve recent security events gösteriyor.
+- `apps/desktop` settings ekranı runtime-owned security posture inspection taşıyor.
+- `apps/desktop` logs ekranı runtime/security ayrımı ile filtrelenebiliyor.
+- `apps/desktop/src-tauri/src/main.rs` managed sidecar supervisor aldı; desktop shell runtime'ı boot/restart/stop edebiliyor ve sidecar loglarını okuyabiliyor.
+- `apps/desktop` global provider katmanı runtime health poll + socket reconnect akışını yönetiyor.
+- Gateway `ws/dashboard` canlı telemetry endpoint'i desktop için geri açıldı; managed sidecar admin token'ı ile bağlanan Tauri shell artık gerçek workflow/activity/tool event akışından query invalidation tetikleyebiliyor.
+- Desktop settings artık kalıcı workflow launch profile taşıyor: dil, hedef kitle, ton, website stack ve belge/sunum export tercihleri persist ediliyor.
+- Home ekranı bu tercihleri sakin bir launch profile olarak gösteriyor ve yeni workflow start mutation'larına gerçek payload olarak indiriyor.
+- Command center seçili run için launch profile inspection gösteriyor; runtime scope contract artık audience/language/theme/stack/preferred_formats alanlarını taşıyor.
+- Desktop settings artık project template seçimi taşıyor; template bazlı lane, routing posture ve review strictness tek noktadan yönetiliyor.
+- Home ekranı active project template, recommended next lane ve resume lane zekasını gerçek runtime snapshot'ı ile birleştiriyor.
+- `core/workflow/vertical_runner.py` classify/scope/review step'lerinde artık `routing_profile`, `review_strictness`, `candidate_chain`, `project_template_id` ve `project_name` alanlarını persist ediyor.
+- Home ekranı calm command home olarak sadeleştirildi; 3 dikey flow lane'i, recent artifact continuation ve compact trust strip öne çıktı.
+- Desktop design system üzerinde ferahlaştırma geçildi: surface, button, search field, sidebar, top command bar, right inspector ve robot hero daha sakin, daha mat ve daha premium bir dil ile rafine edildi.
+- `cli/commands/desktop.py` artık Tauri shell'i canonical açılış yolu olarak dener, yoksa legacy PyQt fallback'e düşer.
+- `core/workflow/contracts.py` eklendi; document / presentation / website flow'ları ve canonical lifecycle state'leri tek yerde tanımlandı.
+- `core/workflow/state_machine.py` lifecycle validation destekli hale geldi, legacy alias'lar korundu.
+- `core/workflow/vertical_runner.py` eklendi; document / presentation / website flow'ları artık gerçek artifact üretip run store'a canonical workflow state, review gate ve artifact manifest ile yazılıyor.
+- `core/workflow/vertical_runner.py` artık stage start/end/failure ve workflow complete/failure olaylarını gateway telemetry hattına yayıyor; desktop command center yeni state'leri poll beklemeden görebiliyor.
+- `core/workflow/vertical_runner.py` preferred output profile kabul ediyor; presentation lane `pptx` tekli tercihinde bile destek format fallback ile export üretiyor.
+- Gateway `/api/v1/*` compatibility yüzeyi artık aiohttp server içinde yaşıyor; desktop shell Flask dashboard server'a ihtiyaç duymadan `runs`, `timeline`, `security`, `approvals`, `backends` ve `workflow start` rotalarını okuyabiliyor.
+- `apps/desktop` home ekranı artık gerçek workflow start yapıyor; command center son run'ın timeline, review sonucu ve artifact çıktılarını açıp reveal edebiliyor.
+- Managed sidecar artık local admin token'ı runtime'a enjekte ediyor; Tauri shell güvenliği zayıflatmadan protected mutation endpoint'lerine çağrı yapabiliyor.
 
 ---
 
@@ -940,3 +1017,17 @@ Screenshot → VLM → LLM Plan → Approval Gate → Execute → Evidence
 - **TOTAL SPRINT**: 345+ tests, 12,946+ lines code in v0.2.0-5.1 🚀
 
 **Status: Phase 5.1 — 100% COMPLETE (7 of 7 Days)**
+
+---
+
+## Incremental Progress — 2026-03-27
+
+- Optional polyglot backend registry eklendi; Python canonical runtime, Rust/Go/TS/Swift opsiyonel acceleration/surface olarak tanımlandı.
+- Event store native backend adapter tanıyacak şekilde güncellendi; native backend yoksa Python SQLite fallback korunuyor.
+- `/api/v1/system/backends` endpoint'i eklendi; runtime backend durumu artık UI tarafından okunabilir.
+- Desktop home veri katmanı backend registry ile bağlandı; home snapshot artık backend label, tone ve backend state listesi taşıyor.
+- Premium desktop home alt durum şeridi görünür hale getirildi; bot state, backend state, workspace ve update zamanı aynı matte yüzeyde gösteriliyor.
+- `apps/desktop` altında Tauri-first React/TypeScript shell eklendi.
+- Yeni desktop katmanı için theme tokens, typed API/mocks, socket bridge, command palette, title bar ve 8 ekranlık premium MVP surface kuruldu.
+- Çalışma kuralı netleştirildi: Elyan runtime geliştikçe desktop da paralel geliştirilecek; yeni capability'ler desktop shell'de state, control veya inspection karşılığı olmadan bırakılmayacak.
+- Python runtime korunuyor; yeni shell mevcut `/api/v1/*` kontratlarıyla çalışıyor, eksik endpoint'lerde typed fallback kullanıyor.

@@ -1,8 +1,8 @@
 # ROADMAP.md — Elyan Operator Runtime
 
-**Son Güncelleme**: 2026-03-26
-**Mevcut Durum**: Phase 5.2.3 Dashboard Redesign ✓ COMPLETE
-**Test Durumu**: 81/2781 test geçiyor (1 fail: wallpaper flow, `run_store` duplikasyonu nedeniyle)
+**Son Güncelleme**: 2026-03-27
+**Mevcut Durum**: Phase 5.2.7 cowork-first desktop + workspace billing + connector platform in progress
+**Test Durumu**: Targeted compile checks, cowork/billing/workflow tests, desktop build ve Tauri cargo check bu seansta geçti
 
 ---
 
@@ -12,13 +12,106 @@
 |--------|-------|--------|
 | Performance (LRU Cache + AsyncExecutor) | ✓ Complete | 13 test |
 | Approval System | ✓ Complete | 10 test |
-| Run Store + Inspector | ⚠️ Partially Broken | Duplikat import nedeniyle step tracking çalışmıyor |
+| Run Store + Inspector | ✓ Canonicalized | `core/run_store.py` canonical, read-model fallback aktif |
 | Security Hardening (Vault + Session + Audit) | ✓ Complete | 22 test |
-| Dashboard Redesign | ✓ Mostly Complete | run_visualizer.js hardcoded localhost sorunu var |
-| Real-time Updates | ✗ Not Done | 3 ayrı sistem, hiçbiri tam entegre değil |
-| Config Layer | ✗ Not Done | Her şey hardcoded |
+| Security Hardening Program v1 | ⚠️ In Progress | ingress firewall, encrypted run fields, HTTP/Tauri hardening, desktop security visibility |
+| Dashboard Redesign | ✓ Mostly Complete | Runtime config helper eklendi, hardcoded API URL'ler temizleniyor |
+| Real-time Updates | ⚠️ In Progress | Gateway telemetry desktop shell'e cowork delta event'leri taşır; selected thread patching ilerliyor |
+| Config Layer | ⚠️ In Progress | Gateway/API base URL helper merkezi hale getirildi |
+| Cowork Desktop | ⚠️ In Progress | chat-first thread/workstream UX canonical hale getiriliyor |
+| Workspace Billing | ⚠️ In Progress | Stripe-backed subscription + entitlement cache + usage ledger aktif, production env config eksik olabilir |
+| Connector Platform | ⚠️ In Progress | workspace-owned connector accounts ve traces aktif, deeper app actions sırada |
 | Health Checks | ✗ Stub | NotImplementedError |
 | Alerting | ✗ Stub | NotImplementedError |
+
+---
+
+## Current Implementation Snapshot
+
+- `core/run_store.py` canonical storage path olarak kullanılıyor.
+- Telegram, CLI ve desktop komut yüzeyleri aynı normalized agent turn akışına bağlandı.
+- `core/cowork_threads.py` ile canonical `CoworkThread` store eklendi; thread artık workspace/session truth, approvals, artifacts ve active mission/run referanslarını tek modelde taşır.
+- `document`, `presentation` ve `website` lane'leri artık ayrı ürün adası değil; cowork thread içinden başlayan deterministic artifact akışlarıdır.
+- Gateway artık resmi cowork API ailesini sunuyor: `/api/v1/cowork/home`, `/api/v1/cowork/threads`, `/api/v1/cowork/threads/{id}`, `/api/v1/cowork/threads/{id}/turns`, `/api/v1/cowork/approvals/{id}/resolve`.
+- Command center artık canonical cowork yüzeyidir: thread listesi, follow-up composer, in-pane approvals, artifacts ve review state aynı workstream içinde görünür.
+- Desktop websocket hattı artık cowork delta event ailesini (`cowork.thread.updated`, `cowork.turn.*`, `cowork.approval.*`, `cowork.artifact.added`) first-class olarak tüketir.
+- Tool contract katmanı artık yalnızca parameter schema değildir; `execution_tier`, `required_permissions`, `preconditions`, `verification_method`, `rollback_strategy` ve `idempotency` alanlarıyla operational contract olarak tutulur.
+- `core/billing/workspace_billing.py` ile workspace/team-owned hybrid billing katmanı eklendi; entitlement cache, usage ledger, checkout/portal/webhook uçları ve quota enforcement aynı katmanda çözülür.
+- Gateway billing yüzeyi artık `/api/v1/billing/workspace`, `/api/v1/billing/usage`, `/api/v1/billing/entitlements`, `/api/v1/billing/checkout-session`, `/api/v1/billing/portal-session`, `/api/v1/billing/webhooks/stripe` rotalarını sunar.
+- Desktop settings içinde workspace billing özeti ve upgrade/portal eylemleri first-class hale geldi; checkout veya portal açılışı Tauri shell üzerinden güvenli external URL launch ile yapılır.
+- Connector platform workspace-owned modele taşındı; `/api/v1/connectors/*` ailesi Google Drive, Gmail, Google Calendar, Slack ve GitHub connector tanımı, hesap, health ve trace verisini tek contract altında sunar.
+- Integrations ekranı artık mock-driven değildir; connector accounts, scopes, health, reconnect/revoke ve recent traces yüzeyde canlı görünür.
+- `config/settings.py` içinde `get_gateway_api_base_url()` ve `get_gateway_root_url()` eklendi.
+- `core/runtime_backends.py` ile opsiyonel Rust core / Go gateway / TS dashboard / Swift desktop backend registry tanımlandı.
+- `apps/desktop` artık canonical ürün yüzeyi olarak ele alınıyor; `elyan desktop` Tauri shell'i öncelemeye başladı, PyQt yalnızca legacy fallback.
+- Tauri shell managed sidecar komutları (`boot_runtime`, `restart_runtime`, `stop_runtime`, `get_runtime_health`, `get_runtime_logs`) ile Python runtime lifecycle'ını okuyup yönetebiliyor.
+- Desktop runtime köprüsü sidecar health'e göre API base URL ayarlıyor; runtime online/offline/reconnecting durumu shell içinde first-class hale geldi.
+- Home yüzeyi metric-first dashboard dilinden çıkarıldı; calm command home, 3 primary flow lane'i ve compact trust strip ile sadeleştirildi.
+- Desktop artık kalıcı workflow launch profile taşıyor; dil, audience, tone, website stack ve export tercihleri home/settings/command center yüzeylerinde first-class hale geldi.
+- Desktop project template katmanı eklendi; template seçimi artık default session, preferred task type, routing profile ve review strictness davranışını birlikte belirliyor.
+- Desktop shell primitive'leri ve shell chrome'u artık daha sakin bir matte design system ile ilerliyor; primitive seviyede yapılan tasarım müdahaleleri home/command center/settings yüzeylerini aynı anda rafine ediyor.
+- Desktop geliştirme kuralı netleştirildi: runtime/core ile desktop shell paralel ilerler; capability work tamamlanırken desktop görünürlüğü ve kontrol yüzeyi de aynı fazda ele alınır.
+- `core/unified_model_gateway.py` ile specialist-aware, local-first unified model gateway eklendi; transport seçimi artık `operator.multi_llm.*` config'i üzerinden yapılır ve LiteLLM patlarsa native fallback uygulanabilir.
+- `core/multi_agent/specialists.py` Next-Gen specialist profilleri (`code_agent`, `research_agent`, `document_agent`, `thinking_agent`) ile genişletildi.
+- `core/multi_agent/handoff.py` typed handoff packet sözleşmesini tanımlıyor; handoff'lar artık SQLite-backed store'a yazılıyor ve process restart sonrası hydrate edilebiliyor.
+- `core/semantic_memory.py` config-driven opsiyonel Qdrant backend destekli hale geldi; audit text + SQLite fallback korunuyor.
+- `core/events/event_store.py` native event store adapter contract'ı ile future Rust acceleration'a hazırlandı.
+- `/api/v1/system/backends` endpoint'i ile aktif backend ve fallback durumu görünür hale geldi.
+- `/api/v1/metrics/multi-agent` artık handoff persistence, semantic memory backend ve unified model gateway durumunu döndürüyor.
+- Web dashboard sayfaları için `ui/web/runtime_config.js` ile relative API çözümü eklendi.
+- `core/task_engine.py` artık 3-tier intent router ile başlıyor; router fail olursa legacy parser fallback'e düşüyor.
+- `core/agent.py` direct intent değerlendirmesinde yeni intent router ilk tercih; legacy parser fallback olarak kalıyor.
+- `core/task_engine.py` complex task execution için checkpoint persistence yazıyor, resume için `resume_pipeline_id` / `checkpoint_execution_id` kabul ediyor.
+- `core/pipeline_state.py` artık task status mark edebiliyor; pipeline ilerlemesi görünür.
+- `core/agent.py` içinde tool execution öncesi schema validation ve sanitization aktif.
+- Tier 1 fast-match, multi-step komutlarda single-intent yanlış pozitiflerini daha az tetikliyor.
+- Approval path artık uncertainty fallback'i sessizce yutmuyor, debug event üretiyor.
+- `core/security/contracts.py` ile ortak security decision sözleşmesi eklendi.
+- `core/run_store.py` hassas alanları field-level encrypted envelope ile yazıyor.
+- `core/security/session_security.py` disk-backed token persistence taşıyor.
+- `api/http_server.py` explicit origin allowlist + security headers + browser mutation guard uyguluyor.
+- Dashboard HTTP yüzeyi artık session token + CSRF taşıyıcısı üretir; browser/Desktop mutation istekleri auth ve CSRF ile korunur.
+- Tauri shell artık `csp: null` kullanmıyor; minimal CSP aktif.
+- Desktop home snapshot güvenlik posture ve approval queue bilgisini çekiyor.
+- Gateway, Telegram, voice ve direct API/webhook ingress yolları artık prompt firewall kararından geçer.
+- `/api/v1/security/events` ve desktop command center/logs/settings yüzeyleri security event timeline’ını görünür taşır.
+- `core/workflow/contracts.py` ile document / presentation / website için canonical workflow lifecycle ve agent-role sahipliği tanımlandı.
+- `core/workflow/state_machine.py` artık `received -> completed` lifecycle'ını resmi state değerleriyle taşırken legacy `IDLE/RUNNING/DONE` çağrılarını da kırmadan destekliyor.
+- `core/workflow/vertical_runner.py` document / presentation / website akışlarını gerçek artifact pipeline olarak çalıştırıyor; sonuçlar canonical `core/run_store.py` üstüne timeline, review report ve artifact manifest ile yazılıyor.
+- Gateway artık `/api/v1/runs`, `/api/v1/runs/{id}`, `/api/v1/runs/{id}/timeline`, `/api/v1/system/backends`, `/api/v1/security/*`, `/api/v1/metrics/*`, `/api/v1/approvals/*` ve `/api/v1/workflows/start` compatibility yüzeylerini aiohttp runtime içinde sunuyor.
+- `apps/desktop` home ekranındaki 3 primary flow butonu artık gerçek workflow start mutation'ı yapıyor; command center son run için timeline + review gate + artifact browsing gösteriyor.
+- Workflow start payload'ı artık user-owned launch preferences taşır; runtime scope/plan contract'i bu tercihleri run içine yazıp command center inspection'a açar.
+- Workflow classify/scope contract'i artık project template, routing profile, review strictness ve candidate chain verisini de taşır; desktop inspection yüzeyi runtime selection mantığını artık doğrudan görebilir.
+- Tauri managed sidecar admin token enjekte ediyor; runtime mutation rotaları desktop shell'den güvenli şekilde çağrılabiliyor.
+- Gateway `ws/dashboard` endpoint'i artık desktop telemetry için tekrar aktif; Tauri shell managed admin token ile bağlanıp workflow/activity/tool event geldiğinde snapshot query'lerini invalidate ediyor.
+- `core/workflow/vertical_runner.py` stage start/end/failure ve workflow completion olaylarını gateway telemetry hattına yayıyor; desktop artık yalnızca polling'e bağlı değil.
+- Figma tasarım otoritesi olarak kabul edilir; runtime contract sabitlendikten sonra shell foundations, command home, cowork thread, billing ve connector surfaces Figma parity hedefiyle rafine edilir.
+
+---
+
+## Phase 5.2.5 — Security Hardening Program v1
+
+### 5.2.5-A: Security Contracts
+- `risk_level`
+- `data_classification`
+- `approval_policy`
+- `cloud_eligibility`
+- `audit_requirement`
+- `verification_policy`
+
+Bu metadata runtime guard, tool policy, handoff ve model gateway katmanlarında taşınmaya başlandı.
+
+### 5.2.5-B: Secrets & Persistence
+- Vault artık master key’i loglamıyor.
+- Session store restart sonrası diskten geri yüklenebiliyor.
+- Run store plaintext yerine encrypted field envelope kullanıyor.
+
+### 5.2.5-C: HTTP/Desktop Hardening
+- Wildcard CORS kaldırıldı.
+- Browser mutation akışı origin/CSRF guard ile sıkılaştırıldı.
+- Session-backed auth cookie/header köprüsü eklendi; desktop shell future mutation akışına hazır.
+- Tauri CSP aktifleştirildi.
+- Desktop shell home + command center + settings + logs yüzeylerinde security inspection göstermeye başladı.
 
 ---
 
@@ -28,14 +121,8 @@ Bu düzeltmeler yapılmadan yeni feature geliştirmeye geçilmemeli.
 
 ### Fix-1: `run_store` Duplikasyonu Çöz
 **Dosyalar**: `core/run_store.py`, `core/evidence/run_store.py`, `core/agent.py`, testler
-**Sorun**: İki farklı RunStore implementasyonu var, agent yanlış olanı import ediyor
-**Çözüm**:
-1. `core/run_store.py` canonical (async, dataclass tabanlı) olarak kalır
-2. `core/evidence/run_store.py` kaldırılır veya evidece-specific mantık `core/run_store.py`'a taşınır
-3. `core/agent.py`'deki import `core.run_store` olarak güncellenir
-4. `test_attachment_wallpaper_flow` tekrar pass etmeli
-
-**Beklenen etki**: 1 failing test → 0 failing test
+**Durum**: Canonicalization tamamlandı; `core/evidence/run_store.py` kaldırıldı, agent `core/run_store.py` kullanıyor
+**Not**: Bu alanın üstüne encryption/inspection iyileştirmeleri geliyor
 
 ---
 
@@ -48,9 +135,8 @@ Bu düzeltmeler yapılmadan yeni feature geliştirmeye geçilmemeli.
 ---
 
 ### Fix-3: `run_visualizer.js` Hardcoded Localhost Düzelt
-**Dosya**: `ui/web/run_visualizer.js`
-**Sorun**: `http://localhost:18789/api/v1/...` hardcoded
-**Çözüm**: `dashboard.html` gibi relative `/api/v1/...` path kullan
+**Dosyalar**: `ui/web/run_inspector.html`, `ui/web/approval.html`, `ui/web/runtime_config.js`
+**Durum**: API base URL runtime helper ile tekilleştirildi; relative fallback aktif
 
 ---
 
@@ -162,6 +248,7 @@ core/
 2. Her bölümü ayrı dosyaya extract et, orijinal agent.py delegate etsin
 3. Bir bölüm çalışıyor mu doğrulandıktan sonra bir sonrakine geç
 4. Hiçbir test kırılmamalı (2781 test güvencesi)
+5. Shared intent router contract'ı mission_control, pipeline ve llm_client fallback yüzeyleriyle aynı kalacak şekilde korunmalı
 
 ---
 
@@ -267,6 +354,10 @@ Bu projenin geçmişinde yapılan hatalar, tekrar edilmemeli:
 [Sonra]     5.2.4-A: Config layer → hardcoded değerler temizlenir
 [Sonra]     5.2.4-B: Real-time birleştirme → tek EventBus
 [Sonra]     5.2.4-C: Approval persistence → crash-safe
+[Aktif]     UI/runtime sync → desktop home backend health strip canlı registry verisiyle beslenir
+[Aktif]     Tauri-first desktop shell → `apps/desktop` altında React/TS premium shell, 8 ekran ve typed API layer
+[Aktif]     Parallel delivery rule → runtime capability işleri ile desktop inspection/control surfaces birlikte geliştirilir
+[Aktif]     Next-gen multi-agent foundation → unified model gateway + specialist registry + typed handoff protocol
 
 [Daha Sonra] 5.2.5: Encryption + security hardening
 [Daha Sonra] 5.3: Stub modülleri implement et veya sil

@@ -57,6 +57,11 @@ site/
 *.sqlite
 node_modules/
 elyan-video/node_modules/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+apps/desktop/*.tsbuildinfo
+apps/desktop/vite.config.js
+apps/desktop/vite.config.d.ts
 
 # Elyan workspace bootstrap artifacts
 agents.md
