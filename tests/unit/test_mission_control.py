@@ -98,6 +98,19 @@ class _BrowserDirectIntentAgent:
         return {"success": True, "path": "/tmp/browser-proof.png"}
 
 
+class _BrowserSearchDirectIntentAgent(_BrowserDirectIntentAgent):
+    def __init__(self) -> None:
+        super().__init__()
+        self.direct_intents: list[dict] = []
+
+    async def _run_direct_intent(self, intent, user_input, role, history, user_id="local"):
+        _ = (user_input, role, history, user_id)
+        self.direct_intents.append(dict(intent))
+        url = str(intent.get("params", {}).get("url") or "")
+        self._last_direct_intent_payload = {"success": True, "url": url}
+        return f"İşlem tamamlandı: {url}"
+
+
 class _FilePathDirectIntentAgent(_NoArtifactAgent):
     def __init__(self) -> None:
         super().__init__()
@@ -281,6 +294,57 @@ async def test_file_node_prefers_direct_intent_with_inferred_path(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_plan_first_and_per_step_approval_shape_mission_graph(tmp_path: Path):
+    runtime = MissionRuntime(storage_dir=tmp_path)
+
+    mission = await runtime.create_mission(
+        "Masaüstüne note.txt dosyasına 'Merhaba Elyan' yaz ama önce planla ve sorarak ilerle",
+        user_id="local",
+        channel="dashboard",
+        mode="Balanced",
+        auto_start=False,
+    )
+
+    assert mission.success_contract["requires_plan"] is True
+    assert mission.success_contract["approval_mode"] == "per_step"
+    plan_preview = next(node for node in mission.graph.nodes if node.node_id == "plan_preview")
+    assert plan_preview.kind == "probe"
+    work_nodes = [node for node in mission.graph.nodes if node.node_id.startswith("step_")]
+    assert work_nodes[0].depends_on == ["plan_preview"]
+    assert work_nodes[0].metadata["approval_required"] is True
+
+
+@pytest.mark.asyncio
+async def test_per_step_approval_blocks_then_resumes_direct_execution(tmp_path: Path):
+    runtime = MissionRuntime(storage_dir=tmp_path)
+    agent = _DirectIntentAgent()
+
+    mission = await runtime.create_mission(
+        "Masaüstüne note.txt dosyasına 'Merhaba Elyan' yaz ama sorarak ilerle",
+        user_id="local",
+        channel="dashboard",
+        mode="Balanced",
+        agent=agent,
+        auto_start=False,
+    )
+    mission = await runtime.run_mission(mission.mission_id, agent=agent)
+
+    assert mission is not None
+    assert mission.status == "waiting_approval"
+    assert not any("direct_intent" in call for call in agent.calls)
+
+    pending = runtime.pending_approvals(owner="local")
+    while pending:
+        await runtime.resolve_approval(pending[0]["approval_id"], True, agent=agent)
+        mission = await runtime.run_mission(mission.mission_id, agent=agent)
+        pending = runtime.pending_approvals(owner="local")
+
+    assert mission is not None
+    assert mission.status == "completed"
+    assert any("direct_intent" in call for call in agent.calls)
+
+
+@pytest.mark.asyncio
 async def test_file_node_accepts_direct_payload_file_path_as_artifact(tmp_path: Path):
     runtime = MissionRuntime(storage_dir=tmp_path)
     agent = _FilePathDirectIntentAgent()
@@ -353,6 +417,30 @@ async def test_browser_direct_intent_adds_proof_and_passes_verifier(tmp_path: Pa
     assert mission.status == "completed"
     assert agent.shot_calls == 1
     assert any(str(record.path or "").endswith("browser-proof.png") for record in mission.evidence)
+
+
+@pytest.mark.asyncio
+async def test_browser_search_goal_prefers_direct_search_url(tmp_path: Path):
+    runtime = MissionRuntime(storage_dir=tmp_path)
+    agent = _BrowserSearchDirectIntentAgent()
+
+    mission = await runtime.create_mission(
+        "Safari'de python docs ara",
+        user_id="local",
+        channel="dashboard",
+        mode="Balanced",
+        agent=agent,
+        auto_start=False,
+    )
+    mission = await runtime.run_mission(mission.mission_id, agent=agent)
+
+    assert mission is not None
+    assert mission.status == "completed"
+    assert agent.direct_intents
+    direct_intent = agent.direct_intents[0]
+    assert direct_intent["action"] == "open_url"
+    assert "google.com/search" in direct_intent["params"]["url"]
+    assert "python+docs" in direct_intent["params"]["url"]
 
 
 @pytest.mark.asyncio

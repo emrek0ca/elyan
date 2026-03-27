@@ -107,6 +107,28 @@ def test_desktop_note_phrase_routes_to_write_file_instead_of_chat():
     assert "ahmete borcum var" in str(params.get("content", "")).lower()
 
 
+def test_execution_preferences_are_extracted_for_direct_write_command():
+    parser = IntentParser()
+    result = parser.parse("masaüstüne note.txt dosyasına 'Merhaba Elyan' yaz ama önce planla ve sorarak ilerle")
+    assert result is not None
+    assert result.get("action") == "write_file"
+    prefs = result.get("params", {}).get("execution_preferences", {})
+    assert prefs.get("requires_plan") is True
+    assert prefs.get("approval_mode") == "per_step"
+    assert result.get("requires_plan") is True
+
+
+def test_execution_preferences_are_extracted_for_draft_and_observe_only_requests():
+    parser = IntentParser()
+    result = parser.parse("bir landing page yap ama önce taslak hazırla ve değişiklik yapma")
+    assert result is not None
+    assert result.get("action") in ("multi_task", "create_coding_project")
+    prefs = result.get("params", {}).get("execution_preferences", {})
+    assert prefs.get("draft_first") is True
+    assert prefs.get("observe_only") is True
+    assert prefs.get("dry_run") is True
+
+
 def test_force_planning_on_complex_query():
     parser = IntentParser()
     result = parser.parse("önce rapor hazırla sonra maille gonder")

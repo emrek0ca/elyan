@@ -15,7 +15,7 @@ from ._research import ResearchParser
 from ._documents import DocumentParser
 from ._media import MediaParser
 from ._free_apis import FreeApiParser
-from core.nlu.phase1_engine import get_phase1_engine
+from core.nlu import get_phase1_engine
 
 from utils.logger import get_logger
 
@@ -145,37 +145,38 @@ class IntentParser(
 
         coding_intent = self._parse_create_coding_project(text, text_norm, original)
         if coding_intent:
-            return coding_intent
+            return self._apply_execution_preferences(coding_intent, original)
 
         screen_intent = self._parse_screen_workflow(text, text_norm, original)
         if screen_intent:
-            return screen_intent
+            return self._apply_execution_preferences(screen_intent, original)
 
         status_intent = self._parse_status_snapshot(text, text_norm, original)
         if status_intent:
-            return status_intent
+            return self._apply_execution_preferences(status_intent, original)
 
         multi = self._parse_multi_task(original)
         if multi:
-            return multi
+            return self._apply_execution_preferences(multi, original)
 
         single = self._parse_single(text, text_norm, original)
         if single:
-            return single
+            return self._apply_execution_preferences(single, original)
 
-        phase1 = self._phase1.classify(original, allow_clarify=True)
-        if phase1:
-            payload = phase1.to_parser_payload()
-            if payload.get("action") != "chat":
-                logger.debug(
-                    "[intent_parser] phase1 → %s (intent=%s, confidence=%.2f)",
-                    payload.get("action"),
-                    phase1.intent,
-                    phase1.confidence,
-                )
-                return payload
+        if self._phase1 is not None:
+            phase1 = self._phase1.classify(original, allow_clarify=True)
+            if phase1:
+                payload = phase1.to_parser_payload()
+                if payload.get("action") != "chat":
+                    logger.debug(
+                        "[intent_parser] phase1 → %s (intent=%s, confidence=%.2f)",
+                        payload.get("action"),
+                        phase1.intent,
+                        phase1.confidence,
+                    )
+                    return self._apply_execution_preferences(payload, original)
 
-        return self._parse_chat_fallback(text, text_norm, original)
+        return self._apply_execution_preferences(self._parse_chat_fallback(text, text_norm, original), original)
 
     def _parse_single(self, text: str, text_norm: str, original: str) -> dict[str, Any] | None:
         for parser_fn in self._pipeline:

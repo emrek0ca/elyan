@@ -382,6 +382,12 @@ class SystemParser(BaseParser):
         # "şunu yaz: ...", "yaz ..."
         write_match = re.search(r"(?:şunu yaz|sunu yaz|yaz)\s*[:\\-]?\s*(.+)", original, re.IGNORECASE)
         if write_match:
+            file_write_context = bool(
+                re.search(r"[\w\-.]+\.[a-z0-9]{2,8}", original, re.IGNORECASE)
+                and any(token in norm for token in ("masaustu", "masaüstü", "desktop", "dosya", "file", "kaydet", "not olarak"))
+            )
+            if file_write_context:
+                return None
             payload = str(write_match.group(1) or "").strip()
             payload = re.sub(r"\s+(?:ve\s+|sonra\s+)?(?:enter|return)\s+bas.*$", "", payload, flags=re.IGNORECASE)
             if payload:

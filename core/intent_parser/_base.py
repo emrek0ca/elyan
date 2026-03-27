@@ -153,3 +153,125 @@ class BaseParser:
                 path = str(HOME_DIR) + path[1:]
             return path
         return None
+
+    def _extract_execution_preferences(self, text: str) -> dict[str, Any]:
+        low = self._normalize(str(text or "").lower())
+        if not low:
+            return {}
+
+        prefs: dict[str, Any] = {}
+        if any(
+            phrase in low
+            for phrase in (
+                "once planla",
+                "once planini cikar",
+                "planini cikar",
+                "plan cikar",
+                "ilk once planla",
+                "before acting plan",
+                "plan first",
+            )
+        ):
+            prefs["requires_plan"] = True
+        if any(
+            phrase in low
+            for phrase in (
+                "once taslak",
+                "taslak hazirla",
+                "taslak cikar",
+                "draft first",
+                "prepare draft",
+            )
+        ):
+            prefs["draft_first"] = True
+            prefs["requires_plan"] = True
+        if any(
+            phrase in low
+            for phrase in (
+                "sorarak ilerle",
+                "bana sor",
+                "tek tek onay",
+                "onay almadan yapma",
+                "ask before acting",
+                "confirm each step",
+            )
+        ):
+            prefs["approval_mode"] = "per_step"
+            prefs["autonomy_mode"] = "confirmed"
+        if any(
+            phrase in low
+            for phrase in (
+                "sadece incele",
+                "sadece analiz et",
+                "sadece gozlemle",
+                "observe only",
+                "read only",
+                "salt okunur",
+                "degisiklik yapma",
+                "dokunma",
+            )
+        ):
+            prefs["observe_only"] = True
+            prefs["dry_run"] = True
+            prefs["autonomy_mode"] = "observe_only"
+        if any(
+            phrase in low
+            for phrase in (
+                "dry run",
+                "simule et",
+                "simulate et",
+                "simulasyon",
+                "taslak olarak goster",
+            )
+        ):
+            prefs["dry_run"] = True
+        if any(phrase in low for phrase in ("dogrula", "teyit et", "strict verify", "verify")):
+            prefs["verification_mode"] = "strict"
+        if prefs.get("draft_first") and "autonomy_mode" not in prefs and not prefs.get("observe_only"):
+            prefs["autonomy_mode"] = "draft_first"
+        return prefs
+
+    def _apply_execution_preferences(self, result: dict[str, Any] | None, original: str) -> dict[str, Any] | None:
+        if not isinstance(result, dict):
+            return result
+        prefs = self._extract_execution_preferences(original)
+        if not prefs:
+            return result
+
+        params = result.get("params")
+        if not isinstance(params, dict):
+            params = {}
+            result["params"] = params
+
+        merged = dict(params.get("execution_preferences") or {})
+        merged.update(prefs)
+        params["execution_preferences"] = merged
+        if merged.get("dry_run"):
+            params.setdefault("dry_run", True)
+        if merged.get("observe_only"):
+            params.setdefault("read_only", True)
+
+        for key in ("autonomy_mode", "approval_mode", "verification_mode"):
+            value = merged.get(key)
+            if value and not result.get(key):
+                result[key] = value
+        for key in ("requires_plan", "draft_first", "observe_only"):
+            if merged.get(key):
+                result[key] = True
+
+        if str(result.get("action") or "").strip() == "multi_task":
+            for task in list(result.get("tasks") or []):
+                if not isinstance(task, dict):
+                    continue
+                task_params = task.get("params")
+                if not isinstance(task_params, dict):
+                    task_params = {}
+                    task["params"] = task_params
+                task_params.setdefault("execution_preferences", dict(merged))
+                if merged.get("dry_run"):
+                    task_params.setdefault("dry_run", True)
+                if merged.get("observe_only"):
+                    task["read_only"] = True
+                if merged.get("approval_mode") == "per_step":
+                    task["approval_required"] = True
+        return result

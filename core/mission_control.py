@@ -10,15 +10,18 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Optional
+from urllib.parse import quote_plus
 
 from core.conversation_memory import conversation_memory
 from core.capability_router import get_capability_router
 from core.cowork_runtime import get_cowork_runtime
 from core.device_sync import get_device_sync_store
+from core.intent import ConversationContext, route_intent as route_shared_intent
 from core.memory_v2 import memory_v2
 from core.ml import get_verifier
 from core.reliability import get_outcome_store
 from core.storage_paths import resolve_elyan_data_dir, resolve_runs_root
+from tools import AVAILABLE_TOOLS
 from utils.logger import get_logger
 
 logger = get_logger("mission_control")
@@ -237,9 +240,31 @@ def _infer_file_node_intent(mission: "Mission", node: "TaskNode") -> dict[str, A
         if any(token in mission_low for token in ("masaüstü", "masaustu", "desktop")):
             path = f"~/Desktop/{Path(path).name}"
     if not path:
+        folder_name = ""
+        folder_match = re.search(r"([A-Za-z0-9_\-]+)\s+(?:adında|adinda|named)?\s+klas(?:ör|or)", text, re.IGNORECASE)
+        if not folder_match:
+            folder_match = re.search(r"klas(?:ör|or)\s+([A-Za-z0-9_\-]+)", text, re.IGNORECASE)
+        if folder_match:
+            folder_name = str(folder_match.group(1) or "").strip()
+        base_dir = "~/Desktop" if any(token in mission_low for token in ("masaüstü", "masaustu", "desktop")) else "~"
+        if folder_name and any(token in low for token in ("klasör", "klasor", "folder")) and any(token in low for token in ("oluştur", "olustur", "create", "aç", "ac")):
+            return {"action": "create_folder", "params": {"path": f"{base_dir}/{folder_name}".rstrip("/")}}
+        if any(token in low for token in ("listele", "göster", "goster", "list")) and any(token in mission_low for token in ("klasör", "klasor", "folder", "masaüstü", "masaustu", "desktop", "dosya", "file")):
+            return {"action": "list_files", "params": {"path": base_dir}}
+        if any(token in low for token in ("ara", "search", "bul")) and any(token in mission_low for token in ("dosya", "file")):
+            pattern_match = re.search(r"['\"]([^'\"]+)['\"]", combined)
+            pattern = str(pattern_match.group(1) or "").strip() if pattern_match else ""
+            if not pattern:
+                ext_match = re.search(r"(\.[A-Za-z0-9]+)\b", combined)
+                if ext_match:
+                    pattern = f"*{str(ext_match.group(1) or '').strip()}"
+            if pattern:
+                return {"action": "search_files", "params": {"pattern": pattern, "directory": base_dir}}
         return {}
     if any(token in low for token in ("doğrula", "dogrula", "içeriğini", "icerigini", "içerik", "icerik", "oku", "kontrol et")):
         return {"action": "read_file", "params": {"path": path}}
+    if any(token in low for token in ("sil", "delete", "trash")):
+        return {"action": "delete_file", "params": {"path": path, "force": False}}
     if any(token in low for token in (" yaz", " oluştur", "olustur", "kaydet", "save")):
         return {"action": "write_file", "params": {"path": path, "content": content}}
     return {}
@@ -250,7 +275,91 @@ def _infer_browser_node_intent(node: "TaskNode") -> dict[str, Any]:
     url_match = re.search(r"(https?://[^\s'\"]+)", text)
     if url_match:
         return {"action": "open_url", "params": {"url": str(url_match.group(1) or "").strip()}}
-    return {}
+    low = _low(text)
+    if not any(token in low for token in ("ara", "search", "aç", "ac", "haber", "video", "resim", "resmi", "gorsel", "görsel", "docs")):
+        return {}
+    cleaned = re.sub(r"\b(?:google chrome|chrome|safari|firefox|browser|tarayıcı|tarayici)(?:'de|'da|de|da|den|dan)?\b", " ", text, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(?:ara|arat|search|aç|ac|göster|goster)\b", " ", cleaned, flags=re.IGNORECASE)
+    query = " ".join(cleaned.split()).strip(" .")
+    if not query:
+        return {}
+    if any(token in low for token in ("video", "videosu", "videos")):
+        return {"action": "open_url", "params": {"url": f"https://www.youtube.com/results?search_query={quote_plus(query)}"}}
+    if any(token in low for token in ("resim", "resmi", "görsel", "gorsel", "image")):
+        return {"action": "open_url", "params": {"url": f"https://www.google.com/search?tbm=isch&q={quote_plus(query)}"}}
+    return {"action": "open_url", "params": {"url": f"https://www.google.com/search?q={quote_plus(query)}"}}
+
+
+def _serialize_routed_intent(routed: Any) -> dict[str, Any]:
+    if not routed:
+        return {}
+    if isinstance(routed, dict):
+        payload = dict(routed)
+    elif hasattr(routed, "to_dict") and callable(routed.to_dict):
+        try:
+            payload = dict(routed.to_dict())
+        except Exception:
+            payload = {}
+    else:
+        payload = {}
+    if not payload:
+        return {}
+
+    tasks: list[dict[str, Any]] = []
+    for task in list(getattr(routed, "tasks", []) or []):
+        if isinstance(task, dict):
+            tasks.append(dict(task))
+            continue
+        if hasattr(task, "to_dict") and callable(task.to_dict):
+            try:
+                task_payload = task.to_dict()
+                if isinstance(task_payload, dict):
+                    tasks.append(dict(task_payload))
+                    continue
+            except Exception:
+                pass
+        if hasattr(task, "__dict__"):
+            tasks.append({k: v for k, v in vars(task).items() if not str(k).startswith("_")})
+        else:
+            tasks.append({"value": str(task)})
+
+    payload["tasks"] = tasks
+    payload["is_multi_task"] = bool(getattr(routed, "is_multi_task", payload.get("is_multi_task", False)))
+    payload["requires_clarification"] = bool(
+        getattr(routed, "requires_clarification", payload.get("requires_clarification", False))
+    )
+    payload["clarification_options"] = list(
+        getattr(routed, "clarification_options", payload.get("clarification_options", [])) or []
+    )
+    return payload
+
+
+def _route_specialist_intent(agent: Any, objective: str, user_id: str, mission_goal: str = "") -> dict[str, Any]:
+    user_key = str(user_id or "local")
+    text = str(objective or "").strip()
+    if not text:
+        return {}
+
+    context = ConversationContext(user_id=user_key)
+    if mission_goal:
+        context.add_message("user", str(mission_goal))
+    context.add_message("user", text)
+
+    try:
+        router = getattr(agent, "intent_router", None)
+        if router is not None:
+            routed = router.route(text, user_key, AVAILABLE_TOOLS, context)
+        else:
+            routed = route_shared_intent(text, user_key, AVAILABLE_TOOLS, context, getattr(agent, "llm", None))
+    except Exception as exc:
+        logger.debug(f"Shared intent routing skipped: {exc}")
+        return {}
+
+    payload = _serialize_routed_intent(routed)
+    action = str(payload.get("action") or "").strip().lower()
+    if not action or action in {"chat", "unknown"}:
+        return {}
+    return payload
 
 
 def _looks_like_web_build_goal(text: str) -> bool:
@@ -544,6 +653,12 @@ class Mission:
             "needs_clarification": bool(contract.get("needs_clarification", False)),
             "clarifying_question": str(contract.get("clarifying_question") or "").strip(),
             "confidence": float(contract.get("confidence") or 0.0),
+            "autonomy_mode": str(success.get("autonomy_mode") or "assisted"),
+            "approval_mode": str(success.get("approval_mode") or "risk_based"),
+            "verification_mode": str(success.get("verification_mode") or "light"),
+            "requires_plan": bool(success.get("requires_plan", False)),
+            "draft_first": bool(success.get("draft_first", False)),
+            "observe_only": bool(success.get("observe_only", False)),
             "parallel_waves": len(self.graph.parallel_waves),
             "node_preview": [
                 {
@@ -961,13 +1076,89 @@ class MissionRuntime:
         return "low"
 
     @staticmethod
-    def _success_contract(goal: str, route_mode: str, mode: str) -> dict[str, Any]:
+    def _execution_preferences(text: str, mode: str = "") -> dict[str, Any]:
+        low = _low(text)
+        prefs: dict[str, Any] = {}
+        if any(
+            phrase in low
+            for phrase in (
+                "önce planla",
+                "once planla",
+                "planını çıkar",
+                "planini cikar",
+                "plan çıkar",
+                "plan cikar",
+                "plan first",
+            )
+        ):
+            prefs["requires_plan"] = True
+        if any(
+            phrase in low
+            for phrase in (
+                "önce taslak",
+                "once taslak",
+                "taslak hazırla",
+                "taslak hazirla",
+                "taslak çıkar",
+                "taslak cikar",
+                "draft first",
+            )
+        ):
+            prefs["draft_first"] = True
+            prefs["requires_plan"] = True
+        if any(
+            phrase in low
+            for phrase in (
+                "sorarak ilerle",
+                "bana sor",
+                "tek tek onay",
+                "onay almadan yapma",
+                "ask before acting",
+                "confirm each step",
+            )
+        ):
+            prefs["approval_mode"] = "per_step"
+            prefs["autonomy_mode"] = "confirmed"
+        if any(
+            phrase in low
+            for phrase in (
+                "sadece incele",
+                "sadece analiz et",
+                "sadece gözlemle",
+                "sadece gozlemle",
+                "observe only",
+                "read only",
+                "salt okunur",
+                "değişiklik yapma",
+                "degisiklik yapma",
+                "dokunma",
+            )
+        ):
+            prefs["observe_only"] = True
+            prefs["dry_run"] = True
+            prefs["autonomy_mode"] = "observe_only"
+        if any(phrase in low for phrase in ("dry run", "simüle et", "simule et", "simulate", "taslak olarak göster", "taslak olarak goster")):
+            prefs["dry_run"] = True
+        if any(phrase in low for phrase in ("doğrula", "dogrula", "teyit et", "verify")):
+            prefs["verification_mode"] = "strict"
+        if prefs.get("draft_first") and "autonomy_mode" not in prefs and not prefs.get("observe_only"):
+            prefs["autonomy_mode"] = "draft_first"
+        mode_low = str(mode or "").strip().lower()
+        if mode_low == "audit":
+            prefs.setdefault("verification_mode", "strict")
+        elif mode_low == "sprint":
+            prefs.setdefault("verification_mode", "minimal")
+        return prefs
+
+    @staticmethod
+    def _success_contract(goal: str, route_mode: str, mode: str, preferences: dict[str, Any] | None = None) -> dict[str, Any]:
         criteria = ["Somut ve denetlenebilir bir çıktı üret"]
         content_kind = "task"
         expected_outputs = ["deliverable"]
         quality_contract = ["artifact_traceability"]
         style_profile = "executive"
         source_policy = "trusted"
+        prefs = dict(preferences or {})
         if route_mode == "research":
             criteria.append("Önemli iddiaları kaynaklarla bağla")
             content_kind = "research_delivery"
@@ -1007,6 +1198,19 @@ class MissionRuntime:
             verification = "strict"
         elif str(mode or "").strip().lower() == "sprint":
             verification = "minimal"
+        if prefs.get("verification_mode") in {"strict", "minimal", "light"}:
+            verification = str(prefs.get("verification_mode") or verification)
+
+        if prefs.get("requires_plan"):
+            criteria.append("Yürütme öncesi görünür plan çıkar")
+        if prefs.get("draft_first"):
+            criteria.append("Önce taslak veya preview üret, sonra uygulamaya geç")
+        if prefs.get("approval_mode") == "per_step":
+            criteria.append("Etkili adımlardan önce kullanıcı onayı bekle")
+        if prefs.get("observe_only") or prefs.get("dry_run"):
+            criteria.append("Kalıcı değişiklik uygulama; yalnızca analiz, preview veya dry-run çıktısı üret")
+            expected_outputs = ["plan_summary", "impact_preview", "verification_summary"]
+            quality_contract = [item for item in quality_contract if item != "artifact_evidence"] + ["preview_only"]
 
         preview = f"{content_kind.replace('_', ' ')} | çıktı: {', '.join(expected_outputs[:4])} | stil: {style_profile}"
 
@@ -1024,11 +1228,18 @@ class MissionRuntime:
             "source_policy": source_policy,
             "preview": preview,
             "memory_scope": "task_routed" if route_mode != "communication" else "communication_minimal",
+            "autonomy_mode": str(prefs.get("autonomy_mode") or "assisted"),
+            "approval_mode": str(prefs.get("approval_mode") or "risk_based"),
+            "requires_plan": bool(prefs.get("requires_plan", False)),
+            "draft_first": bool(prefs.get("draft_first", False)),
+            "observe_only": bool(prefs.get("observe_only", False)),
+            "dry_run": bool(prefs.get("dry_run", False)),
         }
 
-    def _build_graph(self, goal: str, route_mode: str, mode: str) -> MissionGraph:
+    def _build_graph(self, goal: str, route_mode: str, mode: str, preferences: dict[str, Any] | None = None) -> MissionGraph:
         steps = self._extract_steps(goal)
         sequential_steps = self._steps_are_sequential(goal)
+        prefs = dict(preferences or {})
         nodes: list[TaskNode] = [
             TaskNode(
                 node_id="planner",
@@ -1041,16 +1252,39 @@ class MissionRuntime:
             )
         ]
         parallel_waves: list[list[str]] = []
+        execution_anchor = "planner"
+        work_metadata = {
+            "approval_required": bool(prefs.get("approval_mode") == "per_step"),
+            "read_only": bool(prefs.get("observe_only", False)),
+            "dry_run": bool(prefs.get("dry_run", False)),
+            "requires_plan": bool(prefs.get("requires_plan", False)),
+            "draft_first": bool(prefs.get("draft_first", False)),
+        }
 
         def add_node(node: TaskNode) -> None:
             nodes.append(node)
+
+        if prefs.get("requires_plan") or prefs.get("draft_first"):
+            execution_anchor = "plan_preview"
+            add_node(
+                TaskNode(
+                    node_id=execution_anchor,
+                    title="Plan Preview",
+                    specialist="planner",
+                    objective="Yürütme öncesi plan, yaklaşım ve beklenen etkileri görünür özetle.",
+                    kind="probe",
+                    risk_level="low",
+                    depends_on=["planner"],
+                    metadata={"probe_type": "plan", "execution_preferences": dict(prefs)},
+                )
+            )
 
         if steps:
             wave = []
             for idx, step in enumerate(steps, start=1):
                 specialist = self._select_specialist(step, route_mode=route_mode)
                 node_id = f"step_{idx}"
-                depends_on = ["planner"]
+                depends_on = [execution_anchor]
                 if sequential_steps and idx > 1:
                     depends_on = [f"step_{idx - 1}"]
                 add_node(
@@ -1064,6 +1298,7 @@ class MissionRuntime:
                         depends_on=depends_on,
                         parallel_group="" if sequential_steps else "wave_1",
                         output_schema={"type": "step_result"},
+                        metadata=dict(work_metadata),
                     )
                 )
                 wave.append(node_id)
@@ -1080,7 +1315,7 @@ class MissionRuntime:
                         objective="Mevcut çalışma alanını ve giriş noktalarını tara.",
                         kind="probe",
                         risk_level="low",
-                        depends_on=["planner"],
+                        depends_on=[execution_anchor],
                         parallel_group="wave_1",
                         metadata={"speculative": True, "probe_type": "repo"},
                     )
@@ -1093,9 +1328,10 @@ class MissionRuntime:
                         objective=goal,
                         kind="code",
                         risk_level=self._risk_from_text(goal, route_mode=route_mode),
-                        depends_on=["planner"],
+                        depends_on=[execution_anchor],
                         parallel_group="wave_1",
                         output_schema={"type": "code_deliverable"},
+                        metadata=dict(work_metadata),
                     )
                 )
                 parallel_waves.append(wave)
@@ -1110,7 +1346,7 @@ class MissionRuntime:
                         objective=goal,
                         kind="research",
                         risk_level="low",
-                        depends_on=["planner"],
+                        depends_on=[execution_anchor],
                         parallel_group="wave_1",
                         metadata={"probe_type": "sources"},
                     )
@@ -1123,7 +1359,7 @@ class MissionRuntime:
                         objective="Ara bulgular için taslak iskelet hazırla.",
                         kind="probe",
                         risk_level="low",
-                        depends_on=["planner"],
+                        depends_on=[execution_anchor],
                         parallel_group="wave_1",
                         metadata={"speculative": True, "probe_type": "outline"},
                     )
@@ -1140,7 +1376,7 @@ class MissionRuntime:
                         objective="Ekran veya browser bağlamını özetle.",
                         kind="probe",
                         risk_level="low",
-                        depends_on=["planner"],
+                        depends_on=[execution_anchor],
                         parallel_group="wave_1",
                         metadata={"probe_type": "screen"},
                     )
@@ -1153,9 +1389,10 @@ class MissionRuntime:
                         objective=goal,
                         kind="browser",
                         risk_level=self._risk_from_text(goal, route_mode=route_mode),
-                        depends_on=["planner"],
+                        depends_on=[execution_anchor],
                         parallel_group="wave_1",
                         output_schema={"type": "browser_result"},
+                        metadata=dict(work_metadata),
                     )
                 )
                 parallel_waves.append(wave)
@@ -1170,7 +1407,7 @@ class MissionRuntime:
                         objective="Görev bağlamını ve beklenen teslimi özetle.",
                         kind="probe",
                         risk_level="low",
-                        depends_on=["planner"],
+                        depends_on=[execution_anchor],
                         parallel_group="wave_1",
                         metadata={"speculative": True, "probe_type": "context"},
                     )
@@ -1183,8 +1420,9 @@ class MissionRuntime:
                         objective=goal,
                         kind=route_mode or "task",
                         risk_level=self._risk_from_text(goal, route_mode=route_mode),
-                        depends_on=["planner"],
+                        depends_on=[execution_anchor],
                         parallel_group="wave_1",
+                        metadata=dict(work_metadata),
                     )
                 )
                 parallel_waves.append(wave)
@@ -1375,6 +1613,17 @@ class MissionRuntime:
         contract = mission.success_contract
         criteria = contract.get("criteria") if isinstance(contract.get("criteria"), list) else []
         expected_outputs = contract.get("expected_outputs") if isinstance(contract.get("expected_outputs"), list) else []
+        execution_rules: list[str] = []
+        if bool(node.metadata.get("read_only")) or bool(contract.get("observe_only")):
+            execution_rules.append("- Salt okunur ilerle; kalıcı değişiklik yapma.")
+        elif bool(node.metadata.get("dry_run")) or bool(contract.get("dry_run")):
+            execution_rules.append("- Dry-run/preview modunda ilerle; kalıcı değişiklik uygulama.")
+        if bool(contract.get("requires_plan")) or bool(contract.get("draft_first")):
+            execution_rules.append("- Önce planı veya taslağı görünür hale getir, sonra sadece bu node işini yap.")
+        if bool(node.metadata.get("approval_required")) or str(contract.get("approval_mode") or "") == "per_step":
+            execution_rules.append("- Etkili adımlardan önce kullanıcı onayı bekle.")
+        if str(contract.get("verification_mode") or "").strip().lower() == "strict":
+            execution_rules.append("- Sonucu sıkı doğrulama ve kanıtla kapat.")
         lines = [
             f"Bu node için gerçek işi yap: {node.objective}",
             "",
@@ -1397,6 +1646,8 @@ class MissionRuntime:
                 "- Başarısız olduysa nedeni açıkça yaz.",
             ]
         )
+        if execution_rules:
+            lines.extend(["", "Yürütme kontrolü:"] + execution_rules)
         return "\n".join(lines).strip()
 
     def _probe_workspace(self) -> dict[str, Any]:
@@ -1440,6 +1691,19 @@ class MissionRuntime:
             node.summary = summary
             node.output = summary
             self._add_evidence(mission, node, kind="screen_probe", label="Screen probe", summary=summary)
+        elif probe_type == "plan":
+            payload = {
+                "goal": mission.goal,
+                "route_mode": mission.route_mode,
+                "autonomy_mode": mission.success_contract.get("autonomy_mode"),
+                "approval_mode": mission.success_contract.get("approval_mode"),
+                "observe_only": mission.success_contract.get("observe_only"),
+                "dry_run": mission.success_contract.get("dry_run"),
+            }
+            summary = "Yürütme öncesi plan ve çalışma modu görünür hale getirildi."
+            node.summary = summary
+            node.output = json.dumps(payload, ensure_ascii=False)
+            self._add_evidence(mission, node, kind="plan_preview", label="Plan preview", summary=summary, metadata=payload)
         else:
             summary = "Mission bağlamı ve teslim çerçevesi çıkarıldı."
             node.summary = summary
@@ -1470,7 +1734,11 @@ class MissionRuntime:
         return []
 
     async def _execute_specialist_node(self, mission: Mission, node: TaskNode, agent: Any) -> None:
-        if (node.risk_level == "high" or (node.risk_level == "medium" and str(mission.mode).lower() == "audit")) and not self._is_node_approved(mission, node.node_id):
+        if (
+            bool(node.metadata.get("approval_required"))
+            or node.risk_level == "high"
+            or (node.risk_level == "medium" and str(mission.mode).lower() == "audit")
+        ) and not self._is_node_approved(mission, node.node_id):
             self._ensure_approval(mission, node)
             return
         if agent is None or not hasattr(agent, "process_envelope"):
@@ -1481,12 +1749,16 @@ class MissionRuntime:
             return
 
         direct_response = None
+        read_only = bool(node.metadata.get("read_only") or node.metadata.get("dry_run"))
         if (
             node.specialist in {"file", "browser"}
             and hasattr(agent, "_run_direct_intent")
             and hasattr(agent, "_should_run_direct_intent")
+            and not read_only
         ):
             direct_intent = _infer_file_node_intent(mission, node) if node.specialist == "file" else _infer_browser_node_intent(node)
+            if not isinstance(direct_intent, dict) or not direct_intent:
+                direct_intent = _route_specialist_intent(agent, node.objective, str(mission.owner or "local"), mission.goal)
             if not isinstance(direct_intent, dict) or not direct_intent:
                 if hasattr(agent, "intent_parser"):
                     try:
@@ -1552,7 +1824,14 @@ class MissionRuntime:
                     metadata={},
                 )
 
-        prompt = node.objective if node.specialist in {"file", "browser", "code"} else self._compose_node_prompt(mission, node)
+        raw_prompt_ok = (
+            node.specialist in {"file", "browser", "code"}
+            and not read_only
+            and not bool(node.metadata.get("approval_required"))
+            and not bool(mission.success_contract.get("requires_plan"))
+            and not bool(mission.success_contract.get("draft_first"))
+        )
+        prompt = node.objective if raw_prompt_ok else self._compose_node_prompt(mission, node)
         if direct_response is not None:
             response = direct_response
         else:
@@ -1602,19 +1881,19 @@ class MissionRuntime:
         has_artifact_evidence = bool(manifest_path or attachments or has_run_summary)
         has_concrete_artifact = _has_concrete_artifact(node, attachments, text)
         error_signal = _has_error_signal(status, error_text, text, node.summary)
-        requires_artifact = node.specialist in {"code", "browser", "file", "research", "data"}
+        requires_artifact = node.specialist in {"code", "browser", "file", "research", "data"} and not read_only
         if (
             error_signal
             or status not in {"success", "ok"}
             or (requires_artifact and not has_artifact_evidence)
-            or (node.specialist in {"code", "browser", "file"} and not has_concrete_artifact)
+            or (node.specialist in {"code", "browser", "file"} and not read_only and not has_concrete_artifact)
         ):
             node.status = "failed"
             failure_reason = (
                 error_text
                 or getattr(response, "reason", "")
                 or getattr(response, "summary", "")
-                or ("Somut artifact üretilmedi." if node.specialist in {"code", "browser", "file"} and not has_concrete_artifact else "")
+                or ("Somut artifact üretilmedi." if node.specialist in {"code", "browser", "file"} and not read_only and not has_concrete_artifact else "")
                 or text
                 or "Node failed"
             )
@@ -1710,7 +1989,12 @@ class MissionRuntime:
         artifact_missing = [
             item.node_id
             for item in work_nodes
-            if item.kind != "probe" and item.specialist in {"code", "browser", "file"} and item.node_id not in artifact_nodes
+            if (
+                item.kind != "probe"
+                and item.specialist in {"code", "browser", "file"}
+                and not bool(item.metadata.get("read_only") or item.metadata.get("dry_run"))
+                and item.node_id not in artifact_nodes
+            )
         ]
         passes = not failed and not error_nodes
         if strictness != "minimal":
@@ -1796,7 +2080,7 @@ class MissionRuntime:
         node.status = "running"
         node.started_at = _now()
         self._record_event(mission, "node.started", node.title, status="running", node_id=node.node_id, metadata={"specialist": node.specialist})
-        if node.specialist == "planner":
+        if node.kind == "planner":
             node.summary = "Başarı sözleşmesi ve görev grafiği hazır."
             node.output = json.dumps(_json_safe(mission.success_contract), ensure_ascii=False)
             node.status = "completed"
@@ -1874,6 +2158,9 @@ class MissionRuntime:
                 route_mode = "file"
             elif specialist_hint == "document":
                 route_mode = "document"
+        preferences = self._execution_preferences(goal_text, str(mode or "Balanced"))
+        success_contract = self._success_contract(goal_text, route_mode, str(mode or "Balanced"), preferences)
+        graph = self._build_graph(goal_text, route_mode, str(mode or "Balanced"), preferences)
         mission = Mission(
             mission_id=f"mission_{uuid.uuid4().hex[:10]}",
             goal=goal_text,
@@ -1882,14 +2169,16 @@ class MissionRuntime:
             mode=str(mode or "Balanced"),
             route_mode=route_mode,
             risk_profile=self._risk_from_text(goal_text, route_mode=route_mode),
-            success_contract=self._success_contract(goal_text, route_mode, str(mode or "Balanced")),
-            graph=self._build_graph(goal_text, route_mode, str(mode or "Balanced")),
+            success_contract=success_contract,
+            graph=graph,
             status="queued",
             attachments=[str(item) for item in list(attachments or []) if str(item).strip()],
             metadata={
                 "local_only": True,
                 "request_contract": request_contract,
                 "request_preview": str(request_contract.get("preview") or ""),
+                "execution_preferences": dict(preferences),
+                "autonomy_mode": str(success_contract.get("autonomy_mode") or "assisted"),
                 **dict(metadata or {}),
             },
         )
