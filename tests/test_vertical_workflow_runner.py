@@ -4,15 +4,137 @@ from pathlib import Path
 
 import pytest
 
+from core.persistence import reset_runtime_database
 import core.run_store as run_store_module
+import core.workflow.vertical_runner as vertical_runner_module
 from core.workflow.vertical_runner import VerticalWorkflowRunner
 
 
 @pytest.fixture(autouse=True)
 def isolated_runs_dir(monkeypatch, tmp_path):
     monkeypatch.setenv("ELYAN_RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setenv("ELYAN_RUNTIME_DB_PATH", str(tmp_path / "runtime" / "runtime.sqlite3"))
     run_store_module._run_store = None
+    reset_runtime_database()
     yield
+    run_store_module._run_store = None
+    reset_runtime_database()
+
+
+class _FakeOutbox:
+    def __init__(self):
+        self._pending: list[dict[str, object]] = []
+        self.delivered: list[str] = []
+
+    def enqueue(
+        self,
+        _conn=None,
+        *,
+        workspace_id="local-workspace",
+        aggregate_type="unknown",
+        aggregate_id="",
+        event_type="unknown",
+        payload=None,
+    ):
+        event_id = f"evt_{len(self._pending) + 1}"
+        self._pending.append(
+            {
+                "event_id": event_id,
+                "workspace_id": workspace_id,
+                "aggregate_type": aggregate_type,
+                "aggregate_id": aggregate_id,
+                "event_type": event_type,
+                "payload": dict(payload or {}),
+                "sync_state": "pending",
+            }
+        )
+        return event_id
+
+    def list_pending(self, limit=100):
+        _ = limit
+        return [dict(item) for item in self._pending if str(item.get("sync_state") or "") == "pending"]
+
+    def mark_delivered(self, event_id: str):
+        self.delivered.append(event_id)
+        for item in self._pending:
+            if str(item.get("event_id") or "") == event_id:
+                item["sync_state"] = "delivered"
+                break
+
+
+class _FakeWorkspaceSync:
+    def __init__(self):
+        self.received: list[dict[str, object]] = []
+
+    def accept_outbox_event(self, payload):
+        self.received.append(dict(payload or {}))
+        return True
+
+
+class _FakeExecutionRepo:
+    def __init__(self, outbox: _FakeOutbox):
+        self.outbox = outbox
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def _record(self, method_name: str, payload):
+        data = dict(payload or {})
+        self.calls.append((method_name, data))
+        self.outbox.enqueue(
+            workspace_id=str(data.get("workspace_id") or "local-workspace"),
+            aggregate_type="task_run",
+            aggregate_id=str(data.get("run_id") or data.get("workflow_id") or "run"),
+            event_type=f"workflow.{method_name}",
+            payload=data,
+        )
+
+    def persist_plan(self, **payload):
+        self._record("persist_plan", payload)
+
+    def start_execution_step(self, **payload):
+        self._record("start_execution_step", payload)
+
+    def complete_execution_step(self, **payload):
+        self._record("complete_execution_step", payload)
+
+    def record_verification(self, **payload):
+        self._record("record_verification", payload)
+
+    def record_recovery(self, **payload):
+        self._record("record_recovery", payload)
+
+    def record_checkpoint(self, **payload):
+        self._record("record_checkpoint", payload)
+
+
+class _FakeRunIndexRepo:
+    def __init__(self):
+        self.upserts: list[dict[str, object]] = []
+        self.status_updates: list[dict[str, object]] = []
+
+    def upsert_run(self, payload):
+        self.upserts.append(dict(payload or {}))
+
+    def mark_status(self, run_id, *, status, completed_at=None):
+        self.status_updates.append(
+            {"run_id": run_id, "status": status, "completed_at": completed_at}
+        )
+
+
+class _FakeRuntimeDb:
+    def __init__(self):
+        self.outbox = _FakeOutbox()
+        self.workspace_sync = _FakeWorkspaceSync()
+        self.execution = _FakeExecutionRepo(self.outbox)
+        self.run_index = _FakeRunIndexRepo()
+
+
+@pytest.fixture
+def fake_runtime_db(monkeypatch):
+    runtime_db = _FakeRuntimeDb()
+    monkeypatch.setattr(vertical_runner_module, "get_runtime_database", lambda: runtime_db)
+    monkeypatch.setattr(run_store_module, "get_runtime_database", lambda: runtime_db)
+    run_store_module._run_store = None
+    yield runtime_db
     run_store_module._run_store = None
 
 
@@ -125,3 +247,70 @@ async def test_workflow_persists_template_routing_and_review_contract(tmp_path):
     assert scope_step["result"]["project_template_id"] == "web-launch"
     assert scope_step["result"]["project_name"] == "Web Launch"
     assert review_step["result"]["strictness"] == "strict"
+
+
+@pytest.mark.asyncio
+async def test_vertical_runner_writes_execution_persistence_and_drains_outbox(tmp_path, fake_runtime_db):
+    runner = VerticalWorkflowRunner()
+    record = await runner.start_workflow(
+        task_type="document",
+        title="DB-backed brief",
+        brief="Create a concise technical brief for Elyan runtime persistence.",
+        output_dir=str(tmp_path / "artifacts"),
+        background=False,
+    )
+
+    assert record.status == "completed"
+    calls = fake_runtime_db.execution.calls
+    method_names = [name for name, _ in calls]
+
+    assert "persist_plan" in method_names
+    assert "start_execution_step" in method_names
+    assert "complete_execution_step" in method_names
+    assert "record_verification" in method_names
+    assert "record_checkpoint" in method_names
+    assert fake_runtime_db.workspace_sync.received
+    assert fake_runtime_db.outbox.delivered
+
+    verification = next(payload for name, payload in calls if name == "record_verification")
+    checkpoint = next(payload for name, payload in calls if name == "record_checkpoint")
+    plan = next(payload for name, payload in calls if name == "persist_plan")
+
+    assert verification["status"] == "passed"
+    assert checkpoint["status"] == "completed"
+    assert plan["step_name"] == "build_plan"
+    assert plan["workflow_id"] == "document_flow"
+    assert any(event["event_type"] == "workflow.record_verification" for event in fake_runtime_db.workspace_sync.received)
+    assert any(event["event_type"] == "workflow.record_checkpoint" for event in fake_runtime_db.workspace_sync.received)
+
+
+@pytest.mark.asyncio
+async def test_vertical_runner_records_recovery_and_failure_checkpoint(tmp_path, fake_runtime_db, monkeypatch):
+    runner = VerticalWorkflowRunner()
+
+    async def _failing_review(**_kwargs):
+        return {"status": "failed", "recommended_action": "revise"}
+
+    monkeypatch.setattr(runner, "_review_execution_result", _failing_review)
+
+    record = await runner.start_workflow(
+        task_type="presentation",
+        title="Recovery deck",
+        brief="Prepare a short presentation that should fail review.",
+        output_dir=str(tmp_path / "artifacts"),
+        background=False,
+    )
+
+    assert record.status == "failed"
+    recovery = next(payload for name, payload in fake_runtime_db.execution.calls if name == "record_recovery")
+    checkpoint = next(
+        payload
+        for name, payload in fake_runtime_db.execution.calls
+        if name == "record_checkpoint" and payload["status"] == "failed"
+    )
+    verification = next(payload for name, payload in fake_runtime_db.execution.calls if name == "record_verification")
+
+    assert recovery["decision"] == "revise"
+    assert recovery["workflow_state"] == "reviewing"
+    assert checkpoint["status"] == "failed"
+    assert verification["status"] == "failed"
