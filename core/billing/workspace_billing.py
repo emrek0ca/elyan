@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.persistence import get_runtime_database
 from core.storage_paths import resolve_elyan_data_dir
 
 
@@ -124,20 +125,12 @@ class WorkspaceBillingStore:
         self.storage_path = Path(storage_path or (resolve_elyan_data_dir() / "billing" / "workspaces.json")).expanduser()
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         self._records: dict[str, WorkspaceBillingRecord] = {}
+        self._repository = get_runtime_database().billing
         self._load()
 
     def _load(self) -> None:
-        if not self.storage_path.exists():
-            self._records = {}
-            return
-        try:
-            payload = json.loads(self.storage_path.read_text(encoding="utf-8"))
-        except Exception:
-            self._records = {}
-            return
-        if not isinstance(payload, dict):
-            self._records = {}
-            return
+        self._repository.ensure_legacy_import(self.storage_path)
+        payload = self._repository.load_workspace_records()
         self._records = {
             str(workspace_id): WorkspaceBillingRecord.from_dict(item)
             for workspace_id, item in payload.items()
@@ -145,12 +138,8 @@ class WorkspaceBillingStore:
         }
 
     def _save(self) -> None:
-        temp_path = self.storage_path.with_suffix(".tmp")
-        temp_path.write_text(
-            json.dumps({key: value.to_dict() for key, value in self._records.items()}, ensure_ascii=False, indent=2, default=str),
-            encoding="utf-8",
-        )
-        temp_path.replace(self.storage_path)
+        for record in self._records.values():
+            self._repository.upsert_workspace(record.to_dict())
 
     def _workspace(self, workspace_id: str) -> WorkspaceBillingRecord:
         key = str(workspace_id or "local-workspace").strip() or "local-workspace"
@@ -203,7 +192,8 @@ class WorkspaceBillingStore:
         )
         record.usage.append(entry)
         record.updated_at = _now()
-        self._save()
+        self._repository.record_usage(entry.to_dict())
+        self._repository.upsert_workspace(record.to_dict())
         return entry.to_dict()
 
     def get_workspace_summary(self, workspace_id: str) -> dict[str, Any]:

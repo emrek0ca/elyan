@@ -71,4 +71,15 @@ def resolve_proofs_root() -> Path:
     return _resolve_named_root("ELYAN_PROOFS_DIR", "proofs")
 
 
-__all__ = ["resolve_elyan_data_dir", "resolve_runs_root", "resolve_proofs_root"]
+def resolve_runtime_db_path() -> Path:
+    env_path = str(os.getenv("ELYAN_RUNTIME_DB_PATH", "") or "").strip()
+    if env_path:
+        candidate = Path(env_path).expanduser()
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        return candidate.resolve()
+    root = resolve_elyan_data_dir() / "db"
+    root.mkdir(parents=True, exist_ok=True)
+    return (root / "runtime.sqlite3").resolve()
+
+
+__all__ = ["resolve_elyan_data_dir", "resolve_proofs_root", "resolve_runs_root", "resolve_runtime_db_path"]

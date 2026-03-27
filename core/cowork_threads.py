@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from core.mission_control import get_mission_runtime
+from core.persistence import get_runtime_database
 from core.run_store import get_run_store
 from core.storage_paths import resolve_elyan_data_dir
 from core.workflow.vertical_runner import get_vertical_workflow_runner
@@ -128,35 +129,24 @@ class CoworkThreadStore:
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = asyncio.Lock()
         self._threads: dict[str, CoworkThread] = {}
+        self._repository = get_runtime_database().threads
         self._load()
 
     def _load(self) -> None:
-        if not self.storage_path.exists():
-            self._threads = {}
-            return
-        try:
-            payload = json.loads(self.storage_path.read_text(encoding="utf-8"))
-        except Exception:
-            self._threads = {}
-            return
-        if not isinstance(payload, dict):
-            self._threads = {}
-            return
+        self._repository.ensure_legacy_import(self.storage_path)
+        payload = self._repository.load_all_threads()
         self._threads = {
             str(thread_id): CoworkThread.from_dict(item)
             for thread_id, item in payload.items()
             if isinstance(item, dict)
         }
 
-    def _save(self) -> None:
-        temp_path = self.storage_path.with_suffix(".tmp")
-        payload = {thread_id: thread.to_dict() for thread_id, thread in self._threads.items()}
-        temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-        temp_path.replace(self.storage_path)
+    def _save_thread(self, thread: CoworkThread) -> None:
+        self._repository.save_thread(thread.to_dict(), [turn.to_dict() for turn in thread.turns])
 
     async def count_threads(self, *, workspace_id: str) -> int:
         async with self._lock:
-            return len([thread for thread in self._threads.values() if thread.workspace_id == workspace_id])
+            return self._repository.thread_count(workspace_id=workspace_id)
 
     async def list_threads(self, *, workspace_id: str = "", limit: int = 20) -> list[dict[str, Any]]:
         async with self._lock:
@@ -190,7 +180,7 @@ class CoworkThreadStore:
         )
         async with self._lock:
             self._threads[thread.thread_id] = thread
-            self._save()
+            self._save_thread(thread)
         return await self.add_turn(
             thread.thread_id,
             prompt=prompt,
@@ -237,7 +227,7 @@ class CoworkThreadStore:
             thread.updated_at = _now()
             if title:
                 thread.title = str(title)
-            self._save()
+            self._save_thread(thread)
 
         operator_turn = CoworkTurn(
             turn_id=f"turn_{uuid.uuid4().hex[:10]}",
@@ -277,7 +267,7 @@ class CoworkThreadStore:
                 thread.current_mode = mode
                 thread.updated_at = _now()
                 thread.turns.append(operator_turn)
-                self._save()
+                self._save_thread(thread)
             return await self.get_thread_detail(thread.thread_id)
 
         mission = await get_mission_runtime().create_mission(
@@ -310,7 +300,7 @@ class CoworkThreadStore:
             thread.current_mode = "cowork"
             thread.updated_at = _now()
             thread.turns.append(operator_turn)
-            self._save()
+            self._save_thread(thread)
         return await self.get_thread_detail(thread.thread_id)
 
     async def get_thread(self, thread_id: str) -> CoworkThread | None:

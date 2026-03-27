@@ -2,11 +2,27 @@ import asyncio
 import uuid
 import time
 import json
+import os
 from typing import Any, Dict, List, Optional, Callable
+from pathlib import Path
+from core.persistence import get_runtime_database
 from core.protocol.shared_types import RiskLevel
 from core.observability.logger import get_structured_logger
+from core.storage_paths import resolve_elyan_data_dir
 
 slog = get_structured_logger("approval_engine")
+
+
+def _create_future() -> asyncio.Future:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+    return loop.create_future()
 
 class ApprovalRequest:
     def __init__(
@@ -28,7 +44,7 @@ class ApprovalRequest:
         self.reason = reason
         self.status = "pending"
         self.created_at = time.time()
-        self.future = asyncio.get_event_loop().create_future()
+        self.future = _create_future()
         # Priority: CRITICAL=1 (highest), DESTRUCTIVE=2, WRITE_SENSITIVE=3, WRITE_SAFE=4, READ_ONLY=5 (lowest)
         self.priority = self._calculate_priority()
 
@@ -60,12 +76,78 @@ class ApprovalRequest:
             "priority": self.priority
         }
 
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "ApprovalRequest":
+        """Rehydrate persisted pending request."""
+        risk_raw = str(payload.get("risk_level") or RiskLevel.WRITE_SAFE.value)
+        try:
+            risk = RiskLevel(risk_raw)
+        except Exception:
+            risk = RiskLevel.WRITE_SAFE
+        req = cls(
+            request_id=str(payload.get("request_id") or f"appr_{uuid.uuid4().hex[:8]}"),
+            session_id=str(payload.get("session_id") or "unknown"),
+            run_id=str(payload.get("run_id") or ""),
+            action_type=str(payload.get("action_type") or "unknown"),
+            payload=payload.get("payload") if isinstance(payload.get("payload"), dict) else {},
+            risk_level=risk,
+            reason=str(payload.get("reason") or ""),
+        )
+        req.status = str(payload.get("status") or "pending")
+        created_at = payload.get("created_at")
+        try:
+            req.created_at = float(created_at) if created_at is not None else time.time()
+        except Exception:
+            req.created_at = time.time()
+        req.priority = req._calculate_priority()
+        return req
+
 class ApprovalEngine:
     """
     Manages pending human approval requests for sensitive actions.
     """
     def __init__(self):
         self._pending: Dict[str, ApprovalRequest] = {}
+        self._pending_store_path = resolve_elyan_data_dir() / "approvals" / "pending.json"
+        self._pending_store_path.parent.mkdir(parents=True, exist_ok=True)
+        self._repository = get_runtime_database().approvals
+        persist_mode = os.environ.get("ELYAN_APPROVAL_PERSIST", "1").strip().lower()
+        self._persistence_enabled = persist_mode not in {"0", "false", "off"} and (
+            persist_mode in {"force", "always"} or "PYTEST_CURRENT_TEST" not in os.environ
+        )
+        if self._persistence_enabled:
+            self._restore_pending()
+
+    def _persist_pending(self) -> None:
+        """Persist current pending approvals for crash recovery."""
+        if not self._persistence_enabled:
+            return
+        try:
+            payload = [req.to_dict() for req in self._pending.values()]
+            tmp = self._pending_store_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(self._pending_store_path)
+        except Exception as e:
+            slog.log_event("approval_persist_error", {"error": str(e)}, level="warning")
+
+    def _restore_pending(self) -> None:
+        """Restore pending approvals from disk after restart."""
+        try:
+            self._repository.ensure_legacy_import(self._pending_store_path)
+            raw = self._repository.list_pending()
+            restored = 0
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                req = ApprovalRequest.from_dict(item)
+                if req.status != "pending":
+                    continue
+                self._pending[req.request_id] = req
+                restored += 1
+            if restored:
+                slog.log_event("approval_restored", {"count": restored})
+        except Exception as e:
+            slog.log_event("approval_restore_error", {"error": str(e)}, level="warning")
 
     async def request_approval(
         self,
@@ -79,9 +161,38 @@ class ApprovalEngine:
         """
         Creates a new approval request and waits for resolution.
         """
+        try:
+            from core.reasoning.uncertainty_engine import get_uncertainty_engine
+
+            uncertainty = get_uncertainty_engine()
+            if not uncertainty.should_ask_approval(action_type):
+                slog.log_event(
+                    "approval_implicit",
+                    {"action": action_type, "reason": "uncertainty_threshold_met"},
+                    session_id=session_id,
+                    run_id=run_id,
+                )
+                return True
+        except Exception as exc:
+            slog.log_event(
+                "approval_uncertainty_unavailable",
+                {"action": action_type, "error": str(exc)},
+                level="debug",
+                session_id=session_id,
+                run_id=run_id,
+            )
         request_id = f"appr_{uuid.uuid4().hex[:8]}"
         request = ApprovalRequest(request_id, session_id, run_id, action_type, payload, risk_level, reason)
         self._pending[request_id] = request
+        self._persist_pending()
+        if self._persistence_enabled:
+            approval_payload = request.to_dict()
+            approval_payload["workspace_id"] = str(
+                payload.get("workspace_id")
+                or payload.get("metadata", {}).get("workspace_id")
+                or "local-workspace"
+            )
+            self._repository.upsert_pending(approval_payload)
 
         slog.log_event("approval_requested", {
             "request_id": request_id,
@@ -102,6 +213,9 @@ class ApprovalEngine:
             return False
         finally:
             self._pending.pop(request_id, None)
+            self._persist_pending()
+            if self._persistence_enabled and request.status == "pending":
+                self._repository.mark_timed_out(request_id)
 
     async def _notify_pending(self, request: ApprovalRequest) -> None:
         """Notify web UI and channels about pending approval."""
@@ -146,6 +260,9 @@ class ApprovalEngine:
 
             # Remove from pending (async context will also pop in finally)
             self._pending.pop(request_id, None)
+            self._persist_pending()
+            if self._persistence_enabled:
+                self._repository.mark_resolved(request_id, approved=approved, resolver_id=resolver_id)
 
             slog.log_event("approval_resolved", {
                 "request_id": request_id,
