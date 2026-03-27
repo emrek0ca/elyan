@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Iterable
 
+from core.persistence import get_runtime_database
 from core.storage_paths import resolve_elyan_data_dir
 
 
@@ -21,6 +22,20 @@ def _safe_json(value: Any) -> Any:
         return value
     except Exception:
         return str(value)
+
+
+def _runtime_connectors_repo():
+    try:
+        repo = getattr(get_runtime_database(), "connectors", None)
+    except Exception:
+        return None
+    return repo
+
+
+def _workspace_id_from_payload(payload: dict[str, Any]) -> str:
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    workspace_id = str(payload.get("workspace_id") or metadata.get("workspace_id") or "").strip()
+    return workspace_id or "local-workspace"
 
 
 @dataclass
@@ -117,6 +132,13 @@ class IntegrationTraceStore:
             metadata=dict(metadata or {}),
         )
         payload = record.to_dict()
+        payload["workspace_id"] = _workspace_id_from_payload(payload)
+        repo = _runtime_connectors_repo()
+        if repo is not None:
+            try:
+                repo.record_trace(payload)
+            except Exception:
+                pass
         with self._lock:
             with self.trace_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str) + "\n")
@@ -133,13 +155,41 @@ class IntegrationTraceStore:
         integration_type: str = "",
     ) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
-        if not self.trace_path.exists():
-            return rows
         low_provider = str(provider or "").strip().lower()
         low_user = str(user_id or "").strip().lower()
         low_operation = str(operation or "").strip().lower()
         low_connector = str(connector_name or "").strip().lower()
         low_type = str(integration_type or "").strip().lower()
+        repo = _runtime_connectors_repo()
+        if repo is not None:
+            try:
+                rows = repo.list_traces(
+                    limit=limit,
+                    provider=provider,
+                    user_id=user_id,
+                    operation=operation,
+                    connector_name=connector_name,
+                    integration_type=integration_type,
+                    workspace_id="local-workspace",
+                )
+            except TypeError:
+                try:
+                    rows = repo.list_traces(
+                        limit=limit,
+                        provider=provider,
+                        user_id=user_id,
+                        operation=operation,
+                        connector_name=connector_name,
+                        integration_type=integration_type,
+                    )
+                except TypeError:
+                    rows = repo.list_traces(limit=limit)
+            except Exception:
+                rows = []
+            if rows:
+                return [dict(item) if isinstance(item, dict) else item.model_dump() for item in list(rows or [])][: max(1, int(limit or 100))]
+        if not self.trace_path.exists():
+            return rows
         try:
             raw_lines = self.trace_path.read_text(encoding="utf-8").splitlines()
         except Exception:
@@ -167,6 +217,14 @@ class IntegrationTraceStore:
         return rows
 
     def summary(self, *, limit: int = 200) -> dict[str, Any]:
+        repo = _runtime_connectors_repo()
+        if repo is not None:
+            try:
+                summary = repo.summary(limit=limit)
+                if isinstance(summary, dict) and summary:
+                    return dict(summary)
+            except Exception:
+                pass
         rows = self.list_traces(limit=limit)
         by_provider: dict[str, int] = {}
         by_operation: dict[str, int] = {}

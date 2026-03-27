@@ -188,6 +188,105 @@ def test_oauth_broker_handles_persistence_failure_gracefully(tmp_path, monkeypat
     assert account.access_token == "access-1"
 
 
+def test_oauth_broker_syncs_connector_truth_to_runtime_db(tmp_path, monkeypatch, oauth_config):
+    vault = SecureVault(vault_dir=str(tmp_path / "vault"))
+    vault.unlock()
+
+    class _ConnectorRepo:
+        def __init__(self):
+            self.accounts: dict[tuple[str, str, str], dict[str, object]] = {}
+            self.traces: list[dict[str, object]] = []
+
+        def upsert_account(self, payload):
+            payload = dict(payload or {})
+            key = (
+                str(payload.get("workspace_id") or "local-workspace"),
+                str(payload.get("provider") or ""),
+                str(payload.get("account_alias") or "default"),
+            )
+            self.accounts[key] = payload
+
+        def list_accounts(self, workspace_id="local-workspace", provider=""):
+            rows = list(self.accounts.values())
+            if provider:
+                rows = [row for row in rows if str(row.get("provider") or "") == provider]
+            if workspace_id:
+                rows = [row for row in rows if str(row.get("workspace_id") or "") == workspace_id]
+            return rows
+
+        def get_account(self, provider, account_alias, workspace_id="local-workspace"):
+            return self.accounts.get((workspace_id, provider, account_alias))
+
+        def delete_account(self, provider, account_alias, workspace_id="local-workspace"):
+            self.accounts.pop((workspace_id, provider, account_alias), None)
+
+        def record_trace(self, payload):
+            self.traces.append(dict(payload or {}))
+            return dict(payload or {})
+
+        def list_traces(self, **kwargs):
+            _ = kwargs
+            return list(self.traces)
+
+        def summary(self, **kwargs):
+            _ = kwargs
+            return {"total": len(self.traces), "recent": list(self.traces)}
+
+    class _RuntimeDb:
+        def __init__(self):
+            self.connectors = _ConnectorRepo()
+
+    runtime_db = _RuntimeDb()
+    monkeypatch.setattr("integrations.auth.get_runtime_database", lambda: runtime_db)
+    broker = OAuthBroker(vault=vault)
+
+    class _Resp:
+        def __init__(self, payload, status_code=200):
+            self._payload = payload
+            self.status_code = status_code
+
+        def json(self):
+            return dict(self._payload)
+
+    def fake_post(url, data=None, timeout=None):
+        _ = (url, timeout)
+        grant_type = str((data or {}).get("grant_type") or "")
+        if grant_type == "authorization_code":
+            return _Resp(
+                {
+                    "access_token": "access-1",
+                    "refresh_token": "refresh-1",
+                    "token_type": "Bearer",
+                    "expires_in": 3600,
+                }
+            )
+        return _Resp({}, 400)
+
+    monkeypatch.setattr("integrations.auth.requests.post", fake_post)
+
+    account = broker.authorize(
+        "google",
+        ["email.read"],
+        authorization_code="auth-code",
+        extra={"display_name": "Gmail", "workspace_id": "workspace-alpha"},
+    )
+    assert account.is_ready is True
+
+    records = runtime_db.connectors.list_accounts(workspace_id="workspace-alpha", provider="google")
+    assert len(records) == 1
+    assert records[0]["account_alias"] == "default"
+    assert records[0]["workspace_id"] == "workspace-alpha"
+    assert records[0]["status"] == ConnectorState.READY.value
+    assert runtime_db.connectors.get_account("google", "default", workspace_id="workspace-alpha") is not None
+    loaded = broker.list_accounts("google")
+    assert len(loaded) == 1
+    assert loaded[0].provider == "google"
+    assert loaded[0].display_name == "Gmail"
+    assert broker.delete_account("google", "default") is True
+    assert runtime_db.connectors.get_account("google", "default", workspace_id="workspace-alpha") is None
+    assert broker.list_accounts("google") == []
+
+
 def test_integration_registry_resolves_oauth_first_capabilities():
     email_capability = integration_registry.resolve("Gmail'de son mesajları oku")
     calendar_capability = integration_registry.resolve("Google Calendar'a toplantı ekle")

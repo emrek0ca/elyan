@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import requests
 
 from config.elyan_config import elyan_config
+from core.persistence import get_runtime_database
 from core.security.secure_vault import SecureVault
 from utils.logger import get_logger
 
@@ -46,6 +47,54 @@ def _default_auth_url(provider: str) -> str:
     return defaults.get(provider, "")
 
 
+def _runtime_connectors_repo():
+    try:
+        repo = getattr(get_runtime_database(), "connectors", None)
+    except Exception:
+        return None
+    return repo
+
+
+def _workspace_id_from_metadata(*sources: dict[str, Any] | None) -> str:
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        value = str(source.get("workspace_id") or "").strip()
+        if value:
+            return value
+        metadata = source.get("metadata")
+        if isinstance(metadata, dict):
+            value = str(metadata.get("workspace_id") or "").strip()
+            if value:
+                return value
+    return "local-workspace"
+
+
+def _merge_account_public_state(account: OAuthAccount, payload: dict[str, Any]) -> OAuthAccount:
+    merged = account.model_dump()
+    for key, value in dict(payload or {}).items():
+        if key in {"access_token", "refresh_token"}:
+            continue
+        if key == "metadata" and isinstance(value, dict):
+            base = dict(merged.get("metadata") or {})
+            base.update(value)
+            merged["metadata"] = base
+        else:
+            merged[key] = value
+    return OAuthAccount.model_validate(merged)
+
+
+def _account_from_payload(payload: dict[str, Any] | Any) -> OAuthAccount | None:
+    if hasattr(payload, "model_dump"):
+        payload = payload.model_dump()
+    if not isinstance(payload, dict) or not payload:
+        return None
+    try:
+        return OAuthAccount.model_validate(payload)
+    except Exception:
+        return None
+
+
 class OAuthBroker:
     """
     Provider-agnostic OAuth broker with encrypted persistence.
@@ -67,6 +116,53 @@ class OAuthBroker:
         return dict(raw or {}) if isinstance(raw, dict) else {}
 
     def _load_account(self, provider: str, account_alias: str = "default") -> OAuthAccount | None:
+        repo = _runtime_connectors_repo()
+        if repo is not None:
+            for getter in ("get_account", "load_account"):
+                try:
+                    record = getattr(repo, getter)(provider, account_alias, workspace_id="local-workspace")
+                except TypeError:
+                    try:
+                        record = getattr(repo, getter)(provider, account_alias)
+                    except Exception:
+                        record = None
+                except Exception:
+                    record = None
+                account = _account_from_payload(record)
+                if account:
+                    vault_account = None
+                    try:
+                        raw = self.vault.get_secret(_provider_key(provider, account_alias), "")
+                        if raw:
+                            vault_account = OAuthAccount.model_validate(json.loads(raw))
+                    except Exception:
+                        vault_account = None
+                    if vault_account:
+                        account = _merge_account_public_state(account, vault_account.model_dump())
+                    return account
+            try:
+                rows = repo.list_accounts(workspace_id="", provider=provider or "")
+            except TypeError:
+                try:
+                    rows = repo.list_accounts(provider=provider or "")
+                except TypeError:
+                    rows = repo.list_accounts()
+            except Exception:
+                rows = []
+            for row in list(rows or []):
+                account = _account_from_payload(row)
+                if not account or str(account.account_alias or "default") != str(account_alias or "default"):
+                    continue
+                vault_account = None
+                try:
+                    raw = self.vault.get_secret(_provider_key(provider, account_alias), "")
+                    if raw:
+                        vault_account = OAuthAccount.model_validate(json.loads(raw))
+                except Exception:
+                    vault_account = None
+                if vault_account:
+                    account = _merge_account_public_state(account, vault_account.model_dump())
+                return account
         key = _provider_key(provider, account_alias)
         try:
             raw = self.vault.get_secret(key, "")
@@ -86,6 +182,18 @@ class OAuthBroker:
             self.vault.store_secret(key, payload)
         except Exception as exc:
                 logger.warning("oauth_account_persistence_failed", extra={"provider": account.provider, "alias": account.account_alias, "error": str(exc)})
+        repo = _runtime_connectors_repo()
+        if repo is not None:
+            record = account.model_dump()
+            record["workspace_id"] = _workspace_id_from_metadata(record, dict(account.metadata or {}))
+            record["secret_ref"] = key
+            try:
+                repo.upsert_account(record)
+            except Exception as exc:
+                logger.warning(
+                    "oauth_account_db_persistence_failed",
+                    extra={"provider": account.provider, "alias": account.account_alias, "error": str(exc)},
+                )
         try:
             from core.integration_trace import get_integration_trace_store
 
@@ -113,7 +221,59 @@ class OAuthBroker:
 
     def delete_account(self, provider: str, account_alias: str = "default") -> bool:
         key = _provider_key(provider, account_alias)
+        workspace_id = "local-workspace"
         try:
+            raw = self.vault.get_secret(key, "")
+        except Exception:
+            raw = ""
+        if raw:
+            try:
+                workspace_id = _workspace_id_from_metadata(json.loads(raw))
+            except Exception:
+                workspace_id = "local-workspace"
+        try:
+            repo = _runtime_connectors_repo()
+            if repo is not None:
+                deleted = False
+                try:
+                    repo.delete_account(provider, account_alias, workspace_id=workspace_id)
+                    deleted = True
+                except TypeError:
+                    try:
+                        repo.delete_account(provider, account_alias)
+                        deleted = True
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+                if not deleted:
+                    try:
+                        rows = repo.list_accounts(workspace_id="", provider=provider or "")
+                    except TypeError:
+                        try:
+                            rows = repo.list_accounts(provider=provider or "")
+                        except TypeError:
+                            rows = repo.list_accounts()
+                    except Exception:
+                        rows = []
+                    for row in list(rows or []):
+                        account = _account_from_payload(row)
+                        if not account or str(account.account_alias or "default") != str(account_alias or "default"):
+                            continue
+                        row_workspace_id = "local-workspace"
+                        if isinstance(row, dict):
+                            row_workspace_id = _workspace_id_from_metadata(row)
+                        elif hasattr(row, "model_dump"):
+                            row_workspace_id = _workspace_id_from_metadata(row.model_dump())
+                        try:
+                            repo.delete_account(provider, account_alias, workspace_id=row_workspace_id)
+                        except TypeError:
+                            try:
+                                repo.delete_account(provider, account_alias)
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
             self.vault.delete_secret(key)
             try:
                 from core.integration_trace import get_integration_trace_store
@@ -136,6 +296,43 @@ class OAuthBroker:
             return False
 
     def list_accounts(self, provider: str | None = None) -> list[OAuthAccount]:
+        repo = _runtime_connectors_repo()
+        if repo is not None:
+            rows = []
+            try:
+                rows = list(repo.list_accounts(workspace_id="local-workspace", provider=provider or ""))
+            except TypeError:
+                try:
+                    rows = list(repo.list_accounts(provider=provider or ""))
+                except TypeError:
+                    rows = list(repo.list_accounts())
+            except Exception:
+                rows = []
+            if not rows:
+                try:
+                    rows = list(repo.list_accounts(workspace_id="", provider=provider or ""))
+                except TypeError:
+                    try:
+                        rows = list(repo.list_accounts(provider=provider or ""))
+                    except TypeError:
+                        rows = list(repo.list_accounts())
+                except Exception:
+                    rows = []
+            accounts: list[OAuthAccount] = []
+            for row in list(rows or []):
+                account = _account_from_payload(row)
+                if not account:
+                    continue
+                try:
+                    raw = self.vault.get_secret(_provider_key(account.provider, account.account_alias), "")
+                    if raw:
+                        secret_account = OAuthAccount.model_validate(json.loads(raw))
+                        account = _merge_account_public_state(account, secret_account.model_dump())
+                except Exception:
+                    pass
+                accounts.append(account)
+            if accounts:
+                return accounts
         prefix = f"oauth_accounts::{str(provider or '').strip().lower()}::" if provider else "oauth_accounts::"
         accounts: list[OAuthAccount] = []
         try:

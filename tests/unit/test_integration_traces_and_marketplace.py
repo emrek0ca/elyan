@@ -171,6 +171,64 @@ async def test_gateway_integration_account_and_trace_endpoints(monkeypatch, tmp_
     assert summary_payload["traces"]["total"] == 4
 
 
+def test_integration_trace_store_prefers_runtime_db_when_jsonl_missing(monkeypatch, tmp_path):
+    class _ConnectorRepo:
+        def __init__(self):
+            self.traces = [
+                {
+                    "trace_id": "itr_1",
+                    "provider": "google",
+                    "connector_name": "gmail",
+                    "integration_type": "email",
+                    "operation": "connector",
+                    "status": "success",
+                    "success": True,
+                    "latency_ms": 12.5,
+                    "fallback_used": False,
+                },
+                {
+                    "trace_id": "itr_2",
+                    "provider": "google",
+                    "connector_name": "calendar",
+                    "integration_type": "calendar",
+                    "operation": "connector",
+                    "status": "success",
+                    "success": True,
+                    "latency_ms": 20.0,
+                    "fallback_used": True,
+                },
+            ]
+
+        def list_traces(self, **kwargs):
+            limit = int(kwargs.get("limit") or 100)
+            provider = str(kwargs.get("provider") or "").strip().lower()
+            rows = [dict(item) for item in self.traces]
+            if provider:
+                rows = [row for row in rows if str(row.get("provider") or "").strip().lower() == provider]
+            return rows[:limit]
+
+        def summary(self, **kwargs):
+            _ = kwargs
+            return {"total": len(self.traces), "recent": list(self.traces), "fallback_count": 1}
+
+    class _RuntimeDb:
+        def __init__(self):
+            self.connectors = _ConnectorRepo()
+
+    runtime_db = _RuntimeDb()
+    monkeypatch.setattr("core.integration_trace.get_runtime_database", lambda: runtime_db)
+    store = IntegrationTraceStore(storage_root=tmp_path / "trace")
+
+    rows = store.list_traces(limit=10, provider="google")
+    assert len(rows) == 2
+    assert rows[0]["trace_id"] == "itr_1"
+
+    summary = store.summary(limit=10)
+    assert summary["total"] == 2
+    assert summary["fallback_count"] == 1
+    assert summary["recent"][0]["trace_id"] == "itr_1"
+
+
 @pytest.mark.asyncio
 async def test_marketplace_rejects_untrusted_urls_and_hashless_remote_packages(monkeypatch, tmp_path):
     monkeypatch.setattr("core.skills.marketplace.Path.home", lambda: tmp_path)
