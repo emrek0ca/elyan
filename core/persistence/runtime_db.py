@@ -31,6 +31,11 @@ from sqlalchemy.engine import Connection, Engine
 from core.observability.logger import get_structured_logger
 from core.security.encrypted_vault import get_encrypted_vault
 from core.storage_paths import resolve_runtime_db_path
+from core.persistence.workspace_config import (
+    resolve_workspace_auth_backend,
+    resolve_workspace_database_mode,
+    resolve_workspace_database_url,
+)
 
 slog = get_structured_logger("runtime_db")
 
@@ -734,6 +739,102 @@ sync_receipts_table = Table(
     Column("workspace_id", String(128), nullable=False),
     Column("accepted_at", Float, nullable=False, default=_now),
 )
+
+workspace_users_table = Table(
+    "workspace_users",
+    WORKSPACE_METADATA,
+    Column("user_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), nullable=False),
+    Column("email", String(256), nullable=False),
+    Column("display_name", String(256), nullable=False, default=""),
+    Column("password_hash", String(256), nullable=False, default=""),
+    Column("password_salt", String(128), nullable=False, default=""),
+    Column("status", String(64), nullable=False, default="active"),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+    Column("updated_at", Float, nullable=False, default=_now),
+)
+Index("ix_workspace_users_workspace_updated", workspace_users_table.c.workspace_id, workspace_users_table.c.updated_at)
+Index("ix_workspace_users_workspace_email", workspace_users_table.c.workspace_id, workspace_users_table.c.email, unique=True)
+
+workspace_user_sessions_table = Table(
+    "workspace_user_sessions",
+    WORKSPACE_METADATA,
+    Column("session_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), nullable=False),
+    Column("user_id", String(128), nullable=False),
+    Column("session_token_hash", String(128), nullable=False, unique=True),
+    Column("status", String(64), nullable=False, default="active"),
+    Column("expires_at", Float, nullable=False, default=_now),
+    Column("last_seen_at", Float, nullable=False, default=_now),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+    Column("updated_at", Float, nullable=False, default=_now),
+)
+Index("ix_workspace_user_sessions_workspace_updated", workspace_user_sessions_table.c.workspace_id, workspace_user_sessions_table.c.updated_at)
+Index("ix_workspace_user_sessions_user_updated", workspace_user_sessions_table.c.user_id, workspace_user_sessions_table.c.updated_at)
+
+workspace_data_policies_table = Table(
+    "workspace_data_policies",
+    WORKSPACE_METADATA,
+    Column("workspace_id", String(128), primary_key=True),
+    Column("allow_product_analytics", Boolean, nullable=False, default=True),
+    Column("allow_non_personal_learning", Boolean, nullable=False, default=True),
+    Column("allow_personal_data_learning", Boolean, nullable=False, default=False),
+    Column("allow_support_access", Boolean, nullable=False, default=False),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("updated_at", Float, nullable=False, default=_now),
+)
+
+workspace_user_preference_profiles_table = Table(
+    "workspace_user_preference_profiles",
+    WORKSPACE_METADATA,
+    Column("profile_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), nullable=False),
+    Column("user_id", String(128), nullable=False),
+    Column("explanation_style", String(64), nullable=False, default="concise"),
+    Column("approval_sensitivity_hint", String(64), nullable=False, default="balanced"),
+    Column("preferred_route", String(64), nullable=False, default="balanced"),
+    Column("preferred_model", String(128), nullable=False, default=""),
+    Column("task_templates_json", Text, nullable=False, default="[]"),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("updated_at", Float, nullable=False, default=_now),
+)
+Index("ix_workspace_user_preference_profiles_workspace_user", workspace_user_preference_profiles_table.c.workspace_id, workspace_user_preference_profiles_table.c.user_id, unique=True)
+
+workspace_operational_feedback_table = Table(
+    "workspace_operational_feedback",
+    WORKSPACE_METADATA,
+    Column("feedback_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), nullable=False),
+    Column("user_id", String(128), nullable=False),
+    Column("category", String(64), nullable=False, default="runtime"),
+    Column("entity_id", String(128), nullable=False, default=""),
+    Column("outcome", String(32), nullable=False, default="neutral"),
+    Column("reward", Float, nullable=False, default=0.0),
+    Column("latency_ms", Float, nullable=False, default=0.0),
+    Column("recovery_count", Integer, nullable=False, default=0),
+    Column("payload_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+)
+Index("ix_workspace_operational_feedback_workspace_created", workspace_operational_feedback_table.c.workspace_id, workspace_operational_feedback_table.c.created_at)
+
+workspace_tool_reliability_table = Table(
+    "workspace_tool_reliability",
+    WORKSPACE_METADATA,
+    Column("stat_id", String(160), primary_key=True),
+    Column("workspace_id", String(128), nullable=False),
+    Column("scope", String(64), nullable=False, default="global"),
+    Column("tool_name", String(128), nullable=False),
+    Column("success_count", Integer, nullable=False, default=0),
+    Column("failure_count", Integer, nullable=False, default=0),
+    Column("sample_count", Integer, nullable=False, default=0),
+    Column("avg_reward", Float, nullable=False, default=0.0),
+    Column("avg_latency_ms", Float, nullable=False, default=0.0),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("updated_at", Float, nullable=False, default=_now),
+)
+Index("ix_workspace_tool_reliability_workspace_updated", workspace_tool_reliability_table.c.workspace_id, workspace_tool_reliability_table.c.updated_at)
 
 
 class OutboxRepository:
@@ -1965,7 +2066,26 @@ class LearningRepository:
                 .values(**values)
             )
         else:
-                conn.execute(global_tool_reliability_table.insert().values(**values))
+            conn.execute(global_tool_reliability_table.insert().values(**values))
+        workspace_id = str((metadata or {}).get("workspace_id") or "local-workspace")
+        self._db.outbox.enqueue(
+            conn,
+            workspace_id=workspace_id,
+            aggregate_type="tool_reliability",
+            aggregate_id=stat_id,
+            event_type="learning.tool_reliability.updated",
+            payload={
+                "stat_id": stat_id,
+                "workspace_id": workspace_id,
+                "scope": values["scope"],
+                "tool_name": values["tool_name"],
+                "success_count": values["success_count"],
+                "failure_count": values["failure_count"],
+                "sample_count": values["sample_count"],
+                "avg_reward": values["avg_reward"],
+                "avg_latency_ms": values["avg_latency_ms"],
+            },
+        )
 
 
 class LocalAuthRepository:
@@ -2205,6 +2325,321 @@ class LocalAuthSessionRepository:
                 payload={"session_id": str(row["session_id"]), "user_id": str(row["user_id"])},
             )
         return True
+
+
+class WorkspaceDataPolicyRepository:
+    def __init__(self, db: "RuntimeDatabase") -> None:
+        self._db = db
+
+    def ensure_defaults(
+        self,
+        *,
+        workspace_id: str,
+        metadata: dict[str, Any] | None = None,
+        conn: Connection | None = None,
+    ) -> dict[str, Any]:
+        if not self._db.workspace_sync.engine:
+            return {}
+        values = {
+            "workspace_id": str(workspace_id or "local-workspace"),
+            "allow_product_analytics": True,
+            "allow_non_personal_learning": True,
+            "allow_personal_data_learning": False,
+            "allow_support_access": False,
+            "metadata_json": _json_dumps(dict(metadata or {})),
+            "updated_at": _now(),
+        }
+        owns_connection = conn is None
+        target_conn = conn
+        if target_conn is None:
+            target_conn = self._db.workspace_sync.engine.begin()
+        try:
+            db_conn = target_conn.__enter__() if owns_connection else target_conn
+            existing = db_conn.execute(
+                select(workspace_data_policies_table.c.workspace_id).where(workspace_data_policies_table.c.workspace_id == values["workspace_id"])
+            ).first()
+            if existing:
+                db_conn.execute(
+                    workspace_data_policies_table.update()
+                    .where(workspace_data_policies_table.c.workspace_id == values["workspace_id"])
+                    .values(**values)
+                )
+            else:
+                db_conn.execute(workspace_data_policies_table.insert().values(**values))
+        finally:
+            if owns_connection:
+                target_conn.__exit__(None, None, None)
+        if not owns_connection:
+            return {
+                "workspace_id": values["workspace_id"],
+                "allow_product_analytics": values["allow_product_analytics"],
+                "allow_non_personal_learning": values["allow_non_personal_learning"],
+                "allow_personal_data_learning": values["allow_personal_data_learning"],
+                "allow_support_access": values["allow_support_access"],
+                "metadata": _json_loads(values["metadata_json"], {}),
+                "updated_at": float(values["updated_at"] or 0.0),
+            }
+        return self.get_policy(workspace_id=values["workspace_id"]) or {}
+
+    def get_policy(self, *, workspace_id: str) -> dict[str, Any] | None:
+        if not self._db.workspace_sync.engine:
+            return None
+        with self._db.workspace_sync.engine.begin() as conn:
+            row = conn.execute(
+                select(workspace_data_policies_table).where(workspace_data_policies_table.c.workspace_id == str(workspace_id or "local-workspace"))
+            ).mappings().first()
+        if not row:
+            return None
+        return {
+            "workspace_id": str(row["workspace_id"] or "local-workspace"),
+            "allow_product_analytics": bool(row["allow_product_analytics"]),
+            "allow_non_personal_learning": bool(row["allow_non_personal_learning"]),
+            "allow_personal_data_learning": bool(row["allow_personal_data_learning"]),
+            "allow_support_access": bool(row["allow_support_access"]),
+            "metadata": _json_loads(row["metadata_json"], {}),
+            "updated_at": float(row["updated_at"] or 0.0),
+        }
+
+
+class WorkspaceAuthRepository(LocalAuthRepository):
+    def __init__(self, db: "RuntimeDatabase") -> None:
+        super().__init__(db)
+
+    def upsert_user(
+        self,
+        *,
+        email: str,
+        password: str,
+        display_name: str = "",
+        workspace_id: str = "",
+        status: str = "active",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if not self._db.workspace_sync.engine:
+            raise RuntimeError("workspace database unavailable")
+        normalized_email = self._normalize_email(email)
+        if not normalized_email:
+            raise ValueError("email required")
+        if not str(password or ""):
+            raise ValueError("password required")
+        salt = os.urandom(16).hex()
+        password_hash = self._hash_password(password, salt)
+        now = _now()
+        resolved_workspace = str(workspace_id or "").strip() or self._default_workspace_id(normalized_email)
+        with self._db.workspace_sync.engine.begin() as conn:
+            existing_workspace = conn.execute(
+                select(workspaces_table.c.workspace_id).where(workspaces_table.c.workspace_id == resolved_workspace)
+            ).first()
+            if existing_workspace:
+                conn.execute(
+                    workspaces_table.update()
+                    .where(workspaces_table.c.workspace_id == resolved_workspace)
+                    .values(
+                        display_name=str(display_name or normalized_email.split("@")[0]),
+                        status="active",
+                        metadata_json=_json_dumps({"auth_backend": "workspace"}),
+                        updated_at=now,
+                    )
+                )
+            else:
+                conn.execute(
+                    workspaces_table.insert().values(
+                        workspace_id=resolved_workspace,
+                        display_name=str(display_name or normalized_email.split("@")[0]),
+                        status="active",
+                        metadata_json=_json_dumps({"auth_backend": "workspace"}),
+                        updated_at=now,
+                    )
+                )
+            existing = conn.execute(
+                select(workspace_users_table).where(
+                    workspace_users_table.c.workspace_id == resolved_workspace,
+                    workspace_users_table.c.email == normalized_email,
+                )
+            ).mappings().first()
+            row_values = {
+                "workspace_id": resolved_workspace,
+                "email": normalized_email,
+                "display_name": str(display_name or normalized_email.split("@")[0]),
+                "password_hash": password_hash,
+                "password_salt": salt,
+                "status": str(status or "active"),
+                "metadata_json": _json_dumps(dict(metadata or {})),
+                "updated_at": now,
+            }
+            if existing:
+                user_id = str(existing["user_id"])
+                conn.execute(
+                    workspace_users_table.update()
+                    .where(workspace_users_table.c.user_id == user_id)
+                    .values(**row_values)
+                )
+            else:
+                user_id = f"user_{uuid.uuid4().hex[:12]}"
+                conn.execute(
+                    workspace_users_table.insert().values(
+                        user_id=user_id,
+                        created_at=now,
+                        **row_values,
+                    )
+                )
+                membership_id = f"membership_{uuid.uuid4().hex[:12]}"
+                conn.execute(
+                    workspace_memberships_table.insert().values(
+                        membership_id=membership_id,
+                        workspace_id=resolved_workspace,
+                        actor_id=user_id,
+                        role="owner",
+                        status="active",
+                        updated_at=now,
+                    )
+                )
+            self._db.workspace_data_policies.ensure_defaults(workspace_id=resolved_workspace, conn=conn)
+            row = conn.execute(
+                select(workspace_users_table).where(workspace_users_table.c.user_id == user_id)
+            ).mappings().first()
+        return self._db._decode_workspace_user_row(dict(row or {})) if row else {}
+
+    def authenticate_user(
+        self,
+        *,
+        email: str,
+        password: str,
+        workspace_id: str = "",
+    ) -> dict[str, Any] | None:
+        if not self._db.workspace_sync.engine:
+            return None
+        normalized_email = self._normalize_email(email)
+        with self._db.workspace_sync.engine.begin() as conn:
+            stmt = select(workspace_users_table).where(
+                workspace_users_table.c.email == normalized_email,
+                workspace_users_table.c.status == "active",
+            )
+            if str(workspace_id or "").strip():
+                stmt = stmt.where(workspace_users_table.c.workspace_id == str(workspace_id or "").strip())
+            else:
+                stmt = stmt.order_by(workspace_users_table.c.updated_at.desc())
+            row = conn.execute(stmt).mappings().first()
+        if not row:
+            return None
+        expected = self._hash_password(password, str(row["password_salt"] or ""))
+        if not hmac.compare_digest(expected, str(row["password_hash"] or "")):
+            return None
+        return self._db._decode_workspace_user_row(dict(row))
+
+
+class WorkspaceAuthSessionRepository(LocalAuthSessionRepository):
+    def create_session(
+        self,
+        *,
+        user: dict[str, Any],
+        ttl_seconds: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], str]:
+        if not self._db.workspace_sync.engine:
+            raise RuntimeError("workspace database unavailable")
+        user_id = str(user.get("user_id") or "").strip()
+        workspace_id = str(user.get("workspace_id") or "").strip() or "local-workspace"
+        if not user_id:
+            raise ValueError("user_id required")
+        now = _now()
+        ttl = max(300, int(ttl_seconds or self._DEFAULT_TTL_SECONDS))
+        session_token = f"elys_{secrets.token_urlsafe(32)}"
+        token_hash = self._hash_token(session_token)
+        session_id = f"session_{uuid.uuid4().hex[:12]}"
+        values = {
+            "session_id": session_id,
+            "workspace_id": workspace_id,
+            "user_id": user_id,
+            "session_token_hash": token_hash,
+            "status": "active",
+            "expires_at": now + ttl,
+            "last_seen_at": now,
+            "metadata_json": _json_dumps(dict(metadata or {})),
+            "created_at": now,
+            "updated_at": now,
+        }
+        with self._db.workspace_sync.engine.begin() as conn:
+            conn.execute(workspace_user_sessions_table.insert().values(**values))
+        return self._db._decode_workspace_session_row(values), session_token
+
+    def resolve_session(self, session_token: str, *, touch: bool = True) -> dict[str, Any] | None:
+        if not self._db.workspace_sync.engine:
+            return None
+        token_hash = self._hash_token(session_token)
+        now = _now()
+        with self._db.workspace_sync.engine.begin() as conn:
+            row = conn.execute(
+                select(workspace_user_sessions_table, workspace_users_table)
+                .join(workspace_users_table, workspace_users_table.c.user_id == workspace_user_sessions_table.c.user_id)
+                .where(
+                    workspace_user_sessions_table.c.session_token_hash == token_hash,
+                    workspace_user_sessions_table.c.status == "active",
+                    workspace_user_sessions_table.c.expires_at > now,
+                    workspace_users_table.c.status == "active",
+                )
+            ).mappings().first()
+            if not row:
+                return None
+            if touch:
+                conn.execute(
+                    workspace_user_sessions_table.update()
+                    .where(workspace_user_sessions_table.c.session_id == str(row["session_id"]))
+                    .values(last_seen_at=now, updated_at=now)
+                )
+        return self._db._decode_workspace_session_row(dict(row))
+
+    def revoke_session(self, session_token: str) -> bool:
+        if not self._db.workspace_sync.engine:
+            return False
+        token_hash = self._hash_token(session_token)
+        with self._db.workspace_sync.engine.begin() as conn:
+            row = conn.execute(
+                select(workspace_user_sessions_table).where(workspace_user_sessions_table.c.session_token_hash == token_hash)
+            ).mappings().first()
+            if not row:
+                return False
+            conn.execute(
+                workspace_user_sessions_table.update()
+                .where(workspace_user_sessions_table.c.session_id == str(row["session_id"]))
+                .values(status="revoked", updated_at=_now())
+            )
+        return True
+
+
+class AuthRepositoryFacade:
+    def __init__(self, db: "RuntimeDatabase") -> None:
+        self._db = db
+
+    def _backend(self) -> LocalAuthRepository:
+        if self._db.auth_backend == "workspace" and self._db.workspace_sync.enabled and self._db.workspace_sync.engine is not None:
+            return self._db.workspace_auth
+        return self._db.local_auth
+
+    def upsert_user(self, **kwargs: Any) -> dict[str, Any]:
+        return self._backend().upsert_user(**kwargs)
+
+    def authenticate_user(self, **kwargs: Any) -> dict[str, Any] | None:
+        return self._backend().authenticate_user(**kwargs)
+
+
+class AuthSessionRepositoryFacade:
+    def __init__(self, db: "RuntimeDatabase") -> None:
+        self._db = db
+
+    def _backend(self) -> LocalAuthSessionRepository:
+        if self._db.auth_backend == "workspace" and self._db.workspace_sync.enabled and self._db.workspace_sync.engine is not None:
+            return self._db.workspace_auth_sessions
+        return self._db.local_auth_sessions
+
+    def create_session(self, **kwargs: Any) -> tuple[dict[str, Any], str]:
+        return self._backend().create_session(**kwargs)
+
+    def resolve_session(self, session_token: str, *, touch: bool = True) -> dict[str, Any] | None:
+        return self._backend().resolve_session(session_token, touch=touch)
+
+    def revoke_session(self, session_token: str) -> bool:
+        return self._backend().revoke_session(session_token)
 
 
 class ExecutionRepository:
@@ -2633,12 +3068,13 @@ class RunIndexRepository:
 
 class WorkspaceSyncAdapter:
     def __init__(self, database_url: str = "") -> None:
-        self.database_url = str(database_url or os.getenv("ELYAN_WORKSPACE_DATABASE_URL", "") or "").strip()
+        self.database_url = resolve_workspace_database_url(database_url)
+        self.mode = resolve_workspace_database_mode(self.database_url)
         self.enabled = bool(self.database_url)
         self.engine: Engine | None = None
         if not self.enabled:
             return
-        self.engine = create_engine(self.database_url, future=True)
+        self.engine = create_engine(self.database_url, future=True, pool_pre_ping=True)
         WORKSPACE_METADATA.create_all(self.engine)
 
     def accept_outbox_event(self, event_payload: dict[str, Any]) -> bool:
@@ -2830,7 +3266,84 @@ class WorkspaceSyncAdapter:
                     )
                 else:
                     conn.execute(workspace_audit_index_table.insert().values(**audit_values))
-            elif aggregate_type in {"permission_grant", "user_preference_profile", "learning_feedback"}:
+            elif aggregate_type == "user_preference_profile":
+                profile_values = {
+                    "profile_id": str(payload.get("profile_id") or event_payload.get("aggregate_id") or ""),
+                    "workspace_id": workspace_id,
+                    "user_id": str(payload.get("user_id") or "local-user"),
+                    "explanation_style": str(payload.get("explanation_style") or "concise"),
+                    "approval_sensitivity_hint": str(payload.get("approval_sensitivity_hint") or "balanced"),
+                    "preferred_route": str(payload.get("preferred_route") or "balanced"),
+                    "preferred_model": str(payload.get("preferred_model") or ""),
+                    "task_templates_json": _json_dumps(list(payload.get("task_templates") or [])),
+                    "metadata_json": _json_dumps(dict(payload.get("metadata") or {})),
+                    "updated_at": _now(),
+                }
+                existing_profile = conn.execute(
+                    select(workspace_user_preference_profiles_table.c.profile_id)
+                    .where(workspace_user_preference_profiles_table.c.profile_id == profile_values["profile_id"])
+                ).first()
+                if existing_profile:
+                    conn.execute(
+                        workspace_user_preference_profiles_table.update()
+                        .where(workspace_user_preference_profiles_table.c.profile_id == profile_values["profile_id"])
+                        .values(**profile_values)
+                    )
+                else:
+                    conn.execute(workspace_user_preference_profiles_table.insert().values(**profile_values))
+            elif aggregate_type == "learning_feedback":
+                feedback_values = {
+                    "feedback_id": str(payload.get("feedback_id") or event_payload.get("aggregate_id") or event_id),
+                    "workspace_id": workspace_id,
+                    "user_id": str(payload.get("user_id") or "local-user"),
+                    "category": str(payload.get("category") or "runtime"),
+                    "entity_id": str(payload.get("entity_id") or ""),
+                    "outcome": str(payload.get("outcome") or "neutral"),
+                    "reward": float(payload.get("reward") or 0.0),
+                    "latency_ms": float(payload.get("latency_ms") or 0.0),
+                    "recovery_count": max(0, int(payload.get("recovery_count") or 0)),
+                    "payload_json": _json_dumps(dict(payload.get("payload") or {})),
+                    "created_at": float(event_payload.get("created_at") or _now()),
+                }
+                existing_feedback = conn.execute(
+                    select(workspace_operational_feedback_table.c.feedback_id)
+                    .where(workspace_operational_feedback_table.c.feedback_id == feedback_values["feedback_id"])
+                ).first()
+                if existing_feedback:
+                    conn.execute(
+                        workspace_operational_feedback_table.update()
+                        .where(workspace_operational_feedback_table.c.feedback_id == feedback_values["feedback_id"])
+                        .values(**feedback_values)
+                    )
+                else:
+                    conn.execute(workspace_operational_feedback_table.insert().values(**feedback_values))
+            elif aggregate_type == "tool_reliability":
+                stat_values = {
+                    "stat_id": str(payload.get("stat_id") or event_payload.get("aggregate_id") or ""),
+                    "workspace_id": workspace_id,
+                    "scope": str(payload.get("scope") or "global"),
+                    "tool_name": str(payload.get("tool_name") or "unknown"),
+                    "success_count": max(0, int(payload.get("success_count") or 0)),
+                    "failure_count": max(0, int(payload.get("failure_count") or 0)),
+                    "sample_count": max(0, int(payload.get("sample_count") or 0)),
+                    "avg_reward": float(payload.get("avg_reward") or 0.0),
+                    "avg_latency_ms": float(payload.get("avg_latency_ms") or 0.0),
+                    "metadata_json": _json_dumps(dict(payload.get("metadata") or {})),
+                    "updated_at": _now(),
+                }
+                existing_stat = conn.execute(
+                    select(workspace_tool_reliability_table.c.stat_id)
+                    .where(workspace_tool_reliability_table.c.stat_id == stat_values["stat_id"])
+                ).first()
+                if existing_stat:
+                    conn.execute(
+                        workspace_tool_reliability_table.update()
+                        .where(workspace_tool_reliability_table.c.stat_id == stat_values["stat_id"])
+                        .values(**stat_values)
+                    )
+                else:
+                    conn.execute(workspace_tool_reliability_table.insert().values(**stat_values))
+            elif aggregate_type == "permission_grant":
                 audit_values = {
                     "event_id": event_id,
                     "workspace_id": workspace_id,
@@ -2858,6 +3371,7 @@ class RuntimeDatabase:
         self.db_path = Path(db_path or resolve_runtime_db_path()).expanduser().resolve()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.codec = EncryptedFieldCodec()
+        self.auth_backend = resolve_workspace_auth_backend()
         self.local_engine = create_engine(
             f"sqlite+pysqlite:///{self.db_path}",
             future=True,
@@ -2873,11 +3387,16 @@ class RuntimeDatabase:
         self.billing = BillingRepository(self)
         self.connectors = ConnectorRepository(self)
         self.learning = LearningRepository(self)
-        self.auth = LocalAuthRepository(self)
-        self.auth_sessions = LocalAuthSessionRepository(self)
         self.execution = ExecutionRepository(self)
         self.run_index = RunIndexRepository(self)
         self.workspace_sync = WorkspaceSyncAdapter()
+        self.workspace_data_policies = WorkspaceDataPolicyRepository(self)
+        self.local_auth = LocalAuthRepository(self)
+        self.local_auth_sessions = LocalAuthSessionRepository(self)
+        self.workspace_auth = WorkspaceAuthRepository(self)
+        self.workspace_auth_sessions = WorkspaceAuthSessionRepository(self)
+        self.auth = AuthRepositoryFacade(self)
+        self.auth_sessions = AuthSessionRepositoryFacade(self)
 
     @staticmethod
     def _configure_sqlite(engine: Engine) -> None:
@@ -3207,6 +3726,35 @@ class RuntimeDatabase:
         }
 
     @staticmethod
+    def _decode_workspace_user_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "user_id": str(row.get("user_id") or ""),
+            "workspace_id": str(row.get("workspace_id") or "local-workspace"),
+            "email": str(row.get("email") or ""),
+            "display_name": str(row.get("display_name") or ""),
+            "status": str(row.get("status") or "inactive"),
+            "metadata": _json_loads(row.get("metadata_json"), {}),
+            "created_at": float(row.get("created_at") or 0.0),
+            "updated_at": float(row.get("updated_at") or 0.0),
+        }
+
+    @staticmethod
+    def _decode_workspace_session_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "session_id": str(row.get("session_id") or ""),
+            "workspace_id": str(row.get("workspace_id") or "local-workspace"),
+            "user_id": str(row.get("user_id") or ""),
+            "email": str(row.get("email") or ""),
+            "display_name": str(row.get("display_name") or ""),
+            "status": str(row.get("status") or "active"),
+            "expires_at": float(row.get("expires_at") or 0.0),
+            "last_seen_at": float(row.get("last_seen_at") or 0.0),
+            "created_at": float(row.get("created_at") or 0.0),
+            "updated_at": float(row.get("updated_at") or 0.0),
+            "metadata": _json_loads(row.get("metadata_json"), {}),
+        }
+
+    @staticmethod
     def _decode_user_preference_profile_row(row: dict[str, Any]) -> dict[str, Any]:
         return {
             "profile_id": str(row["profile_id"]),
@@ -3274,6 +3822,8 @@ def reset_runtime_database() -> None:
 
 __all__ = [
     "ApprovalRepository",
+    "AuthRepositoryFacade",
+    "AuthSessionRepositoryFacade",
     "BillingRepository",
     "ConnectorRepository",
     "ExecutionRepository",
@@ -3285,6 +3835,9 @@ __all__ = [
     "RunIndexRepository",
     "RuntimeDatabase",
     "ThreadRepository",
+    "WorkspaceAuthRepository",
+    "WorkspaceAuthSessionRepository",
+    "WorkspaceDataPolicyRepository",
     "WorkspaceSyncAdapter",
     "get_runtime_database",
     "reset_runtime_database",
