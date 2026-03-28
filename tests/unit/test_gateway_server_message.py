@@ -522,6 +522,8 @@ async def test_handle_product_health_stays_ready_without_benchmark_when_core_run
     assert payload["status"] == "ready"
     assert payload["readiness"]["elyan_ready"] is True
     assert payload["readiness"]["telegram_ready"] is False
+    assert payload["protocol_version"] == "elyan-cowork-v1"
+    assert payload["runtime"]["protocol_version"] == "elyan-cowork-v1"
 
 
 @pytest.mark.asyncio

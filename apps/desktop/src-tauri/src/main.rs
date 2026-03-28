@@ -281,7 +281,7 @@ impl SidecarSupervisor {
             .write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
             .is_err()
         {
-            return RuntimeProbeResult { reachable: true, ..RuntimeProbeResult::default() };
+            return RuntimeProbeResult::default();
         }
 
         let mut buffer = Vec::new();
@@ -289,7 +289,7 @@ impl SidecarSupervisor {
             Ok(bytes) if bytes > 0 => {
                 let response = String::from_utf8_lossy(&buffer[..bytes]).to_string();
                 let mut result = RuntimeProbeResult {
-                    reachable: response.contains("200 OK") || response.starts_with("HTTP/1.1 200") || !response.is_empty(),
+                    reachable: response.contains("200 OK") || response.starts_with("HTTP/1.1 200"),
                     ..RuntimeProbeResult::default()
                 };
                 if let Some((_, body)) = response.split_once("\r\n\r\n") {
@@ -312,7 +312,7 @@ impl SidecarSupervisor {
                 }
                 result
             }
-            _ => RuntimeProbeResult { reachable: true, ..RuntimeProbeResult::default() },
+            _ => RuntimeProbeResult::default(),
         }
     }
 

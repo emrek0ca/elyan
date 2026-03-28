@@ -44,8 +44,8 @@ export function LoginScreen() {
     setError("");
     try {
       const health = await runtimeManager.bootRuntime();
-      if (health.status !== "healthy") {
-        throw new Error("Runtime hazırlanıyor. Birkaç saniye sonra tekrar dene.");
+      if (health.status === "error" && health.lastError) {
+        throw new Error(health.lastError);
       }
       const user = await loginLocalUser(normalizedEmail, password);
       signIn(user.email);
@@ -120,7 +120,7 @@ export function LoginScreen() {
               {error ? <div className="text-[12px] text-[var(--state-warning)]">{error}</div> : null}
               {!error ? (
                 <div className="text-[12px] text-[var(--text-tertiary)]">
-                  {connectionState === "connected" ? "Runtime hazır." : "Runtime hazırlanıyor."}
+                  {connectionState === "connected" ? "Runtime hazır." : "Runtime arka planda başlatılıyor."}
                 </div>
               ) : null}
             </div>
