@@ -137,6 +137,36 @@ _LOCAL_DASHBOARD_WRITE_PREFIXES = (
     "/api/v1/runs/",
     "/api/v1/connectors/accounts/",
 )
+_USER_SESSION_PATHS = {
+    "/api/channels",
+    "/api/channels/catalog",
+    "/api/channels/upsert",
+    "/api/channels/toggle",
+    "/api/channels/test",
+    "/api/channels/sync",
+    "/api/v1/auth/logout",
+    "/api/v1/workflows/start",
+    "/api/v1/cowork/home",
+    "/api/v1/cowork/threads",
+    "/api/v1/billing/workspace",
+    "/api/v1/billing/usage",
+    "/api/v1/billing/entitlements",
+    "/api/v1/billing/checkout-session",
+    "/api/v1/billing/portal-session",
+    "/api/v1/connectors",
+    "/api/v1/connectors/accounts",
+    "/api/v1/connectors/traces",
+    "/api/v1/connectors/health",
+    "/api/v1/approvals/pending",
+}
+_USER_SESSION_PREFIXES = (
+    "/api/channels/",
+    "/api/v1/cowork/threads/",
+    "/api/v1/cowork/approvals/",
+    "/api/v1/runs/",
+    "/api/v1/connectors/",
+    "/api/v1/approvals/",
+)
 
 
 def _is_local_dashboard_write_path(path: str, method: str) -> bool:
@@ -145,6 +175,12 @@ def _is_local_dashboard_write_path(path: str, method: str) -> bool:
     if path in _LOCAL_DASHBOARD_WRITE_PATHS:
         return True
     return any(path.startswith(prefix) for prefix in _LOCAL_DASHBOARD_WRITE_PREFIXES)
+
+
+def _is_user_session_path(path: str) -> bool:
+    if path in _USER_SESSION_PATHS:
+        return True
+    return any(path.startswith(prefix) for prefix in _USER_SESSION_PREFIXES)
 
 
 def _adapter_health_bucket(name: str, status: Any, health: dict[str, Any]) -> str:
@@ -812,10 +848,27 @@ class ElyanGatewayServer:
         return get_workspace_billing_store()
 
     @staticmethod
-    def _workspace_id(request, payload: dict[str, Any] | None = None) -> str:
+    def _auth_context(request) -> dict[str, Any]:
+        payload = request.get("elyan_auth") if hasattr(request, "get") else None
+        return payload if isinstance(payload, dict) else {}
+
+    @classmethod
+    def _workspace_id(cls, request, payload: dict[str, Any] | None = None) -> str:
+        auth_context = cls._auth_context(request)
+        if str(auth_context.get("workspace_id") or "").strip():
+            return str(auth_context.get("workspace_id") or "").strip()
         query_workspace = str(request.rel_url.query.get("workspace_id", "") or "").strip()
         body_workspace = str((payload or {}).get("workspace_id") or "").strip()
         return body_workspace or query_workspace or "local-workspace"
+
+    @classmethod
+    def _actor_id(cls, request, payload: dict[str, Any] | None = None) -> str:
+        auth_context = cls._auth_context(request)
+        if str(auth_context.get("user_id") or "").strip():
+            return str(auth_context.get("user_id") or "").strip()
+        body_user = str((payload or {}).get("user_id") or "").strip()
+        query_user = str(request.rel_url.query.get("user_id", "") or "").strip()
+        return body_user or query_user or cls._workspace_id(request, payload)
 
     @staticmethod
     def _connector_catalog() -> list[dict[str, Any]]:
@@ -954,19 +1007,25 @@ class ElyanGatewayServer:
         method = str(getattr(request, "method", "GET") or "GET").upper()
         if not path.startswith("/api"):
             return False
+        if _is_user_session_path(path):
+            return False
         if _is_local_dashboard_write_path(path, method):
             return False
         if path == "/api/message":
             return True
         if path.startswith("/api/trace/") or path == "/api/evidence/file":
             return True
-        if path.startswith("/api/v1/cowork/") or path.startswith("/api/v1/billing/") or path.startswith("/api/v1/connectors/"):
-            return True
         if method in {"POST", "PUT", "PATCH", "DELETE"}:
             return True
         if method == "GET" and path in _ADMIN_READ_PATHS:
             return True
         return False
+
+    def _request_requires_user_session(self, request) -> bool:
+        path = str(getattr(request, "path", "") or "")
+        if not path.startswith("/api"):
+            return False
+        return _is_user_session_path(path)
 
     @web.middleware
     async def _cors_middleware(self, request, handler):
@@ -992,7 +1051,12 @@ class ElyanGatewayServer:
 
     @web.middleware
     async def _api_security_middleware(self, request, handler):
-        if self._request_requires_admin(request):
+        if self._request_requires_user_session(request):
+            allowed, error, auth_context = self._require_user_session(request, allow_cookie=True)
+            if not allowed:
+                return web.json_response({"ok": False, "error": error}, status=403)
+            request["elyan_auth"] = auth_context
+        elif self._request_requires_admin(request):
             allowed, error = self._require_admin_access(request, allow_cookie=True)
             if not allowed:
                 return web.json_response({"ok": False, "error": error}, status=403)
@@ -1015,6 +1079,35 @@ class ElyanGatewayServer:
         if not candidate or candidate != expected:
             return False, "admin token required"
         return True, ""
+
+    def _require_user_session(self, request, *, allow_cookie: bool = True) -> tuple[bool, str, dict[str, Any]]:
+        if not _is_loopback_request(request):
+            return False, "user session is restricted to localhost", {}
+        admin_allowed, _admin_error = self._require_admin_access(request, allow_cookie=allow_cookie)
+        if admin_allowed:
+            return True, "", {
+                "session_id": "admin",
+                "workspace_id": "local-workspace",
+                "user_id": "local-admin",
+                "email": "",
+                "display_name": "Admin",
+                "role": "admin",
+            }
+        query = getattr(request, "query", None)
+        if query is None:
+            query = getattr(getattr(request, "rel_url", None), "query", {}) or {}
+        candidate = str(
+            request.headers.get("X-Elyan-Session-Token", "")
+            or query.get("session_token", "")
+            or (request.cookies.get("elyan_user_session", "") if allow_cookie else "")
+            or ""
+        ).strip()
+        if not candidate:
+            return False, "user session required", {}
+        session = get_runtime_database().auth_sessions.resolve_session(candidate)
+        if not session:
+            return False, "invalid or expired session", {}
+        return True, "", session
 
     def _setup_routes(self):
         # ── API V1 ────────────────────────────────────────────────────────────
@@ -1088,6 +1181,7 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/v1/security/events', self.handle_v1_security_events)
         self.app.router.add_post('/api/v1/workflows/start', self.handle_v1_start_workflow)
         self.app.router.add_post('/api/v1/auth/login', self.handle_v1_auth_login)
+        self.app.router.add_post('/api/v1/auth/logout', self.handle_v1_auth_logout)
         self.app.router.add_get('/api/v1/cowork/home', self.handle_v1_cowork_home)
         self.app.router.add_get('/api/v1/cowork/threads', self.handle_v1_cowork_threads)
         self.app.router.add_post('/api/v1/cowork/threads', self.handle_v1_cowork_threads)
@@ -1373,7 +1467,7 @@ class ElyanGatewayServer:
             return web.json_response({"success": False, "error": "invalid json"}, status=400)
         email = str(data.get("email") or "").strip().lower()
         password = str(data.get("password") or "")
-        workspace_id = self._workspace_id(request, data)
+        workspace_id = str(data.get("workspace_id") or "").strip()
         if not email:
             return web.json_response({"success": False, "error": "email required"}, status=400)
         if not password:
@@ -1385,18 +1479,52 @@ class ElyanGatewayServer:
         )
         if not user:
             return web.json_response({"success": False, "error": "invalid credentials"}, status=401)
-        return web.json_response(
+        session, session_token = get_runtime_database().auth_sessions.create_session(
+            user=user,
+            metadata={
+                "client": "desktop",
+                "login_source": "local_login",
+            },
+        )
+        response = web.json_response(
             {
                 "success": True,
-                "workspace_id": workspace_id,
+                "workspace_id": str(user.get("workspace_id") or workspace_id),
                 "user": {
                     "user_id": str(user.get("user_id") or ""),
                     "email": str(user.get("email") or email),
                     "display_name": str(user.get("display_name") or ""),
                     "status": str(user.get("status") or "active"),
                 },
+                "session": {
+                    "session_id": str(session.get("session_id") or ""),
+                    "expires_at": float(session.get("expires_at") or 0.0),
+                },
             }
         )
+        response.headers["X-Elyan-Session-Token"] = session_token
+        response.set_cookie(
+            "elyan_user_session",
+            session_token,
+            httponly=True,
+            samesite="Strict",
+            secure=False,
+            path="/",
+        )
+        return response
+
+    async def handle_v1_auth_logout(self, request):
+        session_token = str(
+            request.headers.get("X-Elyan-Session-Token", "")
+            or request.cookies.get("elyan_user_session", "")
+            or ""
+        ).strip()
+        if session_token:
+            get_runtime_database().auth_sessions.revoke_session(session_token)
+        response = web.json_response({"success": True})
+        response.del_cookie("elyan_user_session", path="/")
+        response.headers["X-Elyan-Session-Token"] = ""
+        return response
 
     async def handle_v1_cowork_home(self, request):
         workspace_id = self._workspace_id(request)
@@ -1447,7 +1575,7 @@ class ElyanGatewayServer:
             project_template_id=str(data.get("project_template_id") or "").strip(),
             routing_profile=str(data.get("routing_profile") or "balanced").strip() or "balanced",
             review_strictness=str(data.get("review_strictness") or "balanced").strip() or "balanced",
-            user_id=workspace_id,
+            user_id=self._actor_id(request, data),
             agent=self.agent,
             metadata={
                 "project_template_id": str(data.get("project_template_id") or "").strip(),
@@ -1492,7 +1620,7 @@ class ElyanGatewayServer:
                 project_template_id=str(data.get("project_template_id") or "").strip(),
                 routing_profile=str(data.get("routing_profile") or "balanced").strip() or "balanced",
                 review_strictness=str(data.get("review_strictness") or "balanced").strip() or "balanced",
-                user_id=self._workspace_id(request, data),
+                user_id=self._actor_id(request, data),
                 agent=self.agent,
             )
         except KeyError:

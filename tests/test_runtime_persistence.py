@@ -15,7 +15,7 @@ from core.billing.workspace_billing import get_workspace_billing_store
 from core.cowork_threads import get_cowork_thread_store
 from core.learning.policy_learner import ResponsePolicyLearner
 from core.persistence import get_runtime_database, reset_runtime_database
-from core.persistence.runtime_db import outbox_events_table, permission_grants_table
+from core.persistence.runtime_db import local_user_sessions_table, outbox_events_table, permission_grants_table
 from core.run_store import RunRecord, RunStore
 from core.security.approval_engine import ApprovalEngine
 from core.protocol.shared_types import RiskLevel
@@ -231,6 +231,36 @@ def test_permission_grants_issue_revoke_and_expire():
         )
     assert runtime_db.permission_grants.expire_stale() == 1
     assert runtime_db.permission_grants.list_active(workspace_id="workspace-alpha") == []
+
+
+def test_local_auth_sessions_are_hashed_and_workspace_scoped():
+    runtime_db = get_runtime_database()
+    user = runtime_db.auth.upsert_user(
+        email="multiuser@example.com",
+        password="TopSecret123",
+        display_name="Multi User",
+    )
+
+    assert user["workspace_id"].startswith("ws_")
+
+    session, session_token = runtime_db.auth_sessions.create_session(
+        user=user,
+        metadata={"client": "desktop_test"},
+    )
+    resolved = runtime_db.auth_sessions.resolve_session(session_token)
+
+    assert resolved is not None
+    assert resolved["user_id"] == user["user_id"]
+    assert resolved["workspace_id"] == user["workspace_id"]
+    assert resolved["email"] == "multiuser@example.com"
+
+    with runtime_db.local_engine.begin() as conn:
+        row = conn.execute(
+            select(local_user_sessions_table).where(local_user_sessions_table.c.session_id == session["session_id"])
+        ).mappings().first()
+
+    assert row is not None
+    assert str(row["session_token_hash"]) != session_token
 
 
 def test_outbox_retry_transitions_to_dead_letter():

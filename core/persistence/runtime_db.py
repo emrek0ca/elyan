@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import time
 import uuid
 import hmac
@@ -514,6 +515,23 @@ local_users_table = Table(
 )
 Index("ix_local_users_workspace_updated", local_users_table.c.workspace_id, local_users_table.c.updated_at)
 Index("ix_local_users_workspace_email", local_users_table.c.workspace_id, local_users_table.c.email, unique=True)
+
+local_user_sessions_table = Table(
+    "local_user_sessions",
+    LOCAL_METADATA,
+    Column("session_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), nullable=False, default="local-workspace"),
+    Column("user_id", String(128), nullable=False),
+    Column("session_token_hash", String(128), nullable=False, unique=True),
+    Column("status", String(64), nullable=False, default="active"),
+    Column("expires_at", Float, nullable=False, default=_now),
+    Column("last_seen_at", Float, nullable=False, default=_now),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+    Column("updated_at", Float, nullable=False, default=_now),
+)
+Index("ix_local_user_sessions_workspace_updated", local_user_sessions_table.c.workspace_id, local_user_sessions_table.c.updated_at)
+Index("ix_local_user_sessions_user_updated", local_user_sessions_table.c.user_id, local_user_sessions_table.c.updated_at)
 
 workspaces_table = Table(
     "workspaces",
@@ -1960,6 +1978,12 @@ class LocalAuthRepository:
     def _normalize_email(email: str) -> str:
         return str(email or "").strip().lower()
 
+    @staticmethod
+    def _default_workspace_id(email: str) -> str:
+        normalized_email = str(email or "").strip().lower()
+        digest = hashlib.sha256(normalized_email.encode("utf-8")).hexdigest()[:16]
+        return f"ws_{digest}"
+
     @classmethod
     def _hash_password(cls, password: str, salt: str) -> str:
         return hashlib.pbkdf2_hmac(
@@ -1975,7 +1999,7 @@ class LocalAuthRepository:
         email: str,
         password: str,
         display_name: str = "",
-        workspace_id: str = "local-workspace",
+        workspace_id: str = "",
         status: str = "active",
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -1988,14 +2012,20 @@ class LocalAuthRepository:
         password_hash = self._hash_password(password, salt)
         now = _now()
         with self._db.local_engine.begin() as conn:
-            existing = conn.execute(
-                select(local_users_table).where(
-                    local_users_table.c.workspace_id == str(workspace_id or "local-workspace"),
-                    local_users_table.c.email == normalized_email,
-                )
-            ).mappings().first()
+            explicit_workspace = str(workspace_id or "").strip()
+            stmt = select(local_users_table).where(local_users_table.c.email == normalized_email)
+            if explicit_workspace:
+                stmt = stmt.where(local_users_table.c.workspace_id == explicit_workspace)
+            else:
+                stmt = stmt.order_by(local_users_table.c.updated_at.desc())
+            existing = conn.execute(stmt).mappings().first()
+            resolved_workspace = (
+                explicit_workspace
+                or str(existing["workspace_id"] if existing else "")
+                or self._default_workspace_id(normalized_email)
+            )
             row_values = {
-                "workspace_id": str(workspace_id or "local-workspace"),
+                "workspace_id": resolved_workspace,
                 "email": normalized_email,
                 "display_name": str(display_name or normalized_email.split("@")[0]),
                 "password_hash": password_hash,
@@ -2022,7 +2052,7 @@ class LocalAuthRepository:
                 )
             self._db._insert_audit_event(
                 conn,
-                workspace_id=str(workspace_id or "local-workspace"),
+                workspace_id=resolved_workspace,
                 event_type="auth.local_user.upserted",
                 payload={"user_id": user_id, "email": normalized_email},
             )
@@ -2036,21 +2066,23 @@ class LocalAuthRepository:
         *,
         email: str,
         password: str,
-        workspace_id: str = "local-workspace",
+        workspace_id: str = "",
     ) -> dict[str, Any] | None:
         normalized_email = self._normalize_email(email)
         with self._db.local_engine.begin() as conn:
-            row = conn.execute(
-                select(local_users_table).where(
-                    local_users_table.c.workspace_id == str(workspace_id or "local-workspace"),
-                    local_users_table.c.email == normalized_email,
-                    local_users_table.c.status == "active",
-                )
-            ).mappings().first()
+            stmt = select(local_users_table).where(
+                local_users_table.c.email == normalized_email,
+                local_users_table.c.status == "active",
+            )
+            if str(workspace_id or "").strip():
+                stmt = stmt.where(local_users_table.c.workspace_id == str(workspace_id or "").strip())
+            else:
+                stmt = stmt.order_by(local_users_table.c.updated_at.desc())
+            row = conn.execute(stmt).mappings().first()
             if not row:
                 self._db._insert_audit_event(
                     conn,
-                    workspace_id=str(workspace_id or "local-workspace"),
+                    workspace_id=str(workspace_id or self._default_workspace_id(normalized_email)),
                     event_type="auth.local_user.failed",
                     payload={"email": normalized_email, "reason": "not_found"},
                 )
@@ -2059,18 +2091,120 @@ class LocalAuthRepository:
             if not hmac.compare_digest(expected, str(row["password_hash"] or "")):
                 self._db._insert_audit_event(
                     conn,
-                    workspace_id=str(workspace_id or "local-workspace"),
+                    workspace_id=str(row["workspace_id"] or self._default_workspace_id(normalized_email)),
                     event_type="auth.local_user.failed",
                     payload={"email": normalized_email, "reason": "invalid_password"},
                 )
                 return None
             self._db._insert_audit_event(
                 conn,
-                workspace_id=str(workspace_id or "local-workspace"),
+                workspace_id=str(row["workspace_id"] or self._default_workspace_id(normalized_email)),
                 event_type="auth.local_user.authenticated",
                 payload={"user_id": str(row["user_id"]), "email": normalized_email},
             )
         return self._db._decode_local_user_row(dict(row))
+
+
+class LocalAuthSessionRepository:
+    _DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 30
+
+    def __init__(self, db: "RuntimeDatabase") -> None:
+        self._db = db
+
+    @staticmethod
+    def _hash_token(session_token: str) -> str:
+        return hashlib.sha256(str(session_token or "").encode("utf-8")).hexdigest()
+
+    def create_session(
+        self,
+        *,
+        user: dict[str, Any],
+        ttl_seconds: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], str]:
+        user_id = str(user.get("user_id") or "").strip()
+        workspace_id = str(user.get("workspace_id") or "").strip() or "local-workspace"
+        if not user_id:
+            raise ValueError("user_id required")
+        now = _now()
+        ttl = max(300, int(ttl_seconds or self._DEFAULT_TTL_SECONDS))
+        session_token = f"elys_{secrets.token_urlsafe(32)}"
+        token_hash = self._hash_token(session_token)
+        session_id = f"session_{uuid.uuid4().hex[:12]}"
+        values = {
+            "session_id": session_id,
+            "workspace_id": workspace_id,
+            "user_id": user_id,
+            "session_token_hash": token_hash,
+            "status": "active",
+            "expires_at": now + ttl,
+            "last_seen_at": now,
+            "metadata_json": _json_dumps(dict(metadata or {})),
+            "created_at": now,
+            "updated_at": now,
+        }
+        with self._db.local_engine.begin() as conn:
+            conn.execute(local_user_sessions_table.insert().values(**values))
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=workspace_id,
+                event_type="auth.session.created",
+                payload={"session_id": session_id, "user_id": user_id},
+            )
+        return self._db._decode_local_session_row(values), session_token
+
+    def resolve_session(self, session_token: str, *, touch: bool = True) -> dict[str, Any] | None:
+        token_hash = self._hash_token(session_token)
+        now = _now()
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(local_user_sessions_table, local_users_table)
+                .join(local_users_table, local_users_table.c.user_id == local_user_sessions_table.c.user_id)
+                .where(
+                    local_user_sessions_table.c.session_token_hash == token_hash,
+                    local_user_sessions_table.c.status == "active",
+                    local_user_sessions_table.c.expires_at > now,
+                    local_users_table.c.status == "active",
+                )
+            ).mappings().first()
+            if not row:
+                return None
+            if touch:
+                conn.execute(
+                    local_user_sessions_table.update()
+                    .where(local_user_sessions_table.c.session_id == str(row["session_id"]))
+                    .values(last_seen_at=now, updated_at=now)
+                )
+            merged = dict(row)
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=str(row["workspace_id"] or "local-workspace"),
+                event_type="auth.session.resolved",
+                payload={"session_id": str(row["session_id"]), "user_id": str(row["user_id"])},
+            )
+        return self._db._decode_local_session_row(merged)
+
+    def revoke_session(self, session_token: str) -> bool:
+        token_hash = self._hash_token(session_token)
+        now = _now()
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(local_user_sessions_table).where(local_user_sessions_table.c.session_token_hash == token_hash)
+            ).mappings().first()
+            if not row:
+                return False
+            conn.execute(
+                local_user_sessions_table.update()
+                .where(local_user_sessions_table.c.session_id == str(row["session_id"]))
+                .values(status="revoked", updated_at=now)
+            )
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=str(row["workspace_id"] or "local-workspace"),
+                event_type="auth.session.revoked",
+                payload={"session_id": str(row["session_id"]), "user_id": str(row["user_id"])},
+            )
+        return True
 
 
 class ExecutionRepository:
@@ -2740,6 +2874,7 @@ class RuntimeDatabase:
         self.connectors = ConnectorRepository(self)
         self.learning = LearningRepository(self)
         self.auth = LocalAuthRepository(self)
+        self.auth_sessions = LocalAuthSessionRepository(self)
         self.execution = ExecutionRepository(self)
         self.run_index = RunIndexRepository(self)
         self.workspace_sync = WorkspaceSyncAdapter()
@@ -2834,6 +2969,22 @@ class RuntimeDatabase:
             "seats": max(1, int(row["seats"] or 1)),
             "checkout_url": str(row["checkout_url"] or ""),
             "portal_url": str(row["portal_url"] or ""),
+            "updated_at": float(row["updated_at"] or 0.0),
+            "metadata": _json_loads(row["metadata_json"], {}),
+        }
+
+    @staticmethod
+    def _decode_local_session_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "session_id": str(row["session_id"]),
+            "workspace_id": str(row["workspace_id"] or "local-workspace"),
+            "user_id": str(row["user_id"] or ""),
+            "email": str(row.get("email") or ""),
+            "display_name": str(row.get("display_name") or ""),
+            "status": str(row["status"] or "active"),
+            "expires_at": float(row["expires_at"] or 0.0),
+            "last_seen_at": float(row["last_seen_at"] or 0.0),
+            "created_at": float(row["created_at"] or 0.0),
             "updated_at": float(row["updated_at"] or 0.0),
             "metadata": _json_loads(row["metadata_json"], {}),
         }
@@ -3128,6 +3279,7 @@ __all__ = [
     "ExecutionRepository",
     "LearningRepository",
     "LocalAuthRepository",
+    "LocalAuthSessionRepository",
     "OutboxRepository",
     "PermissionGrantRepository",
     "RunIndexRepository",
