@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { DEFAULT_BASE_URL } from "@/services/api/client";
 import type { SidecarHealth } from "@/types/domain";
 
-const DEFAULT_PORT = 18789;
+const DEFAULT_PORT = 18889;
 
 function defaultHealth(overrides: Partial<SidecarHealth> = {}): SidecarHealth {
   return {

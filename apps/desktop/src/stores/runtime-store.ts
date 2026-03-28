@@ -7,7 +7,7 @@ import type { RuntimeConnectionState, SidecarHealth } from "@/types/domain";
 export const defaultSidecarHealth: SidecarHealth = {
   status: "offline",
   managed: false,
-  port: 18789,
+  port: 18889,
   runtimeUrl: DEFAULT_BASE_URL,
   retries: 0,
   desktopVersion: "0.1.0",

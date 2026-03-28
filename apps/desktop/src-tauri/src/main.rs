@@ -14,7 +14,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-const DEFAULT_PORT: u16 = 18789;
+const DEFAULT_PORT: u16 = 18889;
 const MAX_LOG_LINES: usize = 240;
 const EXPECTED_PROTOCOL_VERSION: &str = "elyan-cowork-v1";
 
@@ -269,7 +269,7 @@ impl SidecarSupervisor {
     fn probe_runtime(&self, port: u16) -> RuntimeProbeResult {
         let addr = format!("127.0.0.1:{port}");
         let Ok(mut stream) = TcpStream::connect_timeout(
-            &addr.parse().unwrap_or_else(|_| "127.0.0.1:18789".parse().expect("valid default addr")),
+            &addr.parse().unwrap_or_else(|_| "127.0.0.1:18889".parse().expect("valid default addr")),
             Duration::from_millis(300),
         ) else {
             return RuntimeProbeResult::default();

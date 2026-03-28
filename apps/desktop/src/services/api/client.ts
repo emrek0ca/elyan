@@ -5,7 +5,7 @@ type RequestOptions = {
 };
 
 export const DEFAULT_BASE_URL =
-  import.meta.env.VITE_ELYAN_API_BASE_URL?.trim() || "http://127.0.0.1:18789";
+  import.meta.env.VITE_ELYAN_API_BASE_URL?.trim() || "http://127.0.0.1:18889";
 
 export class ApiClient {
   private sessionToken = "";
