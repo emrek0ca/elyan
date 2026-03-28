@@ -26,7 +26,10 @@ from core.action_lock import action_lock
 from core.timeout_guard import with_timeout, STEP_TIMEOUT
 from core.reasoning.trace_logger import trace_logger
 from core.capability_router import get_capability_router
+from core.event_system import EventPriority, get_event_bus
 from config.elyan_config import elyan_config
+from core.elyan_runtime import get_elyan_runtime
+from core.multi_agent.contract_net import TaskAnnouncement
 
 logger = get_logger("multi_agent.orchestrator")
 
@@ -37,6 +40,18 @@ class AgentOrchestrator:
         self.qa_pipeline = QAPipeline(agent_instance)
         self.team_roster: list[dict[str, str]] = []
 
+    async def _emit_event(self, event_type: str, payload: dict[str, Any], *, priority: EventPriority = EventPriority.NORMAL) -> None:
+        try:
+            await get_event_bus().publish(
+                event_type=event_type,
+                data=dict(payload),
+                priority=priority,
+                source="multi_agent.orchestrator",
+                tags={"multi_agent", "orchestrator"},
+            )
+        except Exception:
+            logger.debug("Orchestrator event publish skipped", exc_info=True)
+
     @staticmethod
     def _specialist_role_key(key: str) -> str:
         token = str(key or "").strip().lower()
@@ -44,9 +59,13 @@ class AgentOrchestrator:
             "lead": "planning",
             "pm_agent": "planning",
             "researcher": "research_worker",
+            "research_agent": "research_worker",
             "builder": "code",
+            "code_agent": "code_worker",
             "executor": "code_worker",
             "coder": "code_worker",
+            "document_agent": "creative",
+            "thinking_agent": "reasoning",
             "ops": "worker",
             "tool_runner": "worker",
             "qa": "qa",
@@ -61,6 +80,11 @@ class AgentOrchestrator:
         """
         job_id = f"job_{int(time.time())}"
         start_time = time.time()
+        await self._emit_event(
+            "orchestrator.flow_started",
+            {"job_id": job_id, "input": str(original_input or "")[:300]},
+            priority=EventPriority.HIGH,
+        )
 
         # 1. Template selection + capability-aware routing
         cap_plan = None
@@ -83,6 +107,10 @@ class AgentOrchestrator:
                 template_key = "research_report_job"
 
         template = get_template(template_key)
+        await self._emit_event(
+            "orchestrator.template_selected",
+            {"job_id": job_id, "template_id": template.id, "template_name": template.name},
+        )
         self.team_roster = self._build_team_roster(template.id, cap_plan)
         try:
             if self.team_roster:
@@ -93,7 +121,21 @@ class AgentOrchestrator:
         workspace_dir = self._derive_workspace_dir(job_id, template.id, original_input)
         plan_hint = self._compact_plan_hint(plan)
         
-        action_lock.lock(job_id, f"Think-Factory Job: {template.name}")
+        lock_result = action_lock.request_lock(
+            job_id,
+            f"Think-Factory Job: {template.name}",
+            policy_scope=f"deliverable:{template.id}",
+            conflict_key=template.id,
+            owner="multi_agent.orchestrator",
+            metadata={"template_id": template.id, "input": str(original_input or "")[:200]},
+        )
+        if not lock_result.get("acquired", False):
+            await self._emit_event(
+                "orchestrator.flow_blocked",
+                {"job_id": job_id, "template_id": template.id, "reason": lock_result.get("reason", "action_locked")},
+                priority=EventPriority.HIGH,
+            )
+            return f"⏳ Başka bir üretim akışı çalışıyor. {template.name} için çalışma kuyruğa alındı."
         context = memory_v2.get_context_for_intent(original_input)
         
         from core.multi_agent.budget import BudgetTracker, BudgetExceededError
@@ -102,6 +144,7 @@ class AgentOrchestrator:
         try:
             # --- Phase 0: DEEP REASONING (The 'Think' Step) ---
             action_lock.update_status(0.05, "Brainstorming: En iyi çözüm yolu aranıyor...")
+            await self._emit_event("orchestrator.phase_started", {"job_id": job_id, "phase": "reason", "template_id": template.id})
             
             # Select Workflow Chain
             chain_key = self._workflow_for_template(template.id)
@@ -130,6 +173,10 @@ class AgentOrchestrator:
                 plan_prompt += f"\nPipeline Plan Hint: {plan_hint}"
             plan_raw = await self._run_specialist("lead", plan_prompt)
             plan_data = self._safe_parse_json(plan_raw)
+            await self._emit_event(
+                "orchestrator.plan_parsed",
+                {"job_id": job_id, "template_id": template.id, "step_count": len(plan_data) if isinstance(plan_data, list) else 0},
+            )
 
             contract = DeliverableContract(job_id=job_id, goal=original_input, job_type=template.id)
             await self.main_agent._execute_tool("create_folder", {"path": workspace_dir})
@@ -142,6 +189,7 @@ class AgentOrchestrator:
             initial_snapshot = await rollback_mgr.create_snapshot()
 
             # --- Phase 2: EXECUTE (Build & Patch) ---
+            await self._emit_event("orchestrator.phase_started", {"job_id": job_id, "phase": "execute", "template_id": template.id})
             for i in range(3): # Max 3 Revision loops
                 iter_label = f"(Rev {i+1})"
                 action_lock.update_status(0.2 + (i * 0.2), f"Builder: Üretim {iter_label}...")
@@ -246,7 +294,11 @@ class AgentOrchestrator:
 
                     plan_data = self._attach_owners(plan_data)
                     try:
-                        await self._warm_up_parallel_sub_agents(plan_data, original_input)
+                        await self._emit_event(
+                            "orchestrator.parallel_warmup_started",
+                            {"job_id": job_id, "template_id": template.id, "step_count": len(plan_data)},
+                        )
+                        await self._warm_up_parallel_sub_agents(job_id, plan_data, original_input)
                     except Exception as warm_exc:
                         logger.debug(f"Sub-agent warmup skipped: {warm_exc}")
                     exec_plan = ExecutionPlan.from_dict({"job_id": job_id, "steps": plan_data})
@@ -283,6 +335,7 @@ class AgentOrchestrator:
 
                 # --- Phase 3: VERIFY (Swarm Consensus) ---
                 action_lock.update_status(0.7, "Validator: Swarm Consensus Debate...")
+                await self._emit_event("orchestrator.phase_started", {"job_id": job_id, "phase": "verify", "template_id": template.id})
             
                 # Layered Swarm QA (Security, Performance, UX)
                 from core.multi_agent.swarm_consensus import SwarmConsensus
@@ -324,7 +377,12 @@ class AgentOrchestrator:
                         )
                         
                     action_lock.update_status(1.0, "Görev Onaylandı ve Paketlendi!")
-                    action_lock.unlock()
+                    action_lock.unlock(reason="completed")
+                    await self._emit_event(
+                        "orchestrator.flow_completed",
+                        {"job_id": job_id, "template_id": template.id, "success": True, "duration_s": round(time.time() - start_time, 2)},
+                        priority=EventPriority.HIGH,
+                    )
                 
                     return (f"✅ İŞ BAŞARIYLA TESLİM EDİLDİ\n\n"
                             f"Job ID: {job_id}\n"
@@ -356,14 +414,38 @@ class AgentOrchestrator:
                         logger.warning("No artifacts detected after QA fail; forcing deterministic fallback on next revision.")
 
             await rollback_mgr.restore_snapshot(initial_snapshot)
-            action_lock.unlock()
+            action_lock.unlock(reason="qa_failed")
+            await self._emit_event(
+                "orchestrator.flow_failed",
+                {"job_id": job_id, "template_id": template.id, "reason": "qa_failed", "issues": issues[:12]},
+                priority=EventPriority.HIGH,
+            )
             return f"❌ GÖREV BAŞARISIZ (QA Onayı Alınamadı: {job_id})\n\nSon Hatalar: {issues}"
         
         except BudgetExceededError as e:
             await getattr(rollback_mgr, 'restore_snapshot')(initial_snapshot) if 'rollback_mgr' in locals() else None
-            action_lock.unlock()
+            action_lock.unlock(reason="budget_exceeded")
+            await self._emit_event(
+                "orchestrator.flow_failed",
+                {"job_id": job_id, "template_id": template.id, "reason": "budget_exceeded", "error": str(e)},
+                priority=EventPriority.HIGH,
+            )
             logger.error(f"Budget break: {e}")
             return f"🛑 BÜTÇE/TOKEN LİMİTİ AŞILDI: {e}\n{self.budget_tracker.get_status()}"
+        except Exception as e:
+            try:
+                if 'rollback_mgr' in locals():
+                    await rollback_mgr.restore_snapshot(initial_snapshot)
+            except Exception:
+                logger.debug("Unexpected orchestrator failure rollback skipped", exc_info=True)
+            action_lock.unlock(reason="unexpected_error")
+            await self._emit_event(
+                "orchestrator.flow_failed",
+                {"job_id": job_id, "template_id": template.id, "reason": "unexpected_error", "error": str(e)},
+                priority=EventPriority.HIGH,
+            )
+            logger.exception(f"Unexpected orchestrator failure: {e}")
+            return f"❌ GÖREV BEKLENMEYEN HATA İLE DURDU: {e}"
 
     async def _apply_production_logic(self, raw_text: str, workspace: str, contract: DeliverableContract):
         """Builder çıktısını analiz eder: Yama mı yoksa Full Dosya mı?"""
@@ -438,31 +520,25 @@ class AgentOrchestrator:
         specialist = self.registry.get(key)
         final_prompt = f"ROLÜN: {specialist.system_prompt}\n\nİSTEK: {prompt}"
         role_key = self._specialist_role_key(key)
-        collab_cfg = self.main_agent.llm.orchestrator.get_collaboration_settings() if getattr(self.main_agent, "llm", None) else {"enabled": False}
-        model_config = None
-        if not bool(collab_cfg.get("enabled")) and getattr(self.main_agent, "llm", None):
-            target_model = specialist.preferred_model or ""
-            model_config = self.main_agent.llm.orchestrator.resolve_model_hint(target_model, role=role_key) if target_model else None
-        
         if hasattr(self, "budget_tracker"):
             self.budget_tracker.consume(input_tokens=(len(final_prompt) // 4), output_tokens=0)
             
         async def _invoke_llm():
+            runtime = get_elyan_runtime()
+            gateway = getattr(runtime, "model_gateway", None)
             try:
-                return await self.main_agent.llm.generate(
-                    final_prompt,
-                    role=role_key,
-                    model_config=model_config,
-                    strict_model_config=bool(model_config),
-                    user_id="system",
-                )
+                if gateway is not None:
+                    return await gateway.generate_text(
+                        self.main_agent.llm,
+                        final_prompt,
+                        specialist_key=key,
+                        role=role_key,
+                        user_id="system",
+                        explicit_model=str(getattr(specialist, "preferred_model", "") or ""),
+                    )
+                return await self.main_agent.llm.generate(final_prompt, role=role_key, user_id="system")
             except TypeError:
-                return await self.main_agent.llm.generate(
-                    final_prompt,
-                    role=role_key,
-                    model_config=model_config,
-                    user_id="system",
-                )
+                return await self.main_agent.llm.generate(final_prompt, role=role_key, user_id="system")
 
         result = await with_timeout(
             _invoke_llm(),
@@ -580,12 +656,29 @@ class AgentOrchestrator:
             patched.append(s)
         return patched
 
-    async def _warm_up_parallel_sub_agents(self, plan_data: list[dict[str, Any]], original_input: str) -> None:
+    @staticmethod
+    def _contract_agent_to_specialist(agent_id: str) -> str:
+        token = str(agent_id or "").strip().lower()
+        mapping = {
+            "research_agent": "research_agent",
+            "vision_agent": "ops",
+            "planning_agent": "thinking_agent",
+            "code_agent": "code_agent",
+            "document_agent": "document_agent",
+            "thinking_agent": "thinking_agent",
+            "approval_agent": "qa",
+        }
+        return mapping.get(token, "worker")
+
+    async def _warm_up_parallel_sub_agents(self, job_id: str, plan_data: list[dict[str, Any]], original_input: str) -> None:
         """
         Lightweight DAG warmup: run independent specialist reasoning in parallel.
         This does not mutate deterministic execution plan output; it enriches context.
         """
-        candidates: list[tuple[str, Any]] = []
+        runtime = get_elyan_runtime()
+        contract_net = runtime.contract_net
+        world_model = runtime.world_model
+        candidates: list[tuple[str, Any, str]] = []
         for step in list(plan_data or []):
             owner = str(step.get("owner") or "").strip().lower()
             action = str(step.get("action") or "").strip()
@@ -596,7 +689,22 @@ class AgentOrchestrator:
                 continue
             if not action:
                 continue
-            candidates.append((owner, step))
+            task_id = f"{job_id}:{str(step.get('id') or action or 'step')}"
+            required = contract_net.infer_required_capabilities(action, owner=owner, params=step.get("params") if isinstance(step.get("params"), dict) else {})
+            announcement = TaskAnnouncement(
+                task_id=task_id,
+                description=str(step.get("description") or action or step.get("id") or "step"),
+                required_capabilities=required,
+                deadline_ms=120000,
+                priority=3 if owner == "researcher" else 2,
+            )
+            agent_id = None
+            try:
+                agent_id = await contract_net.allocate_task(announcement)
+            except Exception as alloc_exc:
+                logger.debug(f"Contract net allocation skipped: {alloc_exc}")
+            selected_owner = self._contract_agent_to_specialist(agent_id) if agent_id else owner
+            candidates.append((selected_owner, step, agent_id or ""))
             if len(candidates) >= 3:
                 break
 
@@ -607,7 +715,7 @@ class AgentOrchestrator:
 
         manager = SubAgentManager(self.main_agent, parent_session_id="orchestrator")
         jobs = []
-        for owner, step in candidates:
+        for owner, step, _agent_id in candidates:
             action = str(step.get("action") or "").strip()
             params = step.get("params") if isinstance(step.get("params"), dict) else {}
             jobs.append(
@@ -634,7 +742,7 @@ class AgentOrchestrator:
         try:
             from core.sub_agent import get_agent_bus
             bus = get_agent_bus()
-            for (owner, step), result in zip(candidates, results):
+            for (owner, step, _agent_id), result in zip(candidates, results):
                 if result.status == "completed":
                     from core.sub_agent.shared_state import TeamMessage
                     msg = TeamMessage(
@@ -651,13 +759,15 @@ class AgentOrchestrator:
         except Exception as e:
             logger.debug(f"Failed to broadcast results to agent bus: {e}")
 
-        for (owner, step), result in zip(candidates, results):
+        for (owner, step, agent_id), result in zip(candidates, results):
             step.setdefault("_sub_agent", {})
+            step_id = str(step.get("id") or step.get("action") or "step")
             payload = result.result if isinstance(result.result, dict) else {}
             quality_summary = payload.get("quality_summary") if isinstance(payload, dict) and isinstance(payload.get("quality_summary"), dict) else {}
             step["_sub_agent"].update(
                 {
                     "owner": owner,
+                    "agent_id": agent_id,
                     "status": result.status,
                     "notes": list(result.notes or []),
                     "failed_gates": list(payload.get("failed_gates") or []) if isinstance(payload, dict) else [],
@@ -666,6 +776,27 @@ class AgentOrchestrator:
                     "revision_summary_path": str(payload.get("revision_summary_path") or "") if isinstance(payload, dict) else "",
                 }
             )
+            try:
+                fact_id = f"job.{job_id}.{step_id}"
+                await world_model.assert_fact(
+                    fact_id,
+                    {
+                        "step_id": step_id,
+                        "owner": owner,
+                        "agent_id": agent_id,
+                        "status": result.status,
+                        "result": payload,
+                    },
+                    confidence=0.88 if result.status == "completed" else 0.5,
+                    source="orchestrator",
+                )
+            except Exception as fact_exc:
+                logger.debug(f"World model update skipped: {fact_exc}")
+            if agent_id:
+                try:
+                    contract_net.report_completion(step_id, agent_id, result.status == "completed")
+                except Exception as completion_exc:
+                    logger.debug(f"Contract completion update skipped: {completion_exc}")
 
     @staticmethod
     def _artifact_type_and_mime(path: str) -> tuple[str, str]:

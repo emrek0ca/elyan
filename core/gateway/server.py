@@ -3119,7 +3119,10 @@ class ElyanGatewayServer:
                 "is_locked": action_lock.is_locked,
                 "progress": action_lock.progress,
                 "message": action_lock.status_message,
-                "task_id": action_lock.current_task_id
+                "task_id": action_lock.current_task_id,
+                "policy_scope": getattr(action_lock, "policy_scope", "global"),
+                "queue_depth": len(getattr(action_lock, "queued_requests", []) or []),
+                "last_conflict": dict(getattr(action_lock, "last_conflict", {}) or {}),
             },
             **_get_runtime_model_info(),
         })
