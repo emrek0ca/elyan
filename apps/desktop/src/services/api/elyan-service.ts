@@ -917,6 +917,16 @@ type StartWorkflowResponse = SuccessEnvelope<{
   run: Record<string, unknown>;
 }>;
 
+type LocalLoginResponse = SuccessEnvelope<{
+  workspace_id: string;
+  user: {
+    user_id: string;
+    email: string;
+    display_name?: string;
+    status?: string;
+  };
+}>;
+
 type CoworkThreadPayload = {
   prompt: string;
   current_mode?: "cowork" | "document" | "presentation" | "website";
@@ -934,6 +944,17 @@ export async function createCoworkThread(payload: CoworkThreadPayload): Promise<
     body: payload,
   });
   return mapThreadDetail(raw.thread);
+}
+
+export async function loginLocalUser(email: string, password: string): Promise<{ email: string; displayName: string }> {
+  const raw = await apiClient.request<LocalLoginResponse>("/api/v1/auth/login", {
+    method: "POST",
+    body: { email, password },
+  });
+  return {
+    email: String(raw.user?.email || email).trim().toLowerCase(),
+    displayName: String(raw.user?.display_name || "").trim(),
+  };
 }
 
 export async function addCoworkTurn(threadId: string, payload: CoworkThreadPayload): Promise<CoworkThreadDetail> {

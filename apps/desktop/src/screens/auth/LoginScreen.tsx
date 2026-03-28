@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { ElyanMark } from "@/components/brand/ElyanMark";
 import { Button } from "@/components/primitives/Button";
 import { Surface } from "@/components/primitives/Surface";
+import { loginLocalUser } from "@/services/api/elyan-service";
 import { runtimeManager } from "@/runtime/runtime-manager";
 import { useUiStore } from "@/stores/ui-store";
 
@@ -16,7 +17,9 @@ export function LoginScreen() {
   const completeOnboarding = useUiStore((state) => state.completeOnboarding);
   const defaultEmail = useUiStore((state) => state.authenticatedEmail);
   const [email, setEmail] = useState(defaultEmail);
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   async function openSignup() {
     const opened = await runtimeManager.openExternalUrl(ELYAN_DEV_URL);
@@ -25,15 +28,28 @@ export function LoginScreen() {
     }
   }
 
-  function handleContinue() {
+  async function handleContinue() {
     const normalizedEmail = email.trim().toLowerCase();
     if (!normalizedEmail) {
       setError("Devam etmek için e-posta gir.");
       return;
     }
-    signIn(normalizedEmail);
-    completeOnboarding();
-    navigate("/home", { replace: true });
+    if (!password.trim()) {
+      setError("Şifre gerekli.");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    try {
+      const user = await loginLocalUser(normalizedEmail, password);
+      signIn(user.email);
+      completeOnboarding();
+      navigate("/home", { replace: true });
+    } catch (authError) {
+      setError(authError instanceof Error ? authError.message : "Giriş başarısız.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -51,7 +67,7 @@ export function LoginScreen() {
                 Hoş geldin
               </h1>
               <p className="text-[14px] leading-7 text-[var(--text-secondary)]">
-                Masaüstü shell’e girmek için e-posta ile devam et. Kayıtlı değilsen hesap açma akışı `elyan.dev` üzerinden yürür.
+                Masaüstü shell’e girmek için yerel hesapla giriş yap. Kayıtlı değilsen hesap açma akışı `elyan.dev` üzerinden yürür.
               </p>
             </div>
 
@@ -71,7 +87,29 @@ export function LoginScreen() {
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
                     event.preventDefault();
-                    handleContinue();
+                    void handleContinue();
+                  }
+                }}
+              />
+            </div>
+
+            <div className="space-y-3">
+              <label className="block text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Şifre</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => {
+                  setPassword(event.target.value);
+                  if (error) {
+                    setError("");
+                  }
+                }}
+                placeholder="Şifren"
+                className="h-[52px] w-full rounded-[20px] border border-[var(--border-subtle)] bg-[color-mix(in_srgb,var(--bg-surface)_94%,var(--bg-surface-raised))] px-5 text-[15px] text-[var(--text-primary)] outline-none transition focus:border-[var(--border-focus)]"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void handleContinue();
                   }
                 }}
               />
@@ -79,11 +117,11 @@ export function LoginScreen() {
             </div>
 
             <div className="flex flex-wrap gap-3">
-              <Button variant="primary" onClick={handleContinue}>
-                Devam et
+              <Button variant="primary" onClick={() => void handleContinue()} disabled={submitting}>
+                {submitting ? "Giriş yapılıyor" : "Giriş yap"}
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
-              <Button variant="secondary" onClick={() => void openSignup()}>
+              <Button variant="secondary" onClick={() => void openSignup()} disabled={submitting}>
                 Kayıt ol
                 <ExternalLink className="ml-2 h-4 w-4" />
               </Button>

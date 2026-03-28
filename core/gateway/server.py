@@ -46,6 +46,7 @@ from core.project_packs import build_pack_overview, normalize_pack
 from core.confidence import coerce_confidence
 from core.mission_control import get_mission_runtime
 from core.storage_paths import resolve_elyan_data_dir, resolve_runs_root
+from core.persistence.runtime_db import get_runtime_database
 from core.security.ingress_guard import blocked_ingress_text, inspect_ingress
 from elyan.dashboard.routes.trace import render_trace_page
 from elyan.verifier.evidence import build_trace_bundle, resolve_evidence_path
@@ -107,11 +108,15 @@ _ADMIN_READ_PATHS = {
     "/api/autopilot/status",
 }
 _LOCAL_DASHBOARD_WRITE_PATHS = {
+    "/api/v1/auth/login",
     "/api/missions",
     "/api/missions/approvals/resolve",
     "/api/missions/skills/save",
     "/api/v1/cowork/threads",
-    "/api/v1/cowork/approvals/resolve",
+    "/api/channels/upsert",
+    "/api/channels/toggle",
+    "/api/channels/test",
+    "/api/channels/sync",
     "/api/v1/billing/checkout-session",
     "/api/v1/billing/portal-session",
     "/api/v1/billing/webhooks/stripe",
@@ -126,6 +131,20 @@ _LOCAL_DASHBOARD_WRITE_PATHS = {
     "/api/autopilot/stop",
     "/api/autopilot/tick",
 }
+_LOCAL_DASHBOARD_WRITE_PREFIXES = (
+    "/api/v1/cowork/threads/",
+    "/api/v1/cowork/approvals/",
+    "/api/v1/runs/",
+    "/api/v1/connectors/accounts/",
+)
+
+
+def _is_local_dashboard_write_path(path: str, method: str) -> bool:
+    if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return False
+    if path in _LOCAL_DASHBOARD_WRITE_PATHS:
+        return True
+    return any(path.startswith(prefix) for prefix in _LOCAL_DASHBOARD_WRITE_PREFIXES)
 
 
 def _adapter_health_bucket(name: str, status: Any, health: dict[str, Any]) -> str:
@@ -935,7 +954,7 @@ class ElyanGatewayServer:
         method = str(getattr(request, "method", "GET") or "GET").upper()
         if not path.startswith("/api"):
             return False
-        if method in {"POST", "PUT", "PATCH", "DELETE"} and path in _LOCAL_DASHBOARD_WRITE_PATHS:
+        if _is_local_dashboard_write_path(path, method):
             return False
         if path == "/api/message":
             return True
@@ -1068,6 +1087,7 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/v1/security/summary', self.handle_v1_security_summary)
         self.app.router.add_get('/api/v1/security/events', self.handle_v1_security_events)
         self.app.router.add_post('/api/v1/workflows/start', self.handle_v1_start_workflow)
+        self.app.router.add_post('/api/v1/auth/login', self.handle_v1_auth_login)
         self.app.router.add_get('/api/v1/cowork/home', self.handle_v1_cowork_home)
         self.app.router.add_get('/api/v1/cowork/threads', self.handle_v1_cowork_threads)
         self.app.router.add_post('/api/v1/cowork/threads', self.handle_v1_cowork_threads)
@@ -1341,6 +1361,40 @@ class ElyanGatewayServer:
                 "task_type": record.task_type,
                 "workflow_state": record.workflow_state,
                 "run": record.to_dict(),
+            }
+        )
+
+    async def handle_v1_auth_login(self, request):
+        if not _is_loopback_request(request):
+            return web.json_response({"success": False, "error": "local login is restricted to localhost"}, status=403)
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"success": False, "error": "invalid json"}, status=400)
+        email = str(data.get("email") or "").strip().lower()
+        password = str(data.get("password") or "")
+        workspace_id = self._workspace_id(request, data)
+        if not email:
+            return web.json_response({"success": False, "error": "email required"}, status=400)
+        if not password:
+            return web.json_response({"success": False, "error": "password required"}, status=400)
+        user = get_runtime_database().auth.authenticate_user(
+            email=email,
+            password=password,
+            workspace_id=workspace_id,
+        )
+        if not user:
+            return web.json_response({"success": False, "error": "invalid credentials"}, status=401)
+        return web.json_response(
+            {
+                "success": True,
+                "workspace_id": workspace_id,
+                "user": {
+                    "user_id": str(user.get("user_id") or ""),
+                    "email": str(user.get("email") or email),
+                    "display_name": str(user.get("display_name") or ""),
+                    "status": str(user.get("status") or "active"),
+                },
             }
         )
 

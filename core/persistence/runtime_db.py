@@ -4,6 +4,8 @@ import json
 import os
 import time
 import uuid
+import hmac
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -495,6 +497,23 @@ global_tool_reliability_table = Table(
     Column("updated_at", Float, nullable=False, default=_now),
 )
 Index("ix_global_tool_reliability_scope_updated", global_tool_reliability_table.c.scope, global_tool_reliability_table.c.updated_at)
+
+local_users_table = Table(
+    "local_users",
+    LOCAL_METADATA,
+    Column("user_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), nullable=False, default="local-workspace"),
+    Column("email", String(256), nullable=False),
+    Column("display_name", String(256), nullable=False, default=""),
+    Column("password_hash", String(256), nullable=False, default=""),
+    Column("password_salt", String(128), nullable=False, default=""),
+    Column("status", String(64), nullable=False, default="active"),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+    Column("updated_at", Float, nullable=False, default=_now),
+)
+Index("ix_local_users_workspace_updated", local_users_table.c.workspace_id, local_users_table.c.updated_at)
+Index("ix_local_users_workspace_email", local_users_table.c.workspace_id, local_users_table.c.email, unique=True)
 
 workspaces_table = Table(
     "workspaces",
@@ -1928,7 +1947,130 @@ class LearningRepository:
                 .values(**values)
             )
         else:
-            conn.execute(global_tool_reliability_table.insert().values(**values))
+                conn.execute(global_tool_reliability_table.insert().values(**values))
+
+
+class LocalAuthRepository:
+    _ITERATIONS = 200_000
+
+    def __init__(self, db: "RuntimeDatabase") -> None:
+        self._db = db
+
+    @staticmethod
+    def _normalize_email(email: str) -> str:
+        return str(email or "").strip().lower()
+
+    @classmethod
+    def _hash_password(cls, password: str, salt: str) -> str:
+        return hashlib.pbkdf2_hmac(
+            "sha256",
+            str(password or "").encode("utf-8"),
+            bytes.fromhex(salt),
+            cls._ITERATIONS,
+        ).hex()
+
+    def upsert_user(
+        self,
+        *,
+        email: str,
+        password: str,
+        display_name: str = "",
+        workspace_id: str = "local-workspace",
+        status: str = "active",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        normalized_email = self._normalize_email(email)
+        if not normalized_email:
+            raise ValueError("email required")
+        if not str(password or ""):
+            raise ValueError("password required")
+        salt = os.urandom(16).hex()
+        password_hash = self._hash_password(password, salt)
+        now = _now()
+        with self._db.local_engine.begin() as conn:
+            existing = conn.execute(
+                select(local_users_table).where(
+                    local_users_table.c.workspace_id == str(workspace_id or "local-workspace"),
+                    local_users_table.c.email == normalized_email,
+                )
+            ).mappings().first()
+            row_values = {
+                "workspace_id": str(workspace_id or "local-workspace"),
+                "email": normalized_email,
+                "display_name": str(display_name or normalized_email.split("@")[0]),
+                "password_hash": password_hash,
+                "password_salt": salt,
+                "status": str(status or "active"),
+                "metadata_json": _json_dumps(dict(metadata or {})),
+                "updated_at": now,
+            }
+            if existing:
+                user_id = str(existing["user_id"])
+                conn.execute(
+                    local_users_table.update()
+                    .where(local_users_table.c.user_id == user_id)
+                    .values(**row_values)
+                )
+            else:
+                user_id = f"user_{uuid.uuid4().hex[:12]}"
+                conn.execute(
+                    local_users_table.insert().values(
+                        user_id=user_id,
+                        created_at=now,
+                        **row_values,
+                    )
+                )
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=str(workspace_id or "local-workspace"),
+                event_type="auth.local_user.upserted",
+                payload={"user_id": user_id, "email": normalized_email},
+            )
+            row = conn.execute(
+                select(local_users_table).where(local_users_table.c.user_id == user_id)
+            ).mappings().first()
+        return self._db._decode_local_user_row(dict(row or {})) if row else {}
+
+    def authenticate_user(
+        self,
+        *,
+        email: str,
+        password: str,
+        workspace_id: str = "local-workspace",
+    ) -> dict[str, Any] | None:
+        normalized_email = self._normalize_email(email)
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(local_users_table).where(
+                    local_users_table.c.workspace_id == str(workspace_id or "local-workspace"),
+                    local_users_table.c.email == normalized_email,
+                    local_users_table.c.status == "active",
+                )
+            ).mappings().first()
+            if not row:
+                self._db._insert_audit_event(
+                    conn,
+                    workspace_id=str(workspace_id or "local-workspace"),
+                    event_type="auth.local_user.failed",
+                    payload={"email": normalized_email, "reason": "not_found"},
+                )
+                return None
+            expected = self._hash_password(password, str(row["password_salt"] or ""))
+            if not hmac.compare_digest(expected, str(row["password_hash"] or "")):
+                self._db._insert_audit_event(
+                    conn,
+                    workspace_id=str(workspace_id or "local-workspace"),
+                    event_type="auth.local_user.failed",
+                    payload={"email": normalized_email, "reason": "invalid_password"},
+                )
+                return None
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=str(workspace_id or "local-workspace"),
+                event_type="auth.local_user.authenticated",
+                payload={"user_id": str(row["user_id"]), "email": normalized_email},
+            )
+        return self._db._decode_local_user_row(dict(row))
 
 
 class ExecutionRepository:
@@ -2597,6 +2739,7 @@ class RuntimeDatabase:
         self.billing = BillingRepository(self)
         self.connectors = ConnectorRepository(self)
         self.learning = LearningRepository(self)
+        self.auth = LocalAuthRepository(self)
         self.execution = ExecutionRepository(self)
         self.run_index = RunIndexRepository(self)
         self.workspace_sync = WorkspaceSyncAdapter()
@@ -2900,6 +3043,19 @@ class RuntimeDatabase:
         }
 
     @staticmethod
+    def _decode_local_user_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "user_id": str(row.get("user_id") or ""),
+            "workspace_id": str(row.get("workspace_id") or "local-workspace"),
+            "email": str(row.get("email") or ""),
+            "display_name": str(row.get("display_name") or ""),
+            "status": str(row.get("status") or "inactive"),
+            "metadata": _json_loads(row.get("metadata_json"), {}),
+            "created_at": float(row.get("created_at") or 0.0),
+            "updated_at": float(row.get("updated_at") or 0.0),
+        }
+
+    @staticmethod
     def _decode_user_preference_profile_row(row: dict[str, Any]) -> dict[str, Any]:
         return {
             "profile_id": str(row["profile_id"]),
@@ -2971,6 +3127,7 @@ __all__ = [
     "ConnectorRepository",
     "ExecutionRepository",
     "LearningRepository",
+    "LocalAuthRepository",
     "OutboxRepository",
     "PermissionGrantRepository",
     "RunIndexRepository",
