@@ -111,16 +111,19 @@ class ApprovalEngine:
         self._pending_store_path = resolve_elyan_data_dir() / "approvals" / "pending.json"
         self._pending_store_path.parent.mkdir(parents=True, exist_ok=True)
         self._repository = get_runtime_database().approvals
+        self._permission_grants = get_runtime_database().permission_grants
         persist_mode = os.environ.get("ELYAN_APPROVAL_PERSIST", "1").strip().lower()
+        legacy_mode = os.environ.get("ELYAN_APPROVAL_LEGACY_JSON", "0").strip().lower()
         self._persistence_enabled = persist_mode not in {"0", "false", "off"} and (
             persist_mode in {"force", "always"} or "PYTEST_CURRENT_TEST" not in os.environ
         )
+        self._legacy_store_enabled = legacy_mode in {"1", "true", "on", "force", "always"}
         if self._persistence_enabled:
             self._restore_pending()
 
     def _persist_pending(self) -> None:
         """Persist current pending approvals for crash recovery."""
-        if not self._persistence_enabled:
+        if not self._persistence_enabled or not self._legacy_store_enabled:
             return
         try:
             payload = [req.to_dict() for req in self._pending.values()]
@@ -255,6 +258,8 @@ class ApprovalEngine:
         request = self._pending.get(request_id)
         if request:
             request.status = "approved" if approved else "denied"
+            if approved:
+                self._issue_scoped_grant(request, resolver_id)
             if not request.future.done():
                 request.future.set_result(approved)
 
@@ -285,6 +290,41 @@ class ApprovalEngine:
 
             return True
         return False
+
+    def _issue_scoped_grant(self, request: ApprovalRequest, resolver_id: str) -> None:
+        payload = dict(request.payload or {})
+        grant_payload = payload.get("permission_grant") if isinstance(payload.get("permission_grant"), dict) else payload
+        scope = str(grant_payload.get("scope") or "").strip()
+        resource = str(grant_payload.get("resource") or "").strip()
+        allowed_actions = [str(item).strip() for item in list(grant_payload.get("allowed_actions") or []) if str(item).strip()]
+        if not scope or not resource or not allowed_actions:
+            return
+        try:
+            self._permission_grants.issue_grant(
+                workspace_id=str(
+                    grant_payload.get("workspace_id")
+                    or payload.get("workspace_id")
+                    or payload.get("metadata", {}).get("workspace_id")
+                    or "local-workspace"
+                ),
+                device_id=str(grant_payload.get("device_id") or "local-device"),
+                scope=scope,
+                resource=resource,
+                allowed_actions=allowed_actions,
+                ttl_seconds=max(0, int(grant_payload.get("ttl_seconds") or 0)),
+                issued_by=str(resolver_id or "desktop_operator"),
+                revocable=bool(grant_payload.get("revocable", True)),
+                metadata={
+                    "approval_request_id": request.request_id,
+                    "action_type": request.action_type,
+                },
+            )
+        except Exception as exc:
+            slog.log_event(
+                "approval_grant_issue_failed",
+                {"request_id": request.request_id, "error": str(exc)},
+                level="warning",
+            )
 
     def bulk_resolve(self, request_ids: List[str], approved: bool, resolver_id: str) -> Dict[str, Any]:
         """Resolve multiple approval requests in bulk.

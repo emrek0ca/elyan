@@ -142,6 +142,59 @@ export interface CoworkThreadSummary {
 }
 
 export interface CoworkThreadDetail extends CoworkThreadSummary {
+  goal?: string;
+  currentStep?: string;
+  riskLevel?: string;
+  toolsInUse?: string[];
+  filesTouched?: string[];
+  lastSuccessfulCheckpoint?: {
+    checkpointId: string;
+    title: string;
+    workflowState?: string;
+    createdAt: string;
+    rawTimestamp?: number;
+    summary?: Record<string, unknown>;
+  };
+  controlActions?: Array<{
+    id: string;
+    label: string;
+    tone: "primary" | "secondary" | "danger";
+    enabled: boolean;
+  }>;
+  replay?: {
+    checkpoints: Array<{
+      checkpointId: string;
+      title: string;
+      workflowState?: string;
+      createdAt: string;
+      rawTimestamp?: number;
+      summary?: Record<string, unknown>;
+    }>;
+    verificationResults: Array<{
+      id: string;
+      status: string;
+      method: string;
+      createdAt: string;
+      rawTimestamp?: number;
+      payload?: Record<string, unknown>;
+    }>;
+    recoveryActions: Array<{
+      id: string;
+      decision: string;
+      createdAt: string;
+      rawTimestamp?: number;
+      payload?: Record<string, unknown>;
+    }>;
+  };
+  artifactDiffs?: Array<{
+    id: string;
+    artifactId: string;
+    beforeHash: string;
+    afterHash: string;
+    createdAt: string;
+    rawTimestamp?: number;
+    summary?: Record<string, unknown>;
+  }>;
   turns: CoworkTurn[];
   approvals: CoworkApproval[];
   artifacts: CoworkArtifact[];
@@ -458,6 +511,12 @@ export interface CommandCenterSnapshot {
   }>;
   security: SecuritySummary;
   securityEvents: LogEvent[];
+  controlActions?: Array<{
+    id: string;
+    label: string;
+    tone: "primary" | "secondary" | "danger";
+    enabled: boolean;
+  }>;
   selectedRun?: {
     id: string;
     title: string;

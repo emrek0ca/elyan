@@ -38,6 +38,20 @@ async def sync_runtime_outbox_once(*, runtime_db: RuntimeDatabase | None = None,
                 outbox.mark_retry(event_id, error=str(exc))
             except Exception:
                 pass
+            attempts = int(event.get("delivery_attempts") or 0) + 1
+            if attempts >= getattr(outbox, "_MAX_ATTEMPTS", 5):
+                slog.log_event(
+                    "runtime_sync_dead_lettered",
+                    {
+                        "event_id": event_id,
+                        "aggregate_type": str(event.get("aggregate_type") or "unknown"),
+                        "event_type": str(event.get("event_type") or "unknown"),
+                        "attempts": attempts,
+                        "error": str(exc),
+                    },
+                    level="warning",
+                )
+                continue
             slog.log_event(
                 "runtime_sync_delivery_failed",
                 {

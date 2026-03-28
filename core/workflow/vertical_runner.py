@@ -344,6 +344,23 @@ class VerticalWorkflowRunner:
         updated = await get_run_store().get_run(run_id)
         return updated or record
 
+    async def cancel_run(self, run_id: str) -> bool:
+        normalized = str(run_id or "").strip()
+        if not normalized:
+            return False
+        task = self._tasks.get(normalized)
+        if task and not task.done():
+            task.cancel()
+        cancelled = await get_run_store().cancel_run(normalized)
+        if cancelled:
+            _publish_workflow_activity(
+                event_type="workflow_cancelled",
+                channel="workflow",
+                detail=f"{normalized} cancelled by operator",
+                success=False,
+            )
+        return cancelled
+
     async def _execute_workflow(
         self,
         *,
@@ -601,6 +618,31 @@ class VerticalWorkflowRunner:
                     "review_status": str(review_report.get("status") or "passed"),
                 },
             )
+        except asyncio.CancelledError:
+            record.completed_at = time.time()
+            record.error = "cancelled_by_operator"
+            record.status = "cancelled"
+            record.workflow_state = "cancelled"
+            await self._persist_record(workflow_run, record)
+            _publish_workflow_tool_event(
+                stage="cancelled",
+                run_id=record.run_id,
+                step_name="workflow_cancelled",
+                success=False,
+                payload={"task_type": task_type.value, "workflow_state": "cancelled"},
+            )
+            if str(record.metadata.get("thread_id") or "").strip():
+                _publish_cowork_event(
+                    "cowork.run.state_changed",
+                    {
+                        "thread_id": str(record.metadata.get("thread_id") or "").strip(),
+                        "workspace_id": str(record.metadata.get("workspace_id") or "").strip(),
+                        "run_id": record.run_id,
+                        "workflow_state": "cancelled",
+                        "status": "cancelled",
+                    },
+                )
+            raise
         except Exception as exc:
             logger.error(f"vertical workflow failed for {record.run_id}: {exc}")
             failure_verification_id = await self._record_verification(
@@ -775,6 +817,20 @@ class VerticalWorkflowRunner:
                     },
                 )
             return payload
+        except asyncio.CancelledError:
+            step["status"] = "cancelled"
+            step["completed_at"] = time.time()
+            step["error"] = "cancelled_by_operator"
+            record.error = "cancelled_by_operator"
+            record.status = "cancelled"
+            record.workflow_state = "cancelled"
+            await self._persist_record(workflow_run, record)
+            await self._record_execution_step_complete(
+                execution_step_id=execution_step_id,
+                payload={"error": "cancelled_by_operator"},
+                success=False,
+            )
+            raise
         except Exception as exc:
             step["status"] = "failed"
             step["completed_at"] = time.time()

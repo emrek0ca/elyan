@@ -445,6 +445,57 @@ local_connector_action_traces_table = Table(
 )
 Index("ix_local_connector_traces_workspace_created", local_connector_action_traces_table.c.workspace_id, local_connector_action_traces_table.c.created_at)
 
+user_preference_profiles_table = Table(
+    "user_preference_profiles",
+    LOCAL_METADATA,
+    Column("profile_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), nullable=False, default="local-workspace"),
+    Column("user_id", String(128), nullable=False, default="local-user"),
+    Column("explanation_style", String(64), nullable=False, default="concise"),
+    Column("approval_sensitivity_hint", String(64), nullable=False, default="balanced"),
+    Column("preferred_route", String(64), nullable=False, default="balanced"),
+    Column("preferred_model", String(128), nullable=False, default=""),
+    Column("task_templates_json", Text, nullable=False, default="[]"),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("updated_at", Float, nullable=False, default=_now),
+)
+Index("ix_user_preference_profiles_workspace_updated", user_preference_profiles_table.c.workspace_id, user_preference_profiles_table.c.updated_at)
+Index("ix_user_preference_profiles_workspace_user", user_preference_profiles_table.c.workspace_id, user_preference_profiles_table.c.user_id)
+
+operational_feedback_table = Table(
+    "operational_feedback",
+    LOCAL_METADATA,
+    Column("feedback_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), nullable=False, default="local-workspace"),
+    Column("user_id", String(128), nullable=False, default="local-user"),
+    Column("category", String(64), nullable=False, default="runtime"),
+    Column("entity_id", String(128), nullable=False, default=""),
+    Column("outcome", String(32), nullable=False, default="neutral"),
+    Column("reward", Float, nullable=False, default=0.0),
+    Column("latency_ms", Float, nullable=False, default=0.0),
+    Column("recovery_count", Integer, nullable=False, default=0),
+    Column("payload_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+)
+Index("ix_operational_feedback_workspace_created", operational_feedback_table.c.workspace_id, operational_feedback_table.c.created_at)
+Index("ix_operational_feedback_entity_created", operational_feedback_table.c.entity_id, operational_feedback_table.c.created_at)
+
+global_tool_reliability_table = Table(
+    "global_tool_reliability",
+    LOCAL_METADATA,
+    Column("stat_id", String(160), primary_key=True),
+    Column("scope", String(64), nullable=False, default="global"),
+    Column("tool_name", String(128), nullable=False),
+    Column("success_count", Integer, nullable=False, default=0),
+    Column("failure_count", Integer, nullable=False, default=0),
+    Column("sample_count", Integer, nullable=False, default=0),
+    Column("avg_reward", Float, nullable=False, default=0.0),
+    Column("avg_latency_ms", Float, nullable=False, default=0.0),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("updated_at", Float, nullable=False, default=_now),
+)
+Index("ix_global_tool_reliability_scope_updated", global_tool_reliability_table.c.scope, global_tool_reliability_table.c.updated_at)
+
 workspaces_table = Table(
     "workspaces",
     WORKSPACE_METADATA,
@@ -649,8 +700,18 @@ sync_receipts_table = Table(
 
 
 class OutboxRepository:
+    _MAX_ATTEMPTS = 5
+    _MAX_BACKOFF_SECONDS = 60.0
+
     def __init__(self, db: "RuntimeDatabase") -> None:
         self._db = db
+
+    @classmethod
+    def retry_delay_seconds(cls, attempts: int) -> float:
+        normalized = max(0, int(attempts or 0))
+        if normalized <= 0:
+            return 0.0
+        return min(float(2 ** min(normalized - 1, 5)), cls._MAX_BACKOFF_SECONDS)
 
     def enqueue(
         self,
@@ -682,14 +743,27 @@ class OutboxRepository:
         return event_id
 
     def list_pending(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        now = _now()
         with self._db.local_engine.begin() as conn:
             rows = conn.execute(
                 select(outbox_events_table)
                 .where(outbox_events_table.c.sync_state == "pending")
                 .order_by(outbox_events_table.c.created_at.asc())
-                .limit(max(1, int(limit or 100)))
+                .limit(max(1, int(limit or 100)) * 4)
             ).mappings().all()
-        return [self._db._decode_outbox_row(row) for row in rows]
+        deliverable: list[dict[str, Any]] = []
+        for row in rows:
+            attempts = int(row["delivery_attempts"] or 0)
+            updated_at = float(row["updated_at"] or row["created_at"] or 0.0)
+            next_retry_at = updated_at + self.retry_delay_seconds(attempts)
+            if attempts > 0 and now < next_retry_at:
+                continue
+            decoded = self._db._decode_outbox_row(row)
+            decoded["next_retry_at"] = next_retry_at
+            deliverable.append(decoded)
+            if len(deliverable) >= max(1, int(limit or 100)):
+                break
+        return deliverable
 
     def mark_delivered(self, event_id: str) -> None:
         with self._db.local_engine.begin() as conn:
@@ -705,12 +779,41 @@ class OutboxRepository:
                 select(outbox_events_table.c.delivery_attempts).where(outbox_events_table.c.event_id == str(event_id))
             ).first()
             attempts = int(row[0] or 0) + 1 if row else 1
+            if attempts >= self._MAX_ATTEMPTS:
+                conn.execute(
+                    outbox_events_table.update()
+                    .where(outbox_events_table.c.event_id == str(event_id))
+                    .values(
+                        sync_state="dead_letter",
+                        delivery_attempts=attempts,
+                        last_error=str(error or "")[:2000],
+                        updated_at=_now(),
+                    )
+                )
+                return
             conn.execute(
                 outbox_events_table.update()
                 .where(outbox_events_table.c.event_id == str(event_id))
                 .values(
                     sync_state="pending",
                     delivery_attempts=attempts,
+                    last_error=str(error or "")[:2000],
+                    updated_at=_now(),
+                )
+            )
+
+    def mark_dead_letter(self, event_id: str, *, error: str) -> None:
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(outbox_events_table.c.delivery_attempts).where(outbox_events_table.c.event_id == str(event_id))
+            ).first()
+            attempts = int(row[0] or 0) if row else 0
+            conn.execute(
+                outbox_events_table.update()
+                .where(outbox_events_table.c.event_id == str(event_id))
+                .values(
+                    sync_state="dead_letter",
+                    delivery_attempts=max(attempts, self._MAX_ATTEMPTS),
                     last_error=str(error or "")[:2000],
                     updated_at=_now(),
                 )
@@ -955,6 +1058,197 @@ class ApprovalRepository:
                     "risk_level": values["risk_level"],
                 },
             )
+
+
+class PermissionGrantRepository:
+    def __init__(self, db: "RuntimeDatabase") -> None:
+        self._db = db
+
+    def issue_grant(
+        self,
+        *,
+        workspace_id: str = "local-workspace",
+        device_id: str = "local-device",
+        scope: str,
+        resource: str,
+        allowed_actions: list[str],
+        ttl_seconds: int = 0,
+        issued_by: str = "runtime",
+        revocable: bool = True,
+        metadata: dict[str, Any] | None = None,
+        grant_id: str = "",
+    ) -> dict[str, Any]:
+        now = _now()
+        normalized_grant_id = str(grant_id or f"grant_{uuid.uuid4().hex[:12]}")
+        expires_at = now + max(0, int(ttl_seconds or 0)) if int(ttl_seconds or 0) > 0 else 0.0
+        payload = {
+            "grant_id": normalized_grant_id,
+            "workspace_id": str(workspace_id or "local-workspace"),
+            "device_id": str(device_id or "local-device"),
+            "scope": str(scope or "").strip(),
+            "resource": str(resource or "").strip(),
+            "allowed_actions": [str(item).strip() for item in list(allowed_actions or []) if str(item).strip()],
+            "ttl_seconds": max(0, int(ttl_seconds or 0)),
+            "issued_by": str(issued_by or "runtime"),
+            "revocable": bool(revocable),
+            "created_at": now,
+            "expires_at": expires_at,
+            "metadata": dict(metadata or {}),
+        }
+        with self._db.local_engine.begin() as conn:
+            existing = conn.execute(
+                select(permission_grants_table.c.grant_id).where(permission_grants_table.c.grant_id == normalized_grant_id)
+            ).first()
+            values = {
+                "grant_id": payload["grant_id"],
+                "workspace_id": payload["workspace_id"],
+                "device_id": payload["device_id"],
+                "scope": payload["scope"],
+                "resource": payload["resource"],
+                "allowed_actions_json": _json_dumps(payload["allowed_actions"]),
+                "ttl_seconds": payload["ttl_seconds"],
+                "issued_by": payload["issued_by"],
+                "revocable": payload["revocable"],
+                "created_at": payload["created_at"],
+                "expires_at": payload["expires_at"],
+                "metadata_json": _json_dumps(payload["metadata"]),
+            }
+            if existing:
+                conn.execute(
+                    permission_grants_table.update()
+                    .where(permission_grants_table.c.grant_id == normalized_grant_id)
+                    .values(**values)
+                )
+            else:
+                conn.execute(permission_grants_table.insert().values(**values))
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=payload["workspace_id"],
+                event_type="security.permission_grant.issued",
+                payload={
+                    "grant_id": normalized_grant_id,
+                    "device_id": payload["device_id"],
+                    "scope": payload["scope"],
+                    "resource": payload["resource"],
+                    "allowed_actions": payload["allowed_actions"],
+                    "expires_at": expires_at,
+                    "issued_by": payload["issued_by"],
+                },
+            )
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=payload["workspace_id"],
+                aggregate_type="permission_grant",
+                aggregate_id=normalized_grant_id,
+                event_type="security.permission_grant.issued",
+                payload={
+                    "grant_id": normalized_grant_id,
+                    "workspace_id": payload["workspace_id"],
+                    "device_id": payload["device_id"],
+                    "scope": payload["scope"],
+                    "resource": payload["resource"],
+                    "allowed_actions": payload["allowed_actions"],
+                    "expires_at": expires_at,
+                    "issued_by": payload["issued_by"],
+                },
+            )
+        return payload
+
+    def list_active(
+        self,
+        *,
+        workspace_id: str = "",
+        device_id: str = "",
+        scope: str = "",
+        resource: str = "",
+    ) -> list[dict[str, Any]]:
+        self.expire_stale()
+        with self._db.local_engine.begin() as conn:
+            stmt = select(permission_grants_table)
+            if workspace_id:
+                stmt = stmt.where(permission_grants_table.c.workspace_id == str(workspace_id))
+            if device_id:
+                stmt = stmt.where(permission_grants_table.c.device_id == str(device_id))
+            if scope:
+                stmt = stmt.where(permission_grants_table.c.scope == str(scope))
+            if resource:
+                stmt = stmt.where(permission_grants_table.c.resource == str(resource))
+            stmt = stmt.order_by(permission_grants_table.c.created_at.asc())
+            rows = conn.execute(stmt).mappings().all()
+        now = _now()
+        return [
+            self._db._decode_permission_grant_row(row)
+            for row in rows
+            if float(row["expires_at"] or 0.0) <= 0.0 or float(row["expires_at"] or 0.0) > now
+        ]
+
+    def revoke_grant(self, grant_id: str, *, revoked_by: str = "runtime", reason: str = "") -> bool:
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(permission_grants_table).where(permission_grants_table.c.grant_id == str(grant_id))
+            ).mappings().first()
+            if row is None:
+                return False
+            decoded = self._db._decode_permission_grant_row(row)
+            conn.execute(
+                permission_grants_table.delete().where(permission_grants_table.c.grant_id == str(grant_id))
+            )
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=str(decoded.get("workspace_id") or "local-workspace"),
+                event_type="security.permission_grant.revoked",
+                payload={
+                    "grant_id": str(grant_id),
+                    "revoked_by": str(revoked_by or "runtime"),
+                    "reason": str(reason or ""),
+                    "scope": str(decoded.get("scope") or ""),
+                    "resource": str(decoded.get("resource") or ""),
+                },
+            )
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=str(decoded.get("workspace_id") or "local-workspace"),
+                aggregate_type="permission_grant",
+                aggregate_id=str(grant_id),
+                event_type="security.permission_grant.revoked",
+                payload={
+                    "grant_id": str(grant_id),
+                    "revoked_by": str(revoked_by or "runtime"),
+                    "reason": str(reason or ""),
+                    "scope": str(decoded.get("scope") or ""),
+                    "resource": str(decoded.get("resource") or ""),
+                },
+            )
+        return True
+
+    def expire_stale(self) -> int:
+        now = _now()
+        expired: list[dict[str, Any]] = []
+        with self._db.local_engine.begin() as conn:
+            rows = conn.execute(
+                select(permission_grants_table)
+                .where(permission_grants_table.c.expires_at > 0.0)
+                .where(permission_grants_table.c.expires_at <= now)
+            ).mappings().all()
+            expired = [self._db._decode_permission_grant_row(row) for row in rows]
+            if rows:
+                conn.execute(
+                    permission_grants_table.delete()
+                    .where(permission_grants_table.c.expires_at > 0.0)
+                    .where(permission_grants_table.c.expires_at <= now)
+                )
+                for row in expired:
+                    self._db._insert_audit_event(
+                        conn,
+                        workspace_id=str(row.get("workspace_id") or "local-workspace"),
+                        event_type="security.permission_grant.expired",
+                        payload={
+                            "grant_id": str(row.get("grant_id") or ""),
+                            "scope": str(row.get("scope") or ""),
+                            "resource": str(row.get("resource") or ""),
+                        },
+                    )
+        return len(expired)
 
 
 class BillingRepository:
@@ -1377,6 +1671,266 @@ class ConnectorRepository:
         }
 
 
+class LearningRepository:
+    def __init__(self, db: "RuntimeDatabase") -> None:
+        self._db = db
+
+    @staticmethod
+    def _profile_id(workspace_id: str, user_id: str) -> str:
+        return f"profile::{str(workspace_id or 'local-workspace')}::{str(user_id or 'local-user')}"
+
+    @staticmethod
+    def _stat_id(scope: str, tool_name: str) -> str:
+        return f"{str(scope or 'global')}::{str(tool_name or 'unknown')}"
+
+    def upsert_user_preference_profile(
+        self,
+        *,
+        workspace_id: str = "local-workspace",
+        user_id: str = "local-user",
+        explanation_style: str = "",
+        approval_sensitivity_hint: str = "",
+        preferred_route: str = "",
+        preferred_model: str = "",
+        task_templates: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        profile_id = self._profile_id(workspace_id, user_id)
+        values = {
+            "profile_id": profile_id,
+            "workspace_id": str(workspace_id or "local-workspace"),
+            "user_id": str(user_id or "local-user"),
+            "explanation_style": str(explanation_style or "concise"),
+            "approval_sensitivity_hint": str(approval_sensitivity_hint or "balanced"),
+            "preferred_route": str(preferred_route or "balanced"),
+            "preferred_model": str(preferred_model or ""),
+            "task_templates_json": _json_dumps(list(task_templates or [])),
+            "metadata_json": _json_dumps(dict(metadata or {})),
+            "updated_at": _now(),
+        }
+        with self._db.local_engine.begin() as conn:
+            existing = conn.execute(
+                select(user_preference_profiles_table.c.profile_id).where(user_preference_profiles_table.c.profile_id == profile_id)
+            ).first()
+            if existing:
+                conn.execute(
+                    user_preference_profiles_table.update()
+                    .where(user_preference_profiles_table.c.profile_id == profile_id)
+                    .values(**values)
+                )
+            else:
+                conn.execute(user_preference_profiles_table.insert().values(**values))
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=str(workspace_id or "local-workspace"),
+                event_type="learning.user_profile.updated",
+                payload={
+                    "profile_id": profile_id,
+                    "user_id": str(user_id or "local-user"),
+                    "explanation_style": values["explanation_style"],
+                    "approval_sensitivity_hint": values["approval_sensitivity_hint"],
+                    "preferred_route": values["preferred_route"],
+                },
+            )
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=str(workspace_id or "local-workspace"),
+                aggregate_type="user_preference_profile",
+                aggregate_id=profile_id,
+                event_type="learning.user_profile.updated",
+                payload={
+                    "profile_id": profile_id,
+                    "workspace_id": str(workspace_id or "local-workspace"),
+                    "user_id": str(user_id or "local-user"),
+                    "explanation_style": values["explanation_style"],
+                    "approval_sensitivity_hint": values["approval_sensitivity_hint"],
+                    "preferred_route": values["preferred_route"],
+                    "preferred_model": values["preferred_model"],
+                    "task_templates": list(task_templates or []),
+                },
+            )
+        return self.get_user_preference_profile(workspace_id=workspace_id, user_id=user_id) or {}
+
+    def get_user_preference_profile(self, *, workspace_id: str = "local-workspace", user_id: str = "local-user") -> dict[str, Any] | None:
+        profile_id = self._profile_id(workspace_id, user_id)
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(user_preference_profiles_table)
+                .where(user_preference_profiles_table.c.profile_id == profile_id)
+            ).mappings().first()
+        return self._db._decode_user_preference_profile_row(row) if row else None
+
+    def record_operational_feedback(
+        self,
+        *,
+        workspace_id: str = "local-workspace",
+        user_id: str = "local-user",
+        category: str,
+        entity_id: str,
+        outcome: str,
+        reward: float = 0.0,
+        latency_ms: float = 0.0,
+        recovery_count: int = 0,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        feedback_id = f"feedback_{uuid.uuid4().hex[:12]}"
+        row_payload = {
+            "feedback_id": feedback_id,
+            "workspace_id": str(workspace_id or "local-workspace"),
+            "user_id": str(user_id or "local-user"),
+            "category": str(category or "runtime"),
+            "entity_id": str(entity_id or "unknown"),
+            "outcome": str(outcome or "neutral"),
+            "reward": float(reward or 0.0),
+            "latency_ms": float(latency_ms or 0.0),
+            "recovery_count": max(0, int(recovery_count or 0)),
+            "payload": dict(payload or {}),
+            "created_at": _now(),
+        }
+        with self._db.local_engine.begin() as conn:
+            conn.execute(
+                operational_feedback_table.insert().values(
+                    feedback_id=feedback_id,
+                    workspace_id=row_payload["workspace_id"],
+                    user_id=row_payload["user_id"],
+                    category=row_payload["category"],
+                    entity_id=row_payload["entity_id"],
+                    outcome=row_payload["outcome"],
+                    reward=row_payload["reward"],
+                    latency_ms=row_payload["latency_ms"],
+                    recovery_count=row_payload["recovery_count"],
+                    payload_json=_json_dumps(row_payload["payload"]),
+                    created_at=row_payload["created_at"],
+                )
+            )
+            self._merge_global_tool_reliability(
+                conn,
+                scope="global",
+                tool_name=f"{row_payload['category']}:{row_payload['entity_id']}",
+                success=row_payload["reward"] >= 0.0 and row_payload["outcome"] not in {"failed", "error", "rejected"},
+                reward=row_payload["reward"],
+                latency_ms=row_payload["latency_ms"],
+                metadata={"workspace_id": row_payload["workspace_id"]},
+            )
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=row_payload["workspace_id"],
+                event_type="learning.feedback.recorded",
+                payload={
+                    "feedback_id": feedback_id,
+                    "user_id": row_payload["user_id"],
+                    "category": row_payload["category"],
+                    "entity_id": row_payload["entity_id"],
+                    "outcome": row_payload["outcome"],
+                },
+            )
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=row_payload["workspace_id"],
+                aggregate_type="learning_feedback",
+                aggregate_id=feedback_id,
+                event_type="learning.feedback.recorded",
+                payload={
+                    "feedback_id": feedback_id,
+                    "workspace_id": row_payload["workspace_id"],
+                    "user_id": row_payload["user_id"],
+                    "category": row_payload["category"],
+                    "entity_id": row_payload["entity_id"],
+                    "outcome": row_payload["outcome"],
+                    "reward": row_payload["reward"],
+                },
+            )
+        return row_payload
+
+    def list_operational_feedback(
+        self,
+        *,
+        workspace_id: str = "",
+        user_id: str = "",
+        category: str = "",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        with self._db.local_engine.begin() as conn:
+            stmt = select(operational_feedback_table)
+            if workspace_id:
+                stmt = stmt.where(operational_feedback_table.c.workspace_id == str(workspace_id))
+            if user_id:
+                stmt = stmt.where(operational_feedback_table.c.user_id == str(user_id))
+            if category:
+                stmt = stmt.where(operational_feedback_table.c.category == str(category))
+            rows = conn.execute(
+                stmt.order_by(operational_feedback_table.c.created_at.desc()).limit(max(1, int(limit or 50)))
+            ).mappings().all()
+        return [self._db._decode_operational_feedback_row(row) for row in rows]
+
+    def get_global_tool_reliability(self, *, tool_name: str, scope: str = "global") -> dict[str, Any] | None:
+        stat_id = self._stat_id(scope, tool_name)
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(global_tool_reliability_table)
+                .where(global_tool_reliability_table.c.stat_id == stat_id)
+            ).mappings().first()
+        return self._db._decode_global_tool_reliability_row(row) if row else None
+
+    def list_global_tool_reliability(self, *, scope: str = "global", limit: int = 50) -> list[dict[str, Any]]:
+        with self._db.local_engine.begin() as conn:
+            rows = conn.execute(
+                select(global_tool_reliability_table)
+                .where(global_tool_reliability_table.c.scope == str(scope or "global"))
+                .order_by(global_tool_reliability_table.c.updated_at.desc())
+                .limit(max(1, int(limit or 50)))
+            ).mappings().all()
+        return [self._db._decode_global_tool_reliability_row(row) for row in rows]
+
+    def _merge_global_tool_reliability(
+        self,
+        conn: Connection,
+        *,
+        scope: str,
+        tool_name: str,
+        success: bool,
+        reward: float,
+        latency_ms: float,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        stat_id = self._stat_id(scope, tool_name)
+        row = conn.execute(
+            select(global_tool_reliability_table).where(global_tool_reliability_table.c.stat_id == stat_id)
+        ).mappings().first()
+        success_count = int(row["success_count"] or 0) if row else 0
+        failure_count = int(row["failure_count"] or 0) if row else 0
+        sample_count = int(row["sample_count"] or 0) if row else 0
+        avg_reward = float(row["avg_reward"] or 0.0) if row else 0.0
+        avg_latency = float(row["avg_latency_ms"] or 0.0) if row else 0.0
+        if success:
+            success_count += 1
+        else:
+            failure_count += 1
+        sample_count += 1
+        avg_reward = ((avg_reward * (sample_count - 1)) + float(reward or 0.0)) / max(sample_count, 1)
+        avg_latency = ((avg_latency * (sample_count - 1)) + float(latency_ms or 0.0)) / max(sample_count, 1)
+        values = {
+            "stat_id": stat_id,
+            "scope": str(scope or "global"),
+            "tool_name": str(tool_name or "unknown"),
+            "success_count": success_count,
+            "failure_count": failure_count,
+            "sample_count": sample_count,
+            "avg_reward": avg_reward,
+            "avg_latency_ms": avg_latency,
+            "metadata_json": _json_dumps(dict(metadata or {})),
+            "updated_at": _now(),
+        }
+        if row:
+            conn.execute(
+                global_tool_reliability_table.update()
+                .where(global_tool_reliability_table.c.stat_id == stat_id)
+                .values(**values)
+            )
+        else:
+            conn.execute(global_tool_reliability_table.insert().values(**values))
+
+
 class ExecutionRepository:
     def __init__(self, db: "RuntimeDatabase") -> None:
         self._db = db
@@ -1574,6 +2128,24 @@ class ExecutionRepository:
                 .order_by(replay_checkpoints_table.c.sequence_number.asc())
             ).mappings().all()
         return [self._db._decode_checkpoint_row(row) for row in rows]
+
+    def list_artifact_diffs(self, run_id: str) -> list[dict[str, Any]]:
+        with self._db.local_engine.begin() as conn:
+            rows = conn.execute(
+                select(artifact_diffs_table)
+                .where(artifact_diffs_table.c.run_id == str(run_id))
+                .order_by(artifact_diffs_table.c.created_at.asc())
+            ).mappings().all()
+        return [self._db._decode_artifact_diff_row(row) for row in rows]
+
+    def list_file_mutations(self, run_id: str) -> list[dict[str, Any]]:
+        with self._db.local_engine.begin() as conn:
+            rows = conn.execute(
+                select(file_mutations_table)
+                .where(file_mutations_table.c.run_id == str(run_id))
+                .order_by(file_mutations_table.c.created_at.asc())
+            ).mappings().all()
+        return [self._db._decode_file_mutation_row(row) for row in rows]
 
 
 class RunIndexRepository:
@@ -1897,6 +2469,25 @@ class WorkspaceSyncAdapter:
                     )
                 else:
                     conn.execute(workspace_audit_index_table.insert().values(**audit_values))
+            elif aggregate_type in {"permission_grant", "user_preference_profile", "learning_feedback"}:
+                audit_values = {
+                    "event_id": event_id,
+                    "workspace_id": workspace_id,
+                    "event_type": event_type,
+                    "payload_json": _json_dumps(payload),
+                    "created_at": float(event_payload.get("created_at") or _now()),
+                }
+                existing_audit = conn.execute(
+                    select(workspace_audit_index_table.c.event_id).where(workspace_audit_index_table.c.event_id == event_id)
+                ).first()
+                if existing_audit:
+                    conn.execute(
+                        workspace_audit_index_table.update()
+                        .where(workspace_audit_index_table.c.event_id == event_id)
+                        .values(**audit_values)
+                    )
+                else:
+                    conn.execute(workspace_audit_index_table.insert().values(**audit_values))
             conn.execute(sync_receipts_table.insert().values(event_id=event_id, workspace_id=workspace_id, accepted_at=_now()))
         return True
 
@@ -1917,8 +2508,10 @@ class RuntimeDatabase:
         self.outbox = OutboxRepository(self)
         self.threads = ThreadRepository(self)
         self.approvals = ApprovalRepository(self)
+        self.permission_grants = PermissionGrantRepository(self)
         self.billing = BillingRepository(self)
         self.connectors = ConnectorRepository(self)
+        self.learning = LearningRepository(self)
         self.execution = ExecutionRepository(self)
         self.run_index = RunIndexRepository(self)
         self.workspace_sync = WorkspaceSyncAdapter()
@@ -1941,6 +2534,18 @@ class RuntimeDatabase:
             if existing:
                 return
             conn.execute(schema_migrations.insert().values(name="runtime_db_v1", applied_at=_now()))
+
+    @staticmethod
+    def _insert_audit_event(conn: Connection, *, workspace_id: str, event_type: str, payload: dict[str, Any]) -> None:
+        conn.execute(
+            audit_events_table.insert().values(
+                event_id=f"audit_{uuid.uuid4().hex[:12]}",
+                workspace_id=str(workspace_id or "local-workspace"),
+                event_type=str(event_type or "runtime.event"),
+                payload_json=_json_dumps(dict(payload or {})),
+                created_at=_now(),
+            )
+        )
 
     def _decode_thread_row(self, row: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -2005,6 +2610,23 @@ class RuntimeDatabase:
             "metadata": _json_loads(row["metadata_json"], {}),
         }
 
+    @staticmethod
+    def _decode_permission_grant_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "grant_id": str(row["grant_id"]),
+            "workspace_id": str(row["workspace_id"] or "local-workspace"),
+            "device_id": str(row["device_id"] or "local-device"),
+            "scope": str(row["scope"] or ""),
+            "resource": str(row["resource"] or ""),
+            "allowed_actions": _json_loads(row["allowed_actions_json"], []),
+            "ttl_seconds": int(row["ttl_seconds"] or 0),
+            "issued_by": str(row["issued_by"] or "runtime"),
+            "revocable": bool(row["revocable"]),
+            "created_at": float(row["created_at"] or 0.0),
+            "expires_at": float(row["expires_at"] or 0.0),
+            "metadata": _json_loads(row["metadata_json"], {}),
+        }
+
     def _decode_usage_row(self, row: dict[str, Any]) -> dict[str, Any]:
         return {
             "usage_id": str(row["usage_id"]),
@@ -2056,6 +2678,31 @@ class RuntimeDatabase:
             "step_id": str(row["step_id"] or ""),
             "sequence_number": int(row["sequence_number"] or 0),
             "workflow_state": str(row["workflow_state"] or ""),
+            "summary": _json_loads(row["summary_json"], {}),
+            "created_at": float(row["created_at"] or 0.0),
+        }
+
+    @staticmethod
+    def _decode_artifact_diff_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "artifact_diff_id": str(row["artifact_diff_id"]),
+            "run_id": str(row["run_id"]),
+            "artifact_id": str(row["artifact_id"] or ""),
+            "before_hash": str(row["before_hash"] or ""),
+            "after_hash": str(row["after_hash"] or ""),
+            "summary": _json_loads(row["summary_json"], {}),
+            "created_at": float(row["created_at"] or 0.0),
+        }
+
+    @staticmethod
+    def _decode_file_mutation_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "mutation_id": str(row["mutation_id"]),
+            "run_id": str(row["run_id"]),
+            "path": str(row["path"] or ""),
+            "before_hash": str(row["before_hash"] or ""),
+            "after_hash": str(row["after_hash"] or ""),
+            "rollback_available": bool(row["rollback_available"]),
             "summary": _json_loads(row["summary_json"], {}),
             "created_at": float(row["created_at"] or 0.0),
         }
@@ -2167,6 +2814,52 @@ class RuntimeDatabase:
             "updated_at": float(row["updated_at"] or 0.0),
         }
 
+    @staticmethod
+    def _decode_user_preference_profile_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "profile_id": str(row["profile_id"]),
+            "workspace_id": str(row["workspace_id"] or "local-workspace"),
+            "user_id": str(row["user_id"] or "local-user"),
+            "explanation_style": str(row["explanation_style"] or "concise"),
+            "approval_sensitivity_hint": str(row["approval_sensitivity_hint"] or "balanced"),
+            "preferred_route": str(row["preferred_route"] or "balanced"),
+            "preferred_model": str(row["preferred_model"] or ""),
+            "task_templates": _json_loads(row["task_templates_json"], []),
+            "metadata": _json_loads(row["metadata_json"], {}),
+            "updated_at": float(row["updated_at"] or 0.0),
+        }
+
+    @staticmethod
+    def _decode_operational_feedback_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "feedback_id": str(row["feedback_id"]),
+            "workspace_id": str(row["workspace_id"] or "local-workspace"),
+            "user_id": str(row["user_id"] or "local-user"),
+            "category": str(row["category"] or "runtime"),
+            "entity_id": str(row["entity_id"] or ""),
+            "outcome": str(row["outcome"] or "neutral"),
+            "reward": float(row["reward"] or 0.0),
+            "latency_ms": float(row["latency_ms"] or 0.0),
+            "recovery_count": int(row["recovery_count"] or 0),
+            "payload": _json_loads(row["payload_json"], {}),
+            "created_at": float(row["created_at"] or 0.0),
+        }
+
+    @staticmethod
+    def _decode_global_tool_reliability_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "stat_id": str(row["stat_id"]),
+            "scope": str(row["scope"] or "global"),
+            "tool_name": str(row["tool_name"] or "unknown"),
+            "success_count": int(row["success_count"] or 0),
+            "failure_count": int(row["failure_count"] or 0),
+            "sample_count": int(row["sample_count"] or 0),
+            "avg_reward": float(row["avg_reward"] or 0.0),
+            "avg_latency_ms": float(row["avg_latency_ms"] or 0.0),
+            "metadata": _json_loads(row["metadata_json"], {}),
+            "updated_at": float(row["updated_at"] or 0.0),
+        }
+
 
 _runtime_database: RuntimeDatabase | None = None
 _runtime_database_key: str = ""
@@ -2192,7 +2885,9 @@ __all__ = [
     "BillingRepository",
     "ConnectorRepository",
     "ExecutionRepository",
+    "LearningRepository",
     "OutboxRepository",
+    "PermissionGrantRepository",
     "RunIndexRepository",
     "RuntimeDatabase",
     "ThreadRepository",

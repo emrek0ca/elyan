@@ -9,7 +9,7 @@ import { Surface } from "@/components/primitives/Surface";
 import { StatusBadge } from "@/components/primitives/StatusBadge";
 import { OutputStream } from "@/features/run/OutputStream";
 import { useCommandCenterSnapshot } from "@/hooks/use-desktop-data";
-import { addCoworkTurn, resolveCoworkApproval } from "@/services/api/elyan-service";
+import { addCoworkTurn, cancelRun, resolveCoworkApproval } from "@/services/api/elyan-service";
 import { runtimeManager } from "@/runtime/runtime-manager";
 import { useUiStore } from "@/stores/ui-store";
 
@@ -45,15 +45,11 @@ export function CommandCenterScreen() {
 
   const selectedThread = data.selectedThread;
   const latestTimelineEntry = selectedThread?.timeline.at(-1);
-  const lastCheckpoint = selectedThread?.timeline
-    ?.slice()
-    .reverse()
-    .find((item) => ["completed", "success", "succeeded", "done"].includes(item.status));
-  const touchedFiles = (selectedThread?.artifacts || []).map((artifact) => artifact.path);
-  const workersInUse = selectedThread?.laneSummary?.assignedAgents || data.selectedRun?.assignedAgents || [];
-  const riskLabel =
-    selectedThread?.approvals[0]?.riskLevel ||
-    (selectedThread?.currentMode === "cowork" ? "low" : selectedThread?.status === "failed" ? "high" : "medium");
+  const lastCheckpoint = selectedThread?.lastSuccessfulCheckpoint;
+  const touchedFiles = selectedThread?.filesTouched || [];
+  const workersInUse = selectedThread?.toolsInUse || selectedThread?.laneSummary?.assignedAgents || data.selectedRun?.assignedAgents || [];
+  const riskLabel = selectedThread?.riskLevel || selectedThread?.approvals[0]?.riskLevel || "medium";
+  const controlActions = selectedThread?.controlActions || data.controlActions || [];
 
   function setSuggestedFollowUp(template: string) {
     setFollowUp(template);
@@ -85,6 +81,31 @@ export function CommandCenterScreen() {
     }
   }
 
+  async function handleQuickFollowUp(prompt: string) {
+    if (!selectedThread || !prompt.trim()) {
+      return;
+    }
+    setTurnBusy(true);
+    try {
+      const updated = await addCoworkTurn(selectedThread.threadId, {
+        prompt: prompt.trim(),
+        current_mode: selectedThread.currentMode,
+      });
+      setSelectedThreadId(updated.threadId);
+      if (updated.activeRunId) {
+        setSelectedRunId(updated.activeRunId);
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["cowork-home"] }),
+        queryClient.invalidateQueries({ queryKey: ["home-snapshot"] }),
+        queryClient.invalidateQueries({ queryKey: ["command-center"] }),
+        queryClient.invalidateQueries({ queryKey: ["logs"] }),
+      ]);
+    } finally {
+      setTurnBusy(false);
+    }
+  }
+
   async function handleApproval(approvalId: string, approved: boolean) {
     setApprovalBusyId(approvalId);
     try {
@@ -103,6 +124,39 @@ export function CommandCenterScreen() {
       ]);
     } finally {
       setApprovalBusyId("");
+    }
+  }
+
+  async function handleControlAction(actionId: string) {
+    if (!selectedThread) {
+      return;
+    }
+    if (actionId === "stop" && selectedThread.activeRunId) {
+      setTurnBusy(true);
+      try {
+        await cancelRun(selectedThread.activeRunId);
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["cowork-home"] }),
+          queryClient.invalidateQueries({ queryKey: ["home-snapshot"] }),
+          queryClient.invalidateQueries({ queryKey: ["command-center"] }),
+          queryClient.invalidateQueries({ queryKey: ["logs"] }),
+        ]);
+      } finally {
+        setTurnBusy(false);
+      }
+      return;
+    }
+    if (actionId === "retry") {
+      await handleQuickFollowUp("Retry from the last successful checkpoint, keep the scope narrow, and verify every step before continuing.");
+      return;
+    }
+    if (actionId === "observe_only") {
+      await handleQuickFollowUp("Stay in observe-only mode, explain the exact plan, and do not make changes yet.");
+      return;
+    }
+    if (actionId === "draft_first") {
+      await handleQuickFollowUp("Draft the plan first, show risks and required permissions, and wait before acting.");
+      return;
     }
   }
 
@@ -200,13 +254,13 @@ export function CommandCenterScreen() {
               <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4">
                 <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Goal</div>
                 <div className="mt-2 text-[13px] leading-6 text-[var(--text-primary)]">
-                  {selectedThread.lastUserTurn?.content || "Waiting for the next user turn."}
+                  {selectedThread.goal || selectedThread.lastUserTurn?.content || "Waiting for the next user turn."}
                 </div>
               </div>
               <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4">
                 <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Current step</div>
                 <div className="mt-2 text-[13px] font-medium text-[var(--text-primary)]">
-                  {latestTimelineEntry?.title || data.selectedRun?.workflowState || selectedThread.status}
+                  {selectedThread.currentStep || latestTimelineEntry?.title || data.selectedRun?.workflowState || selectedThread.status}
                 </div>
                 <div className="mt-1 text-[12px] text-[var(--text-secondary)]">
                   {latestTimelineEntry?.status || "queued"}
@@ -250,10 +304,108 @@ export function CommandCenterScreen() {
                 )}
               </div>
             </div>
+            {controlActions.length ? (
+              <div className="mt-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4">
+                <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Control actions</div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {controlActions.map((action) => (
+                    <Button
+                      key={action.id}
+                      variant={action.tone === "danger" ? "ghost" : action.tone === "primary" ? "primary" : "secondary"}
+                      size="sm"
+                      disabled={!action.enabled || turnBusy || (action.id === "stop" && !selectedThread.activeRunId)}
+                      onClick={() => void handleControlAction(action.id)}
+                    >
+                      {action.label}
+                    </Button>
+                  ))}
+                </div>
+                <div className="mt-3 text-[12px] text-[var(--text-secondary)]">
+                  Runtime-backed actions stay visible even when unavailable. Hidden power actions are not allowed.
+                </div>
+              </div>
+            ) : null}
           </Surface>
         ) : null}
 
         <OutputStream outputBlocks={data.outputBlocks} />
+
+        {selectedThread ? (
+          <Surface tone="card" className="p-5">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Replay</div>
+                <h2 className="mt-2 font-display text-[22px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
+                  Checkpoints and recoveries
+                </h2>
+              </div>
+              <StatusBadge tone={selectedThread.replay?.checkpoints?.length ? "success" : "info"}>
+                {selectedThread.replay?.checkpoints?.length ? `${selectedThread.replay.checkpoints.length} checkpoints` : "No checkpoints"}
+              </StatusBadge>
+            </div>
+            <div className="mt-4 space-y-3">
+              {selectedThread.replay?.checkpoints?.length ? (
+                selectedThread.replay.checkpoints.slice(-4).map((checkpoint) => (
+                  <div key={checkpoint.checkpointId} className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4">
+                    <div className="text-[13px] font-medium text-[var(--text-primary)]">{checkpoint.title}</div>
+                    <div className="mt-1 text-[12px] text-[var(--text-secondary)]">
+                      {checkpoint.workflowState || "checkpoint"} · {checkpoint.createdAt}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4 text-[12px] text-[var(--text-secondary)]">
+                  No replay checkpoints have been persisted yet for this thread.
+                </div>
+              )}
+              {selectedThread.replay?.recoveryActions?.length ? (
+                <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4">
+                  <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Recovery actions</div>
+                  <div className="mt-2 space-y-2">
+                    {selectedThread.replay.recoveryActions.slice(-3).map((recovery) => (
+                      <div key={recovery.id} className="text-[12px] text-[var(--text-secondary)]">
+                        {recovery.decision} · {recovery.createdAt}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </Surface>
+        ) : null}
+
+        {selectedThread ? (
+          <Surface tone="card" className="p-5">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Artifact diffs</div>
+                <h2 className="mt-2 font-display text-[22px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
+                  Change evidence
+                </h2>
+              </div>
+              <StatusBadge tone={selectedThread.artifactDiffs?.length ? "warning" : "info"}>
+                {selectedThread.artifactDiffs?.length ? `${selectedThread.artifactDiffs.length} diffs` : "No diffs"}
+              </StatusBadge>
+            </div>
+            <div className="mt-4 space-y-3">
+              {selectedThread.artifactDiffs?.length ? (
+                selectedThread.artifactDiffs.slice(-4).map((diff) => (
+                  <div key={diff.id} className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4">
+                    <div className="text-[13px] font-medium text-[var(--text-primary)]">{diff.artifactId || "artifact change"}</div>
+                    <div className="mt-1 text-[12px] text-[var(--text-secondary)]">
+                      {diff.beforeHash || "before?"} → {diff.afterHash || "after?"}
+                    </div>
+                    {diff.summary?.summary ? <div className="mt-2 text-[12px] text-[var(--text-secondary)]">{String(diff.summary.summary)}</div> : null}
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4 text-[12px] text-[var(--text-secondary)]">
+                  Artifact outputs exist, but no persisted diff records are attached to this thread yet.
+                </div>
+              )}
+            </div>
+          </Surface>
+        ) : null}
 
         {selectedThread?.artifacts.length ? (
           <Surface tone="card" className="p-5">

@@ -5,6 +5,7 @@ import json
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy import select
 
 import core.billing.workspace_billing as workspace_billing_module
 import core.cowork_threads as cowork_threads_module
@@ -12,7 +13,9 @@ import core.run_store as run_store_module
 import core.security.approval_engine as approval_engine_module
 from core.billing.workspace_billing import get_workspace_billing_store
 from core.cowork_threads import get_cowork_thread_store
+from core.learning.policy_learner import ResponsePolicyLearner
 from core.persistence import get_runtime_database, reset_runtime_database
+from core.persistence.runtime_db import outbox_events_table, permission_grants_table
 from core.run_store import RunRecord, RunStore
 from core.security.approval_engine import ApprovalEngine
 from core.protocol.shared_types import RiskLevel
@@ -191,3 +194,106 @@ async def test_run_store_mirrors_run_index_and_checkpoints(tmp_path):
     assert indexed["artifacts"][0]["label"] == "brief.pdf"
     assert indexed["replay_checkpoints"][0]["step_id"] == "step_1"
 
+
+def test_permission_grants_issue_revoke_and_expire():
+    runtime_db = get_runtime_database()
+    issued = runtime_db.permission_grants.issue_grant(
+        workspace_id="workspace-alpha",
+        device_id="macbook-pro",
+        scope="filesystem.read",
+        resource="/Users/emrekoca/Desktop/bot",
+        allowed_actions=["list", "read_text"],
+        ttl_seconds=1,
+        issued_by="desktop_operator",
+    )
+
+    active = runtime_db.permission_grants.list_active(workspace_id="workspace-alpha")
+    assert len(active) == 1
+    assert active[0]["resource"] == "/Users/emrekoca/Desktop/bot"
+
+    assert runtime_db.permission_grants.revoke_grant(issued["grant_id"], revoked_by="desktop_operator")
+    assert runtime_db.permission_grants.list_active(workspace_id="workspace-alpha") == []
+
+    expired = runtime_db.permission_grants.issue_grant(
+        workspace_id="workspace-alpha",
+        device_id="macbook-pro",
+        scope="filesystem.read",
+        resource="/tmp/ephemeral",
+        allowed_actions=["list"],
+        ttl_seconds=60,
+        issued_by="desktop_operator",
+    )
+    with runtime_db.local_engine.begin() as conn:
+        conn.execute(
+            permission_grants_table.update()
+            .where(permission_grants_table.c.grant_id == expired["grant_id"])
+            .values(expires_at=0.1)
+        )
+    assert runtime_db.permission_grants.expire_stale() == 1
+    assert runtime_db.permission_grants.list_active(workspace_id="workspace-alpha") == []
+
+
+def test_outbox_retry_transitions_to_dead_letter():
+    runtime_db = get_runtime_database()
+    with runtime_db.local_engine.begin() as conn:
+        event_id = runtime_db.outbox.enqueue(
+            conn,
+            workspace_id="workspace-alpha",
+            aggregate_type="cowork_thread",
+            aggregate_id="thread_123",
+            event_type="cowork.thread.updated",
+            payload={"thread_id": "thread_123"},
+        )
+
+    for _ in range(5):
+        runtime_db.outbox.mark_retry(event_id, error="sync failed")
+
+    with runtime_db.local_engine.begin() as conn:
+        row = conn.execute(
+            select(outbox_events_table).where(outbox_events_table.c.event_id == event_id)
+        ).mappings().first()
+
+    assert row is not None
+    assert row["sync_state"] == "dead_letter"
+    assert int(row["delivery_attempts"] or 0) >= 5
+
+
+def test_learning_repository_and_policy_learner_persist_to_runtime_db():
+    runtime_db = get_runtime_database()
+    profile = runtime_db.learning.upsert_user_preference_profile(
+        workspace_id="workspace-alpha",
+        user_id="user-1",
+        explanation_style="technical",
+        approval_sensitivity_hint="strict",
+        preferred_route="quality_first",
+        preferred_model="gpt-4o",
+        task_templates=["website_scaffold"],
+        metadata={"source": "test"},
+    )
+
+    feedback = runtime_db.learning.record_operational_feedback(
+        workspace_id="workspace-alpha",
+        user_id="user-1",
+        category="tool",
+        entity_id="github.commit",
+        outcome="success",
+        reward=0.8,
+        latency_ms=120.0,
+        recovery_count=0,
+        payload={"thread_id": "thread_123"},
+    )
+
+    learner = ResponsePolicyLearner(workspace_id="workspace-alpha", user_id="user-1")
+    learner.policy_weights["concise_answer"] = [0.25] * 64
+    learner._persist()
+    reloaded = ResponsePolicyLearner(workspace_id="workspace-alpha", user_id="user-1")
+
+    assert profile["preferred_route"] == "quality_first"
+    assert feedback["category"] == "tool"
+    reliability = runtime_db.learning.get_global_tool_reliability(tool_name="tool:github.commit")
+    assert reliability is not None
+    assert reliability["success_count"] == 1
+    loaded_profile = runtime_db.learning.get_user_preference_profile(workspace_id="workspace-alpha", user_id="user-1")
+    assert loaded_profile is not None
+    assert loaded_profile["metadata"]["response_policy_weights"]["concise_answer"][0] == pytest.approx(0.25)
+    assert reloaded.snapshot()["policy_weights"]["concise_answer"][0] == pytest.approx(0.25)

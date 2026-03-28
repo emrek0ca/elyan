@@ -313,6 +313,14 @@ class CoworkThreadStore:
             raise KeyError(f"thread not found: {thread_id}")
         run = await get_run_store().get_run(thread.active_run_id) if thread.active_run_id else None
         mission = get_mission_runtime().get_mission(thread.active_mission_id) if thread.active_mission_id else None
+        runtime_db = get_runtime_database()
+        run_index = runtime_db.run_index.get_run_index(thread.active_run_id) if thread.active_run_id else None
+        execution_steps = runtime_db.execution.list_execution_steps(thread.active_run_id) if thread.active_run_id else []
+        verification_results = runtime_db.execution.list_verifications(thread.active_run_id) if thread.active_run_id else []
+        recovery_actions = runtime_db.execution.list_recovery_actions(thread.active_run_id) if thread.active_run_id else []
+        replay_checkpoints = runtime_db.execution.list_checkpoints(thread.active_run_id) if thread.active_run_id else []
+        artifact_diffs = runtime_db.execution.list_artifact_diffs(thread.active_run_id) if thread.active_run_id else []
+        file_mutations = runtime_db.execution.list_file_mutations(thread.active_run_id) if thread.active_run_id else []
         review = dict(run.review_report or {}) if run and isinstance(run.review_report, dict) else {}
         approvals = []
         if mission is not None:
@@ -416,22 +424,114 @@ class CoworkThreadStore:
 
         turns = [turn.to_dict() for turn in thread.turns] + dynamic_operator_turns
         turns.sort(key=lambda item: float(item.get("created_at") or 0.0))
+        last_user_turn = next((turn for turn in reversed(turns) if str(turn.get("role") or "") == "user"), None)
+        last_operator_turn = next((turn for turn in reversed(turns) if str(turn.get("role") or "") == "operator"), None)
+        latest_timeline_entry = timeline[-1] if timeline else None
+        last_successful_checkpoint = replay_checkpoints[-1] if replay_checkpoints else (
+            (run_index or {}).get("replay_checkpoints", [])[-1] if isinstance((run_index or {}).get("replay_checkpoints"), list) and (run_index or {}).get("replay_checkpoints") else None
+        )
+        tools_in_use: list[str] = []
+        for item in execution_steps:
+            tool_name = str(item.get("tool_name") or "").strip()
+            if tool_name and tool_name not in tools_in_use:
+                tools_in_use.append(tool_name)
+        for item in list(run.assigned_agents or []) if run else []:
+            token = str(item or "").strip()
+            if token and token not in tools_in_use:
+                tools_in_use.append(token)
+        files_touched: list[str] = []
+        for mutation in file_mutations:
+            path = str(mutation.get("path") or "").strip()
+            if path and path not in files_touched:
+                files_touched.append(path)
+        for artifact in artifacts:
+            path = str(artifact.get("path") or "").strip()
+            if path and path not in files_touched:
+                files_touched.append(path)
+        if approvals:
+            risk_level = str((approvals[0] or {}).get("risk_level") or "medium")
+        elif str((review or {}).get("status") or "") == "needs_revision":
+            risk_level = "high"
+        elif str((run.workflow_state if run else mission.status if mission else thread.status) or "").lower() in {"failed", "cancelled"}:
+            risk_level = "high"
+        elif thread.current_mode == "cowork":
+            risk_level = "low"
+        else:
+            risk_level = "medium"
+        current_step = str((latest_timeline_entry or {}).get("title") or "").strip()
+        if not current_step:
+            current_step = str((latest_timeline_entry or {}).get("status") or "").strip()
+        if not current_step and run is not None:
+            current_step = str(run.workflow_state or run.status or "").strip()
+        if not current_step and mission is not None:
+            current_step = str(mission.status or "").strip()
+        if not current_step:
+            current_step = str(thread.status or "queued").strip()
+        status_value = str((run.workflow_state if run else mission.status if mission else thread.status) or thread.status)
+        terminal = status_value in {"completed", "failed", "cancelled"}
+        control_actions = [
+            {
+                "id": "stop",
+                "label": "Stop run",
+                "tone": "danger",
+                "enabled": bool(thread.active_run_id and not terminal),
+            },
+            {
+                "id": "retry",
+                "label": "Retry from checkpoint",
+                "tone": "secondary",
+                "enabled": bool(last_successful_checkpoint),
+            },
+            {
+                "id": "observe_only",
+                "label": "Continue in observe-only",
+                "tone": "secondary",
+                "enabled": True,
+            },
+            {
+                "id": "draft_first",
+                "label": "Plan before acting",
+                "tone": "secondary",
+                "enabled": True,
+            },
+        ]
         return {
             "thread_id": thread.thread_id,
             "workspace_id": thread.workspace_id,
             "session_id": thread.session_id,
             "title": thread.title,
             "current_mode": thread.current_mode,
-            "status": str((run.workflow_state if run else mission.status if mission else thread.status) or thread.status),
+            "status": status_value,
             "active_run_id": thread.active_run_id,
             "active_mission_id": thread.active_mission_id,
             "pending_approvals": approvals,
             "artifacts": artifacts,
             "review_status": str(review.get("status") or (mission.control_summary().get("review_status") if mission else "") or ""),
-            "last_user_turn": next((turn for turn in reversed(turns) if str(turn.get("role") or "") == "user"), None),
-            "last_operator_turn": next((turn for turn in reversed(turns) if str(turn.get("role") or "") == "operator"), None),
+            "last_user_turn": last_user_turn,
+            "last_operator_turn": last_operator_turn,
             "turns": turns,
             "timeline": timeline[-40:],
+            "goal": str((last_user_turn or {}).get("content") or "").strip(),
+            "current_step": current_step,
+            "risk_level": risk_level,
+            "tools_in_use": tools_in_use,
+            "files_touched": files_touched[:12],
+            "last_successful_checkpoint": {
+                "checkpoint_id": str((last_successful_checkpoint or {}).get("checkpoint_id") or ""),
+                "title": str(((last_successful_checkpoint or {}).get("summary") or {}).get("name") or (last_successful_checkpoint or {}).get("workflow_state") or "checkpoint"),
+                "workflow_state": str((last_successful_checkpoint or {}).get("workflow_state") or ""),
+                "created_at": float((last_successful_checkpoint or {}).get("created_at") or 0.0),
+                "summary": dict((last_successful_checkpoint or {}).get("summary") or {}),
+            }
+            if last_successful_checkpoint
+            else None,
+            "control_actions": control_actions,
+            "replay": {
+                "checkpoints": replay_checkpoints,
+                "verification_results": verification_results,
+                "recovery_actions": recovery_actions,
+            },
+            "artifact_diffs": artifact_diffs,
             "created_at": thread.created_at,
             "updated_at": max(
                 float(thread.updated_at or 0.0),

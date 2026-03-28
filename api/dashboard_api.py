@@ -10,11 +10,14 @@ Provides REST endpoints for dashboard widgets with:
 
 import json
 import logging
+import time
 from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime, timedelta
 from threading import Thread, Lock, Event
 from dataclasses import dataclass, asdict
 from collections import deque
+
+from security.privacy_guard import sanitize_object
 
 logger = logging.getLogger(__name__)
 
@@ -150,55 +153,65 @@ class DashboardAPIv1:
         """Initialize API"""
         self.metrics = MetricsStore()
         self.ws = WebSocketManager()
+        self._collector_stop = Event()
         self._start_metrics_collector()
 
     def _start_metrics_collector(self) -> None:
         """Start background metrics collection thread"""
         def collector():
-            while True:
+            while not self._collector_stop.is_set():
                 try:
                     self._collect_metrics()
-                    # Sleep 5 seconds between collections
-                    import time
-                    time.sleep(5)
+                    self._collector_stop.wait(5.0)
                 except Exception as e:
                     logger.error(f"Metrics collection error: {e}")
 
-        thread = Thread(target=collector, daemon=True)
+        thread = Thread(target=collector, daemon=True, name="elyan-metrics-collector")
         thread.start()
 
     def _collect_metrics(self) -> None:
         """Collect current system metrics"""
         try:
             from core.performance_cache import get_all_cache_stats
-            from core.cognitive_layer_integrator import get_cognitive_integrator
 
             # Cache hit rate
             cache_stats = get_all_cache_stats()
             total_hits = sum(s.get("hits", 0) for s in cache_stats.values())
             total_misses = sum(s.get("misses", 0) for s in cache_stats.values())
+            hit_rate = 0.0
 
             if total_hits + total_misses > 0:
                 hit_rate = (total_hits / (total_hits + total_misses)) * 100
-                self.metrics.record("cache_hit_rate", hit_rate, {"unit": "percent"})
+            self.metrics.record("cache_hit_rate", hit_rate, {"unit": "percent"})
 
             # Cognitive metrics
-            integrator = get_cognitive_integrator()
-            success_rate = integrator.calculate_success_rate()
+            success_rate = 0.0
+            mode = "UNKNOWN"
+            try:
+                from core.cognitive_layer_integrator import get_cognitive_integrator
+                integrator = get_cognitive_integrator()
+                success_rate = float(integrator.calculate_success_rate())
+                mode = str(getattr(integrator, "current_mode", "UNKNOWN") or "UNKNOWN")
+            except Exception as e:
+                logger.warning(f"Cognitive metrics unavailable: {e}")
             self.metrics.record("task_success_rate", success_rate, {"unit": "percent"})
-
-            mode = integrator.current_mode
             self.metrics.record("cognitive_mode", 1.0 if mode == "FOCUSED" else 0.0, {"mode": mode})
+            self.metrics.record("metrics_collector_ok", 1.0, {"source": "dashboard_api"})
 
             # Broadcast to WebSocket subscribers
             self.ws.broadcast("metrics", {
-                "cache_hit_rate": hit_rate if total_hits + total_misses > 0 else 0,
+                "cache_hit_rate": hit_rate,
                 "task_success_rate": success_rate,
                 "cognitive_mode": mode
             })
 
         except Exception as e:
+            self.metrics.record("metrics_collector_ok", 0.0, {"source": "dashboard_api"})
             logger.error(f"Metric collection failed: {e}")
+
+    def shutdown(self) -> None:
+        """Stop background collector thread (tests / controlled shutdown)."""
+        self._collector_stop.set()
 
     def get_cognitive_state(self) -> Dict[str, Any]:
         """GET /api/v1/cognitive/state"""
@@ -444,19 +457,17 @@ class DashboardAPIv1:
     async def get_run(self, run_id: str) -> Dict[str, Any]:
         """GET /api/v1/runs/<run_id>"""
         try:
+            try:
+                from core.events.read_model import get_run_read_model
+                row = get_run_read_model().get_run(run_id)
+                if row:
+                    return {"success": True, "run": row}
+            except Exception as exc:
+                logger.debug(f"Run read-model unavailable for {run_id}: {exc}")
             from core.run_store import get_run_store
             store = get_run_store()
             run = await store.get_run(run_id)
-            if run:
-                return {
-                    "success": True,
-                    "run": run.to_dict()
-                }
-            else:
-                return {
-                    "success": False,
-                    "error": "Run not found"
-                }
+            return {"success": True, "run": run.to_dict()} if run else {"success": False, "error": "Run not found"}
         except Exception as e:
             logger.error(f"Error getting run {run_id}: {e}")
             return {
@@ -467,14 +478,17 @@ class DashboardAPIv1:
     async def list_runs(self, limit: int = 20, status: Optional[str] = None) -> Dict[str, Any]:
         """GET /api/v1/runs?limit=20&status=*"""
         try:
+            try:
+                from core.events.read_model import get_run_read_model
+                runs = get_run_read_model().get_recent_runs(limit=limit, status=status)
+                if runs:
+                    return {"success": True, "count": len(runs), "runs": runs}
+            except Exception as exc:
+                logger.debug(f"Run read-model list fallback for status={status}: {exc}")
             from core.run_store import get_run_store
             store = get_run_store()
             runs = await store.list_runs(limit, status)
-            return {
-                "success": True,
-                "count": len(runs),
-                "runs": [r.to_dict() for r in runs]
-            }
+            return {"success": True, "count": len(runs), "runs": [r.to_dict() for r in runs]}
         except Exception as e:
             logger.error(f"Error listing runs: {e}")
             return {
@@ -485,9 +499,17 @@ class DashboardAPIv1:
     async def cancel_run(self, run_id: str) -> Dict[str, Any]:
         """POST /api/v1/runs/<run_id>/cancel"""
         try:
-            from core.run_store import get_run_store
-            store = get_run_store()
-            success = await store.cancel_run(run_id)
+            success = False
+            try:
+                from core.workflow.vertical_runner import get_vertical_workflow_runner
+
+                success = await get_vertical_workflow_runner().cancel_run(run_id)
+            except Exception:
+                success = False
+            if not success:
+                from core.run_store import get_run_store
+                store = get_run_store()
+                success = await store.cancel_run(run_id)
             if success:
                 return {
                     "success": True,
@@ -508,19 +530,17 @@ class DashboardAPIv1:
     async def get_step_timeline(self, run_id: str) -> Dict[str, Any]:
         """GET /api/v1/runs/<run_id>/timeline — Get step timeline for Gantt visualization"""
         try:
+            try:
+                from core.events.event_store import get_event_store
+                timeline = get_event_store().replay_to_state(run_id)
+                if isinstance(timeline, dict) and timeline.get("steps"):
+                    return {"success": True, "timeline": timeline}
+            except Exception as exc:
+                logger.debug(f"Event replay unavailable for {run_id}: {exc}")
             from core.run_store import get_run_store
             store = get_run_store()
             timeline = await store.get_step_timeline(run_id)
-            if timeline:
-                return {
-                    "success": True,
-                    "timeline": timeline
-                }
-            else:
-                return {
-                    "success": False,
-                    "error": "Run not found"
-                }
+            return {"success": True, "timeline": timeline} if timeline else {"success": False, "error": "Run not found"}
         except Exception as e:
             logger.error(f"Error getting step timeline for {run_id}: {e}")
             return {
@@ -575,6 +595,264 @@ class DashboardAPIv1:
             }
         except Exception as e:
             logger.error(f"Error getting approval metrics: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_dora_metrics(self, period: int = 24) -> Dict[str, Any]:
+        try:
+            from core.elyan_runtime import get_elyan_runtime
+
+            snapshot = get_elyan_runtime().metrics_collector.compute_snapshot(period_hours=float(period))
+            return {
+                "success": True,
+                "snapshot": {
+                    "period_start": snapshot.period_start,
+                    "period_end": snapshot.period_end,
+                    "task_completion_rate": snapshot.task_completion_rate,
+                    "avg_time_to_first_result_ms": snapshot.avg_time_to_first_result_ms,
+                    "task_failure_rate": snapshot.task_failure_rate,
+                    "avg_recovery_time_ms": snapshot.avg_recovery_time_ms,
+                    "approval_rate": snapshot.approval_rate,
+                    "autonomous_decision_rate": snapshot.autonomous_decision_rate,
+                    "cache_hit_rate": snapshot.cache_hit_rate,
+                    "avg_tool_selection_confidence": snapshot.avg_tool_selection_confidence,
+                    "performance_level": snapshot.performance_level(),
+                    "improvement_suggestions": snapshot.improvement_suggestions(),
+                },
+            }
+        except Exception as e:
+            logger.error(f"Error getting DORA metrics: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_tool_metrics(self) -> Dict[str, Any]:
+        try:
+            from core.events.read_model import get_run_read_model
+            tools = get_run_read_model().get_tool_performance()
+            tools = sorted(tools, key=lambda item: item.get("success_rate", 0.0), reverse=True)
+            return {"success": True, "tools": tools}
+        except Exception as e:
+            logger.error(f"Error getting tool metrics: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_health_metrics(self) -> Dict[str, Any]:
+        try:
+            from core.elyan_runtime import get_elyan_runtime
+            report = get_elyan_runtime().circuit_registry.get_health_report()
+            return {"success": True, "health": report}
+        except Exception as e:
+            logger.error(f"Error getting health metrics: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_learning_metrics(self) -> Dict[str, Any]:
+        try:
+            from core.elyan_runtime import get_elyan_runtime
+            runtime = get_elyan_runtime()
+            return {
+                "success": True,
+                "learning": {
+                    "bandit": runtime.tool_bandit.get_insights(),
+                    "uncertainty": runtime.uncertainty_engine.snapshot(),
+                },
+            }
+        except Exception as e:
+            logger.error(f"Error getting learning metrics: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_toil_metrics(self) -> Dict[str, Any]:
+        try:
+            from core.elyan_runtime import get_elyan_runtime
+            report = get_elyan_runtime().capacity_planner.get_toil_report()
+            return {"success": True, "toil": report}
+        except Exception as e:
+            logger.error(f"Error getting toil metrics: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_multi_agent_metrics(self) -> Dict[str, Any]:
+        try:
+            from core.elyan_runtime import get_elyan_runtime
+            from core.multi_agent.handoff import get_handoff_store
+            from core.semantic_memory import get_semantic_memory
+
+            runtime = get_elyan_runtime()
+            contract_net = runtime.contract_net
+            world_model = runtime.world_model
+            agents = []
+            for agent_id, profile in contract_net.registered_agents.items():
+                agents.append(
+                    {
+                        "agent_id": agent_id,
+                        "capabilities": list(profile.capabilities),
+                        "max_concurrent": profile.max_concurrent,
+                        "current_load": profile.current_load,
+                        "utilization": round(profile.current_load / profile.max_concurrent, 3) if profile.max_concurrent else 0.0,
+                    }
+                )
+            agents.sort(key=lambda item: (item["current_load"], item["agent_id"]))
+            facts = world_model.get_snapshot(prefix="job.")
+            handoff_stats = get_handoff_store().stats()
+            semantic_stats = get_semantic_memory().stats()
+            gateway = getattr(runtime, "model_gateway", None)
+            specialists = getattr(runtime, "specialists", None)
+            security_summary = await self.get_security_summary()
+            return {
+                "success": True,
+                "multi_agent": {
+                    "registered_agents": agents,
+                    "active_contracts": dict(contract_net.active_contracts),
+                    "active_contract_count": len(contract_net.active_contracts),
+                    "world_fact_count": len(facts),
+                    "world_facts": facts,
+                    "handoffs": handoff_stats,
+                    "memory": {
+                        "semantic": semantic_stats,
+                    },
+                    "model_gateway": gateway.describe() if gateway else {},
+                    "security": security_summary.get("security", {}) if isinstance(security_summary, dict) else {},
+                    "specialists": sorted(list(specialists.get_nextgen_team().keys())) if specialists else [],
+                },
+            }
+        except Exception as e:
+            logger.error(f"Error getting multi-agent metrics: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_security_summary(self) -> Dict[str, Any]:
+        try:
+            from config.elyan_config import elyan_config
+            from core.elyan_runtime import get_elyan_runtime
+            from core.multi_agent.handoff import get_handoff_store
+            from core.security.approval_engine import get_approval_engine
+            from core.security.session_security import get_session_manager
+            from core.semantic_memory import get_semantic_memory
+
+            runtime = get_elyan_runtime()
+            approval_metrics = get_approval_engine().get_workflow_metrics()
+            session_stats = get_session_manager().get_session_stats()
+            semantic_stats = get_semantic_memory().stats()
+            handoff_stats = get_handoff_store().stats()
+            return {
+                "success": True,
+                "security": {
+                    "posture": str(elyan_config.get("operator.security_posture", "balanced") or "balanced"),
+                    "deployment_scope": str(elyan_config.get("operator.deployment_scope", "single_user_local_first") or "single_user_local_first"),
+                    "data_locality": str(elyan_config.get("operator.data_locality", "local_only") or "local_only"),
+                    "cloud_prompt_redaction": bool(elyan_config.get("security.kvkk.redactCloudPrompts", True)),
+                    "allow_cloud_fallback": bool(elyan_config.get("security.kvkk.allowCloudFallback", True)),
+                    "pending_approvals": int(approval_metrics.get("pending_count", 0) or 0),
+                    "active_sessions": int(session_stats.get("active_tokens", 0) or 0),
+                    "session_persistence": bool(session_stats.get("persistence_enabled", False)),
+                    "handoff_pending": int(handoff_stats.get("pending", 0) or 0),
+                    "semantic_backend": str(semantic_stats.get("backend", "unknown") or "unknown"),
+                    "model_gateway": runtime.model_gateway.describe() if getattr(runtime, "model_gateway", None) else {},
+                },
+            }
+        except Exception as e:
+            logger.error(f"Error getting security summary: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_security_events(self, limit: int = 40) -> Dict[str, Any]:
+        try:
+            from core.events.event_store import EventType, get_event_store
+
+            security_types = [
+                EventType.SECURITY_DECISION_MADE,
+                EventType.PROMPT_BLOCKED,
+                EventType.SECRET_REDACTED,
+                EventType.CLOUD_ESCALATION_DENIED,
+                EventType.CLOUD_ESCALATION_APPROVED,
+                EventType.SANDBOX_VIOLATION,
+                EventType.TOKEN_ISSUED,
+                EventType.TOKEN_REVOKED,
+            ]
+            store = get_event_store()
+            per_type_limit = max(5, int(limit))
+            collected = []
+            for event_type in security_types:
+                collected.extend(store.query_by_type(event_type, limit=per_type_limit))
+            collected.sort(key=lambda item: float(item.timestamp or 0.0), reverse=True)
+            events = []
+            for event in collected[: max(1, int(limit))]:
+                payload = sanitize_object(dict(event.payload or {}))
+                et = str(event.event_type.value)
+                level = "info"
+                if "denied" in et or "blocked" in et or "violation" in et:
+                    level = "error"
+                elif "redacted" in et:
+                    level = "warning"
+                elif "issued" in et or "approved" in et:
+                    level = "success"
+                events.append(
+                    {
+                        "id": event.event_id,
+                        "event_type": et,
+                        "level": level,
+                        "source": "security",
+                        "title": et.replace("security.", "").replace("_", " "),
+                        "detail": str(
+                            payload.get("reason")
+                            or payload.get("method")
+                            or payload.get("platform")
+                            or payload.get("channel_type")
+                            or payload.get("aggregate_id")
+                            or "security event"
+                        ),
+                        "timestamp": float(event.timestamp or 0.0),
+                        "aggregate_id": str(event.aggregate_id or ""),
+                        "payload": payload,
+                    }
+                )
+            return {"success": True, "events": events}
+        except Exception as e:
+            logger.error(f"Error getting security events: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_runtime_backends(self) -> Dict[str, Any]:
+        try:
+            from core.runtime_backends import get_runtime_backend_registry
+
+            return {
+                "success": True,
+                "backends": get_runtime_backend_registry().describe(),
+            }
+        except Exception as e:
+            logger.error(f"Error getting runtime backend status: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def submit_feedback(self, run_id: str, satisfaction: float) -> Dict[str, Any]:
+        try:
+            from core.elyan_runtime import get_elyan_runtime
+            from core.events.event_store import EventType
+
+            runtime = get_elyan_runtime()
+            runtime.record_event(
+                event_type=EventType.FEEDBACK_RECEIVED,
+                aggregate_id=run_id,
+                aggregate_type="run",
+                payload={"satisfaction": float(satisfaction)},
+            )
+            return {"success": True, "run_id": run_id, "satisfaction": float(satisfaction)}
+        except Exception as e:
+            logger.error(f"Error recording feedback: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def add_htn_method(self, task_name: str, subtasks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        try:
+            from core.elyan_runtime import get_elyan_runtime
+            from core.planning.htn_planner import Task
+
+            runtime = get_elyan_runtime()
+            plan = [
+                Task(
+                    name=str(item.get("name") or item.get("action") or ""),
+                    parameters=dict(item.get("parameters") or {}),
+                    preconditions=list(item.get("preconditions") or []),
+                    is_primitive=bool(item.get("is_primitive", True)),
+                )
+                for item in subtasks
+                if isinstance(item, dict)
+            ]
+            runtime.htn_planner.record_successful_plan(task_name, plan)
+            return {"success": True, "task_name": task_name, "subtask_count": len(plan)}
+        except Exception as e:
+            logger.error(f"Error adding HTN method: {e}")
             return {"success": False, "error": str(e)}
 
     async def get_approval_trends(self, days: int = 7) -> Dict[str, Any]:
@@ -658,8 +936,8 @@ class DashboardAPIv1:
                                 "summary": first_line.replace("#", "").strip()[:100],
                                 "file": file_path.name
                             })
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug(f"Skipping memory summary {file_path}: {exc}")
 
             # Sort by timestamp descending
             events.sort(key=lambda e: e["timestamp"], reverse=True)
@@ -797,4 +1075,9 @@ def get_dashboard_api() -> DashboardAPIv1:
 def reset_dashboard_api() -> None:
     """Reset API instance (for testing)"""
     global _dashboard_api
+    if _dashboard_api is not None:
+        try:
+            _dashboard_api.shutdown()
+        except Exception as exc:
+            logger.debug(f"Dashboard API shutdown skipped: {exc}")
     _dashboard_api = None

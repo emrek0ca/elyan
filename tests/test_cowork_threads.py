@@ -6,9 +6,11 @@ import pytest
 
 import core.cowork_threads as cowork_threads_module
 import core.mission_control as mission_control_module
+import core.persistence.runtime_db as runtime_db_module
 import core.run_store as run_store_module
 import core.workflow.vertical_runner as vertical_runner_module
 from core.cowork_threads import get_cowork_thread_store
+from core.persistence import reset_runtime_database
 from core.run_store import get_run_store
 
 
@@ -16,15 +18,22 @@ from core.run_store import get_run_store
 def isolated_cowork_state(monkeypatch, tmp_path):
     monkeypatch.setenv("ELYAN_DATA_DIR", str(tmp_path / "elyan"))
     monkeypatch.setenv("ELYAN_RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setenv("ELYAN_RUNTIME_DB_PATH", str(tmp_path / "elyan" / "db" / "runtime.sqlite3"))
     cowork_threads_module._thread_store = None
     mission_control_module._mission_runtime = None
     run_store_module._run_store = None
     vertical_runner_module._vertical_workflow_runner = None
+    runtime_db_module._runtime_database = None
+    runtime_db_module._runtime_database_key = ""
+    reset_runtime_database()
     yield
     cowork_threads_module._thread_store = None
     mission_control_module._mission_runtime = None
     run_store_module._run_store = None
     vertical_runner_module._vertical_workflow_runner = None
+    runtime_db_module._runtime_database = None
+    runtime_db_module._runtime_database_key = ""
+    reset_runtime_database()
 
 
 @pytest.mark.asyncio
@@ -61,6 +70,13 @@ async def test_cowork_thread_routes_website_lane_and_supports_follow_up():
 
     detail = await store.get_thread_detail(str(created["thread_id"]))
     assert detail["artifacts"]
+    assert detail["goal"].startswith("Build a premium React landing page")
+    assert detail["current_step"]
+    assert detail["risk_level"] in {"low", "medium", "high"}
+    assert isinstance(detail["tools_in_use"], list)
+    assert detail["last_successful_checkpoint"] is not None
+    assert any(action["id"] == "retry" for action in detail["control_actions"])
+    assert isinstance(detail["replay"]["checkpoints"], list)
 
     follow_up = await store.add_turn(
         str(created["thread_id"]),

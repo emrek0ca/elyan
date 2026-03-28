@@ -271,6 +271,8 @@ function mapReview(item?: Record<string, unknown>): ReviewReport | undefined {
 
 function mapThreadSummary(item: Record<string, unknown>): CoworkThreadSummary {
   const updatedAt = Number(item.updated_at || item.created_at || 0);
+  const pendingApprovals = Array.isArray(item.pending_approvals) ? item.pending_approvals.length : Number(item.pending_approvals || 0);
+  const artifactCount = Array.isArray(item.artifacts) ? item.artifacts.length : Number(item.artifact_count || 0);
   return {
     threadId: String(item.thread_id || crypto.randomUUID()),
     workspaceId: String(item.workspace_id || "local-workspace"),
@@ -280,8 +282,8 @@ function mapThreadSummary(item: Record<string, unknown>): CoworkThreadSummary {
     status: String(item.status || "queued"),
     activeRunId: String(item.active_run_id || ""),
     activeMissionId: String(item.active_mission_id || ""),
-    pendingApprovals: Number(item.pending_approvals || 0),
-    artifactCount: Number(item.artifact_count || 0),
+    pendingApprovals,
+    artifactCount,
     reviewStatus: String(item.review_status || ""),
     lastUserTurn: item.last_user_turn && typeof item.last_user_turn === "object" ? mapTurn(item.last_user_turn as Record<string, unknown>) : undefined,
     lastOperatorTurn:
@@ -295,8 +297,84 @@ function mapThreadSummary(item: Record<string, unknown>): CoworkThreadSummary {
 
 function mapThreadDetail(item: Record<string, unknown>): CoworkThreadDetail {
   const base = mapThreadSummary(item);
+  const checkpoint = item.last_successful_checkpoint && typeof item.last_successful_checkpoint === "object"
+    ? (item.last_successful_checkpoint as Record<string, unknown>)
+    : null;
   return {
     ...base,
+    goal: String(item.goal || base.lastUserTurn?.content || ""),
+    currentStep: String(item.current_step || ""),
+    riskLevel: String(item.risk_level || ""),
+    toolsInUse: Array.isArray(item.tools_in_use) ? item.tools_in_use.map((entry) => String(entry)) : [],
+    filesTouched: Array.isArray(item.files_touched) ? item.files_touched.map((entry) => String(entry)) : [],
+    lastSuccessfulCheckpoint: checkpoint
+      ? {
+          checkpointId: String(checkpoint.checkpoint_id || ""),
+          title: String(checkpoint.title || checkpoint.workflow_state || "checkpoint"),
+          workflowState: String(checkpoint.workflow_state || ""),
+          createdAt: formatDateTime(Number(checkpoint.created_at || 0)),
+          rawTimestamp: Number(checkpoint.created_at || 0),
+          summary: (checkpoint.summary as Record<string, unknown> | undefined) || {},
+        }
+      : undefined,
+    controlActions: Array.isArray(item.control_actions)
+      ? item.control_actions.map((action) => ({
+          id: String((action as Record<string, unknown>).id || crypto.randomUUID()),
+          label: String((action as Record<string, unknown>).label || "Action"),
+          tone:
+            String((action as Record<string, unknown>).tone || "secondary") === "danger"
+              ? "danger"
+              : String((action as Record<string, unknown>).tone || "secondary") === "primary"
+                ? "primary"
+                : "secondary",
+          enabled: Boolean((action as Record<string, unknown>).enabled ?? true),
+        }))
+      : [],
+    replay:
+      item.replay && typeof item.replay === "object"
+        ? {
+            checkpoints: Array.isArray((item.replay as Record<string, unknown>).checkpoints)
+              ? ((item.replay as Record<string, unknown>).checkpoints as Array<Record<string, unknown>>).map((entry) => ({
+                  checkpointId: String(entry.checkpoint_id || ""),
+                  title: String(((entry.summary as Record<string, unknown> | undefined)?.name as string | undefined) || entry.workflow_state || "checkpoint"),
+                  workflowState: String(entry.workflow_state || ""),
+                  createdAt: formatDateTime(Number(entry.created_at || 0)),
+                  rawTimestamp: Number(entry.created_at || 0),
+                  summary: (entry.summary as Record<string, unknown> | undefined) || {},
+                }))
+              : [],
+            verificationResults: Array.isArray((item.replay as Record<string, unknown>).verification_results)
+              ? ((item.replay as Record<string, unknown>).verification_results as Array<Record<string, unknown>>).map((entry) => ({
+                  id: String(entry.verification_id || crypto.randomUUID()),
+                  status: String(entry.status || "pending"),
+                  method: String(entry.method || ""),
+                  createdAt: formatDateTime(Number(entry.created_at || 0)),
+                  rawTimestamp: Number(entry.created_at || 0),
+                  payload: (entry.payload as Record<string, unknown> | undefined) || {},
+                }))
+              : [],
+            recoveryActions: Array.isArray((item.replay as Record<string, unknown>).recovery_actions)
+              ? ((item.replay as Record<string, unknown>).recovery_actions as Array<Record<string, unknown>>).map((entry) => ({
+                  id: String(entry.recovery_id || crypto.randomUUID()),
+                  decision: String(entry.decision || "retry"),
+                  createdAt: formatDateTime(Number(entry.created_at || 0)),
+                  rawTimestamp: Number(entry.created_at || 0),
+                  payload: (entry.payload as Record<string, unknown> | undefined) || {},
+                }))
+              : [],
+          }
+        : undefined,
+    artifactDiffs: Array.isArray(item.artifact_diffs)
+      ? item.artifact_diffs.map((diff) => ({
+          id: String((diff as Record<string, unknown>).artifact_diff_id || crypto.randomUUID()),
+          artifactId: String((diff as Record<string, unknown>).artifact_id || ""),
+          beforeHash: String((diff as Record<string, unknown>).before_hash || ""),
+          afterHash: String((diff as Record<string, unknown>).after_hash || ""),
+          createdAt: formatDateTime(Number((diff as Record<string, unknown>).created_at || 0)),
+          rawTimestamp: Number((diff as Record<string, unknown>).created_at || 0),
+          summary: (((diff as Record<string, unknown>).summary as Record<string, unknown> | undefined) || {}),
+        }))
+      : [],
     turns: Array.isArray(item.turns) ? item.turns.map((turn) => mapTurn(turn as Record<string, unknown>)) : [],
     approvals: Array.isArray(item.pending_approvals) ? item.pending_approvals.map((approval) => mapApproval(approval as Record<string, unknown>)) : [],
     artifacts: Array.isArray(item.artifacts) ? item.artifacts.map((artifact) => mapArtifact(artifact as Record<string, unknown>)) : [],
@@ -768,6 +846,7 @@ export async function getCommandCenterSnapshot(selectedThreadId?: string, select
     outputBlocks,
     security,
     securityEvents: securityEvents.length ? securityEvents : mockCommandCenter.securityEvents,
+    controlActions: selectedThread?.controlActions || [],
     selectedRun: selectedRunSummary,
   };
 }
@@ -831,6 +910,14 @@ export async function resolveCoworkApproval(approvalId: string, payload: { appro
     body: payload,
   });
   return raw.thread ? mapThreadDetail(raw.thread) : null;
+}
+
+export async function cancelRun(runId: string): Promise<boolean> {
+  const raw = await apiClient.request<SuccessEnvelope<{ message?: string; error?: string }>>(`/api/v1/runs/${encodeURIComponent(runId)}/cancel`, {
+    method: "POST",
+    body: {},
+  });
+  return Boolean(raw.success);
 }
 
 export async function startWorkflowRun(payload: StartWorkflowPayload): Promise<StartWorkflowResponse> {
