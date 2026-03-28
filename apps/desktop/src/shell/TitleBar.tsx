@@ -1,5 +1,6 @@
-import { Monitor, MoonStar, Search, SunMedium } from "lucide-react";
+import { Monitor, MoonStar, SunMedium } from "lucide-react";
 
+import { ElyanMark } from "@/components/brand/ElyanMark";
 import { Button } from "@/components/primitives/Button";
 import { SearchField } from "@/components/primitives/SearchField";
 import { closeWindow, minimizeWindow, toggleMaximizeWindow } from "@/services/desktop/window";
@@ -56,6 +57,9 @@ export function TitleBar() {
     <header data-tauri-drag-region className="eylan-titlebar flex items-center justify-between gap-4">
       <div className="flex min-w-0 flex-1 items-center gap-4">
         {mac ? controls : null}
+        <div className="hidden items-center gap-3 md:flex">
+          <ElyanMark size="sm" className="h-9 w-9 rounded-[12px]" alt="Elyan logo" />
+        </div>
         <div className="hidden max-w-md flex-1 md:block">
           <SearchField
             readOnly
@@ -68,20 +72,12 @@ export function TitleBar() {
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <Button variant="ghost" size="sm" onClick={() => openCommandPalette()}>
-          <Search className="mr-2 h-4 w-4" />
-          Command palette
-        </Button>
         <Button variant="secondary" size="sm" onClick={() => setThemeMode(nextTheme(themeMode))}>
           <ThemeIcon className="mr-2 h-4 w-4" />
           {themeMode}
-        </Button>
-        <Button variant="secondary" size="sm">
-          Workspace
         </Button>
         {!mac ? controls : null}
       </div>
     </header>
   );
 }
-

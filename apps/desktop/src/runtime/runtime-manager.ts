@@ -4,6 +4,12 @@ import { sidecarSupervisor } from "@/runtime/sidecar-supervisor";
 export function getRuntimeConnectionState(health: SidecarHealth): RuntimeConnectionState {
   switch (health.status) {
     case "healthy":
+      if (health.compatible === false) {
+        return "error";
+      }
+      if (health.managed && !health.adminToken) {
+        return "reconnecting";
+      }
       return "connected";
     case "starting":
       return "booting";

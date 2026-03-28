@@ -10,6 +10,8 @@ type UiState = {
   inspectorCollapsed: boolean;
   commandPaletteOpen: boolean;
   onboardingComplete: boolean;
+  isAuthenticated: boolean;
+  authenticatedEmail: string;
   selectedThreadId: string;
   selectedRunId: string;
   autoRouting: boolean;
@@ -24,6 +26,8 @@ type UiState = {
   openCommandPalette: () => void;
   closeCommandPalette: () => void;
   completeOnboarding: () => void;
+  signIn: (email: string) => void;
+  signOut: () => void;
   setSelectedRunId: (runId: string) => void;
   clearSelectedRunId: () => void;
   setSelectedThreadId: (threadId: string) => void;
@@ -43,6 +47,8 @@ export const useUiStore = create<UiState>()(
       inspectorCollapsed: false,
       commandPaletteOpen: false,
       onboardingComplete: false,
+      isAuthenticated: false,
+      authenticatedEmail: "",
       selectedThreadId: "",
       selectedRunId: "",
       autoRouting: true,
@@ -57,6 +63,8 @@ export const useUiStore = create<UiState>()(
       openCommandPalette: () => set({ commandPaletteOpen: true }),
       closeCommandPalette: () => set({ commandPaletteOpen: false }),
       completeOnboarding: () => set({ onboardingComplete: true }),
+      signIn: (authenticatedEmail) => set({ isAuthenticated: true, authenticatedEmail }),
+      signOut: () => set({ isAuthenticated: false, authenticatedEmail: "" }),
       setSelectedThreadId: (selectedThreadId) => set({ selectedThreadId }),
       clearSelectedThreadId: () => set({ selectedThreadId: "" }),
       setSelectedRunId: (selectedRunId) => set({ selectedRunId }),
@@ -80,6 +88,8 @@ export const useUiStore = create<UiState>()(
         sidebarCollapsed: state.sidebarCollapsed,
         inspectorCollapsed: state.inspectorCollapsed,
         onboardingComplete: state.onboardingComplete,
+        isAuthenticated: state.isAuthenticated,
+        authenticatedEmail: state.authenticatedEmail,
         selectedThreadId: state.selectedThreadId,
         selectedRunId: state.selectedRunId,
         autoRouting: state.autoRouting,

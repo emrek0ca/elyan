@@ -1,16 +1,12 @@
 import { useState } from "react";
-import { Sparkles } from "lucide-react";
 
-import { Button } from "@/components/primitives/Button";
 import { SearchField } from "@/components/primitives/SearchField";
 import { StatusBadge } from "@/components/primitives/StatusBadge";
 import { Surface } from "@/components/primitives/Surface";
 import { useRuntimeStore } from "@/stores/runtime-store";
-import { useUiStore } from "@/stores/ui-store";
 
 export function TopCommandBar() {
   const [value, setValue] = useState("");
-  const openCommandPalette = useUiStore((state) => state.openCommandPalette);
   const connectionState = useRuntimeStore((state) => state.connectionState);
   const sidecarHealth = useRuntimeStore((state) => state.sidecarHealth);
 
@@ -21,11 +17,11 @@ export function TopCommandBar() {
           <SearchField
             value={value}
             onChange={(event) => setValue(event.target.value)}
-            placeholder="Ask Elyan to create, continue, or review"
+            placeholder="Ask Elyan"
             className="h-12 flex-1 shadow-none"
           />
         </div>
-        <div className="flex shrink-0 items-center gap-3">
+        <div className="flex shrink-0 items-center">
           <StatusBadge
             tone={
               connectionState === "connected"
@@ -37,14 +33,10 @@ export function TopCommandBar() {
           >
             {connectionState === "connected"
               ? sidecarHealth.managed
-                ? "runtime ready"
-                : "external runtime"
+                ? "ready"
+                : "external"
               : connectionState.replace(/_/g, " ")}
           </StatusBadge>
-          <Button variant="secondary" onClick={() => openCommandPalette()}>
-            <Sparkles className="mr-2 h-4 w-4" />
-            Command
-          </Button>
         </div>
       </div>
     </Surface>

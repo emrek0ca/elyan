@@ -29,6 +29,10 @@ export class ApiClient {
     this.adminToken = adminToken.trim();
   }
 
+  hasAdminToken() {
+    return Boolean(this.adminToken);
+  }
+
   async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const csrfToken =
       document.cookie
@@ -55,7 +59,15 @@ export class ApiClient {
     }
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status} for ${path}`);
+      const contentType = response.headers.get("content-type") || "";
+      let detail = "";
+      if (contentType.includes("application/json")) {
+        const payload = (await response.clone().json().catch(() => null)) as Record<string, unknown> | null;
+        detail = String(payload?.error || payload?.message || payload?.detail || "").trim();
+      } else {
+        detail = (await response.clone().text().catch(() => "")).trim();
+      }
+      throw new Error(detail || `HTTP ${response.status} for ${path}`);
     }
 
     return (await response.json()) as T;

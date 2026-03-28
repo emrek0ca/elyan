@@ -39,7 +39,7 @@ export const sidecarBridge = {
     return invokeOrFallback<SidecarHealth>(
       "boot_runtime",
       undefined,
-      defaultHealth({ status: "healthy", managed: false }),
+      defaultHealth({ status: "error", managed: false, lastError: "Managed runtime unavailable" }),
     );
   },
   stopRuntime() {
@@ -49,7 +49,11 @@ export const sidecarBridge = {
     return invokeOrFallback<SidecarHealth>("restart_runtime", undefined, defaultHealth({ status: "starting", managed: true }));
   },
   getRuntimeHealth() {
-    return invokeOrFallback<SidecarHealth>("get_runtime_health", undefined, defaultHealth({ status: "healthy", managed: false }));
+    return invokeOrFallback<SidecarHealth>(
+      "get_runtime_health",
+      undefined,
+      defaultHealth({ status: "offline", managed: false, lastError: "Managed runtime unavailable" }),
+    );
   },
   getRuntimeLogs() {
     return invokeOrFallback<string[]>("get_runtime_logs", undefined, []);

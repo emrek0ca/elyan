@@ -1,16 +1,16 @@
-import { Cable, Command, Home, Logs, SlidersHorizontal } from "lucide-react";
+import { Cable, Command, Home, SlidersHorizontal } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
+import { ElyanMark } from "@/components/brand/ElyanMark";
 import { Button } from "@/components/primitives/Button";
 import { useUiStore } from "@/stores/ui-store";
 import { cn } from "@/utils/cn";
 
 const navItems = [
   { to: "/home", label: "Home", icon: Home },
-  { to: "/command-center", label: "Command Center", icon: Command },
-  { to: "/integrations", label: "Integrations", icon: Cable },
+  { to: "/command-center", label: "Work", icon: Command },
+  { to: "/integrations", label: "Apps", icon: Cable },
   { to: "/settings", label: "Settings", icon: SlidersHorizontal },
-  { to: "/logs", label: "Logs", icon: Logs },
 ];
 
 export function SidebarRail() {
@@ -19,23 +19,17 @@ export function SidebarRail() {
 
   return (
     <aside
-      className={cn(
-        "border-r border-[var(--border-subtle)] bg-[color-mix(in_srgb,var(--bg-shell)_96%,transparent)] px-4 py-5 transition-all duration-180 ease-premium",
-        collapsed ? "w-[88px]" : "w-[216px]",
-      )}
+      className={cn("border-r border-[var(--border-subtle)] bg-[color-mix(in_srgb,var(--bg-shell)_96%,transparent)] px-4 py-5 transition-all duration-180 ease-premium", collapsed ? "w-[86px]" : "w-[198px]")}
     >
       <div className="mb-8 flex items-start justify-between gap-3">
-        <div className={cn("space-y-2", collapsed && "hidden")}>
+        <div className={cn("space-y-3", collapsed && "hidden")}>
           <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-[18px] border border-[color-mix(in_srgb,var(--accent-primary)_18%,var(--border-subtle))] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--accent-soft)_80%,white),var(--bg-surface))] text-[13px] font-semibold tracking-[0.18em] text-[var(--accent-primary)]">
-              EL
-            </div>
+            <ElyanMark size="sm" />
             <div>
               <div className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-tertiary)]">Elyan</div>
-              <div className="mt-1 font-display text-[19px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">Operating layer</div>
+              <div className="mt-1 font-display text-[19px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">Operator shell</div>
             </div>
           </div>
-          <div className="text-[12px] text-[var(--text-secondary)]">Calm shell</div>
         </div>
         <Button variant="ghost" size="sm" onClick={() => toggleSidebar()}>
           {collapsed ? "»" : "«"}

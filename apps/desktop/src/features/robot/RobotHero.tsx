@@ -1,6 +1,5 @@
+import { ElyanMark } from "@/components/brand/ElyanMark";
 import { motion } from "framer-motion";
-
-import robotAsset from "@assets/image.png";
 import { cn } from "@/utils/cn";
 
 type RobotHeroProps = {
@@ -18,14 +17,7 @@ export function RobotHero({ title, subtitle, compact = false }: RobotHeroProps) 
         transition={{ duration: 6.2, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
         className="relative"
       >
-        <img
-          src={robotAsset}
-          alt="Elyan robot"
-          className={cn(
-            "relative z-10 rounded-[28px] object-cover drop-shadow-[0_18px_44px_rgba(0,0,0,0.10)]",
-            compact ? "h-40 w-40" : "h-56 w-56",
-          )}
-        />
+        <ElyanMark size={compact ? "lg" : "xl"} className={cn("relative z-10", compact ? "h-40 w-40 rounded-[28px]" : "h-56 w-56 rounded-[36px]")} alt="Elyan" />
       </motion.div>
       {title ? (
         <div className="space-y-2 text-center">

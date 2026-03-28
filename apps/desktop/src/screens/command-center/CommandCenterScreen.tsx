@@ -9,9 +9,11 @@ import { Surface } from "@/components/primitives/Surface";
 import { StatusBadge } from "@/components/primitives/StatusBadge";
 import { OutputStream } from "@/features/run/OutputStream";
 import { useCommandCenterSnapshot } from "@/hooks/use-desktop-data";
-import { addCoworkTurn, cancelRun, controlCoworkThread, resolveCoworkApproval } from "@/services/api/elyan-service";
 import { runtimeManager } from "@/runtime/runtime-manager";
+import { addCoworkTurn, cancelRun, controlCoworkThread, resolveCoworkApproval } from "@/services/api/elyan-service";
+import { useRuntimeStore } from "@/stores/runtime-store";
 import { useUiStore } from "@/stores/ui-store";
+import { getRuntimeGateReason, hasRuntimeWriteAccess } from "@/utils/runtime-access";
 
 export function CommandCenterScreen() {
   const queryClient = useQueryClient();
@@ -23,6 +25,9 @@ export function CommandCenterScreen() {
   const [followUp, setFollowUp] = useState("");
   const [turnBusy, setTurnBusy] = useState(false);
   const [approvalBusyId, setApprovalBusyId] = useState("");
+  const [actionMessage, setActionMessage] = useState("");
+  const connectionState = useRuntimeStore((state) => state.connectionState);
+  const sidecarHealth = useRuntimeStore((state) => state.sidecarHealth);
 
   if (error) {
     return (
@@ -48,6 +53,8 @@ export function CommandCenterScreen() {
   const lastCheckpoint = selectedThread?.lastSuccessfulCheckpoint;
   const riskLabel = selectedThread?.riskLevel || selectedThread?.approvals[0]?.riskLevel || "medium";
   const controlActions = selectedThread?.controlActions || data.controlActions || [];
+  const runtimeReady = hasRuntimeWriteAccess(connectionState, sidecarHealth);
+  const runtimeGateReason = getRuntimeGateReason(connectionState, sidecarHealth);
 
   async function invalidateAll() {
     await Promise.all([
@@ -58,11 +65,20 @@ export function CommandCenterScreen() {
     ]);
   }
 
+  function guardRuntimeWrite() {
+    if (runtimeReady) {
+      return true;
+    }
+    setActionMessage(runtimeGateReason);
+    return false;
+  }
+
   async function handleFollowUp(promptOverride?: string) {
     const prompt = promptOverride ?? followUp;
-    if (!selectedThread || !prompt.trim()) {
+    if (!selectedThread || !prompt.trim() || !guardRuntimeWrite()) {
       return;
     }
+    setActionMessage("");
     setTurnBusy(true);
     try {
       const updated = await addCoworkTurn(selectedThread.threadId, {
@@ -81,7 +97,11 @@ export function CommandCenterScreen() {
   }
 
   async function handleApproval(approvalId: string, approved: boolean) {
+    if (!guardRuntimeWrite()) {
+      return;
+    }
     setApprovalBusyId(approvalId);
+    setActionMessage("");
     try {
       const updated = await resolveCoworkApproval(approvalId, { approved });
       if (updated?.threadId) {
@@ -97,9 +117,10 @@ export function CommandCenterScreen() {
   }
 
   async function handleControlAction(actionId: string) {
-    if (!selectedThread) {
+    if (!selectedThread || !guardRuntimeWrite()) {
       return;
     }
+    setActionMessage("");
     if (actionId === "stop" && (selectedThread.activeRunId || selectedThread.activeMissionId)) {
       setTurnBusy(true);
       try {
@@ -377,13 +398,13 @@ export function CommandCenterScreen() {
             ) : null}
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
-            <Button variant="secondary" size="sm" onClick={() => setFollowUp("Stay in observe-only mode and tell me the next safest step.")}>
+            <Button variant="secondary" size="sm" onClick={() => setFollowUp("Stay in observe-only mode and tell me the next safest step.")} disabled={!runtimeReady}>
               Observe only
             </Button>
-            <Button variant="secondary" size="sm" onClick={() => setFollowUp("Draft the plan first and wait for approval before acting.")}>
+            <Button variant="secondary" size="sm" onClick={() => setFollowUp("Draft the plan first and wait for approval before acting.")} disabled={!runtimeReady}>
               Draft first
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setFollowUp("Retry from the last successful checkpoint and keep the scope narrow.")}>
+            <Button variant="ghost" size="sm" onClick={() => setFollowUp("Retry from the last successful checkpoint and keep the scope narrow.")} disabled={!runtimeReady}>
               Retry safely
             </Button>
           </div>
@@ -395,12 +416,14 @@ export function CommandCenterScreen() {
               className="min-h-[120px] w-full resize-none bg-transparent text-[14px] leading-7 text-[var(--text-primary)] outline-none"
             />
             <div className="mt-4 flex justify-end">
-              <Button variant="primary" onClick={() => void handleFollowUp()} disabled={!selectedThread || turnBusy || !followUp.trim()}>
+              <Button variant="primary" onClick={() => void handleFollowUp()} disabled={!selectedThread || turnBusy || !followUp.trim() || !runtimeReady}>
                 {turnBusy ? "Sending..." : "Send"}
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             </div>
           </div>
+          {actionMessage ? <div className="mt-3 text-[12px] text-[var(--state-warning)]">{actionMessage}</div> : null}
+          {!actionMessage && !runtimeReady ? <div className="mt-3 text-[12px] text-[var(--text-secondary)]">{runtimeGateReason}</div> : null}
         </Surface>
       </div>
     </div>
