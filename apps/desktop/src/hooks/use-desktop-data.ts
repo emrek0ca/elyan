@@ -2,6 +2,8 @@ import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 
 import type {
   CommandCenterSnapshot,
+  ChannelCatalogEntry,
+  ChannelSummary,
   ConnectorAccount,
   ConnectorActionTrace,
   ConnectorDefinition,
@@ -16,6 +18,8 @@ import type {
 } from "@/types/domain";
 import {
   getBillingWorkspace,
+  getChannels,
+  getChannelsCatalog,
   getCommandCenterSnapshot,
   getConnectorAccounts,
   getConnectorHealth,
@@ -75,6 +79,22 @@ export function useConnectors(): UseQueryResult<ConnectorDefinition[]> {
     queryKey: ["connectors"],
     queryFn: getConnectors,
     staleTime: 30000,
+  });
+}
+
+export function useChannels(): UseQueryResult<ChannelSummary[]> {
+  return useQuery({
+    queryKey: ["channels"],
+    queryFn: getChannels,
+    refetchInterval: 15000,
+  });
+}
+
+export function useChannelsCatalog(): UseQueryResult<ChannelCatalogEntry[]> {
+  return useQuery({
+    queryKey: ["channels-catalog"],
+    queryFn: getChannelsCatalog,
+    staleTime: 60000,
   });
 }
 

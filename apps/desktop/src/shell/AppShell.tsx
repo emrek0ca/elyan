@@ -1,7 +1,6 @@
 import { Outlet } from "react-router-dom";
 
 import { CommandPalette } from "@/shell/CommandPalette";
-import { RightInspectorRail } from "@/shell/RightInspectorRail";
 import { SidebarRail } from "@/shell/SidebarRail";
 import { TitleBar } from "@/shell/TitleBar";
 import { TopCommandBar } from "@/shell/TopCommandBar";
@@ -17,7 +16,6 @@ export function AppShell() {
             <TopCommandBar />
             <Outlet />
           </main>
-          <RightInspectorRail />
         </div>
       </div>
       <CommandPalette />

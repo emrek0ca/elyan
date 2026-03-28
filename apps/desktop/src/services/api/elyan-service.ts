@@ -2,6 +2,9 @@ import type {
   ActivityItem,
   BackendSummary,
   CommandCenterSnapshot,
+  ChannelCatalogEntry,
+  ChannelSummary,
+  ChannelTestResult,
   ConnectorAccount,
   ConnectorActionTrace,
   ConnectorDefinition,
@@ -266,6 +269,43 @@ function mapReview(item?: Record<string, unknown>): ReviewReport | undefined {
           status: entry?.status === "failed" ? "failed" : entry?.status === "warning" ? "warning" : "passed",
         }))
       : [],
+  };
+}
+
+function mapChannelField(item: Record<string, unknown>) {
+  return {
+    name: String(item.name || ""),
+    label: String(item.label || item.name || ""),
+    required: Boolean(item.required),
+    secret: Boolean(item.secret),
+  };
+}
+
+function mapChannelCatalogEntry(item: Record<string, unknown>): ChannelCatalogEntry {
+  return {
+    type: String(item.type || ""),
+    label: String(item.label || item.type || ""),
+    fields: Array.isArray(item.fields) ? item.fields.map((entry) => mapChannelField((entry || {}) as Record<string, unknown>)) : [],
+    notes: String(item.notes || ""),
+  };
+}
+
+function mapChannelSummary(item: Record<string, unknown>): ChannelSummary {
+  const metrics = (item.message_metrics as Record<string, unknown> | undefined) || {};
+  return {
+    id: String(item.id || item.type || crypto.randomUUID()),
+    type: String(item.type || ""),
+    enabled: Boolean(item.enabled ?? true),
+    status: String(item.status || "disconnected"),
+    connected: Boolean(item.connected),
+    lastActivity: String(item.last_activity || ""),
+    messageMetrics: {
+      received: Number(metrics.received || 0),
+      sent: Number(metrics.sent || 0),
+      sendFailures: Number(metrics.send_failures || 0),
+      processingErrors: Number(metrics.processing_errors || 0),
+    },
+    health: ((item.health as Record<string, unknown> | undefined) || {}) as Record<string, unknown>,
   };
 }
 
@@ -1014,6 +1054,56 @@ export async function getConnectorHealth(): Promise<ConnectorHealth[]> {
     return [];
   }
   return Array.isArray(raw.health) ? raw.health.map((item) => mapConnectorHealth(item)) : [];
+}
+
+export async function getChannels(): Promise<ChannelSummary[]> {
+  const raw = await safeRequest<{ channels?: Array<Record<string, unknown>> }>("/api/channels");
+  if (!raw?.channels || !Array.isArray(raw.channels)) {
+    return [];
+  }
+  return raw.channels.map((item) => mapChannelSummary(item));
+}
+
+export async function getChannelsCatalog(): Promise<ChannelCatalogEntry[]> {
+  const raw = await safeRequest<{ ok?: boolean; catalog?: Array<Record<string, unknown>> }>("/api/channels/catalog");
+  if (!raw?.ok || !Array.isArray(raw.catalog)) {
+    return [];
+  }
+  return raw.catalog.map((item) => mapChannelCatalogEntry(item));
+}
+
+export async function upsertChannel(channel: Record<string, unknown>): Promise<ChannelSummary | null> {
+  const raw = await apiClient.request<{ ok?: boolean; channel?: Record<string, unknown> }>("/api/channels/upsert", {
+    method: "POST",
+    body: { channel, sync: true },
+  });
+  return raw.ok && raw.channel ? mapChannelSummary(raw.channel) : null;
+}
+
+export async function toggleChannel(id: string, enabled: boolean): Promise<ChannelSummary | null> {
+  const raw = await apiClient.request<{ ok?: boolean; channel?: Record<string, unknown> }>("/api/channels/toggle", {
+    method: "POST",
+    body: { id, enabled },
+  });
+  return raw.ok && raw.channel ? mapChannelSummary(raw.channel) : null;
+}
+
+export async function testChannel(channel: string): Promise<ChannelTestResult> {
+  const raw = await apiClient.request<{
+    ok?: boolean;
+    message?: string;
+    result?: Record<string, unknown>;
+  }>("/api/channels/test", {
+    method: "POST",
+    body: { channel },
+  });
+  const result = (raw.result || {}) as Record<string, unknown>;
+  return {
+    channel: String(result.channel || channel),
+    status: String(result.status || "unknown"),
+    connected: Boolean(result.connected),
+    message: String(raw.message || ""),
+  };
 }
 
 export async function getProviders(): Promise<ProviderSummary[]> {

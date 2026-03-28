@@ -326,6 +326,43 @@ export interface ConnectorActionTrace {
   metadata?: Record<string, unknown>;
 }
 
+export interface ChannelField {
+  name: string;
+  label: string;
+  required: boolean;
+  secret: boolean;
+}
+
+export interface ChannelCatalogEntry {
+  type: string;
+  label: string;
+  fields: ChannelField[];
+  notes?: string;
+}
+
+export interface ChannelSummary {
+  id: string;
+  type: string;
+  enabled: boolean;
+  status: string;
+  connected: boolean;
+  lastActivity?: string;
+  messageMetrics?: {
+    received: number;
+    sent: number;
+    sendFailures: number;
+    processingErrors: number;
+  };
+  health?: Record<string, unknown>;
+}
+
+export interface ChannelTestResult {
+  channel: string;
+  status: string;
+  connected: boolean;
+  message: string;
+}
+
 export interface BackendSummary {
   id: string;
   label: string;
