@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Cable, Clock3, Command, FileStack, Globe, Sparkles } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -88,10 +88,7 @@ export function HomeScreen() {
   const recentThreads = data.recentThreads?.slice(0, 4) || [];
   const resumeCandidate = data.lastThread || data.recentThreads?.[0];
   const latestRun = data.recentRuns?.[0];
-  const approvalCount = useMemo(
-    () => Number(data.trustStrip.find((item) => item.id === "approvals")?.value || 0),
-    [data.trustStrip],
-  );
+  const approvalCount = Number(data.trustStrip.find((item) => item.id === "approvals")?.value || 0);
 
   const inferTaskType = (value: string): "document" | "presentation" | "website" => {
     const text = value.toLowerCase();
