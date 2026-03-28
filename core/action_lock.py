@@ -31,6 +31,15 @@ class ActionLockManager:
 
     def _emit(self, event_type: str, payload: dict[str, Any], *, priority: EventPriority = EventPriority.NORMAL) -> None:
         try:
+            payload = dict(payload or {})
+            correlation_id = str(
+                payload.get("task_id")
+                or self.current_task_id
+                or payload.get("policy_scope")
+                or event_type
+            )
+            causation_id = str(payload.get("causation_id") or correlation_id)
+            idempotency_key = str(payload.get("idempotency_key") or f"{event_type}:{correlation_id}")
             bus = get_event_bus()
             try:
                 loop = asyncio.get_running_loop()
@@ -40,20 +49,30 @@ class ActionLockManager:
                 loop.create_task(
                     bus.publish(
                         event_type=event_type,
-                        data=dict(payload),
+                        data=payload,
                         priority=priority,
                         source="action_lock",
                         tags={"action_lock"},
+                        metadata={"action_lock": True},
+                        schema_version=1,
+                        correlation_id=correlation_id,
+                        causation_id=causation_id,
+                        idempotency_key=idempotency_key,
                     )
                 )
             else:
                 event = Event(
                     event_id=f"action_lock_{int(time.time() * 1000)}",
                     event_type=event_type,
-                    data=dict(payload),
+                    data=payload,
                     priority=priority,
                     source="action_lock",
                     tags={"action_lock"},
+                    metadata={"action_lock": True},
+                    schema_version=1,
+                    correlation_id=correlation_id,
+                    causation_id=causation_id,
+                    idempotency_key=idempotency_key,
                 )
                 bus.event_history.append(event)
                 bus.event_stats[event_type] += 1

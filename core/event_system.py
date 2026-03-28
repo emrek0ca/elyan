@@ -36,6 +36,26 @@ class Event:
     source: Optional[str] = None
     tags: Set[str] = field(default_factory=set)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    schema_version: int = 1
+    correlation_id: Optional[str] = None
+    causation_id: Optional[str] = None
+    idempotency_key: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "event_id": self.event_id,
+            "event_type": self.event_type,
+            "data": dict(self.data),
+            "priority": self.priority.name,
+            "timestamp": self.timestamp,
+            "source": self.source,
+            "tags": sorted(self.tags),
+            "metadata": dict(self.metadata),
+            "schema_version": self.schema_version,
+            "correlation_id": self.correlation_id,
+            "causation_id": self.causation_id,
+            "idempotency_key": self.idempotency_key,
+        }
 
 
 @dataclass
@@ -105,7 +125,12 @@ class EventBus:
         data: Dict[str, Any],
         priority: EventPriority = EventPriority.NORMAL,
         source: Optional[str] = None,
-        tags: Optional[Set[str]] = None
+        tags: Optional[Set[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        schema_version: int = 1,
+        correlation_id: Optional[str] = None,
+        causation_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
     ) -> str:
         """Publish an event"""
         event_id = str(uuid.uuid4())[:8]
@@ -116,7 +141,12 @@ class EventBus:
             data=data,
             priority=priority,
             source=source,
-            tags=tags or set()
+            tags=tags or set(),
+            metadata=dict(metadata or {}),
+            schema_version=int(schema_version or 1),
+            correlation_id=correlation_id,
+            causation_id=causation_id,
+            idempotency_key=idempotency_key,
         )
 
         # Store in history
@@ -262,11 +292,7 @@ class EventBus:
                 import aiohttp
                 async with aiohttp.ClientSession() as session:
                     payload = {
-                        "event_id": event.event_id,
-                        "event_type": event.event_type,
-                        "data": event.data,
-                        "timestamp": event.timestamp,
-                        "source": event.source
+                        **event.to_dict(),
                     }
 
                     async with session.post(url, json=payload, timeout=5) as response:

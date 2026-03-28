@@ -29,9 +29,12 @@ def parse_raw_event(payload: Dict[str, Any]) -> Optional[ElyanEvent]:
     # This is a placeholder for a more sophisticated factory pattern
     # In a full implementation, we'd use a registry mapping type names to classes
     from core.protocol.events import (
-        MessageReceived, SessionResolved, RunQueued, RunStarted, RunStatusChanged,
-        ToolRequested, ToolSucceeded, ToolFailed, ApprovalRequested, ApprovalResolved,
-        OutputBlockCreated, PreviewUpdated, VerificationResult, RunCompleted, RunCompacted,
+        MessageReceived, SessionResolved, RunQueued, RunStarted, RunStatusChanged, SessionStateChanged,
+        PlanCreated, PlanStepStarted, PlanStepCompleted,
+        ToolRequested, ToolApproved, ToolRejected, ToolSucceeded, ToolFailed,
+        ApprovalRequested, ApprovalResolved,
+        OutputBlockCreated, PreviewUpdated, VerificationStarted, VerificationResult,
+        RecoveryStarted, RecoveryCompleted, RunCompleted, RunFailed, RunCancelled, RunCompacted,
         MemoryWritten, NodeRegistered, NodeHealthUpdated
     )
     
@@ -46,15 +49,26 @@ def parse_raw_event(payload: Dict[str, Any]) -> Optional[ElyanEvent]:
         "RunQueued": RunQueued,
         "RunStarted": RunStarted,
         "RunStatusChanged": RunStatusChanged,
+        "SessionStateChanged": SessionStateChanged,
+        "PlanCreated": PlanCreated,
+        "PlanStepStarted": PlanStepStarted,
+        "PlanStepCompleted": PlanStepCompleted,
         "ToolRequested": ToolRequested,
+        "ToolApproved": ToolApproved,
+        "ToolRejected": ToolRejected,
         "ToolSucceeded": ToolSucceeded,
         "ToolFailed": ToolFailed,
         "ApprovalRequested": ApprovalRequested,
         "ApprovalResolved": ApprovalResolved,
         "OutputBlockCreated": OutputBlockCreated,
         "PreviewUpdated": PreviewUpdated,
+        "VerificationStarted": VerificationStarted,
         "VerificationResult": VerificationResult,
+        "RecoveryStarted": RecoveryStarted,
+        "RecoveryCompleted": RecoveryCompleted,
         "RunCompleted": RunCompleted,
+        "RunFailed": RunFailed,
+        "RunCancelled": RunCancelled,
         "RunCompacted": RunCompacted,
         "MemoryWritten": MemoryWritten,
         "NodeRegistered": NodeRegistered,

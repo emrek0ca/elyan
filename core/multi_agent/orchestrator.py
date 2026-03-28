@@ -41,13 +41,33 @@ class AgentOrchestrator:
         self.team_roster: list[dict[str, str]] = []
 
     async def _emit_event(self, event_type: str, payload: dict[str, Any], *, priority: EventPriority = EventPriority.NORMAL) -> None:
+        payload = dict(payload or {})
+        correlation_id = str(
+            payload.get("job_id")
+            or payload.get("run_id")
+            or payload.get("session_id")
+            or payload.get("template_id")
+            or event_type
+        )
+        causation_id = str(
+            payload.get("parent_job_id")
+            or payload.get("parent_run_id")
+            or payload.get("causation_id")
+            or correlation_id
+        )
+        idempotency_key = str(payload.get("idempotency_key") or f"{event_type}:{correlation_id}")
         try:
             await get_event_bus().publish(
                 event_type=event_type,
-                data=dict(payload),
+                data=payload,
                 priority=priority,
                 source="multi_agent.orchestrator",
                 tags={"multi_agent", "orchestrator"},
+                metadata={"orchestrator": True},
+                schema_version=1,
+                correlation_id=correlation_id,
+                causation_id=causation_id,
+                idempotency_key=idempotency_key,
             )
         except Exception:
             logger.debug("Orchestrator event publish skipped", exc_info=True)
