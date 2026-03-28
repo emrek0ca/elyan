@@ -385,18 +385,20 @@ fn is_project_root(path: &Path) -> bool {
 }
 
 fn spawn_runtime_process(project_dir: &Path, port: u16, admin_token: &str) -> Result<Child, String> {
-    let launcher = project_dir.join("elyan_entrypoint.py");
-    let port_str = port.to_string();
+    let project_dir_str = project_dir.to_string_lossy().to_string();
+    let python_inline = format!(
+        "import sys; sys.path.insert(0, {project_dir:?}); from main import _run_gateway; _run_gateway({port})",
+        project_dir = project_dir_str,
+        port = port,
+    );
 
     let mut attempts: Vec<(String, Vec<String>)> = Vec::new();
     if let Ok(python) = env::var("ELYAN_PYTHON") {
         attempts.push((
             python,
             vec![
-                launcher.to_string_lossy().to_string(),
-                "start".to_string(),
-                "--port".to_string(),
-                port_str.clone(),
+                "-c".to_string(),
+                python_inline.clone(),
             ],
         ));
     }
@@ -406,38 +408,30 @@ fn spawn_runtime_process(project_dir: &Path, port: u16, admin_token: &str) -> Re
             "py".to_string(),
             vec![
                 "-3".to_string(),
-                launcher.to_string_lossy().to_string(),
-                "start".to_string(),
-                "--port".to_string(),
-                port_str.clone(),
+                "-c".to_string(),
+                python_inline.clone(),
             ],
         ));
         attempts.push((
             "python".to_string(),
             vec![
-                launcher.to_string_lossy().to_string(),
-                "start".to_string(),
-                "--port".to_string(),
-                port_str.clone(),
+                "-c".to_string(),
+                python_inline.clone(),
             ],
         ));
     } else {
         attempts.push((
             "python3".to_string(),
             vec![
-                launcher.to_string_lossy().to_string(),
-                "start".to_string(),
-                "--port".to_string(),
-                port_str.clone(),
+                "-c".to_string(),
+                python_inline.clone(),
             ],
         ));
         attempts.push((
             "python".to_string(),
             vec![
-                launcher.to_string_lossy().to_string(),
-                "start".to_string(),
-                "--port".to_string(),
-                port_str.clone(),
+                "-c".to_string(),
+                python_inline.clone(),
             ],
         ));
     }

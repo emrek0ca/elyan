@@ -40,18 +40,27 @@ export class ApiClient {
         .find((chunk) => chunk.startsWith("elyan_csrf="))
         ?.split("=")[1] || "";
 
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      method: options.method ?? "GET",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        ...(csrfToken ? { "X-Elyan-CSRF": decodeURIComponent(csrfToken) } : {}),
-        ...(this.sessionToken ? { "X-Elyan-Session-Token": this.sessionToken } : {}),
-        ...(this.adminToken ? { "X-Elyan-Admin-Token": this.adminToken } : {}),
-      },
-      body: options.body ? JSON.stringify(options.body) : undefined,
-      signal: options.signal,
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}${path}`, {
+        method: options.method ?? "GET",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          ...(csrfToken ? { "X-Elyan-CSRF": decodeURIComponent(csrfToken) } : {}),
+          ...(this.sessionToken ? { "X-Elyan-Session-Token": this.sessionToken } : {}),
+          ...(this.adminToken ? { "X-Elyan-Admin-Token": this.adminToken } : {}),
+        },
+        body: options.body ? JSON.stringify(options.body) : undefined,
+        signal: options.signal,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (/load failed|failed to fetch|networkerror/i.test(message)) {
+        throw new Error("Runtime henüz hazır değil. Birkaç saniye bekleyip tekrar dene.");
+      }
+      throw error;
+    }
 
     const responseSessionToken = response.headers.get("X-Elyan-Session-Token");
     if (responseSessionToken) {

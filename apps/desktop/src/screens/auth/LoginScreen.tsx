@@ -5,8 +5,9 @@ import { useNavigate } from "react-router-dom";
 import { ElyanMark } from "@/components/brand/ElyanMark";
 import { Button } from "@/components/primitives/Button";
 import { Surface } from "@/components/primitives/Surface";
-import { loginLocalUser } from "@/services/api/elyan-service";
 import { runtimeManager } from "@/runtime/runtime-manager";
+import { loginLocalUser } from "@/services/api/elyan-service";
+import { useRuntimeStore } from "@/stores/runtime-store";
 import { useUiStore } from "@/stores/ui-store";
 
 const ELYAN_DEV_URL = "https://elyan.dev";
@@ -16,6 +17,7 @@ export function LoginScreen() {
   const signIn = useUiStore((state) => state.signIn);
   const completeOnboarding = useUiStore((state) => state.completeOnboarding);
   const defaultEmail = useUiStore((state) => state.authenticatedEmail);
+  const connectionState = useRuntimeStore((state) => state.connectionState);
   const [email, setEmail] = useState(defaultEmail);
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -41,6 +43,10 @@ export function LoginScreen() {
     setSubmitting(true);
     setError("");
     try {
+      const health = await runtimeManager.bootRuntime();
+      if (health.status !== "healthy") {
+        throw new Error("Runtime hazırlanıyor. Birkaç saniye sonra tekrar dene.");
+      }
       const user = await loginLocalUser(normalizedEmail, password);
       signIn(user.email);
       completeOnboarding();
@@ -54,21 +60,19 @@ export function LoginScreen() {
 
   return (
     <div className="flex min-h-[calc(100vh-44px)] items-center justify-center px-6 py-10">
-      <Surface tone="hero" className="w-full max-w-[980px] px-8 py-10 md:px-12 md:py-12">
-        <div className="grid items-center gap-12 md:grid-cols-[0.95fr_1.05fr]">
+      <Surface tone="hero" className="w-full max-w-[920px] px-8 py-10 md:px-12 md:py-12">
+        <div className="grid items-center gap-14 md:grid-cols-[0.9fr_1.1fr]">
           <div className="flex justify-center md:justify-start">
-            <ElyanMark size="xl" className="h-[220px] w-[220px] rounded-[40px]" alt="Elyan logo" />
+            <ElyanMark size="xl" className="h-[220px] w-[220px]" alt="Elyan logo" />
           </div>
 
-          <div className="max-w-[440px] space-y-6">
-            <div className="space-y-3">
+          <div className="max-w-[420px] space-y-6">
+            <div className="space-y-2">
               <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-tertiary)]">Elyan</div>
               <h1 className="font-display text-[40px] font-semibold tracking-[-0.05em] text-[var(--text-primary)]">
                 Hoş geldin
               </h1>
-              <p className="text-[14px] leading-7 text-[var(--text-secondary)]">
-                Masaüstü shell’e girmek için yerel hesapla giriş yap. Kayıtlı değilsen hesap açma akışı `elyan.dev` üzerinden yürür.
-              </p>
+              <p className="text-[14px] leading-7 text-[var(--text-secondary)]">Yerel hesabınla giriş yap. Kayıt yoksa `elyan.dev` üzerinden aç.</p>
             </div>
 
             <div className="space-y-3">
@@ -114,6 +118,11 @@ export function LoginScreen() {
                 }}
               />
               {error ? <div className="text-[12px] text-[var(--state-warning)]">{error}</div> : null}
+              {!error ? (
+                <div className="text-[12px] text-[var(--text-tertiary)]">
+                  {connectionState === "connected" ? "Runtime hazır." : "Runtime hazırlanıyor."}
+                </div>
+              ) : null}
             </div>
 
             <div className="flex flex-wrap gap-3">

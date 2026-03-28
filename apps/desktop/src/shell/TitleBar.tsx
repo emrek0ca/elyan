@@ -1,8 +1,7 @@
-import { Monitor, MoonStar, SunMedium } from "lucide-react";
+import { Command } from "lucide-react";
 
 import { ElyanMark } from "@/components/brand/ElyanMark";
 import { Button } from "@/components/primitives/Button";
-import { SearchField } from "@/components/primitives/SearchField";
 import { closeWindow, minimizeWindow, toggleMaximizeWindow } from "@/services/desktop/window";
 import { useUiStore } from "@/stores/ui-store";
 
@@ -13,19 +12,9 @@ function detectMac() {
   return /mac/i.test(navigator.platform);
 }
 
-function nextTheme(mode: "light" | "dark" | "system") {
-  if (mode === "system") return "light";
-  if (mode === "light") return "dark";
-  return "system";
-}
-
 export function TitleBar() {
   const mac = detectMac();
-  const themeMode = useUiStore((state) => state.themeMode);
-  const setThemeMode = useUiStore((state) => state.setThemeMode);
   const openCommandPalette = useUiStore((state) => state.openCommandPalette);
-
-  const ThemeIcon = themeMode === "system" ? Monitor : themeMode === "dark" ? MoonStar : SunMedium;
 
   const controls = (
     <div className="flex items-center gap-2">
@@ -57,24 +46,18 @@ export function TitleBar() {
     <header data-tauri-drag-region className="eylan-titlebar flex items-center justify-between gap-4">
       <div className="flex min-w-0 flex-1 items-center gap-4">
         {mac ? controls : null}
-        <div className="hidden items-center gap-3 md:flex">
-          <ElyanMark size="sm" className="h-9 w-9 rounded-[12px]" alt="Elyan logo" />
-        </div>
-        <div className="hidden max-w-md flex-1 md:block">
-          <SearchField
-            readOnly
-            value=""
-            onFocus={() => openCommandPalette()}
-            onClick={() => openCommandPalette()}
-            placeholder="Search commands, runs, providers"
-            className="h-10"
-          />
+        <div className="flex items-center gap-3">
+          <ElyanMark size="sm" alt="Elyan logo" />
+          <div className="hidden md:block">
+            <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Elyan</div>
+            <div className="text-[13px] font-medium text-[var(--text-primary)]">Desktop</div>
+          </div>
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <Button variant="secondary" size="sm" onClick={() => setThemeMode(nextTheme(themeMode))}>
-          <ThemeIcon className="mr-2 h-4 w-4" />
-          {themeMode}
+        <Button variant="secondary" size="sm" onClick={() => openCommandPalette()}>
+          <Command className="mr-2 h-4 w-4" />
+          Command
         </Button>
         {!mac ? controls : null}
       </div>

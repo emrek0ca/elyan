@@ -8,7 +8,6 @@ import { SkeletonBlock } from "@/components/feedback/SkeletonBlock";
 import { Button } from "@/components/primitives/Button";
 import { SearchField } from "@/components/primitives/SearchField";
 import { Surface } from "@/components/primitives/Surface";
-import { StatusBadge } from "@/components/primitives/StatusBadge";
 import { RobotHero } from "@/features/robot/RobotHero";
 import { useHomeSnapshot } from "@/hooks/use-desktop-data";
 import { runtimeManager } from "@/runtime/runtime-manager";
@@ -52,13 +51,6 @@ export function HomeScreen() {
   if (isLoading || !data) {
     return <SkeletonBlock className="h-[420px] w-full rounded-[32px]" />;
   }
-
-  const runtimeTone =
-    connectionState === "connected"
-      ? "success"
-      : connectionState === "booting" || connectionState === "reconnecting"
-        ? "warning"
-        : "error";
 
   const activeProjectTemplate = resolveProjectTemplate(projectTemplates, activeProjectTemplateId);
   const effectivePreferences = mergeWorkflowPreferences(workflowPreferences, activeProjectTemplate.preferences);
@@ -140,26 +132,19 @@ export function HomeScreen() {
 
   return (
     <div className="space-y-6">
-      <Surface tone="hero" className="min-h-[calc(100vh-220px)] px-8 py-10 lg:px-12 lg:py-12">
-        <div className="grid items-center gap-10 lg:grid-cols-[1fr_320px]">
-          <div className="max-w-[560px] space-y-6">
-            <div className="flex flex-wrap items-center gap-3">
-              <StatusBadge tone={runtimeTone}>
-                {connectionState === "connected" ? "runtime ready" : connectionState.replace(/_/g, " ")}
-              </StatusBadge>
-              <StatusBadge tone="info">{data.workspace.name}</StatusBadge>
-            </div>
-
-            <div className="space-y-3">
+      <Surface tone="hero" className="min-h-[calc(100vh-220px)] px-8 py-12 lg:px-14 lg:py-16">
+        <div className="grid items-center gap-14 lg:grid-cols-[1fr_300px]">
+          <div className="max-w-[600px] space-y-7">
+            <div className="space-y-4">
               <h1 className="font-display text-[46px] font-semibold tracking-[-0.06em] text-[var(--text-primary)]">
-                Başlat. Devam et. Kontrol sende kalsın.
+                Tek giriş alanı. Temiz çalışma akışı.
               </h1>
               <p className="max-w-[520px] text-[15px] leading-7 text-[var(--text-secondary)]">
-                Tek giriş alanı, tek thread, görünür durum.
+                Görevi yaz. Elyan aynı thread içinde planlasın, yürütsün ve görünür tutsun.
               </p>
             </div>
 
-            <div className="space-y-3">
+            <div className="space-y-4">
               <SearchField
                 value={command}
                 onChange={(event) => {
@@ -175,7 +160,7 @@ export function HomeScreen() {
                   }
                 }}
                 placeholder="Ne yapmamı istiyorsun?"
-                className="h-14 rounded-[20px] px-5 text-[14px]"
+                className="h-14 rounded-[20px] px-5 text-[14px] shadow-none"
               />
 
               <div className="flex flex-wrap gap-3">
@@ -202,7 +187,7 @@ export function HomeScreen() {
 
                 <Button variant="ghost" onClick={() => navigate("/integrations")}>
                   <Cable className="mr-2 h-4 w-4" />
-                  Apps
+                  Telegram
                 </Button>
 
                 {!runtimeReady ? (
@@ -217,27 +202,10 @@ export function HomeScreen() {
               {!launchError && !runtimeReady ? <div className="text-[12px] text-[var(--text-secondary)]">{runtimeGateReason}</div> : null}
               {!launchError && runtimeMessage ? <div className="text-[12px] text-[var(--text-secondary)]">{runtimeMessage}</div> : null}
             </div>
-
-            {resumeCandidate ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedThreadId(resumeCandidate.threadId);
-                  if (resumeCandidate.activeRunId) {
-                    setSelectedRunId(resumeCandidate.activeRunId);
-                  }
-                  navigate("/command-center");
-                }}
-                className="rounded-[18px] border border-[var(--border-subtle)] bg-[color-mix(in_srgb,var(--bg-surface)_88%,transparent)] px-4 py-4 text-left transition hover:bg-[var(--bg-surface)]"
-              >
-                <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-tertiary)]">Recent thread</div>
-                <div className="mt-2 text-[16px] font-semibold text-[var(--text-primary)]">{resumeCandidate.title}</div>
-              </button>
-            ) : null}
           </div>
 
           <div className="hidden justify-center lg:flex">
-            <RobotHero compact />
+            <RobotHero compact title="Elyan" subtitle="Calm operator shell" />
           </div>
         </div>
       </Surface>
