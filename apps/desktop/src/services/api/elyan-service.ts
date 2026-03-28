@@ -18,6 +18,7 @@ import type {
   HomeSnapshotV2,
   IntegrationSummary,
   LogEvent,
+  LearningSummary,
   MetricSummary,
   ProviderSummary,
   RecentArtifactSummary,
@@ -48,6 +49,30 @@ type SecurityEnvelope = SuccessEnvelope<{
     session_persistence?: boolean;
     handoff_pending?: number;
     semantic_backend?: string;
+  };
+}>;
+
+type LearningEnvelope = SuccessEnvelope<{
+  summary: {
+    user_id?: string;
+    learning_mode?: string;
+    retention_policy?: string;
+    paused?: boolean;
+    opt_out?: boolean;
+    learning_score?: number;
+    success_rate?: number;
+    dominant_domain?: string;
+    top_topics?: string[];
+    recent_lessons?: string[];
+    next_actions?: Array<{
+      title?: string;
+      reason?: string;
+      priority?: string;
+    }>;
+    prompt_hint?: string;
+    signal_count?: number;
+    action_count?: number;
+    agent_count?: number;
   };
 }>;
 
@@ -195,6 +220,32 @@ function mapSecuritySummary(payload?: SecurityEnvelope["security"]): SecuritySum
     sessionPersistence: Boolean(payload?.session_persistence ?? false),
     handoffPending: Number(payload?.handoff_pending ?? 0),
     semanticBackend: String(payload?.semantic_backend || "unknown"),
+  };
+}
+
+function mapLearningSummary(payload?: LearningEnvelope["summary"]): LearningSummary {
+  return {
+    userId: String(payload?.user_id || "local"),
+    learningMode: String(payload?.learning_mode || "hybrid"),
+    retentionPolicy: String(payload?.retention_policy || "long"),
+    paused: Boolean(payload?.paused ?? false),
+    optOut: Boolean(payload?.opt_out ?? false),
+    learningScore: Number(payload?.learning_score ?? 0),
+    successRate: Number(payload?.success_rate ?? 0),
+    dominantDomain: String(payload?.dominant_domain || "general"),
+    topTopics: Array.isArray(payload?.top_topics) ? payload?.top_topics.map((entry) => String(entry)).slice(0, 3) : [],
+    recentLessons: Array.isArray(payload?.recent_lessons) ? payload?.recent_lessons.map((entry) => String(entry)).slice(0, 2) : [],
+    nextActions: Array.isArray(payload?.next_actions)
+      ? payload.next_actions.slice(0, 2).map((item) => ({
+          title: String(item?.title || ""),
+          reason: String(item?.reason || ""),
+          priority: String(item?.priority || ""),
+        }))
+      : [],
+    promptHint: String(payload?.prompt_hint || "").trim(),
+    signalCount: Number(payload?.signal_count ?? 0),
+    actionCount: Number(payload?.action_count ?? 0),
+    agentCount: Number(payload?.agent_count ?? 0),
   };
 }
 
@@ -562,6 +613,14 @@ async function getSecuritySummary(): Promise<SecuritySummary> {
     return mockCommandCenter.security;
   }
   return mapSecuritySummary(securityRaw.security);
+}
+
+export async function getLearningSummary(): Promise<LearningSummary | null> {
+  const raw = await safeRequest<LearningEnvelope>("/api/v1/learning/summary");
+  if (!raw?.success || !raw.summary) {
+    return null;
+  }
+  return mapLearningSummary(raw.summary);
 }
 
 async function getSecurityEvents(limit = 12): Promise<LogEvent[]> {

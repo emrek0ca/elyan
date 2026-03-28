@@ -349,6 +349,42 @@ async def test_handle_status_treats_telegram_conflict_as_optional_for_core_runti
 
 
 @pytest.mark.asyncio
+async def test_handle_learning_summary_compacts_learning_state(monkeypatch):
+    monkeypatch.setattr(
+        gateway_server,
+        "get_learning_control_plane",
+        lambda: SimpleNamespace(
+            get_learning_summary=lambda user_id: {
+                "user_id": user_id,
+                "learning_mode": "hybrid",
+                "retention_policy": "long",
+                "paused": False,
+                "opt_out": False,
+                "learning_score": 0.84,
+                "success_rate": 0.91,
+                "dominant_domain": "document",
+                "top_topics": ["docs", "review"],
+                "recent_lessons": ["keep it short"],
+                "next_actions": [{"title": "Prefer read-only first", "reason": "safety", "priority": "low"}],
+                "prompt_hint": "- stay concise",
+                "signal_count": 12,
+                "action_count": 5,
+                "agent_count": 2,
+            }
+        ),
+    )
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    req = SimpleNamespace(rel_url=SimpleNamespace(query={}), match_info={}, headers={}, cookies={})
+
+    resp = await gateway_server.ElyanGatewayServer.handle_v1_learning_summary(srv, req)
+    payload = json.loads(resp.text)
+    assert payload["success"] is True
+    assert payload["summary"]["dominant_domain"] == "document"
+    assert payload["summary"]["learning_score"] == 0.84
+    assert payload["summary"]["signal_count"] == 12
+
+
+@pytest.mark.asyncio
 async def test_handle_privacy_delete_wipes_personalization(monkeypatch):
     pushed = {"value": False}
 

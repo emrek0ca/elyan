@@ -87,6 +87,7 @@ _ADMIN_READ_PATHS = {
     "/api/security/pending",
     "/api/v1/security/events",
     "/api/v1/security/summary",
+    "/api/v1/learning/summary",
     "/api/v1/approvals/pending",
     "/api/privacy/export",
     "/api/interventions",
@@ -1179,6 +1180,7 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/v1/system/backends', self.handle_v1_runtime_backends)
         self.app.router.add_get('/api/v1/security/summary', self.handle_v1_security_summary)
         self.app.router.add_get('/api/v1/security/events', self.handle_v1_security_events)
+        self.app.router.add_get('/api/v1/learning/summary', self.handle_v1_learning_summary)
         self.app.router.add_post('/api/v1/workflows/start', self.handle_v1_start_workflow)
         self.app.router.add_post('/api/v1/auth/login', self.handle_v1_auth_login)
         self.app.router.add_post('/api/v1/auth/logout', self.handle_v1_auth_logout)
@@ -1398,6 +1400,15 @@ class ElyanGatewayServer:
 
     async def handle_v1_security_summary(self, request):
         return web.json_response(await self._dashboard_api().get_security_summary())
+
+    async def handle_v1_learning_summary(self, request):
+        user_id = self._actor_id(request)
+        return web.json_response(
+            {
+                "success": True,
+                "summary": get_learning_control_plane().get_learning_summary(user_id),
+            }
+        )
 
     async def handle_v1_security_events(self, request):
         try:

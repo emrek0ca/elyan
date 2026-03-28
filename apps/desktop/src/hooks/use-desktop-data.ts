@@ -12,6 +12,7 @@ import type {
   HomeSnapshotV2,
   IntegrationSummary,
   LogEvent,
+  LearningSummary,
   ProviderSummary,
   SecuritySummary,
   WorkspaceBillingSummary,
@@ -28,6 +29,7 @@ import {
   getCoworkHome,
   getHomeSnapshot,
   getIntegrations,
+  getLearningSummary,
   getLogs,
   getProviders,
   getSecuritySummary,
@@ -135,6 +137,14 @@ export function useSecuritySummary(): UseQueryResult<SecuritySummary> {
     queryKey: ["security-summary"],
     queryFn: getSecuritySummary,
     refetchInterval: 15000,
+  });
+}
+
+export function useLearningSummary(): UseQueryResult<LearningSummary | null> {
+  return useQuery({
+    queryKey: ["learning-summary"],
+    queryFn: getLearningSummary,
+    refetchInterval: 30000,
   });
 }
 

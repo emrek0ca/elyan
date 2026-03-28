@@ -5,7 +5,7 @@ import { SegmentedControl } from "@/components/primitives/SegmentedControl";
 import { ToggleSwitch } from "@/components/primitives/ToggleSwitch";
 import { Surface } from "@/components/primitives/Surface";
 import { StatusBadge } from "@/components/primitives/StatusBadge";
-import { useBillingWorkspace, useSecuritySummary } from "@/hooks/use-desktop-data";
+import { useBillingWorkspace, useLearningSummary, useSecuritySummary } from "@/hooks/use-desktop-data";
 import { createCheckoutSession, createPortalSession } from "@/services/api/elyan-service";
 import { runtimeManager } from "@/runtime/runtime-manager";
 import { useRuntimeStore } from "@/stores/runtime-store";
@@ -31,6 +31,7 @@ export function SettingsScreen() {
   const [runtimeBusy, setRuntimeBusy] = useState<"restart" | "stop" | null>(null);
   const [billingBusy, setBillingBusy] = useState<"checkout" | "portal" | null>(null);
   const { data: security } = useSecuritySummary();
+  const { data: learning } = useLearningSummary();
   const { data: billing } = useBillingWorkspace();
   const connectionState = useRuntimeStore((state) => state.connectionState);
   const sidecarHealth = useRuntimeStore((state) => state.sidecarHealth);
@@ -117,12 +118,28 @@ export function SettingsScreen() {
         <div className="mb-6">
           <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">{category}</div>
           <h1 className="mt-2 font-display text-[28px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
-            Automatic by default, explicit when it matters
+            Defaults stay light.
           </h1>
           <p className="mt-3 max-w-3xl text-[14px] leading-7 text-[var(--text-secondary)]">
-            Settings stay intentionally minimal. Elyan should not require a control panel for every decision.
+            Keep only the controls that change behavior.
           </p>
         </div>
+
+        {learning ? (
+          <Surface tone="panel" className="mb-6 rounded-[20px] border border-[var(--border-subtle)] p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Adaptive posture</div>
+                <div className="mt-2 text-[14px] font-medium text-[var(--text-primary)]">
+                  {learning.dominantDomain} · {Math.round(learning.learningScore * 100)}% · {learning.learningMode}
+                </div>
+              </div>
+              <StatusBadge tone={learning.paused ? "warning" : learning.optOut ? "neutral" : "success"}>
+                {learning.paused ? "paused" : learning.optOut ? "off" : "learning"}
+              </StatusBadge>
+            </div>
+          </Surface>
+        ) : null}
 
         <div className="grid gap-4">
           {(category === "General" || category === "Workflows") && (
@@ -131,7 +148,7 @@ export function SettingsScreen() {
                 <div>
                   <div className="text-[13px] font-medium text-[var(--text-primary)]">Workflow launch profile</div>
                   <div className="mt-2 text-[12px] leading-6 text-[var(--text-secondary)]">
-                    These defaults shape every new document, presentation, and website flow. They are product preferences, not runtime policy.
+                    Defaults for new document, presentation, and website flows.
                   </div>
                 </div>
                 <Button variant="ghost" size="sm" onClick={() => setWorkflowPreferences(defaultWorkflowPreferences)}>
@@ -200,7 +217,7 @@ export function SettingsScreen() {
                 <div>
                   <div className="text-[13px] font-medium text-[var(--text-primary)]">Project templates</div>
                   <div className="mt-2 text-[12px] leading-6 text-[var(--text-secondary)]">
-                    Each template defines the default lane, routing posture, and review strictness for a project family.
+                    Pick the default lane and review posture for a project family.
                   </div>
                 </div>
                 <StatusBadge tone="info">{workflowProfileSummary(workflowPreferences)}</StatusBadge>

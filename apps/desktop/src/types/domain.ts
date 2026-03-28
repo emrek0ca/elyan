@@ -418,6 +418,28 @@ export interface SecuritySummary {
   semanticBackend: string;
 }
 
+export interface LearningSummary {
+  userId: string;
+  learningMode: string;
+  retentionPolicy: string;
+  paused: boolean;
+  optOut: boolean;
+  learningScore: number;
+  successRate: number;
+  dominantDomain: string;
+  topTopics: string[];
+  recentLessons: string[];
+  nextActions: Array<{
+    title: string;
+    reason: string;
+    priority: string;
+  }>;
+  promptHint: string;
+  signalCount: number;
+  actionCount: number;
+  agentCount: number;
+}
+
 export interface WorkflowPreferences {
   language: WorkflowLanguage;
   audience: WorkflowAudience;

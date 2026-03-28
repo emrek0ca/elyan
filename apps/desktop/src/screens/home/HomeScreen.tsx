@@ -7,9 +7,9 @@ import { ErrorState } from "@/components/feedback/ErrorState";
 import { SkeletonBlock } from "@/components/feedback/SkeletonBlock";
 import { Button } from "@/components/primitives/Button";
 import { SearchField } from "@/components/primitives/SearchField";
+import { StatusBadge } from "@/components/primitives/StatusBadge";
 import { Surface } from "@/components/primitives/Surface";
-import { RobotHero } from "@/features/robot/RobotHero";
-import { useHomeSnapshot } from "@/hooks/use-desktop-data";
+import { useHomeSnapshot, useLearningSummary } from "@/hooks/use-desktop-data";
 import { runtimeManager } from "@/runtime/runtime-manager";
 import { createCoworkThread } from "@/services/api/elyan-service";
 import { useRuntimeStore } from "@/stores/runtime-store";
@@ -24,6 +24,7 @@ import {
 
 export function HomeScreen() {
   const { data, isLoading, error, refetch } = useHomeSnapshot();
+  const { data: learning } = useLearningSummary();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [command, setCommand] = useState("");
@@ -132,81 +133,116 @@ export function HomeScreen() {
 
   return (
     <div className="space-y-6">
-      <Surface tone="hero" className="min-h-[calc(100vh-220px)] px-8 py-12 lg:px-14 lg:py-16">
-        <div className="grid items-center gap-14 lg:grid-cols-[1fr_300px]">
-          <div className="max-w-[600px] space-y-7">
-            <div className="space-y-4">
-              <h1 className="font-display text-[46px] font-semibold tracking-[-0.06em] text-[var(--text-primary)]">
-                Tek giriş alanı. Temiz çalışma akışı.
-              </h1>
-              <p className="max-w-[520px] text-[15px] leading-7 text-[var(--text-secondary)]">
-                Görevi yaz. Elyan aynı thread içinde planlasın, yürütsün ve görünür tutsun.
-              </p>
+      <Surface tone="hero" className="min-h-[calc(100vh-220px)] px-8 py-10 lg:px-12 lg:py-12">
+        <div className="max-w-[840px] space-y-8">
+          <div className="space-y-4">
+            <div className="flex flex-wrap gap-2">
+              <StatusBadge tone={learning?.paused ? "warning" : learning?.optOut ? "neutral" : "success"}>
+                {learning?.paused ? "learning paused" : learning?.optOut ? "learning off" : "adaptive on"}
+              </StatusBadge>
+              <StatusBadge tone="info">local workspace</StatusBadge>
+            </div>
+            <h1 className="font-display text-[44px] font-semibold tracking-[-0.06em] text-[var(--text-primary)]">
+              Start a task. Keep control.
+            </h1>
+            <p className="max-w-[520px] text-[15px] leading-7 text-[var(--text-secondary)]">
+              One thread. One lane. Fewer panels.
+            </p>
+          </div>
+
+          <div className="space-y-4">
+            <SearchField
+              value={command}
+              onChange={(event) => {
+                setCommand(event.target.value);
+                if (launchError) {
+                  setLaunchError("");
+                }
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void launchWorkflow(inferTaskType(command));
+                }
+              }}
+              placeholder="Ne yapmamı istiyorsun?"
+              className="h-14 rounded-[20px] px-5 text-[14px] shadow-none"
+            />
+
+            <div className="flex flex-wrap gap-3">
+              <Button variant="primary" onClick={() => void launchWorkflow(inferTaskType(command))} disabled={!runtimeReady || launchingFlow !== null}>
+                {launchingFlow ? "Starting..." : "Start"}
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+
+              {resumeCandidate ? (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setSelectedThreadId(resumeCandidate.threadId);
+                    if (resumeCandidate.activeRunId) {
+                      setSelectedRunId(resumeCandidate.activeRunId);
+                    }
+                    navigate("/command-center");
+                  }}
+                >
+                  <Clock3 className="mr-2 h-4 w-4" />
+                  Continue
+                </Button>
+              ) : null}
+
+              <Button variant="ghost" onClick={() => navigate("/integrations")}>
+                <Cable className="mr-2 h-4 w-4" />
+                Telegram
+              </Button>
+
+              {!runtimeReady ? (
+                <Button variant="ghost" onClick={() => void handleRestartRuntime()}>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Retry runtime
+                </Button>
+              ) : null}
             </div>
 
-            <div className="space-y-4">
-              <SearchField
-                value={command}
-                onChange={(event) => {
-                  setCommand(event.target.value);
-                  if (launchError) {
-                    setLaunchError("");
-                  }
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    void launchWorkflow(inferTaskType(command));
-                  }
-                }}
-                placeholder="Ne yapmamı istiyorsun?"
-                className="h-14 rounded-[20px] px-5 text-[14px] shadow-none"
-              />
+            {launchError ? <div className="text-[12px] text-[var(--state-warning)]">{launchError}</div> : null}
+            {!launchError && !runtimeReady ? <div className="text-[12px] text-[var(--text-secondary)]">{runtimeGateReason}</div> : null}
+            {!launchError && runtimeMessage ? <div className="text-[12px] text-[var(--text-secondary)]">{runtimeMessage}</div> : null}
+          </div>
 
-              <div className="flex flex-wrap gap-3">
-                <Button variant="primary" onClick={() => void launchWorkflow(inferTaskType(command))} disabled={!runtimeReady || launchingFlow !== null}>
-                  {launchingFlow ? "Starting..." : "Start"}
-                  <ArrowRight className="ml-2 h-4 w-4" />
-                </Button>
-
-                {resumeCandidate ? (
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      setSelectedThreadId(resumeCandidate.threadId);
-                      if (resumeCandidate.activeRunId) {
-                        setSelectedRunId(resumeCandidate.activeRunId);
-                      }
-                      navigate("/command-center");
-                    }}
-                  >
-                    <Clock3 className="mr-2 h-4 w-4" />
-                    Continue
-                  </Button>
-                ) : null}
-
-                <Button variant="ghost" onClick={() => navigate("/integrations")}>
-                  <Cable className="mr-2 h-4 w-4" />
-                  Telegram
-                </Button>
-
-                {!runtimeReady ? (
-                  <Button variant="ghost" onClick={() => void handleRestartRuntime()}>
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    Retry runtime
-                  </Button>
-                ) : null}
+          {learning ? (
+            <Surface tone="panel" className="rounded-[24px] border border-[var(--border-subtle)] p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Adaptive posture</div>
+                  <div className="mt-2 text-[14px] font-medium text-[var(--text-primary)]">
+                    {learning.dominantDomain} · score {Math.round(learning.learningScore * 100)} · {learning.learningMode}
+                  </div>
+                </div>
+                <StatusBadge tone={learning.paused ? "warning" : learning.optOut ? "neutral" : "success"}>
+                  {learning.paused ? "paused" : learning.optOut ? "opted out" : "learning"}
+                </StatusBadge>
               </div>
 
-              {launchError ? <div className="text-[12px] text-[var(--state-warning)]">{launchError}</div> : null}
-              {!launchError && !runtimeReady ? <div className="text-[12px] text-[var(--text-secondary)]">{runtimeGateReason}</div> : null}
-              {!launchError && runtimeMessage ? <div className="text-[12px] text-[var(--text-secondary)]">{runtimeMessage}</div> : null}
-            </div>
-          </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                <div className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
+                  <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Success</div>
+                  <div className="mt-2 text-[15px] font-medium text-[var(--text-primary)]">{Math.round(learning.successRate * 100)}%</div>
+                </div>
+                <div className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
+                  <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Retention</div>
+                  <div className="mt-2 text-[15px] font-medium text-[var(--text-primary)]">{learning.retentionPolicy}</div>
+                </div>
+                <div className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
+                  <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Signals</div>
+                  <div className="mt-2 text-[15px] font-medium text-[var(--text-primary)]">{learning.signalCount}</div>
+                </div>
+              </div>
 
-          <div className="hidden justify-center lg:flex">
-            <RobotHero compact title="Elyan" subtitle="Calm operator shell" />
-          </div>
+              {learning.nextActions[0] ? (
+                <div className="mt-4 text-[12px] text-[var(--text-secondary)]">Next: {learning.nextActions[0].title}</div>
+              ) : null}
+            </Surface>
+          ) : null}
         </div>
       </Surface>
     </div>
