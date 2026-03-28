@@ -2093,6 +2093,91 @@ class ExecutionRepository:
             )
         return checkpoint_id
 
+    def record_artifact_diff(
+        self,
+        *,
+        run_id: str,
+        artifact_id: str,
+        before_hash: str = "",
+        after_hash: str = "",
+        summary: dict[str, Any] | None = None,
+        created_at: float | None = None,
+    ) -> str:
+        artifact_diff_id = f"diff_{uuid.uuid4().hex[:12]}"
+        with self._db.local_engine.begin() as conn:
+            conn.execute(
+                artifact_diffs_table.insert().values(
+                    artifact_diff_id=artifact_diff_id,
+                    run_id=str(run_id),
+                    artifact_id=str(artifact_id or ""),
+                    before_hash=str(before_hash or ""),
+                    after_hash=str(after_hash or ""),
+                    summary_json=_json_dumps(dict(summary or {})),
+                    created_at=float(created_at or _now()),
+                )
+            )
+            workspace_row = conn.execute(
+                select(task_runs_table.c.workspace_id).where(task_runs_table.c.run_id == str(run_id))
+            ).first()
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=str(workspace_row[0] if workspace_row else "local-workspace"),
+                aggregate_type="artifact_diff",
+                aggregate_id=artifact_diff_id,
+                event_type="artifact.diff.recorded",
+                payload={
+                    "run_id": str(run_id),
+                    "artifact_diff_id": artifact_diff_id,
+                    "artifact_id": str(artifact_id or ""),
+                    "summary": dict(summary or {}),
+                },
+            )
+        return artifact_diff_id
+
+    def record_file_mutation(
+        self,
+        *,
+        run_id: str,
+        path: str,
+        before_hash: str = "",
+        after_hash: str = "",
+        rollback_available: bool = False,
+        summary: dict[str, Any] | None = None,
+        created_at: float | None = None,
+    ) -> str:
+        mutation_id = f"mut_{uuid.uuid4().hex[:12]}"
+        with self._db.local_engine.begin() as conn:
+            conn.execute(
+                file_mutations_table.insert().values(
+                    mutation_id=mutation_id,
+                    run_id=str(run_id),
+                    path=str(path or ""),
+                    before_hash=str(before_hash or ""),
+                    after_hash=str(after_hash or ""),
+                    rollback_available=bool(rollback_available),
+                    summary_json=_json_dumps(dict(summary or {})),
+                    created_at=float(created_at or _now()),
+                )
+            )
+            workspace_row = conn.execute(
+                select(task_runs_table.c.workspace_id).where(task_runs_table.c.run_id == str(run_id))
+            ).first()
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=str(workspace_row[0] if workspace_row else "local-workspace"),
+                aggregate_type="file_mutation",
+                aggregate_id=mutation_id,
+                event_type="file.mutation.recorded",
+                payload={
+                    "run_id": str(run_id),
+                    "mutation_id": mutation_id,
+                    "path": str(path or ""),
+                    "rollback_available": bool(rollback_available),
+                    "summary": dict(summary or {}),
+                },
+            )
+        return mutation_id
+
     def list_execution_steps(self, run_id: str) -> list[dict[str, Any]]:
         with self._db.local_engine.begin() as conn:
             rows = conn.execute(

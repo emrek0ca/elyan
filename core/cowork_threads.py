@@ -303,6 +303,46 @@ class CoworkThreadStore:
             self._save_thread(thread)
         return await self.get_thread_detail(thread.thread_id)
 
+    async def control_thread(self, thread_id: str, *, action: str, note: str = "", agent: Any = None) -> dict[str, Any]:
+        normalized_thread_id = str(thread_id or "").strip()
+        normalized_action = str(action or "").strip().lower()
+        if not normalized_thread_id:
+            raise KeyError("thread_id required")
+        async with self._lock:
+            thread = self._threads.get(normalized_thread_id)
+            if thread is None:
+                raise KeyError(f"thread not found: {thread_id}")
+            active_run_id = str(thread.active_run_id or "").strip()
+            active_mission_id = str(thread.active_mission_id or "").strip()
+
+        if normalized_action == "stop":
+            if active_run_id:
+                await get_vertical_workflow_runner().cancel_run(active_run_id)
+            if active_mission_id:
+                await get_mission_runtime().cancel_mission(active_mission_id, note=note, cancelled_by="desktop")
+            async with self._lock:
+                thread = self._threads.get(normalized_thread_id)
+                if thread is None:
+                    raise KeyError(f"thread not found: {thread_id}")
+                thread.status = "cancelled"
+                thread.updated_at = _now()
+                self._save_thread(thread)
+            return await self.get_thread_detail(normalized_thread_id)
+
+        if normalized_action == "resume":
+            if active_mission_id:
+                await get_mission_runtime().resume_mission(active_mission_id, note=note, resumed_by="desktop", agent=agent)
+            async with self._lock:
+                thread = self._threads.get(normalized_thread_id)
+                if thread is None:
+                    raise KeyError(f"thread not found: {thread_id}")
+                thread.status = "queued"
+                thread.updated_at = _now()
+                self._save_thread(thread)
+            return await self.get_thread_detail(normalized_thread_id)
+
+        raise ValueError(f"unsupported thread action: {normalized_action}")
+
     async def get_thread(self, thread_id: str) -> CoworkThread | None:
         async with self._lock:
             return self._threads.get(str(thread_id or "").strip())
@@ -474,13 +514,19 @@ class CoworkThreadStore:
                 "id": "stop",
                 "label": "Stop run",
                 "tone": "danger",
-                "enabled": bool(thread.active_run_id and not terminal),
+                "enabled": bool((thread.active_run_id or thread.active_mission_id) and not terminal),
             },
             {
                 "id": "retry",
                 "label": "Retry from checkpoint",
                 "tone": "secondary",
                 "enabled": bool(last_successful_checkpoint),
+            },
+            {
+                "id": "resume",
+                "label": "Resume lane",
+                "tone": "secondary",
+                "enabled": bool(thread.active_mission_id and status_value == "cancelled"),
             },
             {
                 "id": "observe_only",

@@ -107,6 +107,14 @@ class _FakeExecutionRepo:
     def record_checkpoint(self, **payload):
         self._record("record_checkpoint", payload)
 
+    def record_artifact_diff(self, **payload):
+        self._record("record_artifact_diff", payload)
+        return f"diff_{len(self.calls)}"
+
+    def record_file_mutation(self, **payload):
+        self._record("record_file_mutation", payload)
+        return f"mut_{len(self.calls)}"
+
 
 class _FakeRunIndexRepo:
     def __init__(self):
@@ -271,6 +279,8 @@ async def test_vertical_runner_writes_execution_persistence_and_drains_outbox(tm
     assert "complete_execution_step" in method_names
     assert "record_verification" in method_names
     assert "record_checkpoint" in method_names
+    assert "record_artifact_diff" in method_names
+    assert "record_file_mutation" in method_names
     assert fake_runtime_db.workspace_sync.received
     assert fake_runtime_db.outbox.delivered
 
@@ -344,3 +354,24 @@ async def test_vertical_runner_persists_execution_rows_to_runtime_db(tmp_path):
     assert any(step["tool_name"] == "review_artifact_output" for step in steps)
     assert any(item["method"] == "artifact_review" and item["status"] == "passed" for item in verifications)
     assert any(item["step_id"] == "review_artifact_output" for item in checkpoints)
+
+
+@pytest.mark.asyncio
+async def test_vertical_runner_records_real_artifact_diffs_and_mutations(tmp_path):
+    runner = VerticalWorkflowRunner()
+    record = await runner.start_workflow(
+        task_type="document",
+        title="Artifact diff brief",
+        brief="Create a concise runtime brief and export it.",
+        output_dir=str(tmp_path / "artifacts"),
+        background=False,
+    )
+
+    execution_repo = get_runtime_database().execution
+    diffs = execution_repo.list_artifact_diffs(record.run_id)
+    mutations = execution_repo.list_file_mutations(record.run_id)
+
+    assert record.status == "completed"
+    assert diffs
+    assert mutations
+    assert any(item["summary"].get("change_type") in {"created", "updated"} for item in diffs)

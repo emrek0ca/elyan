@@ -158,14 +158,18 @@ class WorkspaceBillingStore:
 
     def get_entitlements(self, workspace_id: str) -> dict[str, Any]:
         record = self._workspace(workspace_id)
-        entitlements = _plan_entitlements(record.plan_id)
+        effective_plan_id = self._effective_plan_id(record)
+        entitlements = _plan_entitlements(effective_plan_id)
         return {
             "workspace_id": record.workspace_id,
-            "plan_id": record.plan_id,
+            "plan_id": effective_plan_id,
+            "requested_plan_id": record.plan_id,
             "status": record.status,
             "entitlements": entitlements,
             "workspace_owned": True,
             "hybrid_billing": True,
+            "degraded": effective_plan_id != record.plan_id,
+            "degraded_reason": self._degraded_reason(record),
         }
 
     def get_usage(self, workspace_id: str, *, limit: int = 100) -> dict[str, Any]:
@@ -205,6 +209,7 @@ class WorkspaceBillingStore:
             "billing_customer": record.billing_customer,
             "plan": {
                 "id": record.plan_id,
+                "effective_id": self._effective_plan_id(record),
                 "label": record.plan_id.replace("_", " ").title(),
                 "status": record.status,
             },
@@ -249,6 +254,39 @@ class WorkspaceBillingStore:
             str(os.getenv("STRIPE_WEBHOOK_SECRET", "") or "").strip(),
         )
 
+    @staticmethod
+    def _degraded_reason(record: WorkspaceBillingRecord) -> str:
+        normalized_status = str(record.status or "").strip().lower()
+        if normalized_status in {"inactive", "past_due", "unpaid", "canceled", "cancelled", "incomplete_expired"}:
+            return f"subscription_{normalized_status}"
+        return ""
+
+    def _effective_plan_id(self, record: WorkspaceBillingRecord) -> str:
+        normalized_status = str(record.status or "").strip().lower()
+        if normalized_status in {"active", "trialing"}:
+            return str(record.plan_id or "free").strip().lower() or "free"
+        return "free"
+
+    @staticmethod
+    def _normalize_subscription_status(value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"active", "trialing", "past_due", "inactive", "unpaid", "canceled", "cancelled", "incomplete", "incomplete_expired"}:
+            return "inactive" if normalized in {"canceled", "cancelled"} else normalized
+        return "inactive"
+
+    @staticmethod
+    def _stripe_price_env(plan_id: str) -> str:
+        return f"STRIPE_PRICE_{str(plan_id or '').strip().upper()}"
+
+    def _stripe_price_id(self, plan_id: str) -> str:
+        normalized_plan = str(plan_id or "free").strip().lower() or "free"
+        if normalized_plan == "free":
+            raise RuntimeError("free_plan_no_checkout")
+        price_id = str(os.getenv(self._stripe_price_env(normalized_plan), "") or "").strip()
+        if not price_id:
+            raise RuntimeError("stripe_price_missing")
+        return price_id
+
     def _stripe_client(self):
         secret_key, _ = self._stripe_keys()
         if not secret_key:
@@ -271,13 +309,14 @@ class WorkspaceBillingStore:
         record = self._workspace(workspace_id)
         stripe = self._stripe_client()
         normalized_plan = str(plan_id or "free").strip().lower() or "free"
+        price_id = self._stripe_price_id(normalized_plan)
         session = stripe.checkout.Session.create(
             mode="subscription",
             success_url=success_url,
             cancel_url=cancel_url,
             customer=record.stripe_customer_id or None,
             metadata={"workspace_id": record.workspace_id, "plan_id": normalized_plan},
-            line_items=[{"price": os.getenv(f"STRIPE_PRICE_{normalized_plan.upper()}", ""), "quantity": 1}],
+            line_items=[{"price": price_id, "quantity": 1}],
         )
         record.checkout_url = str(getattr(session, "url", "") or "")
         record.metadata["pending_plan_id"] = normalized_plan
@@ -315,29 +354,36 @@ class WorkspaceBillingStore:
         event = stripe.Webhook.construct_event(payload=payload, sig_header=signature, secret=webhook_secret)
         event_type = str(event.get("type") or "")
         obj = dict((event.get("data") or {}).get("object") or {})
+        metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
         workspace_id = str((obj.get("metadata") or {}).get("workspace_id") or "local-workspace").strip() or "local-workspace"
         record = self._workspace(workspace_id)
         record.metadata["last_webhook_type"] = event_type
+        if metadata.get("plan_id"):
+            record.plan_id = str(metadata.get("plan_id") or record.plan_id)
         if event_type == "checkout.session.completed":
             record.stripe_customer_id = str(obj.get("customer") or record.stripe_customer_id or "")
-            record.plan_id = str((obj.get("metadata") or {}).get("plan_id") or record.plan_id or "free")
             record.status = "active"
         elif event_type in {"customer.subscription.created", "customer.subscription.updated"}:
             record.stripe_subscription_id = str(obj.get("id") or record.stripe_subscription_id or "")
             record.stripe_customer_id = str(obj.get("customer") or record.stripe_customer_id or "")
-            record.status = str(obj.get("status") or record.status or "active")
+            record.status = self._normalize_subscription_status(str(obj.get("status") or record.status or "active"))
             record.current_period_end = float(obj.get("current_period_end") or record.current_period_end or 0.0)
-            metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
-            if metadata.get("plan_id"):
-                record.plan_id = str(metadata.get("plan_id") or record.plan_id)
         elif event_type in {"customer.subscription.deleted", "invoice.payment_failed"}:
             record.status = "past_due" if event_type == "invoice.payment_failed" else "inactive"
+        degraded_reason = self._degraded_reason(record)
+        if degraded_reason:
+            record.metadata["degraded_reason"] = degraded_reason
+            record.metadata["effective_plan_id"] = self._effective_plan_id(record)
+        else:
+            record.metadata.pop("degraded_reason", None)
+            record.metadata["effective_plan_id"] = self._effective_plan_id(record)
         record.updated_at = _now()
         self._save()
         return {
             "event_type": event_type,
             "workspace_id": workspace_id,
             "status": record.status,
+            "effective_plan_id": self._effective_plan_id(record),
         }
 
     def verify_webhook_signature(self, payload: bytes, signature: str) -> dict[str, Any]:

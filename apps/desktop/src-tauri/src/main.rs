@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::Serialize;
+use serde_json::Value;
 use std::{
     collections::VecDeque,
     env,
@@ -15,6 +16,14 @@ use std::{
 
 const DEFAULT_PORT: u16 = 18789;
 const MAX_LOG_LINES: usize = 240;
+const EXPECTED_PROTOCOL_VERSION: &str = "elyan-cowork-v1";
+
+#[derive(Default)]
+struct RuntimeProbeResult {
+    reachable: bool,
+    runtime_version: Option<String>,
+    runtime_protocol_version: Option<String>,
+}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +39,13 @@ struct SidecarHealth {
     last_error: Option<String>,
     last_started_at: Option<String>,
     last_ready_at: Option<String>,
+    desktop_version: String,
+    expected_protocol_version: String,
+    runtime_version: Option<String>,
+    runtime_protocol_version: Option<String>,
+    compatible: bool,
+    compatibility_reason: Option<String>,
+    last_logs_export_path: Option<String>,
 }
 
 impl Default for SidecarHealth {
@@ -46,6 +62,13 @@ impl Default for SidecarHealth {
             last_error: None,
             last_started_at: None,
             last_ready_at: None,
+            desktop_version: env!("CARGO_PKG_VERSION").to_string(),
+            expected_protocol_version: EXPECTED_PROTOCOL_VERSION.to_string(),
+            runtime_version: None,
+            runtime_protocol_version: None,
+            compatible: false,
+            compatibility_reason: Some("runtime_offline".to_string()),
+            last_logs_export_path: None,
         }
     }
 }
@@ -61,19 +84,8 @@ impl SidecarSupervisor {
     fn boot(&self) -> Result<SidecarHealth, String> {
         self.reconcile_child_state();
 
-        if self.health_probe(DEFAULT_PORT) {
-            return Ok(self.set_health(|health| {
-                health.status = "healthy".to_string();
-                health.port = DEFAULT_PORT;
-                health.runtime_url = runtime_url(DEFAULT_PORT);
-                if health.pid.is_none() {
-                    health.managed = false;
-                }
-                if health.last_ready_at.is_none() {
-                    health.last_ready_at = Some(now_stamp());
-                }
-                health.clone()
-            }));
+        if self.probe_runtime(DEFAULT_PORT).reachable {
+            return Ok(self.refresh_health_snapshot());
         }
 
         {
@@ -125,12 +137,8 @@ impl SidecarSupervisor {
         for _ in 0..60 {
             thread::sleep(Duration::from_millis(250));
             self.reconcile_child_state();
-            if self.health_probe(DEFAULT_PORT) {
-                return Ok(self.set_health(|health| {
-                    health.status = "healthy".to_string();
-                    health.last_ready_at = Some(now_stamp());
-                    health.clone()
-                }));
+            if self.probe_runtime(DEFAULT_PORT).reachable {
+                return Ok(self.refresh_health_snapshot());
             }
         }
 
@@ -152,13 +160,8 @@ impl SidecarSupervisor {
         *child_slot = None;
         drop(child_slot);
 
-        if self.health_probe(DEFAULT_PORT) {
-            return Ok(self.set_health(|health| {
-                health.status = "healthy".to_string();
-                health.managed = false;
-                health.pid = None;
-                health.clone()
-            }));
+        if self.probe_runtime(DEFAULT_PORT).reachable {
+            return Ok(self.refresh_health_snapshot());
         }
 
         Ok(self.set_health(|health| {
@@ -180,18 +183,8 @@ impl SidecarSupervisor {
 
     fn get_health(&self) -> SidecarHealth {
         self.reconcile_child_state();
-        if self.health_probe(DEFAULT_PORT) {
-            return self.set_health(|health| {
-                if health.status != "healthy" {
-                    health.status = "healthy".to_string();
-                    health.last_ready_at = Some(now_stamp());
-                }
-                health.runtime_url = runtime_url(DEFAULT_PORT);
-                if health.pid.is_none() {
-                    health.managed = false;
-                }
-                health.clone()
-            });
+        if self.probe_runtime(DEFAULT_PORT).reachable {
+            return self.refresh_health_snapshot();
         }
         self.health_snapshot()
     }
@@ -199,6 +192,21 @@ impl SidecarSupervisor {
     fn get_logs(&self) -> Vec<String> {
         let logs = self.logs.lock().expect("sidecar logs lock poisoned");
         logs.iter().cloned().collect()
+    }
+
+    fn export_logs(&self, path: Option<String>) -> Result<String, String> {
+        let output_path = resolve_logs_export_path(path)?;
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        }
+        std::fs::write(&output_path, self.get_logs().join("\n")).map_err(|err| err.to_string())?;
+        let exported = output_path.to_string_lossy().to_string();
+        self.set_health(|health| {
+            health.last_logs_export_path = Some(exported.clone());
+            health.clone()
+        });
+        self.push_log_line("supervisor", format!("sidecar logs exported to {}", exported));
+        Ok(exported)
     }
 
     fn reconcile_child_state(&self) {
@@ -234,13 +242,37 @@ impl SidecarSupervisor {
         }
     }
 
-    fn health_probe(&self, port: u16) -> bool {
+    fn refresh_health_snapshot(&self) -> SidecarHealth {
+        let probe = self.probe_runtime(DEFAULT_PORT);
+        self.set_health(|health| {
+            let compatible = probe.runtime_protocol_version.as_deref() == Some(EXPECTED_PROTOCOL_VERSION);
+            health.runtime_url = runtime_url(DEFAULT_PORT);
+            health.runtime_version = probe.runtime_version.clone();
+            health.runtime_protocol_version = probe.runtime_protocol_version.clone();
+            health.compatible = compatible;
+            health.compatibility_reason = if compatible {
+                None
+            } else if probe.runtime_protocol_version.is_none() {
+                Some("runtime_protocol_missing".to_string())
+            } else {
+                Some("runtime_protocol_mismatch".to_string())
+            };
+            if health.pid.is_none() {
+                health.managed = false;
+            }
+            health.status = if compatible { "healthy".to_string() } else { "degraded".to_string() };
+            health.last_ready_at = Some(now_stamp());
+            health.clone()
+        })
+    }
+
+    fn probe_runtime(&self, port: u16) -> RuntimeProbeResult {
         let addr = format!("127.0.0.1:{port}");
         let Ok(mut stream) = TcpStream::connect_timeout(
             &addr.parse().unwrap_or_else(|_| "127.0.0.1:18789".parse().expect("valid default addr")),
             Duration::from_millis(300),
         ) else {
-            return false;
+            return RuntimeProbeResult::default();
         };
 
         let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
@@ -249,13 +281,38 @@ impl SidecarSupervisor {
             .write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
             .is_err()
         {
-            return true;
+            return RuntimeProbeResult { reachable: true, ..RuntimeProbeResult::default() };
         }
 
-        let mut buffer = [0_u8; 256];
-        match stream.read(&mut buffer) {
-            Ok(bytes) if bytes > 0 => String::from_utf8_lossy(&buffer[..bytes]).contains("200"),
-            _ => true,
+        let mut buffer = Vec::new();
+        match stream.read_to_end(&mut buffer) {
+            Ok(bytes) if bytes > 0 => {
+                let response = String::from_utf8_lossy(&buffer[..bytes]).to_string();
+                let mut result = RuntimeProbeResult {
+                    reachable: response.contains("200 OK") || response.starts_with("HTTP/1.1 200") || !response.is_empty(),
+                    ..RuntimeProbeResult::default()
+                };
+                if let Some((_, body)) = response.split_once("\r\n\r\n") {
+                    if let Ok(json) = serde_json::from_str::<Value>(body) {
+                        result.runtime_version = json
+                            .get("version")
+                            .and_then(Value::as_str)
+                            .map(|item| item.to_string());
+                        result.runtime_protocol_version = json
+                            .get("protocol_version")
+                            .and_then(Value::as_str)
+                            .map(|item| item.to_string())
+                            .or_else(|| {
+                                json.get("runtime")
+                                    .and_then(|runtime| runtime.get("protocol_version"))
+                                    .and_then(Value::as_str)
+                                    .map(|item| item.to_string())
+                            });
+                    }
+                }
+                result
+            }
+            _ => RuntimeProbeResult { reachable: true, ..RuntimeProbeResult::default() },
         }
     }
 
@@ -412,6 +469,21 @@ fn runtime_url(port: u16) -> String {
     format!("http://127.0.0.1:{port}")
 }
 
+fn resolve_logs_export_path(path: Option<String>) -> Result<PathBuf, String> {
+    if let Some(raw) = path {
+        let candidate = PathBuf::from(raw);
+        if candidate.as_os_str().is_empty() {
+            return Err("logs export path is empty".to_string());
+        }
+        return Ok(candidate);
+    }
+    let base = resolve_project_dir().unwrap_or_else(env::temp_dir);
+    Ok(base
+        .join(".elyan")
+        .join("exports")
+        .join(format!("sidecar-logs-{}.log", now_stamp())))
+}
+
 fn now_stamp() -> String {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -510,6 +582,11 @@ fn get_runtime_logs(supervisor: tauri::State<'_, SidecarSupervisor>) -> Vec<Stri
 }
 
 #[tauri::command]
+fn export_runtime_logs(supervisor: tauri::State<'_, SidecarSupervisor>, path: Option<String>) -> Result<String, String> {
+    supervisor.export_logs(path)
+}
+
+#[tauri::command]
 fn open_artifact(path: String) -> bool {
     open_path(&path)
 }
@@ -533,6 +610,7 @@ fn main() {
             restart_runtime,
             get_runtime_health,
             get_runtime_logs,
+            export_runtime_logs,
             open_artifact,
             reveal_in_folder,
             open_external_url

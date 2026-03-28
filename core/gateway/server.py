@@ -50,7 +50,7 @@ from core.security.ingress_guard import blocked_ingress_text, inspect_ingress
 from elyan.dashboard.routes.trace import render_trace_page
 from elyan.verifier.evidence import build_trace_bundle, resolve_evidence_path
 from core.text_artifacts import existing_text_path
-from core.version import APP_VERSION
+from core.version import APP_VERSION, RUNTIME_PROTOCOL_VERSION
 from core.compliance.audit_trail import audit_trail
 from config.elyan_config import elyan_config
 from security.tool_policy import tool_policy
@@ -1073,6 +1073,7 @@ class ElyanGatewayServer:
         self.app.router.add_post('/api/v1/cowork/threads', self.handle_v1_cowork_threads)
         self.app.router.add_get('/api/v1/cowork/threads/{thread_id}', self.handle_v1_cowork_thread_detail)
         self.app.router.add_post('/api/v1/cowork/threads/{thread_id}/turns', self.handle_v1_cowork_thread_turn)
+        self.app.router.add_post('/api/v1/cowork/threads/{thread_id}/actions', self.handle_v1_cowork_thread_action)
         self.app.router.add_post('/api/v1/cowork/approvals/{approval_id}/resolve', self.handle_v1_cowork_resolve_approval)
         self.app.router.add_get('/api/v1/billing/workspace', self.handle_v1_billing_workspace)
         self.app.router.add_get('/api/v1/billing/usage', self.handle_v1_billing_usage)
@@ -1438,6 +1439,31 @@ class ElyanGatewayServer:
                 routing_profile=str(data.get("routing_profile") or "balanced").strip() or "balanced",
                 review_strictness=str(data.get("review_strictness") or "balanced").strip() or "balanced",
                 user_id=self._workspace_id(request, data),
+                agent=self.agent,
+            )
+        except KeyError:
+            return web.json_response({"success": False, "error": "thread not found"}, status=404)
+        except ValueError as exc:
+            return web.json_response({"success": False, "error": str(exc)}, status=400)
+        push_cowork_event("cowork.thread.updated", detail)
+        return web.json_response({"success": True, "thread": detail})
+
+    async def handle_v1_cowork_thread_action(self, request):
+        thread_id = str(request.match_info.get("thread_id") or "").strip()
+        if not thread_id:
+            return web.json_response({"success": False, "error": "thread_id required"}, status=400)
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        action = str(data.get("action") or "").strip().lower()
+        if action not in {"stop", "resume"}:
+            return web.json_response({"success": False, "error": "unsupported action"}, status=400)
+        try:
+            detail = await self._cowork_store().control_thread(
+                thread_id,
+                action=action,
+                note=str(data.get("note") or "").strip(),
                 agent=self.agent,
             )
         except KeyError:
@@ -2853,6 +2879,7 @@ class ElyanGatewayServer:
             "uptime_s": uptime_s,
             "uptime_seconds": uptime_s,
             "version": elyan_config.get("version", APP_VERSION),
+            "protocol_version": RUNTIME_PROTOCOL_VERSION,
             "adapters": adapter_status,
             "adapter_health": adapter_health,
             "cron_jobs": len(self.cron.scheduler.get_jobs()),
@@ -2873,6 +2900,8 @@ class ElyanGatewayServer:
                 "cpu_pct": health.cpu_percent,
                 "ram_pct": health.ram_percent,
                 "disk_pct": health.disk_percent,
+                "protocol_version": RUNTIME_PROTOCOL_VERSION,
+                "app_version": elyan_config.get("version", APP_VERSION),
                 "tools_total": tools_total,
                 "tool_load_errors": load_error_count,
                 "channels_total": adapter_total,

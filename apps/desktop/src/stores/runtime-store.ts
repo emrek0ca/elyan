@@ -10,6 +10,9 @@ export const defaultSidecarHealth: SidecarHealth = {
   port: 18789,
   runtimeUrl: DEFAULT_BASE_URL,
   retries: 0,
+  desktopVersion: "0.1.0",
+  expectedProtocolVersion: "elyan-cowork-v1",
+  compatible: false,
 };
 
 type RuntimeStore = {

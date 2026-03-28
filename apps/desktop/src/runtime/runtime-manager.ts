@@ -37,6 +37,10 @@ export class RuntimeManager {
     return sidecarSupervisor.getLogs();
   }
 
+  exportRuntimeLogs(path?: string) {
+    return sidecarSupervisor.exportLogs(path);
+  }
+
   openArtifact(path: string) {
     return sidecarSupervisor.openArtifact(path);
   }

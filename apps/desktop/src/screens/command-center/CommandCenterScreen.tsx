@@ -9,7 +9,7 @@ import { Surface } from "@/components/primitives/Surface";
 import { StatusBadge } from "@/components/primitives/StatusBadge";
 import { OutputStream } from "@/features/run/OutputStream";
 import { useCommandCenterSnapshot } from "@/hooks/use-desktop-data";
-import { addCoworkTurn, cancelRun, resolveCoworkApproval } from "@/services/api/elyan-service";
+import { addCoworkTurn, cancelRun, controlCoworkThread, resolveCoworkApproval } from "@/services/api/elyan-service";
 import { runtimeManager } from "@/runtime/runtime-manager";
 import { useUiStore } from "@/stores/ui-store";
 
@@ -131,10 +131,14 @@ export function CommandCenterScreen() {
     if (!selectedThread) {
       return;
     }
-    if (actionId === "stop" && selectedThread.activeRunId) {
+    if (actionId === "stop" && (selectedThread.activeRunId || selectedThread.activeMissionId)) {
       setTurnBusy(true);
       try {
-        await cancelRun(selectedThread.activeRunId);
+        if (selectedThread.activeRunId) {
+          await cancelRun(selectedThread.activeRunId);
+        } else {
+          await controlCoworkThread(selectedThread.threadId, "stop");
+        }
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ["cowork-home"] }),
           queryClient.invalidateQueries({ queryKey: ["home-snapshot"] }),
@@ -148,6 +152,21 @@ export function CommandCenterScreen() {
     }
     if (actionId === "retry") {
       await handleQuickFollowUp("Retry from the last successful checkpoint, keep the scope narrow, and verify every step before continuing.");
+      return;
+    }
+    if (actionId === "resume") {
+      setTurnBusy(true);
+      try {
+        await controlCoworkThread(selectedThread.threadId, "resume");
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["cowork-home"] }),
+          queryClient.invalidateQueries({ queryKey: ["home-snapshot"] }),
+          queryClient.invalidateQueries({ queryKey: ["command-center"] }),
+          queryClient.invalidateQueries({ queryKey: ["logs"] }),
+        ]);
+      } finally {
+        setTurnBusy(false);
+      }
       return;
     }
     if (actionId === "observe_only") {
@@ -313,7 +332,11 @@ export function CommandCenterScreen() {
                       key={action.id}
                       variant={action.tone === "danger" ? "ghost" : action.tone === "primary" ? "primary" : "secondary"}
                       size="sm"
-                      disabled={!action.enabled || turnBusy || (action.id === "stop" && !selectedThread.activeRunId)}
+                      disabled={
+                        !action.enabled
+                        || turnBusy
+                        || (action.id === "stop" && !selectedThread.activeRunId && !selectedThread.activeMissionId)
+                      }
                       onClick={() => void handleControlAction(action.id)}
                     >
                       {action.label}

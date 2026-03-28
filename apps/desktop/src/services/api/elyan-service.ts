@@ -920,6 +920,14 @@ export async function cancelRun(runId: string): Promise<boolean> {
   return Boolean(raw.success);
 }
 
+export async function controlCoworkThread(threadId: string, action: "stop" | "resume", note = ""): Promise<CoworkThreadDetail | null> {
+  const raw = await apiClient.request<SuccessEnvelope<{ thread?: Record<string, unknown> }>>(`/api/v1/cowork/threads/${encodeURIComponent(threadId)}/actions`, {
+    method: "POST",
+    body: { action, note },
+  });
+  return raw.thread ? mapThreadDetail(raw.thread) : null;
+}
+
 export async function startWorkflowRun(payload: StartWorkflowPayload): Promise<StartWorkflowResponse> {
   return apiClient.request<StartWorkflowResponse>("/api/v1/workflows/start", {
     method: "POST",

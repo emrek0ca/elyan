@@ -94,7 +94,7 @@ async def test_cowork_thread_can_run_general_mission_mode():
     store = get_cowork_thread_store()
 
     created = await store.create_thread(
-        prompt="Review the current Elyan roadmap and suggest the next three priorities.",
+        prompt="Production deploy hazırla ve yayınla",
         workspace_id="workspace-alpha",
         session_id="desktop-main",
         preferred_mode="cowork",
@@ -104,3 +104,21 @@ async def test_cowork_thread_can_run_general_mission_mode():
     assert created["current_mode"] == "cowork"
     assert created["active_mission_id"]
     assert any(turn["role"] == "operator" for turn in created["turns"])
+
+
+@pytest.mark.asyncio
+async def test_cowork_thread_supports_stop_and_resume_for_mission_lane():
+    store = get_cowork_thread_store()
+
+    created = await store.create_thread(
+        prompt="Review the current Elyan roadmap and suggest the next three priorities.",
+        workspace_id="workspace-alpha",
+        session_id="desktop-main",
+        preferred_mode="cowork",
+    )
+
+    stopped = await store.control_thread(str(created["thread_id"]), action="stop", note="pause")
+    assert stopped["status"] == "cancelled"
+
+    resumed = await store.control_thread(str(created["thread_id"]), action="resume", note="continue")
+    assert resumed["thread_id"] == created["thread_id"]

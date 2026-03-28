@@ -537,6 +537,31 @@ async def test_high_risk_node_waits_for_approval_and_can_resume(tmp_path: Path):
     assert mission is not None
     assert mission.status == "completed"
 
+
+@pytest.mark.asyncio
+async def test_mission_can_be_cancelled_and_resumed(tmp_path: Path):
+    runtime = MissionRuntime(storage_dir=tmp_path)
+    agent = _DummyAgent()
+
+    mission = await runtime.create_mission(
+        "Review the Elyan roadmap and then prepare the next sprint outline",
+        user_id="local",
+        channel="dashboard",
+        mode="Balanced",
+        auto_start=False,
+    )
+
+    cancelled = await runtime.cancel_mission(mission.mission_id, note="operator stop", cancelled_by="desktop")
+    assert cancelled is not None
+    assert cancelled.status == "cancelled"
+
+    resumed = await runtime.resume_mission(mission.mission_id, note="continue", resumed_by="desktop", agent=agent)
+    assert resumed is not None
+
+    final = await runtime.run_mission(mission.mission_id, agent=agent)
+    assert final is not None
+    assert final.status == "completed"
+
 @pytest.mark.asyncio
 async def test_save_skill_and_memory_snapshot_async(tmp_path: Path):
     runtime = MissionRuntime(storage_dir=tmp_path)

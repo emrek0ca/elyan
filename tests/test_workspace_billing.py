@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+import sys
+from types import SimpleNamespace
+
 import pytest
 
 import core.billing.workspace_billing as workspace_billing_module
@@ -46,3 +50,62 @@ def test_workspace_billing_checkout_requires_stripe_configuration():
             success_url="https://tauri.localhost/billing/success",
             cancel_url="https://tauri.localhost/billing/cancel",
         )
+
+
+def test_workspace_billing_checkout_requires_price_id(monkeypatch):
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_123")
+    store = get_workspace_billing_store()
+
+    class _FakeStripe:
+        class checkout:
+            class Session:
+                @staticmethod
+                def create(**_kwargs):
+                    return SimpleNamespace(id="cs_test", url="https://billing.local/checkout")
+
+    monkeypatch.setattr(store, "_stripe_client", lambda: _FakeStripe())
+
+    with pytest.raises(RuntimeError, match="stripe_price_missing"):
+        store.create_checkout_session(
+            workspace_id="workspace-team",
+            plan_id="pro",
+            success_url="https://tauri.localhost/billing/success",
+            cancel_url="https://tauri.localhost/billing/cancel",
+        )
+
+
+def test_workspace_billing_past_due_degrades_entitlements(monkeypatch):
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_123")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test_123")
+
+    class _FakeWebhook:
+        @staticmethod
+        def construct_event(*, payload, sig_header, secret):
+            assert sig_header == "sig_test"
+            assert secret == "whsec_test_123"
+            return json.loads(payload.decode("utf-8"))
+
+    monkeypatch.setitem(sys.modules, "stripe", SimpleNamespace(Webhook=_FakeWebhook()))
+
+    store = get_workspace_billing_store()
+    payload = {
+        "type": "invoice.payment_failed",
+        "data": {
+            "object": {
+                "metadata": {
+                    "workspace_id": "workspace-team",
+                    "plan_id": "team",
+                },
+                "customer": "cus_team",
+            }
+        },
+    }
+
+    result = store.handle_webhook(json.dumps(payload).encode("utf-8"), "sig_test")
+    entitlements = store.get_entitlements("workspace-team")
+
+    assert result["status"] == "past_due"
+    assert result["effective_plan_id"] == "free"
+    assert entitlements["plan_id"] == "free"
+    assert entitlements["degraded"] is True
+    assert entitlements["degraded_reason"] == "subscription_past_due"

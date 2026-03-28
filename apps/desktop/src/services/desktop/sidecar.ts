@@ -54,6 +54,9 @@ export const sidecarBridge = {
   getRuntimeLogs() {
     return invokeOrFallback<string[]>("get_runtime_logs", undefined, []);
   },
+  exportRuntimeLogs(path?: string) {
+    return invokeOrFallback<string>("export_runtime_logs", { path }, "");
+  },
   openArtifact(path: string) {
     return invokeOrFallback<boolean>("open_artifact", { path }, false);
   },

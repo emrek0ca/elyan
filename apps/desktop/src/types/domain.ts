@@ -413,6 +413,13 @@ export interface SidecarHealth {
   lastError?: string | null;
   lastStartedAt?: string | null;
   lastReadyAt?: string | null;
+  desktopVersion?: string;
+  expectedProtocolVersion?: string;
+  runtimeVersion?: string | null;
+  runtimeProtocolVersion?: string | null;
+  compatible?: boolean;
+  compatibilityReason?: string | null;
+  lastLogsExportPath?: string | null;
 }
 
 export type RuntimeConnectionState = "booting" | "connected" | "reconnecting" | "offline" | "error";

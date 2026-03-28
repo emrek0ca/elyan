@@ -2267,6 +2267,9 @@ class MissionRuntime:
                 mission = self._missions.get(mission_id)
                 if mission is None:
                     return None
+                if mission.status == "cancelled":
+                    self._save()
+                    return mission
                 index = self._node_index(mission)
                 if all(node.status == "completed" for node in mission.graph.nodes):
                     mission.status = "completed"
@@ -2329,6 +2332,93 @@ class MissionRuntime:
                 if mission is not None:
                     mission.updated_at = _now()
                     self._save()
+
+    async def cancel_mission(self, mission_id: str, *, note: str = "", cancelled_by: str = "operator") -> Optional[Mission]:
+        normalized = str(mission_id or "").strip()
+        if not normalized:
+            return None
+        task: asyncio.Task | None = None
+        async with self._lock:
+            mission = self._missions.get(normalized)
+            if mission is None:
+                return None
+            if mission.status in {"completed", "failed", "cancelled"}:
+                return mission
+            for node in mission.graph.nodes:
+                if node.status == "running":
+                    node.status = "queued"
+                    node.started_at = 0.0
+            mission.status = "cancelled"
+            mission.updated_at = _now()
+            mission.metadata["last_control_action"] = "cancel"
+            mission.metadata["last_control_note"] = str(note or "")
+            mission.metadata["last_control_actor"] = str(cancelled_by or "operator")
+            self._record_event(
+                mission,
+                "mission.cancelled",
+                "Mission operator tarafından durduruldu",
+                status="cancelled",
+                metadata={"note": str(note or ""), "cancelled_by": str(cancelled_by or "operator")},
+            )
+            try:
+                device_id, session_id = self._sync_identifiers(mission)
+                self.sync_store.record_stage(
+                    request_id=mission.mission_id,
+                    user_id=str(mission.owner or "local"),
+                    channel=str(mission.channel or "dashboard"),
+                    state="cancelled",
+                    device_id=device_id,
+                    session_id=session_id,
+                    metadata={"mission_id": mission.mission_id, "note": str(note or "")},
+                )
+            except Exception as exc:
+                logger.debug(f"mission sync cancelled skipped: {exc}")
+            self._save()
+            task = self._running.get(normalized)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        return self.get_mission(normalized)
+
+    async def resume_mission(self, mission_id: str, *, note: str = "", resumed_by: str = "operator", agent: Any = None) -> Optional[Mission]:
+        normalized = str(mission_id or "").strip()
+        if not normalized:
+            return None
+        async with self._lock:
+            mission = self._missions.get(normalized)
+            if mission is None:
+                return None
+            if mission.status == "completed":
+                return mission
+            if any(item.status == "pending" for item in mission.approvals):
+                mission.status = "waiting_approval"
+                self._save()
+                return mission
+            if mission.status not in {"cancelled", "queued", "running", "waiting_approval"}:
+                return mission
+            for node in mission.graph.nodes:
+                if node.status == "cancelled":
+                    node.status = "queued"
+            mission.status = "queued"
+            mission.updated_at = _now()
+            mission.metadata["last_control_action"] = "resume"
+            mission.metadata["last_control_note"] = str(note or "")
+            mission.metadata["last_control_actor"] = str(resumed_by or "operator")
+            self._record_event(
+                mission,
+                "mission.resumed",
+                "Mission tekrar kuyruğa alındı",
+                status="queued",
+                metadata={"note": str(note or ""), "resumed_by": str(resumed_by or "operator")},
+            )
+            self._save()
+        await self.start_mission(normalized, agent=agent)
+        return self.get_mission(normalized)
 
     def list_missions(self, *, owner: str = "", limit: int = 30) -> list[dict[str, Any]]:
         rows = []

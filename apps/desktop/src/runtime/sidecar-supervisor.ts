@@ -40,6 +40,10 @@ export class SidecarSupervisor {
     return sidecarBridge.getRuntimeLogs();
   }
 
+  async exportLogs(path?: string) {
+    return sidecarBridge.exportRuntimeLogs(path);
+  }
+
   async openArtifact(path: string) {
     return sidecarBridge.openArtifact(path);
   }

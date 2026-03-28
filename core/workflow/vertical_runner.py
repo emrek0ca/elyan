@@ -5,7 +5,9 @@ Deterministic vertical workflow runner for Elyan vNext.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
+import os
 import time
 import zipfile
 from dataclasses import replace
@@ -395,6 +397,7 @@ class VerticalWorkflowRunner:
             template=template,
             artifact_targets=requested_artifact_targets,
         )
+        pre_execution_inventory = self._snapshot_existing_files(Path(artifact_root).expanduser())
         planned_step_ids = {
             str(step.get("objective") or self._step_name_for_state(WorkflowLifecycleState.PLANNED)).replace(" ", "_"): str(step.get("planned_step_id") or "")
             for step in execution_plan
@@ -565,6 +568,12 @@ class VerticalWorkflowRunner:
 
             record.artifact_path = str(export_payload.get("primary_path") or "")
             record.artifacts = list(export_payload.get("artifacts") or [])
+            await self._record_artifact_outputs(
+                record=record,
+                artifacts=list(record.artifacts or []),
+                artifact_root=Path(artifact_root).expanduser(),
+                before_inventory=pre_execution_inventory,
+            )
             record.completed_at = time.time()
             record.status = WorkflowLifecycleState.COMPLETED.value
             workflow_run.transition_to(WorkflowState.COMPLETED, {"task_type": task_type.value})
@@ -1470,6 +1479,204 @@ class VerticalWorkflowRunner:
                 }
             )
         return rows
+
+    async def _record_artifact_outputs(
+        self,
+        *,
+        record: RunRecord,
+        artifacts: list[dict[str, Any]],
+        artifact_root: Path,
+        before_inventory: dict[str, str],
+    ) -> None:
+        seen_paths: set[str] = set()
+        for artifact in list(artifacts or []):
+            raw_path = str(artifact.get("path") or "").strip()
+            if not raw_path:
+                continue
+            path = Path(raw_path).expanduser()
+            if not path.exists():
+                continue
+            normalized_path = str(path)
+            if normalized_path in seen_paths:
+                continue
+            seen_paths.add(normalized_path)
+            artifact_id = str(artifact.get("artifact_id") or artifact.get("label") or path.name or normalized_path)
+            artifact_kind = str(artifact.get("kind") or record.task_type or "artifact")
+            if path.is_file():
+                await self._record_file_artifact(
+                    record=record,
+                    artifact_id=artifact_id,
+                    path=path,
+                    before_inventory=before_inventory,
+                    artifact_kind=artifact_kind,
+                )
+            elif path.is_dir():
+                await self._record_directory_artifact(
+                    record=record,
+                    artifact_id=artifact_id,
+                    path=path,
+                    before_inventory=before_inventory,
+                    artifact_kind=artifact_kind,
+                )
+        if not artifacts and artifact_root.exists():
+            await self._record_directory_artifact(
+                record=record,
+                artifact_id=f"{record.run_id}_artifact_root",
+                path=artifact_root,
+                before_inventory=before_inventory,
+                artifact_kind=str(record.task_type or "artifact"),
+            )
+
+    async def _record_file_artifact(
+        self,
+        *,
+        record: RunRecord,
+        artifact_id: str,
+        path: Path,
+        before_inventory: dict[str, str],
+        artifact_kind: str,
+    ) -> None:
+        normalized_path = str(path)
+        before_hash = str(before_inventory.get(normalized_path) or "")
+        after_hash = self._hash_path(path)
+        change_type = "created" if not before_hash else "updated" if before_hash != after_hash else "unchanged"
+        summary = {
+            "path": normalized_path,
+            "label": path.name,
+            "kind": artifact_kind,
+            "change_type": change_type,
+            "size_bytes": int(path.stat().st_size) if path.exists() else 0,
+        }
+        await self._exec_db_call(
+            "record_artifact_diff",
+            run_id=record.run_id,
+            artifact_id=str(artifact_id or path.name),
+            before_hash=before_hash,
+            after_hash=after_hash,
+            summary=summary,
+        )
+        if change_type != "unchanged":
+            await self._exec_db_call(
+                "record_file_mutation",
+                run_id=record.run_id,
+                path=normalized_path,
+                before_hash=before_hash,
+                after_hash=after_hash,
+                rollback_available=bool(before_hash),
+                summary=summary,
+            )
+
+    async def _record_directory_artifact(
+        self,
+        *,
+        record: RunRecord,
+        artifact_id: str,
+        path: Path,
+        before_inventory: dict[str, str],
+        artifact_kind: str,
+    ) -> None:
+        current_files = self._snapshot_existing_files(path)
+        path_prefix = f"{path}{os.sep}"
+        before_subset = {
+            key: value
+            for key, value in before_inventory.items()
+            if key == str(path) or key.startswith(path_prefix)
+        }
+        dir_before_hash = self._hash_inventory(before_subset)
+        dir_after_hash = self._hash_inventory(current_files)
+        created_count = 0
+        updated_count = 0
+        unchanged_count = 0
+        for file_path, after_hash in current_files.items():
+            before_hash = str(before_inventory.get(file_path) or "")
+            change_type = "created" if not before_hash else "updated" if before_hash != after_hash else "unchanged"
+            if change_type == "created":
+                created_count += 1
+            elif change_type == "updated":
+                updated_count += 1
+            else:
+                unchanged_count += 1
+            if change_type == "unchanged":
+                continue
+            mutation_path = Path(file_path)
+            await self._exec_db_call(
+                "record_file_mutation",
+                run_id=record.run_id,
+                path=file_path,
+                before_hash=before_hash,
+                after_hash=after_hash,
+                rollback_available=bool(before_hash),
+                summary={
+                    "path": file_path,
+                    "label": mutation_path.name,
+                    "kind": artifact_kind,
+                    "change_type": change_type,
+                    "parent_artifact_id": artifact_id,
+                    "size_bytes": int(mutation_path.stat().st_size) if mutation_path.exists() else 0,
+                },
+            )
+        await self._exec_db_call(
+            "record_artifact_diff",
+            run_id=record.run_id,
+            artifact_id=str(artifact_id or path.name),
+            before_hash=dir_before_hash,
+            after_hash=dir_after_hash,
+            summary={
+                "path": str(path),
+                "label": path.name,
+                "kind": artifact_kind,
+                "change_type": "created" if not dir_before_hash else "updated" if dir_before_hash != dir_after_hash else "unchanged",
+                "file_count": len(current_files),
+                "created_count": created_count,
+                "updated_count": updated_count,
+                "unchanged_count": unchanged_count,
+            },
+        )
+
+    @staticmethod
+    def _snapshot_existing_files(root: Path) -> dict[str, str]:
+        path = Path(root).expanduser()
+        if not path.exists():
+            return {}
+        if path.is_file():
+            digest = VerticalWorkflowRunner._hash_path(path)
+            return {str(path): digest} if digest else {}
+        files: dict[str, str] = {}
+        for item in sorted(path.rglob("*")):
+            if not item.is_file():
+                continue
+            digest = VerticalWorkflowRunner._hash_path(item)
+            if digest:
+                files[str(item)] = digest
+        return files
+
+    @staticmethod
+    def _hash_path(path: Path) -> str:
+        normalized = Path(path).expanduser()
+        if not normalized.exists():
+            return ""
+        if normalized.is_dir():
+            return VerticalWorkflowRunner._hash_inventory(VerticalWorkflowRunner._snapshot_existing_files(normalized))
+        digest = hashlib.sha256()
+        with normalized.open("rb") as handle:
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @staticmethod
+    def _hash_inventory(items: dict[str, str]) -> str:
+        if not items:
+            return ""
+        digest = hashlib.sha256()
+        for key in sorted(items.keys()):
+            digest.update(key.encode("utf-8"))
+            digest.update(b":")
+            digest.update(str(items[key] or "").encode("utf-8"))
+            digest.update(b"\n")
+        return digest.hexdigest()
 
     @staticmethod
     def _objective_for_task(*, task_type: WorkflowTaskType, title: str) -> str:
