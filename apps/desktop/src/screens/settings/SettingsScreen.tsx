@@ -15,7 +15,6 @@ import {
   defaultWorkflowPreferences,
   documentOutputOptions,
   presentationOutputOptions,
-  workflowProfileSummary,
   websiteStackOptions,
   workflowAudienceOptions,
   workflowLanguageOptions,
@@ -99,14 +98,11 @@ export function SettingsScreen() {
   return (
     <div className="space-y-6">
       <Surface tone="hero" className="max-w-[900px] px-8 py-10">
-        <div className="max-w-[640px] space-y-3">
+        <div className="max-w-[640px] space-y-2">
           <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Settings</div>
-          <h1 className="font-display text-[38px] font-semibold tracking-[-0.05em] text-[var(--text-primary)]">
-            Keep defaults light.
+          <h1 className="font-display text-[32px] font-semibold tracking-[-0.05em] text-[var(--text-primary)]">
+            Defaults
           </h1>
-          <p className="max-w-[560px] text-[14px] leading-7 text-[var(--text-secondary)]">
-            Only the controls that change behavior stay visible.
-          </p>
         </div>
       </Surface>
 
@@ -115,7 +111,7 @@ export function SettingsScreen() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Workflow defaults</div>
-              <h2 className="mt-2 font-display text-[22px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
+              <h2 className="mt-2 font-display text-[20px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
                 Launch profile
               </h2>
             </div>
@@ -182,7 +178,7 @@ export function SettingsScreen() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Runtime</div>
-              <h2 className="mt-2 font-display text-[22px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
+              <h2 className="mt-2 font-display text-[20px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
                 Local control
               </h2>
             </div>
@@ -230,7 +226,7 @@ export function SettingsScreen() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Privacy</div>
-              <h2 className="mt-2 font-display text-[22px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
+              <h2 className="mt-2 font-display text-[20px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
                 Learning
               </h2>
             </div>
@@ -260,7 +256,7 @@ export function SettingsScreen() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Billing</div>
-              <h2 className="mt-2 font-display text-[22px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
+              <h2 className="mt-2 font-display text-[20px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
                 Workspace plan
               </h2>
             </div>
@@ -276,10 +272,6 @@ export function SettingsScreen() {
             </Button>
           </div>
         </Surface>
-      </div>
-
-      <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">
-        {workflowProfileSummary(workflowPreferences)}
       </div>
 
       <Surface tone="card" className="max-w-[900px] p-5">

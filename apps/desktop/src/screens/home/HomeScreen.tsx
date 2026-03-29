@@ -131,15 +131,16 @@ export function HomeScreen() {
 
   return (
     <div className="space-y-6">
-      <Surface tone="hero" className="min-h-[calc(100vh-220px)] px-8 py-10 lg:px-12 lg:py-12">
-        <div className="max-w-[840px] space-y-8">
-          <div className="space-y-2">
-            <h1 className="font-display text-[44px] font-semibold tracking-[-0.06em] text-[var(--text-primary)]">
+      <Surface tone="hero" className="px-8 py-10 lg:px-12 lg:py-12">
+        <div className="max-w-[720px] space-y-6">
+          <div className="space-y-1">
+            <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Home</div>
+            <h1 className="font-display text-[36px] font-semibold tracking-[-0.05em] text-[var(--text-primary)]">
               Start
             </h1>
           </div>
 
-          <div className="space-y-4">
+          <div className="space-y-3">
             <SearchField
               value={command}
               onChange={(event) => {
