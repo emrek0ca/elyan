@@ -7,9 +7,6 @@ export function getRuntimeConnectionState(health: SidecarHealth): RuntimeConnect
       if (health.compatible === false) {
         return "error";
       }
-      if (health.managed && !health.adminToken) {
-        return "reconnecting";
-      }
       return "connected";
     case "starting":
       return "booting";

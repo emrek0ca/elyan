@@ -7,9 +7,8 @@ import { ErrorState } from "@/components/feedback/ErrorState";
 import { SkeletonBlock } from "@/components/feedback/SkeletonBlock";
 import { Button } from "@/components/primitives/Button";
 import { SearchField } from "@/components/primitives/SearchField";
-import { StatusBadge } from "@/components/primitives/StatusBadge";
 import { Surface } from "@/components/primitives/Surface";
-import { useHomeSnapshot, useLearningSummary } from "@/hooks/use-desktop-data";
+import { useHomeSnapshot } from "@/hooks/use-desktop-data";
 import { runtimeManager } from "@/runtime/runtime-manager";
 import { createCoworkThread } from "@/services/api/elyan-service";
 import { useRuntimeStore } from "@/stores/runtime-store";
@@ -24,7 +23,6 @@ import {
 
 export function HomeScreen() {
   const { data, isLoading, error, refetch } = useHomeSnapshot();
-  const { data: learning } = useLearningSummary();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [command, setCommand] = useState("");
@@ -135,19 +133,10 @@ export function HomeScreen() {
     <div className="space-y-6">
       <Surface tone="hero" className="min-h-[calc(100vh-220px)] px-8 py-10 lg:px-12 lg:py-12">
         <div className="max-w-[840px] space-y-8">
-          <div className="space-y-4">
-            <div className="flex flex-wrap gap-2">
-              <StatusBadge tone={learning?.paused ? "warning" : learning?.optOut ? "neutral" : "success"}>
-                {learning?.paused ? "learning paused" : learning?.optOut ? "learning off" : "adaptive on"}
-              </StatusBadge>
-              <StatusBadge tone="info">local workspace</StatusBadge>
-            </div>
+          <div className="space-y-2">
             <h1 className="font-display text-[44px] font-semibold tracking-[-0.06em] text-[var(--text-primary)]">
-              Start a task. Keep control.
+              Start
             </h1>
-            <p className="max-w-[520px] text-[15px] leading-7 text-[var(--text-secondary)]">
-              One thread. One lane. Fewer panels.
-            </p>
           </div>
 
           <div className="space-y-4">
@@ -208,41 +197,6 @@ export function HomeScreen() {
             {!launchError && !runtimeReady ? <div className="text-[12px] text-[var(--text-secondary)]">{runtimeGateReason}</div> : null}
             {!launchError && runtimeMessage ? <div className="text-[12px] text-[var(--text-secondary)]">{runtimeMessage}</div> : null}
           </div>
-
-          {learning ? (
-            <Surface tone="panel" className="rounded-[24px] border border-[var(--border-subtle)] p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Adaptive posture</div>
-                  <div className="mt-2 text-[14px] font-medium text-[var(--text-primary)]">
-                    {learning.dominantDomain} · score {Math.round(learning.learningScore * 100)} · {learning.learningMode}
-                  </div>
-                </div>
-                <StatusBadge tone={learning.paused ? "warning" : learning.optOut ? "neutral" : "success"}>
-                  {learning.paused ? "paused" : learning.optOut ? "opted out" : "learning"}
-                </StatusBadge>
-              </div>
-
-              <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                <div className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
-                  <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Success</div>
-                  <div className="mt-2 text-[15px] font-medium text-[var(--text-primary)]">{Math.round(learning.successRate * 100)}%</div>
-                </div>
-                <div className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
-                  <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Retention</div>
-                  <div className="mt-2 text-[15px] font-medium text-[var(--text-primary)]">{learning.retentionPolicy}</div>
-                </div>
-                <div className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
-                  <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Signals</div>
-                  <div className="mt-2 text-[15px] font-medium text-[var(--text-primary)]">{learning.signalCount}</div>
-                </div>
-              </div>
-
-              {learning.nextActions[0] ? (
-                <div className="mt-4 text-[12px] text-[var(--text-secondary)]">Next: {learning.nextActions[0].title}</div>
-              ) : null}
-            </Surface>
-          ) : null}
         </div>
       </Surface>
     </div>

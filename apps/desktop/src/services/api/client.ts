@@ -33,6 +33,10 @@ export class ApiClient {
     return Boolean(this.adminToken);
   }
 
+  getSessionToken() {
+    return this.sessionToken;
+  }
+
   async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const csrfToken =
       document.cookie
@@ -62,24 +66,35 @@ export class ApiClient {
       throw error;
     }
 
-    const responseSessionToken = response.headers.get("X-Elyan-Session-Token");
-    if (responseSessionToken) {
-      this.sessionToken = responseSessionToken;
-    }
+    const contentType = response.headers.get("content-type") || "";
+    const responseIsJson = contentType.includes("application/json");
+    const responseBody = responseIsJson ? await response.clone().json().catch(() => null) : null;
+    const responseText = responseIsJson ? "" : await response.clone().text().catch(() => "");
 
     if (!response.ok) {
-      const contentType = response.headers.get("content-type") || "";
       let detail = "";
-      if (contentType.includes("application/json")) {
-        const payload = (await response.clone().json().catch(() => null)) as Record<string, unknown> | null;
+      if (responseIsJson) {
+        const payload = responseBody as Record<string, unknown> | null;
         detail = String(payload?.error || payload?.message || payload?.detail || "").trim();
       } else {
-        detail = (await response.clone().text().catch(() => "")).trim();
+        detail = responseText.trim();
       }
       throw new Error(detail || `HTTP ${response.status} for ${path}`);
     }
 
-    return (await response.json()) as T;
+    const responseSessionToken =
+      response.headers.get("X-Elyan-Session-Token") ||
+      (responseIsJson && responseBody && typeof responseBody === "object"
+        ? String((responseBody as Record<string, unknown>).session_token || "")
+        : "");
+    if (responseSessionToken) {
+      this.sessionToken = responseSessionToken;
+    }
+
+    if (responseIsJson) {
+      return (responseBody as T) ?? ({} as T);
+    }
+    return (responseText as unknown as T) || ({} as T);
   }
 }
 

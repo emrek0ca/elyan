@@ -6,6 +6,7 @@ import { runtimeManager } from "@/runtime/runtime-manager";
 import { useRuntimeStore } from "@/stores/runtime-store";
 import { useUiStore } from "@/stores/ui-store";
 import { runtimeSocketBridge } from "@/services/websocket/runtime-socket";
+import { apiClient } from "@/services/api/client";
 
 function RuntimeBridge() {
   const queryClient = useQueryClient();
@@ -75,9 +76,10 @@ function RuntimeBridge() {
       invalidateRuntimeQueries();
     };
 
-    const syncSocket = (baseUrl: string, adminToken: string, isHealthy: boolean) => {
-      const identity = `${baseUrl}::${adminToken}`;
-      if (!isHealthy) {
+    const syncSocket = (baseUrl: string, token: string, isHealthy: boolean) => {
+      const normalizedToken = token.trim();
+      const identity = `${baseUrl}::${normalizedToken}`;
+      if (!isHealthy || !normalizedToken) {
         if (socketIdentity) {
           disconnectSocket();
           socketIdentity = "";
@@ -89,7 +91,7 @@ function RuntimeBridge() {
       }
       disconnectSocket();
       socketIdentity = identity;
-      disconnectSocket = runtimeSocketBridge.connect(baseUrl, adminToken, handleRuntimeEvent);
+      disconnectSocket = runtimeSocketBridge.connect(baseUrl, normalizedToken, handleRuntimeEvent);
     };
 
     const syncHealth = async (boot = false) => {
@@ -100,7 +102,7 @@ function RuntimeBridge() {
         return;
       }
       setSidecarHealth(health);
-      syncSocket(health.runtimeUrl, health.adminToken || "", health.status === "healthy");
+      syncSocket(health.runtimeUrl, health.adminToken || apiClient.getSessionToken(), health.status === "healthy");
       if (health.status === "healthy") {
         invalidateRuntimeQueries();
       }

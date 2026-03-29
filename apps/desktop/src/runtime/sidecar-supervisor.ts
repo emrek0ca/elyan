@@ -8,7 +8,6 @@ function normalizeRuntimeUrl(health: SidecarHealth) {
 
 function syncRuntimeHeaders(health: SidecarHealth) {
   apiClient.setBaseUrl(normalizeRuntimeUrl(health));
-  apiClient.setAdminToken(health.adminToken || "");
 }
 
 export class SidecarSupervisor {

@@ -1039,6 +1039,7 @@ class ElyanGatewayServer:
             if allowed_origin:
                 resp.headers["Access-Control-Allow-Origin"] = allowed_origin
                 resp.headers["Access-Control-Allow-Credentials"] = "true"
+                resp.headers["Access-Control-Expose-Headers"] = "X-Elyan-Session-Token, X-Elyan-Admin-Token"
             resp.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
             resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Elyan-Admin-Token, X-Elyan-Session-Token, X-Elyan-CSRF"
             resp.headers["Vary"] = "Origin"
@@ -1047,6 +1048,7 @@ class ElyanGatewayServer:
         if allowed_origin:
             resp.headers["Access-Control-Allow-Origin"] = allowed_origin
             resp.headers["Access-Control-Allow-Credentials"] = "true"
+            resp.headers["Access-Control-Expose-Headers"] = "X-Elyan-Session-Token, X-Elyan-Admin-Token"
             resp.headers["Vary"] = "Origin"
         return resp
 
@@ -1084,6 +1086,20 @@ class ElyanGatewayServer:
     def _require_user_session(self, request, *, allow_cookie: bool = True) -> tuple[bool, str, dict[str, Any]]:
         if not _is_loopback_request(request):
             return False, "user session is restricted to localhost", {}
+        query = getattr(request, "query", None)
+        if query is None:
+            query = getattr(getattr(request, "rel_url", None), "query", {}) or {}
+        candidate = str(
+            request.headers.get("X-Elyan-Session-Token", "")
+            or query.get("session_token", "")
+            or (request.cookies.get("elyan_user_session", "") if allow_cookie else "")
+            or ""
+        ).strip()
+        session = get_runtime_database().auth_sessions.resolve_session(candidate)
+        if session:
+            return True, "", session
+        if candidate:
+            return False, "invalid or expired session", {}
         admin_allowed, _admin_error = self._require_admin_access(request, allow_cookie=allow_cookie)
         if admin_allowed:
             return True, "", {
@@ -1094,21 +1110,7 @@ class ElyanGatewayServer:
                 "display_name": "Admin",
                 "role": "admin",
             }
-        query = getattr(request, "query", None)
-        if query is None:
-            query = getattr(getattr(request, "rel_url", None), "query", {}) or {}
-        candidate = str(
-            request.headers.get("X-Elyan-Session-Token", "")
-            or query.get("session_token", "")
-            or (request.cookies.get("elyan_user_session", "") if allow_cookie else "")
-            or ""
-        ).strip()
-        if not candidate:
-            return False, "user session required", {}
-        session = get_runtime_database().auth_sessions.resolve_session(candidate)
-        if not session:
-            return False, "invalid or expired session", {}
-        return True, "", session
+        return False, "user session required", {}
 
     def _setup_routes(self):
         # ── API V1 ────────────────────────────────────────────────────────────
@@ -1501,6 +1503,7 @@ class ElyanGatewayServer:
             {
                 "success": True,
                 "workspace_id": str(user.get("workspace_id") or workspace_id),
+                "session_token": session_token,
                 "user": {
                     "user_id": str(user.get("user_id") or ""),
                     "email": str(user.get("email") or email),
@@ -6287,7 +6290,9 @@ class ElyanGatewayServer:
 
     # ── WebSocket: Dashboard push (new) ───────────────────────────────────────
     async def handle_dashboard_ws(self, request):
-        allowed, error = self._require_admin_access(request, allow_cookie=True)
+        allowed, error, _auth_context = self._require_user_session(request, allow_cookie=True)
+        if not allowed:
+            allowed, error = self._require_admin_access(request, allow_cookie=True)
         if not allowed:
             return web.json_response({"ok": False, "error": error}, status=403)
 

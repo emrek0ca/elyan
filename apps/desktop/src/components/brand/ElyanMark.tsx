@@ -19,7 +19,7 @@ export function ElyanMark({ size = "md", className, alt = "Elyan" }: ElyanMarkPr
     <img
       src={brandImage}
       alt={alt}
-      className={cn("select-none object-contain drop-shadow-[0_14px_26px_rgba(43,72,145,0.12)]", sizeClasses[size], className)}
+      className={cn("select-none object-contain", sizeClasses[size], className)}
     />
   );
 }

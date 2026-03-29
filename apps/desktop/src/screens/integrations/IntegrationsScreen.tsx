@@ -106,27 +106,25 @@ export function IntegrationsScreen() {
   return (
     <div className="space-y-6">
       <Surface tone="hero" className="max-w-[760px] px-8 py-10">
-        <div className="max-w-[560px] space-y-4">
-          <h1 className="font-display text-[38px] font-semibold tracking-[-0.05em] text-[var(--text-primary)]">Telegram bağlantısı</h1>
-          <p className="text-[14px] leading-7 text-[var(--text-secondary)]">Sadece token gir, kaydet ve test et. Diğer bağlantılar daha sonra gelir.</p>
+        <div className="max-w-[560px] space-y-2">
+          <h1 className="font-display text-[38px] font-semibold tracking-[-0.05em] text-[var(--text-primary)]">Telegram</h1>
         </div>
       </Surface>
 
       <Surface tone="card" className="max-w-[760px] p-6">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-[16px] bg-[var(--accent-soft)] text-[var(--accent-primary)]">
-              <MessageCircle className="h-5 w-5" />
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-[16px] bg-[var(--accent-soft)] text-[var(--accent-primary)]">
+                <MessageCircle className="h-5 w-5" />
+              </div>
+              <div>
+                <div className="text-[16px] font-semibold text-[var(--text-primary)]">Telegram bot</div>
+              </div>
             </div>
-            <div>
-              <div className="text-[16px] font-semibold text-[var(--text-primary)]">Telegram bot</div>
-              <div className="text-[12px] text-[var(--text-secondary)]">Tek gerekli channel setup</div>
-            </div>
+            <StatusBadge tone={telegramChannel?.connected ? "success" : telegramChannel?.enabled ? "warning" : "info"}>
+              {telegramChannel?.connected ? "connected" : telegramChannel?.enabled ? "configured" : "not connected"}
+            </StatusBadge>
           </div>
-          <StatusBadge tone={telegramChannel?.connected ? "success" : telegramChannel?.enabled ? "warning" : "info"}>
-            {telegramChannel?.connected ? "connected" : telegramChannel?.enabled ? "configured" : "not connected"}
-          </StatusBadge>
-        </div>
 
         <div className="mt-5 space-y-4">
           <input
@@ -159,7 +157,7 @@ export function IntegrationsScreen() {
       </Surface>
 
       <Button variant="ghost" onClick={() => void runtimeManager.openExternalUrl("https://elyan.dev")} disabled={busyId !== ""}>
-        Diğer bağlantılar için elyan.dev
+        elyan.dev
         <ExternalLink className="ml-2 h-4 w-4" />
       </Button>
     </div>

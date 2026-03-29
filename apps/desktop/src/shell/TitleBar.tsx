@@ -1,9 +1,5 @@
-import { Command } from "lucide-react";
-
 import { ElyanMark } from "@/components/brand/ElyanMark";
-import { Button } from "@/components/primitives/Button";
 import { closeWindow, minimizeWindow, toggleMaximizeWindow } from "@/services/desktop/window";
-import { useUiStore } from "@/stores/ui-store";
 
 function detectMac() {
   if (typeof navigator === "undefined") {
@@ -14,7 +10,6 @@ function detectMac() {
 
 export function TitleBar() {
   const mac = detectMac();
-  const openCommandPalette = useUiStore((state) => state.openCommandPalette);
 
   const controls = (
     <div className="flex items-center gap-2">
@@ -48,19 +43,9 @@ export function TitleBar() {
         {mac ? controls : null}
         <div className="flex items-center gap-3">
           <ElyanMark size="sm" alt="Elyan logo" />
-          <div className="hidden md:block">
-            <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Elyan</div>
-            <div className="text-[13px] font-medium text-[var(--text-primary)]">Desktop</div>
-          </div>
         </div>
       </div>
-      <div className="flex items-center gap-2">
-        <Button variant="secondary" size="sm" onClick={() => openCommandPalette()}>
-          <Command className="mr-2 h-4 w-4" />
-          Command
-        </Button>
-        {!mac ? controls : null}
-      </div>
+      <div className="flex items-center gap-2">{!mac ? controls : null}</div>
     </header>
   );
 }

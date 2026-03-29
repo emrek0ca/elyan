@@ -3,14 +3,15 @@ type RuntimeEventListener = (event: { type: string; payload: unknown }) => void;
 export class RuntimeSocketBridge {
   private socket: WebSocket | null = null;
 
-  connect(baseUrl: string, adminToken: string, onEvent: RuntimeEventListener): () => void {
+  connect(baseUrl: string, token: string, onEvent: RuntimeEventListener): () => void {
     try {
       const normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
+      if (!token.trim()) {
+        return () => undefined;
+      }
       const socketUrl = new URL(`${normalizedBaseUrl}/ws/dashboard`);
       socketUrl.protocol = socketUrl.protocol === "https:" ? "wss:" : "ws:";
-      if (adminToken.trim()) {
-        socketUrl.searchParams.set("token", adminToken.trim());
-      }
+      socketUrl.searchParams.set("token", token.trim());
 
       this.socket = new WebSocket(socketUrl.toString());
       this.socket.onmessage = (message) => {
