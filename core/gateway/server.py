@@ -146,6 +146,7 @@ _USER_SESSION_PATHS = {
     "/api/channels/test",
     "/api/channels/sync",
     "/api/v1/auth/logout",
+    "/api/v1/auth/me",
     "/api/v1/workflows/start",
     "/api/v1/cowork/home",
     "/api/v1/cowork/threads",
@@ -1186,6 +1187,7 @@ class ElyanGatewayServer:
         self.app.router.add_post('/api/v1/workflows/start', self.handle_v1_start_workflow)
         self.app.router.add_post('/api/v1/auth/login', self.handle_v1_auth_login)
         self.app.router.add_post('/api/v1/auth/logout', self.handle_v1_auth_logout)
+        self.app.router.add_get('/api/v1/auth/me', self.handle_v1_auth_me)
         self.app.router.add_get('/api/v1/cowork/home', self.handle_v1_cowork_home)
         self.app.router.add_get('/api/v1/cowork/threads', self.handle_v1_cowork_threads)
         self.app.router.add_post('/api/v1/cowork/threads', self.handle_v1_cowork_threads)
@@ -1538,6 +1540,35 @@ class ElyanGatewayServer:
         response = web.json_response({"success": True})
         response.del_cookie("elyan_user_session", path="/")
         response.headers["X-Elyan-Session-Token"] = ""
+        return response
+
+    async def handle_v1_auth_me(self, request):
+        allowed, error, session = self._require_user_session(request, allow_cookie=True)
+        if not allowed:
+            return web.json_response({"success": False, "error": error}, status=403)
+        session_token = str(
+            request.headers.get("X-Elyan-Session-Token", "")
+            or request.cookies.get("elyan_user_session", "")
+            or ""
+        ).strip()
+        response = web.json_response(
+            {
+                "success": True,
+                "workspace_id": str(session.get("workspace_id") or "local-workspace"),
+                "session_token": session_token,
+                "user": {
+                    "user_id": str(session.get("user_id") or ""),
+                    "email": str(session.get("email") or ""),
+                    "display_name": str(session.get("display_name") or ""),
+                    "status": str(session.get("status") or "active"),
+                },
+                "session": {
+                    "session_id": str(session.get("session_id") or ""),
+                    "expires_at": float(session.get("expires_at") or 0.0),
+                },
+            }
+        )
+        response.headers["X-Elyan-Session-Token"] = session_token
         return response
 
     async def handle_v1_cowork_home(self, request):

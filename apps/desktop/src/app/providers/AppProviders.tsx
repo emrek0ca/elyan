@@ -7,6 +7,7 @@ import { useRuntimeStore } from "@/stores/runtime-store";
 import { useUiStore } from "@/stores/ui-store";
 import { runtimeSocketBridge } from "@/services/websocket/runtime-socket";
 import { apiClient } from "@/services/api/client";
+import { getCurrentLocalUser } from "@/services/api/elyan-service";
 
 function RuntimeBridge() {
   const queryClient = useQueryClient();
@@ -108,7 +109,19 @@ function RuntimeBridge() {
       }
     };
 
-    void syncHealth(true);
+    const hydrateAuth = async () => {
+      const currentUser = await getCurrentLocalUser().catch(() => null);
+      if (disposed || !currentUser) {
+        return;
+      }
+      useUiStore.getState().signIn(currentUser.email);
+    };
+
+    void (async () => {
+      await syncHealth(true);
+      await hydrateAuth();
+      await syncHealth(false);
+    })();
     const interval = window.setInterval(() => {
       void syncHealth(false);
     }, 5000);

@@ -37,6 +37,14 @@ export class ApiClient {
     return this.sessionToken;
   }
 
+  setSessionToken(sessionToken: string) {
+    this.sessionToken = sessionToken.trim();
+  }
+
+  clearSessionToken() {
+    this.sessionToken = "";
+  }
+
   async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const csrfToken =
       document.cookie

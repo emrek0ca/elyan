@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/primitives/Button";
 import { SegmentedControl } from "@/components/primitives/SegmentedControl";
@@ -6,7 +7,7 @@ import { ToggleSwitch } from "@/components/primitives/ToggleSwitch";
 import { Surface } from "@/components/primitives/Surface";
 import { StatusBadge } from "@/components/primitives/StatusBadge";
 import { useBillingWorkspace, useLearningSummary } from "@/hooks/use-desktop-data";
-import { createCheckoutSession, createPortalSession } from "@/services/api/elyan-service";
+import { createCheckoutSession, createPortalSession, logoutLocalUser } from "@/services/api/elyan-service";
 import { runtimeManager } from "@/runtime/runtime-manager";
 import { useRuntimeStore } from "@/stores/runtime-store";
 import { useUiStore } from "@/stores/ui-store";
@@ -22,6 +23,7 @@ import {
 } from "@/utils/workflow-preferences";
 
 export function SettingsScreen() {
+  const navigate = useNavigate();
   const [runtimeBusy, setRuntimeBusy] = useState<"restart" | "stop" | null>(null);
   const [billingBusy, setBillingBusy] = useState<"checkout" | "portal" | null>(null);
   const { data: learning } = useLearningSummary();
@@ -39,6 +41,10 @@ export function SettingsScreen() {
   const setReduceMotion = useUiStore((state) => state.setReduceMotion);
   const workflowPreferences = useUiStore((state) => state.workflowPreferences);
   const setWorkflowPreferences = useUiStore((state) => state.setWorkflowPreferences);
+  const authenticatedEmail = useUiStore((state) => state.authenticatedEmail);
+  const signOut = useUiStore((state) => state.signOut);
+  const clearSelectedThreadId = useUiStore((state) => state.clearSelectedThreadId);
+  const clearSelectedRunId = useUiStore((state) => state.clearSelectedRunId);
 
   async function restartRuntime() {
     setRuntimeBusy("restart");
@@ -80,6 +86,14 @@ export function SettingsScreen() {
     } finally {
       setBillingBusy(null);
     }
+  }
+
+  async function handleSignOut() {
+    await logoutLocalUser().catch(() => undefined);
+    signOut();
+    clearSelectedThreadId();
+    clearSelectedRunId();
+    navigate("/login", { replace: true });
   }
 
   return (
@@ -267,6 +281,20 @@ export function SettingsScreen() {
       <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">
         {workflowProfileSummary(workflowPreferences)}
       </div>
+
+      <Surface tone="card" className="max-w-[900px] p-5">
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Account</div>
+            <div className="mt-2 truncate text-[14px] font-medium text-[var(--text-primary)]">
+              {authenticatedEmail || "Signed in"}
+            </div>
+          </div>
+          <Button variant="ghost" onClick={() => void handleSignOut()}>
+            Sign out
+          </Button>
+        </div>
+      </Surface>
     </div>
   );
 }

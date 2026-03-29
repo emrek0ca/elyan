@@ -978,11 +978,27 @@ type StartWorkflowResponse = SuccessEnvelope<{
 
 type LocalLoginResponse = SuccessEnvelope<{
   workspace_id: string;
+  session_token?: string;
   user: {
     user_id: string;
     email: string;
     display_name?: string;
     status?: string;
+  };
+}>;
+
+type LocalAuthSessionResponse = SuccessEnvelope<{
+  workspace_id: string;
+  session_token?: string;
+  user: {
+    user_id: string;
+    email: string;
+    display_name?: string;
+    status?: string;
+  };
+  session?: {
+    session_id?: string;
+    expires_at?: number;
   };
 }>;
 
@@ -1014,6 +1030,28 @@ export async function loginLocalUser(email: string, password: string): Promise<{
     email: String(raw.user?.email || email).trim().toLowerCase(),
     displayName: String(raw.user?.display_name || "").trim(),
   };
+}
+
+export async function getCurrentLocalUser(): Promise<{ email: string; displayName: string } | null> {
+  const raw = await safeRequest<LocalAuthSessionResponse>("/api/v1/auth/me");
+  if (!raw?.success || !raw.user) {
+    return null;
+  }
+  return {
+    email: String(raw.user.email || "").trim().toLowerCase(),
+    displayName: String(raw.user.display_name || "").trim(),
+  };
+}
+
+export async function logoutLocalUser(): Promise<void> {
+  try {
+    await apiClient.request("/api/v1/auth/logout", {
+      method: "POST",
+      body: {},
+    });
+  } finally {
+    apiClient.clearSessionToken();
+  }
 }
 
 export async function addCoworkTurn(threadId: string, payload: CoworkThreadPayload): Promise<CoworkThreadDetail> {
