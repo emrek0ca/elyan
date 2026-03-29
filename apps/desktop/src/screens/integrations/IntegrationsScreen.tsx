@@ -25,6 +25,15 @@ export function IntegrationsScreen() {
 
   const telegramChannel = channels.find((item) => item.type === "telegram");
   const telegramCatalogEntry = channelCatalog.find((item) => item.type === "telegram");
+  const telegramStatus = telegramChannel?.connected
+    ? "connected"
+    : telegramChannel?.enabled
+      ? "configured"
+      : "not connected";
+  const telegramStatusTone = telegramChannel?.connected ? "success" : telegramChannel?.enabled ? "warning" : "info";
+  const primaryLabel = telegramChannel ? "Update" : "Connect";
+  const tokenPlaceholder =
+    telegramCatalogEntry?.fields.find((field) => field.name === "token")?.label || "Telegram bot token";
 
   async function syncViews() {
     await Promise.all([
@@ -112,32 +121,31 @@ export function IntegrationsScreen() {
       </Surface>
 
       <Surface tone="card" className="max-w-[760px] p-6">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-[16px] bg-[var(--accent-soft)] text-[var(--accent-primary)]">
-                <MessageCircle className="h-5 w-5" />
-              </div>
-              <div>
-                <div className="text-[16px] font-semibold text-[var(--text-primary)]">Telegram bot</div>
-              </div>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-[16px] bg-[var(--accent-soft)] text-[var(--accent-primary)]">
+              <MessageCircle className="h-5 w-5" />
             </div>
-            <StatusBadge tone={telegramChannel?.connected ? "success" : telegramChannel?.enabled ? "warning" : "info"}>
-              {telegramChannel?.connected ? "connected" : telegramChannel?.enabled ? "configured" : "not connected"}
-            </StatusBadge>
+            <div>
+              <div className="text-[16px] font-semibold text-[var(--text-primary)]">Telegram bot</div>
+              <div className="text-[12px] text-[var(--text-tertiary)]">Workspace channel</div>
+            </div>
           </div>
+          <StatusBadge tone={telegramStatusTone}>{telegramStatus}</StatusBadge>
+        </div>
 
         <div className="mt-5 space-y-4">
           <input
             type="password"
             value={telegramToken}
             onChange={(event) => setTelegramToken(event.target.value)}
-            placeholder={telegramCatalogEntry?.fields.find((field) => field.name === "token")?.label || "Telegram bot token"}
+            placeholder={tokenPlaceholder}
             className="h-[52px] w-full rounded-[20px] border border-[var(--border-subtle)] bg-[color-mix(in_srgb,var(--bg-surface)_94%,var(--bg-surface-raised))] px-5 text-[14px] text-[var(--text-primary)] outline-none transition focus:border-[var(--border-focus)]"
           />
 
           <div className="flex flex-wrap gap-3">
             <Button variant="primary" onClick={() => void handleTelegramSave()} disabled={!runtimeReady || busyId === "telegram-save"}>
-              {busyId === "telegram-save" ? "Saving..." : telegramChannel ? "Update" : "Connect"}
+              {busyId === "telegram-save" ? "Saving..." : primaryLabel}
             </Button>
             <Button variant="secondary" onClick={() => void handleTelegramTest()} disabled={!runtimeReady || busyId === "telegram-test"}>
               {busyId === "telegram-test" ? "Testing..." : "Test"}
@@ -149,7 +157,10 @@ export function IntegrationsScreen() {
             ) : null}
           </div>
 
-          <div className="text-[13px] text-[var(--text-secondary)]">Status: {telegramChannel?.status || "disconnected"}</div>
+          <div className="flex flex-wrap items-center gap-3 text-[12px] text-[var(--text-tertiary)]">
+            <div>Status: {telegramChannel?.status || "disconnected"}</div>
+            {telegramChannel?.enabled ? <div>Enabled</div> : null}
+          </div>
 
           {message ? <div className="text-[12px] text-[var(--text-secondary)]">{message}</div> : null}
           {!message && !runtimeReady ? <div className="text-[12px] text-[var(--text-secondary)]">{runtimeGateReason}</div> : null}

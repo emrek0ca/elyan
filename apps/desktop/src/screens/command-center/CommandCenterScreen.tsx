@@ -49,6 +49,12 @@ export function CommandCenterScreen() {
   const selectedThread = data.selectedThread;
   const runtimeReady = hasRuntimeWriteAccess(connectionState, sidecarHealth);
   const runtimeGateReason = getRuntimeGateReason(connectionState, sidecarHealth);
+  const lastCheckpoint = selectedThread?.lastSuccessfulCheckpoint;
+  const replay = selectedThread?.replay;
+  const verificationCount = replay?.verificationResults?.length ?? 0;
+  const recoveryCount = replay?.recoveryActions?.length ?? 0;
+  const artifactDiffCount = selectedThread?.artifactDiffs?.length ?? 0;
+  const timelinePreview = selectedThread?.timeline?.slice(-3) ?? [];
 
   async function invalidateAll() {
     await Promise.all([
@@ -161,6 +167,30 @@ export function CommandCenterScreen() {
             <div className="mt-3 rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4 text-[13px] leading-6 text-[var(--text-secondary)]">
               {selectedThread.goal || selectedThread.lastUserTurn?.content || "No goal set for this thread yet."}
             </div>
+          </Surface>
+        ) : null}
+
+        {selectedThread ? (
+          <Surface tone="card" className="p-5">
+            <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Replay</div>
+            <div className="mt-3 flex flex-wrap items-center gap-3 text-[13px] text-[var(--text-secondary)]">
+              <span className="rounded-[999px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] px-3 py-1">
+                {lastCheckpoint?.title || "No checkpoint"}
+              </span>
+              <span>V {verificationCount}</span>
+              <span>R {recoveryCount}</span>
+              <span>D {artifactDiffCount}</span>
+            </div>
+            {timelinePreview.length ? (
+              <div className="mt-3 space-y-1">
+                {timelinePreview.map((item) => (
+                  <div key={item.id} className="flex items-center justify-between gap-3 text-[12px] text-[var(--text-secondary)]">
+                    <span className="truncate">{item.title}</span>
+                    <span className="text-[var(--text-tertiary)]">{item.status}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </Surface>
         ) : null}
 
