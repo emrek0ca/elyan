@@ -440,6 +440,54 @@ export interface LearningSummary {
   agentCount: number;
 }
 
+export interface PrivacySummary {
+  workspaceId: string;
+  userId: string;
+  policy: {
+    allowPersonalDataLearning: boolean;
+    allowWorkspaceDataLearning: boolean;
+    allowOperationalDataLearning: boolean;
+    allowPublicDataLearning: boolean;
+    allowSecretDataLearning: boolean;
+    allowGlobalAggregation: boolean;
+    redactPersonalData: boolean;
+    redactSecretData: boolean;
+    learningScope: string;
+    retentionPolicy: Record<string, unknown>;
+  };
+  consent: {
+    consentId: string;
+    scope: string;
+    granted: boolean;
+    source: string;
+    expiresAt: number;
+  };
+  classificationCounts: Record<string, number>;
+  learningScopeCounts: Record<string, number>;
+  whatIsLearned: string[];
+  whatIsExcluded: string[];
+  totalEntries: number;
+  redactedEntries: number;
+  sharedLearningEligible: number;
+  recentEntries: Array<{
+    entryId: string;
+    sourceKind: string;
+    classification: string;
+    learningScope: string;
+    redacted: boolean;
+    text: string;
+    createdAt: number;
+  }>;
+}
+
+export interface PrivacyExportBundle {
+  userId: string;
+  workspaceId: string;
+  audit: Record<string, unknown>;
+  learningSummary: LearningSummary | null;
+  privacy: PrivacySummary;
+}
+
 export interface WorkflowPreferences {
   language: WorkflowLanguage;
   audience: WorkflowAudience;

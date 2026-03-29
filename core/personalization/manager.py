@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from functools import lru_cache
 from typing import Any
 
 from config.elyan_config import elyan_config
+from core.persistence.runtime_db import get_runtime_database
 from core.user_profile import get_user_profile_store
 from utils.logger import get_logger
 
@@ -116,6 +118,127 @@ class PersonalizationManager:
     def get_runtime_profile(self, user_id: str) -> dict[str, Any]:
         return self._runtime_profile(user_id)
 
+    @staticmethod
+    @lru_cache(maxsize=512)
+    def _cached_request_kind(text: str) -> str:
+        normalized = str(text or "").strip().lower()
+        if not normalized:
+            return "chat"
+        if any(token in normalized for token in ("python", "code", "kod", "function", "bug", "refactor", "implement", "test", "class ")):
+            return "code"
+        if any(token in normalized for token in ("araştır", "arastir", "research", "kaynak", "kanıt", "kanit", "makale", "verify")):
+            return "research"
+        if any(token in normalized for token in ("dosya", "file", "klasör", "klasor", "move", "copy", "rename", "sil", "delete", "create")):
+            return "filesystem"
+        if any(token in normalized for token in ("web", "site", "browser", "url", "link", "open ", "tıkla", "tikla", "sayfa")):
+            return "browser"
+        if any(token in normalized for token in ("plan", "taslak", "architecture", "mimari", "workflow", "roadmap")):
+            return "planning"
+        if any(token in normalized for token in ("özet", "ozet", "summar", "sadeleştir", "sadelestir")):
+            return "summary"
+        if any(token in normalized for token in ("nasıl", "nasil", "neden", "what is", "what are", "?")):
+            return "question"
+        return "chat"
+
+    @staticmethod
+    def _compact_list(values: Any, limit: int = 5) -> list[str]:
+        out: list[str] = []
+        for item in list(values or [])[: max(1, int(limit or 5))]:
+            text = str(item or "").strip()
+            if text and text not in out:
+                out.append(text)
+        return out
+
+    @staticmethod
+    def _infer_request_kind(user_input: str, runtime_context: dict[str, Any] | None = None) -> str:
+        text = str(user_input or "").strip().lower()
+        if text:
+            cached = PersonalizationManager._cached_request_kind(text)
+            if cached != "chat" or "?" in text:
+                return cached
+        if runtime_context and str(runtime_context.get("request_kind") or "").strip():
+            return str(runtime_context.get("request_kind") or "").strip().lower()
+        return "chat"
+
+    @staticmethod
+    def _build_response_contract(request_kind: str, response_length: str) -> dict[str, Any]:
+        kind = str(request_kind or "chat").strip().lower() or "chat"
+        length = str(response_length or "short").strip().lower() or "short"
+        sections_by_kind = {
+            "code": ["goal", "implementation", "verification"],
+            "research": ["answer", "evidence", "next_step"],
+            "filesystem": ["action", "risk", "verification"],
+            "browser": ["action", "result", "verification"],
+            "planning": ["objective", "plan", "next_step"],
+            "summary": ["summary", "key_points", "next_step"],
+            "question": ["answer", "context", "next_step"],
+            "chat": ["answer", "next_step"],
+        }
+        if length == "detailed":
+            style = "expanded"
+        elif length == "medium":
+            style = "balanced"
+        else:
+            style = "concise"
+        return {
+            "kind": kind,
+            "style": style,
+            "length": length,
+            "tone": "professional",
+            "format": "structured",
+            "sections": sections_by_kind.get(kind, sections_by_kind["chat"]),
+            "clarify_if_missing": kind in {"code", "research", "filesystem", "browser", "planning"},
+            "include_verification": kind in {"code", "filesystem", "browser", "planning"},
+            "include_next_step": True,
+            "state_assumptions": False,
+            "prefer_bullets_for_multi_step": True,
+        }
+
+    @staticmethod
+    def _build_task_contract(request: str, request_kind: str, response_contract: dict[str, Any]) -> dict[str, Any]:
+        text = str(request or "").strip()
+        return {
+            "objective": text,
+            "request_kind": str(request_kind or "chat"),
+            "success_criteria": [
+                "answer the request directly",
+                "avoid unnecessary filler",
+                "make the next step explicit",
+            ],
+            "constraints": [
+                "do not invent missing facts",
+                "ask one clarifying question only if required",
+            ],
+            "response_contract": dict(response_contract or {}),
+        }
+
+    def build_operator_brief(self, user_id: str, user_input: str, runtime_context: dict[str, Any] | None = None) -> dict[str, Any]:
+        context = dict(runtime_context or {})
+        profile = dict(context.get("runtime_profile") or self._runtime_profile(user_id) or {})
+        digest = dict(context.get("learning_digest") or {})
+        feedback_summary = dict(digest.get("feedback_summary") or {})
+        request_kind = self._infer_request_kind(user_input, context)
+        response_length = str(profile.get("response_length_bias") or "short").strip() or "short"
+        response_contract = self._build_response_contract(request_kind, response_length)
+        brief = {
+            "request": str(user_input or "").strip(),
+            "preferred_language": str(profile.get("preferred_language") or "auto").strip() or "auto",
+            "response_length": response_length,
+            "request_kind": request_kind,
+            "top_topics": self._compact_list(profile.get("top_topics"), limit=5),
+            "recent_lessons": self._compact_list(digest.get("recent_lessons"), limit=3),
+            "correction_hints": self._compact_list(feedback_summary.get("correction_hints"), limit=3),
+            "answer_contract": response_contract,
+            "task_contract": self._build_task_contract(str(user_input or ""), request_kind, response_contract),
+            "output_style": {
+                "tone": "professional",
+                "format": "structured",
+            },
+        }
+        if brief["preferred_language"] == "auto" and brief["top_topics"]:
+            brief["preferred_language"] = "tr"
+        return brief
+
     async def get_runtime_context(self, user_id: str, request_meta: dict[str, Any] | None = None) -> dict[str, Any]:
         uid = str(user_id or "local")
         meta = dict(request_meta or {})
@@ -161,32 +284,78 @@ class PersonalizationManager:
             "model": model,
             "base_model_id": base_model_id,
         }
+        context["operator_brief"] = self.build_operator_brief(uid, request, context)
+        context["request_contract"] = dict((context.get("operator_brief") or {}).get("task_contract") or {})
+        context["response_contract"] = dict((context.get("operator_brief") or {}).get("answer_contract") or {})
         context["request_prompt"] = self.build_personalized_prompt(request, context)
         return context
 
     def build_personalized_prompt(self, user_input: str, runtime_context: dict[str, Any] | None = None) -> str:
         context = dict(runtime_context or {})
         blocks: list[str] = []
-        profile = context.get("runtime_profile", {}) if isinstance(context.get("runtime_profile"), dict) else {}
-        if profile:
-            preferred_language = str(profile.get("preferred_language") or "").strip()
-            response_length_bias = str(profile.get("response_length_bias") or "").strip()
-            top_topics = list(profile.get("top_topics") or [])
-            lines: list[str] = []
-            if preferred_language:
-                lines.append(f"Preferred language: {preferred_language}")
-            if response_length_bias:
-                lines.append(f"Response length bias: {response_length_bias}")
-            if top_topics:
-                lines.append(f"Top topics: {', '.join(top_topics[:6])}")
-            if lines:
-                blocks.append("[User Profile]\n" + "\n".join(lines))
+        brief = dict(context.get("operator_brief") or self.build_operator_brief("local", user_input, context))
+        request = str(brief.get("request") or user_input or "").strip()
+        response_contract = dict(brief.get("answer_contract") or {})
+        task_contract = dict(brief.get("task_contract") or {})
+
+        brief_lines = [
+            f"Request: {request}" if request else "",
+            f"Task kind: {str(brief.get('request_kind') or 'chat')}",
+            f"Language: {str(brief.get('preferred_language') or 'auto')}",
+            f"Response length: {str(brief.get('response_length') or 'short')}",
+            f"Tone: {str((brief.get('output_style') or {}).get('tone') or 'professional')}",
+            f"Format: {str((brief.get('output_style') or {}).get('format') or 'structured')}",
+        ]
+        top_topics = self._compact_list(brief.get("top_topics"), limit=5)
+        recent_lessons = self._compact_list(brief.get("recent_lessons"), limit=3)
+        correction_hints = self._compact_list(brief.get("correction_hints"), limit=3)
+        if top_topics:
+            brief_lines.append("Known topics: " + ", ".join(top_topics))
+        if recent_lessons:
+            brief_lines.append("Recent lessons: " + " | ".join(recent_lessons))
+        if correction_hints:
+            brief_lines.append("Corrections: " + " | ".join(correction_hints))
+        if task_contract:
+            success_criteria = self._compact_list(task_contract.get("success_criteria"), limit=4)
+            constraints = self._compact_list(task_contract.get("constraints"), limit=4)
+            if success_criteria:
+                brief_lines.append("Success criteria: " + "; ".join(success_criteria))
+            if constraints:
+                brief_lines.append("Constraints: " + "; ".join(constraints))
+        if response_contract:
+            brief_lines.append(
+                "Response contract: "
+                + "; ".join(
+                    [
+                        str(response_contract.get("style") or ""),
+                        str(response_contract.get("tone") or ""),
+                        "clarify if missing" if response_contract.get("clarify_if_missing") else "",
+                        "include verification" if response_contract.get("include_verification") else "",
+                        "include next step" if response_contract.get("include_next_step") else "",
+                    ]
+                ).strip("; ")
+            )
+        blocks.append("[Operator Brief]\n" + "\n".join(line for line in brief_lines if line))
+        blocks.append(
+            "[Answer Contract]\n"
+            + "\n".join(
+                [
+                    f"- Kind: {str(response_contract.get('kind') or brief.get('request_kind') or 'chat')}",
+                    f"- Style: {str(response_contract.get('style') or 'concise')}",
+                    f"- Tone: {str(response_contract.get('tone') or 'professional')}",
+                    f"- Sections: {', '.join(self._compact_list(response_contract.get('sections'), limit=6))}" if response_contract.get("sections") else "",
+                    f"- Clarify if missing: {bool(response_contract.get('clarify_if_missing', False))}",
+                    f"- Include verification: {bool(response_contract.get('include_verification', False))}",
+                ]
+            ).strip()
+        )
+
         memory_text = str(context.get("retrieved_memory_context") or "").strip()
         if memory_text:
             blocks.append(memory_text)
         if not blocks:
-            return str(user_input or "")
-        return "\n\n".join([*blocks, f"[Current Request]\n{str(user_input or '').strip()}"]).strip()
+            return request
+        return "\n\n".join([*blocks, f"[Current Request]\n{request}"]).strip()
 
     def record_interaction(
         self,
@@ -304,12 +473,18 @@ class PersonalizationManager:
     def delete_user_data(self, user_id: str) -> dict[str, Any]:
         uid = str(user_id or "local")
         self.adapter_registry.evict_user(uid)
+        try:
+            runtime_db = get_runtime_database()
+            privacy = runtime_db.privacy.delete_user_data(uid)
+        except Exception:
+            privacy = {"user_id": uid, "workspace_id": "local-workspace", "deleted": {}}
         return {
             "user_id": uid,
             "memory": self.memory_store.delete_user(uid),
             "reward": self.reward_service.delete_user(uid),
             "adapters": self.artifact_store.delete_user(uid),
             "training": self.trainer_queue.delete_user(uid),
+            "privacy": privacy,
         }
 
 

@@ -89,7 +89,10 @@ _ADMIN_READ_PATHS = {
     "/api/v1/security/summary",
     "/api/v1/learning/summary",
     "/api/v1/approvals/pending",
+    "/api/v1/privacy/summary",
+    "/api/v1/privacy/export",
     "/api/privacy/export",
+    "/api/privacy/delete",
     "/api/interventions",
     "/api/tool-requests",
     "/api/tool-requests/stats",
@@ -147,6 +150,9 @@ _USER_SESSION_PATHS = {
     "/api/channels/sync",
     "/api/v1/auth/logout",
     "/api/v1/auth/me",
+    "/api/v1/privacy/summary",
+    "/api/v1/privacy/export",
+    "/api/v1/privacy/delete",
     "/api/v1/workflows/start",
     "/api/v1/cowork/home",
     "/api/v1/cowork/threads",
@@ -1301,6 +1307,9 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/security/events', self.handle_security_events)
         self.app.router.add_get('/api/security/pending', self.handle_pending_approvals)
         self.app.router.add_post('/api/security/approve', self.handle_approve_action)
+        self.app.router.add_get('/api/v1/privacy/summary', self.handle_privacy_summary)
+        self.app.router.add_get('/api/v1/privacy/export', self.handle_privacy_export)
+        self.app.router.add_post('/api/v1/privacy/delete', self.handle_privacy_delete)
         self.app.router.add_get('/api/privacy/export', self.handle_privacy_export)
         self.app.router.add_post('/api/privacy/delete', self.handle_privacy_delete)
         self.app.router.add_get('/api/interventions', self.handle_interventions_get)
@@ -6505,32 +6514,72 @@ class ElyanGatewayServer:
         except Exception as e:
             return web.json_response({"ok": False, "error": str(e)}, status=400)
 
+    async def handle_privacy_summary(self, request):
+        """Privacy summary visible to the authenticated user."""
+        allowed, error, session = self._require_user_session(request, allow_cookie=True)
+        if not allowed:
+            return web.json_response({"success": False, "error": error}, status=403)
+        user_id = str(
+            request.rel_url.query.get("user_id", "")
+            or session.get("user_id", "")
+            or ""
+        ).strip()
+        if not user_id:
+            return web.json_response({"success": False, "error": "user_id required"}, status=400)
+        workspace_id = self._workspace_id(request, {"user_id": user_id})
+        try:
+            summary = get_learning_control_plane().get_privacy_summary(user_id, workspace_id=workspace_id)
+            return web.json_response({"success": True, "summary": summary})
+        except Exception as e:
+            return web.json_response({"success": False, "error": str(e)}, status=500)
+
     async def handle_privacy_export(self, request):
         """KVKK/GDPR: export user audit footprint."""
-        user_id = str(request.rel_url.query.get("user_id", "") or "").strip()
+        allowed, error, session = self._require_user_session(request, allow_cookie=True)
+        if not allowed:
+            return web.json_response({"ok": False, "error": error}, status=403)
+        user_id = str(
+            request.rel_url.query.get("user_id", "")
+            or session.get("user_id", "")
+            or ""
+        ).strip()
         if not user_id:
             return web.json_response({"ok": False, "error": "user_id required"}, status=400)
+        workspace_id = self._workspace_id(request, {"user_id": user_id})
         try:
-            data = audit_trail.export_for_user(user_id)
-            return web.json_response({"ok": True, "export": data})
+            export = {
+                "audit": audit_trail.export_for_user(user_id),
+                "privacy": get_learning_control_plane().export_privacy_bundle(user_id, workspace_id=workspace_id),
+            }
+            return web.json_response({"ok": True, "export": export})
         except Exception as e:
             return web.json_response({"ok": False, "error": str(e)}, status=500)
 
     async def handle_privacy_delete(self, request):
         """KVKK/GDPR: right to be forgotten (audit trail scope)."""
+        allowed, error, session = self._require_user_session(request, allow_cookie=True)
+        if not allowed:
+            return web.json_response({"ok": False, "error": error}, status=403)
         try:
             payload = await request.json()
         except Exception:
             payload = {}
-        user_id = str(payload.get("user_id", "") or "").strip()
+        user_id = str(
+            payload.get("user_id", "")
+            or request.rel_url.query.get("user_id", "")
+            or session.get("user_id", "")
+            or ""
+        ).strip()
         if not user_id:
             return web.json_response({"ok": False, "error": "user_id required"}, status=400)
+        workspace_id = self._workspace_id(request, payload)
         try:
             result = {
                 "audit": audit_trail.delete_user_data(user_id),
                 "personalization": get_personalization_manager().delete_user_data(user_id),
                 "reliability": get_outcome_store().delete_user(user_id),
                 "runtime_control": get_runtime_control_plane().sync_store.delete_user(user_id),
+                "privacy": get_runtime_database().privacy.delete_user_data(user_id, workspace_id=workspace_id),
             }
             push_activity("privacy", "dashboard", f"user_data_deleted:{user_id}", True)
             return web.json_response({"ok": True, "result": result})

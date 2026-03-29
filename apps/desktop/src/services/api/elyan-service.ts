@@ -19,10 +19,12 @@ import type {
   IntegrationSummary,
   LogEvent,
   LearningSummary,
+  PrivacySummary,
   MetricSummary,
   ProviderSummary,
   RecentArtifactSummary,
   ReviewReport,
+  PrivacyExportBundle,
   RunSummary,
   SecuritySummary,
   TrustStripItem,
@@ -75,6 +77,24 @@ type LearningEnvelope = SuccessEnvelope<{
     agent_count?: number;
   };
 }>;
+
+type PrivacyEnvelope = SuccessEnvelope<{
+  summary: Record<string, unknown>;
+}>;
+
+type PrivacyExportEnvelope = SuccessEnvelope<{
+  export?: {
+    audit?: Record<string, unknown>;
+    privacy?: {
+      user_id?: string;
+      workspace_id?: string;
+      learning_summary?: Record<string, unknown> | null;
+      privacy?: Record<string, unknown>;
+    };
+  };
+}> & {
+  ok?: boolean;
+};
 
 function toRunStatus(status?: string): RunSummary["status"] {
   switch ((status || "").toLowerCase()) {
@@ -246,6 +266,54 @@ function mapLearningSummary(payload?: LearningEnvelope["summary"]): LearningSumm
     signalCount: Number(payload?.signal_count ?? 0),
     actionCount: Number(payload?.action_count ?? 0),
     agentCount: Number(payload?.agent_count ?? 0),
+  };
+}
+
+function mapPrivacySummary(payload?: Record<string, unknown>): PrivacySummary {
+  const policy = (payload?.policy as Record<string, unknown> | undefined) || {};
+  const consent = (payload?.consent as Record<string, unknown> | undefined) || {};
+  const recentEntries = Array.isArray(payload?.recent_entries)
+    ? payload.recent_entries.map((item): PrivacySummary["recentEntries"][number] => ({
+        entryId: String((item as Record<string, unknown>).entry_id || crypto.randomUUID()),
+        sourceKind: String((item as Record<string, unknown>).source_kind || "runtime"),
+        classification: String((item as Record<string, unknown>).classification || "operational"),
+        learningScope: String((item as Record<string, unknown>).learning_scope || "workspace"),
+        redacted: Boolean((item as Record<string, unknown>).redacted ?? true),
+        text: String((item as Record<string, unknown>).text || ""),
+        createdAt: Number((item as Record<string, unknown>).created_at || 0),
+      }))
+    : [];
+
+  return {
+    workspaceId: String(payload?.workspace_id || payload?.workspaceId || "local-workspace"),
+    userId: String(payload?.user_id || payload?.userId || "local"),
+    policy: {
+      allowPersonalDataLearning: Boolean(policy.allow_personal_data_learning ?? false),
+      allowWorkspaceDataLearning: Boolean(policy.allow_workspace_data_learning ?? true),
+      allowOperationalDataLearning: Boolean(policy.allow_operational_data_learning ?? true),
+      allowPublicDataLearning: Boolean(policy.allow_public_data_learning ?? true),
+      allowSecretDataLearning: Boolean(policy.allow_secret_data_learning ?? false),
+      allowGlobalAggregation: Boolean(policy.allow_global_aggregation ?? true),
+      redactPersonalData: Boolean(policy.redact_personal_data ?? true),
+      redactSecretData: Boolean(policy.redact_secret_data ?? true),
+      learningScope: String(policy.learning_scope || "workspace"),
+      retentionPolicy: ((payload?.retention_policy as Record<string, unknown> | undefined) || (policy.retention_policy as Record<string, unknown> | undefined) || {}) as Record<string, unknown>,
+    },
+    consent: {
+      consentId: String(consent.consent_id || ""),
+      scope: String(consent.scope || "workspace"),
+      granted: Boolean(consent.granted ?? false),
+      source: String(consent.source || "runtime"),
+      expiresAt: Number(consent.expires_at || 0),
+    },
+    classificationCounts: ((payload?.classification_counts as Record<string, number> | undefined) || {}) as Record<string, number>,
+    learningScopeCounts: ((payload?.learning_scope_counts as Record<string, number> | undefined) || {}) as Record<string, number>,
+    whatIsLearned: Array.isArray(payload?.what_is_learned) ? payload.what_is_learned.map((item) => String(item)).slice(0, 4) : [],
+    whatIsExcluded: Array.isArray(payload?.what_is_excluded) ? payload.what_is_excluded.map((item) => String(item)).slice(0, 4) : [],
+    totalEntries: Number(payload?.total_entries ?? 0),
+    redactedEntries: Number(payload?.redacted_entries ?? 0),
+    sharedLearningEligible: Number(payload?.shared_learning_eligible ?? 0),
+    recentEntries,
   };
 }
 
@@ -621,6 +689,38 @@ export async function getLearningSummary(): Promise<LearningSummary | null> {
     return null;
   }
   return mapLearningSummary(raw.summary);
+}
+
+export async function getPrivacySummary(): Promise<PrivacySummary | null> {
+  const raw = await safeRequest<PrivacyEnvelope>("/api/v1/privacy/summary");
+  if (!raw?.success || !raw.summary) {
+    return null;
+  }
+  return mapPrivacySummary(raw.summary);
+}
+
+export async function exportPrivacyData(): Promise<PrivacyExportBundle | null> {
+  const raw = await safeRequest<PrivacyExportEnvelope>("/api/v1/privacy/export");
+  const payload = raw?.export;
+  const nested = payload?.privacy;
+  if (!(raw?.ok ?? raw?.success) || !payload || !nested) {
+    return null;
+  }
+  return {
+    userId: String(nested.user_id || "local"),
+    workspaceId: String(nested.workspace_id || "local-workspace"),
+    audit: ((payload.audit as Record<string, unknown> | undefined) || {}) as Record<string, unknown>,
+    learningSummary: nested.learning_summary ? mapLearningSummary(nested.learning_summary as LearningEnvelope["summary"]) : null,
+    privacy: mapPrivacySummary(nested.privacy || {}),
+  };
+}
+
+export async function deletePrivacyData(): Promise<boolean> {
+  const raw = await apiClient.request<{ ok?: boolean; result?: Record<string, unknown> }>("/api/v1/privacy/delete", {
+    method: "POST",
+    body: {},
+  });
+  return Boolean(raw.ok);
 }
 
 async function getSecurityEvents(limit = 12): Promise<LogEvent[]> {

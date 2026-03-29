@@ -404,6 +404,11 @@ async def test_handle_privacy_delete_wipes_personalization(monkeypatch):
         lambda: SimpleNamespace(delete_user=lambda user_id: {"scope": "reliability", "user_id": user_id}),
     )
     monkeypatch.setattr(
+        gateway_server.ElyanGatewayServer,
+        "_require_user_session",
+        lambda _self, _request, allow_cookie=True: (True, "", {"user_id": "user-42", "workspace_id": "workspace-alpha"}),
+    )
+    monkeypatch.setattr(
         gateway_server,
         "push_activity",
         lambda *_a, **_k: pushed.__setitem__("value", True),
@@ -418,6 +423,36 @@ async def test_handle_privacy_delete_wipes_personalization(monkeypatch):
     assert payload["result"]["personalization"]["scope"] == "personalization"
     assert payload["result"]["reliability"]["scope"] == "reliability"
     assert pushed["value"] is True
+
+
+@pytest.mark.asyncio
+async def test_handle_privacy_summary_and_export(monkeypatch):
+    monkeypatch.setattr(
+        gateway_server.ElyanGatewayServer,
+        "_require_user_session",
+        lambda self, request, allow_cookie=True: (True, "", {"user_id": "user-42"}),
+    )
+    monkeypatch.setattr(gateway_server.ElyanGatewayServer, "_workspace_id", lambda self, request, payload=None: "workspace-a")
+    monkeypatch.setattr(
+        gateway_server,
+        "get_learning_control_plane",
+        lambda: SimpleNamespace(
+            get_privacy_summary=lambda user_id, workspace_id="": {"user_id": user_id, "workspace_id": workspace_id, "total_entries": 2},
+            export_privacy_bundle=lambda user_id, workspace_id="": {"user_id": user_id, "workspace_id": workspace_id, "bundle": True},
+        ),
+    )
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    summary_resp = await gateway_server.ElyanGatewayServer.handle_privacy_summary(srv, _Req({}))
+    export_resp = await gateway_server.ElyanGatewayServer.handle_privacy_export(srv, _Req({}))
+
+    summary_payload = json.loads(summary_resp.text)
+    export_payload = json.loads(export_resp.text)
+
+    assert summary_payload["success"] is True
+    assert summary_payload["summary"]["workspace_id"] == "workspace-a"
+    assert export_payload["ok"] is True
+    assert export_payload["export"]["privacy"]["bundle"] is True
 
 
 @pytest.mark.asyncio
@@ -494,9 +529,9 @@ async def test_handle_product_home_aggregates_readiness_and_reports(monkeypatch)
     assert payload["preset_workflows"]
     assert payload["recent_workflow_reports"][0]["workflow_name"] == "Telegram-triggered desktop task completion"
     assert payload["onboarding"]["first_demo_workflow"]
-    assert payload["release"]["entrypoint"] == "/dashboard"
+    assert payload["release"]["entrypoint"] == "elyan desktop"
     checks = payload["release"]["quickstart_checks"]
-    assert any(item["label"] == "Dashboard start script" for item in checks)
+    assert any(item["label"] == "Desktop start script" for item in checks)
     assert any(item["label"] == "Production benchmark gate" for item in checks)
 
 

@@ -80,6 +80,51 @@ class _EvaluationSuite:
         return {"suite_name": "offline"}
 
 
+class _PrivacyStore:
+    def __init__(self):
+        self.decisions = []
+        self.entries = []
+        self.deleted = []
+
+    def record_privacy_decision(self, **kwargs):
+        self.decisions.append(kwargs)
+        return {"decision_id": f"decision-{len(self.decisions)}"}
+
+    def record_dataset_entry(self, **kwargs):
+        self.entries.append(kwargs)
+        return {"entry_id": f"entry-{len(self.entries)}"}
+
+    def summary(self, **kwargs):
+        return {
+            "workspace_id": kwargs.get("workspace_id", "local-workspace"),
+            "user_id": kwargs.get("user_id", "local"),
+            "policy": {},
+            "consent": {},
+            "classification_counts": {"operational": len(self.decisions)},
+            "learning_scope_counts": {"workspace": len(self.entries)},
+            "shared_learning_eligible": len(self.entries),
+            "redacted_entries": len(self.entries),
+            "total_entries": len(self.entries),
+            "recent_entries": [],
+            "what_is_learned": ["operational signals"],
+            "what_is_excluded": ["personal data"],
+            "retention_policy": {},
+        }
+
+    def export_bundle(self, **kwargs):
+        return {"workspace_id": kwargs.get("workspace_id", "local-workspace"), "user_id": kwargs.get("user_id", "local")}
+
+    def delete_user_data(self, user_id, **kwargs):
+        payload = {"user_id": user_id, "workspace_id": kwargs.get("workspace_id", "local-workspace"), "deleted": {"dataset_entries": 1}}
+        self.deleted.append(payload)
+        return payload
+
+
+class _RuntimeDB:
+    def __init__(self):
+        self.privacy = _PrivacyStore()
+
+
 def test_learning_control_delegates_and_summarizes_user():
     personalization = _Personalization()
     plane = LearningControlPlane(personalization=personalization, evaluation_suite=_EvaluationSuite())
@@ -193,3 +238,38 @@ def test_learning_control_persists_compact_learning_hint(monkeypatch):
     assert personalization.interactions[-1]["metadata"]["learning_hint"]["dominant_domain"] == "browser"
     titles = [item["title"] for item in personalization.interactions[-1]["metadata"]["learning_hint"]["next_actions"]]
     assert "Default to screenshots" in titles
+
+
+def test_learning_control_records_privacy_artifacts_for_latency(monkeypatch):
+    personalization = _Personalization()
+    plane = LearningControlPlane(personalization=personalization, evaluation_suite=_EvaluationSuite())
+    runtime_db = _RuntimeDB()
+    monkeypatch.setattr("core.learning_control.get_runtime_database", lambda: runtime_db)
+
+    result = plane.record_latency(
+        user_id="u1",
+        interaction_id="latency-1",
+        latency_ms=250.0,
+        target_ms=800.0,
+        metadata={"channel": "desktop"},
+    )
+
+    assert result["event_id"] == "e1"
+    assert runtime_db.privacy.decisions[-1]["classification"] == "operational"
+    assert runtime_db.privacy.entries[-1]["text"] == "latency_reward"
+    assert runtime_db.privacy.entries[-1]["metadata"]["privacy_decision_id"] == "decision-1"
+
+
+def test_learning_control_privacy_delete_includes_runtime_data(monkeypatch):
+    personalization = _Personalization()
+    plane = LearningControlPlane(personalization=personalization, evaluation_suite=_EvaluationSuite())
+    runtime_db = _RuntimeDB()
+    monkeypatch.setattr("core.learning_control.get_runtime_database", lambda: runtime_db)
+
+    summary = plane.get_privacy_summary("u1", workspace_id="workspace-a")
+    exported = plane.export_privacy_bundle("u1", workspace_id="workspace-a")
+    deleted = plane.delete_user_data("u1")
+
+    assert summary["workspace_id"] == "workspace-a"
+    assert exported["privacy"]["workspace_id"] == "workspace-a"
+    assert deleted["privacy"]["deleted"]["dataset_entries"] == 1

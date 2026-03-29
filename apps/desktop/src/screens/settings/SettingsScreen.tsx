@@ -6,8 +6,8 @@ import { SegmentedControl } from "@/components/primitives/SegmentedControl";
 import { ToggleSwitch } from "@/components/primitives/ToggleSwitch";
 import { Surface } from "@/components/primitives/Surface";
 import { StatusBadge } from "@/components/primitives/StatusBadge";
-import { useBillingWorkspace, useLearningSummary } from "@/hooks/use-desktop-data";
-import { createCheckoutSession, createPortalSession, logoutLocalUser } from "@/services/api/elyan-service";
+import { useBillingWorkspace, useLearningSummary, usePrivacySummary } from "@/hooks/use-desktop-data";
+import { createCheckoutSession, createPortalSession, deletePrivacyData, exportPrivacyData, logoutLocalUser } from "@/services/api/elyan-service";
 import { runtimeManager } from "@/runtime/runtime-manager";
 import { useRuntimeStore } from "@/stores/runtime-store";
 import { useUiStore } from "@/stores/ui-store";
@@ -25,7 +25,9 @@ export function SettingsScreen() {
   const navigate = useNavigate();
   const [runtimeBusy, setRuntimeBusy] = useState<"restart" | "stop" | null>(null);
   const [billingBusy, setBillingBusy] = useState<"checkout" | "portal" | null>(null);
+  const [privacyBusy, setPrivacyBusy] = useState<"export" | "delete" | null>(null);
   const { data: learning } = useLearningSummary();
+  const { data: privacy } = usePrivacySummary();
   const { data: billing } = useBillingWorkspace();
   const connectionState = useRuntimeStore((state) => state.connectionState);
   const sidecarHealth = useRuntimeStore((state) => state.sidecarHealth);
@@ -87,12 +89,47 @@ export function SettingsScreen() {
     }
   }
 
-  async function handleSignOut() {
+  async function finalizeLocalSessionExit() {
     await logoutLocalUser().catch(() => undefined);
     signOut();
     clearSelectedThreadId();
     clearSelectedRunId();
     navigate("/login", { replace: true });
+  }
+
+  async function handleSignOut() {
+    await finalizeLocalSessionExit();
+  }
+
+  async function handleExportPrivacy() {
+    setPrivacyBusy("export");
+    try {
+      const payload = await exportPrivacyData();
+      if (!payload) {
+        return;
+      }
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `elyan-privacy-${payload.userId || "user"}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setPrivacyBusy(null);
+    }
+  }
+
+  async function handleDeletePrivacy() {
+    setPrivacyBusy("delete");
+    try {
+      const deleted = await deletePrivacyData();
+      if (deleted) {
+        await finalizeLocalSessionExit();
+      }
+    } finally {
+      setPrivacyBusy(null);
+    }
   }
 
   return (
@@ -227,7 +264,7 @@ export function SettingsScreen() {
             <div>
               <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Privacy</div>
               <h2 className="mt-2 font-display text-[20px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
-                Learning
+                Data & learning
               </h2>
             </div>
             {learning ? (
@@ -238,17 +275,29 @@ export function SettingsScreen() {
           </div>
 
           <div className="mt-5 rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4">
-            {learning ? (
-              <div className="space-y-2 text-[13px] leading-6 text-[var(--text-secondary)]">
-                <div className="text-[14px] font-medium text-[var(--text-primary)]">
-                  {learning.dominantDomain} · {Math.round(learning.learningScore * 100)}% · {learning.learningMode}
-                </div>
-                <div>{learning.retentionPolicy}</div>
-                <div>{learning.nextActions[0]?.title || "No next action queued."}</div>
+            <div className="space-y-2 text-[13px] leading-6 text-[var(--text-secondary)]">
+              <div className="text-[14px] font-medium text-[var(--text-primary)]">
+                {learning?.learningMode || "local"} · {learning ? Math.round(learning.learningScore * 100) : 0}%
               </div>
-            ) : (
-              <div className="text-[13px] leading-6 text-[var(--text-secondary)]">Learning summary unavailable.</div>
-            )}
+              <div>
+                {privacy ? `${privacy.totalEntries} entries · ${privacy.redactedEntries} redacted · ${privacy.policy.learningScope}` : "Privacy summary unavailable."}
+              </div>
+              <div>
+                {privacy?.whatIsLearned?.length ? `Learns: ${privacy.whatIsLearned.join(", ")}` : "Learns: redacted operational signals"}
+              </div>
+              <div>
+                {privacy?.whatIsExcluded?.length ? `Excludes: ${privacy.whatIsExcluded.join(", ")}` : "Excludes: personal data, secrets"}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Button variant="secondary" onClick={() => void handleExportPrivacy()} disabled={privacyBusy !== null}>
+              {privacyBusy === "export" ? "Exporting…" : "Export data"}
+            </Button>
+            <Button variant="ghost" onClick={() => void handleDeletePrivacy()} disabled={privacyBusy !== null}>
+              {privacyBusy === "delete" ? "Deleting…" : "Delete data"}
+            </Button>
           </div>
         </Surface>
 

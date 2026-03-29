@@ -144,6 +144,50 @@ class CapabilityManifest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class ProjectBrief(BaseModel):
+    brief_id: str = Field(default_factory=lambda: f"brief_{uuid.uuid4().hex[:12]}")
+    task_id: str = ""
+    title: str = ""
+    objective: str = ""
+    repo_root: str = ""
+    repo_type: str = ""
+    language: str = ""
+    framework: str = ""
+    package_manager: str = ""
+    stack_family: str = ""
+    risk_level: str = "normal"
+    deliverables: list[dict[str, Any]] = Field(default_factory=list)
+    verification_gates: list[str] = Field(default_factory=list)
+    output_dir: str = ""
+    style_direction: str = ""
+    privacy_mode: str = "local_first"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: float = Field(default_factory=_ts)
+
+    model_config = ConfigDict(extra="allow")
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
+
+class ProjectArtifact(BaseModel):
+    artifact_id: str = Field(default_factory=lambda: f"artifact_{uuid.uuid4().hex[:12]}")
+    brief_id: str = ""
+    path: str = ""
+    kind: str = "artifact"
+    label: str = ""
+    expected: bool = True
+    source: str = "task_spec"
+    checksum: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: float = Field(default_factory=_ts)
+
+    model_config = ConfigDict(extra="allow")
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
+
 class ExecutionEvidence(BaseModel):
     evidence_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     request_id: str = ""
@@ -212,5 +256,7 @@ __all__ = [
     "OperatorAttachmentModel",
     "OperatorOutcome",
     "OperatorRequestModel",
+    "ProjectArtifact",
+    "ProjectBrief",
     "SkillManifest",
 ]

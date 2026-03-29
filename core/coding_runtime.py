@@ -11,6 +11,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Tuple
 
+from core.contracts.operator_runtime import ProjectArtifact, ProjectBrief
+
 
 def _stable_id(prefix: str, seed: str) -> str:
     digest = hashlib.sha1(str(seed or prefix).encode("utf-8")).hexdigest()[:12]
@@ -1005,6 +1007,114 @@ def build_style_intent(
     )
 
 
+def _contract_payload(contract: CodingContract | dict[str, Any] | None) -> dict[str, Any]:
+    if isinstance(contract, CodingContract):
+        return contract.to_dict()
+    return dict(contract or {})
+
+
+def build_project_brief(
+    *,
+    user_input: str,
+    task_spec: dict[str, Any] | None,
+    snapshot: RepoSnapshot,
+    contract: CodingContract | dict[str, Any] | None,
+    style_intent: StyleIntent,
+) -> ProjectBrief:
+    spec = dict(task_spec or {})
+    contract_payload = _contract_payload(contract)
+    deliverables = [dict(item) for item in list(spec.get("deliverables") or []) if isinstance(item, dict)]
+    if not deliverables:
+        deliverables = [dict(item) for item in list(spec.get("artifacts_expected") or []) if isinstance(item, dict)]
+    title = str(spec.get("goal") or spec.get("user_goal") or user_input or "Project brief").strip()
+    objective = str(user_input or spec.get("goal") or spec.get("user_goal") or title).strip()
+    project_name = ""
+    for candidate in deliverables:
+        project_name = str(candidate.get("name") or candidate.get("label") or candidate.get("path") or "").strip()
+        if project_name:
+            break
+    return ProjectBrief(
+        task_id=str(spec.get("task_id") or ""),
+        title=title,
+        objective=objective,
+        repo_root=str(snapshot.root_path or ""),
+        repo_type=str(snapshot.repo_type or "unknown"),
+        language=str(snapshot.language or "unknown"),
+        framework=str(snapshot.framework or ""),
+        package_manager=str(snapshot.package_manager or "none"),
+        stack_family=str(snapshot.stack_family or snapshot.repo_type or "unknown"),
+        risk_level=str(spec.get("risk_level") or contract_payload.get("risk_level") or "normal"),
+        deliverables=deliverables,
+        verification_gates=_dedupe_keep_order([str(item).strip().lower() for item in list(contract_payload.get("required_gates") or []) if str(item).strip()]),
+        output_dir=project_name,
+        style_direction=str(style_intent.visual_direction or ""),
+        privacy_mode="local_first",
+        metadata={
+            "adapter_id": str(contract_payload.get("adapter_id") or contract_payload.get("execution_adapter") or ""),
+            "contract_id": str(contract_payload.get("contract_id") or ""),
+            "repo_snapshot_id": str(snapshot.snapshot_id or ""),
+            "workspace_roots": list(snapshot.workspace_roots or []),
+            "entrypoints": list(snapshot.entrypoints or []),
+            "allowed_write_paths": list(contract_payload.get("allowed_write_paths") or []),
+            "forbidden_write_paths": list(contract_payload.get("forbidden_write_paths") or []),
+        },
+    )
+
+
+def build_project_artifacts(
+    *,
+    task_spec: dict[str, Any] | None,
+    snapshot: RepoSnapshot,
+    contract: CodingContract | dict[str, Any] | None,
+    brief: ProjectBrief,
+) -> list[ProjectArtifact]:
+    spec = dict(task_spec or {})
+    contract_payload = _contract_payload(contract)
+    items: list[ProjectArtifact] = []
+    deliverables = [item for item in list(spec.get("deliverables") or []) if isinstance(item, dict)]
+    if not deliverables:
+        deliverables = [item for item in list(spec.get("artifacts_expected") or []) if isinstance(item, dict)]
+    for index, item in enumerate(deliverables, start=1):
+        path = str(item.get("path") or item.get("output_path") or item.get("artifact_path") or "").strip()
+        if not path:
+            continue
+        items.append(
+            ProjectArtifact(
+                brief_id=brief.brief_id,
+                path=path,
+                kind=str(item.get("kind") or item.get("type") or "artifact"),
+                label=str(item.get("name") or item.get("label") or Path(path).name or f"artifact_{index}"),
+                expected=bool(item.get("required", True)),
+                source="deliverables",
+                metadata={
+                    "must_exist": bool(item.get("must_exist", False)),
+                    "index": index,
+                    "repo_snapshot_id": str(snapshot.snapshot_id or ""),
+                },
+            )
+        )
+    if not items:
+        for index, path in enumerate(list(contract_payload.get("allowed_write_paths") or [])[:4], start=1):
+            candidate = str(path or "").strip()
+            if not candidate:
+                continue
+            items.append(
+                ProjectArtifact(
+                    brief_id=brief.brief_id,
+                    path=candidate,
+                    kind="path",
+                    label=Path(candidate).name or f"artifact_{index}",
+                    expected=False,
+                    source="allowed_write_paths",
+                    metadata={
+                        "index": index,
+                        "repo_snapshot_id": str(snapshot.snapshot_id or ""),
+                    },
+                )
+            )
+    return items
+
+
 def _recommended_write_paths(
     root: Path,
     snapshot: RepoSnapshot,
@@ -1144,12 +1254,27 @@ def prepare_contract_first_coding(
         runtime_policy=runtime_policy,
         workspace_files=workspace_files,
     )
+    project_brief = build_project_brief(
+        user_input=user_input,
+        task_spec=task_spec,
+        snapshot=snapshot,
+        contract=contract,
+        style_intent=style_intent,
+    )
+    project_artifacts = [artifact.to_dict() for artifact in build_project_artifacts(
+        task_spec=task_spec,
+        snapshot=snapshot,
+        contract=contract,
+        brief=project_brief,
+    )]
     spec = dict(task_spec or {})
     if spec:
         spec["execution_mode"] = str(spec.get("execution_mode") or contract.execution_mode)
         spec["repo_snapshot"] = snapshot.to_dict()
         spec["coding_contract"] = contract.to_dict()
         spec["style_intent"] = style_intent.to_dict()
+        spec["project_brief"] = project_brief.to_dict()
+        spec["project_artifacts"] = list(project_artifacts)
         spec["required_gates"] = list(contract.required_gates)
         spec["evidence_requirements"] = list(contract.evidence_requirements)
         spec["allowed_write_paths"] = list(contract.allowed_write_paths)
@@ -1162,6 +1287,8 @@ def prepare_contract_first_coding(
         "repo_snapshot": snapshot.to_dict(),
         "coding_contract": contract.to_dict(),
         "style_intent": style_intent.to_dict(),
+        "project_brief": project_brief.to_dict(),
+        "project_artifacts": list(project_artifacts),
         "failure": failure.to_dict() if isinstance(failure, FailureEnvelope) else {},
     }
 

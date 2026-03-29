@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.data_governance import DataClassification
 from core.evaluation import get_evaluation_suite
+from core.persistence.runtime_db import get_runtime_database
 from core.learning_digest import build_user_learning_digest
 from core.personalization import get_personalization_manager
 from core.personalization.policy_learning import LearningSignal, get_policy_learning_store
@@ -14,6 +16,63 @@ class LearningControlPlane:
         self.personalization = personalization or get_personalization_manager()
         self.evaluation_suite = evaluation_suite or get_evaluation_suite()
         self.policy_learning = get_policy_learning_store()
+
+    @staticmethod
+    def _runtime_database():
+        try:
+            return get_runtime_database()
+        except Exception:
+            return None
+
+    def _workspace_id_for_user(self, user_id: str, metadata: dict[str, Any] | None = None) -> str:
+        meta = dict(metadata or {})
+        workspace_id = str(meta.get("workspace_id") or meta.get("workspaceId") or "").strip()
+        if workspace_id:
+            return workspace_id
+        profile = self._runtime_profile_for_user(user_id)
+        workspace_id = str(profile.get("workspace_id") or profile.get("workspaceId") or "").strip()
+        return workspace_id or "local-workspace"
+
+    def _record_privacy_artifacts(
+        self,
+        *,
+        user_id: str,
+        source_kind: str,
+        source_id: str = "",
+        text: str = "",
+        payload: Any = None,
+        metadata: dict[str, Any] | None = None,
+        classification: Any = None,
+    ) -> None:
+        runtime_db = self._runtime_database()
+        if runtime_db is None:
+            return
+        meta = dict(metadata or {})
+        if bool(meta.get("no_store")) or bool(meta.get("privacy_no_store")):
+            return
+        workspace_id = self._workspace_id_for_user(user_id, meta)
+        try:
+            decision = runtime_db.privacy.record_privacy_decision(
+                workspace_id=workspace_id,
+                user_id=str(user_id or "local"),
+                source_kind=str(source_kind or "runtime"),
+                text=text,
+                payload=payload,
+                metadata=meta,
+                classification=classification,
+            )
+            runtime_db.privacy.record_dataset_entry(
+                workspace_id=workspace_id,
+                user_id=str(user_id or "local"),
+                source_kind=str(source_kind or "runtime"),
+                source_id=str(source_id or ""),
+                text=text,
+                payload=payload,
+                metadata={**meta, "privacy_decision_id": decision.get("decision_id", "")},
+                classification=classification,
+            )
+        except Exception:
+            return
 
     @staticmethod
     def _compact_learning_digest(digest: dict[str, Any]) -> dict[str, Any]:
@@ -139,7 +198,25 @@ class LearningControlPlane:
         user_id = str(kwargs.get("user_id") or "local")
         if not self.policy_learning.is_learning_enabled(user_id):
             return {"success": True, "skipped": "learning_paused_or_opt_out", "user_id": user_id}
-        return self.personalization.record_interaction(**kwargs)
+        result = self.personalization.record_interaction(**kwargs)
+        metadata = dict(kwargs.get("metadata") or {})
+        privacy_flags = dict(kwargs.get("privacy_flags") or {})
+        if not bool(privacy_flags.get("no_store")):
+            self._record_privacy_artifacts(
+                user_id=user_id,
+                source_kind="interaction",
+                source_id=str(result.get("interaction_id") or kwargs.get("interaction_id") or ""),
+                text=str(kwargs.get("user_input") or ""),
+                payload={
+                    "assistant_output": str(kwargs.get("assistant_output") or ""),
+                    "intent": str(kwargs.get("intent") or ""),
+                    "action": str(kwargs.get("action") or ""),
+                    "success": bool(kwargs.get("success", True)),
+                    "duration_ms": float(kwargs.get("duration_ms", 0.0) or 0.0),
+                },
+                metadata=metadata,
+            )
+        return result
 
     def record_feedback(self, **kwargs: Any) -> dict[str, Any]:
         uid = str(kwargs.get("user_id") or "local")
@@ -180,6 +257,14 @@ class LearningControlPlane:
                 metadata=metadata,
             )
         )
+        self._record_privacy_artifacts(
+            user_id=uid,
+            source_kind="feedback",
+            source_id=str(kwargs.get("interaction_id") or kwargs.get("event_id") or ""),
+            text=str(action or event_type or "feedback"),
+            payload={"score": score_raw, "event_type": event_type, "metadata": metadata},
+            metadata=metadata,
+        )
         result["learning_digest"] = self.build_learning_digest(
             uid,
             request_meta={
@@ -202,13 +287,23 @@ class LearningControlPlane:
         meta["latency_ms"] = float(latency_ms or 0.0)
         meta["target_ms"] = float(target_ms or 800.0)
         meta.setdefault("channel", str(meta.get("channel") or ""))
-        return self.personalization.record_feedback(
+        result = self.personalization.record_feedback(
             user_id=user_id,
             interaction_id=interaction_id,
             event_type="latency_reward",
             score=float(latency_ms or 0.0),
             metadata=meta,
         )
+        self._record_privacy_artifacts(
+            user_id=str(user_id or "local"),
+            source_kind="feedback",
+            source_id=str(interaction_id or ""),
+            text="latency_reward",
+            payload={"latency_ms": float(latency_ms or 0.0), "target_ms": float(target_ms or 800.0), "metadata": meta},
+            metadata=meta,
+            classification=DataClassification.OPERATIONAL,
+        )
+        return result
 
     def record_turn(
         self,
@@ -331,6 +426,45 @@ class LearningControlPlane:
             "agent_count": int(status.get("agents", 0) or 0),
         }
 
+    def get_privacy_summary(self, user_id: str, *, workspace_id: str = "") -> dict[str, Any]:
+        uid = str(user_id or "local")
+        runtime_db = self._runtime_database()
+        if runtime_db is None:
+            summary = self.get_learning_summary(uid)
+            return {
+                "workspace_id": str(workspace_id or "local-workspace"),
+                "user_id": uid,
+                "summary": summary,
+                "what_is_learned": [
+                    "redacted operational signals",
+                    "workspace-approved content",
+                ],
+                "what_is_excluded": [
+                    "personal data",
+                    "secret material",
+                ],
+                "total_entries": 0,
+                "redacted_entries": 0,
+                "shared_learning_eligible": 0,
+                "classification_counts": {},
+                "learning_scope_counts": {},
+                "recent_entries": [],
+                "policy": {},
+                "consent": {},
+            }
+        return runtime_db.privacy.summary(workspace_id=workspace_id or self._workspace_id_for_user(uid), user_id=uid)
+
+    def export_privacy_bundle(self, user_id: str, *, workspace_id: str = "") -> dict[str, Any]:
+        uid = str(user_id or "local")
+        runtime_db = self._runtime_database()
+        privacy = runtime_db.privacy.export_bundle(workspace_id=workspace_id or self._workspace_id_for_user(uid), user_id=uid) if runtime_db else {}
+        return {
+            "user_id": uid,
+            "workspace_id": str(workspace_id or privacy.get("workspace_id") or "local-workspace"),
+            "learning_summary": self.get_learning_summary(uid),
+            "privacy": privacy,
+        }
+
     def run_evaluation(self, target_id: str = "", suite_name: str = "offline") -> dict[str, Any]:
         return self.evaluation_suite.run(target_id, suite_name)
 
@@ -342,9 +476,12 @@ class LearningControlPlane:
         }
 
     def delete_user_data(self, user_id: str) -> dict[str, Any]:
+        runtime_db = self._runtime_database()
+        privacy = runtime_db.privacy.delete_user_data(user_id) if runtime_db is not None else {"user_id": str(user_id or "local"), "workspace_id": "local-workspace", "deleted": {}}
         return {
             "personalization": self.personalization.delete_user_data(user_id),
             "policy_learning": self.policy_learning.delete_user_data(user_id),
+            "privacy": privacy,
         }
 
     def set_learning_paused(self, paused: bool, *, user_id: str = "local") -> dict[str, Any]:

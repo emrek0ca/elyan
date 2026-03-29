@@ -13,6 +13,7 @@ import type {
   IntegrationSummary,
   LogEvent,
   LearningSummary,
+  PrivacySummary,
   ProviderSummary,
   SecuritySummary,
   WorkspaceBillingSummary,
@@ -30,6 +31,7 @@ import {
   getHomeSnapshot,
   getIntegrations,
   getLearningSummary,
+  getPrivacySummary,
   getLogs,
   getProviders,
   getSecuritySummary,
@@ -145,6 +147,14 @@ export function useLearningSummary(): UseQueryResult<LearningSummary | null> {
     queryKey: ["learning-summary"],
     queryFn: getLearningSummary,
     refetchInterval: 30000,
+  });
+}
+
+export function usePrivacySummary(): UseQueryResult<PrivacySummary | null> {
+  return useQuery({
+    queryKey: ["privacy-summary"],
+    queryFn: getPrivacySummary,
+    refetchInterval: 45000,
   });
 }
 

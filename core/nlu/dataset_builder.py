@@ -6,12 +6,14 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from core.confidence import coerce_confidence
+from core.data_governance import build_privacy_decision
 from core.text_artifacts import existing_text_path
 
 
 @dataclass
 class NLUExample:
     text: str
+    redacted_text: str
     intent: str
     action_label: str
     slots: Dict[str, Any]
@@ -21,6 +23,10 @@ class NLUExample:
     confidence: float
     source: str
     hard_negative: bool
+    data_classification: str
+    learning_scope: str
+    shared_learning_eligible: bool
+    privacy_reason: str
     run_id: str = ""
     status: str = ""
 
@@ -144,8 +150,19 @@ def _build_example(
                 if sval:
                     success_criteria.append(sval)
     confidence = coerce_confidence(task_spec.get("confidence"), 0.0)
+    decision = build_privacy_decision(
+        source_kind="nlu_dataset",
+        text=utterance,
+        payload={
+            "intent": intent,
+            "action_label": str(steps[0].get("action") or "").strip().lower() if steps else intent,
+            "source": str(source or "").strip() or "run_store",
+        },
+        metadata={"run_id": str(run_id or ""), "status": str(status or "").strip().lower()},
+    )
     return NLUExample(
         text=utterance,
+        redacted_text=str(decision.text or ""),
         intent=intent,
         action_label=str(steps[0].get("action") or "").strip().lower() if steps else intent,
         slots=slots,
@@ -155,6 +172,10 @@ def _build_example(
         confidence=max(0.0, min(1.0, confidence)),
         source=str(source or "").strip() or "run_store",
         hard_negative=bool(hard_negative),
+        data_classification=str(decision.classification.value),
+        learning_scope=str(decision.learning_scope or "local"),
+        shared_learning_eligible=bool(decision.shared_learning_eligible),
+        privacy_reason=str(decision.reason or ""),
         run_id=str(run_id or "").strip(),
         status=str(status or "").strip().lower(),
     )

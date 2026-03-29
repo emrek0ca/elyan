@@ -27,6 +27,8 @@ function RuntimeBridge() {
       queryClient.invalidateQueries({ queryKey: ["connector-health"] }).catch(() => undefined);
       queryClient.invalidateQueries({ queryKey: ["connector-traces"] }).catch(() => undefined);
       queryClient.invalidateQueries({ queryKey: ["billing-workspace"] }).catch(() => undefined);
+      queryClient.invalidateQueries({ queryKey: ["learning-summary"] }).catch(() => undefined);
+      queryClient.invalidateQueries({ queryKey: ["privacy-summary"] }).catch(() => undefined);
       queryClient.invalidateQueries({ queryKey: ["logs"] }).catch(() => undefined);
       queryClient.invalidateQueries({ queryKey: ["security-summary"] }).catch(() => undefined);
       queryClient.invalidateQueries({ queryKey: ["sidecar-logs"] }).catch(() => undefined);

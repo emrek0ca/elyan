@@ -79,6 +79,10 @@ def test_prepare_contract_first_coding_enriches_greenfield_web_spec(tmp_path):
     assert prepared["task_spec"]["style_intent"]["visual_direction"] != ""
     assert "template_hero_with_three_cards" in prepared["task_spec"]["style_intent"]["forbidden_patterns"]
     assert prepared["task_spec"]["allowed_write_paths"]
+    assert prepared["project_brief"]["title"] == "Bir proje oluştur"
+    assert prepared["project_artifacts"]
+    assert prepared["task_spec"]["project_brief"]["title"] == prepared["project_brief"]["title"]
+    assert prepared["task_spec"]["project_artifacts"] == prepared["project_artifacts"]
 
 
 def test_select_language_adapter_unknown_stack_fails(tmp_path):

@@ -29,6 +29,17 @@ from sqlalchemy import (
 from sqlalchemy.engine import Connection, Engine
 
 from core.observability.logger import get_structured_logger
+from core.data_governance import (
+    ConsentPolicy,
+    DataClassification,
+    DatasetEntry,
+    PrivacyDecision,
+    RetentionPolicy,
+    WorkspaceDataPolicy,
+    build_dataset_entry,
+    build_privacy_decision,
+    build_workspace_data_policy,
+)
 from core.security.encrypted_vault import get_encrypted_vault
 from core.storage_paths import resolve_runtime_db_path
 
@@ -498,6 +509,87 @@ global_tool_reliability_table = Table(
     Column("updated_at", Float, nullable=False, default=_now),
 )
 Index("ix_global_tool_reliability_scope_updated", global_tool_reliability_table.c.scope, global_tool_reliability_table.c.updated_at)
+
+workspace_data_policies_table = Table(
+    "workspace_data_policies",
+    LOCAL_METADATA,
+    Column("workspace_id", String(128), primary_key=True),
+    Column("allow_personal_data_learning", Boolean, nullable=False, default=False),
+    Column("allow_workspace_data_learning", Boolean, nullable=False, default=True),
+    Column("allow_operational_data_learning", Boolean, nullable=False, default=True),
+    Column("allow_public_data_learning", Boolean, nullable=False, default=True),
+    Column("allow_secret_data_learning", Boolean, nullable=False, default=False),
+    Column("allow_global_aggregation", Boolean, nullable=False, default=True),
+    Column("redact_personal_data", Boolean, nullable=False, default=True),
+    Column("redact_secret_data", Boolean, nullable=False, default=True),
+    Column("learning_scope", String(64), nullable=False, default="workspace"),
+    Column("retention_policy_json", Text, nullable=False, default="{}"),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("updated_at", Float, nullable=False, default=_now),
+)
+Index("ix_workspace_data_policies_updated", workspace_data_policies_table.c.updated_at)
+
+consent_records_table = Table(
+    "consent_records",
+    LOCAL_METADATA,
+    Column("consent_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), nullable=False, default="local-workspace"),
+    Column("user_id", String(128), nullable=False, default="local-user"),
+    Column("scope", String(128), nullable=False, default="workspace"),
+    Column("granted", Boolean, nullable=False, default=False),
+    Column("source", String(128), nullable=False, default="runtime"),
+    Column("expires_at", Float, nullable=False, default=0.0),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+    Column("updated_at", Float, nullable=False, default=_now),
+)
+Index("ix_consent_records_workspace_user", consent_records_table.c.workspace_id, consent_records_table.c.user_id)
+Index("ix_consent_records_workspace_created", consent_records_table.c.workspace_id, consent_records_table.c.created_at)
+
+privacy_decisions_table = Table(
+    "privacy_decisions",
+    LOCAL_METADATA,
+    Column("decision_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), nullable=False, default="local-workspace"),
+    Column("user_id", String(128), nullable=False, default="local-user"),
+    Column("source_kind", String(128), nullable=False, default="runtime"),
+    Column("classification", String(32), nullable=False, default="operational"),
+    Column("learning_scope", String(64), nullable=False, default="workspace"),
+    Column("shared_learning_eligible", Boolean, nullable=False, default=True),
+    Column("redacted", Boolean, nullable=False, default=True),
+    Column("reason", Text, nullable=False, default=""),
+    Column("payload_json", Text, nullable=False, default="{}"),
+    Column("text", Text, nullable=False, default=""),
+    Column("retention_policy_json", Text, nullable=False, default="{}"),
+    Column("consent_policy_json", Text, nullable=False, default="{}"),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+)
+Index("ix_privacy_decisions_workspace_created", privacy_decisions_table.c.workspace_id, privacy_decisions_table.c.created_at)
+Index("ix_privacy_decisions_user_created", privacy_decisions_table.c.user_id, privacy_decisions_table.c.created_at)
+
+dataset_entries_table = Table(
+    "dataset_entries",
+    LOCAL_METADATA,
+    Column("entry_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), nullable=False, default="local-workspace"),
+    Column("user_id", String(128), nullable=False, default="local-user"),
+    Column("source_kind", String(128), nullable=False, default="runtime"),
+    Column("source_id", String(128), nullable=False, default=""),
+    Column("classification", String(32), nullable=False, default="operational"),
+    Column("learning_scope", String(64), nullable=False, default="workspace"),
+    Column("shared_learning_eligible", Boolean, nullable=False, default=True),
+    Column("redacted", Boolean, nullable=False, default=True),
+    Column("text", Text, nullable=False, default=""),
+    Column("payload_json", Text, nullable=False, default="{}"),
+    Column("retention_policy_json", Text, nullable=False, default="{}"),
+    Column("consent_policy_json", Text, nullable=False, default="{}"),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+)
+Index("ix_dataset_entries_workspace_created", dataset_entries_table.c.workspace_id, dataset_entries_table.c.created_at)
+Index("ix_dataset_entries_user_created", dataset_entries_table.c.user_id, dataset_entries_table.c.created_at)
+Index("ix_dataset_entries_workspace_classification", dataset_entries_table.c.workspace_id, dataset_entries_table.c.classification)
 
 local_users_table = Table(
     "local_users",
@@ -1966,6 +2058,528 @@ class LearningRepository:
             )
         else:
                 conn.execute(global_tool_reliability_table.insert().values(**values))
+class PrivacyRepository:
+    def __init__(self, db: "RuntimeDatabase") -> None:
+        self._db = db
+
+    @staticmethod
+    def _workspace_id(workspace_id: str) -> str:
+        return str(workspace_id or "local-workspace").strip() or "local-workspace"
+
+    @staticmethod
+    def _user_id(user_id: str) -> str:
+        return str(user_id or "local-user").strip() or "local-user"
+
+    @staticmethod
+    def _policy_row(row: dict[str, Any] | None) -> dict[str, Any]:
+        if not row:
+            return build_workspace_data_policy().to_dict()
+        return {
+            "workspace_id": str(row.get("workspace_id") or "local-workspace"),
+            "allow_personal_data_learning": bool(row.get("allow_personal_data_learning", False)),
+            "allow_workspace_data_learning": bool(row.get("allow_workspace_data_learning", True)),
+            "allow_operational_data_learning": bool(row.get("allow_operational_data_learning", True)),
+            "allow_public_data_learning": bool(row.get("allow_public_data_learning", True)),
+            "allow_secret_data_learning": bool(row.get("allow_secret_data_learning", False)),
+            "allow_global_aggregation": bool(row.get("allow_global_aggregation", True)),
+            "redact_personal_data": bool(row.get("redact_personal_data", True)),
+            "redact_secret_data": bool(row.get("redact_secret_data", True)),
+            "learning_scope": str(row.get("learning_scope") or "workspace"),
+            "retention_policy": _json_loads(row.get("retention_policy_json"), {}),
+            "metadata": _json_loads(row.get("metadata_json"), {}),
+            "updated_at": float(row.get("updated_at") or 0.0),
+        }
+
+    @staticmethod
+    def _consent_row(row: dict[str, Any] | None) -> dict[str, Any]:
+        if not row:
+            return {}
+        return {
+            "consent_id": str(row.get("consent_id") or ""),
+            "workspace_id": str(row.get("workspace_id") or "local-workspace"),
+            "user_id": str(row.get("user_id") or "local-user"),
+            "scope": str(row.get("scope") or "workspace"),
+            "granted": bool(row.get("granted", False)),
+            "source": str(row.get("source") or "runtime"),
+            "expires_at": float(row.get("expires_at") or 0.0),
+            "metadata": _json_loads(row.get("metadata_json"), {}),
+            "created_at": float(row.get("created_at") or 0.0),
+            "updated_at": float(row.get("updated_at") or 0.0),
+        }
+
+    @staticmethod
+    def _decision_row(row: dict[str, Any] | None) -> dict[str, Any]:
+        if not row:
+            return {}
+        return {
+            "decision_id": str(row.get("decision_id") or ""),
+            "workspace_id": str(row.get("workspace_id") or "local-workspace"),
+            "user_id": str(row.get("user_id") or "local-user"),
+            "source_kind": str(row.get("source_kind") or "runtime"),
+            "classification": str(row.get("classification") or "operational"),
+            "learning_scope": str(row.get("learning_scope") or "workspace"),
+            "shared_learning_eligible": bool(row.get("shared_learning_eligible", False)),
+            "redacted": bool(row.get("redacted", True)),
+            "reason": str(row.get("reason") or ""),
+            "payload": _json_loads(row.get("payload_json"), {}),
+            "text": str(row.get("text") or ""),
+            "retention_policy": _json_loads(row.get("retention_policy_json"), {}),
+            "consent_policy": _json_loads(row.get("consent_policy_json"), {}),
+            "metadata": _json_loads(row.get("metadata_json"), {}),
+            "created_at": float(row.get("created_at") or 0.0),
+        }
+
+    @staticmethod
+    def _entry_row(row: dict[str, Any] | None) -> dict[str, Any]:
+        if not row:
+            return {}
+        return {
+            "entry_id": str(row.get("entry_id") or ""),
+            "workspace_id": str(row.get("workspace_id") or "local-workspace"),
+            "user_id": str(row.get("user_id") or "local-user"),
+            "source_kind": str(row.get("source_kind") or "runtime"),
+            "source_id": str(row.get("source_id") or ""),
+            "classification": str(row.get("classification") or "operational"),
+            "learning_scope": str(row.get("learning_scope") or "workspace"),
+            "shared_learning_eligible": bool(row.get("shared_learning_eligible", False)),
+            "redacted": bool(row.get("redacted", True)),
+            "text": str(row.get("text") or ""),
+            "payload": _json_loads(row.get("payload_json"), {}),
+            "retention_policy": _json_loads(row.get("retention_policy_json"), {}),
+            "consent_policy": _json_loads(row.get("consent_policy_json"), {}),
+            "metadata": _json_loads(row.get("metadata_json"), {}),
+            "created_at": float(row.get("created_at") or 0.0),
+        }
+
+    def get_workspace_policy(self, *, workspace_id: str = "local-workspace") -> dict[str, Any]:
+        wid = self._workspace_id(workspace_id)
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(workspace_data_policies_table).where(workspace_data_policies_table.c.workspace_id == wid)
+            ).mappings().first()
+        return self._policy_row(dict(row)) if row else build_workspace_data_policy(wid).to_dict()
+
+    def set_workspace_policy(
+        self,
+        *,
+        workspace_id: str = "local-workspace",
+        policy: WorkspaceDataPolicy | dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+        **overrides: Any,
+    ) -> dict[str, Any]:
+        wid = self._workspace_id(workspace_id)
+        payload = policy.to_dict() if hasattr(policy, "to_dict") else dict(policy or {})
+        payload.update({key: value for key, value in overrides.items() if value is not None})
+        retention_payload = payload.get("retention_policy") if isinstance(payload.get("retention_policy"), dict) else {}
+        retention = RetentionPolicy(
+            retention_class=str(retention_payload.get("retention_class") or "standard"),
+            ttl_days=int(retention_payload.get("ttl_days") or 365),
+            redact_personal_data=bool(retention_payload.get("redact_personal_data", True)),
+            redact_secret_data=bool(retention_payload.get("redact_secret_data", True)),
+            workspace_only=bool(retention_payload.get("workspace_only", True)),
+            legal_hold=bool(retention_payload.get("legal_hold", False)),
+            metadata=dict(retention_payload.get("metadata") or {}),
+        )
+        row = {
+            "workspace_id": wid,
+            "allow_personal_data_learning": bool(payload.get("allow_personal_data_learning", False)),
+            "allow_workspace_data_learning": bool(payload.get("allow_workspace_data_learning", True)),
+            "allow_operational_data_learning": bool(payload.get("allow_operational_data_learning", True)),
+            "allow_public_data_learning": bool(payload.get("allow_public_data_learning", True)),
+            "allow_secret_data_learning": bool(payload.get("allow_secret_data_learning", False)),
+            "allow_global_aggregation": bool(payload.get("allow_global_aggregation", True)),
+            "redact_personal_data": bool(payload.get("redact_personal_data", True)),
+            "redact_secret_data": bool(payload.get("redact_secret_data", True)),
+            "learning_scope": str(payload.get("learning_scope") or "workspace"),
+            "retention_policy_json": _json_dumps(retention.to_dict()),
+            "metadata_json": _json_dumps(dict(metadata or payload.get("metadata") or {})),
+            "updated_at": _now(),
+        }
+        with self._db.local_engine.begin() as conn:
+            existing = conn.execute(
+                select(workspace_data_policies_table.c.workspace_id).where(workspace_data_policies_table.c.workspace_id == wid)
+            ).first()
+            if existing:
+                conn.execute(
+                    workspace_data_policies_table.update()
+                    .where(workspace_data_policies_table.c.workspace_id == wid)
+                    .values(**row)
+                )
+            else:
+                conn.execute(workspace_data_policies_table.insert().values(**row))
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=wid,
+                event_type="privacy.workspace_policy.updated",
+                payload={"workspace_id": wid, "learning_scope": row["learning_scope"]},
+            )
+        return self.get_workspace_policy(workspace_id=wid)
+
+    def record_consent(
+        self,
+        *,
+        workspace_id: str = "local-workspace",
+        user_id: str = "local-user",
+        scope: str = "workspace",
+        granted: bool = False,
+        source: str = "runtime",
+        expires_at: float = 0.0,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        wid = self._workspace_id(workspace_id)
+        uid = self._user_id(user_id)
+        consent_id = f"consent_{uuid.uuid4().hex[:12]}"
+        row = {
+            "consent_id": consent_id,
+            "workspace_id": wid,
+            "user_id": uid,
+            "scope": str(scope or "workspace"),
+            "granted": bool(granted),
+            "source": str(source or "runtime"),
+            "expires_at": float(expires_at or 0.0),
+            "metadata_json": _json_dumps(dict(metadata or {})),
+            "created_at": _now(),
+            "updated_at": _now(),
+        }
+        with self._db.local_engine.begin() as conn:
+            conn.execute(consent_records_table.insert().values(**row))
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=wid,
+                event_type="privacy.consent.recorded",
+                payload={"consent_id": consent_id, "user_id": uid, "scope": row["scope"], "granted": row["granted"]},
+            )
+        return self._consent_row(row)
+
+    def record_privacy_decision(
+        self,
+        *,
+        workspace_id: str = "local-workspace",
+        user_id: str = "local-user",
+        source_kind: str = "runtime",
+        text: str = "",
+        payload: Any = None,
+        metadata: dict[str, Any] | None = None,
+        consent_policy: ConsentPolicy | dict[str, Any] | None = None,
+        workspace_policy: WorkspaceDataPolicy | dict[str, Any] | None = None,
+        classification: DataClassification | str | None = None,
+    ) -> dict[str, Any]:
+        policy_obj = workspace_policy if isinstance(workspace_policy, WorkspaceDataPolicy) else (
+            WorkspaceDataPolicy(**dict(workspace_policy or {}, workspace_id=self._workspace_id(workspace_id))) if isinstance(workspace_policy, dict) else None
+        )
+        consent_obj = consent_policy if isinstance(consent_policy, ConsentPolicy) else (
+            ConsentPolicy(**dict(consent_policy or {})) if isinstance(consent_policy, dict) else None
+        )
+        decision = build_privacy_decision(
+            workspace_id=self._workspace_id(workspace_id),
+            user_id=self._user_id(user_id),
+            source_kind=source_kind,
+            text=text,
+            payload=payload,
+            metadata=metadata,
+            consent_policy=consent_obj,
+            workspace_policy=policy_obj,
+            classification=classification,
+        )
+        row = {
+            "decision_id": decision.decision_id,
+            "workspace_id": decision.workspace_id,
+            "user_id": decision.user_id,
+            "source_kind": decision.source_kind,
+            "classification": decision.classification.value,
+            "learning_scope": decision.learning_scope,
+            "shared_learning_eligible": bool(decision.shared_learning_eligible),
+            "redacted": bool(decision.redacted),
+            "reason": decision.reason,
+            "payload_json": _json_dumps(decision.payload),
+            "text": decision.text,
+            "retention_policy_json": _json_dumps(decision.retention_policy.to_dict()),
+            "consent_policy_json": _json_dumps(decision.consent_policy.to_dict()),
+            "metadata_json": _json_dumps(dict(decision.metadata or {})),
+            "created_at": decision.created_at,
+        }
+        with self._db.local_engine.begin() as conn:
+            conn.execute(privacy_decisions_table.insert().values(**row))
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=decision.workspace_id,
+                event_type="privacy.decision.recorded",
+                payload={"decision_id": decision.decision_id, "classification": decision.classification.value, "scope": decision.learning_scope},
+            )
+        return self._decision_row(row)
+
+    def record_dataset_entry(
+        self,
+        *,
+        workspace_id: str = "local-workspace",
+        user_id: str = "local-user",
+        source_kind: str = "runtime",
+        source_id: str = "",
+        text: str = "",
+        payload: Any = None,
+        metadata: dict[str, Any] | None = None,
+        consent_policy: ConsentPolicy | dict[str, Any] | None = None,
+        workspace_policy: WorkspaceDataPolicy | dict[str, Any] | None = None,
+        classification: DataClassification | str | None = None,
+    ) -> dict[str, Any]:
+        policy_obj = workspace_policy if isinstance(workspace_policy, WorkspaceDataPolicy) else (
+            WorkspaceDataPolicy(**dict(workspace_policy or {}, workspace_id=self._workspace_id(workspace_id))) if isinstance(workspace_policy, dict) else None
+        )
+        consent_obj = consent_policy if isinstance(consent_policy, ConsentPolicy) else (
+            ConsentPolicy(**dict(consent_policy or {})) if isinstance(consent_policy, dict) else None
+        )
+        entry = build_dataset_entry(
+            workspace_id=self._workspace_id(workspace_id),
+            user_id=self._user_id(user_id),
+            source_kind=source_kind,
+            source_id=source_id,
+            text=text,
+            payload=payload,
+            metadata=metadata,
+            consent_policy=consent_obj,
+            workspace_policy=policy_obj,
+            classification=classification,
+        )
+        row = {
+            "entry_id": entry.entry_id,
+            "workspace_id": entry.workspace_id,
+            "user_id": entry.user_id,
+            "source_kind": entry.source_kind,
+            "source_id": entry.source_id,
+            "classification": entry.classification.value,
+            "learning_scope": entry.learning_scope,
+            "shared_learning_eligible": bool(entry.shared_learning_eligible),
+            "redacted": bool(entry.redacted),
+            "text": entry.text,
+            "payload_json": _json_dumps(entry.payload),
+            "retention_policy_json": _json_dumps(entry.retention_policy.to_dict()),
+            "consent_policy_json": _json_dumps(entry.consent_policy.to_dict()),
+            "metadata_json": _json_dumps(dict(entry.metadata or {})),
+            "created_at": entry.created_at,
+        }
+        with self._db.local_engine.begin() as conn:
+            conn.execute(dataset_entries_table.insert().values(**row))
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=entry.workspace_id,
+                event_type="privacy.dataset_entry.recorded",
+                payload={"entry_id": entry.entry_id, "classification": entry.classification.value, "scope": entry.learning_scope},
+            )
+        return self._entry_row(row)
+
+    def list_dataset_entries(
+        self,
+        *,
+        workspace_id: str = "",
+        user_id: str = "",
+        classification: str = "",
+        learning_scope: str = "",
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        with self._db.local_engine.begin() as conn:
+            stmt = select(dataset_entries_table)
+            if workspace_id:
+                stmt = stmt.where(dataset_entries_table.c.workspace_id == self._workspace_id(workspace_id))
+            if user_id:
+                stmt = stmt.where(dataset_entries_table.c.user_id == self._user_id(user_id))
+            if classification:
+                stmt = stmt.where(dataset_entries_table.c.classification == str(classification).strip().lower())
+            if learning_scope:
+                stmt = stmt.where(dataset_entries_table.c.learning_scope == str(learning_scope).strip().lower())
+            rows = conn.execute(
+                stmt.order_by(dataset_entries_table.c.created_at.desc()).limit(max(1, int(limit or 100)))
+            ).mappings().all()
+        return [self._entry_row(dict(row)) for row in rows]
+
+    def list_privacy_decisions(
+        self,
+        *,
+        workspace_id: str = "",
+        user_id: str = "",
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        with self._db.local_engine.begin() as conn:
+            stmt = select(privacy_decisions_table)
+            if workspace_id:
+                stmt = stmt.where(privacy_decisions_table.c.workspace_id == self._workspace_id(workspace_id))
+            if user_id:
+                stmt = stmt.where(privacy_decisions_table.c.user_id == self._user_id(user_id))
+            rows = conn.execute(
+                stmt.order_by(privacy_decisions_table.c.created_at.desc()).limit(max(1, int(limit or 100)))
+            ).mappings().all()
+        return [self._decision_row(dict(row)) for row in rows]
+
+    def summary(self, *, workspace_id: str = "local-workspace", user_id: str = "local-user", limit: int = 20) -> dict[str, Any]:
+        wid = self._workspace_id(workspace_id)
+        uid = self._user_id(user_id)
+        policy = self.get_workspace_policy(workspace_id=wid)
+        with self._db.local_engine.begin() as conn:
+            entry_total_row = conn.execute(
+                select(func.count(dataset_entries_table.c.entry_id))
+                .where(dataset_entries_table.c.workspace_id == wid)
+                .where(dataset_entries_table.c.user_id == uid)
+            ).first()
+            decision_total_row = conn.execute(
+                select(func.count(privacy_decisions_table.c.decision_id))
+                .where(privacy_decisions_table.c.workspace_id == wid)
+                .where(privacy_decisions_table.c.user_id == uid)
+            ).first()
+            counts = conn.execute(
+                select(
+                    dataset_entries_table.c.classification,
+                    func.count(dataset_entries_table.c.entry_id),
+                )
+                .where(dataset_entries_table.c.workspace_id == wid)
+                .where(dataset_entries_table.c.user_id == uid)
+                .group_by(dataset_entries_table.c.classification)
+            ).all()
+            scope_counts = conn.execute(
+                select(
+                    dataset_entries_table.c.learning_scope,
+                    func.count(dataset_entries_table.c.entry_id),
+                )
+                .where(dataset_entries_table.c.workspace_id == wid)
+                .where(dataset_entries_table.c.user_id == uid)
+                .group_by(dataset_entries_table.c.learning_scope)
+            ).all()
+            decision_counts = conn.execute(
+                select(
+                    privacy_decisions_table.c.classification,
+                    func.count(privacy_decisions_table.c.decision_id),
+                )
+                .where(privacy_decisions_table.c.workspace_id == wid)
+                .where(privacy_decisions_table.c.user_id == uid)
+                .group_by(privacy_decisions_table.c.classification)
+            ).all()
+            decision_scope_counts = conn.execute(
+                select(
+                    privacy_decisions_table.c.learning_scope,
+                    func.count(privacy_decisions_table.c.decision_id),
+                )
+                .where(privacy_decisions_table.c.workspace_id == wid)
+                .where(privacy_decisions_table.c.user_id == uid)
+                .group_by(privacy_decisions_table.c.learning_scope)
+            ).all()
+            recent = conn.execute(
+                select(dataset_entries_table)
+                .where(dataset_entries_table.c.workspace_id == wid)
+                .where(dataset_entries_table.c.user_id == uid)
+                .order_by(dataset_entries_table.c.created_at.desc())
+                .limit(max(1, int(limit or 20)))
+            ).mappings().all()
+            recent_decisions = conn.execute(
+                select(privacy_decisions_table)
+                .where(privacy_decisions_table.c.workspace_id == wid)
+                .where(privacy_decisions_table.c.user_id == uid)
+                .order_by(privacy_decisions_table.c.created_at.desc())
+                .limit(max(1, int(limit or 20)))
+            ).mappings().all()
+            consent_row = conn.execute(
+                select(consent_records_table)
+                .where(consent_records_table.c.workspace_id == wid)
+                .where(consent_records_table.c.user_id == uid)
+                .order_by(consent_records_table.c.updated_at.desc())
+                ).mappings().first()
+        classification_counts: dict[str, int] = {}
+        for source_rows in (counts, decision_counts):
+            for row in source_rows:
+                key = str(row[0])
+                classification_counts[key] = classification_counts.get(key, 0) + int(row[1] or 0)
+        learning_scope_counts: dict[str, int] = {}
+        for source_rows in (scope_counts, decision_scope_counts):
+            for row in source_rows:
+                key = str(row[0])
+                learning_scope_counts[key] = learning_scope_counts.get(key, 0) + int(row[1] or 0)
+        recent_entries = [self._entry_row(dict(row)) for row in recent]
+        recent_entries.extend(
+            {
+                "entry_id": str(row.get("decision_id") or ""),
+                "workspace_id": str(row.get("workspace_id") or wid),
+                "user_id": str(row.get("user_id") or uid),
+                "source_kind": str(row.get("source_kind") or "runtime"),
+                "source_id": str(row.get("decision_id") or ""),
+                "classification": str(row.get("classification") or "operational"),
+                "learning_scope": str(row.get("learning_scope") or "workspace"),
+                "shared_learning_eligible": bool(row.get("shared_learning_eligible", False)),
+                "redacted": bool(row.get("redacted", True)),
+                "text": str(row.get("text") or ""),
+                "payload": _json_loads(row.get("payload_json"), {}),
+                "retention_policy": _json_loads(row.get("retention_policy_json"), {}),
+                "consent_policy": _json_loads(row.get("consent_policy_json"), {}),
+                "metadata": _json_loads(row.get("metadata_json"), {}),
+                "created_at": float(row.get("created_at") or 0.0),
+            }
+            for row in recent_decisions
+        )
+        recent_entries.sort(key=lambda row: float(row.get("created_at") or 0.0), reverse=True)
+        recent_entries = recent_entries[: max(1, int(limit or 20))]
+        learned_from = []
+        if classification_counts.get("workspace"):
+            learned_from.append("workspace artifacts")
+        if classification_counts.get("operational"):
+            learned_from.append("operational signals")
+        if classification_counts.get("public"):
+            learned_from.append("public references")
+        excluded = ["personal data", "secret material"]
+        if not policy.get("allow_global_aggregation", True):
+            excluded.append("global aggregation")
+        return {
+            "workspace_id": wid,
+            "user_id": uid,
+            "policy": policy,
+            "consent": self._consent_row(dict(consent_row) if consent_row else None),
+            "classification_counts": classification_counts,
+            "learning_scope_counts": learning_scope_counts,
+            "shared_learning_eligible": int(sum(1 for row in recent_entries if bool(row.get("shared_learning_eligible")))),
+            "redacted_entries": int(sum(1 for row in recent_entries if bool(row.get("redacted")))),
+            "total_entries": int((entry_total_row[0] if entry_total_row else 0) + (decision_total_row[0] if decision_total_row else 0)),
+            "recent_entries": recent_entries,
+            "what_is_learned": learned_from,
+            "what_is_excluded": excluded,
+            "retention_policy": policy.get("retention_policy", {}),
+        }
+
+    def export_bundle(
+        self,
+        *,
+        workspace_id: str = "local-workspace",
+        user_id: str = "local-user",
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        wid = self._workspace_id(workspace_id)
+        uid = self._user_id(user_id)
+        summary = self.summary(workspace_id=wid, user_id=uid, limit=min(max(20, int(limit or 100)), 500))
+        return {
+            "workspace_id": wid,
+            "user_id": uid,
+            "summary": summary,
+            "privacy_decisions": self.list_privacy_decisions(workspace_id=wid, user_id=uid, limit=limit),
+            "dataset_entries": self.list_dataset_entries(workspace_id=wid, user_id=uid, limit=limit),
+        }
+
+    def delete_user_data(self, user_id: str, *, workspace_id: str = "") -> dict[str, Any]:
+        uid = self._user_id(user_id)
+        wid = self._workspace_id(workspace_id or "")
+        deleted: dict[str, int] = {}
+        with self._db.local_engine.begin() as conn:
+            for table in (
+                dataset_entries_table,
+                privacy_decisions_table,
+                consent_records_table,
+                operational_feedback_table,
+                user_preference_profiles_table,
+                local_user_sessions_table,
+                local_users_table,
+            ):
+                cursor = conn.execute(table.delete().where(table.c.user_id == uid))
+                deleted[table.name] = int(cursor.rowcount or 0)
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=wid,
+                event_type="privacy.user_data.deleted",
+                payload={"user_id": uid, "workspace_id": wid, "deleted": deleted},
+            )
+        return {"user_id": uid, "workspace_id": wid, "deleted": deleted}
 
 
 class LocalAuthRepository:
@@ -2873,6 +3487,7 @@ class RuntimeDatabase:
         self.billing = BillingRepository(self)
         self.connectors = ConnectorRepository(self)
         self.learning = LearningRepository(self)
+        self.privacy = PrivacyRepository(self)
         self.auth = LocalAuthRepository(self)
         self.auth_sessions = LocalAuthSessionRepository(self)
         self.execution = ExecutionRepository(self)
@@ -3282,6 +3897,7 @@ __all__ = [
     "LocalAuthSessionRepository",
     "OutboxRepository",
     "PermissionGrantRepository",
+    "PrivacyRepository",
     "RunIndexRepository",
     "RuntimeDatabase",
     "ThreadRepository",

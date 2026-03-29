@@ -233,6 +233,46 @@ def test_permission_grants_issue_revoke_and_expire():
     assert runtime_db.permission_grants.list_active(workspace_id="workspace-alpha") == []
 
 
+def test_privacy_repository_summary_export_and_delete():
+    runtime_db = get_runtime_database()
+    runtime_db.privacy.set_workspace_policy(
+        workspace_id="workspace-alpha",
+        allow_global_aggregation=False,
+        metadata={"source": "test"},
+    )
+    runtime_db.privacy.record_privacy_decision(
+        workspace_id="workspace-alpha",
+        user_id="user-privacy",
+        source_kind="interaction",
+        text="iletisimim user@example.com",
+        payload={"request": "user@example.com"},
+        classification="personal",
+    )
+    runtime_db.privacy.record_dataset_entry(
+        workspace_id="workspace-alpha",
+        user_id="user-privacy",
+        source_kind="feedback",
+        source_id="event-1",
+        text="model fallback latency",
+        payload={"latency_ms": 220.0},
+        classification="operational",
+    )
+
+    summary = runtime_db.privacy.summary(workspace_id="workspace-alpha", user_id="user-privacy", limit=5)
+    bundle = runtime_db.privacy.export_bundle(workspace_id="workspace-alpha", user_id="user-privacy", limit=5)
+    deleted = runtime_db.privacy.delete_user_data("user-privacy", workspace_id="workspace-alpha")
+
+    assert summary["workspace_id"] == "workspace-alpha"
+    assert summary["total_entries"] == 2
+    assert summary["classification_counts"]["personal"] == 1
+    assert summary["classification_counts"]["operational"] == 1
+    assert "personal data" in summary["what_is_excluded"]
+    assert bundle["privacy_decisions"]
+    assert bundle["dataset_entries"]
+    assert deleted["deleted"]["dataset_entries"] == 1
+    assert runtime_db.privacy.summary(workspace_id="workspace-alpha", user_id="user-privacy", limit=5)["total_entries"] == 0
+
+
 def test_local_auth_sessions_are_hashed_and_workspace_scoped():
     runtime_db = get_runtime_database()
     user = runtime_db.auth.upsert_user(

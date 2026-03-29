@@ -50,6 +50,7 @@ from core.pipeline_upgrade import (
 )
 from core.workspace_contract import ensure_workspace_contract
 from core.hybrid_model_policy import build_hybrid_model_plan
+from core.intent import ConversationContext, route_intent as route_shared_intent
 from core.verifier import evaluate_runtime_capability
 from core.ml import get_verifier
 from core.process_profiles import (
@@ -169,6 +170,71 @@ def _resolve_execution_mode(ctx: Any) -> str:
     return "operator"
 
 
+def _serialize_routed_intent(routed: Any) -> dict[str, Any]:
+    if not routed:
+        return {}
+    if isinstance(routed, dict):
+        payload = dict(routed)
+    elif hasattr(routed, "to_dict") and callable(routed.to_dict):
+        try:
+            payload = dict(routed.to_dict())
+        except Exception:
+            payload = {}
+    else:
+        payload = {}
+    if not payload:
+        return {}
+
+    tasks: list[dict[str, Any]] = []
+    for task in list(getattr(routed, "tasks", []) or []):
+        if isinstance(task, dict):
+            tasks.append(dict(task))
+            continue
+        if hasattr(task, "to_dict") and callable(task.to_dict):
+            try:
+                task_payload = task.to_dict()
+                if isinstance(task_payload, dict):
+                    tasks.append(dict(task_payload))
+                    continue
+            except Exception:
+                pass
+        if hasattr(task, "__dict__"):
+            tasks.append({k: v for k, v in vars(task).items() if not str(k).startswith("_")})
+        else:
+            tasks.append({"value": str(task)})
+
+    payload["tasks"] = tasks
+    payload["is_multi_task"] = bool(getattr(routed, "is_multi_task", payload.get("is_multi_task", False)))
+    payload["requires_clarification"] = bool(
+        getattr(routed, "requires_clarification", payload.get("requires_clarification", False))
+    )
+    payload["clarification_options"] = list(
+        getattr(routed, "clarification_options", payload.get("clarification_options", [])) or []
+    )
+    return payload
+
+
+def _build_conversation_context(ctx: Any) -> ConversationContext:
+    user_id = str(getattr(ctx, "user_id", "") or "local")
+    context = ConversationContext(user_id=user_id)
+    for attr in ("message_history", "history", "conversation_history", "recent_history"):
+        history = getattr(ctx, attr, None)
+        if not isinstance(history, list):
+            continue
+        for item in history[-5:]:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "user").strip() or "user"
+            content = str(item.get("content") or item.get("text") or item.get("message") or "").strip()
+            if content:
+                context.add_message(role, content)
+        break
+    last_intent = getattr(ctx, "last_intent", None)
+    if last_intent:
+        context.last_intent = str(last_intent)
+    return context
+
+
 def _build_assist_mode_preview(ctx: Any) -> str:
     intent = ctx.intent if isinstance(getattr(ctx, "intent", {}), dict) else {}
     action = _normalize_action(getattr(ctx, "action", "") or intent.get("action"))
@@ -238,10 +304,14 @@ def _apply_contract_first_coding_metadata(ctx: Any, prepared: dict[str, Any]) ->
     style_intent = prepared.get("style_intent") if isinstance(prepared.get("style_intent"), dict) else {}
     failure = prepared.get("failure") if isinstance(prepared.get("failure"), dict) else {}
     task_spec = prepared.get("task_spec") if isinstance(prepared.get("task_spec"), dict) else None
+    project_brief = prepared.get("project_brief") if isinstance(prepared.get("project_brief"), dict) else {}
+    project_artifacts = prepared.get("project_artifacts") if isinstance(prepared.get("project_artifacts"), list) else []
 
     ctx.repo_snapshot = dict(repo_snapshot)
     ctx.coding_contract = dict(coding_contract)
     ctx.style_intent = dict(style_intent)
+    ctx.project_brief = dict(project_brief)
+    ctx.project_artifacts = [dict(item) for item in project_artifacts if isinstance(item, dict)]
     ctx.adapter_id = str(coding_contract.get("execution_adapter") or coding_contract.get("adapter_id") or "")
     ctx.requires_evidence = True
     ctx.is_code_job = True
@@ -267,6 +337,10 @@ def _apply_contract_first_coding_metadata(ctx: Any, prepared: dict[str, Any]) ->
         metadata["forbidden_write_paths"] = list(coding_contract.get("forbidden_write_paths") or [])
         metadata["gate_state"] = dict(ctx.gate_state)
         metadata["model_ladder_trace"] = list(ctx.model_ladder_trace)
+        if project_brief:
+            metadata["project_brief"] = dict(project_brief)
+        if project_artifacts:
+            metadata["project_artifacts"] = [dict(item) for item in project_artifacts if isinstance(item, dict)]
         ctx.runtime_policy["metadata"] = metadata
 
     if isinstance(ctx.intent, dict) and isinstance(task_spec, dict):
@@ -2447,14 +2521,32 @@ class StageRoute(PipelineStage):
             ctx.job_type = "communication"
 
         # Intent parsing
-        if hasattr(agent, 'intent_parser'):
+        routed_intent = None
+        try:
+            user_key = str(getattr(ctx, "user_id", "") or "local")
+            conversation_context = _build_conversation_context(ctx)
+            if getattr(agent, "intent_router", None) is not None:
+                routed = agent.intent_router.route(ctx.user_input, user_key, AVAILABLE_TOOLS, conversation_context)
+            elif hasattr(agent, "llm"):
+                routed = route_shared_intent(ctx.user_input, user_key, AVAILABLE_TOOLS, conversation_context, agent.llm)
+            else:
+                routed = None
+            routed_intent = _serialize_routed_intent(routed)
+        except Exception as route_exc:
+            logger.debug(f"Shared intent routing skipped: {route_exc}")
+
+        if routed_intent:
+            ctx.intent = routed_intent
+            ctx.action = str(ctx.intent.get("action", "")).lower()
+            ctx.job_type = _job_type_from_action(ctx.action, ctx.job_type)
+        elif hasattr(agent, "intent_parser"):
             try:
                 ctx.intent = agent.intent_parser.parse(ctx.user_input)
                 if isinstance(ctx.intent, dict):
                     ctx.action = str(ctx.intent.get("action", "")).lower()
                     ctx.job_type = _job_type_from_action(ctx.action, ctx.job_type)
-            except Exception:
-                pass
+            except Exception as intent_exc:
+                logger.debug(f"Legacy intent parsing skipped: {intent_exc}")
 
         # World model snapshot: deterministic bridge from memory -> plan context.
         try:
