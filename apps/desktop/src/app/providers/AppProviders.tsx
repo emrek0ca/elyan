@@ -87,7 +87,7 @@ function RuntimeBridge() {
         }
         return;
       }
-      if (socketIdentity === identity) {
+      if (socketIdentity === identity && runtimeSocketBridge.isConnected()) {
         return;
       }
       disconnectSocket();
@@ -102,6 +102,8 @@ function RuntimeBridge() {
       if (disposed) {
         return;
       }
+      apiClient.setBaseUrl(health.runtimeUrl);
+      apiClient.setAdminToken(health.adminToken || "");
       setSidecarHealth(health);
       syncSocket(health.runtimeUrl, health.adminToken || apiClient.getSessionToken(), health.status === "healthy");
       if (health.status === "healthy") {

@@ -3,6 +3,10 @@ type RuntimeEventListener = (event: { type: string; payload: unknown }) => void;
 export class RuntimeSocketBridge {
   private socket: WebSocket | null = null;
 
+  isConnected() {
+    return this.socket?.readyState === WebSocket.OPEN || this.socket?.readyState === WebSocket.CONNECTING;
+  }
+
   connect(baseUrl: string, token: string, onEvent: RuntimeEventListener): () => void {
     try {
       const normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
@@ -13,6 +17,7 @@ export class RuntimeSocketBridge {
       socketUrl.protocol = socketUrl.protocol === "https:" ? "wss:" : "ws:";
       socketUrl.searchParams.set("token", token.trim());
 
+      this.socket?.close();
       this.socket = new WebSocket(socketUrl.toString());
       this.socket.onmessage = (message) => {
         try {
@@ -28,6 +33,12 @@ export class RuntimeSocketBridge {
         } catch {
           onEvent({ type: "runtime_event", payload: message.data });
         }
+      };
+      this.socket.onclose = () => {
+        this.socket = null;
+      };
+      this.socket.onerror = () => {
+        this.socket = null;
       };
     } catch {
       return () => undefined;
