@@ -156,7 +156,7 @@ def cli(ctx):
     \b
     İlk kurulum:    elyan setup
     Başlat:         elyan start  
-    Dashboard:      elyan dashboard
+    Desktop:        elyan desktop
     Model seç:      elyan models
     Durum:          elyan status
     """
@@ -182,12 +182,12 @@ def cli(ctx):
             gw = "🟢 ONLINE" if _port_alive() else "🔴 OFFLINE"
             click.echo(f"  Model:     {model}")
             click.echo(f"  Gateway:   {gw}")
-            click.echo(f"  Dashboard: http://localhost:{PORT}/dashboard")
+            click.echo("  Desktop:   elyan desktop")
             click.echo()
             click.echo(click.style("  Komutlar:", bold=True))
             click.echo("    elyan start      — Gateway başlat")
             click.echo("    elyan models     — Model yönetimi")
-            click.echo("    elyan dashboard  — Web panel aç")
+            click.echo("    elyan desktop    — Desktop uygulamayı aç")
             click.echo("    elyan status     — Sistem durumu")
             click.echo("    elyan team       — Ajan takımı")
             click.echo("    elyan setup      — Kurulum sihirbazı")
@@ -352,7 +352,7 @@ def setup():
             else:
                 _warn("Atlandı")
         else:
-            _info("Telegram atlandı. Sonra dashboard'dan ekleyebilirsin.")
+            _info("Telegram atlandı. Sonra desktop uygulamasından ekleyebilirsin.")
 
     # ── Step 6: Config for elyan_config compatibility ──
     _step(6, "Konfigürasyon Oluşturuluyor")
@@ -442,7 +442,7 @@ def setup():
     click.echo()
     click.echo("  Sonraki adımlar:")
     click.echo(click.style("    elyan start", fg="cyan") + "       — Gateway'i başlat")
-    click.echo(click.style("    elyan dashboard", fg="cyan") + "   — Web kontrol panelini aç")
+    click.echo(click.style("    elyan desktop", fg="cyan") + "     — Desktop uygulamayı aç")
     click.echo(click.style("    elyan status", fg="cyan") + "      — Sistem durumunu kontrol et")
     click.echo(click.style("    elyan models", fg="cyan") + "      — Model değiştir")
     click.echo()
@@ -463,7 +463,7 @@ def start(port, daemon):
 
     if _port_alive(port):
         click.echo(f"⚠️  Zaten çalışıyor (port {port})")
-        click.echo(f"   Dashboard: http://localhost:{port}/dashboard")
+        click.echo("   Desktop: elyan desktop")
         return
 
     cfg = _cfg()
@@ -483,7 +483,7 @@ def start(port, daemon):
             start_new_session=True, cwd=str(project_root)
         )
         click.echo(f"  ✅ Arka planda başlatıldı (PID: {proc.pid})")
-        click.echo(f"  Dashboard: http://localhost:{port}/dashboard")
+        click.echo("  Desktop: elyan desktop")
     else:
         _run_gateway(port)
 
@@ -492,6 +492,26 @@ def _run_gateway(port: int):
     os.environ["ELYAN_PORT"] = str(port)
     # Load .env before imports so tokens are available
     _load_dotenv()
+
+    # Kill any stale process occupying the port before starting fresh.
+    # This handles orphaned backends left from previous Tauri sessions.
+    try:
+        import subprocess as _sp
+        result = _sp.run(["lsof", "-ti", f"tcp:{port}"], capture_output=True, text=True)
+        pids = [p.strip() for p in result.stdout.strip().splitlines() if p.strip()]
+        my_pid = str(os.getpid())
+        for pid in pids:
+            if pid != my_pid:
+                try:
+                    _sp.run(["kill", pid], check=False)
+                except Exception:
+                    pass
+        if pids:
+            import time as _t
+            _t.sleep(1)  # give the old process time to release the port
+    except Exception:
+        pass
+
     from core.agent import Agent
     from core.gateway.server import ElyanGatewayServer
     import asyncio
@@ -506,7 +526,7 @@ def _run_gateway(port: int):
             return
         loop.run_until_complete(server.start(port=port))
         click.echo(f"\n  ✅ Elyan v{VERSION} çalışıyor — port {port}")
-        click.echo(f"  🌐 Dashboard: http://localhost:{port}/dashboard")
+        click.echo("  🖥️  Desktop: elyan desktop")
         click.echo("  Ctrl+C ile durdur.\n")
         loop.run_forever()
     except KeyboardInterrupt:
@@ -547,29 +567,25 @@ def restart(port):
 
 
 # ═══════════════════════════════════════════════════════════════
-#  elyan dashboard
+#  elyan dashboard (compat)
 # ═══════════════════════════════════════════════════════════════
 
-@cli.command()
+@cli.command(hidden=True)
 @click.option("--port", default=PORT)
 def dashboard(port):
-    """🖥️  Dashboard panelini aç."""
-    import webbrowser
-    url = f"http://localhost:{port}/dashboard"
-    if not _port_alive(port):
-        click.echo("⚠️  Gateway kapalı. Önce başlat:")
-        click.echo(f"   elyan start --daemon")
-        click.echo()
-        want = click.confirm("   Şimdi başlatayım mı? (arka planda)", default=True)
-        if want:
-            ctx = click.get_current_context()
-            ctx.invoke(start, port=port, daemon=True)
-            time.sleep(2)
-        else:
-            return
+    """Compatibility alias. Canonical UI is `elyan desktop`."""
+    _ = port
+    from cli.commands.desktop import open_desktop
+    click.echo("ℹ️  Web dashboard kaldırıldı. Elyan Desktop açılıyor...")
+    raise SystemExit(open_desktop(detached=False))
 
-    click.echo(f"🌐 {url}")
-    webbrowser.open(url)
+
+@cli.command()
+@click.option("--detached", is_flag=True, help="Desktop uygulamayı arka planda başlat")
+def desktop(detached):
+    """🖥️  Desktop uygulamayı başlat."""
+    from cli.commands.desktop import open_desktop
+    raise SystemExit(open_desktop(detached=bool(detached)))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -713,7 +729,7 @@ def status():
     click.echo(f"  Ollama:   {'🟢' if _ollama_ok() else '🔴'}")
     click.echo(f"  Python:   {sys.version.split()[0]}")
     if gw:
-        click.echo(f"  Dashboard: http://localhost:{PORT}/dashboard")
+        click.echo("  Desktop: elyan desktop")
         if health.get("health_status"):
             click.echo(f"  Health:   {health.get('health_status')}")
     click.echo()

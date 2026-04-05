@@ -727,12 +727,72 @@ class Agent:
                 }
             )
 
+        # ── Layer 1: Domain detection (text-based context intelligence) ──────
+        domain_context: dict[str, Any] = {}
+        try:
+            ci = get_context_intelligence()
+            detected = ci.detect(user_input)
+            domain_context = {
+                "detected_domain": detected.get("domain", "general"),
+                "detected_stack": detected.get("stack", "none"),
+                "is_creative": bool(detected.get("is_creative", False)),
+                "needs_automation": bool(detected.get("needs_automation", False)),
+                "domain_specialized_prompt": ci.get_specialized_prompt(detected),
+                "domain_preferred_tools": ci.get_preferred_tools(detected.get("domain", "general")),
+            }
+        except Exception:
+            domain_context = {}
+
+        # ── Layer 2: Personal OS context (what user is doing RIGHT NOW) ──────
+        os_context: dict[str, Any] = {}
+        try:
+            from core.personal_context_engine import get_personal_context_engine
+            pce = get_personal_context_engine()
+            pce.start_background_polling(uid)
+            snap = pce.get_current_context(uid)
+            if snap.is_fresh(max_age=300):  # use if <5 min old
+                os_context = pce.get_context_summary(uid)
+        except Exception:
+            os_context = {}
+
+        # ── Layer 3: Workspace intelligence (tenant-level patterns) ──────────
+        workspace_intel: dict[str, Any] = {}
+        try:
+            from core.workspace.intelligence import get_workspace_intelligence
+            workspace_id = str((request_meta or {}).get("workspace_id") or "local-workspace")
+            wi = get_workspace_intelligence()
+            profile_ws = wi.get_profile(workspace_id)
+            workspace_intel = {
+                "dominant_task_types": profile_ws.dominant_task_types[:3],
+                "reliable_tools": profile_ws.reliable_tools[:3],
+                "preferred_domains": profile_ws.preferred_domains[:2],
+                "workspace_success_rate": profile_ws.success_rate,
+                "suggested_shortcuts": profile_ws.suggested_shortcuts[:3],
+                "prompt_fragment": profile_ws.to_prompt_fragment(),
+            }
+        except Exception:
+            workspace_intel = {}
+
+        # ── Layer 4: Task continuity (cross-session resume surface) ──────────
+        continuity: dict[str, Any] = {}
+        try:
+            from core.task_continuity import get_task_continuity_manager
+            workspace_id = str((request_meta or {}).get("workspace_id") or "local-workspace")
+            is_session_start = bool((request_meta or {}).get("is_session_start", False))
+            if is_session_start:
+                continuity = get_task_continuity_manager().get_continuity_surface(workspace_id, uid)
+        except Exception:
+            continuity = {}
+
         context = {
             "preferred_language": str(profile.get("preferred_language") or "auto").strip(),
             "response_length_bias": str(profile.get("response_length_bias") or "short").strip(),
             "top_topics": top_topics,
             "top_actions": list(profile.get("top_actions") or [])[:5],
-            "dominant_domain": str(learning_digest.get("dominant_domain") or "").strip(),
+            "dominant_domain": (
+                str(learning_digest.get("dominant_domain") or "").strip()
+                or domain_context.get("detected_domain", "")
+            ),
             "request_kind": request_kind,
             "learning_score": float(learning_digest.get("learning_score", 0.0) or 0.0),
             "success_rate": float(learning_digest.get("success_rate", 0.0) or 0.0),
@@ -741,6 +801,11 @@ class Agent:
             "prompt_hint": str(learning_digest.get("prompt_hint") or "").strip(),
             "correction_hints": correction_hints,
             "conversation_context": dict(conversation_context or {}),
+            # ── NEW: enriched intelligence layers ────────────────────────────
+            "domain_context": domain_context,
+            "os_context": os_context,
+            "workspace_intel": workspace_intel,
+            "continuity": continuity,
         }
         if context["preferred_language"] == "auto":
             if top_topics:

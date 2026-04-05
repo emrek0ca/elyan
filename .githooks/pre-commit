@@ -1,4 +1,11 @@
 #!/bin/sh
 set -eu
 
-python3 scripts/check_repo_policy.py
+# Use the project venv if available (requires Python 3.11+),
+# otherwise fall back to the system python3.
+VENV_PYTHON="$HOME/.venvs/elyan-fresh/bin/python3"
+if [ -x "$VENV_PYTHON" ]; then
+    "$VENV_PYTHON" scripts/check_repo_policy.py
+else
+    python3 scripts/check_repo_policy.py
+fi

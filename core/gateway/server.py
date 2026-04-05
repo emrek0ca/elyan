@@ -215,6 +215,8 @@ _USER_SESSION_PATHS = {
     "/api/v1/tasks/extract",
     "/api/v1/cowork/home",
     "/api/v1/cowork/threads",
+    "/api/v1/cowork/continuity",
+    "/api/v1/workspace/intelligence",
     "/api/v1/billing/workspace",
     "/api/v1/billing/usage",
     "/api/v1/billing/entitlements",
@@ -1752,6 +1754,8 @@ class ElyanGatewayServer:
         self.app.router.add_post('/api/v1/admin/workspaces/{workspace_id}/members/{actor_id}/role', self.handle_v1_admin_workspace_member_role)
         self.app.router.add_post('/api/v1/admin/workspaces/{workspace_id}/seats/assign', self.handle_v1_admin_workspace_seat_assign)
         self.app.router.add_get('/api/v1/cowork/home', self.handle_v1_cowork_home)
+        self.app.router.add_get('/api/v1/cowork/continuity', self.handle_v1_cowork_continuity)
+        self.app.router.add_get('/api/v1/workspace/intelligence', self.handle_v1_workspace_intelligence)
         self.app.router.add_get('/api/v1/cowork/threads', self.handle_v1_cowork_threads)
         self.app.router.add_post('/api/v1/cowork/threads', self.handle_v1_cowork_threads)
         self.app.router.add_get('/api/v1/cowork/threads/{thread_id}', self.handle_v1_cowork_thread_detail)
@@ -2595,6 +2599,25 @@ class ElyanGatewayServer:
             ]
         except Exception:
             background_tasks = []
+        # ── Continuity surface (yarım kalan görevler) ────────────────────
+        continuity = {}
+        try:
+            from core.task_continuity import get_task_continuity_manager
+            continuity = get_task_continuity_manager().get_continuity_surface(
+                workspace_id, user_id, max_results=3
+            )
+        except Exception:
+            continuity = {}
+
+        # ── Workspace intelligence summary ───────────────────────────────
+        workspace_intel = {}
+        try:
+            from core.workspace.intelligence import get_workspace_intelligence
+            profile_ws = get_workspace_intelligence().get_profile(workspace_id)
+            workspace_intel = profile_ws.to_dict()
+        except Exception:
+            workspace_intel = {}
+
         return _json_ok(
             {
                 "workspace_id": workspace_id,
@@ -2614,8 +2637,34 @@ class ElyanGatewayServer:
                     "last_interventions": list(autopilot_status.get("last_interventions") or [])[:4],
                 },
                 "billing": billing,
+                "continuity": continuity,
+                "workspace_intelligence": workspace_intel,
             }
         )
+
+    async def handle_v1_cowork_continuity(self, request):
+        """GET /api/v1/cowork/continuity — Session start continuity surface."""
+        workspace_id = self._workspace_id(request)
+        user_id = self._actor_id(request)
+        try:
+            from core.task_continuity import get_task_continuity_manager
+            surface = get_task_continuity_manager().get_continuity_surface(
+                workspace_id, user_id, max_results=5
+            )
+            return _json_ok({"continuity": surface, "workspace_id": workspace_id})
+        except Exception as exc:
+            return _json_ok({"continuity": {"has_open_tasks": False, "count": 0, "candidates": []}, "error": str(exc)})
+
+    async def handle_v1_workspace_intelligence(self, request):
+        """GET /api/v1/workspace/intelligence — Workspace intelligence profile."""
+        workspace_id = self._workspace_id(request)
+        force = request.rel_url.query.get("force", "").lower() in {"1", "true", "yes"}
+        try:
+            from core.workspace.intelligence import get_workspace_intelligence
+            profile = get_workspace_intelligence().get_profile(workspace_id, force_refresh=force)
+            return _json_ok({"intelligence": profile.to_dict(), "workspace_id": workspace_id})
+        except Exception as exc:
+            return _json_error(f"workspace intelligence unavailable: {exc}", status=500)
 
     async def handle_v1_cowork_threads(self, request):
         workspace_id = self._workspace_id(request)
