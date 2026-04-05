@@ -5,6 +5,7 @@ import { ElyanMark } from "@/components/brand/ElyanMark";
 import { Button } from "@/components/primitives/Button";
 import { Surface } from "@/components/primitives/Surface";
 import { runtimeManager } from "@/runtime/runtime-manager";
+import { apiClient } from "@/services/api/client";
 import { useUiStore } from "@/stores/ui-store";
 import { ArrowRight, ExternalLink } from "@/vendor/lucide-react";
 
@@ -16,7 +17,9 @@ export function LoginScreen() {
   const completeOnboarding = useUiStore((state) => state.completeOnboarding);
   const defaultEmail = useUiStore((state) => state.authenticatedEmail);
   const [email, setEmail] = useState(defaultEmail);
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
   async function openSignup() {
     const opened = await runtimeManager.openExternalUrl(ELYAN_DEV_URL);
@@ -25,15 +28,58 @@ export function LoginScreen() {
     }
   }
 
-  function handleContinue() {
+  async function handleContinue() {
+    setError("");
     const normalizedEmail = email.trim().toLowerCase();
     if (!normalizedEmail) {
-      setError("Devam etmek için e-posta gir.");
+      setError("E-posta gerekli.");
       return;
     }
-    signIn(normalizedEmail);
-    completeOnboarding();
-    navigate("/home", { replace: true });
+    if (!password) {
+      setError("Parola gerekli.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const result = await apiClient.request<{
+        ok: boolean;
+        session_token?: string;
+        user?: { email: string };
+        error?: string;
+        bootstrap_required?: boolean;
+      }>("/api/v1/auth/login", {
+        method: "POST",
+        body: { email: normalizedEmail, password },
+      });
+
+      if (!result.ok) {
+        if (result.bootstrap_required) {
+          // No owner yet — go to onboarding to create account
+          navigate("/onboarding", { replace: true });
+          return;
+        }
+        setError(result.error || "E-posta veya parola hatalı.");
+        return;
+      }
+
+      if (result.session_token) {
+        apiClient.setSessionToken(result.session_token);
+      }
+
+      signIn(normalizedEmail);
+      completeOnboarding();
+      navigate("/home", { replace: true });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("409")) {
+        navigate("/onboarding", { replace: true });
+        return;
+      }
+      setError("Giriş başarısız. Backend çalışıyor mu?");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -60,18 +106,24 @@ export function LoginScreen() {
               <input
                 type="email"
                 value={email}
-                onChange={(event) => {
-                  setEmail(event.target.value);
-                  if (error) {
-                    setError("");
-                  }
-                }}
+                onChange={(event) => { setEmail(event.target.value); setError(""); }}
                 placeholder="you@company.com"
+                className="h-[52px] w-full rounded-[20px] border border-[var(--border-subtle)] bg-[color-mix(in_srgb,var(--bg-surface)_94%,var(--bg-surface-raised))] px-5 text-[15px] text-[var(--text-primary)] outline-none transition focus:border-[var(--border-focus)]"
+              />
+            </div>
+
+            <div className="space-y-3">
+              <label className="block text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Parola</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => { setPassword(event.target.value); setError(""); }}
+                placeholder="••••••••"
                 className="h-[52px] w-full rounded-[20px] border border-[var(--border-subtle)] bg-[color-mix(in_srgb,var(--bg-surface)_94%,var(--bg-surface-raised))] px-5 text-[15px] text-[var(--text-primary)] outline-none transition focus:border-[var(--border-focus)]"
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
                     event.preventDefault();
-                    handleContinue();
+                    void handleContinue();
                   }
                 }}
               />
@@ -79,9 +131,9 @@ export function LoginScreen() {
             </div>
 
             <div className="flex flex-wrap gap-3">
-              <Button variant="primary" onClick={handleContinue}>
-                Devam et
-                <ArrowRight className="ml-2 h-4 w-4" />
+              <Button variant="primary" onClick={() => void handleContinue()} disabled={loading}>
+                {loading ? "Giriş yapılıyor…" : "Devam et"}
+                {!loading && <ArrowRight className="ml-2 h-4 w-4" />}
               </Button>
               <Button variant="secondary" onClick={() => void openSignup()}>
                 Kayıt ol

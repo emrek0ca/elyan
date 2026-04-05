@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 from aiohttp import web, WSMsgType
 from types import SimpleNamespace
 from typing import Any, Optional, Set
-from cli.onboard import _check_macos_permissions, is_setup_complete
+from cli.onboard import _check_macos_permissions, is_setup_complete, mark_setup_complete
 from .router import GatewayRouter
 from .response import UnifiedResponse
 from core.scheduler.cron_engine import CronEngine
@@ -2414,6 +2414,11 @@ class ElyanGatewayServer:
                 "login_source": "bootstrap_owner",
             },
         )
+        # Mark the initial setup complete so subsequent health checks reflect this
+        try:
+            mark_setup_complete({"bootstrap_source": "gateway_bootstrap_owner"})
+        except Exception as _mk_exc:
+            logger.warning(f"mark_setup_complete failed (non-fatal): {_mk_exc}")
         response = _json_ok(
             {
                 "workspace_id": str(user.get("workspace_id") or workspace_id),
@@ -5305,8 +5310,7 @@ class ElyanGatewayServer:
             system_dependencies = get_system_dependency_runtime().snapshot()
         except Exception:
             system_dependencies = {"enabled": False, "status_counts": {}}
-        return web.json_response(
-            {
+        payload: dict = {
                 "ok": bool(readiness.get("elyan_ready")),
                 "status": "ready" if readiness.get("elyan_ready") else "degraded",
                 "version": str(release.get("version") or ""),
@@ -5323,7 +5327,11 @@ class ElyanGatewayServer:
                 "readiness": readiness,
                 "system_dependencies": system_dependencies,
             }
-        )
+        # Non-Tauri (browser/dev) mode: expose admin token to loopback callers so
+        # AppProviders.tsx can call apiClient.setAdminToken() without Rust involvement.
+        if _is_loopback_request(request):
+            payload["admin_token"] = _ensure_admin_access_token()
+        return web.json_response(payload)
 
     async def handle_product_workflows(self, request):
         return web.json_response({"ok": True, "workflows": self._product_workflow_catalog()})

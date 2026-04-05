@@ -48,6 +48,22 @@ import {
   toneOptions,
 } from "@/utils/product-settings";
 
+function translateBillingError(raw: string): string {
+  if (raw.startsWith("iyzico_plan_checkout_missing:") || raw.startsWith("iyzico_token_pack_checkout_missing:")) {
+    return "Ödeme bağlantısı yapılandırılmamış. Lütfen sistem yöneticinize başvurun.";
+  }
+  if (raw.startsWith("iyzico_config_missing:")) {
+    return "Ödeme sağlayıcısı yapılandırılmamış (API anahtarları eksik).";
+  }
+  if (raw.startsWith("billing_profile_incomplete:")) {
+    return "Fatura profili tamamlanmamış. Lütfen fatura bilgilerini doldurun.";
+  }
+  if (raw.includes("503") || raw.toLowerCase().includes("unavailable")) {
+    return "Ödeme servisi şu an kullanılamıyor. Lütfen tekrar deneyin.";
+  }
+  return raw;
+}
+
 const roleOptions = [
   { value: "owner", label: "Owner" },
   { value: "billing_admin", label: "Billing" },
@@ -218,7 +234,8 @@ export function SettingsScreen() {
         void pollCheckout(checkout.referenceId);
       }
     } catch (error) {
-      setBillingMessage(error instanceof Error ? error.message : "Checkout baslatilamadi.");
+      const raw = error instanceof Error ? error.message : "Checkout baslatilamadi.";
+      setBillingMessage(translateBillingError(raw));
     } finally {
       setBillingBusy(null);
     }
@@ -246,7 +263,8 @@ export function SettingsScreen() {
         void pollCheckout(checkout.referenceId);
       }
     } catch (error) {
-      setBillingMessage(error instanceof Error ? error.message : "Token pack checkout baslatilamadi.");
+      const raw = error instanceof Error ? error.message : "Token pack checkout baslatilamadi.";
+      setBillingMessage(translateBillingError(raw));
     } finally {
       setBillingBusy(null);
     }

@@ -488,6 +488,48 @@ def start(port, daemon):
         _run_gateway(port)
 
 
+def _log_startup_config_warnings() -> None:
+    """Non-blocking check — logs warnings for missing or misconfigured services."""
+    warnings: list[str] = []
+
+    # Model / LLM provider
+    try:
+        from core.config import elyan_config as _cfg
+        provider = str(_cfg.get("llm.active_provider", "") or "").strip()
+        model = str(_cfg.get("llm.active_model", "") or "").strip()
+        if not provider or not model:
+            warnings.append("LLM provider/model yapılandırılmamış. Ayarlar > Sağlayıcılar'dan ekle.")
+    except Exception:
+        pass
+
+    # Billing (only when real API is intended)
+    try:
+        real_billing = str(os.getenv("IYZICO_REAL_API_ENABLED", "0") or "0").strip().lower() in {"1", "true", "yes", "on"}
+        if real_billing:
+            missing_billing: list[str] = []
+            for env_name in ("IYZICO_API_KEY", "IYZICO_SECRET_KEY", "IYZICO_MERCHANT_ID"):
+                if not os.getenv(env_name, "").strip():
+                    missing_billing.append(env_name)
+            if missing_billing:
+                warnings.append(f"IYZICO_REAL_API_ENABLED=1 ama eksik env var: {', '.join(missing_billing)}")
+    except Exception:
+        pass
+
+    # Admin token
+    try:
+        from core.config import elyan_config as _cfg
+        admin_tok = str(os.getenv("ELYAN_ADMIN_TOKEN", "") or _cfg.get("gateway.admin.token", "") or "").strip()
+        if not admin_tok:
+            warnings.append("Admin token eksik; ilk /healthz çağrısında otomatik üretilecek.")
+    except Exception:
+        pass
+
+    for w in warnings:
+        logger.warning(f"[startup] ⚠️  {w}")
+    if not warnings:
+        logger.info("[startup] ✅ Tüm yapılandırmalar mevcut.")
+
+
 def _run_gateway(port: int):
     os.environ["ELYAN_PORT"] = str(port)
     # Load .env before imports so tokens are available
@@ -535,6 +577,7 @@ def _run_gateway(port: int):
         loop.run_until_complete(_start_intelligence_layers())
 
         loop.run_until_complete(server.start(port=port))
+        _log_startup_config_warnings()
         click.echo(f"\n  ✅ Elyan v{VERSION} çalışıyor — port {port}")
         click.echo("  🖥️  Desktop: elyan desktop")
         click.echo("  Ctrl+C ile durdur.\n")
