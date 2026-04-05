@@ -7,6 +7,7 @@ Interactive CLI with OpenClaw-style onboarding.
 import sys
 import os
 import json
+import signal
 import socket
 import time
 import subprocess
@@ -535,6 +536,12 @@ def _run_gateway(port: int):
     # Load .env before imports so tokens are available
     _load_dotenv()
 
+    def _handle_sigterm(_sig, _frame):
+        raise KeyboardInterrupt
+
+    previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+
     # Kill any stale process occupying the port before starting fresh.
     # This handles orphaned backends left from previous Tauri sessions.
     try:
@@ -590,6 +597,7 @@ def _run_gateway(port: int):
         except Exception:
             pass
         loop.close()
+        signal.signal(signal.SIGTERM, previous_sigterm_handler)
 
 
 @cli.command()
