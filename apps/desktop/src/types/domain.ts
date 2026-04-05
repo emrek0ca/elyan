@@ -1,5 +1,10 @@
 export type ThemeMode = "light" | "dark" | "system";
 export type HealthState = "connected" | "degraded" | "offline" | "pending";
+export type ProductResponseMode = "adaptive" | "concise" | "detailed";
+export type ProductProviderStrategy = "local_first" | "balanced" | "verified";
+export type ProductPrivacyMode = "balanced" | "maximum";
+export type ProductAutomationLevel = "manual" | "assisted" | "operator";
+export type ProductTone = "natural" | "warm" | "formal";
 export type WorkflowTaskType = "document" | "presentation" | "website";
 export type CoworkMode = "cowork" | WorkflowTaskType;
 export type WorkflowAudience = "executive" | "developer" | "client";
@@ -49,6 +54,184 @@ export interface WorkspaceSummary {
   detail?: string;
 }
 
+export interface WorkspaceSeatSummary {
+  seatLimit: number;
+  seatsUsed: number;
+  seatsAvailable: number;
+}
+
+export interface WorkspacePermissionSummary {
+  viewWorkspace: boolean;
+  viewFinancials: boolean;
+  manageMembers: boolean;
+  manageRoles: boolean;
+  manageSeats: boolean;
+}
+
+export interface WorkspaceAdminSummary {
+  workspaceId: string;
+  displayName: string;
+  status: string;
+  role: string;
+  seats: WorkspaceSeatSummary;
+  permissions: WorkspacePermissionSummary;
+  billing?: {
+    planId: string;
+    status: string;
+    creditsTotal: number;
+  };
+}
+
+export interface WorkspaceMemberSummary {
+  actorId: string;
+  workspaceId: string;
+  role: string;
+  status: string;
+  seatAssigned: boolean;
+  user?: {
+    userId: string;
+    email: string;
+    displayName: string;
+    status: string;
+  };
+  seatAssignment?: {
+    assignmentId: string;
+    status: string;
+    actorId: string;
+    assignedBy: string;
+    updatedAt?: number;
+  };
+}
+
+export interface WorkspaceInviteSummary {
+  inviteId: string;
+  workspaceId: string;
+  email: string;
+  role: string;
+  status: string;
+  expiresAt?: number;
+}
+
+export interface BillingPlanSummary {
+  id: string;
+  label: string;
+  status: string;
+  monthlyCredits: number;
+  seats: number;
+  maxConnectors: number;
+}
+
+export interface TokenPackSummary {
+  id: string;
+  label: string;
+  credits: number;
+  price: number;
+  currency: string;
+}
+
+export interface CreditLedgerEntrySummary {
+  entryId: string;
+  workspaceId: string;
+  bucket: string;
+  entryType: string;
+  deltaCredits: number;
+  balanceAfter: number;
+  referenceId: string;
+  createdAt: string;
+  rawTimestamp?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface BillingEventSummary {
+  eventId: string;
+  workspaceId: string;
+  provider: string;
+  eventType: string;
+  status: string;
+  referenceId: string;
+  createdAt: string;
+  rawTimestamp?: number;
+  payload?: Record<string, unknown>;
+}
+
+export interface BillingProfileSummary {
+  workspaceId: string;
+  profile: {
+    fullName: string;
+    email: string;
+    phone: string;
+    identityNumber: string;
+    addressLine1: string;
+    city: string;
+    zipCode: string;
+    country: string;
+  };
+  isComplete: boolean;
+  missingFields: string[];
+  updatedAt?: number;
+}
+
+export interface BillingCheckoutSessionSummary {
+  referenceId: string;
+  workspaceId: string;
+  mode: "subscription" | "token_pack";
+  catalogId: string;
+  provider: string;
+  status: string;
+  providerStatus: string;
+  launchUrl: string;
+  paymentPageUrl: string;
+  callbackUrl?: string;
+  providerPaymentId?: string;
+  subscriptionReferenceCode?: string;
+  createdAt?: number;
+  updatedAt?: number;
+  completedAt?: number;
+}
+
+export interface BillingCheckoutLaunchSummary {
+  launchUrl: string;
+  referenceId: string;
+  status: string;
+  mode: "subscription" | "token_pack";
+}
+
+export interface InboxTaskExtraction {
+  title: string;
+  summary: string;
+  taskType: CoworkMode;
+  urgency: "low" | "medium" | "high";
+  approvalRequired: boolean;
+  actionItems: string[];
+  recommendedPrompt: string;
+  confidence: number;
+  sourceType: string;
+}
+
+export interface InboxEventSummary {
+  eventId: string;
+  workspaceId: string;
+  sourceType: string;
+  sourceId: string;
+  title: string;
+  content: string;
+  contentPreview: string;
+  status: string;
+  summary?: InboxTaskExtraction;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  rawTimestamp?: number;
+}
+
+export interface WorkspaceAdminDetail {
+  workspace: WorkspaceSummary;
+  seats: WorkspaceSeatSummary;
+  permissions: WorkspacePermissionSummary;
+  currentRole: string;
+  billing?: WorkspaceBillingSummary;
+}
+
 export interface ProviderSummary {
   id: string;
   name: string;
@@ -56,6 +239,72 @@ export interface ProviderSummary {
   latencyMs: number;
   usageToday: number;
   status: HealthState;
+  detail?: string;
+}
+
+export interface ProductSettings {
+  responseMode: ProductResponseMode;
+  providerStrategy: ProductProviderStrategy;
+  privacyMode: ProductPrivacyMode;
+  automationLevel: ProductAutomationLevel;
+  tone: ProductTone;
+}
+
+export interface SystemReadiness {
+  status: "booting" | "ready" | "needs_attention";
+  bootStage: "starting_services" | "loading_local_models" | "checking_providers" | "ready" | "needs_attention";
+  runtimeReady: boolean;
+  setupComplete: boolean;
+  ollamaReady: boolean;
+  productivityAppsReady: boolean;
+  bluebubblesReady: boolean;
+  whatsappMode: "bridge" | "cloud" | "unavailable";
+  applePermissions: {
+    automation: boolean;
+    screenCapture: boolean;
+  };
+  providerSummary: {
+    available: number;
+    authRequired: number;
+    degraded: number;
+  };
+  blockingIssue?: string;
+}
+
+export interface ModelDescriptor {
+  modelId: string;
+  displayName: string;
+  providerId: string;
+  installed: boolean;
+  downloadable: boolean;
+  size?: string;
+  lastUsedAt?: string;
+  capabilities: string[];
+  digest?: string;
+  modified?: string;
+  roleAssignments?: string[];
+}
+
+export interface ExecutionLaneStatus {
+  lane: "chat" | "reasoning" | "vision" | "research" | "fallback";
+  activeProvider: string;
+  model: string;
+  fallbackActive: boolean;
+  verificationState: "standard" | "verified";
+  latencyBucket: "fast" | "balanced" | "slow";
+}
+
+export interface ProviderDescriptor {
+  providerId: string;
+  label: string;
+  kind: "local" | "cloud";
+  enabled: boolean;
+  authState: "ready" | "auth_required" | "not_required";
+  healthState: "available" | "degraded" | "rate_limited" | "unreachable";
+  supportedRoles: string[];
+  models: ModelDescriptor[];
+  lanes: ExecutionLaneStatus[];
+  endpoint?: string;
   detail?: string;
 }
 
@@ -195,6 +444,17 @@ export interface CoworkThreadDetail extends CoworkThreadSummary {
     rawTimestamp?: number;
     summary?: Record<string, unknown>;
   }>;
+  collaborationTrace?: Array<{
+    id: string;
+    provider: string;
+    model: string;
+    lens: string;
+    status: string;
+    strategy?: string;
+    source?: string;
+    order?: number;
+    error?: string;
+  }>;
   turns: CoworkTurn[];
   approvals: CoworkApproval[];
   artifacts: CoworkArtifact[];
@@ -206,11 +466,13 @@ export interface CoworkThreadDetail extends CoworkThreadSummary {
     createdAt: string;
     rawTimestamp?: number;
     error?: string;
+    metadata?: Record<string, unknown>;
   }>;
   laneSummary?: {
     mode: string;
     runState?: string;
     missionState?: string;
+    collaborationStrategy?: string;
     assignedAgents?: string[];
     review?: ReviewReport;
   };
@@ -236,8 +498,9 @@ export interface WorkspaceBillingSummary {
   };
   subscriptionState: {
     status: string;
-    stripeCustomerId?: string;
-    stripeSubscriptionId?: string;
+    paymentProvider?: string;
+    providerCustomerId?: string;
+    providerSubscriptionId?: string;
     currentPeriodEnd?: number;
   };
   entitlements: EntitlementSnapshot;
@@ -246,6 +509,13 @@ export interface WorkspaceBillingSummary {
     budget: number;
     items: UsageLedgerEntry[];
   };
+  creditBalance?: {
+    included: number;
+    purchased: number;
+    total: number;
+  };
+  billingProfile?: BillingProfileSummary;
+  activeCheckout?: BillingCheckoutSessionSummary;
   checkoutUrl?: string;
   portalUrl?: string;
   seats: number;
@@ -256,6 +526,44 @@ export interface CoworkHomeSnapshot {
   recentThreads: CoworkThreadSummary[];
   lastThread?: CoworkThreadSummary;
   pendingApprovals: CoworkApproval[];
+  backgroundTasks: Array<{
+    taskId: string;
+    objective: string;
+    summary: string;
+    state: string;
+    mode: string;
+    capabilityDomain: string;
+    updatedAt: string;
+    rawTimestamp?: number;
+  }>;
+  autopilot?: {
+    enabled: boolean;
+    running: boolean;
+    lastTickAt?: string;
+    rawLastTickAt?: number;
+    lastTickReason?: string;
+    briefing?: string;
+    suggestions: Array<{
+      userId: string;
+      task: string;
+      description: string;
+      priority: string;
+      reason: string;
+      confidence: number;
+    }>;
+    staleTasks: Array<{
+      taskId: string;
+      objective: string;
+      state: string;
+      action: string;
+      ageMinutes: number;
+    }>;
+    interventions: Array<{
+      id: string;
+      prompt: string;
+      ageMinutes: number;
+    }>;
+  };
   security: SecuritySummary;
   billing?: WorkspaceBillingSummary;
   backends: BackendSummary[];
@@ -291,6 +599,8 @@ export interface ConnectorDefinition {
   status: HealthState | "pending" | "offline";
   accountCount: number;
   traceCount: number;
+  blockingIssue?: string;
+  executionMode?: string;
 }
 
 export interface ConnectorAccount {
@@ -312,6 +622,8 @@ export interface ConnectorHealth {
   status: string;
   accountCount: number;
   traceCount: number;
+  blockingIssue?: string;
+  executionMode?: string;
 }
 
 export interface ConnectorActionTrace {
@@ -326,6 +638,13 @@ export interface ConnectorActionTrace {
   metadata?: Record<string, unknown>;
 }
 
+export interface ConnectorExecutionResult {
+  connector: string;
+  action: string;
+  blockingIssue?: string;
+  result: Record<string, unknown>;
+}
+
 export interface ChannelField {
   name: string;
   label: string;
@@ -333,10 +652,22 @@ export interface ChannelField {
   secret: boolean;
 }
 
+export type ChannelSetupMode =
+  | "token"
+  | "bridge_qr"
+  | "bridge_credentials"
+  | "api_credentials"
+  | "cloud_webhook"
+  | "manual";
+
 export interface ChannelCatalogEntry {
   type: string;
   label: string;
   fields: ChannelField[];
+  setupMode?: ChannelSetupMode;
+  supportsPairing?: boolean;
+  minimalFields?: string[];
+  automationHint?: string;
   notes?: string;
 }
 
@@ -344,6 +675,7 @@ export interface ChannelSummary {
   id: string;
   type: string;
   enabled: boolean;
+  mode?: string;
   status: string;
   connected: boolean;
   lastActivity?: string;
@@ -354,6 +686,19 @@ export interface ChannelSummary {
     processingErrors: number;
   };
   health?: Record<string, unknown>;
+}
+
+export interface ChannelPairingStatus {
+  channel: string;
+  mode: ChannelSetupMode;
+  status: "not_configured" | "starting" | "waiting_for_scan" | "configured" | "needs_credentials" | "needs_attention" | "ready" | "unsupported";
+  pending: boolean;
+  ready: boolean;
+  detail: string;
+  instructions: string[];
+  qrText?: string;
+  phone?: string;
+  blockingIssue?: string;
 }
 
 export interface ChannelTestResult {
@@ -601,6 +946,8 @@ export interface HomeSnapshot {
   recentThreads?: CoworkThreadSummary[];
   lastThread?: CoworkThreadSummary;
   pendingApprovals?: CoworkApproval[];
+  backgroundTasks?: CoworkHomeSnapshot["backgroundTasks"];
+  autopilot?: CoworkHomeSnapshot["autopilot"];
   billing?: WorkspaceBillingSummary;
 }
 
@@ -670,7 +1017,72 @@ export interface CommandCenterSnapshot {
       startedAt?: number;
       duration?: number;
       error?: string;
+      }>;
+  };
+  presence?: {
+    headline: string;
+    status: string;
+    liveNote: string;
+    nextMove: string;
+    quickReplies: string[];
+    operatorNotes: Array<{
+      id: string;
+      title: string;
+      body: string;
+      tone: "info" | "success" | "warning";
     }>;
+  };
+  orchestration?: {
+    requestText: string;
+    requestClass: string;
+    domain: string;
+    objective: string;
+    preview: string;
+    primaryAction: string;
+    orchestrationMode: string;
+    fastPath: boolean;
+    realTimeRequired: boolean;
+    modelSelection: {
+      provider: string;
+      model: string;
+      role: string;
+      fallback: boolean;
+    };
+    collaboration: {
+      enabled: boolean;
+      strategy: string;
+      maxModels: number;
+      synthesisRole: string;
+      executionStyle: string;
+      lenses: Array<{
+        name: string;
+        instruction: string;
+      }>;
+    };
+    integration: {
+      provider: string;
+      connectorName: string;
+      integrationType: string;
+      authStrategy: string;
+      fallbackPolicy: string;
+    };
+    autonomy: {
+      mode: string;
+      shouldAsk: boolean;
+      shouldResume: boolean;
+    };
+    taskPlan: {
+      name: string;
+      goal: string;
+      constraints: string[];
+      approvals: string[];
+      evidence: string[];
+      steps: Array<{
+        name: string;
+        kind: string;
+        tool: string;
+      }>;
+    };
   };
 }
 

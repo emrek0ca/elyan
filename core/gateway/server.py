@@ -4,6 +4,7 @@ import inspect
 import time
 import json
 import os
+import re
 import secrets
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +34,9 @@ from core.personalization import get_personalization_manager
 from core.reliability import get_outcome_store, get_regression_evaluator
 from core.dependencies import get_dependency_runtime
 from core.learning_control import get_learning_control_plane
+from core.intake.task_extraction import compact_text as _shared_compact_text
+from core.intake.task_extraction import extract_task_summary as _shared_extract_task_summary
+from core.intake.task_extraction import normalize_intake_source as _shared_normalize_intake_source
 from core.autopilot import get_autopilot
 from core.runtime_control import get_runtime_control_plane
 from core.operator_control_plane import get_operator_control_plane
@@ -48,11 +52,33 @@ from core.mission_control import get_mission_runtime
 from core.storage_paths import resolve_elyan_data_dir, resolve_runs_root
 from core.persistence.runtime_db import get_runtime_database
 from core.security.ingress_guard import blocked_ingress_text, inspect_ingress
+from core.gateway.adapters.whatsapp_bridge import (
+    BRIDGE_HOST,
+    DEFAULT_BRIDGE_PORT,
+    BridgeRuntimeError,
+    bridge_health,
+    build_bridge_url,
+    default_session_dir,
+    ensure_bridge_runtime,
+    generate_bridge_token,
+    start_bridge_process,
+    wait_for_bridge,
+)
 from elyan.dashboard.routes.trace import render_trace_page
 from elyan.verifier.evidence import build_trace_bundle, resolve_evidence_path
 from core.text_artifacts import existing_text_path
 from core.version import APP_VERSION, RUNTIME_PROTOCOL_VERSION
 from core.compliance.audit_trail import audit_trail
+from core.execution_guard import ExecutionCheck, get_execution_guard
+from core.feature_flags import get_feature_flag_registry
+from core.observability.logger import get_structured_logger
+from core.observability.trace_context import (
+    activate_trace_context,
+    apply_trace_headers,
+    build_trace_context,
+    get_trace_context,
+    reset_trace_context,
+)
 from config.elyan_config import elyan_config
 from security.tool_policy import tool_policy
 from security.keychain import KeychainManager
@@ -60,6 +86,7 @@ from tools import AVAILABLE_TOOLS
 from utils.logger import get_logger
 
 logger = get_logger("gateway_server")
+slog = get_structured_logger("gateway_server")
 
 # Global WebSocket client registry for dashboard push
 _dashboard_ws_clients: Set[web.WebSocketResponse] = set()
@@ -91,6 +118,9 @@ _ADMIN_READ_PATHS = {
     "/api/v1/approvals/pending",
     "/api/v1/privacy/summary",
     "/api/v1/privacy/export",
+    "/api/v1/privacy/learning/stats",
+    "/api/v1/privacy/learning/global",
+    "/api/v1/mobile-dispatch/sessions",
     "/api/privacy/export",
     "/api/privacy/delete",
     "/api/interventions",
@@ -105,14 +135,22 @@ _ADMIN_READ_PATHS = {
     "/api/v1/billing/workspace",
     "/api/v1/billing/usage",
     "/api/v1/billing/entitlements",
+    "/api/v1/billing/plans",
+    "/api/v1/billing/credits",
+    "/api/v1/billing/ledger",
+    "/api/v1/billing/events",
+    "/api/v1/billing/profile",
+    "/api/v1/billing/reconcile-usage",
     "/api/v1/connectors",
     "/api/v1/connectors/accounts",
     "/api/v1/connectors/traces",
     "/api/v1/connectors/health",
+    "/api/v1/operator/preview",
     "/api/autopilot/status",
 }
 _LOCAL_DASHBOARD_WRITE_PATHS = {
     "/api/v1/auth/login",
+    "/api/v1/auth/bootstrap-owner",
     "/api/missions",
     "/api/missions/approvals/resolve",
     "/api/missions/skills/save",
@@ -121,14 +159,29 @@ _LOCAL_DASHBOARD_WRITE_PATHS = {
     "/api/channels/toggle",
     "/api/channels/test",
     "/api/channels/sync",
+    "/api/channels/pair/start",
     "/api/v1/billing/checkout-session",
     "/api/v1/billing/portal-session",
     "/api/v1/billing/webhooks/stripe",
+    "/api/v1/billing/checkout/init",
+    "/api/v1/billing/token-packs/purchase",
+    "/api/v1/billing/reconcile-usage",
+    "/api/v1/billing/webhooks/iyzico",
+    "/api/v1/billing/callbacks/iyzico",
     "/api/v1/connectors/google_drive/connect",
     "/api/v1/connectors/gmail/connect",
     "/api/v1/connectors/google_calendar/connect",
+    "/api/v1/connectors/notion/connect",
     "/api/v1/connectors/slack/connect",
     "/api/v1/connectors/github/connect",
+    "/api/v1/connectors/apple_mail/connect",
+    "/api/v1/connectors/apple_calendar/connect",
+    "/api/v1/connectors/apple_reminders/connect",
+    "/api/v1/connectors/apple_notes/connect",
+    "/api/v1/connectors/apple_contacts/connect",
+    "/api/v1/connectors/imessage/connect",
+    "/api/v1/connectors/quick-action",
+    "/api/v1/operator/preview",
     "/api/models",
     "/api/agent/profile",
     "/api/autopilot/start",
@@ -148,29 +201,47 @@ _USER_SESSION_PATHS = {
     "/api/channels/toggle",
     "/api/channels/test",
     "/api/channels/sync",
+    "/api/channels/pair/status",
+    "/api/channels/pair/start",
     "/api/v1/auth/logout",
     "/api/v1/auth/me",
     "/api/v1/privacy/summary",
     "/api/v1/privacy/export",
     "/api/v1/privacy/delete",
+    "/api/v1/privacy/learning/stats",
+    "/api/v1/mobile-dispatch/sessions",
     "/api/v1/workflows/start",
+    "/api/v1/inbox/events",
+    "/api/v1/tasks/extract",
     "/api/v1/cowork/home",
     "/api/v1/cowork/threads",
     "/api/v1/billing/workspace",
     "/api/v1/billing/usage",
     "/api/v1/billing/entitlements",
+    "/api/v1/billing/plans",
+    "/api/v1/billing/credits",
+    "/api/v1/billing/ledger",
+    "/api/v1/billing/events",
+    "/api/v1/billing/profile",
+    "/api/v1/billing/reconcile-usage",
     "/api/v1/billing/checkout-session",
     "/api/v1/billing/portal-session",
+    "/api/v1/billing/checkout/init",
+    "/api/v1/billing/token-packs/purchase",
     "/api/v1/connectors",
     "/api/v1/connectors/accounts",
     "/api/v1/connectors/traces",
     "/api/v1/connectors/health",
+    "/api/v1/operator/preview",
     "/api/v1/approvals/pending",
+    "/api/v1/admin/workspaces",
 }
 _USER_SESSION_PREFIXES = (
     "/api/channels/",
+    "/api/v1/admin/workspaces/",
     "/api/v1/cowork/threads/",
     "/api/v1/cowork/approvals/",
+    "/api/v1/billing/checkouts/",
     "/api/v1/runs/",
     "/api/v1/connectors/",
     "/api/v1/approvals/",
@@ -186,6 +257,8 @@ def _is_local_dashboard_write_path(path: str, method: str) -> bool:
 
 
 def _is_user_session_path(path: str) -> bool:
+    if path.startswith("/api/v1/billing/checkouts/") and path.endswith("/launch"):
+        return False
     if path in _USER_SESSION_PATHS:
         return True
     return any(path.startswith(prefix) for prefix in _USER_SESSION_PREFIXES)
@@ -232,6 +305,7 @@ def _ensure_admin_access_token() -> str:
 
 def push_activity(event_type: str, channel: str, detail: str, success: bool = True):
     """Push an activity event to all connected dashboard WebSocket clients."""
+    trace_context = get_trace_context()
     entry = {
         "ts": time.strftime("%H:%M:%S"),
         "type": event_type,
@@ -239,10 +313,100 @@ def push_activity(event_type: str, channel: str, detail: str, success: bool = Tr
         "detail": detail[:80],
         "ok": success,
     }
+    if trace_context is not None:
+        entry["trace_id"] = trace_context.trace_id
+        entry["request_id"] = trace_context.request_id
     _activity_log.append(entry)
     if len(_activity_log) > 50:
         _activity_log.pop(0)
     _schedule_background(_broadcast_activity, entry)
+
+
+def _json_ok(payload: dict[str, Any] | None = None, *, status: int = 200) -> web.Response:
+    body = {"ok": True, "success": True}
+    if payload:
+        body.update(payload)
+    return web.json_response(body, status=status)
+
+
+def _json_error(error: str, *, status: int = 400, payload: dict[str, Any] | None = None) -> web.Response:
+    body = {"ok": False, "success": False, "error": str(error or "request_failed")}
+    if payload:
+        body.update(payload)
+    return web.json_response(body, status=status)
+
+
+def _compact_text(value: str, *, limit: int = 280) -> str:
+    return _shared_compact_text(value, limit=limit)
+
+
+def _normalize_inbox_source(value: str) -> str:
+    return _shared_normalize_intake_source(value)
+
+
+def _extract_intake_action_items(content: str) -> list[str]:
+    action_items: list[str] = []
+    seen: set[str] = set()
+    lines = [line.strip(" \t-•*0123456789.)") for line in str(content or "").splitlines() if line.strip()]
+    verb_hint = re.compile(
+        r"\b(prepare|draft|review|reply|send|plan|schedule|create|update|fix|ship|deploy|connect|sync|call|follow up|hazırla|incele|yanıtla|gönder|planla|oluştur|düzelt|bağla|ara|takip et)\b",
+        re.IGNORECASE,
+    )
+    for line in lines:
+        candidate = _compact_text(line, limit=120)
+        lowered = candidate.lower()
+        if len(candidate) < 8:
+            continue
+        if line[:1] in {"-", "*", "•"} or re.match(r"^\d+[.)]", line.strip()) or verb_hint.search(lowered):
+            if lowered not in seen:
+                action_items.append(candidate)
+                seen.add(lowered)
+        if len(action_items) >= 4:
+            return action_items
+    sentences = [segment.strip() for segment in re.split(r"(?<=[.!?])\s+", str(content or "").strip()) if segment.strip()]
+    for sentence in sentences:
+        candidate = _compact_text(sentence, limit=120)
+        lowered = candidate.lower()
+        if len(candidate) < 12 or lowered in seen:
+            continue
+        action_items.append(candidate)
+        seen.add(lowered)
+        if len(action_items) >= 4:
+            break
+    return action_items[:4]
+
+
+def _infer_intake_task_type(content: str) -> str:
+    text = str(content or "").lower()
+    if re.search(r"\b(slide|deck|presentation|sunum|ppt|pitch)\b", text):
+        return "presentation"
+    if re.search(r"\b(site|website|landing|web app|web|react|nextjs|frontend|vite|ui)\b", text):
+        return "website"
+    if re.search(r"\b(report|proposal|brief|document|doc|doküman|belge|teklif|rapor|sunuş metni)\b", text):
+        return "document"
+    return "cowork"
+
+
+def _infer_intake_urgency(content: str) -> str:
+    text = str(content or "").lower()
+    if re.search(r"\b(acil|urgent|asap|today|bugün|hemen|critical|kritik|production|prod)\b", text):
+        return "high"
+    if re.search(r"\b(soon|this week|yakında|hafta|review|inceleme|follow up|takip)\b", text):
+        return "medium"
+    return "low"
+
+
+def _intake_requires_approval(content: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(delete|remove|drop|reset|restart|deploy|publish|purchase|pay|refund|invoice|transfer|revoke|production|prod|sil|kaldır|yayınla|satın al|ödeme|iade|fatura|aktarım)\b",
+            str(content or "").lower(),
+        )
+    )
+
+
+def _extract_task_summary(content: str, *, source_type: str, title: str = "") -> dict[str, Any]:
+    return _shared_extract_task_summary(content, source_type=source_type, title=title)
 
 
 def _sanitize_stream_payload(value: Any, *, _depth: int = 0) -> Any:
@@ -589,6 +753,8 @@ _CHANNEL_SECRET_ENV_KEYS = {
         "access_token": "WHATSAPP_ACCESS_TOKEN",
         "verify_token": "WHATSAPP_VERIFY_TOKEN",
     },
+    "imessage": {"password": "IMESSAGE_PASSWORD"},
+    "sms": {"auth_token": "TWILIO_AUTH_TOKEN", "token": "TWILIO_AUTH_TOKEN"},
     "signal": {"token": "SIGNAL_BOT_TOKEN"},
 }
 
@@ -768,6 +934,18 @@ def _channel_secret_env(field: str, channel_type: str) -> str:
     return str(fmap.get(str(field or "").strip(), "")).strip()
 
 
+def _resolve_secret_runtime_value(value: Any) -> str:
+    resolved = elyan_config._resolve_secret_ref(value)
+    return str(resolved or "").strip()
+
+
+def _resolve_channel_secret(field: str, channel_type: str, value: Any) -> tuple[str, bool]:
+    resolved = _resolve_secret_runtime_value(value)
+    is_ref = isinstance(value, str) and str(value).strip().startswith("$")
+    unresolved = bool(is_ref and resolved == str(value).strip())
+    return resolved, unresolved
+
+
 class ElyanGatewayServer:
     """Main HTTP/WebSocket server for the Elyan Gateway."""
 
@@ -777,7 +955,7 @@ class ElyanGatewayServer:
         self.mission_runtime = get_mission_runtime()
         self.mission_runtime.subscribe(self._on_mission_event)
         self.autopilot = get_autopilot()
-        self.app = web.Application(middlewares=[self._cors_middleware, self._api_security_middleware])
+        self.app = web.Application(middlewares=[self._cors_middleware, self._trace_middleware, self._api_security_middleware])
         self.webchat_adapter: Optional[object] = None
         self.cron = CronEngine(agent)
         self.heartbeat = HeartbeatManager(agent)
@@ -856,6 +1034,100 @@ class ElyanGatewayServer:
         return get_workspace_billing_store()
 
     @staticmethod
+    def _execution_guard():
+        return get_execution_guard()
+
+    def _usage_credit_decision(
+        self,
+        request,
+        metric: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        amount: int = 1,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._workspace_billing().authorize_usage(
+            self._workspace_id(request, payload),
+            metric,
+            amount=amount,
+            metadata=metadata,
+        )
+
+    @staticmethod
+    def _credit_block_response(decision: dict[str, Any], *, action_label: str) -> web.Response:
+        return _json_error(
+            f"insufficient credits for {action_label}. Upgrade plan or purchase a token pack.",
+            status=402,
+            payload={"credits": decision},
+        )
+
+    def _record_provisional_usage(
+        self,
+        request,
+        *,
+        metric: str,
+        payload: dict[str, Any] | None = None,
+        amount: int = 1,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._workspace_billing().record_usage(
+            self._workspace_id(request, payload),
+            metric,
+            amount,
+            metadata=metadata,
+        )
+
+    def _reconcile_failed_usage(
+        self,
+        workspace_id: str,
+        *,
+        usage_id: str,
+        failure_class: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        normalized_workspace = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        normalized_usage_id = str(usage_id or "").strip()
+        if not normalized_usage_id:
+            return
+        try:
+            self._workspace_billing().reconcile_usage(
+                normalized_workspace,
+                usage_id=normalized_usage_id,
+                actual_credits=0,
+                metadata={
+                    "dispatch_failed": True,
+                    "failure_class": str(failure_class or "dispatch_failed").strip().lower(),
+                    **dict(metadata or {}),
+                },
+            )
+        except Exception as exc:
+            slog.log_event(
+                "billing_usage_reconcile_failed",
+                {
+                    "workspace_id": normalized_workspace,
+                    "usage_id": normalized_usage_id,
+                    "failure_class": str(failure_class or "dispatch_failed").strip().lower(),
+                    "error": str(exc),
+                    "metadata": dict(metadata or {}),
+                },
+                level="warning",
+                workspace_id=normalized_workspace,
+            )
+
+    @staticmethod
+    def _runtime_db():
+        return get_runtime_database()
+
+    def _workspace_admin_controller(self):
+        controller = getattr(self, "_workspace_admin_instance", None)
+        if controller is None:
+            from core.gateway.controllers import WorkspaceAdminController
+
+            controller = WorkspaceAdminController(self)
+            self._workspace_admin_instance = controller
+        return controller
+
+    @staticmethod
     def _auth_context(request) -> dict[str, Any]:
         payload = request.get("elyan_auth") if hasattr(request, "get") else None
         return payload if isinstance(payload, dict) else {}
@@ -877,6 +1149,146 @@ class ElyanGatewayServer:
         body_user = str((payload or {}).get("user_id") or "").strip()
         query_user = str(request.rel_url.query.get("user_id", "") or "").strip()
         return body_user or query_user or cls._workspace_id(request, payload)
+
+    @classmethod
+    def _session_id(cls, request, payload: dict[str, Any] | None = None, *, default: str = "") -> str:
+        auth_context = cls._auth_context(request)
+        if str(auth_context.get("session_id") or "").strip():
+            return str(auth_context.get("session_id") or "").strip()
+        body_session = str((payload or {}).get("session_id") or "").strip()
+        query_session = str(request.rel_url.query.get("session_id", "") or "").strip()
+        trace_context = request.get("elyan_trace") if hasattr(request, "get") else None
+        if body_session:
+            return body_session
+        if query_session:
+            return query_session
+        if getattr(trace_context, "session_id", ""):
+            return str(trace_context.session_id or "").strip()
+        return str(default or "").strip()
+
+    def _observe_execution_guard(
+        self,
+        request,
+        *,
+        action: str,
+        phase: str,
+        payload: dict[str, Any] | None = None,
+        allowed: bool,
+        reason: str = "",
+        checks: list[ExecutionCheck] | None = None,
+        metadata: dict[str, Any] | None = None,
+        run_id: str = "",
+        level: str = "info",
+        default_session_id: str = "",
+    ) -> None:
+        self._execution_guard().observe_shadow(
+            action=action,
+            phase=phase,
+            allowed=allowed,
+            workspace_id=self._workspace_id(request, payload),
+            actor_id=self._actor_id(request, payload),
+            session_id=self._session_id(request, payload, default=default_session_id),
+            run_id=run_id,
+            reason=reason,
+            checks=checks,
+            metadata=metadata,
+            level=level,
+        )
+
+    @staticmethod
+    def _local_user_count(runtime_db=None) -> int:
+        db = runtime_db or get_runtime_database()
+        try:
+            with db.local_engine.begin() as conn:
+                row = conn.exec_driver_sql("select count(*) from local_users").first()
+                return int((row[0] if row else 0) or 0)
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _set_csrf_cookie(response: web.StreamResponse, token: str = "") -> str:
+        csrf_token = str(token or secrets.token_urlsafe(24))
+        response.headers["X-Elyan-CSRF"] = csrf_token
+        response.set_cookie(
+            "elyan_csrf_token",
+            csrf_token,
+            httponly=False,
+            samesite="Strict",
+            secure=False,
+            path="/",
+        )
+        return csrf_token
+
+    @staticmethod
+    def _clear_csrf_cookie(response: web.StreamResponse) -> None:
+        response.headers["X-Elyan-CSRF"] = ""
+        response.del_cookie("elyan_csrf_token", path="/")
+
+    def _workspace_role_for_request(self, request, payload: dict[str, Any] | None = None) -> str:
+        auth_context = self._auth_context(request)
+        if str(auth_context.get("role") or "") == "admin":
+            return "admin"
+        workspace_id = self._workspace_id(request, payload)
+        actor_id = self._actor_id(request, payload)
+        if str(auth_context.get("workspace_id") or "").strip() == workspace_id and str(auth_context.get("role") or "").strip():
+            return str(auth_context.get("role") or "").strip().lower()
+        return self._runtime_db().access.get_actor_role(workspace_id=workspace_id, actor_id=actor_id)
+
+    def _require_execution_seat(self, request, payload: dict[str, Any] | None = None) -> tuple[bool, str]:
+        role = self._workspace_role_for_request(request, payload)
+        if role == "admin":
+            return True, ""
+        workspace_id = self._workspace_id(request, payload)
+        actor_id = self._actor_id(request, payload)
+        if role not in {"owner", "operator"}:
+            return False, "owner or operator role required"
+        if not self._runtime_db().access.has_active_seat(workspace_id=workspace_id, actor_id=actor_id):
+            return False, "active seat required"
+        return True, ""
+
+    def _require_billing_write_role(self, request, payload: dict[str, Any] | None = None) -> tuple[bool, str]:
+        role = self._workspace_role_for_request(request, payload)
+        if role == "admin" or role in {"owner", "billing_admin"}:
+            return True, ""
+        return False, "owner or billing_admin role required"
+
+    @staticmethod
+    def _has_cookie_user_session(request) -> bool:
+        return bool(str(request.cookies.get("elyan_user_session", "") or "").strip())
+
+    def _request_requires_csrf(self, request) -> bool:
+        method = str(getattr(request, "method", "GET") or "GET").upper()
+        path = str(getattr(request, "path", "") or "")
+        if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+            return False
+        if path in {"/api/v1/auth/login", "/api/v1/auth/bootstrap-owner"}:
+            return False
+        if path.startswith("/api/v1/billing/webhooks/"):
+            return False
+        return self._request_requires_user_session(request) and self._has_cookie_user_session(request)
+
+    def _validate_csrf(self, request) -> tuple[bool, str]:
+        if str(request.headers.get("X-Elyan-Session-Token", "") or "").strip():
+            return True, ""
+        csrf_cookie = str(request.cookies.get("elyan_csrf_token", "") or "").strip()
+        csrf_header = str(request.headers.get("X-Elyan-CSRF", "") or "").strip()
+        if not csrf_cookie or not csrf_header:
+            return False, "csrf token required"
+        if not secrets.compare_digest(csrf_cookie, csrf_header):
+            return False, "csrf token mismatch"
+        origin = str(request.headers.get("Origin", "") or "").strip()
+        if origin and not self._is_allowed_cors_origin(origin):
+            return False, "csrf origin forbidden"
+        referer = str(request.headers.get("Referer", "") or "").strip()
+        if referer:
+            try:
+                parsed = urlparse(referer)
+                referer_origin = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}" if parsed.scheme and parsed.netloc else ""
+            except Exception:
+                referer_origin = ""
+            if referer_origin and not self._is_allowed_cors_origin(referer_origin):
+                return False, "csrf referer forbidden"
+        return True, ""
 
     @staticmethod
     def _connector_catalog() -> list[dict[str, Any]]:
@@ -907,6 +1319,69 @@ class ElyanGatewayServer:
                 "integration_type": "api",
                 "capabilities": ["list_events", "create_event", "check_availability"],
                 "scopes": ["https://www.googleapis.com/auth/calendar"],
+            },
+            {
+                "connector": "notion",
+                "provider": "notion",
+                "label": "Notion",
+                "category": "workspace",
+                "integration_type": "api",
+                "capabilities": ["search_pages", "read_page", "update_page", "create_page"],
+                "scopes": ["notion.read", "notion.write"],
+            },
+            {
+                "connector": "apple_mail",
+                "provider": "apple_mail",
+                "label": "Apple Mail",
+                "category": "apple_apps",
+                "integration_type": "desktop",
+                "capabilities": ["list_items", "read_item", "draft_message", "send_message"],
+                "scopes": ["mail.read", "mail.write"],
+            },
+            {
+                "connector": "apple_calendar",
+                "provider": "apple_calendar",
+                "label": "Apple Calendar",
+                "category": "apple_apps",
+                "integration_type": "desktop",
+                "capabilities": ["list_items", "read_item", "create_item", "update_item"],
+                "scopes": ["calendar.read", "calendar.write"],
+            },
+            {
+                "connector": "apple_reminders",
+                "provider": "apple_reminders",
+                "label": "Apple Reminders",
+                "category": "apple_apps",
+                "integration_type": "desktop",
+                "capabilities": ["list_items", "create_item", "update_item"],
+                "scopes": ["reminders.read", "reminders.write"],
+            },
+            {
+                "connector": "apple_notes",
+                "provider": "apple_notes",
+                "label": "Apple Notes",
+                "category": "apple_apps",
+                "integration_type": "desktop",
+                "capabilities": ["search_items", "read_item", "create_item", "update_item"],
+                "scopes": ["notes.read", "notes.write"],
+            },
+            {
+                "connector": "apple_contacts",
+                "provider": "apple_contacts",
+                "label": "Apple Contacts",
+                "category": "apple_apps",
+                "integration_type": "desktop",
+                "capabilities": ["search_items", "read_item", "create_item", "update_item"],
+                "scopes": ["contacts.read", "contacts.write"],
+            },
+            {
+                "connector": "imessage",
+                "provider": "imessage",
+                "label": "iMessage",
+                "category": "messaging",
+                "integration_type": "desktop",
+                "capabilities": ["list_items", "read_item", "draft_message", "send_message"],
+                "scopes": ["imessage.read", "imessage.write"],
             },
             {
                 "connector": "slack",
@@ -1046,18 +1521,82 @@ class ElyanGatewayServer:
             if allowed_origin:
                 resp.headers["Access-Control-Allow-Origin"] = allowed_origin
                 resp.headers["Access-Control-Allow-Credentials"] = "true"
-                resp.headers["Access-Control-Expose-Headers"] = "X-Elyan-Session-Token, X-Elyan-Admin-Token"
+                resp.headers["Access-Control-Expose-Headers"] = "X-Elyan-Session-Token, X-Elyan-Admin-Token, X-Elyan-Trace-Id, X-Elyan-Request-Id, X-Elyan-Workspace-Id"
             resp.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-            resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Elyan-Admin-Token, X-Elyan-Session-Token, X-Elyan-CSRF"
+            resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Elyan-Admin-Token, X-Elyan-Session-Token, X-Elyan-CSRF, X-Elyan-Trace-Id, X-Elyan-Request-Id, X-Elyan-Workspace-Id, X-Request-ID"
             resp.headers["Vary"] = "Origin"
             return resp
         resp = await handler(request)
         if allowed_origin:
             resp.headers["Access-Control-Allow-Origin"] = allowed_origin
             resp.headers["Access-Control-Allow-Credentials"] = "true"
-            resp.headers["Access-Control-Expose-Headers"] = "X-Elyan-Session-Token, X-Elyan-Admin-Token"
+            resp.headers["Access-Control-Expose-Headers"] = "X-Elyan-Session-Token, X-Elyan-Admin-Token, X-Elyan-Trace-Id, X-Elyan-Request-Id, X-Elyan-Workspace-Id"
             resp.headers["Vary"] = "Origin"
         return resp
+
+    @web.middleware
+    async def _trace_middleware(self, request, handler):
+        flags = get_feature_flag_registry()
+        if not flags.is_enabled(
+            "gateway_request_tracing",
+            default=True,
+            context={"path": str(request.path), "method": str(request.method)},
+        ):
+            return await handler(request)
+
+        trace_context = build_trace_context(
+            method=str(request.method),
+            path=str(request.path_qs),
+            headers=request.headers,
+            query=getattr(request, "query", {}) or {},
+            cookies=request.cookies,
+        )
+        request["elyan_trace"] = trace_context.to_dict()
+        token = activate_trace_context(trace_context)
+        started_at = time.time()
+        try:
+            try:
+                response = await handler(request)
+            except web.HTTPException as exc:
+                response = exc
+            apply_trace_headers(response, trace_context)
+            latency_ms = round((time.time() - started_at) * 1000.0, 2)
+            slog.log_event(
+                "gateway_request_completed",
+                {
+                    "method": str(request.method),
+                    "path": str(request.path),
+                    "path_qs": str(request.path_qs),
+                    "status": int(getattr(response, "status", 200) or 200),
+                    "latency_ms": latency_ms,
+                },
+                level="debug",
+                session_id=trace_context.session_id or None,
+                request_id=trace_context.request_id,
+                trace_id=trace_context.trace_id,
+                workspace_id=trace_context.workspace_id or None,
+            )
+            return response
+        except Exception as exc:
+            latency_ms = round((time.time() - started_at) * 1000.0, 2)
+            slog.log_event(
+                "gateway_request_failed",
+                {
+                    "method": str(request.method),
+                    "path": str(request.path),
+                    "path_qs": str(request.path_qs),
+                    "error": str(exc),
+                    "latency_ms": latency_ms,
+                },
+                level="error",
+                session_id=trace_context.session_id or None,
+                request_id=trace_context.request_id,
+                trace_id=trace_context.trace_id,
+                workspace_id=trace_context.workspace_id or None,
+            )
+            raise
+        finally:
+            reset_trace_context(token)
 
     @web.middleware
     async def _api_security_middleware(self, request, handler):
@@ -1065,6 +1604,10 @@ class ElyanGatewayServer:
             allowed, error, auth_context = self._require_user_session(request, allow_cookie=True)
             if not allowed:
                 return web.json_response({"ok": False, "error": error}, status=403)
+            if self._request_requires_csrf(request):
+                csrf_allowed, csrf_error = self._validate_csrf(request)
+                if not csrf_allowed:
+                    return web.json_response({"ok": False, "error": csrf_error}, status=403)
             request["elyan_auth"] = auth_context
         elif self._request_requires_admin(request):
             allowed, error = self._require_admin_access(request, allow_cookie=True)
@@ -1130,6 +1673,8 @@ class ElyanGatewayServer:
         self.app.router.add_delete('/api/channels/{id}', self.handle_channel_delete)
         self.app.router.add_post('/api/channels/test', self.handle_channels_test)
         self.app.router.add_post('/api/channels/sync', self.handle_channels_sync)
+        self.app.router.add_post('/api/channels/pair/start', self.handle_channel_pair_start)
+        self.app.router.add_get('/api/channels/pair/status', self.handle_channel_pair_status)
         self.app.router.add_get('/api/config', self.handle_get_config)
         self.app.router.add_post('/api/config', self.handle_update_config)
         self.app.router.add_get('/api/agent/profile', self.handle_agent_profile_get)
@@ -1190,10 +1735,22 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/v1/security/summary', self.handle_v1_security_summary)
         self.app.router.add_get('/api/v1/security/events', self.handle_v1_security_events)
         self.app.router.add_get('/api/v1/learning/summary', self.handle_v1_learning_summary)
+        self.app.router.add_get('/api/v1/inbox/events', self.handle_v1_inbox_events)
+        self.app.router.add_post('/api/v1/inbox/events', self.handle_v1_inbox_events)
+        self.app.router.add_post('/api/v1/tasks/extract', self.handle_v1_task_extract)
         self.app.router.add_post('/api/v1/workflows/start', self.handle_v1_start_workflow)
+        self.app.router.add_post('/api/v1/auth/bootstrap-owner', self.handle_v1_auth_bootstrap_owner)
         self.app.router.add_post('/api/v1/auth/login', self.handle_v1_auth_login)
         self.app.router.add_post('/api/v1/auth/logout', self.handle_v1_auth_logout)
         self.app.router.add_get('/api/v1/auth/me', self.handle_v1_auth_me)
+        self.app.router.add_get('/api/v1/admin/workspaces', self.handle_v1_admin_workspaces)
+        self.app.router.add_get('/api/v1/admin/workspaces/{workspace_id}', self.handle_v1_admin_workspace_detail)
+        self.app.router.add_get('/api/v1/admin/workspaces/{workspace_id}/members', self.handle_v1_admin_workspace_members)
+        self.app.router.add_get('/api/v1/admin/workspaces/{workspace_id}/invites', self.handle_v1_admin_workspace_invites_list)
+        self.app.router.add_post('/api/v1/admin/workspaces/{workspace_id}/invites', self.handle_v1_admin_workspace_invites)
+        self.app.router.add_post('/api/v1/admin/workspaces/{workspace_id}/invites/{invite_id}/accept', self.handle_v1_admin_workspace_invite_accept)
+        self.app.router.add_post('/api/v1/admin/workspaces/{workspace_id}/members/{actor_id}/role', self.handle_v1_admin_workspace_member_role)
+        self.app.router.add_post('/api/v1/admin/workspaces/{workspace_id}/seats/assign', self.handle_v1_admin_workspace_seat_assign)
         self.app.router.add_get('/api/v1/cowork/home', self.handle_v1_cowork_home)
         self.app.router.add_get('/api/v1/cowork/threads', self.handle_v1_cowork_threads)
         self.app.router.add_post('/api/v1/cowork/threads', self.handle_v1_cowork_threads)
@@ -1204,12 +1761,28 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/v1/billing/workspace', self.handle_v1_billing_workspace)
         self.app.router.add_get('/api/v1/billing/usage', self.handle_v1_billing_usage)
         self.app.router.add_get('/api/v1/billing/entitlements', self.handle_v1_billing_entitlements)
+        self.app.router.add_get('/api/v1/billing/plans', self.handle_v1_billing_plans)
+        self.app.router.add_get('/api/v1/billing/credits', self.handle_v1_billing_credits)
+        self.app.router.add_get('/api/v1/billing/ledger', self.handle_v1_billing_ledger)
+        self.app.router.add_get('/api/v1/billing/events', self.handle_v1_billing_events)
+        self.app.router.add_get('/api/v1/billing/profile', self.handle_v1_billing_profile)
+        self.app.router.add_put('/api/v1/billing/profile', self.handle_v1_billing_profile)
+        self.app.router.add_get('/api/v1/billing/checkouts/{reference_id}', self.handle_v1_billing_checkout_detail)
+        self.app.router.add_get('/api/v1/billing/checkouts/{reference_id}/launch', self.handle_v1_billing_checkout_launch)
+        self.app.router.add_post('/api/v1/billing/reconcile-usage', self.handle_v1_billing_reconcile_usage)
+        self.app.router.add_post('/api/v1/billing/checkout/init', self.handle_v1_billing_checkout_init)
+        self.app.router.add_post('/api/v1/billing/token-packs/purchase', self.handle_v1_billing_token_pack_purchase)
+        self.app.router.add_get('/api/v1/billing/callbacks/iyzico', self.handle_v1_billing_callback_iyzico)
+        self.app.router.add_post('/api/v1/billing/callbacks/iyzico', self.handle_v1_billing_callback_iyzico)
+        self.app.router.add_post('/api/v1/billing/webhooks/iyzico', self.handle_v1_billing_webhook_iyzico)
         self.app.router.add_post('/api/v1/billing/checkout-session', self.handle_v1_billing_checkout)
         self.app.router.add_post('/api/v1/billing/portal-session', self.handle_v1_billing_portal)
         self.app.router.add_post('/api/v1/billing/webhooks/stripe', self.handle_v1_billing_webhook)
         self.app.router.add_get('/api/v1/connectors', self.handle_v1_connectors)
         self.app.router.add_get('/api/v1/connectors/accounts', self.handle_v1_connector_accounts)
         self.app.router.add_post('/api/v1/connectors/{connector}/connect', self.handle_v1_connector_connect)
+        self.app.router.add_post('/api/v1/connectors/{connector}/quick-action', self.handle_v1_connector_quick_action)
+        self.app.router.add_post('/api/v1/operator/preview', self.handle_v1_operator_preview)
         self.app.router.add_post('/api/v1/connectors/accounts/{account_id}/refresh', self.handle_v1_connector_refresh)
         self.app.router.add_post('/api/v1/connectors/accounts/{account_id}/revoke', self.handle_v1_connector_revoke)
         self.app.router.add_get('/api/v1/connectors/traces', self.handle_v1_connector_traces)
@@ -1302,6 +1875,7 @@ class ElyanGatewayServer:
         self.app.router.add_post('/hook/{event}', self.handle_webhook)
         self.app.router.add_get('/whatsapp/webhook', self.handle_whatsapp_webhook_verify)
         self.app.router.add_post('/whatsapp/webhook', self.handle_whatsapp_webhook)
+        self.app.router.add_post('/sms/webhook', self.handle_sms_webhook)
 
         # ── Security API ─────────────────────────────────────────────────────
         self.app.router.add_get('/api/security/events', self.handle_security_events)
@@ -1310,6 +1884,17 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/v1/privacy/summary', self.handle_privacy_summary)
         self.app.router.add_get('/api/v1/privacy/export', self.handle_privacy_export)
         self.app.router.add_post('/api/v1/privacy/delete', self.handle_privacy_delete)
+        self.app.router.add_get('/api/v1/privacy/consent/{user_id}', self.handle_privacy_consent_get)
+        self.app.router.add_post('/api/v1/privacy/consent/{user_id}', self.handle_privacy_consent_set)
+        self.app.router.add_delete('/api/v1/privacy/data/{user_id}', self.handle_privacy_data_delete)
+        self.app.router.add_get('/api/v1/privacy/export/{user_id}', self.handle_privacy_export_user)
+        self.app.router.add_get('/api/v1/privacy/learning/stats', self.handle_privacy_learning_stats)
+        self.app.router.add_get('/api/v1/privacy/learning/global', self.handle_privacy_learning_global)
+        self.app.router.add_post('/api/v1/privacy/learning/pause/{user_id}', self.handle_privacy_learning_pause)
+        self.app.router.add_post('/api/v1/privacy/learning/resume/{user_id}', self.handle_privacy_learning_resume)
+        self.app.router.add_post('/api/v1/privacy/learning/optout/{user_id}', self.handle_privacy_learning_optout)
+        self.app.router.add_get('/api/v1/mobile-dispatch/sessions', self.handle_mobile_dispatch_sessions)
+        self.app.router.add_get('/api/v1/operator/status', self.handle_operator_status)
         self.app.router.add_get('/api/privacy/export', self.handle_privacy_export)
         self.app.router.add_post('/api/privacy/delete', self.handle_privacy_delete)
         self.app.router.add_get('/api/interventions', self.handle_interventions_get)
@@ -1430,6 +2015,179 @@ class ElyanGatewayServer:
             limit = 40
         return web.json_response(await self._dashboard_api().get_security_events(limit=limit))
 
+    async def handle_v1_inbox_events(self, request):
+        workspace_id = self._workspace_id(request)
+        runtime_db = self._runtime_db()
+        if request.method == "GET":
+            try:
+                limit = int(request.rel_url.query.get("limit", 12))
+            except Exception:
+                limit = 12
+            source_type = str(request.rel_url.query.get("source_type", "") or "").strip()
+            return _json_ok(
+                {
+                    "workspace_id": workspace_id,
+                    "events": runtime_db.inbox.list_events(
+                        workspace_id,
+                        limit=max(1, min(limit, 50)),
+                        source_type=source_type,
+                    ),
+                }
+            )
+
+        try:
+            data = await request.json()
+        except Exception:
+            return _json_error("invalid json", status=400)
+        execution_allowed, execution_error = self._require_execution_seat(request, data)
+        if not execution_allowed:
+            return _json_error(execution_error, status=403)
+        content = str(data.get("content") or "").strip()
+        if not content:
+            return _json_error("content required", status=400)
+        source_type = _normalize_inbox_source(str(data.get("source_type") or "manual"))
+        summary = _extract_task_summary(
+            content,
+            source_type=source_type,
+            title=str(data.get("title") or "").strip(),
+        ) if bool(data.get("analyze", True)) else None
+        event = runtime_db.inbox.create_event(
+            workspace_id=workspace_id,
+            source_type=source_type,
+            source_id=str(data.get("source_id") or "").strip(),
+            title=str(data.get("title") or "").strip(),
+            content=content,
+            summary=summary,
+            status="triaged" if summary else "received",
+            metadata={
+                "captured_via": "desktop",
+                "actor_id": self._actor_id(request, data),
+                **(dict(data.get("metadata") or {}) if isinstance(data.get("metadata"), dict) else {}),
+            },
+        )
+        billing_warning = ""
+        try:
+            self._workspace_billing().record_usage(
+                workspace_id,
+                "inbox_events",
+                1,
+                metadata={"event_id": event.get("event_id"), "source_type": source_type},
+            )
+            if summary is not None:
+                self._workspace_billing().record_usage(
+                    workspace_id,
+                    "task_extractions",
+                    1,
+                    metadata={
+                        "event_id": event.get("event_id"),
+                        "source_type": source_type,
+                        "task_type": str(summary.get("task_type") or "cowork"),
+                        "estimated_credits": 1,
+                    },
+                )
+        except RuntimeError as exc:
+            billing_warning = str(exc)
+        push_activity("inbox_event", "desktop", f"{source_type} intake captured", True)
+        payload = {"workspace_id": workspace_id, "event": event, "extraction": summary}
+        if billing_warning:
+            payload["billing_warning"] = billing_warning
+        return _json_ok(payload, status=201)
+
+    async def handle_v1_task_extract(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return _json_error("invalid json", status=400)
+        execution_allowed, execution_error = self._require_execution_seat(request, data)
+        self._observe_execution_guard(
+            request,
+            action="task_extract",
+            phase="seat_gate",
+            payload=data,
+            allowed=execution_allowed,
+            reason=execution_error,
+            checks=[
+                ExecutionCheck(
+                    name="execution_seat",
+                    allowed=execution_allowed,
+                    reason=execution_error,
+                    metadata={"required_roles": ["owner", "operator", "admin"]},
+                )
+            ],
+            metadata={"source": "task_extract", "event_id": str(data.get("event_id") or "").strip()},
+        )
+        if not execution_allowed:
+            return _json_error(execution_error, status=403)
+        workspace_id = self._workspace_id(request, data)
+        runtime_db = self._runtime_db()
+        event = None
+        event_id = str(data.get("event_id") or "").strip()
+        if event_id:
+            event = runtime_db.inbox.get_event(event_id)
+            if event is None:
+                return _json_error("event not found", status=404)
+            if str(event.get("workspace_id") or "") != workspace_id:
+                return _json_error("workspace mismatch", status=403)
+        source_type = _normalize_inbox_source(
+            str(data.get("source_type") or (event or {}).get("source_type") or "manual")
+        )
+        content = str(data.get("content") or (event or {}).get("content") or "").strip()
+        if not content:
+            return _json_error("content required", status=400)
+        summary = _extract_task_summary(
+            content,
+            source_type=source_type,
+            title=str(data.get("title") or (event or {}).get("title") or "").strip(),
+        )
+        updated_event = runtime_db.inbox.update_summary(event_id, summary=summary, status="triaged") if event_id else None
+        billing_warning = ""
+        task_usage = None
+        try:
+            task_usage = self._workspace_billing().record_usage(
+                workspace_id,
+                "task_extractions",
+                1,
+                metadata={
+                    "event_id": event_id,
+                    "source_type": source_type,
+                    "task_type": str(summary.get("task_type") or "cowork"),
+                    "estimated_credits": 1,
+                },
+            )
+        except RuntimeError as exc:
+            billing_warning = str(exc)
+        push_activity("task_extract", "desktop", f"{source_type} task extracted", True)
+        payload = {"workspace_id": workspace_id, "summary": summary}
+        if updated_event is not None:
+            payload["event"] = updated_event
+        if isinstance(task_usage, dict):
+            payload["billing_usage_id"] = str(task_usage.get("usage_id") or "")
+        if billing_warning:
+            payload["billing_warning"] = billing_warning
+        self._observe_execution_guard(
+            request,
+            action="task_extract",
+            phase="completed",
+            payload=data,
+            allowed=True,
+            checks=[
+                ExecutionCheck(
+                    name="summary_generated",
+                    allowed=True,
+                    metadata={
+                        "task_type": str(summary.get("task_type") or "cowork"),
+                        "needs_approval": bool(summary.get("needs_approval", False)),
+                    },
+                )
+            ],
+            metadata={
+                "source_type": source_type,
+                "event_id": event_id,
+                "billing_warning": billing_warning,
+            },
+        )
+        return _json_ok(payload)
+
     async def handle_v1_start_workflow(self, request):
         try:
             data = await request.json()
@@ -1442,6 +2200,87 @@ class ElyanGatewayServer:
             return web.json_response({"success": False, "error": "task_type required"}, status=400)
         if not brief:
             return web.json_response({"success": False, "error": "brief required"}, status=400)
+        execution_allowed, execution_error = self._require_execution_seat(request, data)
+        self._observe_execution_guard(
+            request,
+            action="workflow_run",
+            phase="seat_gate",
+            payload=data,
+            allowed=execution_allowed,
+            reason=execution_error,
+            checks=[
+                ExecutionCheck(
+                    name="execution_seat",
+                    allowed=execution_allowed,
+                    reason=execution_error,
+                    metadata={"required_roles": ["owner", "operator", "admin"]},
+                )
+            ],
+            metadata={"task_type": task_type, "prompt_length": len(brief)},
+            default_session_id="desktop",
+        )
+        if not execution_allowed:
+            return _json_error(execution_error, status=403)
+        credit_decision = self._usage_credit_decision(
+            request,
+            "workflow_runs",
+            payload=data,
+            metadata={
+                "task_type": task_type,
+                "prompt_length": len(brief),
+                "routing_profile": str(data.get("routing_profile") or "balanced").strip() or "balanced",
+                "review_strictness": str(data.get("review_strictness") or "balanced").strip() or "balanced",
+            },
+        )
+        credit_allowed = bool(credit_decision.get("allowed", True))
+        self._observe_execution_guard(
+            request,
+            action="workflow_run",
+            phase="credit_gate",
+            payload=data,
+            allowed=credit_allowed,
+            reason=str(credit_decision.get("reason") or ""),
+            checks=[
+                ExecutionCheck(
+                    name="credit_authorization",
+                    allowed=credit_allowed,
+                    reason=str(credit_decision.get("reason") or ""),
+                    metadata=credit_decision,
+                )
+            ],
+            metadata={"metric": "workflow_runs", "task_type": task_type},
+            default_session_id="desktop",
+        )
+        if not credit_decision.get("allowed", True):
+            return self._credit_block_response(credit_decision, action_label="workflow run")
+        workspace_id = self._workspace_id(request, data)
+        workflow_usage = None
+        try:
+            workflow_usage = self._record_provisional_usage(
+                request,
+                metric="workflow_runs",
+                payload=data,
+                metadata={
+                    "task_type": task_type,
+                    "routing_profile": str(data.get("routing_profile") or "balanced").strip() or "balanced",
+                    "review_strictness": str(data.get("review_strictness") or "balanced").strip() or "balanced",
+                    "estimated_credits": int(credit_decision.get("estimated_credits") or 0),
+                    "prompt_length": len(brief),
+                },
+            )
+        except Exception as exc:
+            self._observe_execution_guard(
+                request,
+                action="workflow_run",
+                phase="dispatch_failed",
+                payload=data,
+                allowed=False,
+                reason=str(exc),
+                metadata={"task_type": task_type, "failure_class": "billing_reservation_failed"},
+                level="error",
+                default_session_id="desktop",
+            )
+            return web.json_response({"success": False, "error": "billing reservation failed"}, status=500)
 
         from core.workflow.vertical_runner import get_vertical_workflow_runner
 
@@ -1462,64 +2301,126 @@ class ElyanGatewayServer:
                 review_strictness=str(data.get("review_strictness") or "balanced").strip() or "balanced",
                 output_dir=str(data.get("output_dir") or "").strip(),
                 thread_id=str(data.get("thread_id") or "").strip(),
-                workspace_id=self._workspace_id(request, data),
+                workspace_id=workspace_id,
+                actor_id=self._actor_id(request, data),
+                billing_usage_id=str((workflow_usage or {}).get("usage_id") or ""),
                 background=True,
             )
         except ValueError as exc:
+            self._reconcile_failed_usage(
+                workspace_id,
+                usage_id=str((workflow_usage or {}).get("usage_id") or ""),
+                failure_class="validation_error",
+                metadata={"task_type": task_type, "reason": str(exc)},
+            )
+            self._observe_execution_guard(
+                request,
+                action="workflow_run",
+                phase="dispatch_failed",
+                payload=data,
+                allowed=False,
+                reason=str(exc),
+                metadata={"task_type": task_type, "failure_class": "validation_error"},
+                level="warning",
+                default_session_id="desktop",
+            )
             return web.json_response({"success": False, "error": str(exc)}, status=400)
         except Exception as exc:
+            self._reconcile_failed_usage(
+                workspace_id,
+                usage_id=str((workflow_usage or {}).get("usage_id") or ""),
+                failure_class="runtime_error",
+                metadata={"task_type": task_type, "reason": str(exc)},
+            )
+            self._observe_execution_guard(
+                request,
+                action="workflow_run",
+                phase="dispatch_failed",
+                payload=data,
+                allowed=False,
+                reason=str(exc),
+                metadata={"task_type": task_type, "failure_class": "runtime_error"},
+                level="error",
+                default_session_id="desktop",
+            )
             return web.json_response({"success": False, "error": str(exc)}, status=500)
-
+        self._observe_execution_guard(
+            request,
+            action="workflow_run",
+            phase="dispatched",
+            payload=data,
+            allowed=True,
+            checks=[
+                ExecutionCheck(
+                    name="workflow_dispatched",
+                    allowed=True,
+                    metadata={
+                        "workflow_state": str(getattr(record, "workflow_state", "") or ""),
+                        "task_type": task_type,
+                    },
+                )
+            ],
+            metadata={"estimated_credits": int(credit_decision.get("estimated_credits") or 0)},
+            run_id=str(getattr(record, "run_id", "") or ""),
+            default_session_id="desktop",
+        )
         push_activity("workflow_run", "desktop", f"{task_type} flow started", True)
-        return web.json_response(
+        return _json_ok(
             {
-                "success": True,
                 "accepted": True,
                 "run_id": record.run_id,
+                "billing_usage_id": str((workflow_usage or {}).get("usage_id") or ""),
                 "task_type": record.task_type,
                 "workflow_state": record.workflow_state,
                 "run": record.to_dict(),
             }
         )
 
-    async def handle_v1_auth_login(self, request):
+    async def handle_v1_auth_bootstrap_owner(self, request):
         if not _is_loopback_request(request):
-            return web.json_response({"success": False, "error": "local login is restricted to localhost"}, status=403)
+            return _json_error("owner bootstrap is restricted to localhost", status=403)
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"success": False, "error": "invalid json"}, status=400)
+            return _json_error("invalid json", status=400)
         email = str(data.get("email") or "").strip().lower()
         password = str(data.get("password") or "")
-        workspace_id = str(data.get("workspace_id") or "").strip()
+        workspace_id = str(data.get("workspace_id") or "local-workspace").strip() or "local-workspace"
         if not email:
-            return web.json_response({"success": False, "error": "email required"}, status=400)
+            return _json_error("email required", status=400)
         if not password:
-            return web.json_response({"success": False, "error": "password required"}, status=400)
-        user = get_runtime_database().auth.authenticate_user(
-            email=email,
-            password=password,
-            workspace_id=workspace_id,
-        )
-        if not user:
-            return web.json_response({"success": False, "error": "invalid credentials"}, status=401)
-        session, session_token = get_runtime_database().auth_sessions.create_session(
+            return _json_error("password required", status=400)
+        runtime_db = get_runtime_database()
+        if self._local_user_count(runtime_db) > 0:
+            return _json_error("owner bootstrap already completed", status=409)
+        try:
+            user = runtime_db.auth.bootstrap_owner(
+                email=email,
+                password=password,
+                display_name=str(data.get("display_name") or email.split("@", 1)[0]),
+                workspace_id=workspace_id,
+                metadata={"bootstrap_source": "gateway_setup"},
+            )
+        except ValueError as exc:
+            return _json_error(str(exc), status=400)
+        session, session_token = runtime_db.auth_sessions.create_session(
             user=user,
             metadata={
                 "client": "desktop",
-                "login_source": "local_login",
+                "login_source": "bootstrap_owner",
             },
         )
-        response = web.json_response(
+        response = _json_ok(
             {
-                "success": True,
                 "workspace_id": str(user.get("workspace_id") or workspace_id),
                 "session_token": session_token,
+                "csrf_token": "",
                 "user": {
                     "user_id": str(user.get("user_id") or ""),
                     "email": str(user.get("email") or email),
                     "display_name": str(user.get("display_name") or ""),
                     "status": str(user.get("status") or "active"),
+                    "role": "owner",
                 },
                 "session": {
                     "session_id": str(session.get("session_id") or ""),
@@ -1536,6 +2437,73 @@ class ElyanGatewayServer:
             secure=False,
             path="/",
         )
+        csrf_token = self._set_csrf_cookie(response)
+        response.text = json.dumps({**json.loads(response.text), "csrf_token": csrf_token})
+        return response
+
+    async def handle_v1_auth_login(self, request):
+        if not _is_loopback_request(request):
+            return _json_error("local login is restricted to localhost", status=403)
+        try:
+            data = await request.json()
+        except Exception:
+            return _json_error("invalid json", status=400)
+        email = str(data.get("email") or "").strip().lower()
+        password = str(data.get("password") or "")
+        workspace_id = str(data.get("workspace_id") or "").strip()
+        if not email:
+            return _json_error("email required", status=400)
+        if not password:
+            return _json_error("password required", status=400)
+        runtime_db = get_runtime_database()
+        user = runtime_db.auth.authenticate_user(
+            email=email,
+            password=password,
+            workspace_id=workspace_id,
+        )
+        if not user:
+            if self._local_user_count(runtime_db) == 0:
+                return _json_error("owner bootstrap required before login", status=409, payload={"bootstrap_required": True})
+            return _json_error("invalid credentials", status=401)
+        session, session_token = runtime_db.auth_sessions.create_session(
+            user=user,
+            metadata={
+                "client": "desktop",
+                "login_source": "local_login",
+            },
+        )
+        response = _json_ok(
+            {
+                "workspace_id": str(user.get("workspace_id") or workspace_id),
+                "session_token": session_token,
+                "csrf_token": "",
+                "user": {
+                    "user_id": str(user.get("user_id") or ""),
+                    "email": str(user.get("email") or email),
+                    "display_name": str(user.get("display_name") or ""),
+                    "status": str(user.get("status") or "active"),
+                    "role": str(user.get("role") or session.get("role") or runtime_db.access.get_actor_role(
+                        workspace_id=str(user.get("workspace_id") or workspace_id or "local-workspace"),
+                        actor_id=str(user.get("user_id") or ""),
+                    )),
+                },
+                "session": {
+                    "session_id": str(session.get("session_id") or ""),
+                    "expires_at": float(session.get("expires_at") or 0.0),
+                },
+            }
+        )
+        response.headers["X-Elyan-Session-Token"] = session_token
+        response.set_cookie(
+            "elyan_user_session",
+            session_token,
+            httponly=True,
+            samesite="Strict",
+            secure=False,
+            path="/",
+        )
+        csrf_token = self._set_csrf_cookie(response)
+        response.text = json.dumps({**json.loads(response.text), "csrf_token": csrf_token})
         return response
 
     async def handle_v1_auth_logout(self, request):
@@ -1546,30 +2514,32 @@ class ElyanGatewayServer:
         ).strip()
         if session_token:
             get_runtime_database().auth_sessions.revoke_session(session_token)
-        response = web.json_response({"success": True})
+        response = _json_ok()
         response.del_cookie("elyan_user_session", path="/")
+        self._clear_csrf_cookie(response)
         response.headers["X-Elyan-Session-Token"] = ""
         return response
 
     async def handle_v1_auth_me(self, request):
         allowed, error, session = self._require_user_session(request, allow_cookie=True)
         if not allowed:
-            return web.json_response({"success": False, "error": error}, status=403)
+            return _json_error(error, status=403)
         session_token = str(
             request.headers.get("X-Elyan-Session-Token", "")
             or request.cookies.get("elyan_user_session", "")
             or ""
         ).strip()
-        response = web.json_response(
+        response = _json_ok(
             {
-                "success": True,
                 "workspace_id": str(session.get("workspace_id") or "local-workspace"),
                 "session_token": session_token,
+                "csrf_token": str(request.cookies.get("elyan_csrf_token", "") or ""),
                 "user": {
                     "user_id": str(session.get("user_id") or ""),
                     "email": str(session.get("email") or ""),
                     "display_name": str(session.get("display_name") or ""),
                     "status": str(session.get("status") or "active"),
+                    "role": str(session.get("role") or "member"),
                 },
                 "session": {
                     "session_id": str(session.get("session_id") or ""),
@@ -1580,19 +2550,69 @@ class ElyanGatewayServer:
         response.headers["X-Elyan-Session-Token"] = session_token
         return response
 
+    async def handle_v1_admin_workspaces(self, request):
+        return await self._workspace_admin_controller().handle_list_workspaces(request)
+
+    async def handle_v1_admin_workspace_detail(self, request):
+        return await self._workspace_admin_controller().handle_get_workspace(request)
+
+    async def handle_v1_admin_workspace_members(self, request):
+        return await self._workspace_admin_controller().handle_list_members(request)
+
+    async def handle_v1_admin_workspace_invites(self, request):
+        return await self._workspace_admin_controller().handle_create_invite(request)
+
+    async def handle_v1_admin_workspace_invites_list(self, request):
+        return await self._workspace_admin_controller().handle_list_invites(request)
+
+    async def handle_v1_admin_workspace_invite_accept(self, request):
+        return await self._workspace_admin_controller().handle_accept_invite(request)
+
+    async def handle_v1_admin_workspace_member_role(self, request):
+        return await self._workspace_admin_controller().handle_update_role(request)
+
+    async def handle_v1_admin_workspace_seat_assign(self, request):
+        return await self._workspace_admin_controller().handle_assign_seat(request)
+
     async def handle_v1_cowork_home(self, request):
         workspace_id = self._workspace_id(request)
+        user_id = self._actor_id(request)
         home = await self._cowork_store().home_snapshot(workspace_id=workspace_id, limit=8)
         approvals = self._mission_store().pending_approvals(owner=workspace_id)
         billing = self._workspace_billing().get_workspace_summary(workspace_id)
-        return web.json_response(
+        try:
+            autopilot_status = get_autopilot().get_status()
+        except Exception as exc:
+            autopilot_status = {
+                "enabled": False,
+                "running": False,
+                "error": str(exc),
+            }
+        try:
+            background_tasks = [
+                self._normalize_background_task(record)
+                for record in away_task_registry.list_for_user(user_id, limit=6)
+            ]
+        except Exception:
+            background_tasks = []
+        return _json_ok(
             {
-                "success": True,
                 "workspace_id": workspace_id,
                 "recent_threads": home.get("recent_threads", []),
                 "last_thread": home.get("last_thread"),
                 "active_count": home.get("active_count", 0),
                 "pending_approvals": approvals[:12],
+                "background_tasks": background_tasks,
+                "autopilot": {
+                    "enabled": bool(autopilot_status.get("enabled", False)),
+                    "running": bool(autopilot_status.get("running", False)),
+                    "last_tick_at": float(autopilot_status.get("last_tick_at") or 0.0),
+                    "last_tick_reason": str(autopilot_status.get("last_tick_reason") or ""),
+                    "last_briefing": dict(autopilot_status.get("last_briefing") or {}),
+                    "last_suggestions": list(autopilot_status.get("last_suggestions") or [])[:6],
+                    "last_task_review": list(autopilot_status.get("last_task_review") or [])[:6],
+                    "last_interventions": list(autopilot_status.get("last_interventions") or [])[:4],
+                },
                 "billing": billing,
             }
         )
@@ -1605,67 +2625,327 @@ class ElyanGatewayServer:
             except Exception:
                 limit = 20
             threads = await self._cowork_store().list_threads(workspace_id=workspace_id, limit=limit)
-            return web.json_response({"success": True, "threads": threads, "workspace_id": workspace_id})
+            return _json_ok({"threads": threads, "workspace_id": workspace_id})
 
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"success": False, "error": "invalid json"}, status=400)
+            return _json_error("invalid json", status=400)
         prompt = str(data.get("prompt") or data.get("brief") or "").strip()
         if not prompt:
-            return web.json_response({"success": False, "error": "prompt required"}, status=400)
+            return _json_error("prompt required", status=400)
+        execution_allowed, execution_error = self._require_execution_seat(request, data)
+        self._observe_execution_guard(
+            request,
+            action="cowork_thread_create",
+            phase="seat_gate",
+            payload=data,
+            allowed=execution_allowed,
+            reason=execution_error,
+            checks=[
+                ExecutionCheck(
+                    name="execution_seat",
+                    allowed=execution_allowed,
+                    reason=execution_error,
+                    metadata={"required_roles": ["owner", "operator", "admin"]},
+                )
+            ],
+            metadata={"mode": str(data.get("current_mode") or data.get("mode") or "").strip().lower() or "cowork"},
+            default_session_id="desktop",
+        )
+        if not execution_allowed:
+            return _json_error(execution_error, status=403)
+        requested_mode = str(data.get("current_mode") or data.get("mode") or "").strip().lower() or "cowork"
+        credit_decision = self._usage_credit_decision(
+            request,
+            "cowork_threads",
+            payload=data,
+            metadata={
+                "mode": requested_mode,
+                "prompt_length": len(prompt),
+                "routing_profile": str(data.get("routing_profile") or "balanced").strip() or "balanced",
+                "review_strictness": str(data.get("review_strictness") or "balanced").strip() or "balanced",
+            },
+        )
+        credit_allowed = bool(credit_decision.get("allowed", True))
+        self._observe_execution_guard(
+            request,
+            action="cowork_thread_create",
+            phase="credit_gate",
+            payload=data,
+            allowed=credit_allowed,
+            reason=str(credit_decision.get("reason") or ""),
+            checks=[
+                ExecutionCheck(
+                    name="credit_authorization",
+                    allowed=credit_allowed,
+                    reason=str(credit_decision.get("reason") or ""),
+                    metadata=credit_decision,
+                )
+            ],
+            metadata={"metric": "cowork_threads", "mode": requested_mode},
+            default_session_id="desktop",
+        )
+        if not credit_decision.get("allowed", True):
+            return self._credit_block_response(credit_decision, action_label="cowork thread")
         limit_state = self._workspace_billing().enforce_limit(
             workspace_id,
             metric="max_threads",
             current_value=await self._cowork_store().count_threads(workspace_id=workspace_id),
         )
-        if not limit_state.get("allowed", True):
-            return web.json_response({"success": False, "error": str(limit_state.get("reason") or "thread limit reached"), "limit": limit_state}, status=402)
-        detail = await self._cowork_store().create_thread(
-            prompt=prompt,
-            workspace_id=workspace_id,
-            session_id=str(data.get("session_id") or "desktop").strip() or "desktop",
-            preferred_mode=str(data.get("current_mode") or data.get("mode") or "").strip(),
-            project_template_id=str(data.get("project_template_id") or "").strip(),
-            routing_profile=str(data.get("routing_profile") or "balanced").strip() or "balanced",
-            review_strictness=str(data.get("review_strictness") or "balanced").strip() or "balanced",
-            user_id=self._actor_id(request, data),
-            agent=self.agent,
-            metadata={
-                "project_template_id": str(data.get("project_template_id") or "").strip(),
-                "project_name": str(data.get("project_name") or "").strip(),
-            },
+        limit_allowed = bool(limit_state.get("allowed", True))
+        self._observe_execution_guard(
+            request,
+            action="cowork_thread_create",
+            phase="limit_gate",
+            payload=data,
+            allowed=limit_allowed,
+            reason=str(limit_state.get("reason") or ""),
+            checks=[
+                ExecutionCheck(
+                    name="thread_limit",
+                    allowed=limit_allowed,
+                    reason=str(limit_state.get("reason") or ""),
+                    metadata=limit_state,
+                )
+            ],
+            metadata={"metric": "max_threads", "mode": requested_mode},
+            default_session_id="desktop",
         )
-        self._workspace_billing().record_usage(
-            workspace_id,
-            "cowork_threads",
-            1,
-            metadata={"thread_id": detail.get("thread_id"), "mode": detail.get("current_mode")},
+        if not limit_state.get("allowed", True):
+            return _json_error(str(limit_state.get("reason") or "thread limit reached"), status=402, payload={"limit": limit_state})
+        try:
+            thread_usage = self._record_provisional_usage(
+                request,
+                metric="cowork_threads",
+                payload=data,
+                metadata={
+                    "mode": requested_mode,
+                    "routing_profile": str(data.get("routing_profile") or "balanced").strip() or "balanced",
+                    "review_strictness": str(data.get("review_strictness") or "balanced").strip() or "balanced",
+                    "estimated_credits": int(credit_decision.get("estimated_credits") or 0),
+                    "prompt_length": len(prompt),
+                },
+            )
+        except Exception as exc:
+            self._observe_execution_guard(
+                request,
+                action="cowork_thread_create",
+                phase="dispatch_failed",
+                payload=data,
+                allowed=False,
+                reason=str(exc),
+                metadata={"failure_class": "billing_reservation_failed", "mode": requested_mode},
+                level="error",
+                default_session_id="desktop",
+            )
+            return web.json_response({"success": False, "error": "billing reservation failed"}, status=500)
+        try:
+            detail = await self._cowork_store().create_thread(
+                prompt=prompt,
+                workspace_id=workspace_id,
+                session_id=str(data.get("session_id") or "desktop").strip() or "desktop",
+                preferred_mode=str(data.get("current_mode") or data.get("mode") or "").strip(),
+                project_template_id=str(data.get("project_template_id") or "").strip(),
+                routing_profile=str(data.get("routing_profile") or "balanced").strip() or "balanced",
+                review_strictness=str(data.get("review_strictness") or "balanced").strip() or "balanced",
+                user_id=self._actor_id(request, data),
+                agent=self.agent,
+                metadata={
+                    "project_template_id": str(data.get("project_template_id") or "").strip(),
+                    "project_name": str(data.get("project_name") or "").strip(),
+                },
+                billing_usage_id=str((thread_usage or {}).get("usage_id") or ""),
+                billing_metric="cowork_threads",
+            )
+        except KeyError:
+            self._reconcile_failed_usage(
+                workspace_id,
+                usage_id=str((thread_usage or {}).get("usage_id") or ""),
+                failure_class="thread_missing",
+                metadata={"mode": requested_mode},
+            )
+            self._observe_execution_guard(
+                request,
+                action="cowork_thread_create",
+                phase="dispatch_failed",
+                payload=data,
+                allowed=False,
+                reason="thread not found",
+                metadata={"failure_class": "thread_missing", "mode": requested_mode},
+                level="warning",
+                default_session_id="desktop",
+            )
+            return _json_error("thread not found", status=404)
+        except ValueError as exc:
+            self._reconcile_failed_usage(
+                workspace_id,
+                usage_id=str((thread_usage or {}).get("usage_id") or ""),
+                failure_class="validation_error",
+                metadata={"mode": requested_mode, "reason": str(exc)},
+            )
+            self._observe_execution_guard(
+                request,
+                action="cowork_thread_create",
+                phase="dispatch_failed",
+                payload=data,
+                allowed=False,
+                reason=str(exc),
+                metadata={"failure_class": "validation_error", "mode": requested_mode},
+                level="warning",
+                default_session_id="desktop",
+            )
+            return _json_error(str(exc), status=400)
+        except Exception as exc:
+            self._reconcile_failed_usage(
+                workspace_id,
+                usage_id=str((thread_usage or {}).get("usage_id") or ""),
+                failure_class="runtime_error",
+                metadata={"mode": requested_mode, "reason": str(exc)},
+            )
+            self._observe_execution_guard(
+                request,
+                action="cowork_thread_create",
+                phase="dispatch_failed",
+                payload=data,
+                allowed=False,
+                reason=str(exc),
+                metadata={"failure_class": "runtime_error", "mode": requested_mode},
+                level="error",
+                default_session_id="desktop",
+            )
+            return web.json_response({"success": False, "error": str(exc)}, status=500)
+        self._observe_execution_guard(
+            request,
+            action="cowork_thread_create",
+            phase="dispatched",
+            payload=data,
+            allowed=True,
+            checks=[
+                ExecutionCheck(
+                    name="thread_created",
+                    allowed=True,
+                    metadata={
+                        "thread_id": str(detail.get("thread_id") or ""),
+                        "mode": str(detail.get("current_mode") or requested_mode),
+                    },
+                )
+            ],
+            metadata={"estimated_credits": int(credit_decision.get("estimated_credits") or 0)},
+            default_session_id="desktop",
         )
         push_cowork_event("cowork.thread.updated", detail)
-        return web.json_response({"success": True, "thread": detail, "workspace_id": workspace_id})
+        return _json_ok(
+            {
+                "thread": detail,
+                "workspace_id": workspace_id,
+                "billing_usage_id": str((thread_usage or {}).get("usage_id") or ""),
+            }
+        )
 
     async def handle_v1_cowork_thread_detail(self, request):
         thread_id = str(request.match_info.get("thread_id") or "").strip()
         if not thread_id:
-            return web.json_response({"success": False, "error": "thread_id required"}, status=400)
+            return _json_error("thread_id required", status=400)
         try:
             detail = await self._cowork_store().get_thread_detail(thread_id)
         except KeyError:
-            return web.json_response({"success": False, "error": "thread not found"}, status=404)
-        return web.json_response({"success": True, "thread": detail})
+            return _json_error("thread not found", status=404)
+        return _json_ok({"thread": detail})
 
     async def handle_v1_cowork_thread_turn(self, request):
         thread_id = str(request.match_info.get("thread_id") or "").strip()
         if not thread_id:
-            return web.json_response({"success": False, "error": "thread_id required"}, status=400)
+            return _json_error("thread_id required", status=400)
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"success": False, "error": "invalid json"}, status=400)
+            return _json_error("invalid json", status=400)
         prompt = str(data.get("prompt") or "").strip()
         if not prompt:
-            return web.json_response({"success": False, "error": "prompt required"}, status=400)
+            return _json_error("prompt required", status=400)
+        execution_allowed, execution_error = self._require_execution_seat(request, data)
+        self._observe_execution_guard(
+            request,
+            action="cowork_turn_create",
+            phase="seat_gate",
+            payload=data,
+            allowed=execution_allowed,
+            reason=execution_error,
+            checks=[
+                ExecutionCheck(
+                    name="execution_seat",
+                    allowed=execution_allowed,
+                    reason=execution_error,
+                    metadata={"required_roles": ["owner", "operator", "admin"]},
+                )
+            ],
+            metadata={"thread_id": thread_id},
+            default_session_id="desktop",
+        )
+        if not execution_allowed:
+            return _json_error(execution_error, status=403)
+        requested_mode = str(data.get("current_mode") or data.get("mode") or "").strip().lower() or "cowork"
+        credit_decision = self._usage_credit_decision(
+            request,
+            "cowork_turns",
+            payload=data,
+            metadata={
+                "mode": requested_mode,
+                "prompt_length": len(prompt),
+                "routing_profile": str(data.get("routing_profile") or "balanced").strip() or "balanced",
+                "review_strictness": str(data.get("review_strictness") or "balanced").strip() or "balanced",
+            },
+        )
+        credit_allowed = bool(credit_decision.get("allowed", True))
+        self._observe_execution_guard(
+            request,
+            action="cowork_turn_create",
+            phase="credit_gate",
+            payload=data,
+            allowed=credit_allowed,
+            reason=str(credit_decision.get("reason") or ""),
+            checks=[
+                ExecutionCheck(
+                    name="credit_authorization",
+                    allowed=credit_allowed,
+                    reason=str(credit_decision.get("reason") or ""),
+                    metadata=credit_decision,
+                )
+            ],
+            metadata={"metric": "cowork_turns", "thread_id": thread_id, "mode": requested_mode},
+            default_session_id="desktop",
+        )
+        if not credit_decision.get("allowed", True):
+            return self._credit_block_response(credit_decision, action_label="cowork turn")
+        workspace_id = self._workspace_id(request, data)
+        try:
+            turn_usage = self._record_provisional_usage(
+                request,
+                metric="cowork_turns",
+                payload=data,
+                metadata={
+                    "thread_id": thread_id,
+                    "mode": requested_mode,
+                    "routing_profile": str(data.get("routing_profile") or "balanced").strip() or "balanced",
+                    "review_strictness": str(data.get("review_strictness") or "balanced").strip() or "balanced",
+                    "estimated_credits": int(credit_decision.get("estimated_credits") or 0),
+                    "prompt_length": len(prompt),
+                },
+            )
+        except Exception as exc:
+            self._observe_execution_guard(
+                request,
+                action="cowork_turn_create",
+                phase="dispatch_failed",
+                payload=data,
+                allowed=False,
+                reason=str(exc),
+                metadata={"thread_id": thread_id, "failure_class": "billing_reservation_failed"},
+                level="error",
+                default_session_id="desktop",
+            )
+            return web.json_response({"success": False, "error": "billing reservation failed"}, status=500)
         try:
             detail = await self._cowork_store().add_turn(
                 thread_id,
@@ -1676,25 +2956,99 @@ class ElyanGatewayServer:
                 review_strictness=str(data.get("review_strictness") or "balanced").strip() or "balanced",
                 user_id=self._actor_id(request, data),
                 agent=self.agent,
+                billing_usage_id=str((turn_usage or {}).get("usage_id") or ""),
+                billing_metric="cowork_turns",
             )
         except KeyError:
-            return web.json_response({"success": False, "error": "thread not found"}, status=404)
+            self._reconcile_failed_usage(
+                workspace_id,
+                usage_id=str((turn_usage or {}).get("usage_id") or ""),
+                failure_class="thread_missing",
+                metadata={"thread_id": thread_id},
+            )
+            self._observe_execution_guard(
+                request,
+                action="cowork_turn_create",
+                phase="dispatch_failed",
+                payload=data,
+                allowed=False,
+                reason="thread not found",
+                metadata={"thread_id": thread_id, "failure_class": "thread_missing"},
+                level="warning",
+                default_session_id="desktop",
+            )
+            return _json_error("thread not found", status=404)
         except ValueError as exc:
-            return web.json_response({"success": False, "error": str(exc)}, status=400)
+            self._reconcile_failed_usage(
+                workspace_id,
+                usage_id=str((turn_usage or {}).get("usage_id") or ""),
+                failure_class="validation_error",
+                metadata={"thread_id": thread_id, "reason": str(exc)},
+            )
+            self._observe_execution_guard(
+                request,
+                action="cowork_turn_create",
+                phase="dispatch_failed",
+                payload=data,
+                allowed=False,
+                reason=str(exc),
+                metadata={"thread_id": thread_id, "failure_class": "validation_error"},
+                level="warning",
+                default_session_id="desktop",
+            )
+            return _json_error(str(exc), status=400)
+        except Exception as exc:
+            self._reconcile_failed_usage(
+                workspace_id,
+                usage_id=str((turn_usage or {}).get("usage_id") or ""),
+                failure_class="runtime_error",
+                metadata={"thread_id": thread_id, "reason": str(exc)},
+            )
+            self._observe_execution_guard(
+                request,
+                action="cowork_turn_create",
+                phase="dispatch_failed",
+                payload=data,
+                allowed=False,
+                reason=str(exc),
+                metadata={"thread_id": thread_id, "failure_class": "runtime_error"},
+                level="error",
+                default_session_id="desktop",
+            )
+            return web.json_response({"success": False, "error": str(exc)}, status=500)
+        self._observe_execution_guard(
+            request,
+            action="cowork_turn_create",
+            phase="dispatched",
+            payload=data,
+            allowed=True,
+            checks=[
+                ExecutionCheck(
+                    name="turn_created",
+                    allowed=True,
+                    metadata={
+                        "thread_id": str(detail.get("thread_id") or thread_id),
+                        "mode": str(detail.get("current_mode") or requested_mode),
+                    },
+                )
+            ],
+            metadata={"estimated_credits": int(credit_decision.get("estimated_credits") or 0)},
+            default_session_id="desktop",
+        )
         push_cowork_event("cowork.thread.updated", detail)
-        return web.json_response({"success": True, "thread": detail})
+        return _json_ok({"thread": detail, "billing_usage_id": str((turn_usage or {}).get("usage_id") or "")})
 
     async def handle_v1_cowork_thread_action(self, request):
         thread_id = str(request.match_info.get("thread_id") or "").strip()
         if not thread_id:
-            return web.json_response({"success": False, "error": "thread_id required"}, status=400)
+            return _json_error("thread_id required", status=400)
         try:
             data = await request.json()
         except Exception:
             data = {}
         action = str(data.get("action") or "").strip().lower()
         if action not in {"stop", "resume"}:
-            return web.json_response({"success": False, "error": "unsupported action"}, status=400)
+            return _json_error("unsupported action", status=400)
         try:
             detail = await self._cowork_store().control_thread(
                 thread_id,
@@ -1703,16 +3057,16 @@ class ElyanGatewayServer:
                 agent=self.agent,
             )
         except KeyError:
-            return web.json_response({"success": False, "error": "thread not found"}, status=404)
+            return _json_error("thread not found", status=404)
         except ValueError as exc:
-            return web.json_response({"success": False, "error": str(exc)}, status=400)
+            return _json_error(str(exc), status=400)
         push_cowork_event("cowork.thread.updated", detail)
-        return web.json_response({"success": True, "thread": detail})
+        return _json_ok({"thread": detail})
 
     async def handle_v1_cowork_resolve_approval(self, request):
         approval_id = str(request.match_info.get("approval_id") or "").strip()
         if not approval_id:
-            return web.json_response({"success": False, "error": "approval_id required"}, status=400)
+            return _json_error("approval_id required", status=400)
         try:
             data = await request.json()
         except Exception:
@@ -1724,16 +3078,20 @@ class ElyanGatewayServer:
             agent=self.agent,
         )
         if mission is None:
-            return web.json_response({"success": False, "error": "approval not found"}, status=404)
+            return _json_error("approval not found", status=404)
         thread_id = str((mission.metadata or {}).get("thread_id") or "").strip()
         detail = await self._cowork_store().get_thread_detail(thread_id) if thread_id else None
         if detail is not None:
             push_cowork_event("cowork.approval.resolved", detail)
-        return web.json_response({"success": True, "mission": mission.to_dict(), "thread": detail})
+        return _json_ok({"mission": mission.to_dict(), "thread": detail})
 
     async def handle_v1_billing_workspace(self, request):
         workspace_id = self._workspace_id(request)
-        return web.json_response({"success": True, "workspace": self._workspace_billing().get_workspace_summary(workspace_id)})
+        return _json_ok({"workspace": self._workspace_billing().get_workspace_summary(workspace_id)})
+
+    async def handle_v1_billing_plans(self, request):
+        store = self._workspace_billing()
+        return _json_ok({"plans": store.list_plans(), "token_packs": store.list_token_packs()})
 
     async def handle_v1_billing_usage(self, request):
         workspace_id = self._workspace_id(request)
@@ -1741,17 +3099,114 @@ class ElyanGatewayServer:
             limit = int(request.rel_url.query.get("limit", 100))
         except Exception:
             limit = 100
-        return web.json_response({"success": True, "usage": self._workspace_billing().get_usage(workspace_id, limit=limit)})
+        return _json_ok({"usage": self._workspace_billing().get_usage(workspace_id, limit=limit)})
 
     async def handle_v1_billing_entitlements(self, request):
         workspace_id = self._workspace_id(request)
-        return web.json_response({"success": True, "entitlements": self._workspace_billing().get_entitlements(workspace_id)})
+        return _json_ok({"entitlements": self._workspace_billing().get_entitlements(workspace_id)})
 
-    async def handle_v1_billing_checkout(self, request):
+    async def handle_v1_billing_credits(self, request):
+        workspace_id = self._workspace_id(request)
+        return _json_ok({"credits": self._workspace_billing().get_credit_balance(workspace_id)})
+
+    async def handle_v1_billing_ledger(self, request):
+        workspace_id = self._workspace_id(request)
+        try:
+            limit = int(request.rel_url.query.get("limit", 100))
+        except Exception:
+            limit = 100
+        return _json_ok({"ledger": self._workspace_billing().get_credit_ledger(workspace_id, limit=limit)})
+
+    async def handle_v1_billing_events(self, request):
+        workspace_id = self._workspace_id(request)
+        try:
+            limit = int(request.rel_url.query.get("limit", 100))
+        except Exception:
+            limit = 100
+        return _json_ok({"events": self._workspace_billing().get_billing_events(workspace_id, limit=limit)})
+
+    async def handle_v1_billing_profile(self, request):
+        workspace_id = self._workspace_id(request)
+        store = self._workspace_billing()
+        if request.method == "GET":
+            return _json_ok({"profile": store.get_billing_profile(workspace_id)})
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"success": False, "error": "invalid json"}, status=400)
+            return _json_error("invalid json", status=400)
+        allowed, error = self._require_billing_write_role(request, data)
+        if not allowed:
+            return _json_error(error, status=403)
+        payload = {
+            "full_name": str(data.get("full_name") or "").strip(),
+            "email": str(data.get("email") or self._auth_context(request).get("email") or "").strip(),
+            "phone": str(data.get("phone") or "").strip(),
+            "identity_number": str(data.get("identity_number") or "").strip(),
+            "address_line1": str(data.get("address_line1") or "").strip(),
+            "city": str(data.get("city") or "").strip(),
+            "zip_code": str(data.get("zip_code") or "").strip(),
+            "country": str(data.get("country") or "").strip(),
+        }
+        return _json_ok({"profile": store.update_billing_profile(workspace_id, payload)})
+
+    async def handle_v1_billing_checkout_detail(self, request):
+        workspace_id = self._workspace_id(request)
+        reference_id = str(request.match_info.get("reference_id") or "").strip()
+        if not reference_id:
+            return _json_error("reference_id required", status=400)
+        payload = self._workspace_billing().get_checkout_session(workspace_id, reference_id, refresh=True)
+        if payload is None:
+            return _json_error("checkout not found", status=404)
+        return _json_ok({"checkout": payload})
+
+    async def handle_v1_billing_reconcile_usage(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return _json_error("invalid json", status=400)
+        allowed, error = self._require_billing_write_role(request, data)
+        if not allowed:
+            return _json_error(error, status=403)
+        usage_id = str(data.get("usage_id") or "").strip()
+        if not usage_id:
+            return _json_error("usage_id required", status=400)
+        if data.get("actual_credits") is None:
+            return _json_error("actual_credits required", status=400)
+        try:
+            actual_credits = int(data.get("actual_credits") or 0)
+        except Exception:
+            return _json_error("actual_credits must be an integer", status=400)
+        try:
+            actual_cost_usd = float(data.get("actual_cost_usd") or 0.0)
+            total_tokens = int(data.get("total_tokens") or 0)
+        except Exception:
+            return _json_error("actual_cost_usd or total_tokens invalid", status=400)
+        workspace_id = self._workspace_id(request, data)
+        reconciliation_metadata = {
+            "actual_cost_usd": actual_cost_usd,
+            "total_tokens": total_tokens,
+            "provider": str(data.get("provider") or "").strip(),
+            "model": str(data.get("model") or "").strip(),
+            "reconciled_by": str(self._actor_id(request, data) or ""),
+        }
+        try:
+            payload = self._workspace_billing().reconcile_usage(
+                workspace_id,
+                usage_id=usage_id,
+                actual_credits=actual_credits,
+                metadata=reconciliation_metadata,
+            )
+        except KeyError:
+            return _json_error("usage not found", status=404)
+        except RuntimeError as exc:
+            return _json_error(str(exc), status=409)
+        return _json_ok({"reconciliation": payload})
+
+    async def handle_v1_billing_checkout_init(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return _json_error("invalid json", status=400)
         workspace_id = self._workspace_id(request, data)
         try:
             payload = self._workspace_billing().create_checkout_session(
@@ -1759,10 +3214,102 @@ class ElyanGatewayServer:
                 plan_id=str(data.get("plan_id") or "pro").strip() or "pro",
                 success_url=str(data.get("success_url") or "https://tauri.localhost/billing/success").strip(),
                 cancel_url=str(data.get("cancel_url") or "https://tauri.localhost/billing/cancel").strip(),
+                customer_email=str(self._auth_context(request).get("email") or data.get("email") or "").strip(),
             )
         except RuntimeError as exc:
-            return web.json_response({"success": False, "error": str(exc)}, status=503)
-        return web.json_response({"success": True, "checkout": payload})
+            error = str(exc)
+            status = 409 if error.startswith("billing_profile_incomplete:") else 503
+            return _json_error(error, status=status)
+        return _json_ok({"checkout": payload})
+
+    async def handle_v1_billing_token_pack_purchase(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return _json_error("invalid json", status=400)
+        workspace_id = self._workspace_id(request, data)
+        try:
+            payload = self._workspace_billing().purchase_token_pack(
+                workspace_id=workspace_id,
+                pack_id=str(data.get("pack_id") or "").strip(),
+                success_url=str(data.get("success_url") or "https://tauri.localhost/billing/success").strip(),
+                cancel_url=str(data.get("cancel_url") or "https://tauri.localhost/billing/cancel").strip(),
+                customer_email=str(self._auth_context(request).get("email") or data.get("email") or "").strip(),
+            )
+        except KeyError as exc:
+            return _json_error(str(exc), status=404)
+        except RuntimeError as exc:
+            error = str(exc)
+            status = 409 if error.startswith("billing_profile_incomplete:") else 503
+            return _json_error(error, status=status)
+        return _json_ok({"purchase": payload})
+
+    async def handle_v1_billing_webhook_iyzico(self, request):
+        payload = await request.read()
+        store = self._workspace_billing()
+        try:
+            result = store.handle_webhook(payload, dict(request.headers), provider="iyzico")
+        except RuntimeError as exc:
+            return _json_error(str(exc), status=503)
+        return _json_ok({"event": result})
+
+    async def handle_v1_billing_checkout(self, request):
+        return await self.handle_v1_billing_checkout_init(request)
+
+    async def handle_v1_billing_checkout_launch(self, request):
+        reference_id = str(request.match_info.get("reference_id") or "").strip()
+        if not reference_id:
+            return web.Response(text="reference_id required", status=400)
+        payload = self._workspace_billing().get_checkout_launch_payload(reference_id)
+        if payload is None:
+            return web.Response(text="Checkout not found", status=404)
+        checkout_form_content = str(payload.get("checkout_form_content") or "").strip()
+        payment_page_url = str(payload.get("payment_page_url") or "").strip()
+        if checkout_form_content:
+            return web.Response(text=checkout_form_content, content_type="text/html")
+        if payment_page_url:
+            raise web.HTTPFound(payment_page_url)
+        return web.Response(text="Checkout launch unavailable", status=404)
+
+    async def handle_v1_billing_callback_iyzico(self, request):
+        callback_payload: dict[str, Any] = {}
+        if request.method == "GET":
+            callback_payload = dict(request.rel_url.query)
+        else:
+            try:
+                callback_payload = await request.json()
+            except Exception:
+                try:
+                    callback_payload = dict(await request.post())
+                except Exception:
+                    callback_payload = dict(request.rel_url.query)
+        token = str(callback_payload.get("token") or "").strip()
+        reference_id = str(callback_payload.get("reference_id") or request.rel_url.query.get("reference_id") or "").strip()
+        mode = str(callback_payload.get("mode") or request.rel_url.query.get("mode") or "").strip()
+        try:
+            result = self._workspace_billing().complete_checkout_callback(
+                token=token,
+                reference_id=reference_id,
+                mode=mode,
+            )
+        except RuntimeError as exc:
+            if "application/json" in str(request.headers.get("Accept") or "").lower():
+                return _json_error(str(exc), status=503)
+            return web.Response(text=f"Billing callback failed: {exc}", status=503, content_type="text/html")
+        if "application/json" in str(request.headers.get("Accept") or "").lower() or str(request.rel_url.query.get("format") or "") == "json":
+            return _json_ok({"checkout": result.get("checkout"), "event": result})
+        checkout = result.get("checkout") if isinstance(result.get("checkout"), dict) else {}
+        status = str((checkout or {}).get("status") or result.get("status") or "pending").strip()
+        body = (
+            "<!doctype html><html><head><meta charset='utf-8'><title>Elyan Billing</title>"
+            "<meta name='viewport' content='width=device-width, initial-scale=1'></head>"
+            "<body style='font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:40px;background:#f7f7f3;color:#101010;'>"
+            f"<h1 style='font-size:24px;margin:0 0 12px;'>Payment {status}</h1>"
+            "<p style='font-size:15px;line-height:1.6;max-width:560px;'>"
+            "You can return to the Elyan desktop app. The billing state will refresh automatically."
+            "</p></body></html>"
+        )
+        return web.Response(text=body, content_type="text/html")
 
     async def handle_v1_billing_portal(self, request):
         try:
@@ -1776,20 +3323,24 @@ class ElyanGatewayServer:
                 return_url=str(data.get("return_url") or "https://tauri.localhost/settings").strip(),
             )
         except RuntimeError as exc:
-            return web.json_response({"success": False, "error": str(exc)}, status=503)
-        return web.json_response({"success": True, "portal": payload})
+            return _json_error(str(exc), status=503)
+        return _json_ok({"portal": payload})
 
     async def handle_v1_billing_webhook(self, request):
-        payload = await request.read()
-        signature = str(request.headers.get("Stripe-Signature", "") or "").strip()
-        try:
-            result = self._workspace_billing().handle_webhook(payload, signature)
-        except RuntimeError as exc:
-            return web.json_response({"success": False, "error": str(exc)}, status=503)
-        return web.json_response({"success": True, "event": result})
+        return _json_error("stripe webhooks are deprecated; use /api/v1/billing/webhooks/iyzico", status=410)
 
     async def handle_v1_connectors(self, request):
         workspace_id = self._workspace_id(request)
+        permissions = _check_macos_permissions()
+        channels = elyan_config.get("channels", [])
+        if not isinstance(channels, list):
+            channels = []
+        channel_map = {
+            _normalize_channel_type(str(item.get("type") or "")): dict(item)
+            for item in channels
+            if isinstance(item, dict)
+        }
+        adapter_status = self.router.get_adapter_status() if hasattr(self.router, "get_adapter_status") else {}
         accounts_response = await self.handle_v1_connector_accounts(request)
         accounts_payload = json.loads(accounts_response.text)
         traces_response = await self.handle_v1_connector_traces(request)
@@ -1798,10 +3349,34 @@ class ElyanGatewayServer:
         traces = list(traces_payload.get("traces") or [])
         rows = []
         for definition in self._connector_catalog():
+            connector_name = str(definition.get("connector") or "").strip().lower()
             provider = str(definition.get("provider") or "")
             provider_accounts = [item for item in accounts if str(item.get("provider") or "").strip().lower() == provider]
             provider_traces = [item for item in traces if str(item.get("provider") or "").strip().lower() == provider]
             state = "connected" if any(str(item.get("status") or "").strip().lower() == "ready" for item in provider_accounts) else ("pending" if provider_accounts else "offline")
+            blocking_issue = ""
+            execution_mode = "cloud" if str(definition.get("integration_type") or "").strip().lower() == "api" else "local"
+            if connector_name.startswith("apple_"):
+                if not bool(permissions.get("osascript_available")):
+                    state = "offline"
+                    blocking_issue = "permission_denied"
+                elif provider_accounts:
+                    state = "connected" if any(str(item.get("status") or "").strip().lower() == "ready" for item in provider_accounts) else "pending"
+                else:
+                    state = "pending"
+            elif connector_name == "imessage":
+                imessage_cfg = channel_map.get("imessage", {})
+                bluebubbles_ready = bool(imessage_cfg.get("server_url")) and bool(imessage_cfg.get("password"))
+                imessage_status = str(adapter_status.get("imessage") or "").strip().lower()
+                execution_mode = "bluebubbles"
+                if imessage_status in {"connected", "online", "ok", "active", "healthy"}:
+                    state = "connected"
+                elif bluebubbles_ready:
+                    state = "pending"
+                    blocking_issue = "bridge_unreachable"
+                else:
+                    state = "offline"
+                    blocking_issue = "auth_required"
             rows.append(
                 {
                     **definition,
@@ -1809,10 +3384,12 @@ class ElyanGatewayServer:
                     "account_count": len(provider_accounts),
                     "trace_count": len(provider_traces),
                     "status": state,
+                    "blocking_issue": blocking_issue,
+                    "execution_mode": execution_mode,
                     "latest_trace": provider_traces[0] if provider_traces else None,
                 }
             )
-        return web.json_response({"success": True, "connectors": rows})
+        return _json_ok({"connectors": rows})
 
     async def handle_v1_connector_accounts(self, request):
         from integrations import oauth_broker
@@ -1825,13 +3402,13 @@ class ElyanGatewayServer:
         for item in filtered:
             account_id = f"{str(item.get('provider') or '').strip().lower()}::{str(item.get('account_alias') or 'default').strip()}"
             rows.append({**item, "account_id": account_id, "workspace_id": workspace_id})
-        return web.json_response({"success": True, "accounts": rows, "workspace_id": workspace_id})
+        return _json_ok({"accounts": rows, "workspace_id": workspace_id})
 
     async def handle_v1_connector_connect(self, request):
         connector_name = str(request.match_info.get("connector") or "").strip().lower()
         connector = self._connector_lookup(connector_name)
         if connector is None:
-            return web.json_response({"success": False, "error": "connector not found"}, status=404)
+            return _json_error("connector not found", status=404)
         try:
             data = await request.json()
         except Exception:
@@ -1845,7 +3422,7 @@ class ElyanGatewayServer:
             current_value=len(list(current_accounts_payload.get("accounts") or [])),
         )
         if not limit_state.get("allowed", True):
-            return web.json_response({"success": False, "error": str(limit_state.get("reason") or "connector limit reached"), "limit": limit_state}, status=402)
+            return _json_error(str(limit_state.get("reason") or "connector limit reached"), status=402, payload={"limit": limit_state})
         merged = {
             "provider": connector.get("provider"),
             "app_name": connector.get("label"),
@@ -1858,7 +3435,108 @@ class ElyanGatewayServer:
             "workspace_id": workspace_id,
         }
         from integrations import connector_factory, integration_registry, oauth_broker
+        from integrations.base import AuthStrategy, ConnectorState, FallbackPolicy, OAuthAccount
         from core.integration_trace import get_integration_trace_store
+
+        local_connector_names = {"apple_mail", "apple_calendar", "apple_reminders", "apple_notes", "apple_contacts"}
+        trace_store = get_integration_trace_store()
+        if connector_name in local_connector_names:
+            permissions = _check_macos_permissions()
+            ready = bool(permissions.get("osascript_available"))
+            account = OAuthAccount(
+                provider=str(connector.get("provider") or connector_name),
+                account_alias=str(merged.get("account_alias") or "default"),
+                display_name=str(merged.get("display_name") or connector.get("label") or connector_name),
+                auth_strategy=AuthStrategy.NONE,
+                fallback_mode=FallbackPolicy.NATIVE,
+                granted_scopes=list(connector.get("scopes") or []),
+                status=ConnectorState.READY if ready else ConnectorState.NEEDS_INPUT,
+                auth_url="x-apple.systempreferences:com.apple.preference.security?Privacy_Automation" if not ready else "",
+                metadata={
+                    "workspace_id": workspace_id,
+                    "connector": connector_name,
+                    "local_first": True,
+                    "blocking_issue": "" if ready else "permission_denied",
+                },
+            )
+            account = oauth_broker._save_account(account)
+            trace_store.record_trace(
+                operation="workspace_connector_connect",
+                provider=account.provider,
+                connector_name=connector_name,
+                integration_type="desktop",
+                status=str(account.status),
+                success=bool(account.is_ready),
+                auth_state=str(account.status),
+                auth_strategy=str(account.auth_strategy),
+                account_alias=str(account.account_alias or "default"),
+                metadata={"workspace_id": workspace_id, "connector": connector_name, "local_first": True},
+            )
+            self._workspace_billing().record_usage(workspace_id, "connectors", 1, metadata={"connector": connector_name})
+            return _json_ok(
+                {
+                    "connector": connector,
+                    "account": {**account.public_dump(), "workspace_id": workspace_id, "account_id": f"{account.provider}::{account.account_alias}"},
+                    "connect_result": {
+                        "success": bool(account.is_ready),
+                        "status": "ready" if account.is_ready else "needs_attention",
+                        "message": "Apple connector is ready." if account.is_ready else "macOS Automation permission is required.",
+                    },
+                    "launch_url": str(account.auth_url or ""),
+                }
+            )
+
+        if connector_name == "imessage":
+            channels = elyan_config.get("channels", [])
+            if not isinstance(channels, list):
+                channels = []
+            imessage_cfg = next(
+                (dict(item) for item in channels if isinstance(item, dict) and _normalize_channel_type(str(item.get("type") or "")) == "imessage"),
+                {},
+            )
+            ready = bool(imessage_cfg.get("server_url")) and bool(imessage_cfg.get("password"))
+            account = OAuthAccount(
+                provider="imessage",
+                account_alias=str(merged.get("account_alias") or "default"),
+                display_name=str(merged.get("display_name") or connector.get("label") or "iMessage"),
+                auth_strategy=AuthStrategy.NONE,
+                fallback_mode=FallbackPolicy.NATIVE,
+                granted_scopes=list(connector.get("scopes") or []),
+                status=ConnectorState.READY if ready else ConnectorState.NEEDS_INPUT,
+                auth_url="https://bluebubbles.app/",
+                metadata={
+                    "workspace_id": workspace_id,
+                    "connector": connector_name,
+                    "execution_mode": "bluebubbles",
+                    "blocking_issue": "" if ready else "auth_required",
+                },
+            )
+            account = oauth_broker._save_account(account)
+            trace_store.record_trace(
+                operation="workspace_connector_connect",
+                provider="imessage",
+                connector_name=connector_name,
+                integration_type="desktop",
+                status=str(account.status),
+                success=bool(account.is_ready),
+                auth_state=str(account.status),
+                auth_strategy=str(account.auth_strategy),
+                account_alias=str(account.account_alias or "default"),
+                metadata={"workspace_id": workspace_id, "connector": connector_name, "execution_mode": "bluebubbles"},
+            )
+            self._workspace_billing().record_usage(workspace_id, "connectors", 1, metadata={"connector": connector_name})
+            return _json_ok(
+                {
+                    "connector": connector,
+                    "account": {**account.public_dump(), "workspace_id": workspace_id, "account_id": f"{account.provider}::{account.account_alias}"},
+                    "connect_result": {
+                        "success": bool(account.is_ready),
+                        "status": "ready" if account.is_ready else "needs_attention",
+                        "message": "BlueBubbles is configured." if account.is_ready else "Configure BlueBubbles in the iMessage channel card.",
+                    },
+                    "launch_url": "https://bluebubbles.app/",
+                }
+            )
 
         plan = integration_registry.resolve_connection_plan(
             app_name=str(merged.get("app_name") or ""),
@@ -1868,7 +3546,6 @@ class ElyanGatewayServer:
             account_alias=str(merged.get("account_alias") or "default"),
             extra={"display_name": str(merged.get("display_name") or ""), "email": str(merged.get("email") or "")},
         )
-        trace_store = get_integration_trace_store()
         account = oauth_broker.authorize(
             str(plan.get("provider") or merged.get("provider") or ""),
             list(plan.get("required_scopes") or merged.get("scopes") or []),
@@ -1917,9 +3594,8 @@ class ElyanGatewayServer:
         )
         self._workspace_billing().record_usage(workspace_id, "connectors", 1, metadata={"connector": connector_name})
         result_payload = connector_result.model_dump() if hasattr(connector_result, "model_dump") else (dict(connector_result) if isinstance(connector_result, dict) else {})
-        return web.json_response(
+        return _json_ok(
             {
-                "success": True,
                 "connector": connector,
                 "account": {**account.public_dump(), "workspace_id": workspace_id, "account_id": f"{account.provider}::{account.account_alias}"},
                 "connect_result": result_payload,
@@ -1933,7 +3609,7 @@ class ElyanGatewayServer:
         account_id = str(request.match_info.get("account_id") or "").strip()
         provider, _, account_alias = account_id.partition("::")
         if not provider:
-            return web.json_response({"success": False, "error": "account_id required"}, status=400)
+            return _json_error("account_id required", status=400)
         account = next(
             (
                 item for item in oauth_broker.list_accounts(provider)
@@ -1942,7 +3618,7 @@ class ElyanGatewayServer:
             None,
         )
         if account is None:
-            return web.json_response({"success": False, "error": "account not found"}, status=404)
+            return _json_error("account not found", status=404)
         refreshed = oauth_broker.authorize(
             provider,
             list(account.granted_scopes or []),
@@ -1950,7 +3626,216 @@ class ElyanGatewayServer:
             account_alias=account_alias or "default",
             extra=dict(account.metadata or {}),
         )
-        return web.json_response({"success": True, "account": {**refreshed.public_dump(), "account_id": account_id}})
+        return _json_ok({"account": {**refreshed.public_dump(), "account_id": account_id}})
+
+    async def handle_v1_connector_quick_action(self, request):
+        connector_name = str(request.match_info.get("connector") or "").strip().lower()
+        connector = self._connector_lookup(connector_name)
+        if connector is None:
+            return _json_error("connector not found", status=404)
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+
+        action = str(data.get("action") or "").strip().lower()
+        query = str(data.get("query") or "").strip()
+        workspace_id = self._workspace_id(request, data)
+
+        result: dict[str, Any]
+        blocking_issue = ""
+        try:
+            if connector_name == "apple_notes":
+                if query:
+                    from tools.note_tools.note_search import search_notes
+
+                    raw = await search_notes(query, limit=8)
+                    result = {
+                        "items": list(raw.get("results") or [])[:8],
+                        "count": int(raw.get("count") or 0),
+                        "message": str(raw.get("message") or ""),
+                    }
+                else:
+                    from tools.note_tools.note_manager import list_notes
+
+                    raw = await list_notes(limit=8)
+                    result = {
+                        "items": list(raw.get("notes") or [])[:8],
+                        "count": int(raw.get("count") or 0),
+                        "message": "",
+                    }
+            elif connector_name == "apple_calendar":
+                from tools.macos_tools.calendar_reminders import get_today_events
+
+                raw = await get_today_events()
+                result = {
+                    "items": list(raw.get("events") or [])[:8],
+                    "count": int(raw.get("count") or 0),
+                    "date": str(raw.get("date") or ""),
+                }
+            elif connector_name == "apple_reminders":
+                from tools.macos_tools.calendar_reminders import get_reminders
+
+                raw = await get_reminders()
+                result = {
+                    "items": list(raw.get("reminders") or [])[:8],
+                    "count": int(raw.get("count") or 0),
+                }
+            elif connector_name == "whatsapp":
+                cfg = next(
+                    (
+                        dict(item) for item in (elyan_config.get("channels", []) or [])
+                        if isinstance(item, dict) and _normalize_channel_type(str(item.get("type") or "")) == "whatsapp"
+                    ),
+                    {},
+                )
+                status_map = self.router.get_adapter_status() if hasattr(self.router, "get_adapter_status") else {}
+                result = {
+                    "mode": str(cfg.get("mode") or "bridge"),
+                    "status": str(status_map.get("whatsapp") or "disconnected"),
+                    "bridge_url": str(cfg.get("bridge_url") or ""),
+                    "webhook_path": str(cfg.get("webhook_path") or ""),
+                }
+            elif connector_name == "imessage":
+                cfg = next(
+                    (
+                        dict(item) for item in (elyan_config.get("channels", []) or [])
+                        if isinstance(item, dict) and _normalize_channel_type(str(item.get("type") or "")) == "imessage"
+                    ),
+                    {},
+                )
+                status_map = self.router.get_adapter_status() if hasattr(self.router, "get_adapter_status") else {}
+                ready = bool(cfg.get("server_url")) and bool(cfg.get("password"))
+                blocking_issue = "" if ready else "auth_required"
+                result = {
+                    "server_url": str(cfg.get("server_url") or ""),
+                    "status": str(status_map.get("imessage") or "disconnected"),
+                    "ready": ready,
+                }
+            else:
+                return _json_error("quick action unsupported", status=400)
+        except Exception as exc:
+            message = str(exc)
+            lower = message.lower()
+            if "not allowed" in lower or "erişim" in lower or "permission" in lower or "access" in lower:
+                blocking_issue = "permission_denied"
+            else:
+                blocking_issue = "read_failed"
+            return _json_error(
+                message or "quick action failed",
+                status=500,
+                payload={"blocking_issue": blocking_issue, "connector": connector_name},
+            )
+
+        from core.integration_trace import get_integration_trace_store
+
+        get_integration_trace_store().record_trace(
+            operation=f"quick_action:{action or 'default'}",
+            provider=str(connector.get("provider") or connector_name),
+            connector_name=connector_name,
+            integration_type=str(connector.get("integration_type") or ""),
+            status="success",
+            success=True,
+            auth_state="ready",
+            auth_strategy="none",
+            account_alias="default",
+            metadata={"workspace_id": workspace_id, "query": query, "blocking_issue": blocking_issue},
+        )
+        return _json_ok(
+            {
+                "connector": connector_name,
+                "action": action or "default",
+                "result": result,
+                "blocking_issue": blocking_issue,
+            }
+        )
+
+    async def handle_v1_operator_preview(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        text = str(data.get("text") or data.get("request") or "").strip()
+        if not text:
+            return _json_error("text required", status=400)
+
+        workspace_id = self._workspace_id(request, data)
+        user_id = self._actor_id(request, data)
+        session_id = str(data.get("session_id") or request.rel_url.query.get("session_id", "") or "desktop-preview").strip() or "desktop-preview"
+
+        plan = await get_operator_control_plane().plan_request(
+            request_id=str(data.get("request_id") or f"preview-{int(time.time() * 1000)}"),
+            user_id=user_id,
+            request=text,
+            channel=str(data.get("channel") or "desktop"),
+            device_id=str(data.get("device_id") or "desktop"),
+            context={
+                "session_id": session_id,
+                "workspace_id": workspace_id,
+                "metadata": {
+                    "workspace_id": workspace_id,
+                    "preview": True,
+                },
+            },
+        )
+
+        capability = dict(plan.get("capability") or {})
+        integration = dict(plan.get("integration") or {})
+        task_plan = dict(plan.get("task_plan") or {})
+        model_selection = dict(plan.get("model_selection") or {})
+        autonomy = dict(plan.get("autonomy") or {})
+        operator_trace = dict(plan.get("operator_trace") or {})
+        steps = list(task_plan.get("steps") or [])
+        return _json_ok(
+            {
+                "preview": {
+                    "request_text": text,
+                    "request_class": str(plan.get("request_class") or ""),
+                    "domain": str(capability.get("domain") or operator_trace.get("route_domain") or ""),
+                    "objective": str(capability.get("objective") or text),
+                    "preview": str(capability.get("preview") or operator_trace.get("route_preview") or ""),
+                    "primary_action": str(capability.get("primary_action") or ""),
+                    "orchestration_mode": str(capability.get("orchestration_mode") or "single_agent"),
+                    "model_selection": {
+                        "provider": str(model_selection.get("provider") or ""),
+                        "model": str(model_selection.get("model") or ""),
+                        "role": str(model_selection.get("role") or ""),
+                        "fallback": bool(model_selection.get("fallback")),
+                    },
+                    "collaboration": _sanitize_collaboration_payload(plan.get("collaboration") or {}),
+                    "integration": {
+                        "provider": str(integration.get("provider") or ""),
+                        "connector_name": str(integration.get("connector_name") or ""),
+                        "integration_type": str(integration.get("integration_type") or ""),
+                        "auth_strategy": str(integration.get("auth_strategy") or ""),
+                        "fallback_policy": str(integration.get("fallback_policy") or ""),
+                    },
+                    "autonomy": {
+                        "mode": str(autonomy.get("mode") or ""),
+                        "should_ask": bool(autonomy.get("should_ask")),
+                        "should_resume": bool(autonomy.get("should_resume")),
+                    },
+                    "task_plan": {
+                        "name": str(task_plan.get("name") or ""),
+                        "goal": str(task_plan.get("goal") or ""),
+                        "constraints": list(task_plan.get("constraints") or []),
+                        "approvals": list(task_plan.get("approvals") or []),
+                        "evidence": list(task_plan.get("evidence") or []),
+                        "steps": [
+                            {
+                                "name": str(item.get("name") or item.get("tool") or "step"),
+                                "kind": str(item.get("kind") or "task"),
+                                "tool": str(item.get("tool") or ""),
+                            }
+                            for item in steps[:8]
+                            if isinstance(item, dict)
+                        ],
+                    },
+                    "fast_path": bool(plan.get("fast_path")),
+                    "real_time_required": bool(((plan.get("real_time") if isinstance(plan.get("real_time"), dict) else {}) or {}).get("needs_real_time")),
+                }
+            }
+        )
 
     async def handle_v1_connector_revoke(self, request):
         from integrations import oauth_broker
@@ -1958,9 +3843,11 @@ class ElyanGatewayServer:
         account_id = str(request.match_info.get("account_id") or "").strip()
         provider, _, account_alias = account_id.partition("::")
         if not provider:
-            return web.json_response({"success": False, "error": "account_id required"}, status=400)
+            return _json_error("account_id required", status=400)
         ok = oauth_broker.delete_account(provider, account_alias or "default")
-        return web.json_response({"success": ok, "account_id": account_id})
+        if not ok:
+            return _json_error("account revoke failed", status=404, payload={"account_id": account_id})
+        return _json_ok({"account_id": account_id})
 
     async def handle_v1_connector_traces(self, request):
         from core.integration_trace import get_integration_trace_store
@@ -1972,7 +3859,7 @@ class ElyanGatewayServer:
             limit = 100
         traces = get_integration_trace_store().list_traces(limit=limit)
         filtered = self._filter_workspace_traces(traces, workspace_id)
-        return web.json_response({"success": True, "traces": filtered[:limit], "workspace_id": workspace_id})
+        return _json_ok({"traces": filtered[:limit], "workspace_id": workspace_id})
 
     async def handle_v1_connector_health(self, request):
         connectors_response = await self.handle_v1_connectors(request)
@@ -1986,9 +3873,11 @@ class ElyanGatewayServer:
                     "account_count": int(item.get("account_count") or 0),
                     "trace_count": int(item.get("trace_count") or 0),
                     "provider": str(item.get("provider") or ""),
+                    "blocking_issue": str(item.get("blocking_issue") or ""),
+                    "execution_mode": str(item.get("execution_mode") or ""),
                 }
             )
-        return web.json_response({"success": True, "health": rows})
+        return _json_ok({"health": rows})
 
     async def handle_inspector_page(self, request):
         base = Path(__file__).resolve().parent.parent.parent
@@ -3204,12 +5093,25 @@ class ElyanGatewayServer:
         benchmark = load_latest_benchmark_summary()
         recent_reports = list_emre_workflow_reports(limit=5)
         permissions = _check_macos_permissions()
+        channels = elyan_config.get("channels", [])
+        if not isinstance(channels, list):
+            channels = []
+        channel_map = {
+            _normalize_channel_type(str(item.get("type") or "")): dict(item)
+            for item in channels
+            if isinstance(item, dict)
+        }
         desktop_state_path = resolve_elyan_data_dir() / "desktop_host" / "state.json"
         playwright_ready = importlib.util.find_spec("playwright") is not None
         telegram_status = str(adapter_status.get("telegram") or "").strip().lower()
         telegram_ready = telegram_status in {"connected", "online", "ok", "active", "healthy"}
+        imessage_channel = channel_map.get("imessage", {})
+        bluebubbles_ready = bool(imessage_channel.get("server_url")) and bool(imessage_channel.get("password"))
+        whatsapp_channel = channel_map.get("whatsapp", {})
+        whatsapp_mode = str(whatsapp_channel.get("mode") or "bridge").strip().lower() or "bridge"
         desktop_ready = bool(permissions.get("osascript_available")) and bool(permissions.get("screencapture_available"))
         browser_ready = bool(playwright_ready or desktop_ready)
+        productivity_apps_ready = bool(desktop_ready or bluebubbles_ready or telegram_ready)
         provider = str(model_info.get("active_provider") or "—").strip()
         model = str(model_info.get("active_model") or "—").strip()
         provider_ready = provider not in {"", "—"} and model not in {"", "—"}
@@ -3251,6 +5153,18 @@ class ElyanGatewayServer:
                 "detail": "playwright" if playwright_ready else "screen-operator fallback",
             },
             {
+                "key": "apple_apps",
+                "label": "Apple apps readiness",
+                "ready": productivity_apps_ready,
+                "detail": f"automation={bool(permissions.get('osascript_available'))} bluebubbles={bluebubbles_ready}",
+            },
+            {
+                "key": "whatsapp",
+                "label": "WhatsApp lane",
+                "ready": str(adapter_status.get("whatsapp") or "").strip().lower() in {"connected", "online", "ok", "active", "healthy"},
+                "detail": whatsapp_mode,
+            },
+            {
                 "key": "demo_workflow",
                 "label": "First demo workflow execution",
                 "ready": bool(recent_reports),
@@ -3264,6 +5178,13 @@ class ElyanGatewayServer:
                 "desktop_operator_ready": desktop_ready,
                 "browser_ready": browser_ready,
                 "telegram_ready": telegram_ready,
+                "apple_permissions": {
+                    "automation": bool(permissions.get("osascript_available")),
+                    "screen_capture": bool(permissions.get("screencapture_available")),
+                },
+                "bluebubbles_ready": bluebubbles_ready,
+                "whatsapp_mode": whatsapp_mode,
+                "productivity_apps_ready": productivity_apps_ready,
                 "connected_provider": provider,
                 "connected_model": model,
                 "runtime_health": runtime_health_status,
@@ -6256,13 +8177,13 @@ class ElyanGatewayServer:
         from core.llm_setup import get_llm_setup
         setup = get_llm_setup()
         statuses = await setup.get_all_provider_status()
-        return web.json_response({"ok": True, "providers": statuses, "first_run": setup.is_first_run()})
+        return _json_ok({"providers": statuses, "first_run": setup.is_first_run()})
 
     async def handle_llm_setup_health(self, request):
         from core.llm_setup import get_llm_setup
         setup = get_llm_setup()
         health = await setup.quick_health()
-        return web.json_response({"ok": True, **health})
+        return _json_ok(dict(health))
 
     async def handle_llm_setup_save_key(self, request):
         from core.llm_setup import get_llm_setup
@@ -6270,15 +8191,17 @@ class ElyanGatewayServer:
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+            return _json_error("invalid json", status=400)
         provider = str(data.get("provider", "")).strip()
         api_key = str(data.get("api_key", "") or "").strip()
         if not provider:
-            return web.json_response({"ok": False, "error": "provider required"}, status=400)
+            return _json_error("provider required", status=400)
         if provider != "ollama" and not api_key:
-            return web.json_response({"ok": False, "error": "api_key required"}, status=400)
+            return _json_error("api_key required", status=400)
         result = await setup.save_api_key(provider, api_key)
-        return web.json_response({"ok": result.get("success", False), **result})
+        if result.get("success", False):
+            return _json_ok(dict(result))
+        return _json_error(str(result.get("error") or result.get("message") or "request_failed"), payload=dict(result))
 
     async def handle_llm_setup_remove_key(self, request):
         from core.llm_setup import get_llm_setup
@@ -6286,16 +8209,18 @@ class ElyanGatewayServer:
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+            return _json_error("invalid json", status=400)
         provider = str(data.get("provider", "")).strip()
         result = await setup.remove_api_key(provider)
-        return web.json_response({"ok": result.get("success", False), **result})
+        if result.get("success", False):
+            return _json_ok(dict(result))
+        return _json_error(str(result.get("error") or result.get("message") or "request_failed"), payload=dict(result))
 
     async def handle_llm_setup_ollama(self, request):
         from core.llm_setup import get_llm_setup
         setup = get_llm_setup()
         status = await setup.ollama_status()
-        return web.json_response({"ok": True, **status})
+        return _json_ok(dict(status))
 
     async def handle_llm_setup_ollama_pull(self, request):
         from core.llm_setup import get_llm_setup
@@ -6303,12 +8228,14 @@ class ElyanGatewayServer:
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+            return _json_error("invalid json", status=400)
         model = str(data.get("model", "")).strip()
         if not model:
-            return web.json_response({"ok": False, "error": "model required"}, status=400)
+            return _json_error("model required", status=400)
         result = await setup.ollama_pull_model(model)
-        return web.json_response({"ok": result.get("success", False), **result})
+        if result.get("success", False):
+            return _json_ok(dict(result))
+        return _json_error(str(result.get("error") or result.get("message") or "request_failed"), payload=dict(result))
 
     async def handle_llm_setup_ollama_delete(self, request):
         from core.llm_setup import get_llm_setup
@@ -6316,17 +8243,19 @@ class ElyanGatewayServer:
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+            return _json_error("invalid json", status=400)
         model = str(data.get("model", "")).strip()
         if not model:
-            return web.json_response({"ok": False, "error": "model required"}, status=400)
+            return _json_error("model required", status=400)
         result = await setup.ollama_delete_model(model)
-        return web.json_response({"ok": result.get("success", False), **result})
+        if result.get("success", False):
+            return _json_ok(dict(result))
+        return _json_error(str(result.get("error") or result.get("message") or "request_failed"), payload=dict(result))
 
     async def handle_llm_setup_recommend(self, request):
         from core.llm_setup import get_llm_setup
         setup = get_llm_setup()
-        return web.json_response({"ok": True, **setup.get_setup_recommendation()})
+        return _json_ok(dict(setup.get_setup_recommendation()))
 
     # ── WebSocket: Dashboard push (new) ───────────────────────────────────────
     async def handle_dashboard_ws(self, request):
@@ -6586,6 +8515,142 @@ class ElyanGatewayServer:
         except Exception as e:
             return web.json_response({"ok": False, "error": str(e)}, status=500)
 
+    def _privacy_subject(self, request, explicit_user_id: str) -> tuple[bool, str, dict[str, Any]]:
+        allowed, error, session = self._require_user_session(request, allow_cookie=True)
+        if not allowed:
+            return False, error, session
+        session_user = str(session.get("user_id") or "").strip()
+        subject = str(explicit_user_id or session_user or "").strip()
+        if session_user and subject and session_user != subject:
+            return False, "user_mismatch", session
+        return True, subject or session_user, session
+
+    async def handle_privacy_consent_get(self, request):
+        from core.privacy import get_privacy_engine
+
+        allowed, subject, _session = self._privacy_subject(request, str(request.match_info.get("user_id") or ""))
+        if not allowed:
+            return web.json_response({"error": subject, "code": subject}, status=403)
+        workspace_id = self._workspace_id(request, {"user_id": subject})
+        scope = str(request.rel_url.query.get("scope", "") or "learning").strip()
+        return web.json_response({"ok": True, "consent": get_privacy_engine().get_consent(subject, workspace_id=workspace_id, scope=scope)})
+
+    async def handle_privacy_consent_set(self, request):
+        from core.privacy import get_privacy_engine
+
+        allowed, subject, _session = self._privacy_subject(request, str(request.match_info.get("user_id") or ""))
+        if not allowed:
+            return web.json_response({"error": subject, "code": subject}, status=403)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        workspace_id = self._workspace_id(request, dict(payload, user_id=subject))
+        metadata = dict(payload.get("metadata") or {})
+        for key in (
+            "allow_personal_data_learning",
+            "allow_workspace_data_learning",
+            "allow_operational_data_learning",
+            "allow_public_data_learning",
+            "allow_global_aggregate",
+            "allow_global_aggregation",
+            "paused",
+            "opt_out",
+        ):
+            if key in payload:
+                metadata[key] = payload.get(key)
+        consent = get_privacy_engine().set_consent(
+            subject,
+            workspace_id=workspace_id,
+            scope=str(payload.get("scope") or "learning").strip(),
+            granted=bool(payload.get("granted", False)),
+            source=str(payload.get("source") or "gateway").strip(),
+            expires_at=float(payload.get("expires_at") or 0.0),
+            metadata=metadata,
+        )
+        return web.json_response({"ok": True, "consent": consent})
+
+    async def handle_privacy_data_delete(self, request):
+        from core.learning import get_tiered_hub
+        from core.privacy import get_privacy_engine
+
+        allowed, subject, _session = self._privacy_subject(request, str(request.match_info.get("user_id") or ""))
+        if not allowed:
+            return web.json_response({"error": subject, "code": subject}, status=403)
+        workspace_id = self._workspace_id(request, {"user_id": subject})
+        result = {
+            "privacy": get_privacy_engine().delete_user_data(subject, workspace_id=workspace_id),
+            "learning": get_learning_control_plane().delete_user_data(subject),
+            "tiered": get_tiered_hub().delete_user_data(subject),
+        }
+        return web.json_response({"ok": True, "result": result})
+
+    async def handle_privacy_export_user(self, request):
+        from core.learning import get_tiered_hub
+        from core.privacy import get_privacy_engine
+
+        allowed, subject, _session = self._privacy_subject(request, str(request.match_info.get("user_id") or ""))
+        if not allowed:
+            return web.json_response({"error": subject, "code": subject}, status=403)
+        workspace_id = self._workspace_id(request, {"user_id": subject})
+        export = {
+            "privacy": get_privacy_engine().export_user_data(subject, workspace_id=workspace_id),
+            "learning": get_learning_control_plane().export_privacy_bundle(subject, workspace_id=workspace_id),
+            "tiered": get_tiered_hub().stats(),
+        }
+        return web.json_response({"ok": True, "export": export})
+
+    async def handle_privacy_learning_stats(self, request):
+        from core.learning import get_tiered_hub
+
+        allowed, error, _session = self._require_user_session(request, allow_cookie=True)
+        if not allowed:
+            return web.json_response({"error": error, "code": error}, status=403)
+        return web.json_response({"ok": True, "stats": get_tiered_hub().stats()})
+
+    async def handle_privacy_learning_global(self, request):
+        from core.learning import get_tiered_hub
+
+        allowed, error = self._require_admin_access(request)
+        if not allowed:
+            return web.json_response({"error": error, "code": error}, status=403)
+        return web.json_response({"ok": True, "global": get_tiered_hub().global_summary()})
+
+    async def handle_privacy_learning_pause(self, request):
+        allowed, subject, _session = self._privacy_subject(request, str(request.match_info.get("user_id") or ""))
+        if not allowed:
+            return web.json_response({"error": subject, "code": subject}, status=403)
+        return web.json_response({"ok": True, "policy": get_learning_control_plane().set_learning_paused(True, user_id=subject)})
+
+    async def handle_privacy_learning_resume(self, request):
+        allowed, subject, _session = self._privacy_subject(request, str(request.match_info.get("user_id") or ""))
+        if not allowed:
+            return web.json_response({"error": subject, "code": subject}, status=403)
+        return web.json_response({"ok": True, "policy": get_learning_control_plane().set_learning_paused(False, user_id=subject)})
+
+    async def handle_privacy_learning_optout(self, request):
+        allowed, subject, _session = self._privacy_subject(request, str(request.match_info.get("user_id") or ""))
+        if not allowed:
+            return web.json_response({"error": subject, "code": subject}, status=403)
+        return web.json_response({"ok": True, "policy": get_learning_control_plane().set_learning_opt_out(subject, True)})
+
+    async def handle_mobile_dispatch_sessions(self, request):
+        from elyan.channels.mobile_dispatch import MobileDispatchBridge
+
+        allowed, error, _session = self._require_user_session(request, allow_cookie=True)
+        if not allowed:
+            return web.json_response({"error": error, "code": error}, status=403)
+        return web.json_response({"ok": True, **MobileDispatchBridge().get_dashboard_sessions()})
+
+    async def handle_operator_status(self, request):
+        from core.operator_status import get_operator_status
+
+        allowed, error, _session = self._require_user_session(request, allow_cookie=True)
+        if not allowed:
+            return web.json_response({"error": error, "code": error}, status=403)
+        payload = await get_operator_status()
+        return web.json_response({"ok": True, **payload})
+
     # ── Channels ──────────────────────────────────────────────────────────────
     async def handle_list_channels(self, request):
         channels = elyan_config.get("channels", [])
@@ -6636,6 +8701,181 @@ class ElyanGatewayServer:
             enriched.append(entry)
         return web.json_response({"channels": enriched})
 
+    def _load_channel_map(self) -> dict[str, dict[str, Any]]:
+        channels = elyan_config.get("channels", [])
+        if not isinstance(channels, list):
+            return {}
+        return {
+            _normalize_channel_type(str(item.get("type") or "")): dict(item)
+            for item in channels
+            if isinstance(item, dict)
+        }
+
+    def _build_channel_pair_status_payload(self, channel_type: str) -> dict[str, Any]:
+        ctype = _normalize_channel_type(channel_type)
+        adapter_status = self.router.get_adapter_status() if hasattr(self.router, "get_adapter_status") else {}
+        channel_map = self._load_channel_map()
+        config = dict(channel_map.get(ctype) or {})
+
+        def _pack(
+            *,
+            mode: str,
+            status: str,
+            pending: bool,
+            ready: bool,
+            detail: str,
+            instructions: list[str],
+            qr_text: str = "",
+            phone: str = "",
+            blocking_issue: str = "",
+        ) -> dict[str, Any]:
+            return {
+                "ok": True,
+                "channel": ctype,
+                "mode": mode,
+                "status": status,
+                "pending": pending,
+                "ready": ready,
+                "detail": detail,
+                "instructions": instructions,
+                "qr_text": qr_text,
+                "phone": phone,
+                "blocking_issue": blocking_issue,
+            }
+
+        if ctype == "whatsapp":
+            if not config:
+                return _pack(
+                    mode="bridge_qr",
+                    status="not_configured",
+                    pending=False,
+                    ready=False,
+                    detail="WhatsApp pairing henüz başlatılmadı.",
+                    instructions=[
+                        "QR pairing başlat.",
+                        "Telefonunda Bağlı Cihazlar ekranını aç.",
+                        "QR görünür olduğunda tara.",
+                    ],
+                    blocking_issue="pairing_not_started",
+                )
+            bridge_url = str(
+                config.get("bridge_url")
+                or build_bridge_url(
+                    str(config.get("bridge_host") or BRIDGE_HOST),
+                    int(config.get("bridge_port") or DEFAULT_BRIDGE_PORT),
+                )
+            ).rstrip("/")
+            bridge_token, unresolved_token = _resolve_channel_secret("bridge_token", ctype, config.get("bridge_token"))
+            if unresolved_token:
+                return _pack(
+                    mode="bridge_qr",
+                    status="needs_attention",
+                    pending=False,
+                    ready=False,
+                    detail="WhatsApp bridge token çözümlenemedi.",
+                    instructions=[
+                        "WHATSAPP_BRIDGE_TOKEN secret’ını tekrar kaydet.",
+                        "Pairing’i yeniden başlat.",
+                    ],
+                    blocking_issue="bridge_token_unresolved",
+                )
+            try:
+                health = bridge_health(bridge_url, token=bridge_token, timeout_s=2.0)
+                state = health.get("state", {}) if isinstance(health, dict) else {}
+                if not isinstance(state, dict):
+                    state = {}
+                ready = bool(state.get("ready"))
+                has_qr = bool(state.get("hasQr"))
+                last_error = str(state.get("lastError") or "").strip()
+                return _pack(
+                    mode="bridge_qr",
+                    status="ready" if ready else "waiting_for_scan" if has_qr else "starting",
+                    pending=not ready,
+                    ready=ready,
+                    detail="WhatsApp lane hazır." if ready else "QR eşleştirmesi bekleniyor." if has_qr else "WhatsApp bridge başlıyor.",
+                    instructions=[
+                        "Telefonda WhatsApp > Bağlı Cihazlar > Cihaz Bağla aç.",
+                        "Aşağıdaki QR’ı tara.",
+                        "Eşleşme sonrası Elyan kanalı otomatik aktif olur.",
+                    ],
+                    qr_text=str(state.get("qrText") or ""),
+                    phone=str(state.get("phone") or ""),
+                    blocking_issue=last_error,
+                )
+            except Exception as exc:
+                connected = str(adapter_status.get("whatsapp") or "").strip().lower() in {"connected", "online", "ok", "active", "healthy"}
+                return _pack(
+                    mode="bridge_qr",
+                    status="ready" if connected else "needs_attention",
+                    pending=False,
+                    ready=connected,
+                    detail="WhatsApp bridge erişilemiyor." if not connected else "WhatsApp adapter bağlı ama pair state okunamadı.",
+                    instructions=[
+                        "QR pairing’i yeniden başlat.",
+                        "Node.js ve local bridge runtime’ı kontrol et.",
+                    ],
+                    blocking_issue=str(exc),
+                )
+
+        if ctype == "imessage":
+            ready = bool(config.get("server_url")) and bool(config.get("password"))
+            return _pack(
+                mode="bridge_credentials",
+                status="ready" if ready else "needs_credentials",
+                pending=not ready,
+                ready=ready,
+                detail="BlueBubbles yapılandırılmış." if ready else "BlueBubbles server URL ve password gerekli.",
+                instructions=[
+                    "BlueBubbles server’ı macOS tarafında başlat.",
+                    "Server URL ve password gir.",
+                    "Sonra Messages lane otomatik hazır olur.",
+                ],
+                phone=str(config.get("handle") or ""),
+                blocking_issue="" if ready else "bluebubbles_credentials_required",
+            )
+
+        if ctype == "telegram":
+            configured = bool(config.get("token"))
+            connected = str(adapter_status.get("telegram") or "").strip().lower() in {"connected", "online", "ok", "active", "healthy"}
+            return _pack(
+                mode="token",
+                status="ready" if connected else "configured" if configured else "needs_credentials",
+                pending=not connected,
+                ready=connected,
+                detail="Telegram bot bağlı." if connected else "Bot token kaydedildi, bağlantı testi bekliyor." if configured else "Telegram bot token gerekli.",
+                instructions=[
+                    "BotFather üzerinden token al.",
+                    "Token’i kaydet ve test et.",
+                ],
+                blocking_issue="" if configured else "telegram_token_required",
+            )
+
+        if ctype == "sms":
+            ready = bool(config.get("account_sid")) and bool(config.get("auth_token")) and bool(config.get("from_number"))
+            return _pack(
+                mode="api_credentials",
+                status="ready" if ready else "needs_credentials",
+                pending=not ready,
+                ready=ready,
+                detail="Twilio SMS lane hazır." if ready else "Twilio SID, auth token ve gönderici numara gerekli.",
+                instructions=[
+                    "Twilio Account SID gir.",
+                    "Auth token ve gönderici numarayı kaydet.",
+                    "Webhook URL’yi SMS provider tarafına tanımla.",
+                ],
+                blocking_issue="" if ready else "sms_credentials_required",
+            )
+
+        return _pack(
+            mode="manual",
+            status="unsupported",
+            pending=False,
+            ready=False,
+            detail=f"{ctype or 'channel'} için pairing desteklenmiyor.",
+            instructions=[],
+            blocking_issue="pairing_unsupported",
+        )
+
     async def _reload_channels_runtime(self) -> int:
         await self.router.stop_all()
         self.router.adapters.clear()
@@ -6649,6 +8889,10 @@ class ElyanGatewayServer:
             {
                 "type": "telegram",
                 "label": "Telegram",
+                "setup_mode": "token",
+                "supports_pairing": False,
+                "minimal_fields": ["token"],
+                "automation_hint": "Bot token kaydet, Elyan kanalı ve test akışını kendi toparlasın.",
                 "fields": [
                     {"name": "id", "label": "ID", "required": False, "secret": False},
                     {"name": "token", "label": "Bot Token", "required": True, "secret": True},
@@ -6674,6 +8918,10 @@ class ElyanGatewayServer:
             {
                 "type": "whatsapp",
                 "label": "WhatsApp",
+                "setup_mode": "bridge_qr",
+                "supports_pairing": True,
+                "minimal_fields": ["mode"],
+                "automation_hint": "Varsayılan bridge ayarları ve token otomatik hazırlanır; QR ile eşleştir.",
                 "fields": [
                     {"name": "id", "label": "ID", "required": False, "secret": False},
                     {"name": "mode", "label": "Mode (bridge/cloud)", "required": False, "secret": False},
@@ -6687,6 +8935,37 @@ class ElyanGatewayServer:
                     {"name": "webhook_path", "label": "Webhook Path", "required": False, "secret": False},
                 ],
                 "notes": "Bridge için `elyan channels login whatsapp`; Cloud için mode=cloud + /whatsapp/webhook",
+            },
+            {
+                "type": "imessage",
+                "label": "iMessage",
+                "setup_mode": "bridge_credentials",
+                "supports_pairing": False,
+                "minimal_fields": ["server_url", "password"],
+                "automation_hint": "BlueBubbles hazırsa yalnız URL ve password yeterli.",
+                "fields": [
+                    {"name": "id", "label": "ID", "required": False, "secret": False},
+                    {"name": "server_url", "label": "BlueBubbles Server URL", "required": True, "secret": False},
+                    {"name": "password", "label": "BlueBubbles Password", "required": True, "secret": True},
+                    {"name": "handle", "label": "Handle", "required": False, "secret": False},
+                ],
+                "notes": "BlueBubbles sunucusu ile iMessage read/send lane’i açılır.",
+            },
+            {
+                "type": "sms",
+                "label": "SMS",
+                "setup_mode": "api_credentials",
+                "supports_pairing": False,
+                "minimal_fields": ["account_sid", "auth_token", "from_number"],
+                "automation_hint": "Twilio REST + webhook ile SMS lane’i bağlanır.",
+                "fields": [
+                    {"name": "id", "label": "ID", "required": False, "secret": False},
+                    {"name": "account_sid", "label": "Twilio Account SID", "required": True, "secret": False},
+                    {"name": "auth_token", "label": "Twilio Auth Token", "required": True, "secret": True},
+                    {"name": "from_number", "label": "Twilio From Number", "required": True, "secret": False},
+                    {"name": "webhook_path", "label": "Webhook Path", "required": False, "secret": False},
+                ],
+                "notes": "Twilio ile SMS send/read lane’i açılır. Varsayılan webhook: /sms/webhook",
             },
             {
                 "type": "signal",
@@ -6743,6 +9022,7 @@ class ElyanGatewayServer:
         merged["type"] = ctype
         merged["id"] = cid
         merged["enabled"] = bool(incoming.get("enabled", existing.get("enabled", True)))
+        merged["workspace_id"] = str(incoming.get("workspace_id") or existing.get("workspace_id") or "local-workspace").strip() or "local-workspace"
 
         clear_secret_fields = data.get("clear_secret_fields", [])
         if not isinstance(clear_secret_fields, list):
@@ -6761,7 +9041,7 @@ class ElyanGatewayServer:
             merged[key] = v
 
         # Merge secret fields with keychain support.
-        secret_fields = {"token", "bot_token", "app_token", "bridge_token", "access_token", "verify_token", "password"}
+        secret_fields = {"token", "bot_token", "app_token", "bridge_token", "access_token", "verify_token", "password", "auth_token"}
         for field in secret_fields:
             if field in clear_secret_fields:
                 merged.pop(field, None)
@@ -6806,6 +9086,22 @@ class ElyanGatewayServer:
                 merged.setdefault("bridge_url", f"http://127.0.0.1:{int(merged.get('bridge_port', 18792))}")
                 merged.setdefault("auto_start_bridge", True)
                 merged.setdefault("client_id", cid)
+                if not str(merged.get("session_dir") or "").strip():
+                    merged["session_dir"] = str(default_session_dir(cid))
+                if not str(merged.get("bridge_token") or "").strip():
+                    bridge_secret = generate_bridge_token()
+                    env_key = _channel_secret_env("bridge_token", ctype)
+                    if env_key:
+                        keychain_key = KeychainManager.key_for_env(env_key)
+                        if keychain_key and KeychainManager.set_key(keychain_key, bridge_secret):
+                            merged["bridge_token"] = f"${env_key}"
+                        else:
+                            merged["bridge_token"] = bridge_secret
+                    else:
+                        merged["bridge_token"] = bridge_secret
+        if ctype == "sms":
+            merged.setdefault("provider", "twilio")
+            merged.setdefault("webhook_path", "/sms/webhook")
 
         if idx is None:
             channels.append(merged)
@@ -6945,6 +9241,132 @@ class ElyanGatewayServer:
             logger.error(f"Channels sync failed: {e}")
             return web.json_response({"ok": False, "message": f"Senkronizasyon hatası: {e}"}, status=500)
 
+    async def handle_channel_pair_start(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+
+        ctype = _normalize_channel_type(str(data.get("channel") or "whatsapp"))
+        if ctype != "whatsapp":
+            payload = self._build_channel_pair_status_payload(ctype)
+            payload["ok"] = False
+            return web.json_response(payload, status=400)
+
+        channels = elyan_config.get("channels", [])
+        if not isinstance(channels, list):
+            channels = []
+        channel_id = str(data.get("id") or "whatsapp").strip() or "whatsapp"
+        existing_index = None
+        existing: dict[str, Any] = {}
+        for idx, item in enumerate(channels):
+            if not isinstance(item, dict):
+                continue
+            if _normalize_channel_type(str(item.get("type") or "")) == ctype and _channel_id(item) == channel_id:
+                existing_index = idx
+                existing = dict(item)
+                break
+
+        bridge_host = str(existing.get("bridge_host") or BRIDGE_HOST)
+        bridge_port = int(existing.get("bridge_port") or DEFAULT_BRIDGE_PORT)
+        bridge_url = str(existing.get("bridge_url") or build_bridge_url(bridge_host, bridge_port)).rstrip("/")
+        session_dir = Path(str(existing.get("session_dir") or default_session_dir(channel_id))).expanduser()
+        bridge_secret, unresolved_token = _resolve_channel_secret("bridge_token", ctype, existing.get("bridge_token"))
+        if unresolved_token:
+            return web.json_response(
+                {
+                    "ok": False,
+                    "channel": ctype,
+                    "blocking_issue": "bridge_token_unresolved",
+                },
+                status=500,
+            )
+        if not bridge_secret:
+            bridge_secret = generate_bridge_token()
+
+        try:
+            ensure_bridge_runtime(force_install=False)
+            try:
+                health = bridge_health(bridge_url, token=bridge_secret, timeout_s=1.0)
+                state = health.get("state", {}) if isinstance(health, dict) else {}
+                if not bool((state or {}).get("ready") or (state or {}).get("hasQr")):
+                    raise BridgeRuntimeError("bridge_not_ready")
+            except Exception:
+                start_bridge_process(
+                    session_dir=session_dir,
+                    token=bridge_secret,
+                    host=bridge_host,
+                    port=bridge_port,
+                    print_qr=False,
+                    detached=True,
+                    client_id=channel_id,
+                )
+                wait_for_bridge(
+                    bridge_url=bridge_url,
+                    token=bridge_secret,
+                    timeout_s=15,
+                    require_connected=False,
+                    poll_interval_s=1.0,
+                )
+        except Exception as exc:
+            return web.json_response(
+                {
+                    "ok": False,
+                    "channel": ctype,
+                    "blocking_issue": str(exc),
+                },
+                status=500,
+            )
+
+        bridge_token_ref = bridge_secret
+        env_key = _channel_secret_env("bridge_token", ctype)
+        if env_key:
+            keychain_key = KeychainManager.key_for_env(env_key)
+            if keychain_key and KeychainManager.set_key(keychain_key, bridge_secret):
+                bridge_token_ref = f"${env_key}"
+
+        merged = {
+            **existing,
+            "type": ctype,
+            "id": channel_id,
+            "enabled": True,
+            "workspace_id": str(data.get("workspace_id") or existing.get("workspace_id") or "local-workspace").strip() or "local-workspace",
+            "mode": "bridge",
+            "bridge_host": bridge_host,
+            "bridge_port": bridge_port,
+            "bridge_url": bridge_url,
+            "bridge_token": bridge_token_ref,
+            "session_dir": str(session_dir),
+            "client_id": str(existing.get("client_id") or channel_id),
+            "auto_start_bridge": True,
+        }
+        if existing_index is None:
+            channels.append(merged)
+        else:
+            channels[existing_index] = merged
+        elyan_config.set("channels", channels)
+
+        runtime_total = len(self.router.adapters)
+        try:
+            runtime_total = await self._reload_channels_runtime()
+        except Exception as exc:
+            logger.error(f"Channel pairing runtime sync failed: {exc}")
+
+        payload = self._build_channel_pair_status_payload(ctype)
+        payload.update(
+            {
+                "ok": True,
+                "channel_config": _mask_sensitive_fields(merged),
+                "runtime_adapters": runtime_total,
+            }
+        )
+        push_activity("channel_pair", ctype, f"{channel_id} pairing started", True)
+        return web.json_response(payload)
+
+    async def handle_channel_pair_status(self, request):
+        ctype = _normalize_channel_type(str(request.query.get("channel") or "whatsapp"))
+        return web.json_response(self._build_channel_pair_status_payload(ctype))
+
     # ── External message ──────────────────────────────────────────────────────
     async def handle_external_message(self, request):
         try:
@@ -7061,6 +9483,15 @@ class ElyanGatewayServer:
         handler = getattr(adapter, "handle_webhook", None)
         if not callable(handler):
             return web.json_response({"ok": False, "error": "whatsapp adapter webhook unsupported"}, status=400)
+        return await handler(request)
+
+    async def handle_sms_webhook(self, request):
+        adapter = self.router.adapters.get("sms")
+        if not adapter:
+            return web.Response(text="sms adapter not active", status=404)
+        handler = getattr(adapter, "handle_webhook", None)
+        if not callable(handler):
+            return web.Response(text="sms adapter webhook unsupported", status=400)
         return await handler(request)
 
     # ── WebChat WS ────────────────────────────────────────────────────────────

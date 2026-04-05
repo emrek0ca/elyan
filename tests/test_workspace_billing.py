@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import sys
-from types import SimpleNamespace
 
 import pytest
 
@@ -13,8 +11,10 @@ from core.billing.workspace_billing import get_workspace_billing_store
 @pytest.fixture(autouse=True)
 def isolated_workspace_billing(monkeypatch, tmp_path):
     monkeypatch.setenv("ELYAN_DATA_DIR", str(tmp_path / "elyan"))
-    monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
-    monkeypatch.delenv("STRIPE_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("IYZICO_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("IYZICO_PLAN_PRO_CHECKOUT_URL", raising=False)
+    monkeypatch.delenv("IYZICO_PLAN_TEAM_CHECKOUT_URL", raising=False)
+    monkeypatch.delenv("IYZICO_TOKEN_PACK_STARTER_25K_CHECKOUT_URL", raising=False)
     workspace_billing_module._workspace_billing_store = None
     yield
     workspace_billing_module._workspace_billing_store = None
@@ -27,6 +27,7 @@ def test_workspace_billing_defaults_and_usage_persist():
     assert summary["workspace_id"] == "workspace-team"
     assert summary["plan"]["id"] == "free"
     assert summary["entitlements"]["max_connectors"] == 2
+    assert int(summary["credit_balance"]["included"]) > 0
 
     store.record_usage("workspace-team", "connectors", 1, metadata={"connector": "github"})
     store.record_usage("workspace-team", "artifact_exports", 3, metadata={"kind": "document"})
@@ -40,10 +41,10 @@ def test_workspace_billing_defaults_and_usage_persist():
     assert blocked["reason"] == "max_connectors_limit_reached"
 
 
-def test_workspace_billing_checkout_requires_stripe_configuration():
+def test_workspace_billing_checkout_requires_iyzico_checkout_url():
     store = get_workspace_billing_store()
 
-    with pytest.raises(RuntimeError, match="stripe_not_configured"):
+    with pytest.raises(RuntimeError, match="iyzico_plan_checkout_missing:pro"):
         store.create_checkout_session(
             workspace_id="workspace-team",
             plan_id="pro",
@@ -52,56 +53,56 @@ def test_workspace_billing_checkout_requires_stripe_configuration():
         )
 
 
-def test_workspace_billing_checkout_requires_price_id(monkeypatch):
-    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_123")
+def test_workspace_billing_checkout_uses_iyzico_checkout_url(monkeypatch):
+    monkeypatch.setenv("IYZICO_PLAN_PRO_CHECKOUT_URL", "https://billing.local/checkout")
+
     store = get_workspace_billing_store()
+    payload = store.create_checkout_session(
+        workspace_id="workspace-team",
+        plan_id="pro",
+        success_url="https://tauri.localhost/billing/success",
+        cancel_url="https://tauri.localhost/billing/cancel",
+        customer_email="team@example.com",
+    )
 
-    class _FakeStripe:
-        class checkout:
-            class Session:
-                @staticmethod
-                def create(**_kwargs):
-                    return SimpleNamespace(id="cs_test", url="https://billing.local/checkout")
-
-    monkeypatch.setattr(store, "_stripe_client", lambda: _FakeStripe())
-
-    with pytest.raises(RuntimeError, match="stripe_price_missing"):
-        store.create_checkout_session(
-            workspace_id="workspace-team",
-            plan_id="pro",
-            success_url="https://tauri.localhost/billing/success",
-            cancel_url="https://tauri.localhost/billing/cancel",
-        )
+    assert payload["provider"] == "iyzico"
+    assert payload["plan_id"] == "pro"
+    assert payload["url"].startswith("https://billing.local/checkout?")
+    assert "workspace_id=workspace-team" in payload["url"]
+    assert "plan_id=pro" in payload["url"]
 
 
-def test_workspace_billing_past_due_degrades_entitlements(monkeypatch):
-    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_123")
-    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test_123")
-
-    class _FakeWebhook:
-        @staticmethod
-        def construct_event(*, payload, sig_header, secret):
-            assert sig_header == "sig_test"
-            assert secret == "whsec_test_123"
-            return json.loads(payload.decode("utf-8"))
-
-    monkeypatch.setitem(sys.modules, "stripe", SimpleNamespace(Webhook=_FakeWebhook()))
-
+def test_workspace_billing_token_pack_webhook_is_idempotent():
     store = get_workspace_billing_store()
     payload = {
-        "type": "invoice.payment_failed",
-        "data": {
-            "object": {
-                "metadata": {
-                    "workspace_id": "workspace-team",
-                    "plan_id": "team",
-                },
-                "customer": "cus_team",
-            }
-        },
+        "event_type": "payment.updated",
+        "workspace_id": "workspace-team",
+        "token_pack_id": "starter_25k",
+        "status": "paid",
+        "reference_id": "pack_ref_1",
     }
 
-    result = store.handle_webhook(json.dumps(payload).encode("utf-8"), "sig_test")
+    first = store.handle_webhook(json.dumps(payload).encode("utf-8"), {}, provider="iyzico")
+    first_balance = store.get_credit_balance("workspace-team")
+    second = store.handle_webhook(json.dumps(payload).encode("utf-8"), {}, provider="iyzico")
+    second_balance = store.get_credit_balance("workspace-team")
+
+    assert first["provider"] == "iyzico"
+    assert second["provider"] == "iyzico"
+    assert first_balance["purchased"] == second_balance["purchased"]
+
+
+def test_workspace_billing_failed_payment_degrades_entitlements():
+    store = get_workspace_billing_store()
+    payload = {
+        "event_type": "payment.updated",
+        "workspace_id": "workspace-team",
+        "plan_id": "team",
+        "status": "overdue",
+        "reference_id": "plan_ref_1",
+    }
+
+    result = store.handle_webhook(json.dumps(payload).encode("utf-8"), {}, provider="iyzico")
     entitlements = store.get_entitlements("workspace-team")
 
     assert result["status"] == "past_due"
@@ -109,3 +110,40 @@ def test_workspace_billing_past_due_degrades_entitlements(monkeypatch):
     assert entitlements["plan_id"] == "free"
     assert entitlements["degraded"] is True
     assert entitlements["degraded_reason"] == "subscription_past_due"
+
+
+def test_workspace_billing_authorize_usage_estimates_runtime_costs():
+    store = get_workspace_billing_store()
+
+    decision = store.authorize_usage(
+        "workspace-team",
+        "cowork_threads",
+        metadata={
+            "mode": "website",
+            "prompt_length": 1800,
+            "routing_profile": "quality_first",
+            "review_strictness": "strict",
+        },
+    )
+
+    assert decision["allowed"] is True
+    assert int(decision["estimated_credits"]) >= 8
+    assert int(decision["available_credits"]) >= int(decision["estimated_credits"])
+
+
+def test_workspace_billing_record_usage_auto_debits_runtime_estimate():
+    store = get_workspace_billing_store()
+    before = store.get_credit_balance("workspace-team")
+
+    store.record_usage(
+        "workspace-team",
+        "cowork_turns",
+        1,
+        metadata={
+            "mode": "document",
+            "prompt_length": 1200,
+        },
+    )
+
+    after = store.get_credit_balance("workspace-team")
+    assert int(after["total"]) < int(before["total"])

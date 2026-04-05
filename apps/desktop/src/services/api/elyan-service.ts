@@ -3,10 +3,12 @@ import type {
   BackendSummary,
   CommandCenterSnapshot,
   ChannelCatalogEntry,
+  ChannelPairingStatus,
   ChannelSummary,
   ChannelTestResult,
   ConnectorAccount,
   ConnectorActionTrace,
+  ConnectorExecutionResult,
   ConnectorDefinition,
   ConnectorHealth,
   CoworkApproval,
@@ -21,20 +23,36 @@ import type {
   LearningSummary,
   PrivacySummary,
   MetricSummary,
+  ModelDescriptor,
+  ExecutionLaneStatus,
+  ProviderDescriptor,
   ProviderSummary,
   RecentArtifactSummary,
   ReviewReport,
   PrivacyExportBundle,
   RunSummary,
   SecuritySummary,
+  SystemReadiness,
   TrustStripItem,
   UsageLedgerEntry,
   WorkflowTaskType,
   WorkflowLaunchCard,
   WorkspaceBillingSummary,
+  WorkspaceAdminDetail,
+  WorkspaceAdminSummary,
+  BillingCheckoutLaunchSummary,
+  BillingCheckoutSessionSummary,
+  BillingProfileSummary,
+  BillingPlanSummary,
+  BillingEventSummary,
+  CreditLedgerEntrySummary,
+  InboxEventSummary,
+  InboxTaskExtraction,
+  TokenPackSummary,
+  WorkspaceInviteSummary,
+  WorkspaceMemberSummary,
 } from "@/types/domain";
 import { apiClient } from "@/services/api/client";
-import { mockCommandCenter, mockHome, mockIntegrations, mockLogs, mockProviders } from "@/services/api/mock";
 import { approvalSchema, backendSchema, runSchema } from "@/services/api/contracts";
 
 type SuccessEnvelope<T> = { success: boolean } & T;
@@ -157,6 +175,73 @@ async function safeRequest<T>(path: string): Promise<T | null> {
     return null;
   }
 }
+
+async function safePost<T>(path: string, body: Record<string, unknown>): Promise<T | null> {
+  try {
+    return await apiClient.request<T>(path, {
+      method: "POST",
+      body,
+    });
+  } catch {
+    return null;
+  }
+}
+
+const memoryCache = new Map<string, { expiresAt: number; value: unknown }>();
+const inflightRequests = new Map<string, Promise<unknown>>();
+
+function invalidateMemoryCache(prefixes: string[]) {
+  for (const key of Array.from(memoryCache.keys())) {
+    if (prefixes.some((prefix) => key.startsWith(prefix))) {
+      memoryCache.delete(key);
+    }
+  }
+}
+
+async function withMemoryCache<T>(key: string, ttlMs: number, loader: () => Promise<T>): Promise<T> {
+  const now = Date.now();
+  const cached = memoryCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    return cached.value as T;
+  }
+  const active = inflightRequests.get(key);
+  if (active) {
+    return (await active) as T;
+  }
+  const request = loader()
+    .then((value) => {
+      memoryCache.set(key, { expiresAt: Date.now() + ttlMs, value });
+      inflightRequests.delete(key);
+      return value;
+    })
+    .catch((error) => {
+      inflightRequests.delete(key);
+      throw error;
+    });
+  inflightRequests.set(key, request);
+  return (await request) as T;
+}
+
+const DEFAULT_SECURITY_SUMMARY: SecuritySummary = {
+  posture: "balanced",
+  deploymentScope: "single_user_local_first",
+  dataLocality: "local_only",
+  cloudPromptRedaction: true,
+  allowCloudFallback: true,
+  pendingApprovals: 0,
+  activeSessions: 1,
+  sessionPersistence: true,
+  handoffPending: 0,
+  semanticBackend: "unknown",
+};
+
+const DEFAULT_INTEGRATIONS: IntegrationSummary[] = [
+  { id: "desktop", kind: "device", name: "Desktop runtime", status: "connected", detail: "Canonical desktop shell" },
+  { id: "gateway", kind: "automation", name: "Gateway", status: "connected", detail: "Local control plane" },
+];
+
+const DEFAULT_ACTIVITY: ActivityItem[] = [];
+const DEFAULT_LOGS: LogEvent[] = [];
 
 function formatTimestamp(value?: number): string {
   if (!value) {
@@ -405,7 +490,26 @@ function mapChannelCatalogEntry(item: Record<string, unknown>): ChannelCatalogEn
     type: String(item.type || ""),
     label: String(item.label || item.type || ""),
     fields: Array.isArray(item.fields) ? item.fields.map((entry) => mapChannelField((entry || {}) as Record<string, unknown>)) : [],
+    setupMode: String(item.setup_mode || "manual") as ChannelCatalogEntry["setupMode"],
+    supportsPairing: Boolean(item.supports_pairing),
+    minimalFields: Array.isArray(item.minimal_fields) ? item.minimal_fields.map((entry) => String(entry || "")) : [],
+    automationHint: String(item.automation_hint || ""),
     notes: String(item.notes || ""),
+  };
+}
+
+function mapChannelPairingStatus(item: Record<string, unknown>, fallbackChannel = "whatsapp"): ChannelPairingStatus {
+  return {
+    channel: String(item.channel || fallbackChannel),
+    mode: String(item.mode || "manual") as ChannelPairingStatus["mode"],
+    status: String(item.status || "unsupported") as ChannelPairingStatus["status"],
+    pending: Boolean(item.pending),
+    ready: Boolean(item.ready),
+    detail: String(item.detail || ""),
+    instructions: Array.isArray(item.instructions) ? item.instructions.map((entry) => String(entry || "")) : [],
+    qrText: String(item.qr_text || ""),
+    phone: String(item.phone || ""),
+    blockingIssue: String(item.blocking_issue || ""),
   };
 }
 
@@ -415,6 +519,7 @@ function mapChannelSummary(item: Record<string, unknown>): ChannelSummary {
     id: String(item.id || item.type || crypto.randomUUID()),
     type: String(item.type || ""),
     enabled: Boolean(item.enabled ?? true),
+    mode: String(item.mode || ""),
     status: String(item.status || "disconnected"),
     connected: Boolean(item.connected),
     lastActivity: String(item.last_activity || ""),
@@ -534,6 +639,19 @@ function mapThreadDetail(item: Record<string, unknown>): CoworkThreadDetail {
           summary: (((diff as Record<string, unknown>).summary as Record<string, unknown> | undefined) || {}),
         }))
       : [],
+    collaborationTrace: Array.isArray(item.collaboration_trace)
+      ? item.collaboration_trace.map((entry) => ({
+          id: String((entry as Record<string, unknown>).id || crypto.randomUUID()),
+          provider: String((entry as Record<string, unknown>).provider || ""),
+          model: String((entry as Record<string, unknown>).model || ""),
+          lens: String((entry as Record<string, unknown>).lens || "support"),
+          status: String((entry as Record<string, unknown>).status || "planned"),
+          strategy: String((entry as Record<string, unknown>).strategy || ""),
+          source: String((entry as Record<string, unknown>).source || ""),
+          order: Number((entry as Record<string, unknown>).order || 0) || undefined,
+          error: String((entry as Record<string, unknown>).error || ""),
+        }))
+      : [],
     turns: Array.isArray(item.turns) ? item.turns.map((turn) => mapTurn(turn as Record<string, unknown>)) : [],
     approvals: Array.isArray(item.pending_approvals) ? item.pending_approvals.map((approval) => mapApproval(approval as Record<string, unknown>)) : [],
     artifacts: Array.isArray(item.artifacts) ? item.artifacts.map((artifact) => mapArtifact(artifact as Record<string, unknown>)) : [],
@@ -548,6 +666,10 @@ function mapThreadDetail(item: Record<string, unknown>): CoworkThreadDetail {
             createdAt: formatDateTime(timestamp),
             rawTimestamp: timestamp,
             error: String((entry as Record<string, unknown>).error || ""),
+            metadata:
+              (entry as Record<string, unknown>).metadata && typeof (entry as Record<string, unknown>).metadata === "object"
+                ? ((entry as Record<string, unknown>).metadata as Record<string, unknown>)
+                : undefined,
           };
         })
       : [],
@@ -557,6 +679,7 @@ function mapThreadDetail(item: Record<string, unknown>): CoworkThreadDetail {
             mode: String((item.lane_summary as Record<string, unknown>).mode || base.currentMode),
             runState: String((item.lane_summary as Record<string, unknown>).run_state || ""),
             missionState: String((item.lane_summary as Record<string, unknown>).mission_state || ""),
+            collaborationStrategy: String((item.lane_summary as Record<string, unknown>).collaboration_strategy || ""),
             assignedAgents: Array.isArray((item.lane_summary as Record<string, unknown>).assigned_agents)
               ? ((item.lane_summary as Record<string, unknown>).assigned_agents as unknown[]).map((entry) => String(entry))
               : [],
@@ -590,10 +713,69 @@ function mapUsageEntry(item: Record<string, unknown>): UsageLedgerEntry {
   };
 }
 
+function mapSeatSummary(payload: Record<string, unknown>): WorkspaceAdminSummary["seats"] {
+  return {
+    seatLimit: Number(payload.seat_limit || 0),
+    seatsUsed: Number(payload.seats_used || 0),
+    seatsAvailable: Number(payload.seats_available || 0),
+  };
+}
+
+function mapWorkspacePermissions(payload: Record<string, unknown>): WorkspaceAdminSummary["permissions"] {
+  return {
+    viewWorkspace: Boolean(payload.view_workspace ?? false),
+    viewFinancials: Boolean(payload.view_financials ?? false),
+    manageMembers: Boolean(payload.manage_members ?? false),
+    manageRoles: Boolean(payload.manage_roles ?? false),
+    manageSeats: Boolean(payload.manage_seats ?? false),
+  };
+}
+
+function mapBillingProfile(payload: Record<string, unknown>): BillingProfileSummary {
+  const profile = (payload.profile as Record<string, unknown> | undefined) || {};
+  return {
+    workspaceId: String(payload.workspace_id || "local-workspace"),
+    profile: {
+      fullName: String(profile.full_name || ""),
+      email: String(profile.email || ""),
+      phone: String(profile.phone || ""),
+      identityNumber: String(profile.identity_number || ""),
+      addressLine1: String(profile.address_line1 || ""),
+      city: String(profile.city || ""),
+      zipCode: String(profile.zip_code || ""),
+      country: String(profile.country || ""),
+    },
+    isComplete: Boolean(payload.is_complete ?? false),
+    missingFields: Array.isArray(payload.missing_fields) ? payload.missing_fields.map((entry) => String(entry || "")) : [],
+    updatedAt: Number(payload.updated_at || 0) || undefined,
+  };
+}
+
+function mapBillingCheckoutSession(payload: Record<string, unknown>): BillingCheckoutSessionSummary {
+  return {
+    referenceId: String(payload.reference_id || ""),
+    workspaceId: String(payload.workspace_id || "local-workspace"),
+    mode: String(payload.mode || "subscription") === "token_pack" ? "token_pack" : "subscription",
+    catalogId: String(payload.catalog_id || ""),
+    provider: String(payload.provider || "iyzico"),
+    status: String(payload.status || "pending"),
+    providerStatus: String(payload.provider_status || payload.status || "pending"),
+    launchUrl: String(payload.launch_url || payload.payment_page_url || ""),
+    paymentPageUrl: String(payload.payment_page_url || payload.launch_url || ""),
+    callbackUrl: String(payload.callback_url || ""),
+    providerPaymentId: String(payload.provider_payment_id || ""),
+    subscriptionReferenceCode: String(payload.subscription_reference_code || ""),
+    createdAt: Number(payload.created_at || 0) || undefined,
+    updatedAt: Number(payload.updated_at || 0) || undefined,
+    completedAt: Number(payload.completed_at || 0) || undefined,
+  };
+}
+
 function mapBilling(payload: Record<string, unknown>): WorkspaceBillingSummary {
   const plan = (payload.plan as Record<string, unknown> | undefined) || {};
   const subscriptionState = (payload.subscription_state as Record<string, unknown> | undefined) || {};
   const usage = (payload.usage as Record<string, unknown> | undefined) || {};
+  const balance = (payload.credit_balance as Record<string, unknown> | undefined) || {};
   return {
     workspaceId: String(payload.workspace_id || "local-workspace"),
     billingCustomer: String(payload.billing_customer || ""),
@@ -604,8 +786,9 @@ function mapBilling(payload: Record<string, unknown>): WorkspaceBillingSummary {
     },
     subscriptionState: {
       status: String(subscriptionState.status || "inactive"),
-      stripeCustomerId: String(subscriptionState.stripe_customer_id || ""),
-      stripeSubscriptionId: String(subscriptionState.stripe_subscription_id || ""),
+      paymentProvider: String(subscriptionState.payment_provider || "iyzico"),
+      providerCustomerId: String(subscriptionState.provider_customer_id || subscriptionState.stripe_customer_id || ""),
+      providerSubscriptionId: String(subscriptionState.provider_subscription_id || subscriptionState.stripe_subscription_id || ""),
       currentPeriodEnd: Number(subscriptionState.current_period_end || 0) || undefined,
     },
     entitlements: mapEntitlements((payload.entitlements as Record<string, unknown> | undefined) || {}),
@@ -614,9 +797,179 @@ function mapBilling(payload: Record<string, unknown>): WorkspaceBillingSummary {
       budget: Number(usage.budget || 0),
       items: Array.isArray(usage.items) ? usage.items.map((item) => mapUsageEntry(item as Record<string, unknown>)) : [],
     },
+    creditBalance: {
+      included: Number(balance.included || 0),
+      purchased: Number(balance.purchased || 0),
+      total: Number(balance.total || 0),
+    },
+    billingProfile:
+      payload.billing_profile && typeof payload.billing_profile === "object"
+        ? mapBillingProfile(payload.billing_profile as Record<string, unknown>)
+        : undefined,
+    activeCheckout:
+      payload.active_checkout && typeof payload.active_checkout === "object"
+        ? mapBillingCheckoutSession(payload.active_checkout as Record<string, unknown>)
+        : undefined,
     checkoutUrl: String(payload.checkout_url || ""),
     portalUrl: String(payload.portal_url || ""),
     seats: Number(payload.seats || 1),
+  };
+}
+
+function mapWorkspaceAdminSummary(item: Record<string, unknown>): WorkspaceAdminSummary {
+  const billing = item.billing && typeof item.billing === "object" ? (item.billing as Record<string, unknown>) : null;
+  return {
+    workspaceId: String(item.workspace_id || "local-workspace"),
+    displayName: String(item.display_name || item.workspace_id || "Workspace"),
+    status: String(item.status || "active"),
+    role: String(item.role || "member"),
+    seats: mapSeatSummary(((item.seats as Record<string, unknown> | undefined) || {})),
+    permissions: mapWorkspacePermissions(((item.permissions as Record<string, unknown> | undefined) || {})),
+    billing: billing
+      ? {
+          planId: String(billing.plan_id || "free"),
+          status: String(billing.status || "inactive"),
+          creditsTotal: Number(billing.credits_total || 0),
+        }
+      : undefined,
+  };
+}
+
+function mapWorkspaceSummary(item: Record<string, unknown>): WorkspaceAdminDetail["workspace"] {
+  return {
+    id: String(item.workspace_id || item.id || "local-workspace"),
+    name: String(item.display_name || item.name || item.workspace_id || "Workspace"),
+    status: String(item.status || "connected") as WorkspaceAdminDetail["workspace"]["status"],
+    detail: String(item.detail || item.workspace_id || ""),
+  };
+}
+
+function mapWorkspaceMember(item: Record<string, unknown>): WorkspaceMemberSummary {
+  const user = item.user && typeof item.user === "object" ? (item.user as Record<string, unknown>) : null;
+  const seatAssignment =
+    item.seat_assignment && typeof item.seat_assignment === "object" ? (item.seat_assignment as Record<string, unknown>) : null;
+  return {
+    actorId: String(item.actor_id || user?.user_id || ""),
+    workspaceId: String(item.workspace_id || "local-workspace"),
+    role: String(item.role || "member"),
+    status: String(item.status || "active"),
+    seatAssigned: Boolean(item.seat_assigned ?? false),
+    user: user
+      ? {
+          userId: String(user.user_id || ""),
+          email: String(user.email || ""),
+          displayName: String(user.display_name || user.email || "Workspace member"),
+          status: String(user.status || "active"),
+        }
+      : undefined,
+    seatAssignment: seatAssignment
+      ? {
+          assignmentId: String(seatAssignment.assignment_id || ""),
+          status: String(seatAssignment.status || "active"),
+          actorId: String(seatAssignment.actor_id || ""),
+          assignedBy: String(seatAssignment.assigned_by || ""),
+          updatedAt: Number(seatAssignment.updated_at || 0) || undefined,
+        }
+      : undefined,
+  };
+}
+
+function mapWorkspaceInvite(item: Record<string, unknown>): WorkspaceInviteSummary {
+  return {
+    inviteId: String(item.invite_id || ""),
+    workspaceId: String(item.workspace_id || "local-workspace"),
+    email: String(item.email || ""),
+    role: String(item.role || "member"),
+    status: String(item.status || "pending"),
+    expiresAt: Number(item.expires_at || 0) || undefined,
+  };
+}
+
+function mapBillingPlan(item: Record<string, unknown>): BillingPlanSummary {
+  return {
+    id: String(item.plan_id || item.id || "free"),
+    label: String(item.label || item.id || "Plan"),
+    status: String(item.status || "inactive"),
+    monthlyCredits: Number(item.included_credits || item.monthly_credits || 0),
+    seats: Number(item.seat_limit || item.seats || 0),
+    maxConnectors: Number(item.connector_limit || item.max_connectors || 0),
+  };
+}
+
+function mapTokenPack(item: Record<string, unknown>): TokenPackSummary {
+  return {
+    id: String(item.pack_id || item.id || ""),
+    label: String(item.label || item.id || "Token Pack"),
+    credits: Number(item.credits || 0) + Number(item.bonus_credits || 0),
+    price: Number(item.price_try || item.price || 0),
+    currency: String(item.currency || "TRY"),
+  };
+}
+
+function mapCreditLedgerEntry(item: Record<string, unknown>): CreditLedgerEntrySummary {
+  const createdAt = Number(item.created_at || 0);
+  return {
+    entryId: String(item.entry_id || ""),
+    workspaceId: String(item.workspace_id || "local-workspace"),
+    bucket: String(item.bucket || "purchased"),
+    entryType: String(item.entry_type || "adjustment"),
+    deltaCredits: Number(item.delta_credits || 0),
+    balanceAfter: Number(item.balance_after || 0),
+    referenceId: String(item.reference_id || ""),
+    createdAt: formatDateTime(createdAt),
+    rawTimestamp: createdAt || undefined,
+    metadata: ((item.metadata as Record<string, unknown> | undefined) || {}) as Record<string, unknown>,
+  };
+}
+
+function mapBillingEvent(item: Record<string, unknown>): BillingEventSummary {
+  const createdAt = Number(item.created_at || 0);
+  return {
+    eventId: String(item.event_id || crypto.randomUUID()),
+    workspaceId: String(item.workspace_id || "local-workspace"),
+    provider: String(item.provider || "internal"),
+    eventType: String(item.event_type || "unknown"),
+    status: String(item.status || "unknown"),
+    referenceId: String(item.reference_id || ""),
+    createdAt: formatDateTime(createdAt),
+    rawTimestamp: createdAt,
+    payload: ((item.payload as Record<string, unknown> | undefined) || {}) as Record<string, unknown>,
+  };
+}
+
+function mapInboxTaskExtraction(item: Record<string, unknown>): InboxTaskExtraction {
+  return {
+    title: String(item.title || "Inbox task"),
+    summary: String(item.summary || ""),
+    taskType: String(item.task_type || "cowork") as InboxTaskExtraction["taskType"],
+    urgency: String(item.urgency || "low") as InboxTaskExtraction["urgency"],
+    approvalRequired: Boolean(item.approval_required ?? false),
+    actionItems: Array.isArray(item.action_items) ? item.action_items.map((entry) => String(entry)) : [],
+    recommendedPrompt: String(item.recommended_prompt || item.summary || ""),
+    confidence: Number(item.confidence || 0),
+    sourceType: String(item.source_type || "manual"),
+  };
+}
+
+function mapInboxEvent(item: Record<string, unknown>): InboxEventSummary {
+  const updatedAt = Number(item.updated_at || item.created_at || 0);
+  return {
+    eventId: String(item.event_id || ""),
+    workspaceId: String(item.workspace_id || "local-workspace"),
+    sourceType: String(item.source_type || "manual"),
+    sourceId: String(item.source_id || ""),
+    title: String(item.title || "Inbox event"),
+    content: String(item.content || ""),
+    contentPreview: String(item.content_preview || item.content || ""),
+    status: String(item.status || "received"),
+    summary:
+      item.summary && typeof item.summary === "object"
+        ? mapInboxTaskExtraction(item.summary as Record<string, unknown>)
+        : undefined,
+    metadata: ((item.metadata as Record<string, unknown> | undefined) || {}) as Record<string, unknown>,
+    createdAt: formatDateTime(Number(item.created_at || 0)),
+    updatedAt: formatDateTime(updatedAt),
+    rawTimestamp: updatedAt,
   };
 }
 
@@ -632,6 +985,8 @@ function mapConnector(item: Record<string, unknown>): ConnectorDefinition {
     status: (String(item.status || "offline") as ConnectorDefinition["status"]) || "offline",
     accountCount: Number(item.account_count || 0),
     traceCount: Number(item.trace_count || 0),
+    blockingIssue: String(item.blocking_issue || ""),
+    executionMode: String(item.execution_mode || ""),
   };
 }
 
@@ -672,13 +1027,15 @@ function mapConnectorHealth(item: Record<string, unknown>): ConnectorHealth {
     status: String(item.status || "offline"),
     accountCount: Number(item.account_count || 0),
     traceCount: Number(item.trace_count || 0),
+    blockingIssue: String(item.blocking_issue || ""),
+    executionMode: String(item.execution_mode || ""),
   };
 }
 
 async function getSecuritySummary(): Promise<SecuritySummary> {
   const securityRaw = await safeRequest<SecurityEnvelope>("/api/v1/security/summary");
   if (!securityRaw?.success) {
-    return mockCommandCenter.security;
+    return DEFAULT_SECURITY_SUMMARY;
   }
   return mapSecuritySummary(securityRaw.security);
 }
@@ -726,7 +1083,7 @@ export async function deletePrivacyData(): Promise<boolean> {
 async function getSecurityEvents(limit = 12): Promise<LogEvent[]> {
   const raw = await safeRequest<SuccessEnvelope<{ events: Array<Record<string, unknown>> }>>(`/api/v1/security/events?limit=${limit}`);
   if (!raw?.success || !Array.isArray(raw.events)) {
-    return mockCommandCenter.securityEvents;
+    return [];
   }
   return raw.events.map((item): LogEvent => {
     const timestamp = Number(item.timestamp || 0);
@@ -758,6 +1115,8 @@ export async function getCoworkHome(): Promise<CoworkHomeSnapshot> {
       recent_threads: Array<Record<string, unknown>>;
       last_thread?: Record<string, unknown>;
       pending_approvals: Array<Record<string, unknown>>;
+      background_tasks?: Array<Record<string, unknown>>;
+      autopilot?: Record<string, unknown>;
       billing?: Record<string, unknown>;
     }>>("/api/v1/cowork/home"),
     getSecuritySummary(),
@@ -774,15 +1133,21 @@ export async function getCoworkHome(): Promise<CoworkHomeSnapshot> {
           available: Boolean(parsed.data.available),
           detail: String(parsed.data.details?.role || parsed.data.details?.preferred || parsed.data.details?.mode || "Runtime surface"),
         }))
-    : mockHome().backends;
+    : [];
 
   if (!homeRaw?.success) {
-    const fallback = mockHome();
     return {
-      workspace: fallback.workspace,
+      workspace: {
+        id: "local-workspace",
+        name: "Local workspace",
+        status: "connected",
+        detail: "Cowork runtime attached",
+      },
       recentThreads: [],
       lastThread: undefined,
       pendingApprovals: [],
+      backgroundTasks: [],
+      autopilot: undefined,
       security,
       billing: undefined,
       backends,
@@ -799,6 +1164,57 @@ export async function getCoworkHome(): Promise<CoworkHomeSnapshot> {
     recentThreads: Array.isArray(homeRaw.recent_threads) ? homeRaw.recent_threads.map((item) => mapThreadSummary(item)) : [],
     lastThread: homeRaw.last_thread && typeof homeRaw.last_thread === "object" ? mapThreadSummary(homeRaw.last_thread) : undefined,
     pendingApprovals: Array.isArray(homeRaw.pending_approvals) ? homeRaw.pending_approvals.map((item) => mapApproval(item)) : [],
+    backgroundTasks: Array.isArray(homeRaw.background_tasks)
+      ? homeRaw.background_tasks.map((item) => ({
+          taskId: String((item as Record<string, unknown>).task_id || crypto.randomUUID()),
+          objective: String((item as Record<string, unknown>).objective || ""),
+          summary: String((item as Record<string, unknown>).summary || ""),
+          state: String((item as Record<string, unknown>).state || "queued"),
+          mode: String((item as Record<string, unknown>).mode || "background"),
+          capabilityDomain: String((item as Record<string, unknown>).capability_domain || "general"),
+          updatedAt: formatDateTime(Number((item as Record<string, unknown>).updated_at || 0)),
+          rawTimestamp: Number((item as Record<string, unknown>).updated_at || 0),
+        }))
+      : [],
+    autopilot:
+      homeRaw.autopilot && typeof homeRaw.autopilot === "object"
+        ? {
+            enabled: Boolean((homeRaw.autopilot as Record<string, unknown>).enabled ?? false),
+            running: Boolean((homeRaw.autopilot as Record<string, unknown>).running ?? false),
+            lastTickAt: Number((homeRaw.autopilot as Record<string, unknown>).last_tick_at || 0)
+              ? formatDateTime(Number((homeRaw.autopilot as Record<string, unknown>).last_tick_at || 0))
+              : undefined,
+            rawLastTickAt: Number((homeRaw.autopilot as Record<string, unknown>).last_tick_at || 0) || undefined,
+            lastTickReason: String((homeRaw.autopilot as Record<string, unknown>).last_tick_reason || ""),
+            briefing: String((((homeRaw.autopilot as Record<string, unknown>).last_briefing as Record<string, unknown> | undefined) || {}).briefing || ""),
+            suggestions: Array.isArray((homeRaw.autopilot as Record<string, unknown>).last_suggestions)
+              ? (((homeRaw.autopilot as Record<string, unknown>).last_suggestions as Array<Record<string, unknown>>) || []).map((item) => ({
+                  userId: String(item.user_id || "local"),
+                  task: String(item.task || ""),
+                  description: String(item.description || ""),
+                  priority: String(item.priority || "medium"),
+                  reason: String(item.reason || ""),
+                  confidence: Number(item.confidence || 0),
+                }))
+              : [],
+            staleTasks: Array.isArray((homeRaw.autopilot as Record<string, unknown>).last_task_review)
+              ? (((homeRaw.autopilot as Record<string, unknown>).last_task_review as Array<Record<string, unknown>>) || []).map((item) => ({
+                  taskId: String(item.task_id || crypto.randomUUID()),
+                  objective: String(item.objective || ""),
+                  state: String(item.state || ""),
+                  action: String(item.action || ""),
+                  ageMinutes: Number(item.age_minutes || 0),
+                }))
+              : [],
+            interventions: Array.isArray((homeRaw.autopilot as Record<string, unknown>).last_interventions)
+              ? (((homeRaw.autopilot as Record<string, unknown>).last_interventions as Array<Record<string, unknown>>) || []).map((item) => ({
+                  id: String(item.id || crypto.randomUUID()),
+                  prompt: String(item.prompt || ""),
+                  ageMinutes: Number(item.age_minutes || 0),
+                }))
+              : [],
+          }
+        : undefined,
     security,
     billing: homeRaw.billing && typeof homeRaw.billing === "object" ? mapBilling(homeRaw.billing) : undefined,
     backends,
@@ -806,9 +1222,11 @@ export async function getCoworkHome(): Promise<CoworkHomeSnapshot> {
 }
 
 export async function getHomeSnapshot(): Promise<HomeSnapshotV2> {
-  const [coworkHome, runsRaw] = await Promise.all([
+  const [coworkHome, runsRaw, providers, integrations] = await Promise.all([
     getCoworkHome(),
     safeRequest<SuccessEnvelope<{ runs: unknown[] }>>("/api/v1/runs?limit=6"),
+    getProviders(),
+    getIntegrations(),
   ]);
 
   const runs = Array.isArray(runsRaw?.runs)
@@ -816,10 +1234,12 @@ export async function getHomeSnapshot(): Promise<HomeSnapshotV2> {
         .map((item) => runSchema.safeParse(item))
         .filter((parsed) => parsed.success)
         .map((parsed): RunSummary => toRunSummary(parsed.data))
-    : mockHome().recentRuns;
+    : [];
 
   const recentThreads = coworkHome.recentThreads || [];
-  const activeAgents = coworkHome.backends.filter((backend) => backend.active).length || mockHome().metrics.activeAgents;
+  const backgroundTasks = coworkHome.backgroundTasks || [];
+  const autopilot = coworkHome.autopilot;
+  const activeAgents = coworkHome.backends.filter((backend) => backend.active).length;
   const metricCards: MetricSummary[] = [
     {
       label: "Active threads",
@@ -838,6 +1258,12 @@ export async function getHomeSnapshot(): Promise<HomeSnapshotV2> {
       value: `${activeAgents}`,
       meta: "Healthy backend surfaces",
       tone: "neutral",
+    },
+    {
+      label: "Background work",
+      value: `${backgroundTasks.filter((task) => !["completed", "failed", "cancelled"].includes(task.state)).length}`,
+      meta: autopilot?.running ? "Autopilot active" : "Manual follow-up",
+      tone: autopilot?.running ? "success" : "neutral",
     },
     {
       label: "Security posture",
@@ -869,9 +1295,36 @@ export async function getHomeSnapshot(): Promise<HomeSnapshotV2> {
       tone: coworkHome.billing?.plan.status === "active" ? "success" : "neutral",
       detail: coworkHome.billing ? `${coworkHome.billing.entitlements.teamSeats} seats` : "billing offline",
     },
+    {
+      id: "autopilot",
+      label: "Operator mode",
+      value: autopilot?.running ? "active" : "manual",
+      tone: autopilot?.running ? "success" : "neutral",
+      detail: autopilot?.lastTickAt || "not started",
+    },
   ];
 
   const activity: ActivityItem[] = [
+    ...(autopilot?.briefing
+      ? [
+          {
+            id: "autopilot-briefing",
+            title: "Elyan check-in",
+            detail: autopilot.briefing,
+            source: "autopilot",
+            level: "info" as const,
+            createdAt: autopilot.lastTickAt || "Now",
+          },
+        ]
+      : []),
+    ...(autopilot?.suggestions || []).slice(0, 2).map((suggestion): ActivityItem => ({
+      id: `suggestion-${suggestion.task}-${suggestion.userId}`,
+      title: suggestion.task || "Next move",
+      detail: suggestion.description || suggestion.reason || "Suggested follow-up",
+      source: "suggestion",
+      level: suggestion.priority === "high" ? "warning" : "info",
+      createdAt: autopilot?.lastTickAt || "Now",
+    })),
     ...recentThreads.slice(0, 4).map((thread): ActivityItem => ({
       id: `thread-${thread.threadId}`,
       title: thread.title,
@@ -931,10 +1384,10 @@ export async function getHomeSnapshot(): Promise<HomeSnapshotV2> {
 
   return {
     workspace: coworkHome.workspace,
-    providers: mockProviders,
-    integrations: mockIntegrations,
+    providers,
+    integrations,
     recentRuns: runs,
-    activity: activity.length ? activity : mockHome().activity,
+    activity: activity.length ? activity : DEFAULT_ACTIVITY,
     metrics: {
       successRate: 0.93,
       avgLatencyMs: 680,
@@ -942,7 +1395,7 @@ export async function getHomeSnapshot(): Promise<HomeSnapshotV2> {
       totalActions: recentThreads.length + coworkHome.pendingApprovals.length,
     },
     metricCards,
-    backends: coworkHome.backends.length ? coworkHome.backends : mockHome().backends,
+    backends: coworkHome.backends,
     workflowCards,
     trustStrip,
     recentArtifacts,
@@ -953,7 +1406,94 @@ export async function getHomeSnapshot(): Promise<HomeSnapshotV2> {
     recentThreads,
     lastThread: coworkHome.lastThread,
     pendingApprovals: coworkHome.pendingApprovals,
+    backgroundTasks,
+    autopilot,
     billing: coworkHome.billing,
+  };
+}
+
+export async function getAutopilotStatus(): Promise<CoworkHomeSnapshot["autopilot"] | null> {
+  const raw = await safeRequest<Record<string, unknown>>("/api/autopilot/status");
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  return {
+    enabled: Boolean(raw.enabled ?? false),
+    running: Boolean(raw.running ?? false),
+    lastTickAt: Number(raw.last_tick_at || 0) ? formatDateTime(Number(raw.last_tick_at || 0)) : undefined,
+    rawLastTickAt: Number(raw.last_tick_at || 0) || undefined,
+    lastTickReason: String(raw.last_tick_reason || ""),
+    briefing: String(((raw.last_briefing as Record<string, unknown> | undefined) || {}).briefing || ""),
+    suggestions: Array.isArray(raw.last_suggestions)
+      ? (raw.last_suggestions as Array<Record<string, unknown>>).map((item) => ({
+          userId: String(item.user_id || "local"),
+          task: String(item.task || ""),
+          description: String(item.description || ""),
+          priority: String(item.priority || "medium"),
+          reason: String(item.reason || ""),
+          confidence: Number(item.confidence || 0),
+        }))
+      : [],
+    staleTasks: Array.isArray(raw.last_task_review)
+      ? (raw.last_task_review as Array<Record<string, unknown>>).map((item) => ({
+          taskId: String(item.task_id || crypto.randomUUID()),
+          objective: String(item.objective || ""),
+          state: String(item.state || ""),
+          action: String(item.action || ""),
+          ageMinutes: Number(item.age_minutes || 0),
+        }))
+      : [],
+    interventions: Array.isArray(raw.last_interventions)
+      ? (raw.last_interventions as Array<Record<string, unknown>>).map((item) => ({
+          id: String(item.id || crypto.randomUUID()),
+          prompt: String(item.prompt || ""),
+          ageMinutes: Number(item.age_minutes || 0),
+        }))
+      : [],
+  };
+}
+
+export async function triggerAutopilotTick(reason = "desktop_checkin"): Promise<CoworkHomeSnapshot["autopilot"] | null> {
+  const raw = await apiClient.request<{ ok?: boolean; autopilot?: Record<string, unknown> }>("/api/autopilot/tick", {
+    method: "POST",
+    body: { reason },
+  });
+  if (!(raw?.ok ?? false) || !raw.autopilot) {
+    return null;
+  }
+  return {
+    enabled: Boolean(raw.autopilot.enabled ?? false),
+    running: Boolean(raw.autopilot.running ?? false),
+    lastTickAt: Number(raw.autopilot.last_tick_at || 0) ? formatDateTime(Number(raw.autopilot.last_tick_at || 0)) : undefined,
+    rawLastTickAt: Number(raw.autopilot.last_tick_at || 0) || undefined,
+    lastTickReason: String(raw.autopilot.last_tick_reason || ""),
+    briefing: String((((raw.autopilot.last_briefing as Record<string, unknown> | undefined) || {}).briefing) || ""),
+    suggestions: Array.isArray(raw.autopilot.last_suggestions)
+      ? (raw.autopilot.last_suggestions as Array<Record<string, unknown>>).map((item) => ({
+          userId: String(item.user_id || "local"),
+          task: String(item.task || ""),
+          description: String(item.description || ""),
+          priority: String(item.priority || "medium"),
+          reason: String(item.reason || ""),
+          confidence: Number(item.confidence || 0),
+        }))
+      : [],
+    staleTasks: Array.isArray(raw.autopilot.last_task_review)
+      ? (raw.autopilot.last_task_review as Array<Record<string, unknown>>).map((item) => ({
+          taskId: String(item.task_id || crypto.randomUUID()),
+          objective: String(item.objective || ""),
+          state: String(item.state || ""),
+          action: String(item.action || ""),
+          ageMinutes: Number(item.age_minutes || 0),
+        }))
+      : [],
+    interventions: Array.isArray(raw.autopilot.last_interventions)
+      ? (raw.autopilot.last_interventions as Array<Record<string, unknown>>).map((item) => ({
+          id: String(item.id || crypto.randomUUID()),
+          prompt: String(item.prompt || ""),
+          ageMinutes: Number(item.age_minutes || 0),
+        }))
+      : [],
   };
 }
 
@@ -982,9 +1522,9 @@ export async function getCommandCenterSnapshot(selectedThreadId?: string, select
         .map((item) => runSchema.safeParse(item))
         .filter((parsed) => parsed.success)
         .map((parsed): RunSummary => toRunSummary(parsed.data))
-    : mockCommandCenter.runs;
+    : [];
 
-  const outputBlocks: CommandCenterSnapshot["outputBlocks"] = selectedThread
+  const outputBlocksBase: CommandCenterSnapshot["outputBlocks"] = selectedThread
     ? [
         ...selectedThread.turns.slice(-8).map((turn): CommandCenterSnapshot["outputBlocks"][number] => ({
           id: turn.turnId,
@@ -1001,7 +1541,7 @@ export async function getCommandCenterSnapshot(selectedThreadId?: string, select
           meta: item.createdAt,
         })),
       ]
-    : mockCommandCenter.outputBlocks;
+    : [];
 
   const selectedRunSummary =
     selectedThread?.activeRunId && runs.some((run) => run.id === selectedThread.activeRunId)
@@ -1032,10 +1572,182 @@ export async function getCommandCenterSnapshot(selectedThreadId?: string, select
         }
       : undefined;
 
+  const previewText = selectedThread?.goal || selectedThread?.lastUserTurn?.content || "";
+  const previewRaw = previewText
+    ? await withMemoryCache(
+        `operator-preview:${selectedThread?.threadId || "latest"}:${previewText}`,
+        5000,
+        () =>
+          safePost<{
+            ok?: boolean;
+            preview?: Record<string, unknown>;
+          }>("/api/v1/operator/preview", {
+            text: previewText,
+            session_id: selectedThread?.sessionId || selectedThread?.threadId || "desktop-preview",
+          }),
+      )
+    : null;
+  const orchestration = previewRaw?.ok && previewRaw.preview
+    ? {
+        requestText: String(previewRaw.preview.request_text || previewText),
+        requestClass: String(previewRaw.preview.request_class || ""),
+        domain: String(previewRaw.preview.domain || ""),
+        objective: String(previewRaw.preview.objective || ""),
+        preview: String(previewRaw.preview.preview || ""),
+        primaryAction: String(previewRaw.preview.primary_action || ""),
+        orchestrationMode: String(previewRaw.preview.orchestration_mode || "single_agent"),
+        fastPath: Boolean(previewRaw.preview.fast_path),
+        realTimeRequired: Boolean(previewRaw.preview.real_time_required),
+        modelSelection: {
+          provider: String(((previewRaw.preview.model_selection as Record<string, unknown> | undefined) || {}).provider || ""),
+          model: String(((previewRaw.preview.model_selection as Record<string, unknown> | undefined) || {}).model || ""),
+          role: String(((previewRaw.preview.model_selection as Record<string, unknown> | undefined) || {}).role || ""),
+          fallback: Boolean(((previewRaw.preview.model_selection as Record<string, unknown> | undefined) || {}).fallback),
+        },
+        collaboration: {
+          enabled: Boolean(((previewRaw.preview.collaboration as Record<string, unknown> | undefined) || {}).enabled),
+          strategy: String(((previewRaw.preview.collaboration as Record<string, unknown> | undefined) || {}).strategy || ""),
+          maxModels: Number(((previewRaw.preview.collaboration as Record<string, unknown> | undefined) || {}).max_models || 1),
+          synthesisRole: String(((previewRaw.preview.collaboration as Record<string, unknown> | undefined) || {}).synthesis_role || ""),
+          executionStyle: String(((previewRaw.preview.collaboration as Record<string, unknown> | undefined) || {}).execution_style || ""),
+          lenses: Array.isArray(((previewRaw.preview.collaboration as Record<string, unknown> | undefined) || {}).lenses)
+            ? ((((previewRaw.preview.collaboration as Record<string, unknown> | undefined) || {}).lenses as Array<Record<string, unknown>>) || []).map((item) => ({
+                name: String(item.name || ""),
+                instruction: String(item.instruction || ""),
+              }))
+            : [],
+        },
+        integration: {
+          provider: String(((previewRaw.preview.integration as Record<string, unknown> | undefined) || {}).provider || ""),
+          connectorName: String(((previewRaw.preview.integration as Record<string, unknown> | undefined) || {}).connector_name || ""),
+          integrationType: String(((previewRaw.preview.integration as Record<string, unknown> | undefined) || {}).integration_type || ""),
+          authStrategy: String(((previewRaw.preview.integration as Record<string, unknown> | undefined) || {}).auth_strategy || ""),
+          fallbackPolicy: String(((previewRaw.preview.integration as Record<string, unknown> | undefined) || {}).fallback_policy || ""),
+        },
+        autonomy: {
+          mode: String(((previewRaw.preview.autonomy as Record<string, unknown> | undefined) || {}).mode || ""),
+          shouldAsk: Boolean(((previewRaw.preview.autonomy as Record<string, unknown> | undefined) || {}).should_ask),
+          shouldResume: Boolean(((previewRaw.preview.autonomy as Record<string, unknown> | undefined) || {}).should_resume),
+        },
+        taskPlan: {
+          name: String(((previewRaw.preview.task_plan as Record<string, unknown> | undefined) || {}).name || ""),
+          goal: String(((previewRaw.preview.task_plan as Record<string, unknown> | undefined) || {}).goal || ""),
+          constraints: Array.isArray(((previewRaw.preview.task_plan as Record<string, unknown> | undefined) || {}).constraints)
+            ? ((((previewRaw.preview.task_plan as Record<string, unknown> | undefined) || {}).constraints as unknown[]) || []).map((item) => String(item))
+            : [],
+          approvals: Array.isArray(((previewRaw.preview.task_plan as Record<string, unknown> | undefined) || {}).approvals)
+            ? ((((previewRaw.preview.task_plan as Record<string, unknown> | undefined) || {}).approvals as unknown[]) || []).map((item) => String(item))
+            : [],
+          evidence: Array.isArray(((previewRaw.preview.task_plan as Record<string, unknown> | undefined) || {}).evidence)
+            ? ((((previewRaw.preview.task_plan as Record<string, unknown> | undefined) || {}).evidence as unknown[]) || []).map((item) => String(item))
+            : [],
+          steps: Array.isArray(((previewRaw.preview.task_plan as Record<string, unknown> | undefined) || {}).steps)
+            ? ((((previewRaw.preview.task_plan as Record<string, unknown> | undefined) || {}).steps as Array<Record<string, unknown>>) || []).map((item) => ({
+                name: String(item.name || ""),
+                kind: String(item.kind || ""),
+                tool: String(item.tool || ""),
+              }))
+            : [],
+        },
+      }
+    : undefined;
+
+  const presence = (() => {
+    type PresenceNote = NonNullable<CommandCenterSnapshot["presence"]>["operatorNotes"][number];
+    const makeNote = (id: string, title: string, body: string, tone: PresenceNote["tone"]): PresenceNote => ({
+      id,
+      title,
+      body,
+      tone,
+    });
+    const quickReplies = orchestration
+      ? [
+          ...orchestration.taskPlan.steps.slice(0, 2).map((step) => `Şimdi şunu yap: ${step.name}`),
+          ...(orchestration.integration.connectorName ? [`${orchestration.integration.connectorName} ile devam et`] : []),
+        ].slice(0, 3)
+      : ["Buradan devam et", "Durum özeti ver", "Sonraki adımı seç"];
+    const baseNotes: PresenceNote[] = [];
+    if (selectedThread?.status === "running") {
+      baseNotes.push(makeNote("presence-running", "İş bende", selectedThread.currentStep || "Akış ilerliyor; istersen yönü burada değiştirebilirim.", "success"));
+    }
+    if (selectedThread?.approvals?.length) {
+      baseNotes.push(makeNote("presence-approval", "Sende kısa bir onay var", "Riskli bölüme gelince durdum. Onay gelir gelmez devam ederim.", "warning"));
+    }
+    if ((selectedThread?.collaborationTrace || []).length) {
+      const firstModel = (selectedThread?.collaborationTrace || [])[0];
+      baseNotes.push(
+        makeNote(
+          "presence-collaboration",
+          "Arka planda birden fazla akıl çalışıyor",
+          `${firstModel?.lens || "planner"} hattı ${[firstModel?.provider, firstModel?.model].filter(Boolean).join(" / ") || "model"} ile açıldı.`,
+          "info",
+        ),
+      );
+    }
+    if (selectedThread?.status === "running") {
+      return {
+        headline: "Elyan şu an işin içinde",
+        status: "active",
+        liveNote:
+          selectedThread.lastOperatorTurn?.content ||
+          selectedThread.currentStep ||
+          "Arka planda işi yürütüyorum; yeni bir yön verirsen akışı ona göre çeviririm.",
+        nextMove:
+          orchestration?.taskPlan.steps[0]?.name ||
+          selectedThread.currentStep ||
+          "İstersen sıradaki adımı hemen başlatayım.",
+        quickReplies,
+        operatorNotes: baseNotes,
+      };
+    }
+    if (selectedThread?.status === "failed" || selectedThread?.riskLevel === "high") {
+      return {
+        headline: "Elyan işi açıkta bırakmıyor",
+        status: "blocked",
+        liveNote:
+          selectedThread.lastOperatorTurn?.content ||
+          "Bu akışta sürtünme var. İstersen yön değiştirip daha güvenli bir yöntemden devam ederim.",
+        nextMove: "Önce tıkanan yeri netleştirip ikinci yolu kurarım.",
+        quickReplies: ["Alternatif yol dene", "Nerede takıldığını söyle", "Önce plan çıkar"],
+        operatorNotes: [
+          ...baseNotes,
+          makeNote("presence-recovery", "Plan B hazır", "Bu yol sürtünüyorsa ikinci bir rota kurup işi tekrar ayağa kaldırırım.", "warning"),
+        ],
+      };
+    }
+    return {
+      headline: "Elyan hazır ve seni takip ediyor",
+      status: "ready",
+      liveNote:
+        selectedThread?.lastOperatorTurn?.content ||
+        orchestration?.preview ||
+        "Buradayım. Ne tarafa ağırlık vermem gerektiğini söylemen yeterli.",
+      nextMove:
+        orchestration?.taskPlan.steps[0]?.name ||
+        selectedThread?.goal ||
+        "İstersen yeni işi başlatayım ya da mevcut işi derinleştireyim.",
+      quickReplies,
+      operatorNotes: [
+        ...baseNotes,
+        makeNote("presence-ready", "Hazırım", "Senden kısa bir yön bile yeter; geri kalanını akışa çeviririm.", "info"),
+      ],
+    };
+  })();
+  const outputBlocks: CommandCenterSnapshot["outputBlocks"] = [
+    ...(presence?.operatorNotes || []).slice(0, 2).map((note: NonNullable<CommandCenterSnapshot["presence"]>["operatorNotes"][number]): CommandCenterSnapshot["outputBlocks"][number] => ({
+      id: `presence:${note.id}`,
+      kind: note.tone === "warning" ? "warning" : note.tone === "success" ? "result" : "action",
+      title: `Elyan note · ${note.title}`,
+      body: note.body,
+      meta: presence.headline,
+    })),
+    ...outputBlocksBase,
+  ];
+
   return {
     threads,
     selectedThread: selectedThread || undefined,
-    runs: runs.length ? runs : mockCommandCenter.runs,
+    runs,
     approvals: approvals.map((approval) => ({
       id: approval.id,
       action: approval.title,
@@ -1044,9 +1756,11 @@ export async function getCommandCenterSnapshot(selectedThreadId?: string, select
     })),
     outputBlocks,
     security,
-    securityEvents: securityEvents.length ? securityEvents : mockCommandCenter.securityEvents,
+    securityEvents,
     controlActions: selectedThread?.controlActions || [],
     selectedRun: selectedRunSummary,
+    presence,
+    orchestration,
   };
 }
 
@@ -1078,12 +1792,25 @@ type StartWorkflowResponse = SuccessEnvelope<{
 
 type LocalLoginResponse = SuccessEnvelope<{
   workspace_id: string;
+  bootstrap_required?: boolean;
   session_token?: string;
   user: {
     user_id: string;
     email: string;
     display_name?: string;
     status?: string;
+  };
+}>;
+
+type BootstrapOwnerResponse = SuccessEnvelope<{
+  workspace_id: string;
+  session_token?: string;
+  user: {
+    user_id: string;
+    email: string;
+    display_name?: string;
+    status?: string;
+    role?: string;
   };
 }>;
 
@@ -1111,6 +1838,11 @@ type CoworkThreadPayload = {
   routing_profile?: string;
   review_strictness?: string;
   workspace_id?: string;
+  response_mode?: string;
+  provider_strategy?: string;
+  privacy_mode?: string;
+  automation_level?: string;
+  tone?: string;
 };
 
 export async function createCoworkThread(payload: CoworkThreadPayload): Promise<CoworkThreadDetail> {
@@ -1129,6 +1861,28 @@ export async function loginLocalUser(email: string, password: string): Promise<{
   return {
     email: String(raw.user?.email || email).trim().toLowerCase(),
     displayName: String(raw.user?.display_name || "").trim(),
+  };
+}
+
+export async function bootstrapOwner(payload: {
+  email: string;
+  password: string;
+  displayName?: string;
+  workspaceId?: string;
+}): Promise<{ email: string; displayName: string; workspaceId: string }> {
+  const raw = await apiClient.request<BootstrapOwnerResponse>("/api/v1/auth/bootstrap-owner", {
+    method: "POST",
+    body: {
+      email: payload.email,
+      password: payload.password,
+      display_name: payload.displayName || payload.email.split("@", 1)[0],
+      workspace_id: payload.workspaceId || "local-workspace",
+    },
+  });
+  return {
+    email: String(raw.user?.email || payload.email).trim().toLowerCase(),
+    displayName: String(raw.user?.display_name || payload.displayName || "").trim(),
+    workspaceId: String(raw.workspace_id || payload.workspaceId || "local-workspace"),
   };
 }
 
@@ -1198,12 +1952,61 @@ export async function getBillingWorkspace(): Promise<WorkspaceBillingSummary | n
   return raw?.success && raw.workspace ? mapBilling(raw.workspace) : null;
 }
 
-export async function createCheckoutSession(planId: string): Promise<string> {
-  const raw = await apiClient.request<SuccessEnvelope<{ checkout: { url?: string } }>>("/api/v1/billing/checkout-session", {
+export async function getBillingProfile(): Promise<BillingProfileSummary | null> {
+  const raw = await safeRequest<SuccessEnvelope<{ profile: Record<string, unknown> }>>("/api/v1/billing/profile");
+  return raw?.success && raw.profile ? mapBillingProfile(raw.profile) : null;
+}
+
+export async function saveBillingProfile(payload: {
+  fullName: string;
+  email: string;
+  phone: string;
+  identityNumber: string;
+  addressLine1: string;
+  city: string;
+  zipCode: string;
+  country: string;
+}): Promise<BillingProfileSummary | null> {
+  const raw = await apiClient.request<SuccessEnvelope<{ profile?: Record<string, unknown> }>>("/api/v1/billing/profile", {
+    method: "PUT",
+    body: {
+      full_name: payload.fullName,
+      email: payload.email,
+      phone: payload.phone,
+      identity_number: payload.identityNumber,
+      address_line1: payload.addressLine1,
+      city: payload.city,
+      zip_code: payload.zipCode,
+      country: payload.country,
+    },
+  });
+  return raw.profile ? mapBillingProfile(raw.profile) : null;
+}
+
+export async function getBillingCheckout(referenceId: string): Promise<BillingCheckoutSessionSummary | null> {
+  if (!referenceId) {
+    return null;
+  }
+  const raw = await safeRequest<SuccessEnvelope<{ checkout: Record<string, unknown> }>>(`/api/v1/billing/checkouts/${encodeURIComponent(referenceId)}`);
+  return raw?.success && raw.checkout ? mapBillingCheckoutSession(raw.checkout) : null;
+}
+
+export async function createCheckoutSession(planId: string): Promise<BillingCheckoutLaunchSummary> {
+  const raw = await apiClient.request<SuccessEnvelope<{ checkout: Record<string, unknown> }>>("/api/v1/billing/checkout/init", {
     method: "POST",
     body: { plan_id: planId },
   });
-  return String(raw.checkout?.url || "");
+  const checkoutPayload =
+    raw.checkout && typeof raw.checkout.checkout === "object"
+      ? (raw.checkout.checkout as Record<string, unknown>)
+      : raw.checkout;
+  const checkout = checkoutPayload ? mapBillingCheckoutSession(checkoutPayload) : null;
+  return {
+    launchUrl: checkout?.launchUrl || String((raw.checkout as Record<string, unknown> | undefined)?.launch_url || (raw.checkout as Record<string, unknown> | undefined)?.url || ""),
+    referenceId: checkout?.referenceId || String((raw.checkout as Record<string, unknown> | undefined)?.reference_id || ""),
+    status: checkout?.status || String((raw.checkout as Record<string, unknown> | undefined)?.status || "pending"),
+    mode: checkout?.mode || "subscription",
+  };
 }
 
 export async function createPortalSession(): Promise<string> {
@@ -1214,12 +2017,243 @@ export async function createPortalSession(): Promise<string> {
   return String(raw.portal?.url || "");
 }
 
-export async function getConnectors(): Promise<ConnectorDefinition[]> {
-  const raw = await safeRequest<SuccessEnvelope<{ connectors: Array<Record<string, unknown>> }>>("/api/v1/connectors");
-  if (!raw?.success) {
+export async function getAdminWorkspaces(): Promise<WorkspaceAdminSummary[]> {
+  const raw = await safeRequest<SuccessEnvelope<{ workspaces: Array<Record<string, unknown>> }>>("/api/v1/admin/workspaces");
+  if (!raw?.success || !Array.isArray(raw.workspaces)) {
     return [];
   }
-  return Array.isArray(raw.connectors) ? raw.connectors.map((item) => mapConnector(item)) : [];
+  return raw.workspaces.map((item) => mapWorkspaceAdminSummary(item));
+}
+
+export async function getAdminWorkspaceDetail(workspaceId: string): Promise<WorkspaceAdminDetail | null> {
+  if (!workspaceId) {
+    return null;
+  }
+  const raw = await safeRequest<
+    SuccessEnvelope<{
+      workspace: Record<string, unknown>;
+      seats: Record<string, unknown>;
+      permissions: Record<string, unknown>;
+      current_role: string;
+      billing?: Record<string, unknown>;
+    }>
+  >(`/api/v1/admin/workspaces/${encodeURIComponent(workspaceId)}`);
+  if (!raw?.success || !raw.workspace) {
+    return null;
+  }
+  return {
+    workspace: mapWorkspaceSummary(raw.workspace),
+    seats: mapSeatSummary((raw.seats as Record<string, unknown> | undefined) || {}),
+    permissions: mapWorkspacePermissions((raw.permissions as Record<string, unknown> | undefined) || {}),
+    currentRole: String(raw.current_role || "member"),
+    billing: raw.billing && typeof raw.billing === "object" ? mapBilling(raw.billing) : undefined,
+  };
+}
+
+export async function getWorkspaceMembers(workspaceId: string): Promise<WorkspaceMemberSummary[]> {
+  if (!workspaceId) {
+    return [];
+  }
+  const raw = await safeRequest<SuccessEnvelope<{ members: Array<Record<string, unknown>> }>>(
+    `/api/v1/admin/workspaces/${encodeURIComponent(workspaceId)}/members`,
+  );
+  if (!raw?.success || !Array.isArray(raw.members)) {
+    return [];
+  }
+  return raw.members.map((item) => mapWorkspaceMember(item));
+}
+
+export async function getWorkspaceInvites(workspaceId: string): Promise<WorkspaceInviteSummary[]> {
+  if (!workspaceId) {
+    return [];
+  }
+  const raw = await safeRequest<SuccessEnvelope<{ invites: Array<Record<string, unknown>> }>>(
+    `/api/v1/admin/workspaces/${encodeURIComponent(workspaceId)}/invites`,
+  );
+  if (!raw?.success || !Array.isArray(raw.invites)) {
+    return [];
+  }
+  return raw.invites.map((item) => mapWorkspaceInvite(item));
+}
+
+export async function createWorkspaceInvite(payload: {
+  workspaceId: string;
+  email: string;
+  role: string;
+}): Promise<WorkspaceInviteSummary | null> {
+  const raw = await apiClient.request<SuccessEnvelope<{ invite?: Record<string, unknown> }>>(
+    `/api/v1/admin/workspaces/${encodeURIComponent(payload.workspaceId)}/invites`,
+    {
+      method: "POST",
+      body: {
+        email: payload.email,
+        role: payload.role,
+      },
+    },
+  );
+  return raw.invite ? mapWorkspaceInvite(raw.invite) : null;
+}
+
+export async function updateWorkspaceRole(payload: {
+  workspaceId: string;
+  actorId: string;
+  role: string;
+}): Promise<WorkspaceMemberSummary | null> {
+  const raw = await apiClient.request<SuccessEnvelope<{ membership?: Record<string, unknown> }>>(
+    `/api/v1/admin/workspaces/${encodeURIComponent(payload.workspaceId)}/members/${encodeURIComponent(payload.actorId)}/role`,
+    {
+      method: "POST",
+      body: {
+        role: payload.role,
+      },
+    },
+  );
+  return raw.membership ? mapWorkspaceMember(raw.membership) : null;
+}
+
+export async function assignWorkspaceSeat(payload: {
+  workspaceId: string;
+  actorId: string;
+  action?: "assign" | "release";
+}): Promise<{ seats: WorkspaceAdminSummary["seats"] | null }> {
+  const raw = await apiClient.request<SuccessEnvelope<{ seats?: Record<string, unknown> }>>(
+    `/api/v1/admin/workspaces/${encodeURIComponent(payload.workspaceId)}/seats/assign`,
+    {
+      method: "POST",
+      body: {
+        actor_id: payload.actorId,
+        action: payload.action || "assign",
+      },
+    },
+  );
+  return {
+    seats: raw.seats && typeof raw.seats === "object" ? mapSeatSummary(raw.seats) : null,
+  };
+}
+
+export async function getBillingCatalog(): Promise<{ plans: BillingPlanSummary[]; tokenPacks: TokenPackSummary[] }> {
+  const raw = await safeRequest<SuccessEnvelope<{ plans: Array<Record<string, unknown>>; token_packs: Array<Record<string, unknown>> }>>(
+    "/api/v1/billing/plans",
+  );
+  if (!raw?.success) {
+    return { plans: [], tokenPacks: [] };
+  }
+  return {
+    plans: Array.isArray(raw.plans) ? raw.plans.map((item) => mapBillingPlan(item)) : [],
+    tokenPacks: Array.isArray(raw.token_packs) ? raw.token_packs.map((item) => mapTokenPack(item)) : [],
+  };
+}
+
+export async function getCreditLedger(limit = 40): Promise<CreditLedgerEntrySummary[]> {
+  const raw = await safeRequest<SuccessEnvelope<{ ledger?: { items?: Array<Record<string, unknown>> } }>>(`/api/v1/billing/ledger?limit=${limit}`);
+  const items = raw?.success && raw.ledger && typeof raw.ledger === "object" ? raw.ledger.items : [];
+  return Array.isArray(items) ? items.map((item) => mapCreditLedgerEntry(item)) : [];
+}
+
+export async function getBillingEvents(limit = 24): Promise<BillingEventSummary[]> {
+  const raw = await safeRequest<SuccessEnvelope<{ events?: { items?: Array<Record<string, unknown>> } }>>(`/api/v1/billing/events?limit=${limit}`);
+  const items = raw?.success && raw.events && typeof raw.events === "object" ? raw.events.items : [];
+  return Array.isArray(items) ? items.map((item) => mapBillingEvent(item)) : [];
+}
+
+export async function getInboxEvents(workspaceId = "", limit = 8): Promise<InboxEventSummary[]> {
+  const query = new URLSearchParams();
+  if (workspaceId) {
+    query.set("workspace_id", workspaceId);
+  }
+  query.set("limit", String(limit));
+  const raw = await safeRequest<SuccessEnvelope<{ events?: Array<Record<string, unknown>> }>>(`/api/v1/inbox/events?${query.toString()}`);
+  const items = raw?.success ? raw.events : [];
+  return Array.isArray(items) ? items.map((item) => mapInboxEvent(item)) : [];
+}
+
+export async function createInboxEvent(payload: {
+  content: string;
+  sourceType?: string;
+  sourceId?: string;
+  title?: string;
+  workspaceId?: string;
+}): Promise<{ event: InboxEventSummary | null; extraction: InboxTaskExtraction | null; billingWarning: string }> {
+  const raw = await apiClient.request<
+    SuccessEnvelope<{
+      event?: Record<string, unknown>;
+      extraction?: Record<string, unknown>;
+      billing_warning?: string;
+    }>
+  >("/api/v1/inbox/events", {
+    method: "POST",
+    body: {
+      content: payload.content,
+      source_type: payload.sourceType || "manual",
+      source_id: payload.sourceId || "",
+      title: payload.title || "",
+      workspace_id: payload.workspaceId || "",
+      analyze: true,
+    },
+  });
+  return {
+    event: raw.event ? mapInboxEvent(raw.event) : null,
+    extraction: raw.extraction ? mapInboxTaskExtraction(raw.extraction) : null,
+    billingWarning: String(raw.billing_warning || ""),
+  };
+}
+
+export async function extractInboxTask(payload: {
+  content?: string;
+  eventId?: string;
+  sourceType?: string;
+  title?: string;
+  workspaceId?: string;
+}): Promise<{ extraction: InboxTaskExtraction | null; event: InboxEventSummary | null; billingWarning: string }> {
+  const raw = await apiClient.request<
+    SuccessEnvelope<{
+      summary?: Record<string, unknown>;
+      event?: Record<string, unknown>;
+      billing_warning?: string;
+    }>
+  >("/api/v1/tasks/extract", {
+    method: "POST",
+    body: {
+      content: payload.content || "",
+      event_id: payload.eventId || "",
+      source_type: payload.sourceType || "manual",
+      title: payload.title || "",
+      workspace_id: payload.workspaceId || "",
+    },
+  });
+  return {
+    extraction: raw.summary ? mapInboxTaskExtraction(raw.summary) : null,
+    event: raw.event ? mapInboxEvent(raw.event) : null,
+    billingWarning: String(raw.billing_warning || ""),
+  };
+}
+
+export async function purchaseTokenPack(packId: string): Promise<BillingCheckoutLaunchSummary> {
+  const raw = await apiClient.request<SuccessEnvelope<{ purchase?: Record<string, unknown> }>>("/api/v1/billing/token-packs/purchase", {
+    method: "POST",
+    body: { pack_id: packId },
+  });
+  const purchasePayload =
+    raw.purchase && typeof raw.purchase.checkout === "object"
+      ? (raw.purchase.checkout as Record<string, unknown>)
+      : raw.purchase;
+  const purchase = purchasePayload ? mapBillingCheckoutSession(purchasePayload) : null;
+  return {
+    launchUrl: purchase?.launchUrl || String((raw.purchase as Record<string, unknown> | undefined)?.launch_url || (raw.purchase as Record<string, unknown> | undefined)?.url || ""),
+    referenceId: purchase?.referenceId || String((raw.purchase as Record<string, unknown> | undefined)?.reference_id || ""),
+    status: purchase?.status || String((raw.purchase as Record<string, unknown> | undefined)?.status || "pending"),
+    mode: purchase?.mode || "token_pack",
+  };
+}
+
+export async function getConnectors(): Promise<ConnectorDefinition[]> {
+  return withMemoryCache("connectors", 8000, async () => {
+    const raw = await safeRequest<SuccessEnvelope<{ connectors: Array<Record<string, unknown>> }>>("/api/v1/connectors");
+    if (!raw?.success) {
+      return [];
+    }
+    return Array.isArray(raw.connectors) ? raw.connectors.map((item) => mapConnector(item)) : [];
+  });
 }
 
 export async function getConnectorAccounts(provider = ""): Promise<ConnectorAccount[]> {
@@ -1236,6 +2270,9 @@ export async function connectConnector(connector: string): Promise<{ launchUrl: 
     method: "POST",
     body: {},
   });
+  if (raw.success) {
+    invalidateMemoryCache(["connectors", "integrations-summary"]);
+  }
   return {
     launchUrl: String(raw.launch_url || ""),
     account: raw.account ? mapConnectorAccount(raw.account) : undefined,
@@ -1247,6 +2284,9 @@ export async function refreshConnectorAccount(accountId: string): Promise<Connec
     method: "POST",
     body: {},
   });
+  if (raw.success) {
+    invalidateMemoryCache(["connectors", "integrations-summary"]);
+  }
   return raw.account ? mapConnectorAccount(raw.account) : null;
 }
 
@@ -1255,6 +2295,9 @@ export async function revokeConnectorAccount(accountId: string): Promise<boolean
     method: "POST",
     body: {},
   });
+  if (raw.success) {
+    invalidateMemoryCache(["connectors", "integrations-summary"]);
+  }
   return Boolean(raw.success);
 }
 
@@ -1274,6 +2317,32 @@ export async function getConnectorHealth(): Promise<ConnectorHealth[]> {
   return Array.isArray(raw.health) ? raw.health.map((item) => mapConnectorHealth(item)) : [];
 }
 
+export async function runConnectorQuickAction(
+  connector: string,
+  action: string,
+  payload: Record<string, unknown> = {},
+): Promise<ConnectorExecutionResult> {
+  const raw = await apiClient.request<{
+    ok?: boolean;
+    connector?: string;
+    action?: string;
+    blocking_issue?: string;
+    result?: Record<string, unknown>;
+  }>(`/api/v1/connectors/${encodeURIComponent(connector)}/quick-action`, {
+    method: "POST",
+    body: {
+      action,
+      ...payload,
+    },
+  });
+  return {
+    connector: String(raw.connector || connector),
+    action: String(raw.action || action),
+    blockingIssue: String(raw.blocking_issue || ""),
+    result: ((raw.result as Record<string, unknown> | undefined) || {}) as Record<string, unknown>,
+  };
+}
+
 export async function getChannels(): Promise<ChannelSummary[]> {
   const raw = await safeRequest<{ channels?: Array<Record<string, unknown>> }>("/api/channels");
   if (!raw?.channels || !Array.isArray(raw.channels)) {
@@ -1288,6 +2357,26 @@ export async function getChannelsCatalog(): Promise<ChannelCatalogEntry[]> {
     return [];
   }
   return raw.catalog.map((item) => mapChannelCatalogEntry(item));
+}
+
+export async function getChannelPairingStatus(channel: string): Promise<ChannelPairingStatus> {
+  const raw = await safeRequest<Record<string, unknown>>(`/api/channels/pair/status?channel=${encodeURIComponent(channel)}`);
+  return mapChannelPairingStatus(raw || {}, channel);
+}
+
+export async function startChannelPairing(
+  channel: string,
+  payload: Record<string, unknown> = {},
+): Promise<ChannelPairingStatus> {
+  const raw = await apiClient.request<Record<string, unknown>>("/api/channels/pair/start", {
+    method: "POST",
+    body: {
+      channel,
+      ...payload,
+    },
+  });
+  invalidateMemoryCache(["channels"]);
+  return mapChannelPairingStatus(raw || {}, channel);
 }
 
 export async function upsertChannel(channel: Record<string, unknown>): Promise<ChannelSummary | null> {
@@ -1325,28 +2414,405 @@ export async function testChannel(channel: string): Promise<ChannelTestResult> {
 }
 
 export async function getProviders(): Promise<ProviderSummary[]> {
-  return mockProviders;
+  return withMemoryCache("providers-summary", 8000, async () => {
+    const descriptors = await getProviderDescriptors();
+    if (!descriptors.length) {
+      return [];
+    }
+    return descriptors.map((provider) => {
+      const primaryLane = provider.lanes.find((lane) => lane.lane !== "fallback") || provider.lanes[0];
+      const activeModel =
+        provider.models.find((model) => model.modelId === primaryLane?.model) ||
+        provider.models.find((model) => model.installed) ||
+        provider.models[0];
+      return {
+        id: provider.providerId,
+        name: provider.label,
+        model: String(activeModel?.displayName || activeModel?.modelId || "Not configured"),
+        latencyMs:
+          primaryLane?.latencyBucket === "fast"
+            ? 450
+            : primaryLane?.latencyBucket === "slow"
+              ? 3200
+              : 1100,
+        usageToday: provider.models.filter((model) => model.installed).length,
+        status:
+          provider.healthState === "available"
+            ? "connected"
+            : provider.healthState === "degraded" || provider.healthState === "rate_limited"
+              ? "degraded"
+              : "offline",
+        detail: provider.detail,
+      };
+    });
+  });
+}
+
+type ModelsEnvelope = {
+  ok?: boolean;
+  default?: { provider?: string; model?: string };
+  fallback?: { provider?: string; model?: string };
+  roles?: Record<string, { provider?: string; model?: string }>;
+  registry?: Array<Record<string, unknown>>;
+  provider_keys?: Record<string, { configured?: boolean }>;
+  providers?: Record<string, { status?: string; success_rate?: string; avg_latency?: string; total_calls?: number }>;
+};
+
+type LlmSetupStatusEnvelope = {
+  ok?: boolean;
+  providers?: Array<Record<string, unknown>>;
+};
+
+type OllamaStatusEnvelope = {
+  ok?: boolean;
+  running?: boolean;
+  models?: Array<Record<string, unknown>>;
+  recommended?: Array<Record<string, unknown>>;
+};
+
+type HealthEnvelope = {
+  ok?: boolean;
+  status?: string;
+  readiness?: Record<string, unknown>;
+};
+
+function normalizeProviderLabel(providerId: string): string {
+  const normalized = providerId.trim().toLowerCase();
+  const labels: Record<string, string> = {
+    openai: "OpenAI",
+    anthropic: "Anthropic",
+    google: "Google",
+    groq: "Groq",
+    ollama: "Ollama",
+    deepseek: "DeepSeek",
+    mistral: "Mistral",
+    together: "Together",
+    cohere: "Cohere",
+    perplexity: "Perplexity",
+    xai: "xAI",
+  };
+  return labels[normalized] || providerId;
+}
+
+function latencyBucket(value: string): ExecutionLaneStatus["latencyBucket"] {
+  const seconds = Number(String(value || "").replace(/[^\d.]/g, ""));
+  if (!seconds || Number.isNaN(seconds)) {
+    return "balanced";
+  }
+  if (seconds <= 1.2) {
+    return "fast";
+  }
+  if (seconds <= 3.0) {
+    return "balanced";
+  }
+  return "slow";
+}
+
+function laneVerificationState(lane: ExecutionLaneStatus["lane"]): ExecutionLaneStatus["verificationState"] {
+  return lane === "research" || lane === "fallback" ? "verified" : "standard";
+}
+
+function mapRoleToLane(role: string): ExecutionLaneStatus["lane"] {
+  const normalized = role.trim().toLowerCase();
+  if (normalized === "router" || normalized === "inference" || normalized === "creative") {
+    return "chat";
+  }
+  if (normalized === "reasoning" || normalized === "planning" || normalized === "critic" || normalized === "qa") {
+    return "reasoning";
+  }
+  if (normalized === "research_worker") {
+    return "research";
+  }
+  if (normalized === "fallback") {
+    return "fallback";
+  }
+  return "vision";
+}
+
+function buildProviderDescriptors(
+  modelsRaw: ModelsEnvelope | null,
+  setupRaw: LlmSetupStatusEnvelope | null,
+  ollamaRaw: OllamaStatusEnvelope | null,
+): ProviderDescriptor[] {
+  const setupProviders = Array.isArray(setupRaw?.providers) ? setupRaw.providers : [];
+  const setupById = new Map<string, Record<string, unknown>>();
+  for (const item of setupProviders) {
+    const providerId = String(item.provider || item.id || "").trim().toLowerCase();
+    if (providerId) {
+      setupById.set(providerId, item);
+    }
+  }
+
+  const modelHealth = (modelsRaw?.providers || {}) as Record<string, { status?: string; avg_latency?: string }>;
+  const roleMap = (modelsRaw?.roles || {}) as Record<string, { provider?: string; model?: string }>;
+  const providerKeys = (modelsRaw?.provider_keys || {}) as Record<string, { configured?: boolean }>;
+  const registry = Array.isArray(modelsRaw?.registry) ? modelsRaw?.registry : [];
+
+  const providerIds = new Set<string>([
+    ...Object.keys(providerKeys),
+    ...Object.keys(modelHealth),
+    ...Array.from(setupById.keys()),
+    ...registry.map((item) => String(item.provider || item.type || "").trim().toLowerCase()).filter(Boolean),
+  ]);
+  providerIds.add("ollama");
+
+  const ollamaModels = Array.isArray(ollamaRaw?.models) ? ollamaRaw.models : [];
+  const ollamaRecommended = Array.isArray(ollamaRaw?.recommended) ? ollamaRaw.recommended : [];
+
+  return Array.from(providerIds)
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (a === "ollama") return -1;
+      if (b === "ollama") return 1;
+      return a.localeCompare(b);
+    })
+    .map((providerId) => {
+      const setupInfo = setupById.get(providerId) || {};
+      const healthInfo = modelHealth[providerId] || {};
+      const configInfo = providerKeys[providerId] || {};
+      const supportedRoles = Object.entries(roleMap)
+        .filter(([, value]) => String(value.provider || "").trim().toLowerCase() === providerId)
+        .map(([role]) => role);
+
+      const lanes: ExecutionLaneStatus[] = Object.entries(roleMap)
+        .filter(([, value]) => String(value.provider || "").trim().toLowerCase() === providerId)
+        .slice(0, 5)
+        .map(([role, value]) => ({
+          lane: mapRoleToLane(role),
+          activeProvider: providerId,
+          model: String(value.model || ""),
+          fallbackActive: role === "fallback",
+          verificationState: laneVerificationState(mapRoleToLane(role)),
+          latencyBucket: latencyBucket(healthInfo.avg_latency || ""),
+        }));
+
+      const configured = Boolean(configInfo.configured ?? setupInfo.configured ?? providerId === "ollama");
+      const isLocal = providerId === "ollama";
+      const setupStatus = String(setupInfo.status || "").trim().toLowerCase();
+      const healthState: ProviderDescriptor["healthState"] =
+        !configured && !isLocal
+          ? "unreachable"
+          : setupStatus === "degraded" || String(healthInfo.status || "").includes("degraded")
+            ? "degraded"
+            : setupStatus === "rate_limited"
+              ? "rate_limited"
+              : setupStatus === "connected" || setupStatus === "available" || providerId === "ollama"
+                ? "available"
+                : "unreachable";
+
+      const authState: ProviderDescriptor["authState"] = isLocal ? "not_required" : configured ? "ready" : "auth_required";
+
+      const models: ModelDescriptor[] = isLocal
+        ? [...ollamaModels, ...ollamaRecommended.filter((item) => !ollamaModels.some((installed) => String(installed.name || "") === String(item.name || "")))]
+            .map((item) => {
+              const name = String(item.name || "");
+              return {
+                modelId: name,
+                displayName: name,
+                providerId,
+                installed: Boolean(item.installed ?? ollamaModels.some((installed) => String(installed.name || "") === name)),
+                downloadable: true,
+                size: String(item.size || ""),
+                lastUsedAt: "",
+                capabilities: ["chat", "reasoning", "local"],
+                digest: String(item.digest || ""),
+                modified: String(item.modified || ""),
+                roleAssignments: Object.entries(roleMap)
+                  .filter(([, value]) => String(value.provider || "").trim().toLowerCase() === providerId && String(value.model || "") === name)
+                  .map(([role]) => role),
+              };
+            })
+        : registry
+            .filter((item) => String(item.provider || item.type || "").trim().toLowerCase() === providerId)
+            .map((item) => ({
+              modelId: String(item.id || item.model || crypto.randomUUID()),
+              displayName: String(item.alias || item.label || item.model || providerId),
+              providerId,
+              installed: true,
+              downloadable: false,
+              size: "",
+              lastUsedAt: "",
+              capabilities: Array.isArray(item.roles) ? item.roles.map((role) => String(role)) : ["chat"],
+              roleAssignments: Array.isArray(item.roles) ? item.roles.map((role) => String(role)) : [],
+            }));
+
+      return {
+        providerId,
+        label: normalizeProviderLabel(providerId),
+        kind: isLocal ? "local" : "cloud",
+        enabled: configured || isLocal,
+        authState,
+        healthState,
+        supportedRoles,
+        models,
+        lanes,
+        endpoint: String((setupInfo.base_url || setupInfo.endpoint || "")).trim(),
+        detail: isLocal
+          ? ollamaRaw?.running
+            ? `${ollamaModels.length} local models`
+            : "Ollama not running"
+          : configured
+            ? `${supportedRoles.length || 1} active lanes`
+            : "API key required",
+      };
+    });
+}
+
+export async function getSystemReadiness(): Promise<SystemReadiness> {
+  return withMemoryCache("system-readiness", 2500, async () => {
+    const [healthRaw, setupRaw, ollamaRaw] = await Promise.all([
+      safeRequest<HealthEnvelope>("/healthz"),
+      safeRequest<LlmSetupStatusEnvelope>("/api/llm/setup/status"),
+      safeRequest<OllamaStatusEnvelope>("/api/llm/setup/ollama"),
+    ]);
+
+    const runtimeReady = Boolean(healthRaw?.ok);
+    const ollamaReady = Boolean(ollamaRaw?.running);
+    const readiness = (healthRaw?.readiness as Record<string, unknown> | undefined) || {};
+    const providers = Array.isArray(setupRaw?.providers) ? setupRaw.providers : [];
+    const providerSummary = {
+      available: providers.filter((provider) => ["connected", "available", "ready"].includes(String(provider.status || "").toLowerCase())).length,
+      authRequired: providers.filter((provider) => String(provider.status || "").toLowerCase().includes("key") || String(provider.status || "").toLowerCase().includes("auth")).length,
+      degraded: providers.filter((provider) => ["degraded", "error", "unreachable"].includes(String(provider.status || "").toLowerCase())).length,
+    };
+
+    let bootStage: SystemReadiness["bootStage"] = "ready";
+    let status: SystemReadiness["status"] = "ready";
+    let blockingIssue = "";
+
+    if (!runtimeReady) {
+      bootStage = "starting_services";
+      status = "booting";
+      blockingIssue = "Local services are still starting.";
+    } else if (!ollamaReady) {
+      bootStage = "loading_local_models";
+      status = "needs_attention";
+      blockingIssue = "Ollama is unavailable. Local model lanes are limited.";
+    } else if (providerSummary.authRequired || providerSummary.degraded) {
+      bootStage = "checking_providers";
+      status = "needs_attention";
+      blockingIssue = providerSummary.authRequired
+        ? "Some cloud providers need API keys."
+        : "Some providers are degraded right now.";
+    }
+
+    return {
+      status,
+      bootStage,
+      runtimeReady,
+      setupComplete: Boolean(readiness.setup_complete ?? runtimeReady),
+      ollamaReady,
+      productivityAppsReady: Boolean(readiness.productivity_apps_ready ?? runtimeReady),
+      bluebubblesReady: Boolean(readiness.bluebubbles_ready),
+      whatsappMode: (String(readiness.whatsapp_mode || "unavailable") as SystemReadiness["whatsappMode"]) || "unavailable",
+      applePermissions: {
+        automation: Boolean((readiness.apple_permissions as Record<string, unknown> | undefined)?.automation),
+        screenCapture: Boolean((readiness.apple_permissions as Record<string, unknown> | undefined)?.screen_capture),
+      },
+      providerSummary,
+      blockingIssue,
+    };
+  });
+}
+
+export async function getProviderDescriptors(): Promise<ProviderDescriptor[]> {
+  return withMemoryCache("provider-descriptors", 8000, async () => {
+    const [modelsRaw, setupRaw, ollamaRaw] = await Promise.all([
+      safeRequest<ModelsEnvelope>("/api/models"),
+      safeRequest<LlmSetupStatusEnvelope>("/api/llm/setup/status"),
+      safeRequest<OllamaStatusEnvelope>("/api/llm/setup/ollama"),
+    ]);
+    return buildProviderDescriptors(modelsRaw, setupRaw, ollamaRaw);
+  });
+}
+
+export async function saveProviderKey(provider: string, apiKey: string): Promise<{ ok: boolean; message: string }> {
+  const raw = await apiClient.request<{ ok?: boolean; message?: string; error?: string }>("/api/llm/setup/save-key", {
+    method: "POST",
+    body: { provider, api_key: apiKey },
+  });
+  if (raw.ok) {
+    invalidateMemoryCache(["provider-descriptors", "providers-summary", "system-readiness"]);
+  }
+  return { ok: Boolean(raw.ok), message: String(raw.message || raw.error || "") };
+}
+
+export async function removeProviderKey(provider: string): Promise<{ ok: boolean; message: string }> {
+  const raw = await apiClient.request<{ ok?: boolean; message?: string; error?: string }>("/api/llm/setup/remove-key", {
+    method: "POST",
+    body: { provider },
+  });
+  if (raw.ok) {
+    invalidateMemoryCache(["provider-descriptors", "providers-summary", "system-readiness"]);
+  }
+  return { ok: Boolean(raw.ok), message: String(raw.message || raw.error || "") };
+}
+
+export async function pullOllamaModel(model: string): Promise<{ ok: boolean; message: string }> {
+  const raw = await apiClient.request<{ ok?: boolean; message?: string; error?: string }>("/api/llm/setup/ollama-pull", {
+    method: "POST",
+    body: { model },
+  });
+  if (raw.ok) {
+    invalidateMemoryCache(["provider-descriptors", "providers-summary", "system-readiness"]);
+  }
+  return { ok: Boolean(raw.ok), message: String(raw.message || raw.error || "") };
+}
+
+export async function deleteOllamaModel(model: string): Promise<{ ok: boolean; message: string }> {
+  const raw = await apiClient.request<{ ok?: boolean; message?: string; error?: string }>("/api/llm/setup/ollama-delete", {
+    method: "POST",
+    body: { model },
+  });
+  if (raw.ok) {
+    invalidateMemoryCache(["provider-descriptors", "providers-summary", "system-readiness"]);
+  }
+  return { ok: Boolean(raw.ok), message: String(raw.message || raw.error || "") };
+}
+
+export async function updateProviderLanePreferences(payload: {
+  defaultProvider: string;
+  defaultModel: string;
+  fallbackProvider: string;
+  fallbackModel: string;
+}): Promise<boolean> {
+  const raw = await apiClient.request<{ ok?: boolean }>("/api/models", {
+    method: "POST",
+    body: {
+      provider: payload.defaultProvider,
+      model: payload.defaultModel,
+      fallback_provider: payload.fallbackProvider,
+      fallback_model: payload.fallbackModel,
+      sync_roles: true,
+    },
+  });
+  if (raw.ok) {
+    invalidateMemoryCache(["provider-descriptors", "providers-summary"]);
+  }
+  return Boolean(raw.ok);
 }
 
 export async function getIntegrations(): Promise<IntegrationSummary[]> {
-  const connectors = await getConnectors();
-  if (!connectors.length) {
-    return mockIntegrations;
-  }
-  return connectors.map((connector): IntegrationSummary => ({
-    id: connector.connector,
-    kind: connector.integrationType === "email" ? "channel" : connector.integrationType === "api" ? "devtool" : "automation",
-    name: connector.label,
-    status:
-      connector.status === "connected"
-        ? "connected"
-        : connector.status === "pending"
-          ? "pending"
-          : connector.status === "degraded"
-            ? "degraded"
-            : "offline",
-    detail: `${connector.accountCount} accounts · ${connector.traceCount} traces`,
-  }));
+  return withMemoryCache("integrations-summary", 10000, async () => {
+    const connectors = await getConnectors();
+    if (!connectors.length) {
+      return DEFAULT_INTEGRATIONS;
+    }
+    return connectors.map((connector): IntegrationSummary => ({
+      id: connector.connector,
+      kind: connector.integrationType === "email" ? "channel" : connector.integrationType === "api" ? "devtool" : "automation",
+      name: connector.label,
+      status:
+        connector.status === "connected"
+          ? "connected"
+          : connector.status === "pending"
+            ? "pending"
+            : connector.status === "degraded"
+              ? "degraded"
+              : "offline",
+      detail: `${connector.accountCount} accounts · ${connector.traceCount} traces`,
+    }));
+  });
 }
 
 export async function getLogs(): Promise<LogEvent[]> {
@@ -1383,7 +2849,7 @@ export async function getLogs(): Promise<LogEvent[]> {
     payload: trace.metadata,
   }));
   const merged = [...securityEvents, ...connectorEvents, ...threadEvents].sort((a, b) => (b.rawTimestamp || 0) - (a.rawTimestamp || 0));
-  return merged.length ? merged : mockLogs;
+  return merged.length ? merged : DEFAULT_LOGS;
 }
 
 export { getSecuritySummary };

@@ -17,9 +17,7 @@ export default defineConfig({
         manualChunks: {
           react: ["react", "react-dom", "react-router-dom"],
           query: ["@tanstack/react-query", "zustand"],
-          motion: ["framer-motion"],
-          ui: ["lucide-react", "clsx"],
-          realtime: ["socket.io-client"],
+          ui: ["clsx"],
         },
       },
     },

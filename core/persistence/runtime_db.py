@@ -7,6 +7,7 @@ import time
 import uuid
 import hmac
 import hashlib
+import re
 from pathlib import Path
 from typing import Any
 
@@ -193,6 +194,68 @@ usage_ledger_table = Table(
     Column("created_at", Float, nullable=False, default=_now),
 )
 Index("ix_usage_ledger_workspace_created", usage_ledger_table.c.workspace_id, usage_ledger_table.c.created_at)
+
+billing_events_table = Table(
+    "billing_events",
+    LOCAL_METADATA,
+    Column("event_id", String(96), primary_key=True),
+    Column("workspace_id", String(128), ForeignKey("billing_workspaces.workspace_id", ondelete="CASCADE"), nullable=False),
+    Column("provider", String(64), nullable=False, default="internal"),
+    Column("event_type", String(128), nullable=False),
+    Column("status", String(64), nullable=False, default="pending"),
+    Column("reference_id", String(128), nullable=False, default=""),
+    Column("payload_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+)
+Index("ix_billing_events_workspace_created", billing_events_table.c.workspace_id, billing_events_table.c.created_at)
+
+billing_checkout_sessions_table = Table(
+    "billing_checkout_sessions",
+    LOCAL_METADATA,
+    Column("reference_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), ForeignKey("billing_workspaces.workspace_id", ondelete="CASCADE"), nullable=False),
+    Column("mode", String(64), nullable=False, default="subscription"),
+    Column("catalog_id", String(128), nullable=False, default=""),
+    Column("provider", String(64), nullable=False, default="iyzico"),
+    Column("provider_token", String(256), nullable=False, default=""),
+    Column("provider_payment_id", String(128), nullable=False, default=""),
+    Column("subscription_reference_code", String(128), nullable=False, default=""),
+    Column("status", String(64), nullable=False, default="pending"),
+    Column("payment_page_url", Text, nullable=False, default=""),
+    Column("callback_url", Text, nullable=False, default=""),
+    Column("raw_last_payload_encrypted", Text, nullable=False, default=""),
+    Column("created_at", Float, nullable=False, default=_now),
+    Column("updated_at", Float, nullable=False, default=_now),
+    Column("completed_at", Float, nullable=False, default=0.0),
+)
+Index("ix_billing_checkout_workspace_updated", billing_checkout_sessions_table.c.workspace_id, billing_checkout_sessions_table.c.updated_at)
+Index("ix_billing_checkout_provider_token", billing_checkout_sessions_table.c.provider_token)
+Index("ix_billing_checkout_subscription_ref", billing_checkout_sessions_table.c.subscription_reference_code)
+
+workspace_billing_profiles_table = Table(
+    "workspace_billing_profiles",
+    LOCAL_METADATA,
+    Column("workspace_id", String(128), ForeignKey("billing_workspaces.workspace_id", ondelete="CASCADE"), primary_key=True),
+    Column("profile_encrypted", Text, nullable=False, default=""),
+    Column("created_at", Float, nullable=False, default=_now),
+    Column("updated_at", Float, nullable=False, default=_now),
+)
+Index("ix_workspace_billing_profiles_updated", workspace_billing_profiles_table.c.updated_at)
+
+credit_ledger_table = Table(
+    "credit_ledger",
+    LOCAL_METADATA,
+    Column("entry_id", String(96), primary_key=True),
+    Column("workspace_id", String(128), ForeignKey("billing_workspaces.workspace_id", ondelete="CASCADE"), nullable=False),
+    Column("bucket", String(32), nullable=False, default="purchased"),
+    Column("entry_type", String(64), nullable=False, default="adjustment"),
+    Column("delta_credits", Integer, nullable=False, default=0),
+    Column("balance_after", Integer, nullable=False, default=0),
+    Column("reference_id", String(128), nullable=False, default=""),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+)
+Index("ix_credit_ledger_workspace_created", credit_ledger_table.c.workspace_id, credit_ledger_table.c.created_at)
 
 task_runs_table = Table(
     "task_runs",
@@ -646,6 +709,51 @@ workspace_memberships_table = Table(
     Column("updated_at", Float, nullable=False, default=_now),
 )
 Index("ix_workspace_memberships_workspace_actor", workspace_memberships_table.c.workspace_id, workspace_memberships_table.c.actor_id)
+
+workspace_invites_table = Table(
+    "workspace_invites",
+    WORKSPACE_METADATA,
+    Column("invite_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), nullable=False),
+    Column("email", String(256), nullable=False),
+    Column("role", String(64), nullable=False, default="member"),
+    Column("status", String(64), nullable=False, default="pending"),
+    Column("invited_by", String(128), nullable=False, default=""),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("expires_at", Float, nullable=False, default=0.0),
+    Column("updated_at", Float, nullable=False, default=_now),
+)
+Index("ix_workspace_invites_workspace_updated", workspace_invites_table.c.workspace_id, workspace_invites_table.c.updated_at)
+
+workspace_seat_assignments_table = Table(
+    "workspace_seat_assignments",
+    WORKSPACE_METADATA,
+    Column("assignment_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), nullable=False),
+    Column("actor_id", String(128), nullable=False),
+    Column("assigned_by", String(128), nullable=False, default=""),
+    Column("status", String(64), nullable=False, default="active"),
+    Column("created_at", Float, nullable=False, default=_now),
+    Column("updated_at", Float, nullable=False, default=_now),
+)
+Index("ix_workspace_seat_assignments_workspace_actor", workspace_seat_assignments_table.c.workspace_id, workspace_seat_assignments_table.c.actor_id)
+
+workspace_inbox_events_table = Table(
+    "workspace_inbox_events",
+    WORKSPACE_METADATA,
+    Column("event_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), nullable=False),
+    Column("source_type", String(64), nullable=False, default="manual"),
+    Column("source_id", String(128), nullable=False, default=""),
+    Column("title", String(256), nullable=False, default=""),
+    Column("content_encrypted", Text, nullable=False, default=""),
+    Column("status", String(64), nullable=False, default="received"),
+    Column("summary_json", Text, nullable=False, default="{}"),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+    Column("updated_at", Float, nullable=False, default=_now),
+)
+Index("ix_workspace_inbox_events_workspace_updated", workspace_inbox_events_table.c.workspace_id, workspace_inbox_events_table.c.updated_at)
 
 workspace_devices_table = Table(
     "workspace_devices",
@@ -1189,6 +1297,142 @@ class ApprovalRepository:
             )
 
 
+class InboxRepository:
+    def __init__(self, db: "RuntimeDatabase") -> None:
+        self._db = db
+
+    @staticmethod
+    def _derive_title(content: str, source_type: str) -> str:
+        lines = [line.strip() for line in str(content or "").splitlines() if line.strip()]
+        first = lines[0] if lines else str(content or "").strip()
+        compact = re.sub(r"\s+", " ", first).strip()
+        if not compact:
+            compact = f"{str(source_type or 'manual').replace('_', ' ').title()} intake"
+        return compact[:120]
+
+    def create_event(
+        self,
+        *,
+        workspace_id: str,
+        source_type: str,
+        content: str,
+        source_id: str = "",
+        title: str = "",
+        summary: dict[str, Any] | None = None,
+        status: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        normalized_content = str(content or "").strip()
+        if not normalized_content:
+            raise ValueError("content required")
+        event_id = f"inbox_{uuid.uuid4().hex[:16]}"
+        now = _now()
+        summary_payload = dict(summary or {})
+        metadata_payload = dict(metadata or {})
+        values = {
+            "event_id": event_id,
+            "workspace_id": wid,
+            "source_type": str(source_type or "manual").strip().lower() or "manual",
+            "source_id": str(source_id or "").strip(),
+            "title": str(title or summary_payload.get("title") or self._derive_title(normalized_content, source_type)).strip()[:256],
+            "content_encrypted": self._db.codec.dumps(
+                {"content": normalized_content},
+                context=f"inbox:{event_id}:content",
+                classification="private",
+            ),
+            "status": str(status or ("triaged" if summary_payload else "received")).strip().lower() or "received",
+            "summary_json": _json_dumps(summary_payload),
+            "metadata_json": _json_dumps(metadata_payload),
+            "created_at": now,
+            "updated_at": now,
+        }
+        with self._db.local_engine.begin() as conn:
+            conn.execute(workspace_inbox_events_table.insert().values(**values))
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=wid,
+                aggregate_type="workspace_inbox_event",
+                aggregate_id=event_id,
+                event_type="workspace.inbox_event.created",
+                payload={
+                    "event_id": event_id,
+                    "workspace_id": wid,
+                    "source_type": values["source_type"],
+                    "source_id": values["source_id"],
+                    "title": values["title"],
+                    "status": values["status"],
+                    "content_encrypted": values["content_encrypted"],
+                    "summary": summary_payload,
+                    "metadata": metadata_payload,
+                    "created_at": values["created_at"],
+                },
+            )
+        return self._db._decode_workspace_inbox_event_row(values)
+
+    def get_event(self, event_id: str) -> dict[str, Any] | None:
+        eid = str(event_id or "").strip()
+        if not eid:
+            return None
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(workspace_inbox_events_table).where(workspace_inbox_events_table.c.event_id == eid)
+            ).mappings().first()
+        return self._db._decode_workspace_inbox_event_row(row) if row else None
+
+    def list_events(self, workspace_id: str, *, limit: int = 20, source_type: str = "") -> list[dict[str, Any]]:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        with self._db.local_engine.begin() as conn:
+            stmt = select(workspace_inbox_events_table).where(workspace_inbox_events_table.c.workspace_id == wid)
+            if str(source_type or "").strip():
+                stmt = stmt.where(workspace_inbox_events_table.c.source_type == str(source_type or "").strip().lower())
+            rows = conn.execute(
+                stmt.order_by(workspace_inbox_events_table.c.updated_at.desc()).limit(max(1, int(limit or 20)))
+            ).mappings().all()
+        return [self._db._decode_workspace_inbox_event_row(row) for row in rows]
+
+    def update_summary(self, event_id: str, *, summary: dict[str, Any], status: str = "triaged") -> dict[str, Any] | None:
+        eid = str(event_id or "").strip()
+        if not eid:
+            return None
+        now = _now()
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(workspace_inbox_events_table).where(workspace_inbox_events_table.c.event_id == eid)
+            ).mappings().first()
+            if row is None:
+                return None
+            conn.execute(
+                workspace_inbox_events_table.update()
+                .where(workspace_inbox_events_table.c.event_id == eid)
+                .values(summary_json=_json_dumps(dict(summary or {})), status=str(status or "triaged"), updated_at=now)
+            )
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=str(row.get("workspace_id") or "local-workspace"),
+                aggregate_type="workspace_inbox_event",
+                aggregate_id=eid,
+                event_type="workspace.inbox_event.updated",
+                payload={
+                    "event_id": eid,
+                    "workspace_id": str(row.get("workspace_id") or "local-workspace"),
+                    "source_type": str(row.get("source_type") or "manual"),
+                    "source_id": str(row.get("source_id") or ""),
+                    "title": str(row.get("title") or ""),
+                    "status": str(status or "triaged"),
+                    "content_encrypted": str(row.get("content_encrypted") or ""),
+                    "summary": dict(summary or {}),
+                    "metadata": _json_loads(row.get("metadata_json"), {}),
+                    "created_at": float(row.get("created_at") or now),
+                },
+            )
+            updated = dict(row)
+            updated["summary_json"] = _json_dumps(dict(summary or {}))
+            updated["status"] = str(status or "triaged")
+            updated["updated_at"] = now
+        return self._db._decode_workspace_inbox_event_row(updated)
+
+
 class PermissionGrantRepository:
     def __init__(self, db: "RuntimeDatabase") -> None:
         self._db = db
@@ -1440,6 +1684,351 @@ class BillingRepository:
                 payload={"workspace_id": str(usage_payload.get("workspace_id") or "local-workspace"), "metric": str(usage_payload.get("metric") or "unknown"), "amount": int(usage_payload.get("amount") or 0)},
             )
 
+    def get_usage(self, usage_id: str) -> dict[str, Any] | None:
+        normalized = str(usage_id or "").strip()
+        if not normalized:
+            return None
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(usage_ledger_table).where(usage_ledger_table.c.usage_id == normalized)
+            ).mappings().first()
+        return self._db._decode_usage_row(row) if row else None
+
+    def update_usage_metadata(self, usage_id: str, metadata: dict[str, Any]) -> dict[str, Any] | None:
+        normalized = str(usage_id or "").strip()
+        if not normalized:
+            return None
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(usage_ledger_table).where(usage_ledger_table.c.usage_id == normalized)
+            ).mappings().first()
+            if row is None:
+                return None
+            conn.execute(
+                usage_ledger_table.update()
+                .where(usage_ledger_table.c.usage_id == normalized)
+                .values(metadata_json=_json_dumps(dict(metadata or {})))
+            )
+            updated = dict(row)
+            updated["metadata_json"] = _json_dumps(dict(metadata or {}))
+        return self._db._decode_usage_row(updated)
+
+    def record_billing_event(self, event_payload: dict[str, Any]) -> dict[str, Any]:
+        event_id = str(event_payload.get("event_id") or f"bill_{uuid.uuid4().hex[:12]}")
+        workspace_id = str(event_payload.get("workspace_id") or "local-workspace")
+        row = {
+            "event_id": event_id,
+            "workspace_id": workspace_id,
+            "provider": str(event_payload.get("provider") or "internal"),
+            "event_type": str(event_payload.get("event_type") or "billing.updated"),
+            "status": str(event_payload.get("status") or "pending"),
+            "reference_id": str(event_payload.get("reference_id") or ""),
+            "payload_json": _json_dumps(dict(event_payload.get("payload") or {})),
+            "created_at": float(event_payload.get("created_at") or _now()),
+        }
+        with self._db.local_engine.begin() as conn:
+            existing = conn.execute(
+                select(billing_events_table.c.event_id).where(billing_events_table.c.event_id == event_id)
+            ).first()
+            if existing:
+                conn.execute(
+                    billing_events_table.update()
+                    .where(billing_events_table.c.event_id == event_id)
+                    .values(**row)
+                )
+            else:
+                conn.execute(billing_events_table.insert().values(**row))
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=workspace_id,
+                aggregate_type="billing_event",
+                aggregate_id=event_id,
+                event_type=row["event_type"],
+                payload={"workspace_id": workspace_id, "provider": row["provider"], "status": row["status"], "reference_id": row["reference_id"]},
+            )
+        return self._db._decode_billing_event_row(row)
+
+    def list_billing_events(self, workspace_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        with self._db.local_engine.begin() as conn:
+            rows = conn.execute(
+                select(billing_events_table)
+                .where(billing_events_table.c.workspace_id == str(workspace_id or "local-workspace"))
+                .order_by(billing_events_table.c.created_at.desc())
+                .limit(max(1, int(limit or 100)))
+            ).mappings().all()
+        return [self._db._decode_billing_event_row(row) for row in rows]
+
+    def list_billing_events_for_reference(
+        self,
+        workspace_id: str,
+        *,
+        reference_id: str,
+        event_type: str = "",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        normalized_workspace = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        normalized_reference = str(reference_id or "").strip()
+        if not normalized_reference:
+            return []
+        with self._db.local_engine.begin() as conn:
+            stmt = (
+                select(billing_events_table)
+                .where(billing_events_table.c.workspace_id == normalized_workspace)
+                .where(billing_events_table.c.reference_id == normalized_reference)
+            )
+            if event_type:
+                stmt = stmt.where(billing_events_table.c.event_type == str(event_type or "").strip())
+            rows = conn.execute(
+                stmt.order_by(billing_events_table.c.created_at.desc()).limit(max(1, int(limit or 50)))
+            ).mappings().all()
+        return [self._db._decode_billing_event_row(row) for row in rows]
+
+    def upsert_checkout_session(self, session_payload: dict[str, Any]) -> dict[str, Any]:
+        reference_id = str(session_payload.get("reference_id") or "").strip()
+        if not reference_id:
+            raise RuntimeError("billing_checkout_reference_required")
+        values = {
+            "reference_id": reference_id,
+            "workspace_id": str(session_payload.get("workspace_id") or "local-workspace").strip() or "local-workspace",
+            "mode": str(session_payload.get("mode") or "subscription").strip() or "subscription",
+            "catalog_id": str(session_payload.get("catalog_id") or "").strip(),
+            "provider": str(session_payload.get("provider") or "iyzico").strip() or "iyzico",
+            "provider_token": str(session_payload.get("provider_token") or "").strip(),
+            "provider_payment_id": str(session_payload.get("provider_payment_id") or "").strip(),
+            "subscription_reference_code": str(session_payload.get("subscription_reference_code") or "").strip(),
+            "status": str(session_payload.get("status") or "pending").strip() or "pending",
+            "payment_page_url": str(session_payload.get("payment_page_url") or session_payload.get("launch_url") or "").strip(),
+            "callback_url": str(session_payload.get("callback_url") or "").strip(),
+            "raw_last_payload_encrypted": self._db.codec.dumps(
+                dict(session_payload.get("raw_last_payload") or {}),
+                context=f"billing_checkout:{reference_id}:raw",
+                classification="sensitive",
+            ),
+            "created_at": float(session_payload.get("created_at") or _now()),
+            "updated_at": float(session_payload.get("updated_at") or _now()),
+            "completed_at": float(session_payload.get("completed_at") or 0.0),
+        }
+        with self._db.local_engine.begin() as conn:
+            existing = conn.execute(
+                select(billing_checkout_sessions_table.c.reference_id).where(billing_checkout_sessions_table.c.reference_id == reference_id)
+            ).first()
+            if existing:
+                current = conn.execute(
+                    select(billing_checkout_sessions_table).where(billing_checkout_sessions_table.c.reference_id == reference_id)
+                ).mappings().first()
+                if current:
+                    current_values = dict(current)
+                    values["created_at"] = float(current_values.get("created_at") or values["created_at"])
+                conn.execute(
+                    billing_checkout_sessions_table.update()
+                    .where(billing_checkout_sessions_table.c.reference_id == reference_id)
+                    .values(**values)
+                )
+            else:
+                conn.execute(billing_checkout_sessions_table.insert().values(**values))
+        return self._db._decode_billing_checkout_session_row(values)
+
+    def get_checkout_session(self, reference_id: str) -> dict[str, Any] | None:
+        normalized = str(reference_id or "").strip()
+        if not normalized:
+            return None
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(billing_checkout_sessions_table).where(billing_checkout_sessions_table.c.reference_id == normalized)
+            ).mappings().first()
+        return self._db._decode_billing_checkout_session_row(row) if row else None
+
+    def get_checkout_session_by_provider_token(self, provider_token: str) -> dict[str, Any] | None:
+        normalized = str(provider_token or "").strip()
+        if not normalized:
+            return None
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(billing_checkout_sessions_table).where(billing_checkout_sessions_table.c.provider_token == normalized)
+            ).mappings().first()
+        return self._db._decode_billing_checkout_session_row(row) if row else None
+
+    def get_checkout_session_by_subscription_reference(self, subscription_reference_code: str) -> dict[str, Any] | None:
+        normalized = str(subscription_reference_code or "").strip()
+        if not normalized:
+            return None
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(billing_checkout_sessions_table).where(
+                    billing_checkout_sessions_table.c.subscription_reference_code == normalized
+                )
+            ).mappings().first()
+        return self._db._decode_billing_checkout_session_row(row) if row else None
+
+    def upsert_billing_profile(self, workspace_id: str, profile_payload: dict[str, Any]) -> dict[str, Any]:
+        workspace_key = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        values = {
+            "workspace_id": workspace_key,
+            "profile_encrypted": self._db.codec.dumps(
+                dict(profile_payload or {}),
+                context=f"billing_profile:{workspace_key}",
+                classification="sensitive",
+            ),
+            "created_at": float(profile_payload.get("created_at") or _now()),
+            "updated_at": float(profile_payload.get("updated_at") or _now()),
+        }
+        with self._db.local_engine.begin() as conn:
+            existing = conn.execute(
+                select(workspace_billing_profiles_table.c.workspace_id).where(workspace_billing_profiles_table.c.workspace_id == workspace_key)
+            ).first()
+            if existing:
+                current = conn.execute(
+                    select(workspace_billing_profiles_table).where(workspace_billing_profiles_table.c.workspace_id == workspace_key)
+                ).mappings().first()
+                if current:
+                    values["created_at"] = float(current.get("created_at") or values["created_at"])
+                conn.execute(
+                    workspace_billing_profiles_table.update()
+                    .where(workspace_billing_profiles_table.c.workspace_id == workspace_key)
+                    .values(**values)
+                )
+            else:
+                conn.execute(workspace_billing_profiles_table.insert().values(**values))
+        return self._db._decode_billing_profile_row(values)
+
+    def get_billing_profile(self, workspace_id: str) -> dict[str, Any] | None:
+        workspace_key = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(workspace_billing_profiles_table).where(workspace_billing_profiles_table.c.workspace_id == workspace_key)
+            ).mappings().first()
+        return self._db._decode_billing_profile_row(row) if row else None
+
+    def record_credit_entry(self, credit_payload: dict[str, Any]) -> dict[str, Any]:
+        entry_id = str(credit_payload.get("entry_id") or f"cred_{uuid.uuid4().hex[:12]}")
+        workspace_id = str(credit_payload.get("workspace_id") or "local-workspace")
+        bucket = str(credit_payload.get("bucket") or "purchased").strip().lower() or "purchased"
+        delta = int(credit_payload.get("delta_credits") or 0)
+        reference_id = str(credit_payload.get("reference_id") or "")
+        created_at = float(credit_payload.get("created_at") or _now())
+        with self._db.local_engine.begin() as conn:
+            existing = conn.execute(
+                select(credit_ledger_table.c.entry_id).where(credit_ledger_table.c.entry_id == entry_id)
+            ).first()
+            if existing:
+                row = conn.execute(
+                    select(credit_ledger_table).where(credit_ledger_table.c.entry_id == entry_id)
+                ).mappings().first()
+                return self._db._decode_credit_ledger_row(dict(row or {})) if row else {}
+            balance_before = self._current_credit_balance(conn, workspace_id, bucket=bucket)
+            balance_after = balance_before + delta
+            values = {
+                "entry_id": entry_id,
+                "workspace_id": workspace_id,
+                "bucket": bucket,
+                "entry_type": str(credit_payload.get("entry_type") or "adjustment"),
+                "delta_credits": delta,
+                "balance_after": balance_after,
+                "reference_id": reference_id,
+                "metadata_json": _json_dumps(dict(credit_payload.get("metadata") or {})),
+                "created_at": created_at,
+            }
+            conn.execute(credit_ledger_table.insert().values(**values))
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=workspace_id,
+                aggregate_type="credit_ledger",
+                aggregate_id=entry_id,
+                event_type=f"billing.credit.{values['entry_type']}",
+                payload={"workspace_id": workspace_id, "bucket": bucket, "delta_credits": delta, "reference_id": reference_id},
+            )
+        return self._db._decode_credit_ledger_row(values)
+
+    def get_credit_balance(self, workspace_id: str) -> dict[str, Any]:
+        wid = str(workspace_id or "local-workspace")
+        with self._db.local_engine.begin() as conn:
+            rows = conn.execute(
+                select(credit_ledger_table)
+                .where(credit_ledger_table.c.workspace_id == wid)
+                .order_by(credit_ledger_table.c.created_at.asc())
+            ).mappings().all()
+        included = 0
+        purchased = 0
+        for row in rows:
+            bucket = str(row.get("bucket") or "purchased")
+            delta = int(row.get("delta_credits") or 0)
+            if bucket == "included":
+                included += delta
+            else:
+                purchased += delta
+        return {
+            "workspace_id": wid,
+            "included": max(0, included),
+            "purchased": max(0, purchased),
+            "total": max(0, included) + max(0, purchased),
+        }
+
+    def list_credit_ledger(self, workspace_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        with self._db.local_engine.begin() as conn:
+            rows = conn.execute(
+                select(credit_ledger_table)
+                .where(credit_ledger_table.c.workspace_id == str(workspace_id or "local-workspace"))
+                .order_by(credit_ledger_table.c.created_at.desc())
+                .limit(max(1, int(limit or 100)))
+            ).mappings().all()
+        return [self._db._decode_credit_ledger_row(row) for row in rows]
+
+    def list_credit_entries_for_reference(
+        self,
+        workspace_id: str,
+        *,
+        reference_id: str,
+        entry_type: str = "",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        normalized_workspace = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        normalized_reference = str(reference_id or "").strip()
+        if not normalized_reference:
+            return []
+        with self._db.local_engine.begin() as conn:
+            stmt = (
+                select(credit_ledger_table)
+                .where(credit_ledger_table.c.workspace_id == normalized_workspace)
+                .where(credit_ledger_table.c.reference_id == normalized_reference)
+            )
+            if entry_type:
+                stmt = stmt.where(credit_ledger_table.c.entry_type == str(entry_type or "").strip())
+            rows = conn.execute(
+                stmt.order_by(credit_ledger_table.c.created_at.asc()).limit(max(1, int(limit or 50)))
+            ).mappings().all()
+        return [self._db._decode_credit_ledger_row(row) for row in rows]
+
+    def record_entitlement_snapshot(self, snapshot_payload: dict[str, Any]) -> dict[str, Any]:
+        snapshot_id = str(snapshot_payload.get("snapshot_id") or f"entsnap_{uuid.uuid4().hex[:12]}")
+        values = {
+            "snapshot_id": snapshot_id,
+            "workspace_id": str(snapshot_payload.get("workspace_id") or "local-workspace"),
+            "scope": str(snapshot_payload.get("scope") or "workspace"),
+            "payload_json": _json_dumps(dict(snapshot_payload.get("payload") or {})),
+            "created_at": float(snapshot_payload.get("created_at") or _now()),
+        }
+        with self._db.local_engine.begin() as conn:
+            conn.execute(entitlement_snapshots_table.insert().values(**values))
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=values["workspace_id"],
+                aggregate_type="entitlement_snapshot",
+                aggregate_id=snapshot_id,
+                event_type="billing.entitlements.snapshotted",
+                payload={"workspace_id": values["workspace_id"], "scope": values["scope"]},
+            )
+        return self._db._decode_entitlement_snapshot_row(values)
+
+    def list_entitlement_snapshots(self, workspace_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        with self._db.local_engine.begin() as conn:
+            rows = conn.execute(
+                select(entitlement_snapshots_table)
+                .where(entitlement_snapshots_table.c.workspace_id == str(workspace_id or "local-workspace"))
+                .order_by(entitlement_snapshots_table.c.created_at.desc())
+                .limit(max(1, int(limit or 50)))
+            ).mappings().all()
+        return [self._db._decode_entitlement_snapshot_row(row) for row in rows]
+
     def _upsert_workspace(self, conn: Connection, workspace_payload: dict[str, Any], *, enqueue: bool) -> None:
         workspace_id = str(workspace_payload.get("workspace_id") or "local-workspace")
         values = {
@@ -1492,6 +2081,15 @@ class BillingRepository:
                 created_at=float(usage_payload.get("created_at") or _now()),
             )
         )
+
+    @staticmethod
+    def _current_credit_balance(conn: Connection, workspace_id: str, *, bucket: str) -> int:
+        rows = conn.execute(
+            select(credit_ledger_table.c.delta_credits)
+            .where(credit_ledger_table.c.workspace_id == str(workspace_id or "local-workspace"))
+            .where(credit_ledger_table.c.bucket == str(bucket or "purchased"))
+        ).all()
+        return int(sum(int(row[0] or 0) for row in rows))
 
 
 class ConnectorRepository:
@@ -2673,7 +3271,54 @@ class LocalAuthRepository:
             row = conn.execute(
                 select(local_users_table).where(local_users_table.c.user_id == user_id)
             ).mappings().first()
-        return self._db._decode_local_user_row(dict(row or {})) if row else {}
+        decoded = self._db._decode_local_user_row(dict(row or {})) if row else {}
+        if decoded:
+            role_hint = str((metadata or {}).get("workspace_role") or "member")
+            try:
+                self._db.access.ensure_membership(
+                    workspace_id=decoded["workspace_id"],
+                    actor_id=decoded["user_id"],
+                    role=role_hint,
+                    status="active",
+                )
+            except Exception:
+                pass
+        return decoded
+
+    def bootstrap_owner(
+        self,
+        *,
+        email: str,
+        password: str,
+        display_name: str = "",
+        workspace_id: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = self.upsert_user(
+            email=email,
+            password=password,
+            display_name=display_name,
+            workspace_id=workspace_id,
+            status="active",
+            metadata={**dict(metadata or {}), "workspace_role": "owner", "bootstrap_source": "explicit_setup"},
+        )
+        if payload:
+            self._db.access.ensure_workspace(
+                payload["workspace_id"],
+                display_name=str(display_name or email.split("@")[0] or payload["workspace_id"]),
+            )
+            self._db.access.ensure_membership(
+                workspace_id=payload["workspace_id"],
+                actor_id=payload["user_id"],
+                role="owner",
+                status="active",
+            )
+            self._db.access.assign_seat(
+                workspace_id=payload["workspace_id"],
+                actor_id=payload["user_id"],
+                assigned_by=payload["user_id"],
+            )
+        return payload
 
     def authenticate_user(
         self,
@@ -2796,6 +3441,14 @@ class LocalAuthSessionRepository:
                 event_type="auth.session.resolved",
                 payload={"session_id": str(row["session_id"]), "user_id": str(row["user_id"])},
             )
+            role = conn.execute(
+                select(workspace_memberships_table.c.role)
+                .where(workspace_memberships_table.c.workspace_id == str(row["workspace_id"] or "local-workspace"))
+                .where(workspace_memberships_table.c.actor_id == str(row["user_id"] or ""))
+                .where(workspace_memberships_table.c.status == "active")
+            ).scalar()
+            if role:
+                merged["role"] = str(role)
         return self._db._decode_local_session_row(merged)
 
     def revoke_session(self, session_token: str) -> bool:
@@ -2819,6 +3472,524 @@ class LocalAuthSessionRepository:
                 payload={"session_id": str(row["session_id"]), "user_id": str(row["user_id"])},
             )
         return True
+
+
+class WorkspaceAccessRepository:
+    _ALLOWED_ROLES = {"owner", "billing_admin", "security_admin", "operator", "viewer", "member"}
+
+    def __init__(self, db: "RuntimeDatabase") -> None:
+        self._db = db
+
+    @staticmethod
+    def _normalize_role(role: str) -> str:
+        normalized = str(role or "member").strip().lower() or "member"
+        return normalized if normalized in WorkspaceAccessRepository._ALLOWED_ROLES else "member"
+
+    def ensure_workspace(self, workspace_id: str, *, display_name: str = "", metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        values = {
+            "workspace_id": wid,
+            "display_name": str(display_name or wid),
+            "status": "active",
+            "metadata_json": _json_dumps(dict(metadata or {})),
+            "updated_at": _now(),
+        }
+        with self._db.local_engine.begin() as conn:
+            existing = conn.execute(
+                select(workspaces_table.c.workspace_id).where(workspaces_table.c.workspace_id == wid)
+            ).first()
+            if existing:
+                conn.execute(
+                    workspaces_table.update()
+                    .where(workspaces_table.c.workspace_id == wid)
+                    .values(**values)
+                )
+            else:
+                conn.execute(workspaces_table.insert().values(**values))
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=wid,
+                event_type="workspace.updated",
+                payload={"workspace_id": wid, "display_name": values["display_name"], "status": values["status"]},
+            )
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=wid,
+                aggregate_type="workspace",
+                aggregate_id=wid,
+                event_type="workspace.updated",
+                payload={"workspace_id": wid, "display_name": values["display_name"], "status": values["status"], "metadata": _json_loads(values["metadata_json"], {})},
+            )
+        return self._db._decode_workspace_row(values)
+
+    def get_workspace(self, workspace_id: str) -> dict[str, Any] | None:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(workspaces_table).where(workspaces_table.c.workspace_id == wid)
+            ).mappings().first()
+        return self._db._decode_workspace_row(row) if row else None
+
+    def list_workspaces(self, *, actor_id: str = "", include_inactive: bool = False) -> list[dict[str, Any]]:
+        actor = str(actor_id or "").strip()
+        with self._db.local_engine.begin() as conn:
+            rows = conn.execute(select(workspaces_table).order_by(workspaces_table.c.updated_at.desc())).mappings().all()
+            memberships: dict[str, dict[str, Any]] = {}
+            if actor:
+                membership_rows = conn.execute(
+                    select(workspace_memberships_table)
+                    .where(workspace_memberships_table.c.actor_id == actor)
+                    .order_by(workspace_memberships_table.c.updated_at.desc())
+                ).mappings().all()
+                memberships = {
+                    str(row["workspace_id"]): self._db._decode_workspace_membership_row(row)
+                    for row in membership_rows
+                    if include_inactive or str(row.get("status") or "active") == "active"
+                }
+        workspaces = [self._db._decode_workspace_row(row) for row in rows]
+        if actor:
+            workspaces = [item for item in workspaces if item["workspace_id"] in memberships]
+        if not include_inactive:
+            workspaces = [item for item in workspaces if item["status"] == "active"]
+        out: list[dict[str, Any]] = []
+        for item in workspaces:
+            membership = memberships.get(item["workspace_id"])
+            payload = dict(item)
+            if membership:
+                payload["membership"] = membership
+            out.append(payload)
+        return out
+
+    def ensure_membership(
+        self,
+        *,
+        workspace_id: str,
+        actor_id: str,
+        role: str = "member",
+        status: str = "active",
+    ) -> dict[str, Any]:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        aid = str(actor_id or "").strip()
+        if not aid:
+            raise ValueError("actor_id required")
+        self.ensure_workspace(wid)
+        values = {
+            "membership_id": f"mbr::{wid}::{aid}",
+            "workspace_id": wid,
+            "actor_id": aid,
+            "role": self._normalize_role(role),
+            "status": str(status or "active"),
+            "updated_at": _now(),
+        }
+        with self._db.local_engine.begin() as conn:
+            existing = conn.execute(
+                select(workspace_memberships_table.c.membership_id).where(workspace_memberships_table.c.membership_id == values["membership_id"])
+            ).first()
+            if existing:
+                conn.execute(
+                    workspace_memberships_table.update()
+                    .where(workspace_memberships_table.c.membership_id == values["membership_id"])
+                    .values(**values)
+                )
+            else:
+                conn.execute(workspace_memberships_table.insert().values(**values))
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=wid,
+                event_type="workspace.membership.upserted",
+                payload={"actor_id": aid, "role": values["role"], "status": values["status"]},
+            )
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=wid,
+                aggregate_type="workspace_membership",
+                aggregate_id=values["membership_id"],
+                event_type="workspace.membership.upserted",
+                payload={"workspace_id": wid, "actor_id": aid, "role": values["role"], "status": values["status"]},
+            )
+        return self._db._decode_workspace_membership_row(values)
+
+    def get_membership(self, *, workspace_id: str, actor_id: str) -> dict[str, Any] | None:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        aid = str(actor_id or "").strip()
+        if not aid:
+            return None
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(workspace_memberships_table)
+                .where(workspace_memberships_table.c.workspace_id == wid)
+                .where(workspace_memberships_table.c.actor_id == aid)
+            ).mappings().first()
+        return self._db._decode_workspace_membership_row(row) if row else None
+
+    def list_memberships(self, workspace_id: str, *, include_users: bool = False) -> list[dict[str, Any]]:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        with self._db.local_engine.begin() as conn:
+            rows = conn.execute(
+                select(workspace_memberships_table)
+                .where(workspace_memberships_table.c.workspace_id == wid)
+                .order_by(workspace_memberships_table.c.updated_at.desc())
+            ).mappings().all()
+            if not include_users:
+                return [self._db._decode_workspace_membership_row(row) for row in rows]
+            actor_ids = [str(row["actor_id"]) for row in rows if str(row.get("actor_id") or "").strip()]
+            users = {}
+            if actor_ids:
+                user_rows = conn.execute(
+                    select(local_users_table).where(local_users_table.c.user_id.in_(actor_ids))
+                ).mappings().all()
+                users = {str(row["user_id"]): self._db._decode_local_user_row(row) for row in user_rows}
+            seat_rows = conn.execute(
+                select(workspace_seat_assignments_table)
+                .where(workspace_seat_assignments_table.c.workspace_id == wid)
+                .where(workspace_seat_assignments_table.c.status == "active")
+            ).mappings().all()
+            seat_map = {
+                str(row["actor_id"]): self._db._decode_workspace_seat_assignment_row(row)
+                for row in seat_rows
+            }
+        enriched: list[dict[str, Any]] = []
+        for row in rows:
+            item = self._db._decode_workspace_membership_row(row)
+            item["user"] = users.get(item["actor_id"])
+            item["seat_assignment"] = seat_map.get(item["actor_id"])
+            item["seat_assigned"] = item["seat_assignment"] is not None
+            enriched.append(item)
+        return enriched
+
+    def get_actor_role(self, *, workspace_id: str, actor_id: str) -> str:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        aid = str(actor_id or "").strip()
+        if not aid:
+            return "member"
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(workspace_memberships_table.c.role, workspace_memberships_table.c.status)
+                .where(workspace_memberships_table.c.workspace_id == wid)
+                .where(workspace_memberships_table.c.actor_id == aid)
+            ).first()
+        if not row or str(row[1] or "inactive") != "active":
+            return "member"
+        return self._normalize_role(str(row[0] or "member"))
+
+    def update_membership_role(
+        self,
+        *,
+        workspace_id: str,
+        actor_id: str,
+        role: str,
+        updated_by: str,
+    ) -> dict[str, Any]:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        aid = str(actor_id or "").strip()
+        if not aid:
+            raise ValueError("actor_id required")
+        normalized_role = self._normalize_role(role)
+        membership_id = f"mbr::{wid}::{aid}"
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(workspace_memberships_table).where(workspace_memberships_table.c.membership_id == membership_id)
+            ).mappings().first()
+            if row is None:
+                raise KeyError("membership_not_found")
+            previous_role = str(row.get("role") or "member")
+            if previous_role == "owner" and normalized_role != "owner":
+                owner_count = conn.execute(
+                    select(func.count()).select_from(workspace_memberships_table)
+                    .where(workspace_memberships_table.c.workspace_id == wid)
+                    .where(workspace_memberships_table.c.role == "owner")
+                    .where(workspace_memberships_table.c.status == "active")
+                ).scalar_one()
+                if int(owner_count or 0) <= 1:
+                    raise RuntimeError("workspace_requires_owner")
+            values = {
+                "role": normalized_role,
+                "updated_at": _now(),
+            }
+            conn.execute(
+                workspace_memberships_table.update()
+                .where(workspace_memberships_table.c.membership_id == membership_id)
+                .values(**values)
+            )
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=wid,
+                event_type="workspace.membership.role_updated",
+                payload={"actor_id": aid, "previous_role": previous_role, "role": normalized_role, "updated_by": str(updated_by or "")},
+            )
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=wid,
+                aggregate_type="workspace_membership",
+                aggregate_id=membership_id,
+                event_type="workspace.membership.role_updated",
+                payload={"workspace_id": wid, "actor_id": aid, "previous_role": previous_role, "role": normalized_role, "updated_by": str(updated_by or "")},
+            )
+            updated = conn.execute(
+                select(workspace_memberships_table).where(workspace_memberships_table.c.membership_id == membership_id)
+            ).mappings().first()
+        return self._db._decode_workspace_membership_row(updated or {})
+
+    def create_invite(
+        self,
+        *,
+        workspace_id: str,
+        email: str,
+        role: str,
+        invited_by: str,
+        ttl_seconds: int = 60 * 60 * 24 * 7,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        invite_id = f"inv_{uuid.uuid4().hex[:12]}"
+        values = {
+            "invite_id": invite_id,
+            "workspace_id": str(workspace_id or "local-workspace").strip() or "local-workspace",
+            "email": str(email or "").strip().lower(),
+            "role": self._normalize_role(role),
+            "status": "pending",
+            "invited_by": str(invited_by or ""),
+            "metadata_json": _json_dumps(dict(metadata or {})),
+            "expires_at": _now() + max(300, int(ttl_seconds or 0)),
+            "updated_at": _now(),
+        }
+        if not values["email"]:
+            raise ValueError("email required")
+        self.ensure_workspace(values["workspace_id"])
+        with self._db.local_engine.begin() as conn:
+            conn.execute(workspace_invites_table.insert().values(**values))
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=values["workspace_id"],
+                event_type="workspace.invite.created",
+                payload={"invite_id": invite_id, "email": values["email"], "role": values["role"]},
+            )
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=values["workspace_id"],
+                aggregate_type="workspace_invite",
+                aggregate_id=invite_id,
+                event_type="workspace.invite.created",
+                payload={"workspace_id": values["workspace_id"], "invite_id": invite_id, "email": values["email"], "role": values["role"], "status": values["status"], "invited_by": values["invited_by"], "expires_at": values["expires_at"]},
+            )
+        return self._db._decode_workspace_invite_row(values)
+
+    def list_invites(self, workspace_id: str, *, status: str = "") -> list[dict[str, Any]]:
+        with self._db.local_engine.begin() as conn:
+            stmt = select(workspace_invites_table).where(workspace_invites_table.c.workspace_id == str(workspace_id or "local-workspace"))
+            if str(status or "").strip():
+                stmt = stmt.where(workspace_invites_table.c.status == str(status or "").strip())
+            rows = conn.execute(stmt.order_by(workspace_invites_table.c.updated_at.desc())).mappings().all()
+        return [self._db._decode_workspace_invite_row(row) for row in rows]
+
+    def get_invite(self, invite_id: str) -> dict[str, Any] | None:
+        iid = str(invite_id or "").strip()
+        if not iid:
+            return None
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(workspace_invites_table).where(workspace_invites_table.c.invite_id == iid)
+            ).mappings().first()
+        return self._db._decode_workspace_invite_row(row) if row else None
+
+    def accept_invite(self, *, invite_id: str, actor_id: str, email: str = "") -> dict[str, Any] | None:
+        iid = str(invite_id or "").strip()
+        if not iid:
+            return None
+        normalized_email = str(email or "").strip().lower()
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(workspace_invites_table).where(workspace_invites_table.c.invite_id == iid)
+            ).mappings().first()
+            if not row:
+                return None
+            if normalized_email and str(row.get("email") or "").strip().lower() != normalized_email:
+                raise PermissionError("invite_email_mismatch")
+            if float(row.get("expires_at") or 0.0) and float(row.get("expires_at") or 0.0) < _now():
+                conn.execute(
+                    workspace_invites_table.update()
+                    .where(workspace_invites_table.c.invite_id == iid)
+                    .values(status="expired", updated_at=_now())
+                )
+                return None
+            conn.execute(
+                workspace_invites_table.update()
+                .where(workspace_invites_table.c.invite_id == iid)
+                .values(status="accepted", updated_at=_now())
+            )
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=str(row.get("workspace_id") or "local-workspace"),
+                event_type="workspace.invite.accepted",
+                payload={"invite_id": iid, "actor_id": str(actor_id or ""), "email": str(row.get("email") or "")},
+            )
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=str(row.get("workspace_id") or "local-workspace"),
+                aggregate_type="workspace_invite",
+                aggregate_id=iid,
+                event_type="workspace.invite.accepted",
+                payload={"workspace_id": str(row.get("workspace_id") or "local-workspace"), "invite_id": iid, "actor_id": str(actor_id or ""), "email": str(row.get("email") or ""), "status": "accepted"},
+            )
+        membership = self.ensure_membership(
+            workspace_id=str(row.get("workspace_id") or "local-workspace"),
+            actor_id=str(actor_id or ""),
+            role=str(row.get("role") or "member"),
+            status="active",
+        )
+        return {
+            "invite": self._db._decode_workspace_invite_row(dict(row, status="accepted", updated_at=_now())),
+            "membership": membership,
+        }
+
+    @staticmethod
+    def _seat_assignment_id(workspace_id: str, actor_id: str) -> str:
+        return f"seat::{str(workspace_id or 'local-workspace').strip() or 'local-workspace'}::{str(actor_id or '').strip()}"
+
+    @staticmethod
+    def _seat_limit_from_row(row: Any) -> int:
+        try:
+            return max(1, int((row[0] if row else 1) or 1))
+        except Exception:
+            return 1
+
+    def _seat_limit(self, conn: Connection, workspace_id: str) -> int:
+        row = conn.execute(
+            select(billing_workspaces_table.c.seats).where(billing_workspaces_table.c.workspace_id == str(workspace_id or "local-workspace"))
+        ).first()
+        return self._seat_limit_from_row(row)
+
+    def list_seat_assignments(self, workspace_id: str, *, status: str = "active") -> list[dict[str, Any]]:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        with self._db.local_engine.begin() as conn:
+            stmt = select(workspace_seat_assignments_table).where(workspace_seat_assignments_table.c.workspace_id == wid)
+            if str(status or "").strip():
+                stmt = stmt.where(workspace_seat_assignments_table.c.status == str(status or "").strip())
+            rows = conn.execute(stmt.order_by(workspace_seat_assignments_table.c.updated_at.desc())).mappings().all()
+        return [self._db._decode_workspace_seat_assignment_row(row) for row in rows]
+
+    def has_active_seat(self, *, workspace_id: str, actor_id: str) -> bool:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        aid = str(actor_id or "").strip()
+        if not aid:
+            return False
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(workspace_seat_assignments_table.c.assignment_id)
+                .where(workspace_seat_assignments_table.c.workspace_id == wid)
+                .where(workspace_seat_assignments_table.c.actor_id == aid)
+                .where(workspace_seat_assignments_table.c.status == "active")
+            ).first()
+        return row is not None
+
+    def assign_seat(self, *, workspace_id: str, actor_id: str, assigned_by: str) -> dict[str, Any]:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        aid = str(actor_id or "").strip()
+        if not aid:
+            raise ValueError("actor_id required")
+        assignment_id = self._seat_assignment_id(wid, aid)
+        with self._db.local_engine.begin() as conn:
+            membership = conn.execute(
+                select(workspace_memberships_table)
+                .where(workspace_memberships_table.c.workspace_id == wid)
+                .where(workspace_memberships_table.c.actor_id == aid)
+                .where(workspace_memberships_table.c.status == "active")
+            ).mappings().first()
+            if membership is None:
+                raise KeyError("membership_not_found")
+            existing = conn.execute(
+                select(workspace_seat_assignments_table)
+                .where(workspace_seat_assignments_table.c.assignment_id == assignment_id)
+            ).mappings().first()
+            if existing and str(existing.get("status") or "") == "active":
+                return self._db._decode_workspace_seat_assignment_row(existing)
+            seats_used = conn.execute(
+                select(func.count()).select_from(workspace_seat_assignments_table)
+                .where(workspace_seat_assignments_table.c.workspace_id == wid)
+                .where(workspace_seat_assignments_table.c.status == "active")
+            ).scalar_one()
+            seat_limit = self._seat_limit(conn, wid)
+            if int(seats_used or 0) >= int(seat_limit or 1):
+                raise RuntimeError("seat_limit_reached")
+            now = _now()
+            values = {
+                "assignment_id": assignment_id,
+                "workspace_id": wid,
+                "actor_id": aid,
+                "assigned_by": str(assigned_by or ""),
+                "status": "active",
+                "created_at": float(existing.get("created_at") or now) if existing else now,
+                "updated_at": now,
+            }
+            if existing:
+                conn.execute(
+                    workspace_seat_assignments_table.update()
+                    .where(workspace_seat_assignments_table.c.assignment_id == assignment_id)
+                    .values(**values)
+                )
+            else:
+                conn.execute(workspace_seat_assignments_table.insert().values(**values))
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=wid,
+                event_type="workspace.seat.assigned",
+                payload={"assignment_id": assignment_id, "actor_id": aid, "assigned_by": str(assigned_by or "")},
+            )
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=wid,
+                aggregate_type="workspace_seat_assignment",
+                aggregate_id=assignment_id,
+                event_type="workspace.seat.assigned",
+                payload={"workspace_id": wid, "assignment_id": assignment_id, "actor_id": aid, "assigned_by": str(assigned_by or ""), "status": "active"},
+            )
+        return self._db._decode_workspace_seat_assignment_row(values)
+
+    def release_seat(self, *, workspace_id: str, actor_id: str, released_by: str) -> bool:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        aid = str(actor_id or "").strip()
+        if not aid:
+            return False
+        assignment_id = self._seat_assignment_id(wid, aid)
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(workspace_seat_assignments_table).where(workspace_seat_assignments_table.c.assignment_id == assignment_id)
+            ).mappings().first()
+            if row is None or str(row.get("status") or "") != "active":
+                return False
+            conn.execute(
+                workspace_seat_assignments_table.update()
+                .where(workspace_seat_assignments_table.c.assignment_id == assignment_id)
+                .values(status="released", updated_at=_now())
+            )
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=wid,
+                event_type="workspace.seat.released",
+                payload={"assignment_id": assignment_id, "actor_id": aid, "released_by": str(released_by or "")},
+            )
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=wid,
+                aggregate_type="workspace_seat_assignment",
+                aggregate_id=assignment_id,
+                event_type="workspace.seat.released",
+                payload={"workspace_id": wid, "assignment_id": assignment_id, "actor_id": aid, "released_by": str(released_by or ""), "status": "released"},
+            )
+        return True
+
+    def seat_summary(self, workspace_id: str) -> dict[str, Any]:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        assignments = self.list_seat_assignments(wid, status="active")
+        with self._db.local_engine.begin() as conn:
+            seat_limit = self._seat_limit(conn, wid)
+        seats_used = len(assignments)
+        return {
+            "workspace_id": wid,
+            "seat_limit": int(seat_limit),
+            "seats_used": int(seats_used),
+            "seats_available": max(0, int(seat_limit) - int(seats_used)),
+            "assignments": assignments,
+        }
 
 
 class ExecutionRepository:
@@ -3321,6 +4492,114 @@ class WorkspaceSyncAdapter:
                     )
                 else:
                     conn.execute(workspace_approvals_table.insert().values(**approval_values))
+            elif aggregate_type == "workspace":
+                workspace_values = {
+                    "workspace_id": str(payload.get("workspace_id") or event_payload.get("aggregate_id") or workspace_id),
+                    "display_name": str(payload.get("display_name") or workspace_id),
+                    "status": str(payload.get("status") or "active"),
+                    "metadata_json": _json_dumps(dict(payload.get("metadata") or {})),
+                    "updated_at": _now(),
+                }
+                existing_workspace = conn.execute(
+                    select(workspaces_table.c.workspace_id).where(workspaces_table.c.workspace_id == workspace_values["workspace_id"])
+                ).first()
+                if existing_workspace:
+                    conn.execute(
+                        workspaces_table.update()
+                        .where(workspaces_table.c.workspace_id == workspace_values["workspace_id"])
+                        .values(**workspace_values)
+                    )
+                else:
+                    conn.execute(workspaces_table.insert().values(**workspace_values))
+            elif aggregate_type == "workspace_membership":
+                membership_values = {
+                    "membership_id": str(event_payload.get("aggregate_id") or payload.get("membership_id") or ""),
+                    "workspace_id": workspace_id,
+                    "actor_id": str(payload.get("actor_id") or ""),
+                    "role": str(payload.get("role") or "member"),
+                    "status": str(payload.get("status") or "active"),
+                    "updated_at": _now(),
+                }
+                existing_membership = conn.execute(
+                    select(workspace_memberships_table.c.membership_id).where(workspace_memberships_table.c.membership_id == membership_values["membership_id"])
+                ).first()
+                if existing_membership:
+                    conn.execute(
+                        workspace_memberships_table.update()
+                        .where(workspace_memberships_table.c.membership_id == membership_values["membership_id"])
+                        .values(**membership_values)
+                    )
+                else:
+                    conn.execute(workspace_memberships_table.insert().values(**membership_values))
+            elif aggregate_type == "workspace_invite":
+                invite_values = {
+                    "invite_id": str(payload.get("invite_id") or event_payload.get("aggregate_id") or ""),
+                    "workspace_id": workspace_id,
+                    "email": str(payload.get("email") or ""),
+                    "role": str(payload.get("role") or "member"),
+                    "status": str(payload.get("status") or "pending"),
+                    "invited_by": str(payload.get("invited_by") or ""),
+                    "metadata_json": _json_dumps(dict(payload.get("metadata") or {})),
+                    "expires_at": float(payload.get("expires_at") or 0.0),
+                    "updated_at": _now(),
+                }
+                existing_invite = conn.execute(
+                    select(workspace_invites_table.c.invite_id).where(workspace_invites_table.c.invite_id == invite_values["invite_id"])
+                ).first()
+                if existing_invite:
+                    conn.execute(
+                        workspace_invites_table.update()
+                        .where(workspace_invites_table.c.invite_id == invite_values["invite_id"])
+                        .values(**invite_values)
+                    )
+                else:
+                    conn.execute(workspace_invites_table.insert().values(**invite_values))
+            elif aggregate_type == "workspace_seat_assignment":
+                assignment_values = {
+                    "assignment_id": str(payload.get("assignment_id") or event_payload.get("aggregate_id") or ""),
+                    "workspace_id": workspace_id,
+                    "actor_id": str(payload.get("actor_id") or ""),
+                    "assigned_by": str(payload.get("assigned_by") or payload.get("released_by") or ""),
+                    "status": str(payload.get("status") or "active"),
+                    "created_at": float(event_payload.get("created_at") or _now()),
+                    "updated_at": _now(),
+                }
+                existing_assignment = conn.execute(
+                    select(workspace_seat_assignments_table.c.assignment_id).where(workspace_seat_assignments_table.c.assignment_id == assignment_values["assignment_id"])
+                ).first()
+                if existing_assignment:
+                    conn.execute(
+                        workspace_seat_assignments_table.update()
+                        .where(workspace_seat_assignments_table.c.assignment_id == assignment_values["assignment_id"])
+                        .values(**assignment_values)
+                    )
+                else:
+                    conn.execute(workspace_seat_assignments_table.insert().values(**assignment_values))
+            elif aggregate_type == "workspace_inbox_event":
+                inbox_values = {
+                    "event_id": str(payload.get("event_id") or event_payload.get("aggregate_id") or ""),
+                    "workspace_id": workspace_id,
+                    "source_type": str(payload.get("source_type") or "manual"),
+                    "source_id": str(payload.get("source_id") or ""),
+                    "title": str(payload.get("title") or ""),
+                    "content_encrypted": str(payload.get("content_encrypted") or ""),
+                    "status": str(payload.get("status") or "received"),
+                    "summary_json": _json_dumps(dict(payload.get("summary") or {})),
+                    "metadata_json": _json_dumps(dict(payload.get("metadata") or {})),
+                    "created_at": float(payload.get("created_at") or event_payload.get("created_at") or _now()),
+                    "updated_at": _now(),
+                }
+                existing_inbox = conn.execute(
+                    select(workspace_inbox_events_table.c.event_id).where(workspace_inbox_events_table.c.event_id == inbox_values["event_id"])
+                ).first()
+                if existing_inbox:
+                    conn.execute(
+                        workspace_inbox_events_table.update()
+                        .where(workspace_inbox_events_table.c.event_id == inbox_values["event_id"])
+                        .values(**inbox_values)
+                    )
+                else:
+                    conn.execute(workspace_inbox_events_table.insert().values(**inbox_values))
             elif aggregate_type == "billing_workspace":
                 subscription_values = {
                     "workspace_id": workspace_id,
@@ -3479,10 +4758,12 @@ class RuntimeDatabase:
         )
         self._configure_sqlite(self.local_engine)
         LOCAL_METADATA.create_all(self.local_engine)
+        WORKSPACE_METADATA.create_all(self.local_engine)
         self._stamp_schema()
         self.outbox = OutboxRepository(self)
         self.threads = ThreadRepository(self)
         self.approvals = ApprovalRepository(self)
+        self.inbox = InboxRepository(self)
         self.permission_grants = PermissionGrantRepository(self)
         self.billing = BillingRepository(self)
         self.connectors = ConnectorRepository(self)
@@ -3490,6 +4771,7 @@ class RuntimeDatabase:
         self.privacy = PrivacyRepository(self)
         self.auth = LocalAuthRepository(self)
         self.auth_sessions = LocalAuthSessionRepository(self)
+        self.access = WorkspaceAccessRepository(self)
         self.execution = ExecutionRepository(self)
         self.run_index = RunIndexRepository(self)
         self.workspace_sync = WorkspaceSyncAdapter()
@@ -3502,6 +4784,11 @@ class RuntimeDatabase:
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA busy_timeout=5000")
+            cursor.execute("PRAGMA temp_store=MEMORY")
+            cursor.execute("PRAGMA cache_size=-20000")
+            cursor.execute("PRAGMA mmap_size=268435456")
+            cursor.execute("PRAGMA wal_autocheckpoint=1000")
             cursor.close()
 
     def _stamp_schema(self) -> None:
@@ -3588,6 +4875,157 @@ class RuntimeDatabase:
             "metadata": _json_loads(row["metadata_json"], {}),
         }
 
+    def _decode_billing_checkout_session_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        reference_id = str(row.get("reference_id") or "")
+        raw_last_payload = self.codec.loads(
+            str(row.get("raw_last_payload_encrypted") or ""),
+            context=f"billing_checkout:{reference_id}:raw",
+            default={},
+        )
+        return {
+            "reference_id": reference_id,
+            "workspace_id": str(row.get("workspace_id") or "local-workspace"),
+            "mode": str(row.get("mode") or "subscription"),
+            "catalog_id": str(row.get("catalog_id") or ""),
+            "provider": str(row.get("provider") or "iyzico"),
+            "provider_token": str(row.get("provider_token") or ""),
+            "provider_payment_id": str(row.get("provider_payment_id") or ""),
+            "subscription_reference_code": str(row.get("subscription_reference_code") or ""),
+            "status": str(row.get("status") or "pending"),
+            "payment_page_url": str(row.get("payment_page_url") or ""),
+            "callback_url": str(row.get("callback_url") or ""),
+            "raw_last_payload": raw_last_payload if isinstance(raw_last_payload, dict) else {},
+            "created_at": float(row.get("created_at") or 0.0),
+            "updated_at": float(row.get("updated_at") or 0.0),
+            "completed_at": float(row.get("completed_at") or 0.0),
+        }
+
+    def _decode_billing_profile_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        workspace_id = str(row.get("workspace_id") or "local-workspace")
+        profile_payload = self.codec.loads(
+            str(row.get("profile_encrypted") or ""),
+            context=f"billing_profile:{workspace_id}",
+            default={},
+        )
+        return {
+            "workspace_id": workspace_id,
+            "profile": profile_payload if isinstance(profile_payload, dict) else {},
+            "created_at": float(row.get("created_at") or 0.0),
+            "updated_at": float(row.get("updated_at") or 0.0),
+        }
+
+    @staticmethod
+    def _decode_workspace_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "workspace_id": str(row.get("workspace_id") or "local-workspace"),
+            "display_name": str(row.get("display_name") or ""),
+            "status": str(row.get("status") or "active"),
+            "metadata": _json_loads(row.get("metadata_json"), {}),
+            "updated_at": float(row.get("updated_at") or 0.0),
+        }
+
+    @staticmethod
+    def _decode_workspace_membership_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "membership_id": str(row.get("membership_id") or ""),
+            "workspace_id": str(row.get("workspace_id") or "local-workspace"),
+            "actor_id": str(row.get("actor_id") or ""),
+            "role": str(row.get("role") or "member"),
+            "status": str(row.get("status") or "active"),
+            "updated_at": float(row.get("updated_at") or 0.0),
+        }
+
+    @staticmethod
+    def _decode_workspace_invite_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "invite_id": str(row.get("invite_id") or ""),
+            "workspace_id": str(row.get("workspace_id") or "local-workspace"),
+            "email": str(row.get("email") or ""),
+            "role": str(row.get("role") or "member"),
+            "status": str(row.get("status") or "pending"),
+            "invited_by": str(row.get("invited_by") or ""),
+            "metadata": _json_loads(row.get("metadata_json"), {}),
+            "expires_at": float(row.get("expires_at") or 0.0),
+            "updated_at": float(row.get("updated_at") or 0.0),
+        }
+
+    @staticmethod
+    def _decode_workspace_seat_assignment_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "assignment_id": str(row.get("assignment_id") or ""),
+            "workspace_id": str(row.get("workspace_id") or "local-workspace"),
+            "actor_id": str(row.get("actor_id") or ""),
+            "assigned_by": str(row.get("assigned_by") or ""),
+            "status": str(row.get("status") or "active"),
+            "created_at": float(row.get("created_at") or 0.0),
+            "updated_at": float(row.get("updated_at") or 0.0),
+        }
+
+    @staticmethod
+    def _decode_billing_event_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "event_id": str(row.get("event_id") or ""),
+            "workspace_id": str(row.get("workspace_id") or "local-workspace"),
+            "provider": str(row.get("provider") or "internal"),
+            "event_type": str(row.get("event_type") or "billing.updated"),
+            "status": str(row.get("status") or "pending"),
+            "reference_id": str(row.get("reference_id") or ""),
+            "payload": _json_loads(row.get("payload_json"), {}),
+            "created_at": float(row.get("created_at") or 0.0),
+        }
+
+    @staticmethod
+    def _decode_credit_ledger_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "entry_id": str(row.get("entry_id") or ""),
+            "workspace_id": str(row.get("workspace_id") or "local-workspace"),
+            "bucket": str(row.get("bucket") or "purchased"),
+            "entry_type": str(row.get("entry_type") or "adjustment"),
+            "delta_credits": int(row.get("delta_credits") or 0),
+            "balance_after": int(row.get("balance_after") or 0),
+            "reference_id": str(row.get("reference_id") or ""),
+            "metadata": _json_loads(row.get("metadata_json"), {}),
+            "created_at": float(row.get("created_at") or 0.0),
+        }
+
+    def _decode_workspace_inbox_event_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        event_id = str(row.get("event_id") or "")
+        content_payload = self.codec.loads(
+            str(row.get("content_encrypted") or ""),
+            context=f"inbox:{event_id}:content",
+            default={},
+        )
+        content = ""
+        if isinstance(content_payload, dict):
+            content = str(content_payload.get("content") or "")
+        compact_preview = re.sub(r"\s+", " ", content).strip()
+        if len(compact_preview) > 220:
+            compact_preview = compact_preview[:217].rstrip() + "..."
+        return {
+            "event_id": event_id,
+            "workspace_id": str(row.get("workspace_id") or "local-workspace"),
+            "source_type": str(row.get("source_type") or "manual"),
+            "source_id": str(row.get("source_id") or ""),
+            "title": str(row.get("title") or ""),
+            "content": content,
+            "content_preview": compact_preview,
+            "status": str(row.get("status") or "received"),
+            "summary": _json_loads(row.get("summary_json"), {}),
+            "metadata": _json_loads(row.get("metadata_json"), {}),
+            "created_at": float(row.get("created_at") or 0.0),
+            "updated_at": float(row.get("updated_at") or 0.0),
+        }
+
+    @staticmethod
+    def _decode_entitlement_snapshot_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "snapshot_id": str(row.get("snapshot_id") or ""),
+            "workspace_id": str(row.get("workspace_id") or "local-workspace"),
+            "scope": str(row.get("scope") or "workspace"),
+            "payload": _json_loads(row.get("payload_json"), {}),
+            "created_at": float(row.get("created_at") or 0.0),
+        }
+
     @staticmethod
     def _decode_local_session_row(row: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -3596,6 +5034,7 @@ class RuntimeDatabase:
             "user_id": str(row["user_id"] or ""),
             "email": str(row.get("email") or ""),
             "display_name": str(row.get("display_name") or ""),
+            "role": str(row.get("role") or "member"),
             "status": str(row["status"] or "active"),
             "expires_at": float(row["expires_at"] or 0.0),
             "last_seen_at": float(row["last_seen_at"] or 0.0),

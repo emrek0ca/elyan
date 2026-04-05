@@ -1,11 +1,13 @@
 type RequestOptions = {
-  method?: "GET" | "POST";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   signal?: AbortSignal;
 };
 
+type JsonRecord = Record<string, unknown>;
+
 export const DEFAULT_BASE_URL =
-  import.meta.env.VITE_ELYAN_API_BASE_URL?.trim() || "http://127.0.0.1:18889";
+  import.meta.env.VITE_ELYAN_API_BASE_URL?.trim() || "http://127.0.0.1:18789";
 
 export class ApiClient {
   private sessionToken = "";
@@ -45,11 +47,25 @@ export class ApiClient {
     this.sessionToken = "";
   }
 
+  private normalizeEnvelope<T>(payload: T): T {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return payload;
+    }
+    const normalized = { ...(payload as JsonRecord) };
+    if ("success" in normalized && !("ok" in normalized)) {
+      normalized.ok = Boolean(normalized.success);
+    }
+    if ("ok" in normalized && !("success" in normalized)) {
+      normalized.success = Boolean(normalized.ok);
+    }
+    return normalized as T;
+  }
+
   async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const csrfToken =
       document.cookie
         .split("; ")
-        .find((chunk) => chunk.startsWith("elyan_csrf="))
+        .find((chunk) => chunk.startsWith("elyan_csrf_token="))
         ?.split("=")[1] || "";
 
     let response: Response;
@@ -100,7 +116,7 @@ export class ApiClient {
     }
 
     if (responseIsJson) {
-      return (responseBody as T) ?? ({} as T);
+      return this.normalizeEnvelope((responseBody as T) ?? ({} as T));
     }
     return (responseText as unknown as T) || ({} as T);
   }
