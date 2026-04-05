@@ -104,6 +104,7 @@ class TaskContinuityManager:
 
     def _find_candidates(self, workspace_id: str) -> list[ContinuityCandidate]:
         from core.persistence.runtime_db import get_runtime_database as get_runtime_db
+        from sqlalchemy import text as _text
         db = get_runtime_db()
         now = time.time()
         cutoff = now - (_RESUME_WINDOW_HOURS * 3600)
@@ -113,16 +114,15 @@ class TaskContinuityManager:
         try:
             with db.local_engine.connect() as conn:
                 rows = conn.execute(
-                    """
-                    SELECT thread_id, title, status, current_mode, updated_at, metadata_json
-                    FROM cowork_threads
-                    WHERE workspace_id = ?
-                      AND updated_at > ?
-                      AND status NOT IN ('completed', 'cancelled', 'archived')
-                    ORDER BY updated_at DESC
-                    LIMIT 50
-                    """,
-                    (workspace_id, cutoff),
+                    _text(
+                        "SELECT thread_id, title, status, current_mode, updated_at, metadata_json "
+                        "FROM cowork_threads "
+                        "WHERE workspace_id = :wid "
+                        "  AND updated_at > :cutoff "
+                        "  AND status NOT IN ('completed', 'cancelled', 'archived') "
+                        "ORDER BY updated_at DESC LIMIT 50"
+                    ),
+                    {"wid": workspace_id, "cutoff": cutoff},
                 ).fetchall()
         except Exception:
             return []

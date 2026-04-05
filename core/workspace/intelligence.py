@@ -51,6 +51,7 @@ class WorkspaceProfile:
             "suggested_shortcuts": self.suggested_shortcuts[:5],
             "learning_momentum": round(self.learning_momentum, 3),
             "computed_at": self.computed_at,
+            "prompt_fragment": self.to_prompt_fragment(),
         }
 
     def to_prompt_fragment(self) -> str:
