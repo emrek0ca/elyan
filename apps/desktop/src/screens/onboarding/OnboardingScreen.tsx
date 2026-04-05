@@ -1,13 +1,18 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ElyanMark } from "@/components/brand/ElyanMark";
 import { Button } from "@/components/primitives/Button";
 import { Surface } from "@/components/primitives/Surface";
 import { apiClient } from "@/services/api/client";
+import { getProviderDescriptors, getSystemReadiness, saveProviderKey } from "@/services/api/elyan-service";
 import { useUiStore } from "@/stores/ui-store";
+import type { ProviderDescriptor, SystemReadiness } from "@/types/domain";
 
-type Step = "welcome" | "account" | "done";
+type Step = "welcome" | "account" | "model" | "done";
+type CloudProviderId = "openai" | "anthropic" | "groq";
+
+const cloudProviderOrder: CloudProviderId[] = ["openai", "anthropic", "groq"];
 
 export function OnboardingScreen() {
   const navigate = useNavigate();
@@ -21,6 +26,50 @@ export function OnboardingScreen() {
   const [passwordConfirm, setPasswordConfirm] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [modelSetupLoading, setModelSetupLoading] = useState(false);
+  const [modelSetupBusy, setModelSetupBusy] = useState(false);
+  const [modelSetupError, setModelSetupError] = useState("");
+  const [modelSetupMessage, setModelSetupMessage] = useState("");
+  const [selectedProvider, setSelectedProvider] = useState<CloudProviderId>("openai");
+  const [providerKey, setProviderKey] = useState("");
+  const [readiness, setReadiness] = useState<SystemReadiness | null>(null);
+  const [providers, setProviders] = useState<ProviderDescriptor[]>([]);
+
+  const ollamaProvider = providers.find((provider) => provider.providerId === "ollama") || null;
+  const ollamaInstalledModels = (ollamaProvider?.models || []).filter((model) => model.installed);
+  const configuredCloudProviders = cloudProviderOrder
+    .map((providerId) => providers.find((provider) => provider.providerId === providerId))
+    .filter((provider): provider is ProviderDescriptor => Boolean(provider?.authState === "ready"));
+
+  useEffect(() => {
+    if (step !== "model") {
+      return;
+    }
+    void loadModelSetup();
+  }, [step]);
+
+  async function loadModelSetup() {
+    setModelSetupLoading(true);
+    setModelSetupError("");
+    try {
+      const [nextReadiness, nextProviders] = await Promise.all([getSystemReadiness(), getProviderDescriptors()]);
+      setReadiness(nextReadiness);
+      setProviders(nextProviders);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setModelSetupError(msg || "Model durumu alınamadı.");
+    } finally {
+      setModelSetupLoading(false);
+    }
+  }
+
+  function finishOnboarding() {
+    setStep("done");
+    window.setTimeout(() => {
+      completeOnboarding();
+      navigate("/home", { replace: true });
+    }, 600);
+  }
 
   async function handleBootstrap() {
     setError("");
@@ -71,11 +120,10 @@ export function OnboardingScreen() {
       }
 
       signIn(normalizedEmail);
-      completeOnboarding();
-      setStep("done");
-
-      // Brief pause so the "done" state renders, then navigate
-      setTimeout(() => navigate("/home", { replace: true }), 600);
+      setModelSetupMessage("");
+      setModelSetupError("");
+      setProviderKey("");
+      setStep("model");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("409") || msg.toLowerCase().includes("already completed")) {
@@ -87,6 +135,31 @@ export function OnboardingScreen() {
       setError("Bir hata oluştu. Backend çalışıyor mu?");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleSaveProviderKey() {
+    const apiKey = providerKey.trim();
+    if (!apiKey) {
+      setModelSetupError("API key gerekli.");
+      return;
+    }
+    setModelSetupBusy(true);
+    setModelSetupError("");
+    setModelSetupMessage("");
+    try {
+      const result = await saveProviderKey(selectedProvider, apiKey);
+      if (!result.ok) {
+        setModelSetupError(result.message || "API key kaydedilemedi.");
+        return;
+      }
+      setModelSetupMessage(result.message || "Provider hazır.");
+      finishOnboarding();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setModelSetupError(msg || "API key kaydedilemedi.");
+    } finally {
+      setModelSetupBusy(false);
     }
   }
 
@@ -110,6 +183,117 @@ export function OnboardingScreen() {
               </div>
               <Button variant="primary" onClick={() => setStep("account")}>
                 Başla →
+              </Button>
+            </div>
+          </div>
+        </Surface>
+      </div>
+    );
+  }
+
+  if (step === "model") {
+    const selectedProviderLabel =
+      providers.find((provider) => provider.providerId === selectedProvider)?.label || selectedProvider.toUpperCase();
+    const ollamaSummary = ollamaInstalledModels[0]?.displayName || (readiness?.ollamaReady ? "Yerel host hazır" : "");
+
+    return (
+      <div className="flex min-h-[calc(100vh-44px)] items-center justify-center px-6 py-10">
+        <Surface tone="hero" className="w-full max-w-[560px] px-8 py-10 md:px-10 md:py-12">
+          <div className="space-y-6">
+            <div>
+              <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-[var(--text-tertiary)]">Model ayarla</div>
+              <h2 className="font-display text-[28px] font-semibold tracking-tight text-[var(--text-primary)]">
+                Çalışma motoru
+              </h2>
+              <p className="mt-2 text-[13px] leading-6 text-[var(--text-secondary)]">
+                Yerel model hazırsa devam et. Değilse şimdi bir cloud provider anahtarı ekleyebilir ya da bu adımı atlayabilirsin.
+              </p>
+            </div>
+
+            <div className="rounded-[20px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-5">
+              {modelSetupLoading ? (
+                <div className="text-[13px] text-[var(--text-secondary)]">Model durumu kontrol ediliyor…</div>
+              ) : readiness?.ollamaReady ? (
+                <div className="space-y-2">
+                  <div className="text-[12px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Ollama</div>
+                  <div className="text-[16px] font-medium text-[var(--text-primary)]">
+                    Ollama hazır{ollamaSummary ? `, model: ${ollamaSummary}` : "."}
+                  </div>
+                  <div className="text-[13px] text-[var(--text-secondary)]">
+                    {ollamaInstalledModels.length
+                      ? `${ollamaInstalledModels.length} local model kullanılabilir.`
+                      : "Yerel host açık, istersen modelleri daha sonra Providers ekranından yönetebilirsin."}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                    <div className="text-[12px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Cloud provider</div>
+                    <div className="mt-2 text-[14px] text-[var(--text-primary)]">
+                      Ollama şu anda görünmüyor. İstersen bir API key ekleyip cloud lane’leri aç.
+                    </div>
+                    <div className="mt-1 text-[12px] text-[var(--text-secondary)]">
+                      {configuredCloudProviders.length
+                        ? `Hazır provider: ${configuredCloudProviders.map((provider) => provider.label).join(", ")}`
+                        : readiness?.blockingIssue || "OpenAI, Anthropic veya Groq ile devam edebilirsin."}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    {cloudProviderOrder.map((providerId) => {
+                      const provider = providers.find((item) => item.providerId === providerId);
+                      const isActive = selectedProvider === providerId;
+                      return (
+                        <button
+                          key={providerId}
+                          type="button"
+                          onClick={() => setSelectedProvider(providerId)}
+                          className={`rounded-full border px-3 py-2 text-[12px] uppercase tracking-[0.12em] transition ${
+                            isActive
+                              ? "border-[var(--border-focus)] bg-[var(--bg-surface)] text-[var(--text-primary)]"
+                              : "border-[var(--border-subtle)] bg-transparent text-[var(--text-secondary)]"
+                          }`}
+                        >
+                          {provider?.label || providerId}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <input
+                    type="password"
+                    value={providerKey}
+                    onChange={(event) => {
+                      setProviderKey(event.target.value);
+                      setModelSetupError("");
+                    }}
+                    placeholder={`${selectedProviderLabel} API key`}
+                    className={inputCls}
+                  />
+                </div>
+              )}
+            </div>
+
+            {modelSetupError ? <div className="text-[12px] text-[var(--state-warning)]">{modelSetupError}</div> : null}
+            {modelSetupMessage ? <div className="text-[12px] text-[var(--text-secondary)]">{modelSetupMessage}</div> : null}
+
+            <div className="flex flex-wrap gap-3">
+              <Button variant="secondary" onClick={() => void loadModelSetup()} disabled={modelSetupLoading || modelSetupBusy}>
+                Tekrar kontrol et
+              </Button>
+              <Button variant="ghost" onClick={() => finishOnboarding()} disabled={modelSetupBusy}>
+                Atla
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => (readiness?.ollamaReady ? finishOnboarding() : void handleSaveProviderKey())}
+                disabled={modelSetupLoading || modelSetupBusy}
+              >
+                {modelSetupBusy
+                  ? "Kaydediliyor…"
+                  : readiness?.ollamaReady
+                    ? "Devam et →"
+                    : "API key kaydet →"}
               </Button>
             </div>
           </div>
