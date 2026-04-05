@@ -168,6 +168,7 @@ class PersonalContextEngine:
         # Global (single-user desktop) current snapshot
         self._current: OSContextSnapshot = OSContextSnapshot.empty()
         self._polling = False
+        self._poll_task: Optional[asyncio.Task] = None
         self._last_poll: float = 0.0
         self._persist_path = _PERSIST_PATH
         self._load()
@@ -239,9 +240,24 @@ class PersonalContextEngine:
         self._polling = True
         try:
             loop = asyncio.get_event_loop()
-            loop.create_task(self._poll_loop(user_id))
+            self._poll_task = loop.create_task(self._poll_loop(user_id))
         except RuntimeError:
+            self._polling = False
+            self._poll_task = None
             pass  # No event loop available — polling will be on-demand
+
+    async def stop_background_polling(self) -> None:
+        """Stop background polling and await task shutdown."""
+        self._polling = False
+        task = self._poll_task
+        self._poll_task = None
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     # ─── Internal ──────────────────────────────────────────────────────────
 
@@ -255,18 +271,26 @@ class PersonalContextEngine:
         self._persist()
 
     async def _poll_loop(self, user_id: str) -> None:
-        while self._polling:
-            await asyncio.sleep(_POLL_INTERVAL_SECONDS)
-            try:
-                snap = _capture_os_snapshot()
-                self._push(user_id, snap)
-                slog.log_event("context_polled", {
-                    "user_id": user_id,
-                    "active_app": snap.active_app,
-                    "age": int(snap.age_seconds()),
-                })
-            except Exception as exc:
-                slog.log_event("context_poll_error", {"error": str(exc)})
+        try:
+            while self._polling:
+                await asyncio.sleep(_POLL_INTERVAL_SECONDS)
+                try:
+                    snap = _capture_os_snapshot()
+                    self._push(user_id, snap)
+                    slog.log_event("context_polled", {
+                        "user_id": user_id,
+                        "active_app": snap.active_app,
+                        "age": int(snap.age_seconds()),
+                    })
+                except Exception as exc:
+                    slog.log_event("context_poll_error", {"error": str(exc)})
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self._polling = False
+            current_task = asyncio.current_task()
+            if self._poll_task is current_task:
+                self._poll_task = None
 
     def _persist(self) -> None:
         """Persist context rings to disk for cross-session continuity."""

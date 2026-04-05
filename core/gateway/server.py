@@ -9695,7 +9695,7 @@ class ElyanGatewayServer:
         # Phase 20: Start Automation Scheduler
         try:
             from core.automation_registry import automation_registry
-            asyncio.create_task(automation_registry.start_scheduler(self.agent))
+            await automation_registry.start_scheduler(self.agent)
         except Exception as e:
             logger.error(f"Automation scheduler start failed: {e}")
 
@@ -9715,6 +9715,16 @@ class ElyanGatewayServer:
 
     async def stop(self):
         logger.info("Stopping Gateway Server...")
+        try:
+            from core.away_mode import background_task_runner
+            await background_task_runner.stop_resume_loop()
+        except Exception as e:
+            logger.error(f"Away resume loop stop failed: {e}")
+        try:
+            from core.automation_registry import automation_registry
+            await automation_registry.stop_scheduler()
+        except Exception as e:
+            logger.error(f"Automation scheduler stop failed: {e}")
         if self._runtime_sync_worker:
             try:
                 await self._runtime_sync_worker.stop()
@@ -9724,10 +9734,17 @@ class ElyanGatewayServer:
                 self._runtime_sync_worker = None
         if self._telemetry_task:
             self._telemetry_task.cancel()
+            try:
+                await self._telemetry_task
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self._telemetry_task = None
         try:
             await self.autopilot.stop()
         except Exception as e:
             logger.error(f"Autopilot stop failed: {e}")
+        await self.scheduler.stop()
         await self.heartbeat.stop()
         await self.cron.stop()
         if self.runner:

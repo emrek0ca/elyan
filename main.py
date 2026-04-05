@@ -593,6 +593,14 @@ def _run_gateway(port: int):
         click.echo("\n  🛑 Durduruldu.")
     finally:
         try:
+            async def _stop_intelligence_layers():
+                from core.personal_context_engine import get_personal_context_engine
+                await get_personal_context_engine().stop_background_polling()
+
+            loop.run_until_complete(_stop_intelligence_layers())
+        except Exception:
+            pass
+        try:
             loop.run_until_complete(server.stop())
         except Exception:
             pass

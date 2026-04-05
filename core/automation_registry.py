@@ -25,6 +25,7 @@ class AutomationRegistry:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.automations: Dict[str, Any] = self._load()
         self._running = False
+        self._scheduler_task: asyncio.Task | None = None
 
     def _load(self) -> Dict[str, Any]:
         if not self.db_path.exists():
@@ -787,9 +788,24 @@ class AutomationRegistry:
 
     async def start_scheduler(self, agent) -> None:
         """Otomasyon döngüsünü başlat."""
+        if self._scheduler_task and not self._scheduler_task.done():
+            return
         self._running = True
-        asyncio.create_task(self._scheduler_loop(agent))
+        self._scheduler_task = asyncio.create_task(self._scheduler_loop(agent))
         logger.info("Automation scheduler started")
+
+    async def stop_scheduler(self) -> None:
+        """Otomasyon döngüsünü durdur ve task'i temiz kapat."""
+        self._running = False
+        task = self._scheduler_task
+        self._scheduler_task = None
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     async def _execute_automation(self, task_id: str, task: dict[str, Any], agent) -> dict[str, Any]:
         module_id = str(task.get("module_id") or "").strip().lower()
@@ -818,57 +834,65 @@ class AutomationRegistry:
         }
 
     async def _scheduler_loop(self, agent) -> None:
-        while getattr(self, "_running", False):
-            try:
-                now = time.time()
-                active = self.get_active()
-                due: list[tuple[str, dict[str, Any]]] = []
+        try:
+            while getattr(self, "_running", False):
+                try:
+                    now = time.time()
+                    active = self.get_active()
+                    due: list[tuple[str, dict[str, Any]]] = []
 
-                for task in active:
-                    task_id = str(task.get("id") or "").strip()
-                    if not task_id:
-                        continue
-                    last = float(task.get("last_run") or 0.0)
-                    next_retry_at = self._as_float(task.get("next_retry_at"), 0.0)
-                    if next_retry_at > now:
-                        continue
-                    circuit_open_until = self._as_float(task.get("circuit_open_until"), 0.0)
-                    if circuit_open_until > now:
-                        continue
-                    interval_seconds = self._as_interval_seconds(task.get("interval_seconds", 3600), default_seconds=3600)
-                    if next_retry_at > 0.0:
-                        due.append((task_id, task))
-                    elif now - last >= interval_seconds:
-                        due.append((task_id, task))
+                    for task in active:
+                        task_id = str(task.get("id") or "").strip()
+                        if not task_id:
+                            continue
+                        last = float(task.get("last_run") or 0.0)
+                        next_retry_at = self._as_float(task.get("next_retry_at"), 0.0)
+                        if next_retry_at > now:
+                            continue
+                        circuit_open_until = self._as_float(task.get("circuit_open_until"), 0.0)
+                        if circuit_open_until > now:
+                            continue
+                        interval_seconds = self._as_interval_seconds(task.get("interval_seconds", 3600), default_seconds=3600)
+                        if next_retry_at > 0.0:
+                            due.append((task_id, task))
+                        elif now - last >= interval_seconds:
+                            due.append((task_id, task))
 
-                if due:
-                    logger.info(f"Triggering {len(due)} automation job(s)")
-                    sem = asyncio.Semaphore(self._max_parallel_jobs())
+                    if due:
+                        logger.info(f"Triggering {len(due)} automation job(s)")
+                        sem = asyncio.Semaphore(self._max_parallel_jobs())
 
-                    async def _run_one(task_id: str, task: dict[str, Any]) -> None:
-                        display = str(task.get("task") or task.get("module_id") or task_id)
-                        async with sem:
-                            try:
-                                logger.info(f"Triggering automation: {task_id} -> {display}")
-                                outcome = await self._execute_with_policy(task_id, task, agent)
-                                self._persist_execution_outcome(task_id, task, outcome)
-                            except Exception as exc:
-                                logger.error(f"Automation execution failed ({task_id}): {exc}")
-                                self.update_last_run(
-                                    task_id,
-                                    last_status="failed",
-                                    last_error=str(exc),
-                                    runtime_patch={
-                                        "fail_streak": int(task.get("fail_streak") or 0) + 1,
-                                        "next_retry_at": time.time() + 60.0,
-                                    },
-                                )
+                        async def _run_one(task_id: str, task: dict[str, Any]) -> None:
+                            display = str(task.get("task") or task.get("module_id") or task_id)
+                            async with sem:
+                                try:
+                                    logger.info(f"Triggering automation: {task_id} -> {display}")
+                                    outcome = await self._execute_with_policy(task_id, task, agent)
+                                    self._persist_execution_outcome(task_id, task, outcome)
+                                except Exception as exc:
+                                    logger.error(f"Automation execution failed ({task_id}): {exc}")
+                                    self.update_last_run(
+                                        task_id,
+                                        last_status="failed",
+                                        last_error=str(exc),
+                                        runtime_patch={
+                                            "fail_streak": int(task.get("fail_streak") or 0) + 1,
+                                            "next_retry_at": time.time() + 60.0,
+                                        },
+                                    )
 
-                    await asyncio.gather(*[_run_one(task_id, task) for task_id, task in due])
-            except Exception as e:
-                logger.error(f"Scheduler error: {e}")
+                        await asyncio.gather(*[_run_one(task_id, task) for task_id, task in due])
+                except Exception as e:
+                    logger.error(f"Scheduler error: {e}")
 
-            await asyncio.sleep(60)  # Check every minute
+                await asyncio.sleep(60)  # Check every minute
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self._running = False
+            current_task = asyncio.current_task()
+            if self._scheduler_task is current_task:
+                self._scheduler_task = None
 
 # Global Instance
 automation_registry = AutomationRegistry()
