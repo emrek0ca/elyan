@@ -94,6 +94,9 @@ _activity_log: list = []  # Rolling buffer of last 50 events
 _tool_event_log: list = []  # Rolling buffer of last 200 tool events
 _cowork_event_log: list = []  # Rolling buffer of last 200 cowork events
 _start_time: float = time.time()
+_AUTH_FAILURE_ATTEMPTS: dict[str, list[float]] = {}
+_AUTH_RATE_LIMIT_WINDOW_SECONDS = 600.0
+_AUTH_RATE_LIMIT_MAX_FAILURES = 10
 _tool_health_cache: dict = {
     "ts": 0.0,
     "probe": False,
@@ -682,6 +685,44 @@ def _is_loopback_request(request) -> bool:
     if not host:
         return False
     return _is_loopback_host(host)
+
+
+def _prune_auth_failures(ip: str) -> list[float]:
+    normalized_ip = str(ip or "").strip()
+    if not normalized_ip:
+        return []
+    now = time.time()
+    attempts = [
+        ts for ts in _AUTH_FAILURE_ATTEMPTS.get(normalized_ip, [])
+        if now - ts < _AUTH_RATE_LIMIT_WINDOW_SECONDS
+    ]
+    if attempts:
+        _AUTH_FAILURE_ATTEMPTS[normalized_ip] = attempts
+    else:
+        _AUTH_FAILURE_ATTEMPTS.pop(normalized_ip, None)
+    return attempts
+
+
+def _is_auth_rate_limited(ip: str) -> bool:
+    normalized_ip = str(ip or "").strip()
+    if not normalized_ip:
+        return False
+    return len(_prune_auth_failures(normalized_ip)) >= _AUTH_RATE_LIMIT_MAX_FAILURES
+
+
+def _record_auth_failure(ip: str) -> None:
+    normalized_ip = str(ip or "").strip()
+    if not normalized_ip:
+        return
+    attempts = _prune_auth_failures(normalized_ip)
+    attempts.append(time.time())
+    _AUTH_FAILURE_ATTEMPTS[normalized_ip] = attempts
+
+
+def _clear_auth_failures(ip: str) -> None:
+    normalized_ip = str(ip or "").strip()
+    if normalized_ip:
+        _AUTH_FAILURE_ATTEMPTS.pop(normalized_ip, None)
 
 
 def _iter_memory_candidates(memory_obj: Any) -> list[Any]:
@@ -2383,6 +2424,9 @@ class ElyanGatewayServer:
     async def handle_v1_auth_bootstrap_owner(self, request):
         if not _is_loopback_request(request):
             return _json_error("owner bootstrap is restricted to localhost", status=403)
+        remote_ip = _request_remote_host(request)
+        if _is_auth_rate_limited(remote_ip):
+            return _json_error("too many failed authentication attempts, try again later", status=429)
         try:
             data = await request.json()
         except Exception:
@@ -2391,8 +2435,10 @@ class ElyanGatewayServer:
         password = str(data.get("password") or "")
         workspace_id = str(data.get("workspace_id") or "local-workspace").strip() or "local-workspace"
         if not email:
+            _record_auth_failure(remote_ip)
             return _json_error("email required", status=400)
         if not password:
+            _record_auth_failure(remote_ip)
             return _json_error("password required", status=400)
         runtime_db = get_runtime_database()
         if self._local_user_count(runtime_db) > 0:
@@ -2406,6 +2452,7 @@ class ElyanGatewayServer:
                 metadata={"bootstrap_source": "gateway_setup"},
             )
         except ValueError as exc:
+            _record_auth_failure(remote_ip)
             return _json_error(str(exc), status=400)
         session, session_token = runtime_db.auth_sessions.create_session(
             user=user,
@@ -2437,6 +2484,7 @@ class ElyanGatewayServer:
                 },
             }
         )
+        _clear_auth_failures(remote_ip)
         response.headers["X-Elyan-Session-Token"] = session_token
         response.set_cookie(
             "elyan_user_session",
@@ -2453,6 +2501,9 @@ class ElyanGatewayServer:
     async def handle_v1_auth_login(self, request):
         if not _is_loopback_request(request):
             return _json_error("local login is restricted to localhost", status=403)
+        remote_ip = _request_remote_host(request)
+        if _is_auth_rate_limited(remote_ip):
+            return _json_error("too many failed authentication attempts, try again later", status=429)
         try:
             data = await request.json()
         except Exception:
@@ -2461,8 +2512,10 @@ class ElyanGatewayServer:
         password = str(data.get("password") or "")
         workspace_id = str(data.get("workspace_id") or "").strip()
         if not email:
+            _record_auth_failure(remote_ip)
             return _json_error("email required", status=400)
         if not password:
+            _record_auth_failure(remote_ip)
             return _json_error("password required", status=400)
         runtime_db = get_runtime_database()
         user = runtime_db.auth.authenticate_user(
@@ -2473,6 +2526,7 @@ class ElyanGatewayServer:
         if not user:
             if self._local_user_count(runtime_db) == 0:
                 return _json_error("owner bootstrap required before login", status=409, payload={"bootstrap_required": True})
+            _record_auth_failure(remote_ip)
             return _json_error("invalid credentials", status=401)
         session, session_token = runtime_db.auth_sessions.create_session(
             user=user,
@@ -2502,6 +2556,7 @@ class ElyanGatewayServer:
                 },
             }
         )
+        _clear_auth_failures(remote_ip)
         response.headers["X-Elyan-Session-Token"] = session_token
         response.set_cookie(
             "elyan_user_session",
