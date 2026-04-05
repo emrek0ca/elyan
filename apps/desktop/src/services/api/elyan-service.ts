@@ -1891,8 +1891,12 @@ export async function getCurrentLocalUser(): Promise<{ email: string; displayNam
   if (!raw?.success || !raw.user) {
     return null;
   }
+  const email = String(raw.user.email || "").trim().toLowerCase();
+  if (!email) {
+    return null;
+  }
   return {
-    email: String(raw.user.email || "").trim().toLowerCase(),
+    email,
     displayName: String(raw.user.display_name || "").trim(),
   };
 }
