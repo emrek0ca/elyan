@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 
 import pytest
@@ -73,6 +75,7 @@ def test_workspace_billing_checkout_uses_iyzico_checkout_url(monkeypatch):
 
 
 def test_workspace_billing_token_pack_webhook_is_idempotent():
+    secret = "test-webhook-secret"
     store = get_workspace_billing_store()
     payload = {
         "event_type": "payment.updated",
@@ -81,11 +84,15 @@ def test_workspace_billing_token_pack_webhook_is_idempotent():
         "status": "paid",
         "reference_id": "pack_ref_1",
     }
+    encoded = json.dumps(payload).encode("utf-8")
+    signature = hmac.new(secret.encode("utf-8"), encoded, hashlib.sha256).hexdigest()
 
-    first = store.handle_webhook(json.dumps(payload).encode("utf-8"), {}, provider="iyzico")
-    first_balance = store.get_credit_balance("workspace-team")
-    second = store.handle_webhook(json.dumps(payload).encode("utf-8"), {}, provider="iyzico")
-    second_balance = store.get_credit_balance("workspace-team")
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setenv("IYZICO_WEBHOOK_SECRET", secret)
+        first = store.handle_webhook(encoded, {"x-iyzico-signature": signature}, provider="iyzico")
+        first_balance = store.get_credit_balance("workspace-team")
+        second = store.handle_webhook(encoded, {"x-iyzico-signature": signature}, provider="iyzico")
+        second_balance = store.get_credit_balance("workspace-team")
 
     assert first["provider"] == "iyzico"
     assert second["provider"] == "iyzico"
@@ -93,6 +100,7 @@ def test_workspace_billing_token_pack_webhook_is_idempotent():
 
 
 def test_workspace_billing_failed_payment_degrades_entitlements():
+    secret = "test-webhook-secret"
     store = get_workspace_billing_store()
     payload = {
         "event_type": "payment.updated",
@@ -101,8 +109,12 @@ def test_workspace_billing_failed_payment_degrades_entitlements():
         "status": "overdue",
         "reference_id": "plan_ref_1",
     }
+    encoded = json.dumps(payload).encode("utf-8")
+    signature = hmac.new(secret.encode("utf-8"), encoded, hashlib.sha256).hexdigest()
 
-    result = store.handle_webhook(json.dumps(payload).encode("utf-8"), {}, provider="iyzico")
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setenv("IYZICO_WEBHOOK_SECRET", secret)
+        result = store.handle_webhook(encoded, {"x-iyzico-signature": signature}, provider="iyzico")
     entitlements = store.get_entitlements("workspace-team")
 
     assert result["status"] == "past_due"

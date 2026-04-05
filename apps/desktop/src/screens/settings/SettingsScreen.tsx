@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ArrowUpRight, Coins, Crown, CreditCard, MailPlus, RefreshCw, ShieldCheck, Sparkles, Ticket, UsersRound } from "@/vendor/lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -106,6 +106,7 @@ export function SettingsScreen() {
     zipCode: "",
     country: "",
   });
+  const pollingRef = useRef<boolean>(false);
 
   useEffect(() => {
     if (!billingProfile) {
@@ -169,19 +170,27 @@ export function SettingsScreen() {
     if (!referenceId) {
       return;
     }
-    for (let attempt = 0; attempt < 90; attempt += 1) {
-      const checkout = await getBillingCheckout(referenceId).catch(() => null);
-      if (checkout?.status === "completed") {
-        await invalidateControlPlane();
-        setBillingMessage("Odeme tamamlandi. Bakiye guncellendi.");
-        return;
+    if (pollingRef.current) {
+      return;
+    }
+    pollingRef.current = true;
+    try {
+      for (let attempt = 0; attempt < 90; attempt += 1) {
+        const checkout = await getBillingCheckout(referenceId).catch(() => null);
+        if (checkout?.status === "completed") {
+          await invalidateControlPlane();
+          setBillingMessage("Odeme tamamlandi. Bakiye guncellendi.");
+          return;
+        }
+        if (checkout?.status === "failed") {
+          await invalidateControlPlane();
+          setBillingMessage("Odeme tamamlanmadi.");
+          return;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 2000));
       }
-      if (checkout?.status === "failed") {
-        await invalidateControlPlane();
-        setBillingMessage("Odeme tamamlanmadi.");
-        return;
-      }
-      await new Promise((resolve) => window.setTimeout(resolve, 2000));
+    } finally {
+      pollingRef.current = false;
     }
   }
 

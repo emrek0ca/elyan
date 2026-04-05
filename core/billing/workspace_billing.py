@@ -349,9 +349,12 @@ class WorkspaceBillingStore:
 
     def _apply_provider_completion(self, completion: ProviderCompletion, *, source: str) -> dict[str, Any]:
         session = self._resolve_checkout_session_for_completion(completion)
-        workspace_id = (
-            str((session or {}).get("workspace_id") or completion.workspace_id or "local-workspace").strip() or "local-workspace"
-        )
+        workspace_id = str((session or {}).get("workspace_id") or completion.workspace_id or "").strip()
+        if not workspace_id:
+            raise RuntimeError(
+                f"webhook_unresolvable_workspace:ref={completion.reference_id}:"
+                f"sub_ref={completion.subscription_reference_code}"
+            )
         record = self._workspace(workspace_id)
         mode = str((session or {}).get("mode") or completion.mode or "subscription").strip() or "subscription"
         catalog_id = str((session or {}).get("catalog_id") or completion.catalog_id or "").strip().lower()

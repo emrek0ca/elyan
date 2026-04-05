@@ -32,7 +32,6 @@ from core.user_profile import get_user_profile_store
 from core.context7_client import context7_client
 from core.conversation_context import get_conversation_context_manager
 from core.canvas.engine import canvas_engine
-from tools.generators.slidev_generator import slidev_gen
 from tools import AVAILABLE_TOOLS
 from core.tool_usage import record_tool_usage
 from core.tool_request import get_tool_request_log
@@ -63,7 +62,7 @@ from core.pipeline_state import get_pipeline_state
 from core.pipeline_state import set_current_pipeline_state, reset_current_pipeline_state, create_pipeline_state
 from core.evidence.execution_ledger import ExecutionLedger
 from core.evidence.adapters import adapt_evidence
-from core.evidence.run_store import RunStore
+from core.run_store import RunStore
 from core.contracts.agent_response import AgentResponse, AttachmentRef
 from core.contracts.execution_result import coerce_execution_result
 from core.task_brain import task_brain
@@ -118,6 +117,7 @@ from utils.logger import get_logger
 logger = get_logger("agent")
 _active_ledger: ContextVar[ExecutionLedger | None] = ContextVar("active_execution_ledger", default=None)
 _active_runtime_policy: ContextVar[dict | None] = ContextVar("active_runtime_policy", default=None)
+_active_user_understanding: ContextVar[dict | None] = ContextVar("active_user_understanding", default=None)
 
 ACTION_TO_TOOL = {
     # Intent parser aliases
@@ -301,6 +301,7 @@ class Agent:
     def __init__(self):
         self.kernel = kernel
         self.llm = None
+        self.intent_router = None
         # Quick access
         self.quick_intent = get_quick_intent_detector()
         self.intent_parser = get_intent_parser()
@@ -373,11 +374,6 @@ class Agent:
             self.multi_agent_v2 = get_multi_agent_orchestrator()
         except Exception:
             self.multi_agent_v2 = None
-        try:
-            from core.billing.subscription import get_subscription_manager
-            self.billing = get_subscription_manager()
-        except Exception:
-            self.billing = None
         try:
             from core.plugins.plugin_system import get_plugin_manager
             self.plugin_manager = get_plugin_manager()
@@ -539,6 +535,7 @@ class Agent:
             return None
 
         ctx = dict(conversation_context or {})
+        understanding = self._current_user_understanding()
         followup_markers = (
             "hangi alanlarda",
             "hangi alanlarda mesela",
@@ -568,6 +565,7 @@ class Agent:
                 str(ctx.get("last_app") or "").strip(),
                 str(ctx.get("last_url") or "").strip(),
                 str(ctx.get("last_file") or "").strip(),
+                " ".join(str(item) for item in list(understanding.get("top_topics") or [])[:3] if item),
                 " ".join(str(item) for item in list(ctx.get("recent_topics") or [])[:3] if item),
             )
             if part
@@ -588,16 +586,23 @@ class Agent:
 
         topic_seed_norm = normalize_turkish_text(topic_seed)
         if any(k in topic_seed_norm for k in ("yapay zeka", "ai", "machine learning", "makine ogrenmesi", "makine öğrenmesi")):
-            return (
+            response = (
                 "Örneğin sağlık, eğitim, finans, müşteri hizmetleri, ulaşım, üretim ve yazılım geliştirmede kullanılıyor. "
                 "İstersen bunlardan birini seçip kısa örneklerle açayım."
             )
+            if str(understanding.get("response_length_bias") or "").strip().lower() == "short":
+                response = "Örneğin sağlık, eğitim, finans ve yazılımda kullanılıyor. İstersen örnek açayım."
+            return response
 
         topic = self._extract_topic(topic_seed, topic_seed)
         if topic and topic != "genel konu":
+            if str(understanding.get("response_length_bias") or "").strip().lower() == "short":
+                return f"Mesela {topic} için örneklerle devam edebilirim."
             return f"Mesela {topic} için kullanım örnekleri, avantajlar ve riskler üzerinden devam edebilirim. İstersen açayım."
 
         if any(marker in low for marker in ("hangi alan", "nerede", "nerelerde", "örnek", "ornek")):
+            if str(understanding.get("response_length_bias") or "").strip().lower() == "short":
+                return "Örneğin sağlık, eğitim, finans ve yazılım geliştirmede kullanılıyor."
             return "Örneğin sağlık, eğitim, finans, müşteri hizmetleri ve yazılım geliştirme gibi alanlarda kullanılıyor. İstersen tek tek örnekleyeyim."
         return None
 
@@ -626,6 +631,123 @@ class Agent:
             return ctx_mgr.extract_context(normalized_history)
         except Exception:
             return {}
+
+    @staticmethod
+    def _infer_request_kind(user_input: str, conversation_context: dict[str, Any] | None = None) -> str:
+        text = normalize_turkish_text(str(user_input or "")).lower()
+        if not text:
+            return "chat"
+        if any(token in text for token in ("python", "code", "kod", "bug", "refactor", "implement", "test", "class", "function")):
+            return "code"
+        if any(token in text for token in ("araştır", "arastir", "research", "kaynak", "kanıt", "kanit", "makale", "verify")):
+            return "research"
+        if any(token in text for token in ("dosya", "file", "klasör", "klasor", "move", "copy", "rename", "sil", "delete", "create")):
+            return "filesystem"
+        if any(token in text for token in ("web", "site", "browser", "url", "link", "open ", "tıkla", "tikla", "sayfa")):
+            return "browser"
+        if any(token in text for token in ("plan", "taslak", "architecture", "mimari", "workflow", "roadmap")):
+            return "planning"
+        if any(token in text for token in ("özet", "ozet", "summar", "sadeleştir", "sadelestir")):
+            return "summary"
+        if "?" in text or any(token in text for token in ("nasıl", "nasil", "neden", "what is", "what are")):
+            return "question"
+        if conversation_context:
+            topic = str(conversation_context.get("last_topic") or "").strip()
+            if topic:
+                topic_text = normalize_turkish_text(topic).lower()
+                if any(token in topic_text for token in ("code", "kod", "file", "dosya", "research", "araştır")):
+                    return "contextual"
+        return "chat"
+
+    def _build_user_understanding_context(
+        self,
+        user_id: str,
+        user_input: str,
+        *,
+        conversation_context: dict[str, Any] | None = None,
+        request_meta: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        uid = str(user_id or "local")
+        profile = {}
+        try:
+            profile = dict(self.user_profile.profile_summary(uid) or {})
+        except Exception:
+            profile = {}
+
+        learning_digest = {}
+        if getattr(self, "learning_control", None) and hasattr(self.learning_control, "build_learning_digest"):
+            try:
+                learning_digest = dict(
+                    self.learning_control.build_learning_digest(
+                        uid,
+                        request_meta={
+                            "request": str(user_input or ""),
+                            "user_input": str(user_input or ""),
+                            **dict(request_meta or {}),
+                        },
+                    )
+                    or {}
+                )
+            except Exception:
+                learning_digest = {}
+
+        feedback_summary = dict(learning_digest.get("feedback_summary") or {})
+        request_kind = self._infer_request_kind(user_input, conversation_context)
+        correction_hints = []
+        for item in list(feedback_summary.get("correction_hints") or [])[:3]:
+            if not isinstance(item, dict):
+                continue
+            correction_hints.append(
+                {
+                    "wrong_action": str(item.get("wrong_action") or "").strip(),
+                    "corrected_text": str(item.get("corrected_text") or "").strip(),
+                    "reason": str(item.get("reason") or "").strip(),
+                }
+            )
+
+        top_topics = []
+        for value in list(profile.get("top_topics") or [])[:5]:
+            token = str(value or "").strip()
+            if token and token not in top_topics:
+                top_topics.append(token)
+        for value in list(learning_digest.get("top_topics") or [])[:5]:
+            token = str(value or "").strip()
+            if token and token not in top_topics:
+                top_topics.append(token)
+
+        next_actions = []
+        for item in list(learning_digest.get("next_actions") or [])[:3]:
+            if not isinstance(item, dict):
+                continue
+            next_actions.append(
+                {
+                    "title": str(item.get("title") or "").strip(),
+                    "reason": str(item.get("reason") or "").strip(),
+                    "priority": str(item.get("priority") or "").strip(),
+                }
+            )
+
+        context = {
+            "preferred_language": str(profile.get("preferred_language") or "auto").strip(),
+            "response_length_bias": str(profile.get("response_length_bias") or "short").strip(),
+            "top_topics": top_topics,
+            "top_actions": list(profile.get("top_actions") or [])[:5],
+            "dominant_domain": str(learning_digest.get("dominant_domain") or "").strip(),
+            "request_kind": request_kind,
+            "learning_score": float(learning_digest.get("learning_score", 0.0) or 0.0),
+            "success_rate": float(learning_digest.get("success_rate", 0.0) or 0.0),
+            "recent_lessons": list(learning_digest.get("recent_lessons") or [])[:5],
+            "next_actions": next_actions,
+            "prompt_hint": str(learning_digest.get("prompt_hint") or "").strip(),
+            "correction_hints": correction_hints,
+            "conversation_context": dict(conversation_context or {}),
+        }
+        if context["preferred_language"] == "auto":
+            if top_topics:
+                context["preferred_language"] = "tr"
+            elif normalize_turkish_text(user_input) != user_input.lower():
+                context["preferred_language"] = "tr"
+        return context
 
     def _safe_get_recent_conversations(self, uid: Any, limit: int = 8) -> list:
         try:
@@ -858,66 +980,19 @@ class Agent:
         if request_kind != "direct_action" or exec_path != "fast":
             return None
 
-        candidates: list[tuple[str, dict[str, Any]]] = []
-        seen: set[str] = set()
-
-        def _push_candidate(source: str, payload: Any) -> None:
-            if not isinstance(payload, dict):
-                return
-            normalized = self._coerce_intent_for_request_shape(
-                dict(payload),
-                user_input,
-                attachments=list(attachments or []),
-            )
-            if not isinstance(normalized, dict):
-                return
-            try:
-                key = json.dumps(normalized, ensure_ascii=False, sort_keys=True, default=str)
-            except Exception:
-                key = str(normalized)
-            if key in seen:
-                return
-            seen.add(key)
-            normalized["_intent_source"] = str(source or "")
-            candidates.append((str(source or ""), normalized))
-
-        learned_match = None
-        try:
-            if getattr(self, "learning", None) and hasattr(self.learning, "quick_match"):
-                learned_match = self.learning.quick_match(user_input)
-        except Exception:
-            learned_match = None
-        if isinstance(learned_match, dict):
-            _push_candidate("learning_quick_match", learned_match)
-        elif isinstance(learned_match, str) and learned_match.strip():
-            _push_candidate(
-                "learning_quick_match",
-                {
-                    "action": str(learned_match).strip(),
-                    "params": {},
-                    "confidence": 0.88,
-                    "reply": "Öğrenilmiş hızlı aksiyon uygulanıyor...",
-                },
-            )
-
-        _push_candidate("intent_parser", parsed_intent)
-        try:
-            _push_candidate("skill_intent", self._infer_skill_intent(user_input))
-        except Exception:
-            pass
-        try:
-            _push_candidate("general_tool_intent", self._infer_general_tool_intent(user_input))
-        except Exception:
-            pass
-        if self._looks_compound_action_request(user_input):
-            try:
-                _push_candidate("multi_task_infer", self._infer_multi_task_intent(user_input))
-            except Exception:
-                pass
-
-        for _source, candidate in candidates:
-            if self._should_run_direct_intent(candidate, user_input):
-                return candidate
+        best_candidate = self._select_best_direct_intent(
+            user_input,
+            parsed_intent=parsed_intent,
+            quick_intent=quick_intent,
+            attachments=attachments,
+            history=history,
+            user_id=user_id,
+            request_class=request_class,
+            execution_path=execution_path,
+            min_score=0.45,
+        )
+        if best_candidate is not None:
+            return best_candidate
 
         allow_llm_rescue = exec_path == "fast" and request_kind == "direct_action"
         if not allow_llm_rescue:
@@ -1160,6 +1235,8 @@ class Agent:
         finally:
             _active_ledger.reset(ledger_token)
             _active_runtime_policy.reset(runtime_policy_token)
+            if user_understanding_token is not None:
+                _active_user_understanding.reset(user_understanding_token)
             reset_current_pipeline_state(state_token)
 
         payload = dict(self._last_direct_intent_payload or {}) if isinstance(self._last_direct_intent_payload, dict) else {}
@@ -1903,6 +1980,12 @@ class Agent:
     async def initialize(self) -> bool:
         await self.kernel.initialize()
         self.llm = self.kernel.llm
+        try:
+            from core.intent import IntentRouter
+
+            self.intent_router = IntentRouter(self.llm)
+        except Exception as router_exc:
+            logger.debug(f"Agent intent router init skipped: {router_exc}")
         handler = self._build_away_task_handler()
         background_task_runner.set_resume_handler(handler)
         await background_task_runner.start_resume_loop(handler, interval_s=15.0)
@@ -1948,6 +2031,11 @@ class Agent:
     def _current_runtime_policy() -> dict:
         policy = _active_runtime_policy.get()
         return policy if isinstance(policy, dict) else {}
+
+    @staticmethod
+    def _current_user_understanding() -> dict:
+        context = _active_user_understanding.get()
+        return context if isinstance(context, dict) else {}
 
     @classmethod
     def _runtime_security_flags(cls) -> dict:
@@ -2056,8 +2144,8 @@ class Agent:
                 result_summary=str(summary or ""),
                 channel=str(channel or ""),
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"security audit skipped: {exc}")
 
     @staticmethod
     def _log_data_access_if_needed(user_id: str, tool_name: str, params: dict) -> None:
@@ -2077,8 +2165,8 @@ class Agent:
                 resource=resource,
                 purpose="task_execution",
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"data access audit skipped: {exc}")
 
     async def process(
         self,
@@ -2229,6 +2317,54 @@ class Agent:
         effective_user_input = self._runtime_normalize_user_input(
             str(pending_workflow.get("objective") or user_input) if pending_workflow and approval_granted(user_input) else user_input
         )
+        try:
+            is_correction, corrected_input = get_feedback_detector().extract_correction_intent(effective_user_input)
+            if is_correction and corrected_input and corrected_input.strip():
+                effective_user_input = corrected_input.strip()
+        except Exception as exc:
+            logger.debug(f"correction detection skipped: {exc}")
+        normalized_input = normalize_turkish_text(effective_user_input).lower()
+        if any(marker in normalized_input for marker in ("captcha", "sms kod", "otp", "doğrul", "dogrul", "verification", "2fa", "iki aşama", "iki asama")) and any(
+            marker in normalized_input for marker in ("geç", "gec", "atla", "skip", "bypass")
+        ):
+            manifest = ledger.write_manifest(
+                status="partial",
+                metadata={"reason": "verification_bypass_refused", "channel": channel},
+            )
+            run_store.write_task({}, user_input=effective_user_input, metadata={"channel": channel, "reason": "verification_bypass_refused"})
+            run_store.write_evidence(manifest_path=manifest, steps=[], artifacts=[], metadata={"status": "partial"})
+            run_store.write_summary(
+                status="partial",
+                response_text="CAPTCHA ve doğrulama adımlarını atlamaya yardımcı olamam.",
+                artifacts=[],
+                metadata={"manifest_path": manifest, "reason": "verification_bypass_refused"},
+            )
+            run_store.write_logs(lines=["verification_bypass_refused"])
+            try:
+                await self._finalize_turn(
+                    user_input=effective_user_input,
+                    response_text="CAPTCHA ve doğrulama adımlarını atlamaya yardımcı olamam.",
+                    action="refuse",
+                    success=False,
+                    started_at=started_at,
+                    context={
+                        "role": "chat",
+                        "job_type": "communication",
+                        "errors": 0,
+                        "run_id": run_id,
+                        "mode": "refusal",
+                    },
+                )
+            except Exception as finalize_exc:
+                logger.debug(f"verification refusal finalize skipped: {finalize_exc}")
+            return AgentResponse(
+                run_id=run_id,
+                text="CAPTCHA ve doğrulama adımlarını atlamaya yardımcı olamam.",
+                attachments=[],
+                evidence_manifest_path=manifest,
+                status="partial",
+                error="",
+            )
         last_personalization = self._last_turn_context.get("personalization", {}) if isinstance(self._last_turn_context, dict) else {}
         if getattr(self, "learning_control", None) and isinstance(last_personalization, dict):
             last_interaction_id = str(self._last_turn_context.get("interaction_id") or "").strip()
@@ -2256,7 +2392,28 @@ class Agent:
             quick_intent = None
 
         parsed_intent = None
-        if getattr(self, "intent_parser", None):
+        try:
+            routed = None
+            if getattr(self, "intent_router", None) is not None:
+                routed = self.intent_router.route(effective_user_input, uid, AVAILABLE_TOOLS, None)
+            else:
+                from core.intent import route_intent as intent_route_v2
+
+                routed = intent_route_v2(effective_user_input, uid, AVAILABLE_TOOLS, None, self.llm)
+            if routed:
+                parsed_intent = {
+                    "action": routed.action,
+                    "params": routed.params or {},
+                    "confidence": float(routed.confidence or 0.0),
+                    "reply": routed.reasoning or "",
+                    "source": routed.source_tier or "intent_router",
+                    "tasks": routed.tasks or [],
+                    "requires_clarification": bool(routed.requires_clarification or routed.action == "clarify"),
+                    "clarification_options": list(routed.clarification_options or []),
+                }
+        except Exception:
+            parsed_intent = None
+        if parsed_intent is None and getattr(self, "intent_parser", None):
             try:
                 parsed_intent = self.intent_parser.parse(effective_user_input)
             except Exception:
@@ -2296,19 +2453,77 @@ class Agent:
                 if resolved_input:
                     effective_user_input = resolved_input
                     route_metadata["resolved_user_input"] = resolved_input
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"conversation context resolution skipped: {exc}")
+
+        user_understanding_token = None
+        understanding_context = self._build_user_understanding_context(
+            uid,
+            effective_user_input,
+            conversation_context=conversation_context,
+            request_meta={
+                "channel": str(channel or "cli"),
+                "run_id": run_id,
+                "request_class": str(route_metadata.get("request_class") or ""),
+                "execution_path": str(route_metadata.get("execution_path") or ""),
+            },
+        )
+        user_understanding_token = _active_user_understanding.set(dict(understanding_context or {}))
+        route_metadata["user_understanding"] = dict(understanding_context or {})
+        route_metadata["request_kind"] = str(understanding_context.get("request_kind") or "chat")
+        route_metadata["preferred_language"] = str(understanding_context.get("preferred_language") or "auto")
+        route_metadata["response_length_bias"] = str(understanding_context.get("response_length_bias") or "short")
+        if understanding_context.get("prompt_hint"):
+            route_metadata["learning_prompt_hint"] = str(understanding_context.get("prompt_hint") or "")
+        if understanding_context.get("correction_hints"):
+            route_metadata["correction_hints"] = list(understanding_context.get("correction_hints") or [])[:3]
 
         active_provider = str(elyan_config.get("models.default.provider", "ollama") or "ollama").strip().lower()
         active_model = str(elyan_config.get("models.default.model", "") or "").strip()
         active_base_model_id = f"{active_provider}:{active_model}" if active_provider else active_model
 
         quick_category = getattr(quick_intent, "category", None)
-        chat_like_request = bool(
-            quick_category in {_IC.CHAT, _IC.GREETING, _IC.QUESTION}
-            or self._is_likely_chat_message(effective_user_input)
-            or self._should_route_to_llm_chat(effective_user_input, parsed_intent if isinstance(parsed_intent, dict) else None, quick_intent)
+        parsed_action = ""
+        if isinstance(parsed_intent, dict):
+            parsed_action = str(parsed_intent.get("action") or "").strip().lower()
+        actionable_attachment_request = bool(resolved_paths) and (
+            parsed_action not in {"", "chat", "unknown", "respond", "answer"}
+            or any(
+                token in str(effective_user_input or "").lower()
+                for token in ("yap", "set", "duvar kağıdı", "wallpaper", "uygula", "değiştir", "degistir")
+            )
         )
+        early_direct_intent = None
+        try:
+            early_direct_intent = self._select_best_direct_intent(
+                effective_user_input,
+                parsed_intent=parsed_intent if isinstance(parsed_intent, dict) else None,
+                quick_intent=quick_intent,
+                attachments=list(resolved_paths),
+                history=conversation_history,
+                user_id=uid,
+                min_score=0.48,
+            )
+        except Exception:
+            early_direct_intent = None
+        chat_like_request = bool(
+            quick_category in {_IC.CHAT, _IC.GREETING}
+            or (
+                self._is_likely_chat_message(effective_user_input)
+                and not self._is_information_question(effective_user_input)
+            )
+            or (
+                self._should_route_to_llm_chat(effective_user_input, parsed_intent if isinstance(parsed_intent, dict) else None, quick_intent)
+                and not self._is_information_question(effective_user_input)
+            )
+        )
+        parsed_action = str(parsed_intent.get("action") or "").strip().lower() if isinstance(parsed_intent, dict) else ""
+        if parsed_action and parsed_action not in {"chat", "unknown"} and self._should_run_direct_intent(parsed_intent, effective_user_input):
+            chat_like_request = False
+        if isinstance(early_direct_intent, dict):
+            chat_like_request = False
+        if actionable_attachment_request:
+            chat_like_request = False
         if chat_like_request:
             fast_text = ""
             fast_question_type = ""
@@ -2670,7 +2885,7 @@ class Agent:
         except Exception as cowork_exc:
             logger.debug(f"Cowork session bootstrap skipped: {cowork_exc}")
 
-        if fast_chat_allowed and self.llm is not None:
+        if fast_chat_allowed and self.llm is not None and not actionable_attachment_request:
             session_mode = str(getattr(cowork_session, "mode", "") or "").strip().lower()
             disable_fast_chat_for_mode = session_mode in {"screen", "browser", "code", "research", "file"}
             fast_response = None
@@ -2909,8 +3124,13 @@ class Agent:
             if route_decision is not None and hasattr(route_decision, "to_dict"):
                 ctx.telemetry["route_decision"] = route_decision.to_dict()
                 ctx.runtime_policy["metadata"]["route_decision"] = route_decision.to_dict()
-                ctx.runtime_policy["metadata"]["route_mode"] = str(getattr(route_decision, "mode", "") or "")
-                ctx.runtime_policy["metadata"]["route_confidence"] = float(getattr(route_decision, "confidence", 0.0) or 0.0)
+            ctx.runtime_policy["metadata"]["route_mode"] = str(getattr(route_decision, "mode", "") or "")
+            ctx.runtime_policy["metadata"]["route_confidence"] = float(getattr(route_decision, "confidence", 0.0) or 0.0)
+            ctx.runtime_policy["metadata"]["user_understanding"] = dict(route_metadata.get("user_understanding") or {})
+            ctx.runtime_policy["metadata"]["request_kind"] = str(route_metadata.get("request_kind") or "chat")
+            ctx.runtime_policy["metadata"]["learning_prompt_hint"] = str(route_metadata.get("learning_prompt_hint") or "")
+            ctx.runtime_policy["metadata"]["preferred_language"] = str(route_metadata.get("preferred_language") or "auto")
+            ctx.runtime_policy["metadata"]["response_length_bias"] = str(route_metadata.get("response_length_bias") or "short")
             if ctx.cowork_mode in {"screen", "browser"}:
                 screen_state = await with_timeout(
                     cowork_runtime.collect_screen_state(goal=effective_user_input, task_state=task.to_dict() if hasattr(task, "to_dict") else {}),
@@ -3075,12 +3295,6 @@ class Agent:
                         status="ok" if status == "success" else "error",
                         latency_ms=_elapsed_ms,
                     )
-                except Exception:
-                    pass
-            if self.billing:
-                try:
-                    from core.billing.subscription import UsageType
-                    self.billing.usage.record(uid, UsageType.API_REQUEST, 1)
                 except Exception:
                     pass
             if self.compliance:
@@ -3403,7 +3617,7 @@ class Agent:
             reset_current_pipeline_state(state_token)
 
     def _infer_response_mode(self, user_input: str, ctx) -> str:
-        # Öncelik: runtime policy -> kullanıcı ipucu -> varsayılan
+        # Öncelik: runtime policy -> brief -> kullanıcı ipucu -> varsayılan
         try:
             resp_policy = ctx.runtime_policy.get("response", {}) if isinstance(ctx.runtime_policy, dict) else {}
             policy_mode = str(resp_policy.get("mode") or "").strip().lower()
@@ -3411,6 +3625,19 @@ class Agent:
             policy_mode = ""
         if policy_mode:
             return policy_mode
+        try:
+            metadata = ctx.runtime_policy.get("metadata", {}) if isinstance(ctx.runtime_policy, dict) else {}
+            brief = metadata.get("user_understanding") if isinstance(metadata, dict) else {}
+            if isinstance(brief, dict):
+                response_length = str(brief.get("response_length") or brief.get("response_length_bias") or "").strip().lower()
+                if response_length == "short":
+                    return "concise"
+                if response_length == "medium":
+                    return "formal"
+                if response_length == "detailed":
+                    return "friendly"
+        except Exception:
+            pass
         low = str(user_input or "").lower()
         if any(k in low for k in ("kısa", "kisaca", "öz", "özet")):
             return "concise"
@@ -3830,10 +4057,49 @@ class Agent:
         ):
             mapped_tool = "research_document_delivery"
         clean_params = self._normalize_param_aliases(mapped_tool, clean_params)
+        try:
+            from core.reliability_integration import sanitize_and_validate_params
+
+            param_ok, clean_params, validation_error = sanitize_and_validate_params(mapped_tool, clean_params)
+            if not param_ok and validation_error is not None:
+                _push_tool_event(
+                    "end",
+                    mapped_tool,
+                    step=step_name,
+                    request_id="",
+                    success=False,
+                    payload={
+                        "error": validation_error.message,
+                        "error_code": validation_error.code,
+                        "validation": validation_error.to_dict(),
+                    },
+                )
+                return {
+                    "success": False,
+                    "error": validation_error.message,
+                    "error_code": validation_error.code,
+                    "validation": validation_error.to_dict(),
+                }
+        except Exception as validation_exc:
+            logger.debug(f"Tool validation skipped for {mapped_tool}: {validation_exc}")
         start = time.perf_counter()
         success = False
         err_text = ""
         used_tool = mapped_tool
+        task_category = str(step_name or mapped_tool or "default").strip().lower() or "default"
+        runtime_facade = None
+        try:
+            from core.elyan_runtime import get_elyan_runtime
+
+            runtime_facade = get_elyan_runtime()
+        except Exception:
+            runtime_facade = None
+        circuit_breaker = None
+        if runtime_facade is not None:
+            try:
+                circuit_breaker = runtime_facade.circuit_registry.get_or_create(mapped_tool)
+            except Exception:
+                circuit_breaker = None
 
         # ── ToolRequest kaydı başlat ──────────────────────────────────────────
         _tr_log = get_tool_request_log()
@@ -3928,13 +4194,13 @@ class Agent:
 
             typed_tools_strict = bool(elyan_config.get("agent.flags.typed_tools_strict", False))
         except Exception:
-            pass
+            logger.debug("typed_tools_strict config lookup skipped")
         try:
             ff = runtime_policy.get("feature_flags", {}) if isinstance(runtime_policy.get("feature_flags"), dict) else {}
             if "typed_tools_strict" in ff:
                 typed_tools_strict = bool(ff.get("typed_tools_strict"))
         except Exception:
-            pass
+            logger.debug("typed_tools_strict runtime override skipped")
         if typed_tools_strict:
             try:
                 from core.pipeline_upgrade.executor import validate_tool_io
@@ -3952,7 +4218,7 @@ class Agent:
                     )
                     return {"success": False, "error": err_text, "error_code": "TOOL_INPUT_SCHEMA"}
             except Exception:
-                pass
+                logger.debug(f"typed tool gate skipped for {mapped_tool}")
 
         # --- Runtime Guard (RBAC + operator policy + path/command checks) ---
         guard = runtime_security_guard.evaluate(
@@ -4163,12 +4429,45 @@ class Agent:
         # Registry Execution
         try:
             _tool_timeout = RESEARCH_TIMEOUT if "research" in mapped_tool else TOOL_TIMEOUT
-            result = await with_timeout(
-                self.kernel.tools.execute(mapped_tool, clean_params),
-                seconds=_tool_timeout,
-                fallback=None,
-                context=f"tool:{mapped_tool}",
-            )
+            async def _run_kernel_tool():
+                return await with_timeout(
+                    self.kernel.tools.execute(mapped_tool, clean_params),
+                    seconds=_tool_timeout,
+                    fallback=None,
+                    context=f"tool:{mapped_tool}",
+                )
+
+            try:
+                if circuit_breaker is not None:
+                    result = await circuit_breaker.call(_run_kernel_tool)
+                else:
+                    result = await _run_kernel_tool()
+            except Exception as breaker_exc:
+                from core.resilience.circuit_breaker import CircuitOpenError
+
+                if isinstance(breaker_exc, CircuitOpenError):
+                    if runtime_facade is not None:
+                        try:
+                            runtime_facade.tool_bandit.disable_tool(task_category, mapped_tool)
+                        except Exception:
+                            pass
+                    fallback_candidates = [name for name in AVAILABLE_TOOLS.keys() if name != mapped_tool]
+                    close_matches = get_close_matches(mapped_tool, fallback_candidates, n=2, cutoff=0.55)
+                    fallback_tool = close_matches[0] if close_matches else ""
+                    if fallback_tool:
+                        used_tool = fallback_tool
+                        result = await with_timeout(
+                            self.kernel.tools.execute(fallback_tool, clean_params),
+                            seconds=_tool_timeout,
+                            fallback=None,
+                            context=f"tool:{fallback_tool}",
+                        )
+                        result = self._normalize_tool_execution_result(fallback_tool, result, source="agent_kernel_execute_fallback")
+                    else:
+                        logger.warning(f"Circuit open for {mapped_tool}; falling back to direct execution.")
+                        result = await _run_kernel_tool()
+                else:
+                    raise
             result = self._normalize_tool_execution_result(mapped_tool, result, source="agent_kernel_execute")
             if isinstance(result, dict) and result.get("success") is False:
                 err_text = str(result.get("error", "") or "")
@@ -4635,6 +4934,15 @@ class Agent:
             latency = int((time.perf_counter() - start) * 1000)
             _final_result = locals().get("result", {})
             record_tool_usage(used_tool, success=success, latency_ms=latency, source="agent", error=err_text)
+            try:
+                if runtime_facade is not None:
+                    runtime_facade.record_tool_outcome(task_category, used_tool, success, latency)
+                    if success:
+                        runtime_facade.uncertainty_engine.update_belief(used_tool, "success", 0.9)
+                    else:
+                        runtime_facade.uncertainty_engine.update_belief(used_tool, "failure", 0.1)
+            except Exception:
+                pass
             # ToolRequest kaydını tamamla
             try:
                 _tr_log.finish_request(
@@ -6120,6 +6428,220 @@ class Agent:
         if self._is_multi_step_request(user_input):
             return False
         return True
+
+    @staticmethod
+    def _direct_intent_source_bonus(source: str) -> float:
+        token = str(source or "").strip().lower()
+        return {
+            "learning_quick_match": 0.18,
+            "intent_parser": 0.14,
+            "skill_intent": 0.16,
+            "general_tool_intent": 0.10,
+            "multi_task_infer": 0.20,
+            "llm_tool_router": 0.08,
+        }.get(token, 0.0)
+
+    def _score_direct_intent_candidate(self, intent: Optional[dict], user_input: str) -> float:
+        if not isinstance(intent, dict):
+            return -1.0
+        action = str(intent.get("action") or "").strip().lower()
+        if not action or action in {"chat", "unknown"}:
+            return -1.0
+
+        text = normalize_turkish_text(user_input).lower()
+        understanding = self._current_user_understanding()
+        base_conf = float(intent.get("confidence", 0.55) or 0.55)
+        score = max(0.0, min(1.0, base_conf)) * 0.55
+        score += self._direct_intent_source_bonus(str(intent.get("_intent_source") or ""))
+        request_kind = str(understanding.get("request_kind") or "").strip().lower()
+
+        if action == "multi_task":
+            tasks = intent.get("tasks")
+            if isinstance(tasks, list) and len(tasks) >= 2:
+                score += 0.25
+            else:
+                score -= 0.35
+
+        action_tokens = [tok for tok in re.split(r"[_\s]+", action) if tok]
+        match_hits = sum(1 for tok in action_tokens[:4] if tok and tok in text)
+        if match_hits:
+            score += min(0.22, match_hits * 0.07)
+
+        action_aliases = {
+            "research": ("araştır", "arastir", "research", "incele", "analiz", "makale", "kaynak"),
+            "advanced_research": ("araştır", "arastir", "research", "incele", "analiz", "makale", "kaynak"),
+            "research_document_delivery": ("araştır", "arastir", "belge", "doküman", "dokuman", "rapor", "gönder", "gonder"),
+            "list_files": ("listele", "içinde", "icinde", "göster", "goster", "neler var"),
+            "read_file": ("oku", "içerik", "icerik", "ne yazıyor", "ne yaziyor"),
+            "write_file": ("kaydet", "yaz", "oluştur", "olustur", "not"),
+            "create_folder": ("klasör", "klasor", "folder", "dizin"),
+            "delete_file": ("sil", "kaldır", "kaldir", "delete", "remove"),
+            "move_file": ("taşı", "tasi", "move"),
+            "copy_file": ("kopyala", "copy"),
+            "rename_file": ("yeniden adlandır", "rename", "adını", "adini"),
+            "open_url": ("aç", "ac", "url", "site", "web"),
+            "web_search": ("ara", "search", "google"),
+            "run_safe_command": ("komut", "terminal", "shell", "çalıştır", "calistir", "run"),
+            "analyze_screen": ("ekran", "screenshot", "ss", "bak"),
+            "computer_use": ("tıkla", "tikla", "mouse", "klavye", "bilgisayar", "computer"),
+        }
+        for token in action_aliases.get(action, ()):
+            if token and token in text:
+                score += 0.08
+                break
+
+        for topic in list(understanding.get("top_topics") or [])[:3]:
+            topic_token = normalize_turkish_text(str(topic or "")).lower()
+            if topic_token and topic_token in text:
+                score += 0.06
+                break
+
+        request_kind_family = {
+            "code": {"write_file", "read_file", "run_safe_command", "analyze_codebase", "code_execution", "test_code"},
+            "filesystem": {"list_files", "read_file", "write_file", "create_folder", "delete_file", "move_file", "copy_file", "rename_file"},
+            "research": {"research", "advanced_research", "web_search", "research_document_delivery"},
+            "browser": {"open_url", "analyze_screen", "computer_use", "screenshot"},
+            "planning": {"plan", "multi_task", "summarize_document"},
+            "summary": {"summarize_document", "generate_summary"},
+            "question": {"chat", "answer_question", "explain"},
+        }
+        if request_kind and action in request_kind_family.get(request_kind, set()):
+            score += 0.12
+        elif request_kind == "code" and action in {"write_file", "run_safe_command"}:
+            score += 0.08
+        elif request_kind == "research" and action in {"web_search", "research"}:
+            score += 0.08
+
+        for correction in list(understanding.get("correction_hints") or [])[:3]:
+            wrong_action = str((correction or {}).get("wrong_action") or "").strip().lower()
+            if not wrong_action:
+                continue
+            wrong_action = ACTION_TO_TOOL.get(wrong_action, wrong_action)
+            if wrong_action == action or wrong_action in {str(intent.get("tool") or "").strip().lower(), str(intent.get("tool_name") or "").strip().lower()}:
+                score -= 0.3
+                break
+
+        if intent.get("_route_to_llm"):
+            score -= 0.12
+        if self._is_multi_step_request(user_input) and action != "multi_task":
+            score -= 0.08
+        if str(understanding.get("response_length_bias") or "").strip().lower() == "short" and action in {"detailed_explanation", "step_by_step"}:
+            score -= 0.04
+        return score
+
+    def _build_direct_intent_candidates(
+        self,
+        user_input: str,
+        *,
+        parsed_intent: Optional[dict[str, Any]] = None,
+        quick_intent: Any = None,
+        attachments: list[str] | None = None,
+        history: list | None = None,
+        user_id: str = "local",
+        request_class: str = "",
+        execution_path: str = "",
+    ) -> list[dict[str, Any]]:
+        request_kind = str(request_class or "").strip().lower()
+        exec_path = str(execution_path or "").strip().lower()
+        if request_kind and (request_kind != "direct_action" or exec_path != "fast"):
+            return []
+
+        candidates: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        def _push_candidate(source: str, payload: Any) -> None:
+            if not isinstance(payload, dict):
+                return
+            normalized = self._coerce_intent_for_request_shape(
+                dict(payload),
+                user_input,
+                attachments=list(attachments or []),
+            )
+            if not isinstance(normalized, dict):
+                return
+            try:
+                key = json.dumps(normalized, ensure_ascii=False, sort_keys=True, default=str)
+            except Exception:
+                key = str(normalized)
+            if key in seen:
+                return
+            seen.add(key)
+            normalized["_intent_source"] = str(source or "")
+            candidates.append(normalized)
+
+        learned_match = None
+        try:
+            if getattr(self, "learning", None) and hasattr(self.learning, "quick_match"):
+                learned_match = self.learning.quick_match(user_input)
+        except Exception:
+            learned_match = None
+        if isinstance(learned_match, dict):
+            _push_candidate("learning_quick_match", learned_match)
+        elif isinstance(learned_match, str) and learned_match.strip():
+            _push_candidate(
+                "learning_quick_match",
+                {
+                    "action": str(learned_match).strip(),
+                    "params": {},
+                    "confidence": 0.88,
+                    "reply": "Öğrenilmiş hızlı aksiyon uygulanıyor...",
+                },
+            )
+
+        _push_candidate("intent_parser", parsed_intent)
+        try:
+            _push_candidate("skill_intent", self._infer_skill_intent(user_input))
+        except Exception:
+            pass
+        try:
+            _push_candidate("general_tool_intent", self._infer_general_tool_intent(user_input))
+        except Exception:
+            pass
+        if self._looks_compound_action_request(user_input):
+            try:
+                _push_candidate("multi_task_infer", self._infer_multi_task_intent(user_input))
+            except Exception:
+                pass
+
+        scored = [candidate for candidate in candidates if self._should_run_direct_intent(candidate, user_input)]
+        scored.sort(
+            key=lambda item: (
+                self._score_direct_intent_candidate(item, user_input),
+                float(item.get("confidence", 0.0) or 0.0),
+            ),
+            reverse=True,
+        )
+        return scored
+
+    def _select_best_direct_intent(
+        self,
+        user_input: str,
+        *,
+        parsed_intent: Optional[dict[str, Any]] = None,
+        quick_intent: Any = None,
+        attachments: list[str] | None = None,
+        history: list | None = None,
+        user_id: str = "local",
+        request_class: str = "",
+        execution_path: str = "",
+        min_score: float = 0.45,
+    ) -> Optional[dict[str, Any]]:
+        candidates = self._build_direct_intent_candidates(
+            user_input,
+            parsed_intent=parsed_intent,
+            quick_intent=quick_intent,
+            attachments=attachments,
+            history=history,
+            user_id=user_id,
+            request_class=request_class,
+            execution_path=execution_path,
+        )
+        if not candidates:
+            return None
+        best = candidates[0]
+        if self._score_direct_intent_candidate(best, user_input) < float(min_score or 0.0):
+            return None
+        return best
 
     @staticmethod
     def _should_route_to_llm_chat(user_input: str, parsed_intent: Optional[dict], quick_intent: Any) -> bool:
@@ -9225,7 +9747,8 @@ class Agent:
         retries_cfg = task_spec.get("retries") if isinstance(task_spec.get("retries"), dict) else {}
         default_attempts = max(1, min(4, int(retries_cfg.get("max_attempts", 1) or 1)))
         dag_parallel = self._feature_flag_enabled("ELYAN_DAG_EXEC", False)
-        max_parallel = 3
+        cpu_half = max(2, (os.cpu_count() or 4) // 2)
+        max_parallel = min(4, cpu_half)
         try:
             policy = self._current_runtime_policy()
             orch = policy.get("orchestration", {}) if isinstance(policy, dict) and isinstance(policy.get("orchestration"), dict) else {}
@@ -9235,7 +9758,7 @@ class Agent:
                 max_parallel = int(orch.get("team_max_parallel") or max_parallel)
         except Exception:
             pass
-        max_parallel = max(1, min(6, max_parallel))
+        max_parallel = max(1, min(8, max_parallel))
 
         def _emit_terminal_error(code: str, reason: str = "") -> None:
             c = str(code or TOOL_ERROR).strip().upper() or TOOL_ERROR
@@ -11359,6 +11882,14 @@ class Agent:
                     "ok": bool((context or {}).get("verified", False)) and not bool((context or {}).get("delivery_blocked", False)),
                     "delivery_blocked": bool((context or {}).get("delivery_blocked", False)),
                 }
+            collaboration_trace = []
+            try:
+                if getattr(self, "llm", None) and hasattr(self.llm, "get_last_collaboration_trace"):
+                    collaboration_trace = list(self.llm.get_last_collaboration_trace() or [])
+            except Exception as collaboration_exc:
+                logger.debug(f"collaboration trace capture failed: {collaboration_exc}")
+            if collaboration_trace and not model_runtime.get("collaboration_trace"):
+                model_runtime["collaboration_trace"] = collaboration_trace
             user_feedback = dict((context or {}).get("reward_evidence") or {})
             final_outcome = "success" if success else "failed"
             if str(action or "") == "clarify":
@@ -12085,12 +12616,15 @@ class Agent:
             compact_mode = self._should_use_compact_action_responses(user_input=user_input)
             policy = self._current_runtime_policy()
             orch_cfg = policy.get("orchestration", {}) if isinstance(policy.get("orchestration"), dict) else {}
-            max_parallel = 2
+            cpu_half = max(2, (os.cpu_count() or 4) // 2)
+            max_parallel = min(3, cpu_half)
             try:
-                max_parallel = int(orch_cfg.get("max_parallel", orch_cfg.get("team_max_parallel", 2)) or 2)
+                max_parallel = int(
+                    orch_cfg.get("max_parallel", orch_cfg.get("team_max_parallel", max_parallel)) or max_parallel
+                )
             except Exception:
-                max_parallel = 2
-            max_parallel = max(1, min(4, max_parallel))
+                max_parallel = min(3, cpu_half)
+            max_parallel = max(1, min(6, max_parallel))
             default_attempts = 2
             ui_serial_actions = {
                 "open_app",
@@ -14764,3 +15298,6 @@ class Agent:
         logger.info("Agent shutting down.")
         # Kernel handles resource cleanup usually, but we can trigger it
         pass
+
+
+ElyanAgent = Agent

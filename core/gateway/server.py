@@ -3207,6 +3207,9 @@ class ElyanGatewayServer:
             data = await request.json()
         except Exception:
             return _json_error("invalid json", status=400)
+        allowed, error = self._require_billing_write_role(request, data)
+        if not allowed:
+            return _json_error(error, status=403)
         workspace_id = self._workspace_id(request, data)
         try:
             payload = self._workspace_billing().create_checkout_session(
@@ -3227,6 +3230,9 @@ class ElyanGatewayServer:
             data = await request.json()
         except Exception:
             return _json_error("invalid json", status=400)
+        allowed, error = self._require_billing_write_role(request, data)
+        if not allowed:
+            return _json_error(error, status=403)
         workspace_id = self._workspace_id(request, data)
         try:
             payload = self._workspace_billing().purchase_token_pack(

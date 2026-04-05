@@ -421,14 +421,15 @@ class IyzicoProvider(PaymentProvider):
     def _validate_fallback_webhook(self, payload: bytes, headers: dict[str, str], body: dict[str, Any]) -> ProviderCompletion:
         secret = self._webhook_secret()
         signature = str(headers.get("x-iyzico-signature") or headers.get("x-iyzi-signature") or "").strip()
-        if secret:
-            digest = hmac.HMAC(
-                key=secret.encode("utf-8"),
-                msg=payload,
-                digestmod=hashlib.sha256,
-            ).hexdigest()
-            if not signature or not hmac.compare_digest(signature, digest):
-                raise RuntimeError("iyzico_webhook_signature_invalid")
+        if not secret:
+            raise RuntimeError("iyzico_webhook_secret_required")
+        digest = hmac.HMAC(
+            key=secret.encode("utf-8"),
+            msg=payload,
+            digestmod=hashlib.sha256,
+        ).hexdigest()
+        if not signature or not hmac.compare_digest(signature, digest):
+            raise RuntimeError("iyzico_webhook_signature_invalid")
         event_type = str(body.get("event_type") or body.get("type") or "payment.updated").strip().lower()
         metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
         workspace_id = str(body.get("workspace_id") or metadata.get("workspace_id") or "local-workspace").strip() or "local-workspace"
@@ -498,10 +499,15 @@ class IyzicoProvider(PaymentProvider):
 
         iyzi_event_type = str(body.get("iyziEventType") or body.get("eventType") or "").strip().lower()
         if body.get("subscriptionReferenceCode") or iyzi_event_type.startswith("subscription."):
+            reference_id = str(
+                body.get("conversationId")
+                or body.get("orderReferenceCode")
+                or ""
+            ).strip()
             return ProviderCompletion(
                 provider=self.provider_name,
                 mode="subscription",
-                reference_id="",
+                reference_id=reference_id,
                 status=iyzi_event_type.split(".")[-1] if iyzi_event_type else "pending",
                 provider_payment_id=str(body.get("orderReferenceCode") or body.get("iyziReferenceCode") or "").strip(),
                 subscription_reference_code=str(body.get("subscriptionReferenceCode") or "").strip(),
