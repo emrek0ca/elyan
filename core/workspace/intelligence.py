@@ -140,6 +140,7 @@ class WorkspaceIntelligenceEngine:
 
     def _build_from_db(self, workspace_id: str) -> WorkspaceProfile:
         from core.persistence.runtime_db import get_runtime_database as get_runtime_db
+        from sqlalchemy import text as _text
         db = get_runtime_db()
 
         # 1. Operational feedback → task type frequencies, success rates
@@ -147,14 +148,13 @@ class WorkspaceIntelligenceEngine:
         try:
             with db.local_engine.connect() as conn:
                 rows = conn.execute(
-                    """
-                    SELECT category, outcome, latency_ms, created_at
-                    FROM operational_feedback
-                    WHERE workspace_id = ?
-                    ORDER BY created_at DESC
-                    LIMIT 500
-                    """,
-                    (workspace_id,),
+                    _text(
+                        "SELECT category, outcome, latency_ms, created_at "
+                        "FROM operational_feedback "
+                        "WHERE workspace_id = :wid "
+                        "ORDER BY created_at DESC LIMIT 500"
+                    ),
+                    {"wid": workspace_id},
                 ).fetchall()
                 feedback_rows = [dict(r._mapping) for r in rows]
         except Exception:
@@ -165,14 +165,13 @@ class WorkspaceIntelligenceEngine:
         try:
             with db.local_engine.connect() as conn:
                 rows = conn.execute(
-                    """
-                    SELECT tool_name, success_count, failure_count, sample_count, avg_latency_ms
-                    FROM global_tool_reliability
-                    WHERE scope = ? OR scope = 'global'
-                    ORDER BY sample_count DESC
-                    LIMIT 100
-                    """,
-                    (workspace_id,),
+                    _text(
+                        "SELECT tool_name, success_count, failure_count, sample_count, avg_latency_ms "
+                        "FROM global_tool_reliability "
+                        "WHERE scope = :wid OR scope = 'global' "
+                        "ORDER BY sample_count DESC LIMIT 100"
+                    ),
+                    {"wid": workspace_id},
                 ).fetchall()
                 tool_rows = [dict(r._mapping) for r in rows]
         except Exception:
@@ -183,14 +182,13 @@ class WorkspaceIntelligenceEngine:
         try:
             with db.local_engine.connect() as conn:
                 rows = conn.execute(
-                    """
-                    SELECT title, current_mode, status, created_at
-                    FROM cowork_threads
-                    WHERE workspace_id = ?
-                    ORDER BY created_at DESC
-                    LIMIT 200
-                    """,
-                    (workspace_id,),
+                    _text(
+                        "SELECT title, current_mode, status, created_at "
+                        "FROM cowork_threads "
+                        "WHERE workspace_id = :wid "
+                        "ORDER BY created_at DESC LIMIT 200"
+                    ),
+                    {"wid": workspace_id},
                 ).fetchall()
                 thread_rows = [dict(r._mapping) for r in rows]
         except Exception:
@@ -305,32 +303,86 @@ class WorkspaceIntelligenceEngine:
         latency_ms: float,
         domain: str,
     ) -> None:
-        """Write outcome signal to the operational_feedback table."""
+        """Write outcome signal to operational_feedback and global_tool_reliability tables."""
         from core.persistence.runtime_db import get_runtime_database as get_runtime_db
-        import uuid
+        from sqlalchemy import text as _text
+        import uuid, json as _json
         db = get_runtime_db()
         outcome = "success" if success else "failure"
+        now = time.time()
+        reward = 1.0 if success else 0.0
         with db.local_engine.begin() as conn:
+            # 1. Write task-level feedback
             conn.execute(
-                """
-                INSERT OR IGNORE INTO operational_feedback
-                (feedback_id, workspace_id, entity_id, category, outcome, reward,
-                 latency_ms, recovery_count, metadata_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    f"wif_{uuid.uuid4().hex[:12]}",
-                    workspace_id,
-                    f"ws_{workspace_id}",
-                    str(domain or task_type or "general"),
-                    outcome,
-                    1.0 if success else 0.0,
-                    float(latency_ms or 0.0),
-                    0,
-                    __import__("json").dumps({"task_type": task_type, "tools": tool_names}),
-                    time.time(),
+                _text(
+                    "INSERT OR IGNORE INTO operational_feedback "
+                    "(feedback_id, workspace_id, user_id, entity_id, category, outcome, reward, "
+                    "latency_ms, recovery_count, payload_json, created_at) "
+                    "VALUES (:fid, :wid, :uid, :eid, :cat, :outcome, :reward, "
+                    ":lat, :rec, :meta, :ts)"
                 ),
+                {
+                    "fid": f"wif_{uuid.uuid4().hex[:12]}",
+                    "wid": workspace_id,
+                    "uid": "workspace-agent",
+                    "eid": f"ws_{workspace_id}",
+                    "cat": str(domain or task_type or "general"),
+                    "outcome": outcome,
+                    "reward": reward,
+                    "lat": float(latency_ms or 0.0),
+                    "rec": 0,
+                    "meta": _json.dumps({"task_type": task_type, "tools": tool_names}),
+                    "ts": now,
+                },
             )
+            # 2. Update per-tool reliability for each tool used
+            for tool in tool_names:
+                if not tool:
+                    continue
+                stat_id = f"{workspace_id}::{tool}"
+                row = conn.execute(
+                    _text(
+                        "SELECT success_count, failure_count, sample_count, avg_latency_ms "
+                        "FROM global_tool_reliability WHERE stat_id = :sid"
+                    ),
+                    {"sid": stat_id},
+                ).fetchone()
+                if row:
+                    s_cnt = int(row[0] or 0) + (1 if success else 0)
+                    f_cnt = int(row[1] or 0) + (0 if success else 1)
+                    n = int(row[2] or 0) + 1
+                    avg_lat = ((float(row[3] or 0.0) * (n - 1)) + float(latency_ms or 0.0)) / max(n, 1)
+                    conn.execute(
+                        _text(
+                            "UPDATE global_tool_reliability "
+                            "SET success_count=:sc, failure_count=:fc, sample_count=:n, "
+                            "avg_reward=:rw, avg_latency_ms=:lat, updated_at=:ts "
+                            "WHERE stat_id=:sid"
+                        ),
+                        {"sc": s_cnt, "fc": f_cnt, "n": n, "rw": reward,
+                         "lat": avg_lat, "ts": now, "sid": stat_id},
+                    )
+                else:
+                    conn.execute(
+                        _text(
+                            "INSERT INTO global_tool_reliability "
+                            "(stat_id, scope, tool_name, success_count, failure_count, "
+                            "sample_count, avg_reward, avg_latency_ms, metadata_json, updated_at) "
+                            "VALUES (:sid, :scope, :tool, :sc, :fc, :n, :rw, :lat, :meta, :ts)"
+                        ),
+                        {
+                            "sid": stat_id,
+                            "scope": workspace_id,
+                            "tool": tool,
+                            "sc": 1 if success else 0,
+                            "fc": 0 if success else 1,
+                            "n": 1,
+                            "rw": reward,
+                            "lat": float(latency_ms or 0.0),
+                            "meta": _json.dumps({"task_type": task_type}),
+                            "ts": now,
+                        },
+                    )
 
 
 # ─── Singleton ────────────────────────────────────────────────────────────────

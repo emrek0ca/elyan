@@ -12053,6 +12053,41 @@ class Agent:
             except Exception as cowork_exc:
                 logger.debug(f"cowork finalize skipped: {cowork_exc}")
 
+        # ── Workspace Intelligence: record task outcome for learning loop ────
+        try:
+            from core.workspace.intelligence import get_workspace_intelligence
+            _rt_policy = self._current_runtime_policy()
+            _rt_meta = _rt_policy.get("metadata", {}) if isinstance(_rt_policy.get("metadata"), dict) else {}
+            _ws_id = str(
+                (context or {}).get("workspace_id")
+                or _rt_meta.get("workspace_id")
+                or "local-workspace"
+            )
+            _task_type = str((context or {}).get("job_type") or action or "general")
+            # Extract tool names from tool_results list (each is a dict with 'tool' or 'action' key)
+            _raw_tool_results = list((context or {}).get("tool_results") or [])
+            _tool_names = list({
+                str(r.get("tool") or r.get("action") or r.get("tool_name") or "")
+                for r in _raw_tool_results if isinstance(r, dict)
+            } - {""})
+            if not _tool_names and action and action not in {"chat", "clarify", "refuse", ""}:
+                _tool_names = [action]
+            _domain = str(
+                (context or {}).get("role")
+                or _rt_meta.get("user_understanding", {}).get("dominant_domain", "")
+                or ""
+            )
+            get_workspace_intelligence().record_task_outcome(
+                workspace_id=_ws_id,
+                task_type=_task_type,
+                tool_names=_tool_names,
+                success=bool(success),
+                latency_ms=float(duration_ms),
+                domain=_domain,
+            )
+        except Exception as _wi_exc:
+            logger.debug(f"workspace intelligence record skipped: {_wi_exc}")
+
     @staticmethod
     def _strip_markdown_fence(content: str) -> str:
         text = str(content or "").strip()

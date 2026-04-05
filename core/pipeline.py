@@ -2358,6 +2358,20 @@ class StageRoute(PipelineStage):
         except Exception as e:
             logger.debug(f"Learning context injection skipped: {e}")
 
+        # Intelligence Layer: inject workspace & OS context into specialized prompt
+        try:
+            _understanding = agent._current_user_understanding() if hasattr(agent, "_current_user_understanding") else {}
+            _ws_fragment = str((_understanding.get("workspace_intel") or {}).get("prompt_fragment") or "").strip()
+            _os_fragment = str((_understanding.get("os_context") or {}).get("prompt_fragment") or "").strip()
+            _intel_parts = [p for p in [_ws_fragment, _os_fragment] if p]
+            if _intel_parts:
+                _intel_ctx = "\n".join(_intel_parts)
+                existing = str(ctx.specialized_prompt or "")
+                ctx.specialized_prompt = f"{existing}\n\n{_intel_ctx}" if existing else _intel_ctx
+                logger.debug("Intelligence layer context injected into pipeline")
+        except Exception as _intel_exc:
+            logger.debug(f"Intelligence layer injection skipped: {_intel_exc}")
+
         # Cognitive parsing: goal graph + constraints for complex instructions.
         try:
             from core.goal_graph import get_goal_graph_planner
