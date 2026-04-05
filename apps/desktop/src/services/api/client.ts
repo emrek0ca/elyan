@@ -9,6 +9,8 @@ type JsonRecord = Record<string, unknown>;
 export const DEFAULT_BASE_URL =
   import.meta.env.VITE_ELYAN_API_BASE_URL?.trim() || "http://127.0.0.1:18789";
 
+const SESSION_TOKEN_STORAGE_KEY = "elyan_session_token";
+
 export class ApiClient {
   private sessionToken = "";
   private adminToken = "";
@@ -16,6 +18,7 @@ export class ApiClient {
 
   constructor(baseUrl = DEFAULT_BASE_URL) {
     this.baseUrl = baseUrl;
+    this.sessionToken = this.readStoredSessionToken();
   }
 
   setBaseUrl(baseUrl: string) {
@@ -41,10 +44,38 @@ export class ApiClient {
 
   setSessionToken(sessionToken: string) {
     this.sessionToken = sessionToken.trim();
+    this.persistSessionToken();
   }
 
   clearSessionToken() {
     this.sessionToken = "";
+    this.persistSessionToken();
+  }
+
+  private readStoredSessionToken(): string {
+    if (typeof localStorage === "undefined") {
+      return "";
+    }
+    try {
+      return (localStorage.getItem(SESSION_TOKEN_STORAGE_KEY) || "").trim();
+    } catch {
+      return "";
+    }
+  }
+
+  private persistSessionToken() {
+    if (typeof localStorage === "undefined") {
+      return;
+    }
+    try {
+      if (this.sessionToken) {
+        localStorage.setItem(SESSION_TOKEN_STORAGE_KEY, this.sessionToken);
+      } else {
+        localStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
+      }
+    } catch {
+      // Ignore storage failures and keep the in-memory token usable.
+    }
   }
 
   private normalizeEnvelope<T>(payload: T): T {
@@ -112,7 +143,7 @@ export class ApiClient {
         ? String((responseBody as Record<string, unknown>).session_token || "")
         : "");
     if (responseSessionToken) {
-      this.sessionToken = responseSessionToken;
+      this.setSessionToken(responseSessionToken);
     }
 
     if (responseIsJson) {
