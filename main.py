@@ -524,6 +524,16 @@ def _run_gateway(port: int):
         if not loop.run_until_complete(agent.initialize()):
             click.echo("❌ Başlatma hatası.")
             return
+
+        async def _start_intelligence_layers():
+            # PersonalContextEngine: start OS context polling for local user
+            try:
+                from core.personal_context_engine import get_personal_context_engine
+                get_personal_context_engine().start_background_polling("local")
+            except Exception:
+                pass
+        loop.run_until_complete(_start_intelligence_layers())
+
         loop.run_until_complete(server.start(port=port))
         click.echo(f"\n  ✅ Elyan v{VERSION} çalışıyor — port {port}")
         click.echo("  🖥️  Desktop: elyan desktop")
