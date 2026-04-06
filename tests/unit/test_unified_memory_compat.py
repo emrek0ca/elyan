@@ -76,6 +76,7 @@ def test_unified_memory_fallback_stats_and_top_users(monkeypatch, tmp_path: Path
     monkeypatch.delitem(sys.modules, "core._memory_legacy", raising=False)
     fake_home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("ELYAN_DATA_DIR", str(fake_home / ".elyan"))
 
     conv_db = fake_home / ".config" / "cdacs-bot" / "conversation.db"
     episodic_db = fake_home / ".elyan" / "memory" / "episodic.db"

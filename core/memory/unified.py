@@ -196,11 +196,23 @@ class UnifiedMemory:
 
         semantic_patterns = existing_text_path(resolve_elyan_data_dir() / "memory" / "patterns.txt")
         semantic_count = 0
+        semantic_backend = "unknown"
         try:
-            if semantic_patterns.exists():
-                semantic_count = semantic_patterns.read_text(encoding="utf-8", errors="ignore").count("### Entry:")
+            from core.semantic_memory import get_semantic_memory
+
+            semantic_stats = get_semantic_memory().stats()
+            semantic_count = int(semantic_stats.get("entries") or 0)
+            semantic_backend = str(semantic_stats.get("backend_effective") or "unknown")
         except Exception:
-            semantic_count = 0
+            pass
+
+        # If the structured backend reports 0, check the audit patterns.txt as fallback
+        if semantic_count == 0:
+            try:
+                if semantic_patterns.exists():
+                    semantic_count = semantic_patterns.read_text(encoding="utf-8", errors="ignore").count("### Entry:")
+            except Exception:
+                pass
 
         db_size = 0
         for p in (conv_db, episodic_db, semantic_patterns):
@@ -220,6 +232,7 @@ class UnifiedMemory:
             "database_path": str(conv_db),
             "database_size_bytes": int(db_size),
             "default_user_limit_bytes": 0,
+            "semantic_backend": semantic_backend,
         }
 
     def get_top_users_storage(self, limit: int = 10) -> List[Dict[str, Any]]:

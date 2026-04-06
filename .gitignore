@@ -49,19 +49,22 @@ logs/
 htmlcov/
 
 # Project specific
+.elyan/
 .elyan_audit/
 .cursor/
+.claude/
 site/
-.elyan/settings.json
 *.db
 *.sqlite
 node_modules/
 elyan-video/node_modules/
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
+apps/desktop/target-workspace/
 apps/desktop/*.tsbuildinfo
 apps/desktop/vite.config.js
 apps/desktop/vite.config.d.ts
+_graveyard/
 
 # Elyan workspace bootstrap artifacts
 agents.md

@@ -21,8 +21,7 @@ class _DummyLLM:
     def __init__(self, response: str):
         self.response = response
 
-    async def generate(self, prompt, user_id="local"):
-        _ = (prompt, user_id)
+    async def generate(self, prompt, **kwargs):
         return self.response
 
 

@@ -1177,12 +1177,43 @@ class ElyanGatewayServer:
 
     @classmethod
     def _workspace_id(cls, request, payload: dict[str, Any] | None = None) -> str:
+        # Security: auth context workspace takes absolute priority.
+        # Query/body params are only used as hints when no session is active.
         auth_context = cls._auth_context(request)
-        if str(auth_context.get("workspace_id") or "").strip():
-            return str(auth_context.get("workspace_id") or "").strip()
-        query_workspace = str(request.rel_url.query.get("workspace_id", "") or "").strip()
+        session_workspace = str(auth_context.get("workspace_id") or "").strip()
+        if session_workspace:
+            return session_workspace
         body_workspace = str((payload or {}).get("workspace_id") or "").strip()
+        query_workspace = str(request.rel_url.query.get("workspace_id", "") or "").strip()
         return body_workspace or query_workspace or "local-workspace"
+
+    def _require_workspace_access(
+        self, request, workspace_id: str, *, allowed_roles: set[str] | None = None
+    ) -> tuple[bool, str]:
+        """Validate that the current user has access to the given workspace.
+        Returns (allowed, error_message)."""
+        auth_context = self._auth_context(request)
+        role = str(auth_context.get("role") or "").strip().lower()
+
+        # Breakglass admin can access any workspace
+        if role == "admin" and str(auth_context.get("user_id") or "") == "local-admin":
+            return True, ""
+
+        # Session workspace must match requested workspace
+        session_workspace = str(auth_context.get("workspace_id") or "").strip()
+        if session_workspace and session_workspace != workspace_id:
+            # Check if user has cross-workspace membership
+            actor_id = self._actor_id(request)
+            cross_role = self._runtime_db().access.get_actor_role(
+                workspace_id=workspace_id, actor_id=actor_id,
+            )
+            if not cross_role:
+                return False, "workspace_access_denied"
+            role = cross_role
+
+        if allowed_roles and role not in allowed_roles:
+            return False, f"insufficient_role:{role}"
+        return True, ""
 
     @classmethod
     def _actor_id(cls, request, payload: dict[str, Any] | None = None) -> str:
@@ -1787,6 +1818,7 @@ class ElyanGatewayServer:
         self.app.router.add_post('/api/v1/auth/logout', self.handle_v1_auth_logout)
         self.app.router.add_get('/api/v1/auth/me', self.handle_v1_auth_me)
         self.app.router.add_get('/api/v1/admin/workspaces', self.handle_v1_admin_workspaces)
+        self.app.router.add_post('/api/v1/admin/workspaces', self.handle_v1_admin_workspace_create)
         self.app.router.add_get('/api/v1/admin/workspaces/{workspace_id}', self.handle_v1_admin_workspace_detail)
         self.app.router.add_get('/api/v1/admin/workspaces/{workspace_id}/members', self.handle_v1_admin_workspace_members)
         self.app.router.add_get('/api/v1/admin/workspaces/{workspace_id}/invites', self.handle_v1_admin_workspace_invites_list)
@@ -2616,6 +2648,9 @@ class ElyanGatewayServer:
 
     async def handle_v1_admin_workspaces(self, request):
         return await self._workspace_admin_controller().handle_list_workspaces(request)
+
+    async def handle_v1_admin_workspace_create(self, request):
+        return await self._workspace_admin_controller().handle_create_workspace(request)
 
     async def handle_v1_admin_workspace_detail(self, request):
         return await self._workspace_admin_controller().handle_get_workspace(request)

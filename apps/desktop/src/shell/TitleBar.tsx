@@ -1,51 +1,57 @@
-import { ElyanMark } from "@/components/brand/ElyanMark";
-import { closeWindow, minimizeWindow, toggleMaximizeWindow } from "@/services/desktop/window";
+import { Search } from "@/vendor/lucide-react";
+import { useLocation } from "react-router-dom";
 
-function detectMac() {
-  if (typeof navigator === "undefined") {
-    return false;
-  }
-  return /mac/i.test(navigator.platform);
-}
+import { StatusBadge } from "@/components/primitives/StatusBadge";
+import { useSystemReadiness } from "@/hooks/use-desktop-data";
+import { useRuntimeStore } from "@/stores/runtime-store";
+import { useUiStore } from "@/stores/ui-store";
+
+const routeLabels: Record<string, string> = {
+  "/home": "Elyan",
+  "/command-center": "İşler",
+  "/providers": "Modeller",
+  "/integrations": "Bağlantılar",
+  "/admin": "Yönetim",
+  "/settings": "Ayarlar",
+  "/logs": "Loglar",
+};
 
 export function TitleBar() {
-  const mac = detectMac();
-
-  const controls = (
-    <div className="flex items-center gap-2">
-      <button
-        type="button"
-        onClick={() => minimizeWindow()}
-        className="h-8 w-8 rounded-full border border-[var(--border-subtle)] text-[var(--text-secondary)] transition hover:bg-[var(--bg-surface)] focus-visible:focus-ring"
-      >
-        −
-      </button>
-      <button
-        type="button"
-        onClick={() => toggleMaximizeWindow()}
-        className="h-8 w-8 rounded-full border border-[var(--border-subtle)] text-[var(--text-secondary)] transition hover:bg-[var(--bg-surface)] focus-visible:focus-ring"
-      >
-        □
-      </button>
-      <button
-        type="button"
-        onClick={() => closeWindow()}
-        className="h-8 w-8 rounded-full border border-[color-mix(in_srgb,var(--state-error)_24%,transparent)] text-[var(--state-error)] transition hover:bg-[color-mix(in_srgb,var(--state-error)_14%,transparent)] focus-visible:focus-ring"
-      >
-        ×
-      </button>
-    </div>
-  );
+  const location = useLocation();
+  const { data: readiness } = useSystemReadiness();
+  const openCommandPalette = useUiStore((s) => s.openCommandPalette);
+  const authenticatedEmail = useUiStore((s) => s.authenticatedEmail);
+  const connectionState = useRuntimeStore((s) => s.connectionState);
+  const routeLabel = routeLabels[location.pathname] || "Elyan";
+  const isReady = readiness?.status === "ready";
 
   return (
-    <header data-tauri-drag-region className="eylan-titlebar flex items-center justify-between gap-4">
-      <div className="flex min-w-0 flex-1 items-center gap-4">
-        {mac ? controls : null}
-        <div className="flex items-center gap-3">
-          <ElyanMark size="sm" alt="Elyan logo" />
-        </div>
+    <header className="eylan-titlebar flex items-center justify-between gap-4">
+      {/* Left: page label */}
+      <div className="eylan-mac-offset flex items-center gap-3">
+        <span className="text-[14px] font-medium text-[var(--text-primary)]">{routeLabel}</span>
+        <StatusBadge tone={isReady ? "success" : connectionState === "connected" ? "info" : "warning"}>
+          {isReady ? "ready" : connectionState === "connected" ? "booting" : "offline"}
+        </StatusBadge>
       </div>
-      <div className="flex items-center gap-2">{!mac ? controls : null}</div>
+
+      {/* Center: command palette trigger */}
+      <button
+        type="button"
+        onClick={() => openCommandPalette()}
+        className="hidden min-w-[320px] items-center gap-3 rounded-[16px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] px-4 py-2 text-left text-[13px] text-[var(--text-tertiary)] transition hover:border-[var(--glass-border-strong)] hover:bg-[var(--bg-surface)] lg:flex"
+      >
+        <Search className="h-3.5 w-3.5" />
+        <span className="flex-1">Ara veya komut yaz…</span>
+        <kbd className="rounded-[8px] border border-[var(--glass-border)] px-1.5 py-0.5 text-[10px]">⌘K</kbd>
+      </button>
+
+      {/* Right: user */}
+      <div className="flex items-center gap-2">
+        <span className="max-w-[160px] truncate text-[12px] text-[var(--text-secondary)]">
+          {authenticatedEmail || "local"}
+        </span>
+      </div>
     </header>
   );
 }

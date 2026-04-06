@@ -185,6 +185,15 @@ def build_context_working_set(ctx: Any, *, max_chars: int = 1600) -> str:
         compact = [{"type": a.get("type"), "size": a.get("size_bytes")} for a in attach[:4] if isinstance(a, dict)]
         parts.append(f"Attachments:{json.dumps(compact, ensure_ascii=False)}")
 
+    world = getattr(ctx, "world_snapshot", None)
+    if isinstance(world, dict):
+        summary = str(world.get("summary") or "").strip()
+        if summary:
+            parts.append(f"World:{summary[:400]}")
+        hints = world.get("strategy_hints")
+        if isinstance(hints, list) and hints:
+            parts.append(f"Strategies:{'; '.join(str(h) for h in hints[:3])}")
+
     base = "\n".join(parts)
     return base[:max_chars]
 
