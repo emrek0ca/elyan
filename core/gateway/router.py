@@ -494,6 +494,49 @@ class GatewayRouter:
         )
 
         try:
+            # ── Jarvis Fast Path ──────────────────────────────────────────────
+            # For actionable intents (system control, monitoring, information,
+            # communication) JarvisCore executes directly via IntentExecutor
+            # without going through the full orchestrator. This makes Telegram
+            # commands instant (< 200 ms).
+            try:
+                from core.jarvis.jarvis_core import get_jarvis_core, IntentCategory
+                _jcore = get_jarvis_core()
+                _intent = _jcore.classify_intent(message.text)
+                _fast_categories = {
+                    IntentCategory.SYSTEM_CONTROL,
+                    IntentCategory.MONITORING,
+                }
+                if _intent.category in _fast_categories:
+                    from core.jarvis.intent_executor import get_intent_executor
+                    _exec_result = await get_intent_executor().execute(_intent)
+                    if _exec_result:
+                        _fast_resp = UnifiedResponse(text=_exec_result, format="markdown")
+                        await self.send_outgoing_response(
+                            message.channel_type, message.channel_id, _fast_resp
+                        )
+                        try:
+                            from core.gateway.server import push_activity
+                            push_activity("message", message.channel_type, message.text[:60])
+                        except Exception:
+                            pass
+                        # Record to memory
+                        try:
+                            from core.memory.jarvis_memory import Interaction, get_jarvis_memory
+                            import time as _t
+                            get_jarvis_memory().record(Interaction(
+                                user_id=str(message.user_id or "default"),
+                                channel=str(message.channel_type or ""),
+                                input_text=str(message.text or "")[:500],
+                                output_text=_exec_result[:500],
+                                outcome="ok",
+                            ))
+                        except Exception:
+                            pass
+                        return
+            except Exception as _je:
+                logger.debug(f"Jarvis fast path skipped: {_je}")
+
             agent = await agent_router.route_message(message.channel_type, message.user_id)
             agent.current_user_id = message.user_id
 

@@ -132,6 +132,13 @@ def _init_memory() -> None:
         logger.debug("PersonalityAdapter initialized")
     except Exception:
         pass
+    # Warmup STT model in background thread
+    try:
+        from core.voice.stt_engine import get_stt_engine
+        get_stt_engine().warmup()
+        logger.debug("STT warmup started")
+    except Exception:
+        pass
 
 
 # ── Main startup entry ────────────────────────────────────────────────────────

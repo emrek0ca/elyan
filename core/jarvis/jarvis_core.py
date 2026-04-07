@@ -100,6 +100,8 @@ _INTENT_RULES: list[tuple[list[str], IntentCategory, str]] = [
     (["dark mode", "karanlık mod", "parlaklık", "brightness"], IntentCategory.SYSTEM_CONTROL, "system_settings"),
     (["dosya", "klasör", "file", "folder", "sil", "taşı", "kopyala"], IntentCategory.SYSTEM_CONTROL, "file_ops"),
     (["terminal", "komut", "command", "çalıştır", "run"], IntentCategory.SYSTEM_CONTROL, "terminal"),
+    (["ip adresi", "ip adresim", "ip address", "wifi durumu", "wifi bağlantı",
+      "bluetooth cihaz", "ağ bağlantı"], IntentCategory.SYSTEM_CONTROL, "network"),
     (["wifi", "bluetooth", "ağ", "network", "ip"], IntentCategory.SYSTEM_CONTROL, "network"),
 
     # Information
@@ -119,10 +121,15 @@ _INTENT_RULES: list[tuple[list[str], IntentCategory, str]] = [
     (["e-posta", "email", "mail gönder", "send email"], IntentCategory.COMMUNICATION, "email"),
     (["mesaj gönder", "send message", "bildir", "notify"], IntentCategory.COMMUNICATION, "message"),
 
-    # Monitoring
+    # Monitoring — UZUN keyword'ler önce gelsin (kazanç skoru: uzunluk)
+    (["sistem durumu", "system status", "sistem sağlık"], IntentCategory.MONITORING, "system_health"),
+    (["batarya", "battery", "şarj durumu", "pil durumu"], IntentCategory.MONITORING, "system_health"),
+    (["cpu kullanımı", "cpu yükü", "işlemci kullanımı"], IntentCategory.MONITORING, "system_health"),
+    (["disk alanı", "disk kullanımı", "depolama alanı"], IntentCategory.MONITORING, "system_health"),
+    (["ram kullanımı", "bellek kullanımı", "memory usage"], IntentCategory.MONITORING, "system_health"),
     (["izle", "watch", "monitor", "takip", "track"], IntentCategory.MONITORING, "watch"),
     (["uyar", "alert", "bildirim", "notification"], IntentCategory.MONITORING, "alert"),
-    (["cpu", "ram", "disk", "battery", "pil", "bellek"], IntentCategory.MONITORING, "system_health"),
+    (["cpu", "ram", "disk", "battery", "pil", "bellek", "batarya", "şarj"], IntentCategory.MONITORING, "system_health"),
 
     # Automation
     (["her", "every", "otomatik", "automatic", "zamanla", "schedule", "cron"], IntentCategory.AUTOMATION, "schedule"),
@@ -459,12 +466,32 @@ class JarvisCore:
         channel_type: str,
         user_id: str,
     ) -> str:
-        """Route to the appropriate handler based on intent + complexity."""
-        # TRIVIAL/SIMPLE conversations handled by quick agent
+        """Route to the appropriate handler based on intent + complexity.
+
+        Priority:
+          1. IntentExecutor — system_control / monitoring / information / communication
+             (fast, direct macOS API calls, no LLM needed)
+          2. Quick LLM response — trivial conversation
+          3. Full orchestrator — complex multi-step tasks
+        """
+        # ── 1. Direct execution for actionable intents ────────────────────────
+        EXECUTABLE = {
+            "system_control", "monitoring", "information", "communication"
+        }
+        if intent.category.value in EXECUTABLE:
+            try:
+                from core.jarvis.intent_executor import get_intent_executor
+                result = await get_intent_executor().execute(intent)
+                if result:  # non-empty → executor handled it
+                    return result
+            except Exception as exc:
+                logger.warning(f"IntentExecutor failed, falling through: {exc}")
+
+        # ── 2. Trivial/Simple conversation → quick LLM ────────────────────────
         if intent.complexity in (Complexity.TRIVIAL, Complexity.SIMPLE):
             return await self._quick_response(text, intent)
 
-        # MODERATE+ → full orchestrator pipeline
+        # ── 3. Moderate+ → full orchestrator pipeline ─────────────────────────
         try:
             from core.multi_agent.router import agent_router
             agent = await agent_router.route_message(channel_type, user_id)

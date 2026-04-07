@@ -182,12 +182,10 @@ class VoicePipeline:
             return None
 
     async def _transcribe(self, wav_path: str) -> str:
-        """Transcribe wav file using existing STT engine."""
+        """Transcribe wav file — faster-whisper preferred, openai-whisper fallback."""
         try:
-            from tools.voice.local_stt import stt_engine
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, stt_engine.transcribe, wav_path)
-            return str(result or "").strip()
+            from core.voice.stt_engine import get_stt_engine
+            return await get_stt_engine().transcribe_async(wav_path)
         except Exception as exc:
             logger.warning(f"STT error: {exc}")
             return ""
