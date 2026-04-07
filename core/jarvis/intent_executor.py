@@ -98,7 +98,12 @@ _TR_SUFFIXES = re.compile(
 
 
 def _strip_tr_suffix(word: str) -> str:
-    """'Safari'yi' → 'safari', 'Zoom'u' → 'zoom'"""
+    """'Safari'yi' → 'safari', 'Zoom'u' → 'zoom'.
+
+    Hem düz apostrof (U+0027) hem eğik apostrof (U+2018/2019) destekler.
+    """
+    # Tipografik apostrof → düz apostrof normalize et
+    word = word.replace("\u2018", "'").replace("\u2019", "'")
     return _TR_SUFFIXES.sub("", word).strip("'").lower()
 
 
@@ -137,30 +142,80 @@ def _extract_app_name(text: str) -> str:
 _TERMINAL_TRIGGER_WORDS = frozenset({"çalıştır", "çalıştırır", "run", "execute", "komutu", "komutunu"})
 
 
+def _normalize_cmd_word(word: str) -> str:
+    """Komut kelimesini Türkçe eklerden arındır: 'ls'yi' → 'ls'."""
+    # Apostrof sonrası eki sil: ls'yi, git'i, python'u
+    word = re.sub(r"'[a-züğşıöçA-ZÜĞŞİÖÇ]+$", "", word)
+    return word.strip("'\"").strip()
+
+
 def _extract_terminal_cmd(text: str) -> str:
-    """'X komutunu çalıştır', 'run X', 'terminal'de X çalıştır' pattern."""
+    """Komut metni çıkar. 3 pattern destekler:
+      1. 'run X' / 'execute X'        → trigger önce
+      2. 'X çalıştır' / 'X komutunu' → trigger sonra
+      3. 'terminal'de X çalıştır'    → terminal prefix
+    """
+    lower = text.lower()
     patterns = [
-        r"(?:çalıştır|run|execute)\s+['\"]?(.+?)['\"]?$",
-        r"terminal(?:de|da|'de|'da|'de|'da)?\s+(.+?)(?:\s*$)",
+        # trigger önce: "run ls -la", "execute git status"
+        r"(?:run|execute)\s+['\"]?(.+?)['\"]?\s*$",
+        # terminal prefix: "terminal'de ls -la çalıştır"
+        r"terminal(?:'?(?:de|da|te|ta))?\s+(.+?)(?:\s*$)",
+        # trigger önce Türkçe: "çalıştır ls" — nadir ama mevcut
+        r"çalıştır\s+['\"]?(.+?)['\"]?\s*$",
+        # trigger sonra: "ls çalıştır", "git status çalıştır"
+        r"(.+?)\s+(?:çalıştır|komutu|komutunu)\s*$",
     ]
     for pat in patterns:
-        m = re.search(pat, text.lower())
+        m = re.search(pat, lower)
         if m:
             cmd = m.group(1).strip()
-            # Strip trailing trigger words that leaked into the capture group
+            # Strip trailing trigger words that leaked in
             words = cmd.split()
             while words and words[-1] in _TERMINAL_TRIGGER_WORDS:
                 words.pop()
-            return " ".join(words).strip()
+            # Normalize each word (remove TR suffixes from cmd tokens)
+            words = [_normalize_cmd_word(w) for w in words]
+            result = " ".join(w for w in words if w).strip()
+            if result:
+                return result
     return ""
 
 
 def _extract_search_query(text: str) -> str:
-    """Arama sorgusunu çıkar."""
+    """Arama sorgusunu çıkar; Türkçe eklerden arındırır.
+
+    Desteklenen pattern'lar:
+      'ara Python'  → 'Python'    (trigger önce)
+      'Python ara'  → 'Python'    (trigger sonra)
+      'Python'u ara'→ 'Python'    (suffix soyulur)
+    """
+    lower = text.lower()
+
+    def _clean(raw: str) -> str:
+        words = raw.strip().split()
+        cleaned = [_normalize_cmd_word(w) for w in words]
+        return " ".join(w for w in cleaned if w).strip()
+
+    # Trigger önce: "ara X", "google X", "bul X"
     for prefix in ["ara ", "search ", "google ", "bul ", "find "]:
-        if prefix in text.lower():
-            idx = text.lower().index(prefix) + len(prefix)
-            return text[idx:].strip()
+        if lower.startswith(prefix):
+            return _clean(text[len(prefix):])
+        # Trigger ortada: "google'da X", "search: X"
+        if prefix.strip() + " " in lower or prefix in lower:
+            idx = lower.index(prefix.strip())
+            after = lower[idx + len(prefix.strip()):]
+            # Boşluk veya ':' sonrasını al
+            after = after.lstrip(": ")
+            if after:
+                return _clean(text[len(text) - len(after):])
+
+    # Trigger sonra: "X ara", "X'i ara", "X search"
+    for suffix in [" ara", " search", " bul", " find"]:
+        if lower.endswith(suffix):
+            raw = text[:len(text) - len(suffix)].strip()
+            return _clean(raw)
+
     return text.strip()
 
 
@@ -209,6 +264,8 @@ class IntentExecutor:
                     return await self._web_search(text)
                 if sub == "weather":
                     return await self._weather(text)
+                if sub == "calendar":
+                    return await self._calendar(text)
 
             # ── Communication ─────────────────────────────────────────────────
             if cat == "communication":
@@ -515,6 +572,10 @@ class IntentExecutor:
         url = f"https://wttr.in/{urllib.parse.quote(city)}"
         await AppController().open_url(url)
         return f"🌍 {city} için hava durumu tarayıcıda açıldı."
+
+    async def _calendar(self, text: str) -> str:
+        from core.integrations.calendar import handle_calendar_query
+        return await handle_calendar_query(text)
 
     async def _setup_monitor(self, text: str) -> str:
         from core.proactive.system_monitor import get_system_monitor

@@ -20,6 +20,7 @@ Design principles:
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.request
 from dataclasses import dataclass, field
@@ -42,31 +43,33 @@ _SYSTEM_PROMPT = (
 )
 
 
+def _get_ollama_model() -> str:
+    """Ollama'dan ilk mevcut modeli al, önbellekte tut."""
+    global _OLLAMA_MODEL
+    if _OLLAMA_MODEL is None:
+        try:
+            with urllib.request.urlopen(
+                "http://localhost:11434/api/tags", timeout=2
+            ) as r:
+                tags = json.loads(r.read())
+            models = [m["name"] for m in tags.get("models", [])]
+            _OLLAMA_MODEL = models[0] if models else "llama3.2:3b"
+        except Exception:
+            _OLLAMA_MODEL = "llama3.2:3b"
+    return _OLLAMA_MODEL
+
+
 async def _ollama_chat(text: str, max_tokens: int = 400) -> str:
-    """Ollama yerel LLM'e asenkron istek atar. Başarısızlıkta '' döner."""
+    """Ollama yerel LLM'e asenkron istek atar (stream=False). Başarısızlıkta '' döner."""
     import asyncio
 
     def _call() -> str:
-        global _OLLAMA_MODEL
-        # Model önbelleği yoksa api/tags'ten al
-        if _OLLAMA_MODEL is None:
-            try:
-                with urllib.request.urlopen(
-                    "http://localhost:11434/api/tags", timeout=2
-                ) as r:
-                    tags = json.loads(r.read())
-                models = [m["name"] for m in tags.get("models", [])]
-                _OLLAMA_MODEL = models[0] if models else "llama3.2:3b"
-            except Exception:
-                _OLLAMA_MODEL = "llama3.2:3b"
-
         payload = json.dumps({
-            "model": _OLLAMA_MODEL,
+            "model": _get_ollama_model(),
             "prompt": f"{_SYSTEM_PROMPT}\n\nKullanıcı: {text}\n\nElyan:",
             "stream": False,
             "options": {"num_predict": max_tokens, "temperature": 0.7},
         }).encode()
-
         req = urllib.request.Request(
             _OLLAMA_URL,
             data=payload,
@@ -83,6 +86,67 @@ async def _ollama_chat(text: str, max_tokens: int = 400) -> str:
 
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _call)
+
+
+async def _ollama_stream(
+    text: str,
+    on_chunk,  # Callable[[str], Awaitable[None] | None]
+    max_tokens: int = 600,
+) -> str:
+    """Ollama'dan stream=True ile cevap alır; her chunk'ı on_chunk callback'e iletir.
+
+    Tam metni string olarak döner. on_chunk async veya sync olabilir.
+    Başarısızlıkta '' döner ve on_chunk çağrılmaz.
+    """
+    import asyncio
+    import socket
+
+    def _stream_sync() -> list[str]:
+        """Blocking stream reader — executor'da çalışır."""
+        chunks: list[str] = []
+        payload = json.dumps({
+            "model": _get_ollama_model(),
+            "prompt": f"{_SYSTEM_PROMPT}\n\nKullanıcı: {text}\n\nElyan:",
+            "stream": True,
+            "options": {"num_predict": max_tokens, "temperature": 0.7},
+        }).encode()
+        req = urllib.request.Request(
+            _OLLAMA_URL,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                for raw_line in resp:
+                    line = raw_line.decode("utf-8").strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                        chunk = obj.get("response", "")
+                        if chunk:
+                            chunks.append(chunk)
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as exc:
+            logger.debug(f"Ollama stream failed: {exc}")
+        return chunks
+
+    loop = asyncio.get_event_loop()
+    chunks = await loop.run_in_executor(None, _stream_sync)
+
+    full_text = ""
+    for chunk in chunks:
+        full_text += chunk
+        try:
+            result = on_chunk(chunk)
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception:
+            pass
+
+    return full_text
 
 
 # ── Intent Taxonomy ─────────────────────────────────────────────────────────
@@ -171,6 +235,8 @@ _INTENT_RULES: list[tuple[list[str], IntentCategory, str]] = [
     (["özetle", "summarize", "özet", "abstract"], IntentCategory.INFORMATION, "summarize"),
     (["açıkla", "explain", "nedir", "ne demek", "what is"], IntentCategory.INFORMATION, "explain"),
     (["hava", "weather", "sıcaklık"], IntentCategory.INFORMATION, "weather"),
+    (["takvim etkinlik", "bugünkü etkinlik", "randevularım", "toplantılarım",
+      "takvime ekle", "randevu ekle", "etkinlik oluştur"], IntentCategory.INFORMATION, "calendar"),
     (["takvim", "calendar", "randevu", "toplantı"], IntentCategory.INFORMATION, "calendar"),
 
     # Creation
@@ -224,12 +290,15 @@ class IntentClassifier:
                         best_match = (category, sub_intent, match_score)
 
         if best_match:
-            category, sub_intent, _ = best_match
+            category, sub_intent, match_len = best_match
             complexity = self._estimate_complexity(lower)
+            # Confidence: short keywords (len<4) are ambiguous → lower confidence
+            # Long specific keywords (len≥10) are very reliable → high confidence
+            confidence = min(0.98, 0.55 + (match_len / 20.0))
             return ClassifiedIntent(
                 category=category,
                 complexity=complexity,
-                confidence=0.85,
+                confidence=round(confidence, 2),
                 sub_intent=sub_intent,
                 raw_text=text,
             )
@@ -239,7 +308,7 @@ class IntentClassifier:
         return ClassifiedIntent(
             category=IntentCategory.CONVERSATION,
             complexity=complexity,
-            confidence=0.5,
+            confidence=0.40,
             sub_intent="chat",
             raw_text=text,
         )
@@ -445,6 +514,31 @@ class JarvisCore:
         """Format results for the target channel."""
         return self.synthesizer.synthesize(results, intent, channel_type)
 
+    # ── Sequential command splitter ──────────────────────────────────────────
+
+    _CHAIN_SPLITTERS = re.compile(
+        r"\s+(?:ve\s+sonra|ve\s+ardından|sonra|ardından|daha\s+sonra|then|and\s+then)\s+",
+        re.IGNORECASE,
+    )
+    # Simple "ve" only when it connects two verb phrases (heuristic: split on " ve " if both sides >3 words)
+    _AND_SPLIT = re.compile(r"\s+ve\s+", re.IGNORECASE)
+
+    def _split_chained_commands(self, text: str) -> list[str]:
+        """'X yap ve Y yap' veya 'X yap, sonra Y yap' → ['X yap', 'Y yap']."""
+        # Phase 1: strong splitters (sonra/ardından/then)
+        parts = self._CHAIN_SPLITTERS.split(text.strip())
+        if len(parts) > 1:
+            return [p.strip() for p in parts if p.strip()]
+
+        # Phase 2: weak "ve" split — only if each side has 2+ words
+        parts = self._AND_SPLIT.split(text.strip())
+        if len(parts) == 2:
+            left, right = parts
+            if len(left.split()) >= 2 and len(right.split()) >= 2:
+                return [left.strip(), right.strip()]
+
+        return [text.strip()]
+
     async def handle(
         self,
         text: str,
@@ -453,10 +547,17 @@ class JarvisCore:
     ) -> JarvisResponse:
         """Full Jarvis pipeline: classify → plan → dispatch → synthesize.
 
+        Supports chained commands: 'X yap ve Y yap' → executes both in sequence.
         Wires into the existing AgentOrchestrator for actual task execution.
         Personality + episodic memory inject context into every request.
         """
         t0 = time.time()
+
+        # ── Sequential chain detection ────────────────────────────────────────
+        segments = self._split_chained_commands(text)
+        if len(segments) > 1:
+            return await self._handle_chain(segments, channel_type, user_id, t0)
+
         intent = self.classify_intent(text)
 
         logger.info(
@@ -568,10 +669,21 @@ class JarvisCore:
             logger.warning(f"Orchestrator dispatch failed: {exc}")
             return await self._quick_response(text, intent)
 
-    async def _quick_response(self, text: str, intent: ClassifiedIntent) -> str:
-        """LLM call — tries Ollama first (local), then cloud providers."""
-        # Try Ollama (local, always free, always private)
-        result = await _ollama_chat(text)
+    async def _quick_response(
+        self,
+        text: str,
+        intent: ClassifiedIntent,
+        stream_broadcast=None,  # Optional[Callable[[str], None]] — WebSocket push
+    ) -> str:
+        """LLM call — tries Ollama streaming first, then cloud providers.
+
+        stream_broadcast: if provided, each token chunk is pushed via this callback.
+        """
+        # Try Ollama — streaming if broadcast available, non-streaming fallback
+        if stream_broadcast is not None:
+            result = await _ollama_stream(text, on_chunk=stream_broadcast)
+        else:
+            result = await _ollama_chat(text)
         if result:
             return result
 
@@ -601,6 +713,34 @@ class JarvisCore:
         # No LLM available — honest fallback
         return ("Şu an dil modelim çevrimdışı. Komut tabanlı işlemler (uygulama aç/kapat, "
                 "sistem durumu, dosya işlemleri) için hazırım.")
+
+    async def _handle_chain(
+        self,
+        segments: list[str],
+        channel_type: str,
+        user_id: str,
+        t0: float,
+    ) -> JarvisResponse:
+        """Execute a list of command segments sequentially and combine results."""
+        results: list[str] = []
+        for i, seg in enumerate(segments):
+            intent = self.classify_intent(seg)
+            logger.info(f"Chain step {i+1}/{len(segments)}: '{seg[:60]}' → {intent.category.value}/{intent.sub_intent}")
+            try:
+                result = await self._dispatch(seg, intent, channel_type, user_id)
+                results.append(result)
+            except Exception as exc:
+                logger.warning(f"Chain step {i+1} failed: {exc}")
+                results.append(f"❌ Adım {i+1} başarısız: {exc}")
+
+        combined = "\n\n".join(
+            f"**{i+1}. {seg[:40]}{'…' if len(seg)>40 else ''}**\n{r}"
+            for i, (seg, r) in enumerate(zip(segments, results))
+        )
+        resp = self.synthesizer.synthesize([{"text": combined}], self.classify_intent(segments[0]), channel_type)
+        self._record(user_id, channel_type, " → ".join(segments), combined, "ok", t0)
+        resp.duration_s = round(time.time() - t0, 3)
+        return resp
 
     def _record(
         self, user_id: str, channel: str, inp: str, out: str, outcome: str, t0: float
