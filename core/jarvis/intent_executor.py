@@ -90,11 +90,29 @@ _SAFE_TERMINAL_CMDS = frozenset({
 
 # ── Entity Extraction ─────────────────────────────────────────────────────────
 
+_TR_SUFFIXES = re.compile(
+    r"[''](?:yi|yı|yu|yü|i|ı|u|ü|ye|ya|yu|yü|de|da|den|dan|te|ta|ten|tan"
+    r"|nin|nın|nun|nün|in|ın|un|ün|e|a|le|la|yle|yla|deki|daki|ki)$",
+    re.IGNORECASE,
+)
+
+
+def _strip_tr_suffix(word: str) -> str:
+    """'Safari'yi' → 'safari', 'Zoom'u' → 'zoom'"""
+    return _TR_SUFFIXES.sub("", word).strip("'").lower()
+
+
 def _extract_app_name(text: str) -> str:
-    """Metin içinden uygulama adını çıkar."""
+    """Metin içinden uygulama adını çıkar (Türkçe ekleri soyarak)."""
     lower = text.lower()
 
-    # Önce tam alias eşleşmesi dene
+    # Her kelimeyi suffix'ten arındırıp alias sözlüğüne bak
+    for word in lower.split():
+        stripped = _strip_tr_suffix(word)
+        if stripped in _APP_ALIASES:
+            return _APP_ALIASES[stripped]
+
+    # Tam alias eşleşmesi dene (çok kelimeli takma adlar için)
     for alias, canonical in sorted(_APP_ALIASES.items(), key=lambda x: -len(x[0])):
         if alias in lower:
             return canonical
@@ -107,7 +125,9 @@ def _extract_app_name(text: str) -> str:
     for pat in patterns:
         m = re.search(pat, lower)
         if m:
-            candidate = m.group(1).strip()
+            candidate = _strip_tr_suffix(m.group(1).strip())
+            if candidate in _APP_ALIASES:
+                return _APP_ALIASES[candidate]
             if candidate and len(candidate) >= 2:
                 return candidate.title()
 
@@ -307,13 +327,49 @@ class IntentExecutor:
         from core.computer.macos_controller import get_macos_controller
         mc = get_macos_controller()
 
+        # ── Ekran kilitle ───────────────────────────────────────────────────
+        if any(w in lower for w in ["kilitle", "lock", "ekranı kapat", "ekranı kilitle"]):
+            subprocess.run(
+                ["osascript", "-e",
+                 'tell application "System Events" to keystroke "q" using {command down, control down}'],
+                capture_output=True,
+            )
+            return "🔒 Ekran kilitlendi."
+
+        # ── Uyku modu ───────────────────────────────────────────────────────
+        if any(w in lower for w in ["uyku", "sleep", "bekle", "standby"]):
+            subprocess.run(
+                ["osascript", "-e", 'tell application "System Events" to sleep'],
+                capture_output=True,
+            )
+            return "💤 Mac uyku moduna alınıyor."
+
+        # ── Yeniden başlat ──────────────────────────────────────────────────
+        if any(w in lower for w in ["yeniden başlat", "restart", "reboot"]):
+            subprocess.run(
+                ["osascript", "-e",
+                 'tell application "System Events" to restart'],
+                capture_output=True,
+            )
+            return "🔄 Mac yeniden başlatılıyor."
+
+        # ── Kapat ──────────────────────────────────────────────────────────
+        if any(w in lower for w in ["kapat bilgisayarı", "shutdown", "power off", "kapat mac"]):
+            subprocess.run(
+                ["osascript", "-e",
+                 'tell application "System Events" to shut down'],
+                capture_output=True,
+            )
+            return "⏹️ Mac kapatılıyor."
+
+        # ── Dark mode ───────────────────────────────────────────────────────
         if "dark mode" in lower or "karanlık" in lower:
             script = 'tell application "System Events" to tell appearance preferences to set dark mode to not dark mode'
             ok = await mc._run_applescript(script)
             return "✅ Dark mode değiştirildi." if ok else "❌ Dark mode değiştirilemedi."
 
-        if "ses" in lower or "volume" in lower:
-            # Sesi al
+        # ── Ses seviyesi ────────────────────────────────────────────────────
+        if any(w in lower for w in ["ses", "volume", "sesi"]):
             m = re.search(r"(\d+)", text)
             vol = int(m.group(1)) if m else 50
             vol = max(0, min(100, vol))
@@ -321,10 +377,55 @@ class IntentExecutor:
                            capture_output=True)
             return f"🔊 Ses seviyesi {vol}% olarak ayarlandı."
 
-        return "Hangi ayarı değiştirmemi istiyorsun? (dark mode, ses seviyesi...)"
+        # ── Parlaklık ───────────────────────────────────────────────────────
+        if any(w in lower for w in ["parlaklık", "brightness"]):
+            m = re.search(r"(\d+)", text)
+            pct = int(m.group(1)) if m else 50
+            val = max(0.0, min(1.0, pct / 100))
+            subprocess.run(
+                ["osascript", "-e",
+                 f'tell application "System Events" to set brightness of screen 1 to {val:.2f}'],
+                capture_output=True,
+            )
+            return f"☀️ Parlaklık {pct}% olarak ayarlandı."
+
+        return "Hangi ayarı değiştirmemi istiyorsun? (dark mode, ses, parlaklık, kilitle, uyku...)"
 
     async def _file_ops(self, text: str) -> str:
-        return "Dosya işlemleri için daha fazla bilgi gerekiyor. Ne yapmak istiyorsun? (sil, taşı, kopyala...)"
+        lower = text.lower()
+        import subprocess, pathlib, os
+
+        # Klasör aç
+        _FOLDER_MAP = {
+            "indirmeler": "~/Downloads",
+            "downloads": "~/Downloads",
+            "masaüstü": "~/Desktop",
+            "desktop": "~/Desktop",
+            "belgeler": "~/Documents",
+            "documents": "~/Documents",
+            "resimler": "~/Pictures",
+            "pictures": "~/Pictures",
+            "müzik": "~/Music",
+            "music": "~/Music",
+            "videolar": "~/Movies",
+            "movies": "~/Movies",
+        }
+        for key, folder in _FOLDER_MAP.items():
+            if key in lower:
+                expanded = os.path.expanduser(folder)
+                subprocess.run(["open", expanded], capture_output=True)
+                return f"📂 {folder} klasörü açıldı."
+
+        # "X dosyasını aç" pattern
+        m = re.search(r"['\"](.+?)['\"]", text)
+        if m:
+            path = os.path.expanduser(m.group(1))
+            if os.path.exists(path):
+                subprocess.run(["open", path], capture_output=True)
+                return f"📄 {path} açıldı."
+            return f"❌ Dosya bulunamadı: {path}"
+
+        return "Hangi klasörü veya dosyayı açmamı istiyorsun?"
 
     async def _system_health(self, text: str) -> str:
         from core.computer.app_controller import AppController

@@ -19,7 +19,9 @@ Design principles:
 
 from __future__ import annotations
 
+import json
 import time
+import urllib.request
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -27,6 +29,60 @@ from typing import Any
 from utils.logger import get_logger
 
 logger = get_logger("jarvis_core")
+
+# ── Ollama helper ─────────────────────────────────────────────────────────────
+
+_OLLAMA_URL = "http://localhost:11434/api/generate"
+_OLLAMA_MODEL: str | None = None   # cached after first successful call
+
+_SYSTEM_PROMPT = (
+    "Sen Elyan'sın — kullanıcının kişisel asistanı. "
+    "Türkçe ve İngilizce anlıyorsun, her zaman Türkçe yanıt veriyorsun. "
+    "Kısa, net ve işe yarar yanıtlar ver. Gereksiz uzatma."
+)
+
+
+async def _ollama_chat(text: str, max_tokens: int = 400) -> str:
+    """Ollama yerel LLM'e asenkron istek atar. Başarısızlıkta '' döner."""
+    import asyncio
+
+    def _call() -> str:
+        global _OLLAMA_MODEL
+        # Model önbelleği yoksa api/tags'ten al
+        if _OLLAMA_MODEL is None:
+            try:
+                with urllib.request.urlopen(
+                    "http://localhost:11434/api/tags", timeout=2
+                ) as r:
+                    tags = json.loads(r.read())
+                models = [m["name"] for m in tags.get("models", [])]
+                _OLLAMA_MODEL = models[0] if models else "llama3.2:3b"
+            except Exception:
+                _OLLAMA_MODEL = "llama3.2:3b"
+
+        payload = json.dumps({
+            "model": _OLLAMA_MODEL,
+            "prompt": f"{_SYSTEM_PROMPT}\n\nKullanıcı: {text}\n\nElyan:",
+            "stream": False,
+            "options": {"num_predict": max_tokens, "temperature": 0.7},
+        }).encode()
+
+        req = urllib.request.Request(
+            _OLLAMA_URL,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = json.loads(r.read())
+                return str(data.get("response", "")).strip()
+        except Exception as exc:
+            logger.debug(f"Ollama call failed: {exc}")
+            return ""
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _call)
 
 
 # ── Intent Taxonomy ─────────────────────────────────────────────────────────
@@ -94,15 +150,21 @@ class JarvisResponse:
 
 # Tier 1: Rule-based keyword matching (<5ms)
 _INTENT_RULES: list[tuple[list[str], IntentCategory, str]] = [
-    # System Control
-    (["aç", "kapat", "başlat", "durdur", "open", "close", "launch", "quit"], IntentCategory.SYSTEM_CONTROL, "app_control"),
-    (["ekran", "screenshot", "screen", "görüntü"], IntentCategory.SYSTEM_CONTROL, "screen_capture"),
-    (["dark mode", "karanlık mod", "parlaklık", "brightness"], IntentCategory.SYSTEM_CONTROL, "system_settings"),
-    (["dosya", "klasör", "file", "folder", "sil", "taşı", "kopyala"], IntentCategory.SYSTEM_CONTROL, "file_ops"),
-    (["terminal", "komut", "command", "çalıştır", "run"], IntentCategory.SYSTEM_CONTROL, "terminal"),
+    # System Control — UZUN eşleşmeler önce (skor = keyword uzunluğu)
+    (["ekran görüntüsü", "ekran görüntüsü al", "screenshot al"], IntentCategory.SYSTEM_CONTROL, "screen_capture"),
+    (["yeniden başlat", "restart", "reboot"], IntentCategory.SYSTEM_CONTROL, "system_settings"),
+    (["ekranı kilitle", "bilgisayarı kilitle", "kilitle", "lock screen"], IntentCategory.SYSTEM_CONTROL, "system_settings"),
+    (["uyku modu", "sleep modu", "bekleme modu"], IntentCategory.SYSTEM_CONTROL, "system_settings"),
+    (["dark mode", "karanlık mod", "karanlık tema", "parlaklık", "brightness"], IntentCategory.SYSTEM_CONTROL, "system_settings"),
+    (["ses seviyesi", "sesi aç", "sesi kapat", "volume"], IntentCategory.SYSTEM_CONTROL, "system_settings"),
     (["ip adresi", "ip adresim", "ip address", "wifi durumu", "wifi bağlantı",
       "bluetooth cihaz", "ağ bağlantı"], IntentCategory.SYSTEM_CONTROL, "network"),
+    (["dosya", "klasör", "file", "folder", "indirmeler", "downloads", "masaüstü"], IntentCategory.SYSTEM_CONTROL, "file_ops"),
+    (["terminal", "komut çalıştır", "command", "çalıştır", "run"], IntentCategory.SYSTEM_CONTROL, "terminal"),
+    (["ekran", "screenshot", "screen", "görüntü al"], IntentCategory.SYSTEM_CONTROL, "screen_capture"),
     (["wifi", "bluetooth", "ağ", "network", "ip"], IntentCategory.SYSTEM_CONTROL, "network"),
+    # App control — genel ("aç"/"kapat") en sona, kısa keyword
+    (["aç", "kapat", "başlat", "durdur", "open", "close", "launch", "quit"], IntentCategory.SYSTEM_CONTROL, "app_control"),
 
     # Information
     (["araştır", "bul", "ara", "search", "find", "google"], IntentCategory.INFORMATION, "search"),
@@ -507,26 +569,38 @@ class JarvisCore:
             return await self._quick_response(text, intent)
 
     async def _quick_response(self, text: str, intent: ClassifiedIntent) -> str:
-        """Lightweight LLM call for trivial/simple intents."""
+        """LLM call — tries Ollama first (local), then cloud providers."""
+        # Try Ollama (local, always free, always private)
+        result = await _ollama_chat(text)
+        if result:
+            return result
+
+        # Try cloud providers via existing LLM router
         try:
             from core.llm.model_selection_policy import get_model_selection_policy, SelectionContext, TaskType
             policy = get_model_selection_policy()
             ctx = SelectionContext(
                 task_type=TaskType.CHAT,
                 required_quality=0.4,
-                budget_remaining=0.1,
-                latency_target_ms=800,
+                budget_remaining=0.5,
+                latency_target_ms=3000,
             )
             decision = policy.select(ctx)
-            logger.debug(f"Quick response via {decision.provider}/{decision.model}")
-        except Exception:
-            pass
-        # Fallback: echo the intent classification (no LLM available)
-        step_descriptions = [f"• {s.owner}: {s.action}" for s in self.decomposer.decompose(intent).steps]
-        return (
-            f"[{intent.category.value}] {intent.sub_intent or 'yanıt'}\n"
-            + ("\n".join(step_descriptions) if step_descriptions else text[:200])
-        )
+            logger.debug(f"Cloud LLM: {decision.provider}/{decision.model}")
+            # Use existing agent pipeline for cloud routing
+            from core.multi_agent.router import agent_router
+            agent = await agent_router.route_message("desktop", "jarvis_internal")
+            if callable(getattr(agent, "process_envelope", None)):
+                resp = await agent.process_envelope(text)
+                out = str(getattr(resp, "text", resp) or "").strip()
+                if out:
+                    return out
+        except Exception as exc:
+            logger.debug(f"Cloud LLM failed: {exc}")
+
+        # No LLM available — honest fallback
+        return ("Şu an dil modelim çevrimdışı. Komut tabanlı işlemler (uygulama aç/kapat, "
+                "sistem durumu, dosya işlemleri) için hazırım.")
 
     def _record(
         self, user_id: str, channel: str, inp: str, out: str, outcome: str, t0: float
