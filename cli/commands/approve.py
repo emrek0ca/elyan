@@ -15,11 +15,12 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from datetime import datetime, timedelta
+from config import get_gateway_api_base_url
 
 console = Console()
 app = typer.Typer(help="Approval system commands")
 
-BASE_URL = "http://localhost:18789/api/v1"
+BASE_URL = get_gateway_api_base_url()
 
 
 def format_age(created_at: float) -> str:

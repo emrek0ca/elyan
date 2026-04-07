@@ -1,14 +1,14 @@
 import httpx
 import asyncio
 import sys
-from config.elyan_config import elyan_config
+from config import get_gateway_api_root_url
 
 def handle_message(args):
     if args.action == "send":
         if not args.text:
             print("Error: Text required.")
             return 1
-        asyncio.run(send_message(args.text))
+        asyncio.run(send_message(args.text, channel=getattr(args, "channel", None)))
         return 0
     if args.action == "poll":
         asyncio.run(poll_recent_runs())
@@ -16,18 +16,18 @@ def handle_message(args):
     if args.action == "broadcast":
         print("Broadcast CLI yuzeyi henuz tek kanalli gateway akisi ile sinirli. once 'message send' kullanin.")
         return 0
-    print("Usage: elyan message send --text '...'\n       elyan message poll")
+    print("Usage: elyan message send --text '...' [--channel telegram]\n       elyan message poll")
     return 1
 
-async def send_message(text: str):
-    port = elyan_config.get("gateway.port", 18789)
-    url = f"http://localhost:{port}/api/message"
+async def send_message(text: str, channel: str | None = None):
+    url = f"{get_gateway_api_root_url().rstrip('/')}/message"
+    channel_name = str(channel or "cli").strip() or "cli"
     
-    print(f"💬  Sending: {text}")
+    print(f"💬  Sending [{channel_name}]: {text}")
     
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json={"text": text, "channel": "cli"})
+            resp = await client.post(url, json={"text": text, "channel": channel_name})
             if resp.status_code == 200:
                 data = resp.json()
                 print(f"🤖  Response: {data.get('status', 'OK')}")
@@ -38,8 +38,7 @@ async def send_message(text: str):
 
 
 async def poll_recent_runs():
-    port = elyan_config.get("gateway.port", 18789)
-    url = f"http://localhost:{port}/api/runs/recent?limit=5"
+    url = f"{get_gateway_api_root_url().rstrip('/')}/runs/recent?limit=5"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(url)

@@ -1,64 +1,85 @@
 {
-  "0": {
-    "preferred_language": "en",
-    "top_topics": {
-      "masaüstünde": 26,
-      "var": 26,
-      "ekran": 17,
-      "görüntüsü": 17,
-      "word": 17,
-      "dosyası": 17,
-      "içine": 17,
-      "köpek": 17,
-      "not": 15,
-      "işi": 13,
-      "planla": 13,
-      "uygula:": 13,
-      "~/desktop/": 13,
-      "-test/a": 13,
-      "klasörü": 13,
-      "not.md": 13,
-      "içeriği": 13,
-      "bunu": 6,
-      "duvar": 6,
-      "kağıdı": 6
-    },
-    "successful_actions": {
-      "list_files": 11,
-      "multi_task": 22,
-      "write_file": 15,
-      "set_wallpaper": 6
-    },
-    "failed_actions": {
-      "list_files": 15,
-      "multi_task": 25
-    },
-    "response_length_bias": "short",
-    "updated_at": 1773486285
-  },
-  "8433815573": {
-    "preferred_language": "tr",
-    "top_topics": {
-      "genel": 1,
-      "konu": 1,
-      "merhaba": 1,
-      "ekran": 1,
-      "görüntüsü": 1
-    },
-    "successful_actions": {
-      "chat": 2,
-      "take_screenshot": 1
-    },
-    "failed_actions": {},
-    "response_length_bias": "short",
-    "updated_at": 1771819510
-  },
-  "local": {
+  "u1": {
     "preferred_language": "auto",
     "top_topics": {},
     "successful_actions": {},
     "failed_actions": {},
     "response_length_bias": "short",
-    "updated_at": 1772928659
+    "conversation_profile": {
+      "tone": "natural_concise",
+      "response_length": "short",
+      "channel_tone_overrides": {
+        "telegram": "natural_concise"
+      },
+      "followup_preference": "balanced",
+      "decision_style": "direct",
+      "prefers_brief_answers": true
+    },
+    "safe_relational_memory": {
+      "preferred_name": "",
+      "projects": [],
+      "people": []
+    },
+    "sensitive_personal_memory": {},
+    "updated_at": 1774915977
+  },
+  "local": {
+    "preferred_language": "tr",
+    "top_topics": {
+      "bunu": 4,
+      "duvar": 4,
+      "kağıdı": 4,
+      "what": 3,
+      "time": 3,
+      "it?": 3,
+      "hello": 30,
+      "genel": 3,
+      "konu": 3
+    },
+    "successful_actions": {
+      "set_wallpaper": 4,
+      "chat": 36
+    },
+    "failed_actions": {},
+    "response_length_bias": "short",
+    "conversation_profile": {
+      "tone": "natural_concise",
+      "response_length": "short",
+      "channel_tone_overrides": {
+        "desktop": "natural_concise"
+      },
+      "followup_preference": "balanced",
+      "decision_style": "direct",
+      "prefers_brief_answers": true
+    },
+    "safe_relational_memory": {
+      "preferred_name": "",
+      "projects": [],
+      "people": []
+    },
+    "sensitive_personal_memory": {},
+    "updated_at": 1775433514
+  },
+  "test": {
+    "preferred_language": "auto",
+    "top_topics": {},
+    "successful_actions": {},
+    "failed_actions": {},
+    "response_length_bias": "short",
+    "conversation_profile": {
+      "tone": "natural_concise",
+      "response_length": "short",
+      "channel_tone_overrides": {},
+      "followup_preference": "balanced",
+      "decision_style": "direct",
+      "prefers_brief_answers": true
+    },
+    "safe_relational_memory": {
+      "preferred_name": "",
+      "projects": [],
+      "people": []
+    },
+    "sensitive_personal_memory": {},
+    "updated_at": 1775420847
   }
 }

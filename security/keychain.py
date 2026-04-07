@@ -15,6 +15,7 @@ ENV_TO_KEYCHAIN = {
     "DISCORD_BOT_TOKEN": "discord_bot_token",
     "SLACK_BOT_TOKEN": "slack_bot_token",
     "SLACK_APP_TOKEN": "slack_app_token",
+    "TWILIO_AUTH_TOKEN": "twilio_auth_token",
     "WHATSAPP_BOT_TOKEN": "whatsapp_bot_token",
     "WHATSAPP_BRIDGE_TOKEN": "whatsapp_bridge_token",
     "WHATSAPP_ACCESS_TOKEN": "whatsapp_access_token",

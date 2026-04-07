@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, ShieldAlert } from "lucide-react";
+import { ArrowRight, ShieldAlert } from "@/vendor/lucide-react";
 
 import { ErrorState } from "@/components/feedback/ErrorState";
 import { SkeletonBlock } from "@/components/feedback/SkeletonBlock";
@@ -12,6 +12,40 @@ import { addCoworkTurn, resolveCoworkApproval } from "@/services/api/elyan-servi
 import { useRuntimeStore } from "@/stores/runtime-store";
 import { useUiStore } from "@/stores/ui-store";
 import { getRuntimeGateReason, hasRuntimeWriteAccess } from "@/utils/runtime-access";
+
+function orchestrationTone(mode?: string): "success" | "info" | "warning" {
+  switch ((mode || "").toLowerCase()) {
+    case "multi_agent":
+    case "team":
+      return "info";
+    case "verified":
+    case "reviewed":
+      return "success";
+    default:
+      return "warning";
+  }
+}
+
+function yesNoTone(value: boolean): "success" | "neutral" {
+  return value ? "success" : "neutral";
+}
+
+function collaborationStatusTone(status?: string): "success" | "info" | "warning" | "neutral" {
+  switch ((status || "").toLowerCase()) {
+    case "success":
+    case "verified":
+    case "completed":
+      return "success";
+    case "failed":
+    case "blocked":
+      return "warning";
+    case "planned":
+    case "running":
+      return "info";
+    default:
+      return "neutral";
+  }
+}
 
 export function CommandCenterScreen() {
   const queryClient = useQueryClient();
@@ -55,6 +89,23 @@ export function CommandCenterScreen() {
   const recoveryCount = replay?.recoveryActions?.length ?? 0;
   const artifactDiffCount = selectedThread?.artifactDiffs?.length ?? 0;
   const timelinePreview = selectedThread?.timeline?.slice(-3) ?? [];
+  const collaborationTrace = selectedThread?.collaborationTrace ?? [];
+  const orchestration = data.orchestration;
+  const presence = data.presence;
+  const operatorMessage = presence?.liveNote
+    || (orchestration
+      ? orchestration.autonomy.shouldAsk
+        ? `Önce güvenli yolu kuracağım, sonra gerekli yerde senden onay isteyeceğim. İlk rota: ${orchestration.preview || orchestration.primaryAction || "analyze"}.`
+        : `Bunu adım adım ben yürüteceğim. İlk rota: ${orchestration.preview || orchestration.primaryAction || "analyze"}.`
+      : selectedThread?.lastOperatorTurn?.content || "Hazırım. İstersen sıradaki adımı netleştireyim.");
+  const suggestedFollowUps = presence?.quickReplies?.length
+    ? presence.quickReplies
+    : orchestration
+      ? [
+          ...orchestration.taskPlan.steps.slice(0, 3).map((step) => `Şimdi şu adımı uygula: ${step.name}`),
+          ...(orchestration.integration.connectorName ? [`${orchestration.integration.connectorName} bağlantısını kullanarak ilerle`] : []),
+        ].slice(0, 4)
+      : ["Bunu devam ettir", "Bir sonraki adımı öner", "Kısa durum özeti ver"];
 
   async function invalidateAll() {
     await Promise.all([
@@ -172,6 +223,220 @@ export function CommandCenterScreen() {
 
         {selectedThread ? (
           <Surface tone="card" className="p-5">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Operator voice</div>
+                <h2 className="mt-2 font-display text-[22px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
+                  {presence?.headline || "Elyan bunu sana böyle söyler"}
+                </h2>
+              </div>
+              {orchestration ? (
+                <StatusBadge tone={orchestration.autonomy.shouldAsk ? "warning" : "success"}>
+                  {orchestration.autonomy.shouldAsk ? "approval-aware" : "self-driven"}
+                </StatusBadge>
+              ) : null}
+            </div>
+            <div className="mt-4 rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4 text-[14px] leading-7 text-[var(--text-primary)]">
+              {operatorMessage}
+            </div>
+            {presence?.nextMove ? (
+              <div className="mt-3 text-[12px] text-[var(--text-secondary)]">
+                Sonraki doğal hareket: {presence.nextMove}
+              </div>
+            ) : null}
+            {presence?.operatorNotes?.length ? (
+              <div className="mt-4 grid gap-2">
+                {presence.operatorNotes.slice(0, 3).map((note) => (
+                  <div
+                    key={note.id}
+                    className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] px-4 py-3"
+                  >
+                    <div className="text-[12px] font-medium text-[var(--text-primary)]">{note.title}</div>
+                    <div className="mt-1 text-[12px] leading-6 text-[var(--text-secondary)]">{note.body}</div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <div className="mt-4 flex flex-wrap gap-2">
+              {suggestedFollowUps.map((suggestion) => (
+                <Button
+                  key={suggestion}
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void handleFollowUp(suggestion)}
+                  disabled={!selectedThread || turnBusy || !runtimeReady}
+                >
+                  {suggestion}
+                </Button>
+              ))}
+            </div>
+          </Surface>
+        ) : null}
+
+        {selectedThread && orchestration ? (
+          <Surface tone="card" className="p-5">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Operator preview</div>
+                <h2 className="mt-2 font-display text-[22px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
+                  {orchestration.preview || orchestration.objective || "Execution preview"}
+                </h2>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <StatusBadge tone="info">{orchestration.domain || "general"}</StatusBadge>
+                <StatusBadge tone={orchestrationTone(orchestration.orchestrationMode)}>
+                  {orchestration.orchestrationMode.replaceAll("_", " ")}
+                </StatusBadge>
+                <StatusBadge tone={yesNoTone(orchestration.fastPath)}>
+                  {orchestration.fastPath ? "fast path" : "full path"}
+                </StatusBadge>
+                <StatusBadge tone={yesNoTone(orchestration.realTimeRequired)}>
+                  {orchestration.realTimeRequired ? "real time" : "deferred ok"}
+                </StatusBadge>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-4 xl:grid-cols-[1.4fr_1fr]">
+              <div className="rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4">
+                <div className="text-[12px] font-medium text-[var(--text-primary)]">Execution route</div>
+                <div className="mt-3 grid gap-3 text-[12px] text-[var(--text-secondary)] md:grid-cols-2">
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Primary action</div>
+                    <div className="mt-1 text-[13px] text-[var(--text-primary)]">{orchestration.primaryAction || "analyze"}</div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Request class</div>
+                    <div className="mt-1 text-[13px] text-[var(--text-primary)]">{orchestration.requestClass || "general"}</div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Model lane</div>
+                    <div className="mt-1 text-[13px] text-[var(--text-primary)]">
+                      {orchestration.modelSelection.provider || "local"} / {orchestration.modelSelection.model || "default"}
+                    </div>
+                    <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">{orchestration.modelSelection.role || "operator"}</div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Connector</div>
+                    <div className="mt-1 text-[13px] text-[var(--text-primary)]">
+                      {orchestration.integration.connectorName || orchestration.integration.provider || "none"}
+                    </div>
+                    <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
+                      {orchestration.integration.integrationType || "local"} · {orchestration.integration.authStrategy || "session"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Autonomy</div>
+                    <div className="mt-1 text-[13px] text-[var(--text-primary)]">{orchestration.autonomy.mode || "assisted"}</div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Fallback</div>
+                    <div className="mt-1 text-[13px] text-[var(--text-primary)]">
+                      {orchestration.modelSelection.fallback ? "provider fallback ready" : orchestration.integration.fallbackPolicy || "none"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">LLM collaboration</div>
+                    <div className="mt-1 text-[13px] text-[var(--text-primary)]">
+                      {orchestration.collaboration.enabled
+                        ? `${orchestration.collaboration.maxModels} models · ${orchestration.collaboration.strategy || "parallel_synthesis"}`
+                        : "single model"}
+                    </div>
+                    <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
+                      {orchestration.collaboration.synthesisRole || orchestration.modelSelection.role || "operator"}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4">
+                <div className="text-[12px] font-medium text-[var(--text-primary)]">Safety</div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <StatusBadge tone={yesNoTone(orchestration.autonomy.shouldAsk)}>
+                    {orchestration.autonomy.shouldAsk ? "approval aware" : "no approval expected"}
+                  </StatusBadge>
+                  <StatusBadge tone={yesNoTone(orchestration.autonomy.shouldResume)}>
+                    {orchestration.autonomy.shouldResume ? "resume capable" : "single pass"}
+                  </StatusBadge>
+                </div>
+                {orchestration.taskPlan.constraints.length ? (
+                  <div className="mt-4">
+                    <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Constraints</div>
+                    <div className="mt-2 space-y-2 text-[12px] text-[var(--text-secondary)]">
+                      {orchestration.taskPlan.constraints.slice(0, 3).map((item) => (
+                        <div key={item} className="rounded-[14px] border border-[var(--border-subtle)] px-3 py-2">
+                          {item}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            {orchestration.taskPlan.steps.length ? (
+              <div className="mt-4 rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="text-[12px] font-medium text-[var(--text-primary)]">
+                    Plan steps
+                  </div>
+                  <div className="text-[11px] text-[var(--text-tertiary)]">
+                    {orchestration.taskPlan.name || orchestration.taskPlan.goal || "planned execution"}
+                  </div>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {orchestration.taskPlan.steps.map((step, index) => (
+                    <div
+                      key={`${step.name}-${index}`}
+                      className="flex items-start justify-between gap-4 rounded-[16px] border border-[var(--border-subtle)] px-3 py-3"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-[13px] font-medium text-[var(--text-primary)]">
+                          {index + 1}. {step.name || "step"}
+                        </div>
+                        <div className="mt-1 text-[12px] text-[var(--text-secondary)]">
+                          {step.kind || "task"}{step.tool ? ` · ${step.tool}` : ""}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {step.tool ? <StatusBadge tone="neutral">{step.tool}</StatusBadge> : null}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => void handleFollowUp(`Şimdi şu adımı uygula: ${step.name}`)}
+                          disabled={turnBusy || !runtimeReady}
+                        >
+                          Run
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {orchestration.collaboration.enabled && orchestration.collaboration.lenses.length ? (
+              <div className="mt-4 rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="text-[12px] font-medium text-[var(--text-primary)]">Model collaboration</div>
+                  <div className="text-[11px] text-[var(--text-tertiary)]">
+                    {orchestration.collaboration.executionStyle.replaceAll("_", " ")}
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-2">
+                  {orchestration.collaboration.lenses.map((lens) => (
+                    <div key={lens.name} className="rounded-[14px] border border-[var(--border-subtle)] px-3 py-3">
+                      <div className="text-[13px] font-medium capitalize text-[var(--text-primary)]">{lens.name}</div>
+                      <div className="mt-1 text-[12px] text-[var(--text-secondary)]">{lens.instruction}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </Surface>
+        ) : null}
+
+        {selectedThread ? (
+          <Surface tone="card" className="p-5">
             <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Replay</div>
             <div className="mt-3 flex flex-wrap items-center gap-3 text-[13px] text-[var(--text-secondary)]">
               <span className="rounded-[999px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] px-3 py-1">
@@ -180,12 +445,38 @@ export function CommandCenterScreen() {
               <span>V {verificationCount}</span>
               <span>R {recoveryCount}</span>
               <span>D {artifactDiffCount}</span>
+              {selectedThread.laneSummary?.collaborationStrategy ? <span>M {selectedThread.laneSummary.collaborationStrategy}</span> : null}
             </div>
+            {collaborationTrace.length ? (
+              <div className="mt-4 space-y-2">
+                <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Execution trace</div>
+                {collaborationTrace.slice(0, 4).map((entry) => (
+                  <div
+                    key={entry.id}
+                    className="flex items-center justify-between gap-3 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] px-3 py-3"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-[13px] font-medium capitalize text-[var(--text-primary)]">
+                        {entry.lens} · {[entry.provider, entry.model].filter(Boolean).join(" / ") || "model"}
+                      </div>
+                      <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
+                        {entry.strategy || selectedThread.laneSummary?.collaborationStrategy || "adaptive"}
+                      </div>
+                    </div>
+                    <StatusBadge tone={collaborationStatusTone(entry.status)}>{entry.status}</StatusBadge>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             {timelinePreview.length ? (
               <div className="mt-3 space-y-1">
                 {timelinePreview.map((item) => (
                   <div key={item.id} className="flex items-center justify-between gap-3 text-[12px] text-[var(--text-secondary)]">
-                    <span className="truncate">{item.title}</span>
+                    <span className="truncate">
+                      {item.metadata?.timeline_kind === "model_collaboration"
+                        ? `${String(item.metadata?.lens || "model")} · ${String(item.metadata?.provider || "")}/${String(item.metadata?.model || "")}`
+                        : item.title}
+                    </span>
                     <span className="text-[var(--text-tertiary)]">{item.status}</span>
                   </div>
                 ))}
@@ -239,7 +530,7 @@ export function CommandCenterScreen() {
             <textarea
               value={followUp}
               onChange={(event) => setFollowUp(event.target.value)}
-              placeholder="Write the next instruction"
+              placeholder={presence?.nextMove || "Write the next instruction"}
               className="min-h-[120px] w-full resize-none bg-transparent text-[14px] leading-7 text-[var(--text-primary)] outline-none"
             />
             <div className="mt-4 flex justify-end">

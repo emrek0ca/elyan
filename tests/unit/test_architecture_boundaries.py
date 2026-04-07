@@ -4,7 +4,7 @@ import ast
 from pathlib import Path
 
 
-ROOT = Path("/Users/emrekoca/Desktop/bot")
+ROOT = Path(__file__).resolve().parent.parent.parent
 CORE_DIR = ROOT / "core"
 FORBIDDEN_IMPORT_PREFIXES = ("ui", "apps", "plugins")
 ALLOWLIST_MODULES = {

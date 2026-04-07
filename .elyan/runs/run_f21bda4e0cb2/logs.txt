@@ -1,2 +1,0 @@
-capability:ui_state_present
-capability:active_window_identified

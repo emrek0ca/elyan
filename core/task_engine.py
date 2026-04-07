@@ -43,8 +43,10 @@ from .task_contract import build_task_contract
 from .artifact_quality_engine import get_artifact_quality_engine
 from .goal_graph import get_goal_graph_planner
 from .operator_policy import get_operator_policy_engine
+from .consensus_engine import get_consensus_engine
 from .cognitive_layer_integrator import get_cognitive_integrator
 from .adaptive_tuning import get_adaptive_tuning
+from .personalization.policy_learning import LearningSignal, get_policy_learning_store
 from .performance_cache import get_cache
 from config.settings_manager import SettingsPanel
 from security.validator import validate_input, sanitize_input
@@ -52,6 +54,7 @@ from security.audit import get_audit_logger
 from elyan.approval.legacy_adapter import get_approval_manager, RiskLevel
 from security.tool_policy import tool_policy
 from security.privacy_guard import redact_text, sanitize_for_storage, sanitize_object, is_external_provider
+from core.reliability_integration import sanitize_and_validate_params
 from tools import AVAILABLE_TOOLS
 from utils.logger import get_logger
 
@@ -126,12 +129,16 @@ class TaskEngine:
         self.quality_engine = get_artifact_quality_engine()
         self.goal_graph_planner = get_goal_graph_planner()
         self.operator_policy_engine = get_operator_policy_engine()
+        self.consensus_engine = get_consensus_engine()
+        self.intent_router = None
+        self._checkpoint_manager = None
 
         # Phase 4: Cognitive Layer Integration
         self.cognitive_integrator = get_cognitive_integrator()
 
         # Phase 5: Adaptive Tuning & Performance Optimization
         self.adaptive_tuning = get_adaptive_tuning()
+        self.policy_learning = get_policy_learning_store()
         self.cache = get_cache()
 
         # Cognitive tracing for all tasks
@@ -174,6 +181,63 @@ class TaskEngine:
 
         # Default
         return "general"
+
+    @staticmethod
+    def _risk_for_action(action: str) -> str:
+        low = str(action or "").strip().lower()
+        if any(tok in low for tok in ("delete", "remove", "shutdown", "restart", "format", "drop")):
+            return "high"
+        if any(tok in low for tok in ("write", "move", "rename", "chmod", "chown")):
+            return "medium"
+        return "low"
+
+    def _build_consensus_proposals(
+        self,
+        *,
+        task_def: TaskDefinition,
+        user_id: str,
+        task_type: str,
+        budget_seconds: float,
+    ) -> List[Dict[str, Any]]:
+        action = str(task_def.action or "").strip().lower()
+        risk = self._risk_for_action(action)
+        proposals: List[Dict[str, Any]] = [
+            {
+                "agent_id": "planner_primary",
+                "action": action,
+                "confidence": 0.92,
+                "risk": risk,
+                "rationale": "planner_primary_action",
+                "est_latency": max(1.0, float(budget_seconds or 60.0) * 1000.0 * 0.7),
+                "domain_match": 1.0,
+                "stability": 0.85,
+                "role": "planner",
+            },
+            {
+                "agent_id": "security_policy_guard",
+                "action": action,
+                "confidence": 1.0,
+                "risk": risk,
+                "rationale": "security_policy_guardrail",
+                "est_latency": max(1.0, float(budget_seconds or 60.0) * 1000.0 * 0.2),
+                "domain_match": 1.0,
+                "stability": 1.0,
+                "role": "security_policy",
+            },
+        ]
+        try:
+            ranked = self.policy_learning.get_action_rankings_ucb(
+                user_id=str(user_id or "local"),
+                task_type=task_type,
+                actions=[action],
+                explore_c=float(self.settings.get("consensus_explore_exploit_level", 0.25) or 0.25),
+            )
+            if ranked:
+                primary = ranked[0]
+                proposals[0]["confidence"] = max(0.55, min(0.98, float(primary.get("score", 0.8) or 0.8)))
+        except Exception as exc:
+            logger.debug(f"Consensus UCB ranking skipped: {exc}")
+        return proposals
 
     def _should_redact_for_cloud_llm(self) -> bool:
         if not self.llm:
@@ -308,6 +372,12 @@ class TaskEngine:
                 return False
 
             self.executor = TaskExecutor()
+            try:
+                from core.intent import IntentRouter
+
+                self.intent_router = IntentRouter(self.llm)
+            except Exception as router_exc:
+                logger.debug(f"Intent router init skipped: {router_exc}")
             
             # Initialize advanced planning components
             from .reasoning import ReasoningEngine
@@ -378,7 +448,7 @@ class TaskEngine:
                 logger.info(f"Cache HIT: Intent for '{user_input[:50]}...'")
                 intent_result = cached_intent
             else:
-                intent_result = await self._analyze_intent(user_input, local_context)
+                intent_result = await self._analyze_intent(user_input, local_context, user_id=user_id)
                 self.cache.set(intent_cache_key, intent_result)
             decompose_tried = False
             planner_route_used = False
@@ -584,6 +654,12 @@ class TaskEngine:
                     {"id": t.id, "action": t.action, "description": t.description, "status": "pending"}
                     for t in ordered_tasks
                 ],
+                pipeline_id=str(
+                    local_context.get("resume_pipeline_id")
+                    or local_context.get("checkpoint_execution_id")
+                    or local_context.get("resume_execution_id")
+                    or ""
+                ).strip() or None,
             )
 
             # 6. Execution (license check removed)
@@ -592,6 +668,7 @@ class TaskEngine:
                 notify_callback=notify_callback,
                 user_id=user_id,
                 pipeline_id=pipeline_id,
+                execution_context=local_context,
             )
 
             # Auto re-plan once if planner route failed.
@@ -627,6 +704,14 @@ class TaskEngine:
             if execution_result.get("success", False) and not quality_report.get("publish_ready", False):
                 execution_result["success"] = False
                 execution_result["quality_blocked"] = True
+
+            if pipeline_id and bool(self.settings.get("checkpointing_enabled", True)) and bool(execution_result.get("success", False)):
+                try:
+                    checkpoint_manager = self._checkpoint_store()
+                    if checkpoint_manager is not None:
+                        checkpoint_manager.cleanup(pipeline_id)
+                except Exception as checkpoint_cleanup_exc:
+                    logger.debug(f"Checkpoint cleanup skipped: {checkpoint_cleanup_exc}")
 
             # 8. Result Summarization
             summary = self._summarize_results(execution_result, ordered_tasks)
@@ -831,6 +916,14 @@ class TaskEngine:
         stage_count = int(execution_req.get("goal_stage_count", 1) or 1)
         if self._is_chat_message(user_input):
             return ""
+        if intent.get("requires_clarification") or str(intent.get("action", "")).strip().lower() == "clarify":
+            options = intent.get("clarification_options", [])
+            if isinstance(options, list) and options:
+                lines = ["Şunu mu demek istedin?"]
+                for idx, option in enumerate(options[:4], start=1):
+                    lines.append(f"{idx}) {option}")
+                return "\n".join(lines)
+            return "İsteği netleştirmem gerekiyor. Hangi işlemi yapmamı istiyorsun?"
         if intent.get("type") == "UNKNOWN" and stage_count <= 1 and domain == "general":
             return (
                 "İsteğini netleştireyim: bu görevde tam olarak ne yapmamı istiyorsun?\n"
@@ -976,7 +1069,12 @@ class TaskEngine:
             if notify_callback:
                 await self._emit_notify(notify_callback, "Plan revize edildi, ikinci deneme başlatılıyor...")
 
-            retry_exec = await self._execute_tasks(retry_tasks, notify_callback=notify_callback, user_id=user_id)
+            retry_exec = await self._execute_tasks(
+                retry_tasks,
+                notify_callback=notify_callback,
+                user_id=user_id,
+                execution_context=context or {},
+            )
             retry_exec["_replanned_tasks"] = retry_tasks
             return retry_exec
         except Exception as exc:
@@ -1120,36 +1218,105 @@ class TaskEngine:
     async def _analyze_intent(
         self,
         user_input: str,
-        context: Optional[Dict[str, Any]]
+        context: Optional[Dict[str, Any]],
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Analyze user intent"""
+        """Analyze user intent with 3-tier router first, legacy parser fallback."""
         try:
+            route_context = None
+            if isinstance(context, dict):
+                try:
+                    from core.intent import ConversationContext
+
+                    route_context = ConversationContext(
+                        user_id=str(user_id or context.get("user_id") or "unknown")
+                    )
+                    history = context.get("recent_history") or context.get("message_history") or []
+                    if isinstance(history, list):
+                        for turn in history[-5:]:
+                            if not isinstance(turn, dict):
+                                continue
+                            content = str(turn.get("content") or turn.get("text") or turn.get("message") or "").strip()
+                            if not content:
+                                continue
+                            role = str(turn.get("role") or turn.get("speaker") or "user").strip().lower()
+                            route_context.add_message(
+                                "assistant" if role in {"assistant", "bot", "model"} else "user",
+                                content,
+                                turn.get("intent"),
+                            )
+                    formatted = str(context.get("formatted_context") or "").strip()
+                    if formatted and not route_context.message_history:
+                        route_context.add_message("user", formatted[:400], None)
+                except Exception as ctx_exc:
+                    logger.debug(f"Intent route context build skipped: {ctx_exc}")
+
+            routed_intent = None
+            try:
+                route_user_id = str(user_id or (context.get("user_id") if isinstance(context, dict) else "unknown") or "unknown")
+                if self.intent_router is not None:
+                    routed_intent = await asyncio.to_thread(
+                        self.intent_router.route,
+                        user_input,
+                        route_user_id,
+                        AVAILABLE_TOOLS,
+                        route_context,
+                    )
+                else:
+                    from core.intent import route_intent as advanced_route_intent
+
+                    routed_intent = await asyncio.to_thread(
+                        advanced_route_intent,
+                        user_input,
+                        route_user_id,
+                        AVAILABLE_TOOLS,
+                        route_context,
+                        self.llm,
+                    )
+            except Exception as route_exc:
+                logger.debug(f"3-tier intent routing skipped: {route_exc}")
+
+            if routed_intent:
+                routed = {
+                    "type": "MULTI_TASK" if routed_intent.action == "multi_task" else "CHAT" if routed_intent.action == "chat" else "CLARIFY" if routed_intent.action == "clarify" else routed_intent.action.upper(),
+                    "action": routed_intent.action,
+                    "params": routed_intent.params or {},
+                    "confidence": float(routed_intent.confidence or 0.0),
+                    "reasoning": routed_intent.reasoning or "",
+                    "source": routed_intent.source_tier or "intent_router",
+                    "tasks": routed_intent.tasks or [],
+                    "requires_clarification": bool(routed_intent.requires_clarification or routed_intent.action == "clarify"),
+                    "clarification_options": list(routed_intent.clarification_options or []),
+                    "is_multi_task": bool(routed_intent.is_multi_task or routed_intent.action == "multi_task"),
+                }
+                if routed["action"] in AVAILABLE_TOOLS or routed["action"] in {"multi_task", "chat", "clarify"}:
+                    return routed
+
             intent = self.intent_parser.parse(user_input)
             if intent:
-                # Normalize intent: ensure 'type' field exists
                 if "action" in intent and "type" not in intent:
                     intent["type"] = intent["action"].upper()
+                intent.setdefault("source", "legacy_parser")
                 return intent
-            else:
-                # Learned quick-match path (only safe param-free actions)
-                learned_action = self.learning.quick_match(user_input)
-                if learned_action in {
-                    "take_screenshot", "get_system_info", "get_brightness",
-                    "wifi_status", "bluetooth_status", "get_today_events",
-                    "get_running_apps", "toggle_dark_mode", "read_clipboard"
-                }:
-                    return {
-                        "type": learned_action.upper(),
-                        "action": learned_action,
-                        "params": {},
-                        "confidence": 0.82,
-                        "source": "learning_quick_match"
-                    }
 
-                # v19.1: Short conversational messages -> CHAT (skip heavy planner)
-                if self._is_chat_message(user_input):
-                    return {"type": "CHAT", "confidence": 0.7}
-                return {"type": "UNKNOWN", "confidence": 0.0}
+            # Learned quick-match path (only safe param-free actions)
+            learned_action = self.learning.quick_match(user_input)
+            if learned_action in {
+                "take_screenshot", "get_system_info", "get_brightness",
+                "wifi_status", "bluetooth_status", "get_today_events",
+                "get_running_apps", "toggle_dark_mode", "read_clipboard"
+            }:
+                return {
+                    "type": learned_action.upper(),
+                    "action": learned_action,
+                    "params": {},
+                    "confidence": 0.82,
+                    "source": "learning_quick_match"
+                }
+
+            if self._is_chat_message(user_input):
+                return {"type": "CHAT", "confidence": 0.7}
+            return {"type": "UNKNOWN", "confidence": 0.0}
         except Exception as e:
             logger.error(f"Intent analysis error: {e}")
             return {"type": "UNKNOWN", "confidence": 0.0}
@@ -1265,7 +1432,7 @@ class TaskEngine:
                     except Exception:
                         pass
 
-            tone = self.settings.get("communication_tone", "professional_friendly")
+            tone = self.settings.get("communication_tone", "natural_concise")
             length = self.settings.get("response_length", "short")
             expertise = self.settings.get("assistant_expertise", "advanced")
             preferred_language = self.settings.get("preferred_language", "auto")
@@ -1288,9 +1455,11 @@ class TaskEngine:
 
             tone_hint = {
                 "professional_friendly": "profesyonel ama samimi",
+                "natural_concise": "dogal, kisa ve samimi",
+                "warm_operator": "yakın, güven veren ve aksiyon odaklı",
                 "mentor": "rehberlik eden ve destekleyici",
                 "formal": "resmi ve kurumsal",
-            }.get(tone, "profesyonel ama samimi")
+            }.get(tone, "dogal, kisa ve samimi")
 
             length_hint = {
                 "short": "2-4 cumle",
@@ -1479,6 +1648,14 @@ JSON ciktisi (baska hicbir sey yazma):
         known_ids: List[str] = []
 
         for idx, a in enumerate(actions[:max_steps]):
+            if not isinstance(a, dict):
+                if hasattr(a, "to_dict"):
+                    try:
+                        a = a.to_dict()
+                    except Exception:
+                        a = getattr(a, "__dict__", {})
+                else:
+                    a = getattr(a, "__dict__", {})
             if not isinstance(a, dict):
                 continue
             action = str(a.get("action", "")).strip()
@@ -1848,6 +2025,7 @@ JSON ciktisi (baska hicbir sey yazma):
         notify_callback = None,
         user_id: Optional[str] = None,
         pipeline_id: Optional[str] = None,
+        execution_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Execute tasks with optimized parallelism (v14.0)"""
         results = []
@@ -1860,6 +2038,39 @@ JSON ciktisi (baska hicbir sey yazma):
         completed_tasks = set()
         successful_tasks = set()
         failed_tasks = set()
+
+        if pipeline_id and bool(self.settings.get("checkpointing_enabled", True)):
+            resume_state = self._load_execution_checkpoint(pipeline_id, tasks)
+            if isinstance(resume_state, dict):
+                resumed_success = {
+                    str(task_id)
+                    for task_id in (resume_state.get("successful_tasks") or [])
+                    if str(task_id).strip()
+                }
+                if resumed_success:
+                    successful_tasks.update(resumed_success)
+                    completed_tasks.update(resumed_success)
+                    results.extend(
+                        [row for row in (resume_state.get("results") or []) if isinstance(row, dict) and row.get("success")]
+                    )
+                    if pipeline_id:
+                        for row in resume_state.get("results") or []:
+                            if not isinstance(row, dict):
+                                continue
+                            if row.get("success") and row.get("task_id"):
+                                self.pipeline_state.mark_task(
+                                    pipeline_id,
+                                    str(row["task_id"]),
+                                    True,
+                                    "",
+                                )
+                    succeeded = len(successful_tasks)
+                    if notify_callback:
+                        await self._emit_notify(
+                            notify_callback,
+                            f"Önceki checkpoint'ten devam ediliyor: {len(successful_tasks)} adım tamamlandı.",
+                        )
+                    logger.info(f"Checkpoint resume loaded for {pipeline_id}: {len(successful_tasks)} successful tasks")
         
         while len(completed_tasks) < len(tasks):
             # Identify tasks ready for execution (all dependencies met)
@@ -1895,8 +2106,79 @@ JSON ciktisi (baska hicbir sey yazma):
             async def run_task(task_def):
                 nonlocal succeeded, failed
                 try:
+                    task_type = self._infer_task_type(task_def.action)
+                    budget_seconds = float((task_def.metadata or {}).get("cognitive_budget_seconds", 120.0) or 120.0)
+                    ceo_risk = {
+                        "conflicts": list((execution_context or {}).get("ceo_conflicts", []) or []),
+                        "error_scenarios": list((execution_context or {}).get("ceo_errors", []) or []),
+                    }
+                    consensus_ctx = {
+                        "consensus_veto_policy": str(self.settings.get("consensus_veto_policy", "require_approval") or "require_approval"),
+                        "consensus_explore_exploit_level": float(
+                            self.settings.get("consensus_explore_exploit_level", 0.25) or 0.25
+                        ),
+                        "latency_budget_ms": max(1000.0, budget_seconds * 1000.0),
+                    }
+                    consensus_result: Dict[str, Any] = {
+                        "enabled": bool(self.settings.get("consensus_enabled", True)),
+                        "selected_action": str(task_def.action),
+                        "score": 0.0,
+                        "requires_approval": bool(task_def.requires_approval),
+                        "blocked": False,
+                    }
+                    if bool(self.settings.get("consensus_enabled", True)):
+                        proposals = self._build_consensus_proposals(
+                            task_def=task_def,
+                            user_id=str(user_id or "local"),
+                            task_type=task_type,
+                            budget_seconds=budget_seconds,
+                        )
+                        self.audit.log_action(
+                            user_id=int(user_id or 0) if str(user_id or "").isdigit() else 0,
+                            action="ConsensusProposed",
+                            details={
+                                "task_id": task_def.id,
+                                "task_type": task_type,
+                                "proposal_count": len(proposals),
+                                "ceo_risk": ceo_risk,
+                            },
+                            success=True,
+                        )
+                        consensus_result = await self.cognitive_integrator.evaluate_consensus(
+                            task_id=task_def.id,
+                            user_id=str(user_id or "local"),
+                            task_type=task_type,
+                            proposals=proposals,
+                            context=consensus_ctx,
+                        )
+                        self.audit.log_action(
+                            user_id=int(user_id or 0) if str(user_id or "").isdigit() else 0,
+                            action="ConsensusResolved",
+                            details={"task_id": task_def.id, "decision": consensus_result, "ceo_risk": ceo_risk},
+                            success=not bool(consensus_result.get("blocked")),
+                        )
+                        if bool(consensus_result.get("blocked")):
+                            failed += 1
+                            reason = str(consensus_result.get("reason") or "consensus_blocked")
+                            if notify_callback:
+                                await self._emit_notify(notify_callback, f" {task_def.description} engellendi: {reason}")
+                            if pipeline_id:
+                                self.pipeline_state.mark_task(pipeline_id, task_def.id, False, reason)
+                            return {
+                                "task_id": task_def.id,
+                                "action": task_def.action,
+                                "success": False,
+                                "error": reason,
+                                "consensus_decision": consensus_result,
+                                "ceo_risk": ceo_risk,
+                            }
+                        if bool(consensus_result.get("requires_approval")):
+                            task_def.requires_approval = True
+
+                    selected_action = str(consensus_result.get("selected_action") or task_def.action).strip().lower() or str(task_def.action)
+
                     # Approval can be required either by explicit risk rules or policy.
-                    if task_def.requires_approval or self._requires_explicit_approval(task_def.action):
+                    if task_def.requires_approval or self._requires_explicit_approval(selected_action):
                         if notify_callback:
                             await self._emit_notify(
                                 notify_callback,
@@ -1911,25 +2193,52 @@ JSON ciktisi (baska hicbir sey yazma):
                                 await self._emit_notify(notify_callback, f" {task_def.description} iptal edildi: {reason}")
                             return {
                                 "task_id": task_def.id,
-                                "action": task_def.action,
+                                "action": selected_action,
                                 "success": False,
                                 "error": reason,
                                 "approval_required": True,
+                                "consensus_decision": consensus_result,
+                                "ceo_risk": ceo_risk,
                             }
 
                     if notify_callback:
                         await self._emit_notify(notify_callback, f" *{task_def.description}* başlatıldı...")
                     
-                    tool_func = AVAILABLE_TOOLS.get(task_def.action)
+                    tool_func = AVAILABLE_TOOLS.get(selected_action)
                     if not tool_func:
-                        raise ValueError(f"Tool not found: {task_def.action}")
+                        raise ValueError(f"Tool not found: {selected_action}")
+
+                    is_valid, sanitized_params, validation_error = sanitize_and_validate_params(
+                        selected_action,
+                        task_def.params or {},
+                    )
+                    if not is_valid:
+                        failed += 1
+                        reason = str(getattr(validation_error, "message", "Param validation failed"))
+                        if pipeline_id:
+                            self.pipeline_state.mark_task(pipeline_id, task_def.id, False, reason)
+                        if notify_callback:
+                            await self._emit_notify(notify_callback, f" {task_def.description} doğrulama hatası: {reason}")
+                        return {
+                            "task_id": task_def.id,
+                            "action": selected_action,
+                            "success": False,
+                            "error": reason,
+                            "validation_error": validation_error.to_dict() if validation_error else None,
+                            "consensus_decision": consensus_result,
+                            "ceo_risk": ceo_risk,
+                        }
                         
                     result = await asyncio.wait_for(
-                        self.executor.execute(tool_func, task_def.params),
+                        self.executor.execute(tool_func, sanitized_params or task_def.params),
                         timeout=60.0
                     )
+                    if isinstance(result, dict):
+                        result["consensus_decision"] = consensus_result
+                        result["consensus_selected_action"] = selected_action
+                        result["ceo_risk"] = ceo_risk
                     # If screenshot and notifier exists, send image
-                    if notify_callback and task_def.action == "take_screenshot" and result.get("success"):
+                    if notify_callback and selected_action == "take_screenshot" and result.get("success"):
                         await self._emit_notify(notify_callback, {
                             "type": "screenshot",
                             "path": result.get("path") or result.get("filename"),
@@ -1966,13 +2275,23 @@ JSON ciktisi (baska hicbir sey yazma):
                             execution_success=result.get("success", False),
                             execution_duration_ms=execution_duration_ms,
                             error_code=error_code,
-                            agent_id=task_def.action
+                            agent_id=selected_action
                         )
 
                         if deadlock_result.get("deadlock_detected"):
                             logger.warning(f"Deadlock detected for {task_def.id}: {deadlock_result.get('recovery_action')}")
                             result["cognitive_deadlock_detected"] = True
                             result["cognitive_recovery_action"] = deadlock_result.get("recovery_action")
+                            self.audit.log_action(
+                                user_id=int(user_id or 0) if str(user_id or "").isdigit() else 0,
+                                action="DeadlockRecovered",
+                                details={
+                                    "task_id": task_def.id,
+                                    "recovery_action": deadlock_result.get("recovery_action"),
+                                    "agent_id": selected_action,
+                                },
+                                success=True,
+                            )
 
                         # Check timeout
                         timeout_result = await self.cognitive_integrator.check_execution_timeout(
@@ -1994,10 +2313,21 @@ JSON ciktisi (baska hicbir sey yazma):
                             result["cognitive_mode_switched"] = True
                             result["cognitive_mode_before"] = mode_result.get("mode_before")
                             result["cognitive_mode_after"] = mode_result.get("mode_after")
+                            self.audit.log_action(
+                                user_id=int(user_id or 0) if str(user_id or "").isdigit() else 0,
+                                action="ModeSwitched",
+                                details={
+                                    "task_id": task_def.id,
+                                    "mode_before": mode_result.get("mode_before"),
+                                    "mode_after": mode_result.get("mode_after"),
+                                    "reason": mode_result.get("reason"),
+                                },
+                                success=True,
+                            )
 
                     # Phase 5: Adaptive Tuning - Record task outcome for learning
                     try:
-                        task_type = self._infer_task_type(task_def.action)
+                        task_type = self._infer_task_type(selected_action)
                         current_mode = getattr(self.cognitive_integrator, 'current_mode', 'FOCUSED')
                         deadlock = deadlock_result.get("deadlock_detected", False) if self.settings.get("cognitive_layer_enabled", True) else False
 
@@ -2009,16 +2339,44 @@ JSON ciktisi (baska hicbir sey yazma):
                             success=result.get("success", False),
                             deadlock_detected=deadlock
                         )
+                        signal_result = self.policy_learning.record_signal(
+                            LearningSignal(
+                                user_id=str(user_id or "local"),
+                                task_type=task_type,
+                                action=selected_action,
+                                agent_id=selected_action,
+                                outcome="success" if bool(result.get("success", False)) else "failed",
+                                latency_ms=float(execution_duration_ms or 0.0),
+                                retry_count=0,
+                                approval_required=bool(task_def.requires_approval),
+                                approval_granted=bool(result.get("success", False)),
+                                source="implicit",
+                                metadata={"task_id": task_def.id, "consensus": consensus_result},
+                            )
+                        )
+                        self.audit.log_action(
+                            user_id=int(user_id or 0) if str(user_id or "").isdigit() else 0,
+                            action="LearningSignalRecorded",
+                            details={
+                                "task_id": task_def.id,
+                                "task_type": task_type,
+                                "action_name": selected_action,
+                                "result": signal_result,
+                            },
+                            success=bool(signal_result.get("success", False)),
+                        )
                     except Exception as e:
                         logger.warning(f"Failed to record adaptive tuning: {e}")
 
                     return {
                         "task_id": task_def.id,
-                        "action": task_def.action,
+                        "action": selected_action,
                         "success": result.get("success", False),
                         "data": result,
                         "message": result.get("message"),
-                        "error": result.get("error")
+                        "error": result.get("error"),
+                        "consensus_decision": consensus_result,
+                        "ceo_risk": ceo_risk,
                     }
                 except Exception as e:
                     failed += 1
@@ -2038,6 +2396,23 @@ JSON ciktisi (baska hicbir sey yazma):
                 else:
                     failed_tasks.add(res["task_id"])
 
+            if pipeline_id and bool(self.settings.get("checkpointing_enabled", True)):
+                try:
+                    self._save_execution_checkpoint(
+                        pipeline_id=pipeline_id,
+                        tasks=tasks,
+                        completed_tasks=completed_tasks,
+                        successful_tasks=successful_tasks,
+                        failed_tasks=failed_tasks,
+                        results=results,
+                        succeeded=succeeded,
+                        failed=failed,
+                        skipped=skipped,
+                        execution_context=execution_context or {},
+                    )
+                except Exception as checkpoint_exc:
+                    logger.debug(f"Checkpoint save skipped: {checkpoint_exc}")
+
         # Final progress update
         if notify_callback and succeeded == len(tasks):
             await self._emit_notify(notify_callback, "Tum gorevler basariyla tamamlandi.")
@@ -2049,6 +2424,82 @@ JSON ciktisi (baska hicbir sey yazma):
             "skipped": skipped,
             "data": {"results": results}
         }
+
+    def _checkpoint_store(self):
+        """Lazy checkpoint manager for complex task recovery."""
+        if self._checkpoint_manager is None:
+            try:
+                from core.advanced_checkpoints import CheckpointManager
+
+                self._checkpoint_manager = CheckpointManager()
+            except Exception as exc:
+                logger.debug(f"Checkpoint manager unavailable: {exc}")
+                return None
+        return self._checkpoint_manager
+
+    @staticmethod
+    def _task_signature(tasks: List[TaskDefinition]) -> List[Dict[str, str]]:
+        return [{"id": t.id, "action": t.action} for t in tasks]
+
+    def _load_execution_checkpoint(self, pipeline_id: str, tasks: List[TaskDefinition]) -> Optional[Dict[str, Any]]:
+        manager = self._checkpoint_store()
+        if manager is None:
+            return None
+        try:
+            state = manager.get_recovery_state(pipeline_id)
+            if not isinstance(state, dict):
+                return None
+            if state.get("task_signature") != self._task_signature(tasks):
+                logger.debug(f"Checkpoint signature mismatch for {pipeline_id}")
+                return None
+            return state
+        except Exception as exc:
+            logger.debug(f"Checkpoint load skipped for {pipeline_id}: {exc}")
+            return None
+
+    def _save_execution_checkpoint(
+        self,
+        *,
+        pipeline_id: str,
+        tasks: List[TaskDefinition],
+        completed_tasks: set[str],
+        successful_tasks: set[str],
+        failed_tasks: set[str],
+        results: List[Dict[str, Any]],
+        succeeded: int,
+        failed: int,
+        skipped: int,
+        execution_context: Dict[str, Any],
+    ) -> None:
+        manager = self._checkpoint_store()
+        if manager is None:
+            return
+
+        pending_ids = [t.id for t in tasks if t.id not in completed_tasks]
+        last_task_id = results[-1]["task_id"] if results and isinstance(results[-1], dict) else None
+        checkpoint_state = {
+            "pipeline_id": pipeline_id,
+            "task_signature": self._task_signature(tasks),
+            "processed_tasks": sorted(completed_tasks),
+            "successful_tasks": sorted(successful_tasks),
+            "failed_tasks": sorted(failed_tasks),
+            "results": results,
+            "succeeded": succeeded,
+            "failed": failed,
+            "skipped": skipped,
+            "pending_tasks": pending_ids,
+            "context_snapshot": sanitize_object(execution_context or {}),
+            "last_task_id": last_task_id,
+        }
+        manager.create_checkpoint(
+            execution_id=pipeline_id,
+            state=checkpoint_state,
+            step_number=len(completed_tasks),
+            checkpoint_type="task_complete" if failed == 0 else "phase_complete",
+            task_id=last_task_id,
+            progress_percentage=(len(completed_tasks) / max(1, len(tasks))) * 100.0,
+            estimated_time_remaining=float(len(pending_ids)) * 30.0,
+        )
 
     def _summarize_results(
         self,

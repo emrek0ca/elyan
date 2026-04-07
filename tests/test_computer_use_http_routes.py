@@ -5,6 +5,12 @@ from unittest.mock import patch, AsyncMock
 import json
 
 
+def _prime_api_session(client):
+    response = client.get('/api/v1/docs')
+    assert response.status_code == 200
+    return {"X-Elyan-Session-Token": response.headers["X-Elyan-Session-Token"]}
+
+
 @pytest.fixture
 def app():
     """Create test Flask app"""
@@ -21,6 +27,7 @@ class TestComputerUseControlPlaneRoutes:
 
     def test_start_task_route(self, app):
         """Test POST /api/v1/computer_use/controlplane/tasks"""
+        headers = _prime_api_session(app)
         with patch('api.computer_use_controlplane.get_computer_use_controlplane_api') as mock_get:
             mock_api = AsyncMock()
             mock_api.start_task.return_value = {
@@ -36,7 +43,8 @@ class TestComputerUseControlPlaneRoutes:
                     "user_intent": "Test task",
                     "approval_level": "CONFIRM"
                 }),
-                content_type='application/json'
+                content_type='application/json',
+                headers=headers,
             )
 
             assert response.status_code == 200
@@ -88,6 +96,7 @@ class TestComputerUseControlPlaneRoutes:
     def test_cancel_task_route(self, app):
         """Test POST /api/v1/computer_use/controlplane/tasks/<task_id>/cancel"""
         task_id = "task_123"
+        headers = _prime_api_session(app)
 
         with patch('api.computer_use_controlplane.get_computer_use_controlplane_api') as mock_get:
             mock_api = AsyncMock()
@@ -98,7 +107,7 @@ class TestComputerUseControlPlaneRoutes:
             }
             mock_get.return_value = mock_api
 
-            response = app.post(f'/api/v1/computer_use/controlplane/tasks/{task_id}/cancel')
+            response = app.post(f'/api/v1/computer_use/controlplane/tasks/{task_id}/cancel', headers=headers)
 
             assert response.status_code == 200
             data = response.get_json()
@@ -125,6 +134,7 @@ class TestComputerUseRouteErrors:
 
     def test_start_task_missing_intent(self, app):
         """Test start_task with missing user_intent"""
+        headers = _prime_api_session(app)
         with patch('api.computer_use_controlplane.get_computer_use_controlplane_api') as mock_get:
             mock_api = AsyncMock()
             mock_api.start_task.return_value = {
@@ -135,7 +145,8 @@ class TestComputerUseRouteErrors:
             response = app.post(
                 '/api/v1/computer_use/controlplane/tasks',
                 data=json.dumps({}),
-                content_type='application/json'
+                content_type='application/json',
+                headers=headers,
             )
 
             # Should still return 200 (empty intent is allowed)
@@ -156,6 +167,7 @@ class TestComputerUseRouteErrors:
 
     def test_cancel_task_not_found(self, app):
         """Test cancel_task with non-existent task"""
+        headers = _prime_api_session(app)
         with patch('api.computer_use_controlplane.get_computer_use_controlplane_api') as mock_get:
             mock_api = AsyncMock()
             mock_api.cancel_task.return_value = {
@@ -164,6 +176,6 @@ class TestComputerUseRouteErrors:
             }
             mock_get.return_value = mock_api
 
-            response = app.post('/api/v1/computer_use/controlplane/tasks/nonexistent/cancel')
+            response = app.post('/api/v1/computer_use/controlplane/tasks/nonexistent/cancel', headers=headers)
 
             assert response.status_code == 404

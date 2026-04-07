@@ -8,6 +8,7 @@ from typing import Any, Awaitable, Callable
 
 from core.contracts.failure_taxonomy import FailureCode
 from core.contracts.verification_result import VerificationCheck, VerificationResult
+from core.execution_guard import get_execution_guard
 from core.storage_paths import resolve_elyan_data_dir
 
 from .services import BrowserRuntimeServices, default_browser_runtime_services, is_playwright_available
@@ -41,6 +42,69 @@ def _artifact_root() -> Path:
     root = resolve_elyan_data_dir() / "browser_runtime" / str(int(time.time() * 1000))
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def _identity_from_metadata(metadata: dict[str, Any] | None = None) -> dict[str, str]:
+    payload = metadata if isinstance(metadata, dict) else {}
+    nested = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    return {
+        "workspace_id": str(payload.get("workspace_id") or nested.get("workspace_id") or "local-workspace").strip() or "local-workspace",
+        "session_id": str(payload.get("session_id") or nested.get("session_id") or "").strip(),
+        "run_id": str(payload.get("run_id") or nested.get("run_id") or "").strip(),
+        "actor_id": str(payload.get("actor_id") or payload.get("user_id") or nested.get("actor_id") or nested.get("user_id") or "").strip(),
+    }
+
+
+def _emit_browser_shadow(
+    *,
+    action: str,
+    payload: dict[str, Any],
+    metadata: dict[str, Any] | None = None,
+    verification: dict[str, Any] | None = None,
+    elapsed_ms: float = 0.0,
+) -> dict[str, Any]:
+    identity = _identity_from_metadata(metadata)
+    get_execution_guard().observe_capability_runtime(
+        capability="browser",
+        action=action,
+        success=bool(payload.get("success")),
+        workspace_id=identity["workspace_id"],
+        actor_id=identity["actor_id"],
+        session_id=identity["session_id"],
+        run_id=identity["run_id"],
+        reason=str(payload.get("error") or payload.get("message") or ""),
+        verification=verification,
+        metadata={
+            "status": str(payload.get("status") or ""),
+            "error_code": str(payload.get("error_code") or ""),
+            "fallback": dict(payload.get("fallback") or {}) if isinstance(payload.get("fallback"), dict) else {},
+            "artifact_count": len(list(payload.get("artifacts") or [])),
+            "screenshot_count": len(list(payload.get("screenshots") or [])),
+        },
+        level="warning" if not payload.get("success") else "info",
+    )
+    try:
+        from core.learning.reward_shaper import RewardShaper
+        from core.learning.tool_bandit import get_tool_bandit
+
+        reward = RewardShaper().compute_reward(
+            task_completed=bool(payload.get("success")),
+            user_explicit_feedback=None,
+            response_time_ms=float(elapsed_ms or 0.0),
+            approval_required=False,
+            task_was_in_cache=False,
+            error_occurred=not bool(payload.get("success")),
+        )
+        get_tool_bandit().record_outcome(
+            task_category="browser",
+            tool_name=str(action or "unknown").strip() or "unknown",
+            success=bool(payload.get("success")),
+            latency_ms=float(elapsed_ms or 0.0),
+            user_satisfaction=max(0.0, (reward + 2.0) / 4.0),
+        )
+    except Exception:
+        pass
+    return payload
 
 
 def _materialize_artifacts(
@@ -296,14 +360,16 @@ async def run_browser_runtime(
     screen_operator_runner: ScreenOperatorRunner | None = None,
     table_selector: str = "table",
     pattern: str = "",
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     runtime_services = services or default_browser_runtime_services()
     normalized_action = str(action or "").strip().lower()
+    started_at = time.monotonic()
     root = _artifact_root()
     action_logs: list[dict[str, Any]] = []
 
     if native_dialog_expected:
-        return await _browser_screen_fallback(
+        payload = await _browser_screen_fallback(
             action=normalized_action,
             url=url,
             selector=selector,
@@ -313,8 +379,9 @@ async def run_browser_runtime(
             screen_operator_runner=screen_operator_runner,
             services=runtime_services,
         )
+        return _emit_browser_shadow(action=normalized_action, payload=payload, metadata=metadata, elapsed_ms=(time.monotonic() - started_at) * 1000.0)
     if uncontrolled_chrome_expected:
-        return await _browser_screen_fallback(
+        payload = await _browser_screen_fallback(
             action=normalized_action,
             url=url,
             selector=selector,
@@ -324,10 +391,11 @@ async def run_browser_runtime(
             screen_operator_runner=screen_operator_runner,
             services=runtime_services,
         )
+        return _emit_browser_shadow(action=normalized_action, payload=payload, metadata=metadata, elapsed_ms=(time.monotonic() - started_at) * 1000.0)
 
     if normalized_action == "close":
         close_result = await runtime_services.close()
-        return {
+        payload = {
             "success": bool(close_result.get("success")),
             "status": "success" if close_result.get("success") else "failed",
             "message": "Browser closed." if close_result.get("success") else str(close_result.get("error") or ""),
@@ -337,11 +405,12 @@ async def run_browser_runtime(
             "verifier_outcomes": [],
             "recovery_hints": _browser_recovery_hints(before_state={}, after_state={}, verification={"failed_codes": []}, action=normalized_action),
         }
+        return _emit_browser_shadow(action=normalized_action, payload=payload, metadata=metadata, elapsed_ms=(time.monotonic() - started_at) * 1000.0)
     if normalized_action == "status":
         state = await runtime_services.get_state()
         if not state.get("success"):
             state = {"url": None, "title": None, "session_id": None, "headless": bool(headless), "dom_available": False}
-        return {
+        payload = {
             "success": True,
             "status": "success",
             "message": str(state.get("title") or state.get("url") or ""),
@@ -352,10 +421,11 @@ async def run_browser_runtime(
             "verifier_outcomes": [],
             "recovery_hints": _browser_recovery_hints(before_state={}, after_state=state if isinstance(state, dict) else {}, verification={"failed_codes": []}, action=normalized_action),
         }
+        return _emit_browser_shadow(action=normalized_action, payload=payload, metadata=metadata, elapsed_ms=(time.monotonic() - started_at) * 1000.0)
 
     session = await runtime_services.ensure_session(headless=headless)
     if not session.get("success"):
-        return await _browser_screen_fallback(
+        payload = await _browser_screen_fallback(
             action=normalized_action,
             url=url,
             selector=selector,
@@ -365,6 +435,7 @@ async def run_browser_runtime(
             screen_operator_runner=screen_operator_runner,
             services=runtime_services,
         )
+        return _emit_browser_shadow(action=normalized_action, payload=payload, metadata=metadata, elapsed_ms=(time.monotonic() - started_at) * 1000.0)
 
     before_state = await runtime_services.get_state()
     if not before_state.get("success"):
@@ -397,7 +468,7 @@ async def run_browser_runtime(
     elif normalized_action == "table":
         action_result = await runtime_services.query_table(selector=table_selector)
     else:
-        return {
+        payload = {
             "success": False,
             "status": "failed",
             "error": "unsupported_browser_action",
@@ -408,6 +479,7 @@ async def run_browser_runtime(
             "action_logs": [],
             "verifier_outcomes": [],
         }
+        return _emit_browser_shadow(action=normalized_action, payload=payload, metadata=metadata, elapsed_ms=(time.monotonic() - started_at) * 1000.0)
 
     action_logs.append({"step": 1, "action": normalized_action, "params": {"url": url, "selector": selector, "text": text}, "result": dict(action_result)})
     if not action_result.get("success"):
@@ -432,7 +504,13 @@ async def run_browser_runtime(
             selector=selector,
             expected_text=expected_text,
         )
-        return payload
+        return _emit_browser_shadow(
+            action=normalized_action,
+            payload=payload,
+            metadata=metadata,
+            verification={"status": "failed", "failed_codes": [failure_code], "reason": str(action_result.get("error") or "browser_action_failed")},
+            elapsed_ms=(time.monotonic() - started_at) * 1000.0,
+        )
 
     dom_snapshot = await runtime_services.get_dom_snapshot()
     after_state = await runtime_services.get_state()
@@ -494,7 +572,13 @@ async def run_browser_runtime(
         failed_codes = list(verification.get("failed_codes") or [FailureCode.NO_VISUAL_CHANGE.value])
         payload["error"] = failed_codes[0].lower()
         payload["error_code"] = failed_codes[0]
-    return payload
+    return _emit_browser_shadow(
+        action=normalized_action,
+        payload=payload,
+        metadata=metadata,
+        verification=verification,
+        elapsed_ms=(time.monotonic() - started_at) * 1000.0,
+    )
 
 
 __all__ = ["run_browser_runtime"]

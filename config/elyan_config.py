@@ -200,6 +200,9 @@ def _default_config() -> AppConfig:
         operator={
             "enabled": True,
             "local_first": True,
+            "security_posture": "balanced",
+            "deployment_scope": "single_user_local_first",
+            "data_locality": "local_only",
             "real_time": {
                 "enabled": True,
                 "mode": "auto",
@@ -212,6 +215,24 @@ def _default_config() -> AppConfig:
                 "coding": "code",
                 "workflow": "planning",
                 "chat": "router",
+            },
+            "multi_llm": {
+                "transport": "native",
+                "native_fallback_on_transport_error": True,
+                "timeout_seconds": 45,
+                "max_tokens": 4096,
+                "temperature": 0.2,
+            },
+            "multi_agent": {
+                "handoff_store": {
+                    "backend": "sqlite",
+                    "path": "~/.elyan/multi_agent/handoffs.sqlite3",
+                },
+                "semantic_memory": {
+                    "backend": "qdrant",
+                    "collection": "semantic_memory",
+                    "path": "~/.elyan/memory/qdrant",
+                },
             },
         },
         realtime_actuator={
@@ -264,6 +285,28 @@ def _default_config() -> AppConfig:
                 "redactCloudPrompts": True,
                 "allowCloudFallback": True,
             },
+            "sessionSecurity": {
+                "enabled": True,
+                "path": "~/.elyan/security/sessions.json",
+                "persist": True,
+            },
+            "http": {
+                "allowedOrigins": [
+                    "http://localhost:3000",
+                    "tauri://localhost",
+                    "http://tauri.localhost",
+                    "https://tauri.localhost",
+                ],
+                "session": {
+                    "cookie_name": "elyan_session",
+                    "header_name": "X-Elyan-Session-Token",
+                },
+                "csrf": {
+                    "enabled": True,
+                    "cookie_name": "elyan_csrf",
+                    "header_name": "X-Elyan-CSRF",
+                },
+            },
             "toolPolicy": {
                 "defaultDeny": True,
             },
@@ -314,6 +357,10 @@ def _default_config() -> AppConfig:
         gateway={
             "port": 18789,
             "host": "127.0.0.1",
+            "runtime": "python",
+            "mode": "python",
+            "scheme": "http",
+            "grpc_target": "127.0.0.1:50051",
             "corsOrigins": [
                 "http://localhost:3000",
                 "tauri://localhost",
@@ -321,12 +368,38 @@ def _default_config() -> AppConfig:
                 "https://tauri.localhost",
             ],
         },
+        runtime_backends={
+            "rust_core": {
+                "enabled": True,
+                "required": False,
+                "module": "elyan_core",
+                "features": ["event_store", "memory_index", "vault"],
+            },
+            "dashboard": {
+                "preferred": "python_embedded",
+                "future_target": "react_vite",
+            },
+            "desktop_shell": {
+                "preferred": "pyqt6",
+                "future_target": "swiftui",
+            },
+        },
         voice={"feedback_enabled": True},
         skills={
             "enabled": ["system", "files", "research", "browser", "office"],
             "workflows": {
                 "enabled": ["wallpaper_with_proof", "api_health_get_save"],
             },
+        },
+        observability={
+            "circuit_breaker_failure_threshold": 5,
+            "circuit_breaker_success_threshold": 2,
+            "circuit_breaker_timeout_seconds": 30.0,
+            "tool_bandit_exploration_constant": 2.0,
+        },
+        learning={
+            "uncertainty_approval_threshold": 0.7,
+            "htn_plan_cache_size": 500,
         },
         subscriptions={"enabled": False, "default_tier": "free"},
         monthly_budget_usd=20.0,

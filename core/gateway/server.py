@@ -2011,30 +2011,79 @@ class ElyanGatewayServer:
 
         return get_dashboard_api()
 
+    @staticmethod
+    def _run_belongs_to_workspace(run_data: dict, workspace_id: str) -> bool:
+        """Check if a run dict belongs to the given workspace.
+
+        Legacy runs without workspace_id are allowed through so existing
+        data remains accessible after the field is introduced.
+        """
+        run_ws = str(
+            run_data.get("workspace_id")
+            or (run_data.get("metadata") or {}).get("workspace_id")
+            or ""
+        ).strip()
+        if not run_ws:
+            return True  # legacy run — no workspace tag yet
+        return run_ws == workspace_id
+
     async def handle_v1_list_runs(self, request):
+        workspace_id = self._workspace_id(request)
+        ws_ok, ws_err = self._require_workspace_access(request, workspace_id)
+        if not ws_ok:
+            return _json_error(ws_err, status=403)
         try:
             limit = int(request.rel_url.query.get("limit", 20))
         except Exception:
             limit = 20
         status = str(request.rel_url.query.get("status", "") or "").strip() or None
-        return web.json_response(await self._dashboard_api().list_runs(limit=limit, status=status))
+        result = await self._dashboard_api().list_runs(limit=limit, status=status)
+        if result.get("success") and isinstance(result.get("runs"), list):
+            filtered = [r for r in result["runs"] if self._run_belongs_to_workspace(r, workspace_id)]
+            result["runs"] = filtered
+            result["count"] = len(filtered)
+        return web.json_response(result)
 
     async def handle_v1_get_run(self, request):
         run_id = str(request.match_info.get("run_id") or "").strip()
         if not run_id:
-            return web.json_response({"success": False, "error": "run_id required"}, status=400)
-        return web.json_response(await self._dashboard_api().get_run(run_id))
+            return _json_error("run_id required", status=400)
+        workspace_id = self._workspace_id(request)
+        ws_ok, ws_err = self._require_workspace_access(request, workspace_id)
+        if not ws_ok:
+            return _json_error(ws_err, status=403)
+        result = await self._dashboard_api().get_run(run_id)
+        if result.get("success") and isinstance(result.get("run"), dict):
+            if not self._run_belongs_to_workspace(result["run"], workspace_id):
+                return _json_error("workspace_access_denied", status=403)
+        return web.json_response(result)
 
     async def handle_v1_get_run_timeline(self, request):
         run_id = str(request.match_info.get("run_id") or "").strip()
         if not run_id:
-            return web.json_response({"success": False, "error": "run_id required"}, status=400)
+            return _json_error("run_id required", status=400)
+        workspace_id = self._workspace_id(request)
+        ws_ok, ws_err = self._require_workspace_access(request, workspace_id)
+        if not ws_ok:
+            return _json_error(ws_err, status=403)
+        run_result = await self._dashboard_api().get_run(run_id)
+        if run_result.get("success") and isinstance(run_result.get("run"), dict):
+            if not self._run_belongs_to_workspace(run_result["run"], workspace_id):
+                return _json_error("workspace_access_denied", status=403)
         return web.json_response(await self._dashboard_api().get_step_timeline(run_id))
 
     async def handle_v1_cancel_run(self, request):
         run_id = str(request.match_info.get("run_id") or "").strip()
         if not run_id:
-            return web.json_response({"success": False, "error": "run_id required"}, status=400)
+            return _json_error("run_id required", status=400)
+        workspace_id = self._workspace_id(request)
+        ws_ok, ws_err = self._require_workspace_access(request, workspace_id)
+        if not ws_ok:
+            return _json_error(ws_err, status=403)
+        run_result = await self._dashboard_api().get_run(run_id)
+        if run_result.get("success") and isinstance(run_result.get("run"), dict):
+            if not self._run_belongs_to_workspace(run_result["run"], workspace_id):
+                return _json_error("workspace_access_denied", status=403)
         return web.json_response(await self._dashboard_api().cancel_run(run_id))
 
     async def handle_v1_pending_approvals(self, request):
@@ -2094,6 +2143,9 @@ class ElyanGatewayServer:
 
     async def handle_v1_inbox_events(self, request):
         workspace_id = self._workspace_id(request)
+        workspace_allowed, workspace_error = self._require_workspace_access(request, workspace_id)
+        if not workspace_allowed:
+            return _json_error(workspace_error, status=403)
         runtime_db = self._runtime_db()
         if request.method == "GET":
             try:
@@ -2116,6 +2168,10 @@ class ElyanGatewayServer:
             data = await request.json()
         except Exception:
             return _json_error("invalid json", status=400)
+        workspace_id = self._workspace_id(request, data)
+        workspace_allowed, workspace_error = self._require_workspace_access(request, workspace_id)
+        if not workspace_allowed:
+            return _json_error(workspace_error, status=403)
         execution_allowed, execution_error = self._require_execution_seat(request, data)
         if not execution_allowed:
             return _json_error(execution_error, status=403)
@@ -2196,6 +2252,9 @@ class ElyanGatewayServer:
         if not execution_allowed:
             return _json_error(execution_error, status=403)
         workspace_id = self._workspace_id(request, data)
+        workspace_allowed, workspace_error = self._require_workspace_access(request, workspace_id)
+        if not workspace_allowed:
+            return _json_error(workspace_error, status=403)
         runtime_db = self._runtime_db()
         event = None
         event_id = str(data.get("event_id") or "").strip()
@@ -2331,6 +2390,9 @@ class ElyanGatewayServer:
         if not credit_decision.get("allowed", True):
             return self._credit_block_response(credit_decision, action_label="workflow run")
         workspace_id = self._workspace_id(request, data)
+        workspace_allowed, workspace_error = self._require_workspace_access(request, workspace_id)
+        if not workspace_allowed:
+            return _json_error(workspace_error, status=403)
         workflow_usage = None
         try:
             workflow_usage = self._record_provisional_usage(
@@ -2675,6 +2737,9 @@ class ElyanGatewayServer:
 
     async def handle_v1_cowork_home(self, request):
         workspace_id = self._workspace_id(request)
+        workspace_allowed, workspace_error = self._require_workspace_access(request, workspace_id)
+        if not workspace_allowed:
+            return _json_error(workspace_error, status=403)
         user_id = self._actor_id(request)
         home = await self._cowork_store().home_snapshot(workspace_id=workspace_id, limit=8)
         approvals = self._mission_store().pending_approvals(owner=workspace_id)
@@ -2740,6 +2805,9 @@ class ElyanGatewayServer:
     async def handle_v1_cowork_continuity(self, request):
         """GET /api/v1/cowork/continuity — Session start continuity surface."""
         workspace_id = self._workspace_id(request)
+        workspace_allowed, workspace_error = self._require_workspace_access(request, workspace_id)
+        if not workspace_allowed:
+            return _json_error(workspace_error, status=403)
         user_id = self._actor_id(request)
         try:
             from core.task_continuity import get_task_continuity_manager
@@ -2763,6 +2831,9 @@ class ElyanGatewayServer:
 
     async def handle_v1_cowork_threads(self, request):
         workspace_id = self._workspace_id(request)
+        workspace_allowed, workspace_error = self._require_workspace_access(request, workspace_id)
+        if not workspace_allowed:
+            return _json_error(workspace_error, status=403)
         if request.method == "GET":
             try:
                 limit = int(request.rel_url.query.get("limit", 20))
@@ -2775,6 +2846,10 @@ class ElyanGatewayServer:
             data = await request.json()
         except Exception:
             return _json_error("invalid json", status=400)
+        workspace_id = self._workspace_id(request, data)
+        workspace_allowed, workspace_error = self._require_workspace_access(request, workspace_id)
+        if not workspace_allowed:
+            return _json_error(workspace_error, status=403)
         prompt = str(data.get("prompt") or data.get("brief") or "").strip()
         if not prompt:
             return _json_error("prompt required", status=400)
@@ -2991,10 +3066,16 @@ class ElyanGatewayServer:
         thread_id = str(request.match_info.get("thread_id") or "").strip()
         if not thread_id:
             return _json_error("thread_id required", status=400)
+        workspace_id = self._workspace_id(request)
+        workspace_allowed, workspace_error = self._require_workspace_access(request, workspace_id)
+        if not workspace_allowed:
+            return _json_error(workspace_error, status=403)
         try:
             detail = await self._cowork_store().get_thread_detail(thread_id)
         except KeyError:
             return _json_error("thread not found", status=404)
+        if str(detail.get("workspace_id") or "").strip() != workspace_id:
+            return _json_error("workspace_access_denied", status=403)
         return _json_ok({"thread": detail})
 
     async def handle_v1_cowork_thread_turn(self, request):
@@ -3005,6 +3086,10 @@ class ElyanGatewayServer:
             data = await request.json()
         except Exception:
             return _json_error("invalid json", status=400)
+        workspace_id = self._workspace_id(request, data)
+        workspace_allowed, workspace_error = self._require_workspace_access(request, workspace_id)
+        if not workspace_allowed:
+            return _json_error(workspace_error, status=403)
         prompt = str(data.get("prompt") or "").strip()
         if not prompt:
             return _json_error("prompt required", status=400)
@@ -3062,7 +3147,6 @@ class ElyanGatewayServer:
         )
         if not credit_decision.get("allowed", True):
             return self._credit_block_response(credit_decision, action_label="cowork turn")
-        workspace_id = self._workspace_id(request, data)
         try:
             turn_usage = self._record_provisional_usage(
                 request,
@@ -3190,9 +3274,19 @@ class ElyanGatewayServer:
             data = await request.json()
         except Exception:
             data = {}
+        workspace_id = self._workspace_id(request, data)
+        workspace_allowed, workspace_error = self._require_workspace_access(request, workspace_id)
+        if not workspace_allowed:
+            return _json_error(workspace_error, status=403)
         action = str(data.get("action") or "").strip().lower()
         if action not in {"stop", "resume"}:
             return _json_error("unsupported action", status=400)
+        try:
+            detail = await self._cowork_store().get_thread_detail(thread_id)
+        except KeyError:
+            return _json_error("thread not found", status=404)
+        if str(detail.get("workspace_id") or "").strip() != workspace_id:
+            return _json_error("workspace_access_denied", status=403)
         try:
             detail = await self._cowork_store().control_thread(
                 thread_id,
@@ -3215,6 +3309,10 @@ class ElyanGatewayServer:
             data = await request.json()
         except Exception:
             data = {}
+        workspace_id = self._workspace_id(request, data)
+        workspace_allowed, workspace_error = self._require_workspace_access(request, workspace_id)
+        if not workspace_allowed:
+            return _json_error(workspace_error, status=403)
         mission = await self._mission_store().resolve_approval(
             approval_id,
             bool(data.get("approved", False)),
@@ -3225,12 +3323,17 @@ class ElyanGatewayServer:
             return _json_error("approval not found", status=404)
         thread_id = str((mission.metadata or {}).get("thread_id") or "").strip()
         detail = await self._cowork_store().get_thread_detail(thread_id) if thread_id else None
+        if detail is not None and str(detail.get("workspace_id") or "").strip() != workspace_id:
+            return _json_error("workspace_access_denied", status=403)
         if detail is not None:
             push_cowork_event("cowork.approval.resolved", detail)
         return _json_ok({"mission": mission.to_dict(), "thread": detail})
 
     async def handle_v1_billing_workspace(self, request):
         workspace_id = self._workspace_id(request)
+        ws_ok, ws_err = self._require_workspace_access(request, workspace_id)
+        if not ws_ok:
+            return _json_error(ws_err, status=403)
         return _json_ok({"workspace": self._workspace_billing().get_workspace_summary(workspace_id)})
 
     async def handle_v1_billing_plans(self, request):
@@ -3239,6 +3342,9 @@ class ElyanGatewayServer:
 
     async def handle_v1_billing_usage(self, request):
         workspace_id = self._workspace_id(request)
+        ws_ok, ws_err = self._require_workspace_access(request, workspace_id)
+        if not ws_ok:
+            return _json_error(ws_err, status=403)
         try:
             limit = int(request.rel_url.query.get("limit", 100))
         except Exception:
@@ -3247,14 +3353,23 @@ class ElyanGatewayServer:
 
     async def handle_v1_billing_entitlements(self, request):
         workspace_id = self._workspace_id(request)
+        ws_ok, ws_err = self._require_workspace_access(request, workspace_id)
+        if not ws_ok:
+            return _json_error(ws_err, status=403)
         return _json_ok({"entitlements": self._workspace_billing().get_entitlements(workspace_id)})
 
     async def handle_v1_billing_credits(self, request):
         workspace_id = self._workspace_id(request)
+        ws_ok, ws_err = self._require_workspace_access(request, workspace_id)
+        if not ws_ok:
+            return _json_error(ws_err, status=403)
         return _json_ok({"credits": self._workspace_billing().get_credit_balance(workspace_id)})
 
     async def handle_v1_billing_ledger(self, request):
         workspace_id = self._workspace_id(request)
+        ws_ok, ws_err = self._require_workspace_access(request, workspace_id)
+        if not ws_ok:
+            return _json_error(ws_err, status=403)
         try:
             limit = int(request.rel_url.query.get("limit", 100))
         except Exception:
@@ -3263,6 +3378,9 @@ class ElyanGatewayServer:
 
     async def handle_v1_billing_events(self, request):
         workspace_id = self._workspace_id(request)
+        ws_ok, ws_err = self._require_workspace_access(request, workspace_id)
+        if not ws_ok:
+            return _json_error(ws_err, status=403)
         try:
             limit = int(request.rel_url.query.get("limit", 100))
         except Exception:
@@ -3271,6 +3389,9 @@ class ElyanGatewayServer:
 
     async def handle_v1_billing_profile(self, request):
         workspace_id = self._workspace_id(request)
+        ws_ok, ws_err = self._require_workspace_access(request, workspace_id)
+        if not ws_ok:
+            return _json_error(ws_err, status=403)
         store = self._workspace_billing()
         if request.method == "GET":
             return _json_ok({"profile": store.get_billing_profile(workspace_id)})
@@ -3295,6 +3416,9 @@ class ElyanGatewayServer:
 
     async def handle_v1_billing_checkout_detail(self, request):
         workspace_id = self._workspace_id(request)
+        ws_ok, ws_err = self._require_workspace_access(request, workspace_id)
+        if not ws_ok:
+            return _json_error(ws_err, status=403)
         reference_id = str(request.match_info.get("reference_id") or "").strip()
         if not reference_id:
             return _json_error("reference_id required", status=400)
@@ -5421,6 +5545,22 @@ class ElyanGatewayServer:
         # AppProviders.tsx can call apiClient.setAdminToken() without Rust involvement.
         if _is_loopback_request(request):
             payload["admin_token"] = _ensure_admin_access_token()
+
+        # Jarvis subsystem status (non-blocking)
+        jarvis_status: dict = {}
+        try:
+            from core.voice.voice_pipeline import get_voice_pipeline
+            from core.voice.wake_word import get_wake_word_detector
+            from core.proactive.system_monitor import get_system_monitor
+            jarvis_status = {
+                "voice_state": get_voice_pipeline().state.value,
+                "wake_backend": get_wake_word_detector().backend,
+                "monitor_running": get_system_monitor().running,
+            }
+        except Exception:
+            pass
+        payload["jarvis"] = jarvis_status
+
         return web.json_response(payload)
 
     async def handle_product_workflows(self, request):
@@ -9748,8 +9888,30 @@ class ElyanGatewayServer:
         except Exception as e:
             logger.error(f"Runtime sync worker start failed: {e}")
 
+        # ── Jarvis Services (Faz 1-7) ────────────────────────────────────────
+        try:
+            from core.jarvis.jarvis_startup import start_jarvis_services
+
+            def _jarvis_broadcast(event_type: str, payload: dict) -> None:
+                asyncio.create_task(
+                    self.broadcast_to_dashboard(event_type, payload)
+                )
+
+            asyncio.create_task(start_jarvis_services(broadcast=_jarvis_broadcast))
+            logger.info("Jarvis services scheduled for startup")
+        except Exception as e:
+            logger.warning(f"Jarvis services startup failed (non-critical): {e}")
+
     async def stop(self):
         logger.info("Stopping Gateway Server...")
+
+        # ── Jarvis Services shutdown ──────────────────────────────────────────
+        try:
+            from core.jarvis.jarvis_startup import stop_jarvis_services
+            await stop_jarvis_services()
+        except Exception as e:
+            logger.warning(f"Jarvis services stop failed: {e}")
+
         try:
             from core.away_mode import background_task_runner
             await background_task_runner.stop_resume_loop()

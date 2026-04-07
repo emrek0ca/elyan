@@ -13,6 +13,7 @@ CHANNEL_CAPABILITY_MATRIX: Dict[str, Dict[str, Any]] = {
     "teams": {"markdown": True, "html": False, "buttons": True, "images": True, "files": True, "text_limit": 3500},
     "google_chat": {"markdown": False, "html": False, "buttons": True, "images": True, "files": True, "text_limit": 3500},
     "imessage": {"markdown": False, "html": False, "buttons": False, "images": True, "files": True, "text_limit": 3500},
+    "sms": {"markdown": False, "html": False, "buttons": False, "images": False, "files": False, "text_limit": 1200},
     "webchat": {"markdown": True, "html": True, "buttons": True, "images": True, "files": True, "text_limit": 12000},
     "cli": {"markdown": True, "html": False, "buttons": False, "images": False, "files": False, "text_limit": 12000},
     "default": {"markdown": False, "html": False, "buttons": False, "images": False, "files": False, "text_limit": 3500},
@@ -38,4 +39,3 @@ def resolve_channel_capabilities(channel_type: str, adapter_caps: Dict[str, Any]
 
 
 __all__ = ["CHANNEL_CAPABILITY_MATRIX", "resolve_channel_capabilities"]
-

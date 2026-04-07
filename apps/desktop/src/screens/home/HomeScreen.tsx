@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Clock3, RefreshCw, Sparkles } from "@/vendor/lucide-react";
 import { useNavigate } from "react-router-dom";
+import { JarvisPanel } from "@/features/jarvis/JarvisPanel";
+import { TaskTreePanel } from "@/features/jarvis/TaskTreePanel";
 
 import { ErrorState } from "@/components/feedback/ErrorState";
 import { SkeletonBlock } from "@/components/feedback/SkeletonBlock";
@@ -158,6 +160,12 @@ export function HomeScreen() {
         <StatusTile label="Autopilot" value={autopilot?.running ? "Aktif" : "Pasif"} tone={autopilot?.running ? "success" : "neutral"} />
         <StatusTile label="Arka plan" value={backgroundTasks.length ? `${backgroundTasks.length} iş` : "Boş"} tone={backgroundTasks.length ? "info" : "neutral"} />
       </div>
+
+      {/* ─── Jarvis Panel ─── */}
+      <JarvisPanel />
+
+      {/* ─── Task Tree ─── */}
+      <TaskTreePanel />
 
       {/* ─── Suggestions + Tasks ─── */}
       <div className="grid gap-5 xl:grid-cols-2">

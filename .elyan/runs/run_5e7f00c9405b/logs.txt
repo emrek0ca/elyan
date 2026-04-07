@@ -1,1 +1,0 @@
-chat_failed: 'NoneType' object has no attribute 'generate'

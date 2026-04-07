@@ -275,10 +275,15 @@ class DashboardHTTPServer:
         """Setup all API routes"""
         try:
             from api.privacy_api import create_privacy_blueprint
-
             self.app.register_blueprint(create_privacy_blueprint())
         except Exception as exc:
             logger.warning(f"Privacy blueprint registration failed: {exc}")
+
+        try:
+            from api.jarvis_api import create_jarvis_blueprint
+            self.app.register_blueprint(create_jarvis_blueprint())
+        except Exception as exc:
+            logger.warning(f"Jarvis blueprint registration failed: {exc}")
 
         # Health check
         @self.app.route("/health", methods=["GET"])

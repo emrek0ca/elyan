@@ -6,6 +6,11 @@ from telegram.ext import ApplicationBuilder, MessageHandler, CallbackQueryHandle
 from .base import BaseChannelAdapter
 from ..message import UnifiedMessage
 from ..response import UnifiedResponse
+from core.telegram_direct_command import (
+    build_telegram_metadata,
+    is_local_telegram_command,
+    normalize_telegram_instruction,
+)
 from core.proactive.intervention import get_intervention_manager
 from tools.voice.local_stt import stt_engine
 import os
@@ -417,6 +422,7 @@ class TelegramAdapter(BaseChannelAdapter):
             self._last_polling_error = ""
             
             # Register handlers
+            self.app.add_handler(MessageHandler(filters.COMMAND, self._handle_command))
             self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_text))
             self.app.add_handler(MessageHandler(filters.PHOTO, self._handle_photo))
             self.app.add_handler(MessageHandler(filters.Document.ALL, self._handle_document))
@@ -471,7 +477,16 @@ class TelegramAdapter(BaseChannelAdapter):
             channel_id=str(update.effective_chat.id),
             user_id=str(update.effective_user.id),
             user_name=update.effective_user.first_name,
-            text=text
+            text=text,
+            metadata=build_telegram_metadata(
+                user_id=str(update.effective_user.id),
+                chat_id=str(update.effective_chat.id),
+                user_name=update.effective_user.first_name or "",
+                source="telegram_text",
+                raw_text=text,
+                normalized_text=text,
+                message_id=str(update.effective_message.message_id),
+            ),
         )
 
         if self.on_message_callback:
@@ -479,18 +494,57 @@ class TelegramAdapter(BaseChannelAdapter):
 
     async def _handle_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Modular command handler."""
-        text = update.effective_message.text or ""
-        command = text.split()[0].lower()
-        
-        if command == "/start":
-            await update.message.reply_text("Elyan Sistemine Hoş Geldiniz. Ben sizin dijital operasyon asistanınızım.")
-        elif command == "/status":
+        if not update.effective_message or not update.effective_user:
+            return
+
+        from ..monitoring import adapter_monitor
+        adapter_monitor.record_heartbeat("telegram")
+
+        raw_text = update.effective_message.text or ""
+        normalized_text, command_name = normalize_telegram_instruction(raw_text)
+        command_name = str(command_name or "").strip().lower()
+
+        if command_name == "start":
+            await update.message.reply_text("Elyan hazir. Dogal dilde ya da /komut ile istek gonderebilirsiniz.")
+            return
+        if command_name == "status":
             from ..monitoring import adapter_monitor
             report = adapter_monitor.get_status_report()
             status = report.get("telegram", {}).get("status", "unknown")
             await update.message.reply_text(f"Sistem Durumu: Çevrimiçi\nTelegram Adaptörü: {status.upper()}")
-        else:
-            await update.message.reply_text("Bilinmeyen komut.")
+            return
+        if command_name == "help":
+            await update.message.reply_text("Dogal dilde yazin. Bilinmeyen /komutlar Elyan tarafinda yorumlanir.")
+            return
+
+        msg = UnifiedMessage(
+            id=str(update.effective_message.message_id),
+            channel_type="telegram",
+            channel_id=str(update.effective_chat.id),
+            user_id=str(update.effective_user.id),
+            user_name=update.effective_user.first_name,
+            text=normalized_text or raw_text.lstrip("/"),
+            metadata={
+                **build_telegram_metadata(
+                    user_id=str(update.effective_user.id),
+                    chat_id=str(update.effective_chat.id),
+                    user_name=update.effective_user.first_name or "",
+                    source="telegram_command",
+                    raw_text=raw_text,
+                    normalized_text=normalized_text or raw_text.lstrip("/"),
+                    command_name=command_name,
+                    message_id=str(update.effective_message.message_id),
+                ),
+                "request_class": "direct_action",
+                "execution_path": "fast",
+            }
+        )
+
+        if self.on_message_callback:
+            await self.on_message_callback(msg)
+            return
+
+        await update.message.reply_text("Komut alindi, ancak Elyan baglantisi aktif degil.")
 
     async def _handle_voice(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle incoming voice notes."""

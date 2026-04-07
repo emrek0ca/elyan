@@ -1,6 +1,7 @@
 """
 Doctor command — System diagnostics with port conflict detection.
-FIX BUG-FUNC-009: Port availability check added.
+
+Canonical desktop shell is apps/desktop (React/Tauri). Legacy PyQt is optional.
 """
 import sys
 import shutil
@@ -111,17 +112,19 @@ def run_doctor(fix=False):
                 issues -= 1
 
     # 5. Critical Dependencies
-    deps = {
+    required_deps = {
         "pydantic":  {"install_spec": "pydantic", "purpose": "Core"},
         "aiohttp":   {"install_spec": "aiohttp", "purpose": "Core"},
         "telegram":  {"install_spec": "python-telegram-bot", "purpose": "Telegram channel"},
-        "PyQt6":     {"install_spec": "PyQt6", "purpose": "Desktop UI"},
         "json5":     {"install_spec": "json5", "purpose": "Config parsing"},
         "apscheduler": {"install_spec": "apscheduler", "purpose": "Cron scheduler"},
     }
+    optional_deps = {
+        "PyQt6": {"install_spec": "PyQt6", "purpose": "Legacy PyQt compatibility shell"},
+    }
     print("\n📦  Dependency Check:")
     dep_runtime = get_dependency_runtime()
-    for dep, purpose in deps.items():
+    for dep, purpose in required_deps.items():
         install_spec = str(purpose.get("install_spec") or dep)
         label = str(purpose.get("purpose") or dep)
         try:
@@ -145,6 +148,22 @@ def run_doctor(fix=False):
             except ImportError:
                 print(f"  ❌  {dep:<15}: MISSING ({label})")
                 issues += 1
+
+    for dep, purpose in optional_deps.items():
+        install_spec = str(purpose.get("install_spec") or dep)
+        label = str(purpose.get("purpose") or dep)
+        try:
+            record = dep_runtime.inspect_dependency(dep, install_spec=install_spec, source="pypi", trust_level="trusted")
+            available = bool(record.get("available", False))
+        except Exception:
+            try:
+                __import__(dep)
+                available = True
+            except ImportError:
+                available = False
+        status = "✅" if available else "⚠️ "
+        detail = "OK" if available else "OPTIONAL"
+        print(f"  {status}  {dep:<15}: {detail} ({label})")
 
     # 6. External Tools
     tools = {

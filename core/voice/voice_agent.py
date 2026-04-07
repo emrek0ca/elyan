@@ -129,6 +129,22 @@ class VoiceAgent:
             logger.info(f"Voice Input: {user_text}")
 
             # 3. Process with Agent
+            from core.security.ingress_guard import blocked_ingress_text, inspect_ingress
+
+            verdict = await inspect_ingress(
+                user_text,
+                platform_origin="voice_local",
+                agent=self.agent,
+                metadata={"user_id": str(user_id or "local"), "channel_type": "voice_local"},
+            )
+            if not verdict.get("allowed", True):
+                return {
+                    "success": False,
+                    "input_text": user_text,
+                    "error": "voice_request_blocked",
+                    "response_text": blocked_ingress_text(verdict),
+                }
+
             response_text = await self.agent.process(user_text)
             logger.info(f"Agent Response: {response_text[:100]}...")
 

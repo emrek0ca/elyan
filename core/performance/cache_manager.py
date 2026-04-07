@@ -31,6 +31,8 @@ class CacheEntry:
     ttl_seconds: int
     hits: int = 0
     access_count: int = 0
+    namespace: str = "default"
+    level: str = "l1"
 
     def is_expired(self, now: Optional[float] = None) -> bool:
         """Check if entry has expired"""
@@ -69,10 +71,13 @@ class CacheManager:
         """Create hash key from input (consistent)"""
         return hashlib.md5(key.encode()).hexdigest()
 
-    async def get(self, key: str) -> Optional[Any]:
+    def _compose_key(self, key: str, *, namespace: str = "default", level: str = "l1", scope: str = "") -> str:
+        return f"{str(level)}::{str(namespace)}::{str(scope)}::{str(key)}"
+
+    async def get(self, key: str, *, namespace: str = "default", level: str = "l1", scope: str = "") -> Optional[Any]:
         """Retrieve from cache"""
         async with self._lock:
-            hash_key = self._hash_key(key)
+            hash_key = self._hash_key(self._compose_key(key, namespace=namespace, level=level, scope=scope))
 
             if hash_key not in self._cache:
                 self._stats["misses"] += 1
@@ -101,11 +106,15 @@ class CacheManager:
         self,
         key: str,
         value: Any,
-        ttl: Optional[int] = None
+        ttl: Optional[int] = None,
+        *,
+        namespace: str = "default",
+        level: str = "l1",
+        scope: str = "",
     ) -> None:
         """Store in cache"""
         async with self._lock:
-            hash_key = self._hash_key(key)
+            hash_key = self._hash_key(self._compose_key(key, namespace=namespace, level=level, scope=scope))
             ttl = ttl or self.default_ttl
 
             # Evict if at capacity
@@ -119,7 +128,9 @@ class CacheManager:
                 key=key,
                 value=value,
                 created_at=datetime.now().timestamp(),
-                ttl_seconds=ttl
+                ttl_seconds=ttl,
+                namespace=str(namespace or "default"),
+                level=str(level or "l1"),
             )
             self._cache[hash_key] = entry
 
@@ -129,6 +140,23 @@ class CacheManager:
         """Clear entire cache"""
         async with self._lock:
             self._cache.clear()
+
+    async def get_or_set(
+        self,
+        key: str,
+        loader: Callable[[], Any],
+        *,
+        ttl: Optional[int] = None,
+        namespace: str = "default",
+        level: str = "l1",
+        scope: str = "",
+    ) -> Any:
+        cached = await self.get(key, namespace=namespace, level=level, scope=scope)
+        if cached is not None:
+            return cached
+        result = await loader()
+        await self.set(key, result, ttl=ttl, namespace=namespace, level=level, scope=scope)
+        return result
 
     def get_stats(self) -> Dict[str, Any]:
         """Get cache statistics"""
@@ -144,7 +172,8 @@ class CacheManager:
             "misses": self._stats["misses"],
             "hit_rate": f"{hit_rate:.1f}%",
             "evictions": self._stats["evictions"],
-            "expirations": self._stats["expirations"]
+            "expirations": self._stats["expirations"],
+            "namespaces": sorted({entry.namespace for entry in self._cache.values()}),
         }
 
 
@@ -155,7 +184,7 @@ _cache_manager: Optional[CacheManager] = None
 def get_cache_manager(max_size: int = 1000) -> CacheManager:
     """Get or create cache manager singleton"""
     global _cache_manager
-    if _cache_manager is None:
+    if _cache_manager is None or int(_cache_manager.max_size) != int(max_size):
         _cache_manager = CacheManager(max_size=max_size)
         logger.info(f"Cache manager initialized (max_size={max_size})")
     return _cache_manager

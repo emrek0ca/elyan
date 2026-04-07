@@ -1,5 +1,6 @@
-"""
-Elyan Desktop UI - Modern PyQt6 based user interface
+"""Legacy PyQt compatibility layer.
+
+Canonical product UI lives in apps/desktop (React/Tauri).
 """
 
 from core.dependencies.autoinstall_hook import activate as _activate_autoinstall_hook

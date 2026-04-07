@@ -51,6 +51,63 @@ class _StatusCron:
     scheduler = _Sched()
 
 
+class _OperatorControlPlane:
+    async def plan_request(self, **kwargs):
+        return {
+            "request_class": "operator_task",
+            "capability": {
+                "domain": "calendar",
+                "objective": "Read today's events",
+                "preview": "Fetch today's calendar events and summarize them.",
+                "primary_action": "fetch_today",
+                "orchestration_mode": "verified",
+            },
+            "integration": {
+                "provider": "apple_calendar",
+                "connector_name": "Apple Calendar",
+                "integration_type": "local",
+                "auth_strategy": "system_permissions",
+                "fallback_policy": "calendar_fallback",
+            },
+            "model_selection": {
+                "provider": "ollama",
+                "model": "llama3.2:3b",
+                "role": "planner",
+                "fallback": True,
+            },
+            "collaboration": {
+                "enabled": True,
+                "strategy": "read_synthesize_verify",
+                "max_models": 3,
+                "synthesis_role": "reasoning",
+                "execution_style": "parallel_synthesis",
+                "lenses": [
+                    {"name": "reader", "instruction": "Extract key claims"},
+                    {"name": "verifier", "instruction": "Check confidence"},
+                ],
+            },
+            "autonomy": {
+                "mode": "assisted",
+                "should_ask": True,
+                "should_resume": True,
+            },
+            "task_plan": {
+                "name": "Calendar read",
+                "goal": "Summarize schedule",
+                "constraints": ["read-only"],
+                "approvals": ["send_invite"],
+                "evidence": ["calendar_trace"],
+                "steps": [
+                    {"name": "Check readiness", "kind": "verify", "tool": "connector.health"},
+                    {"name": "Fetch today", "kind": "read", "tool": "apple_calendar.list_items"},
+                ],
+            },
+            "fast_path": False,
+            "real_time": {"needs_real_time": True},
+            "operator_trace": {"route_domain": "calendar"},
+        }
+
+
 @pytest.mark.asyncio
 async def test_handle_external_message_wait_returns_agent_response(monkeypatch):
     monkeypatch.setattr(gateway_server, "push_activity", lambda *_a, **_k: None)
@@ -178,6 +235,234 @@ async def test_handle_status_includes_runtime_health_and_tool_count(monkeypatch)
     assert payload["runtime"]["ml"]["execution_mode"] == "local_first"
     assert payload["runtime"]["runtime_control"]["sync"]["sessions"] == 2
     assert "orchestration_telemetry" in payload
+
+
+@pytest.mark.asyncio
+async def test_handle_v1_operator_preview_returns_planned_route(monkeypatch):
+    monkeypatch.setattr(
+        gateway_server,
+        "get_operator_control_plane",
+        lambda: _OperatorControlPlane(),
+    )
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    req = _Req({"text": "bugünkü takvimimi oku", "session_id": "thread-1", "workspace_id": "ws-1", "user_id": "u-1"})
+
+    resp = await gateway_server.ElyanGatewayServer.handle_v1_operator_preview(srv, req)
+
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["ok"] is True
+    assert payload["preview"]["domain"] == "calendar"
+    assert payload["preview"]["integration"]["provider"] == "apple_calendar"
+    assert payload["preview"]["model_selection"]["provider"] == "ollama"
+    assert payload["preview"]["collaboration"]["enabled"] is True
+    assert payload["preview"]["collaboration"]["max_models"] == 3
+
+
+@pytest.mark.asyncio
+async def test_handle_channels_catalog_exposes_guided_setup_metadata():
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+
+    resp = await gateway_server.ElyanGatewayServer.handle_channels_catalog(srv, SimpleNamespace())
+    payload = json.loads(resp.text)
+
+    assert payload["ok"] is True
+    catalog = {item["type"]: item for item in payload["catalog"]}
+    assert catalog["whatsapp"]["supports_pairing"] is True
+    assert catalog["whatsapp"]["setup_mode"] == "bridge_qr"
+    assert "sms" in catalog
+    assert catalog["sms"]["setup_mode"] == "api_credentials"
+
+
+@pytest.mark.asyncio
+async def test_handle_channel_pair_status_reports_whatsapp_qr(monkeypatch):
+    monkeypatch.setattr(
+        gateway_server.elyan_config,
+        "get",
+        lambda key, default=None: [{"type": "whatsapp", "id": "whatsapp", "bridge_url": "http://127.0.0.1:19992", "bridge_token": "tok"}] if key == "channels" else default,
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "bridge_health",
+        lambda bridge_url, token="", timeout_s=2.0: {  # noqa: ARG005
+            "state": {"ready": False, "hasQr": True, "qrText": "██ QR ██", "phone": ""}
+        },
+    )
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    srv.router = SimpleNamespace(get_adapter_status=lambda: {})
+    req = SimpleNamespace(query={"channel": "whatsapp"})
+
+    resp = await gateway_server.ElyanGatewayServer.handle_channel_pair_status(srv, req)
+    payload = json.loads(resp.text)
+
+    assert payload["channel"] == "whatsapp"
+    assert payload["status"] == "waiting_for_scan"
+    assert payload["pending"] is True
+    assert "QR" in payload["qr_text"]
+
+
+@pytest.mark.asyncio
+async def test_handle_channel_pair_status_resolves_bridge_token_ref(monkeypatch):
+    monkeypatch.setattr(
+        gateway_server.elyan_config,
+        "get",
+        lambda key, default=None: [{"type": "whatsapp", "id": "whatsapp", "bridge_url": "http://127.0.0.1:19992", "bridge_token": "$WHATSAPP_BRIDGE_TOKEN"}] if key == "channels" else default,
+    )
+    monkeypatch.setenv("WHATSAPP_BRIDGE_TOKEN", "resolved-token")
+
+    seen = {}
+
+    def _health(bridge_url, token="", timeout_s=2.0):  # noqa: ARG001
+        seen["token"] = token
+        return {"state": {"ready": False, "hasQr": True, "qrText": "QR", "phone": ""}}
+
+    monkeypatch.setattr(gateway_server, "bridge_health", _health)
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    srv.router = SimpleNamespace(get_adapter_status=lambda: {})
+    req = SimpleNamespace(query={"channel": "whatsapp"})
+
+    resp = await gateway_server.ElyanGatewayServer.handle_channel_pair_status(srv, req)
+    payload = json.loads(resp.text)
+
+    assert payload["status"] == "waiting_for_scan"
+    assert seen["token"] == "resolved-token"
+
+
+@pytest.mark.asyncio
+async def test_handle_channel_pair_status_flags_unresolved_bridge_token_ref(monkeypatch):
+    monkeypatch.setattr(
+        gateway_server.elyan_config,
+        "get",
+        lambda key, default=None: [{"type": "whatsapp", "id": "whatsapp", "bridge_url": "http://127.0.0.1:19992", "bridge_token": "$WHATSAPP_BRIDGE_TOKEN"}] if key == "channels" else default,
+    )
+    monkeypatch.setattr(gateway_server.elyan_config, "_resolve_secret_ref", lambda value: value)
+    monkeypatch.setattr(gateway_server, "bridge_health", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("bridge_health should not be called")))
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    srv.router = SimpleNamespace(get_adapter_status=lambda: {})
+    req = SimpleNamespace(query={"channel": "whatsapp"})
+
+    resp = await gateway_server.ElyanGatewayServer.handle_channel_pair_status(srv, req)
+    payload = json.loads(resp.text)
+
+    assert payload["status"] == "needs_attention"
+    assert payload["blocking_issue"] == "bridge_token_unresolved"
+
+
+@pytest.mark.asyncio
+async def test_handle_channel_pair_start_uses_resolved_bridge_token(monkeypatch):
+    channels = [{"type": "whatsapp", "id": "whatsapp", "bridge_url": "http://127.0.0.1:19992", "bridge_token": "$WHATSAPP_BRIDGE_TOKEN"}]
+    saved = {}
+
+    monkeypatch.setattr(
+        gateway_server.elyan_config,
+        "get",
+        lambda key, default=None: channels if key == "channels" else default,
+    )
+    monkeypatch.setattr(
+        gateway_server.elyan_config,
+        "set",
+        lambda key, value: saved.setdefault(key, value),
+    )
+    monkeypatch.setenv("WHATSAPP_BRIDGE_TOKEN", "resolved-token")
+    monkeypatch.setattr(gateway_server, "ensure_bridge_runtime", lambda force_install=False: None)
+    monkeypatch.setattr(gateway_server, "push_activity", lambda *_a, **_k: None)
+    monkeypatch.setattr(gateway_server, "_mask_sensitive_fields", lambda payload: payload)
+    monkeypatch.setattr(gateway_server.KeychainManager, "key_for_env", staticmethod(lambda env_key: "kc" if env_key == "WHATSAPP_BRIDGE_TOKEN" else ""))
+    monkeypatch.setattr(gateway_server.KeychainManager, "set_key", staticmethod(lambda key, value: True))
+
+    seen = {}
+
+    def _health(bridge_url, token="", timeout_s=2.0):  # noqa: ARG001
+        seen["token"] = token
+        return {"state": {"ready": True, "hasQr": False}}
+
+    monkeypatch.setattr(gateway_server, "bridge_health", _health)
+    monkeypatch.setattr(gateway_server, "start_bridge_process", lambda **kwargs: (_ for _ in ()).throw(AssertionError("bridge should already be healthy")))
+    monkeypatch.setattr(gateway_server, "wait_for_bridge", lambda *args, **kwargs: None)
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    srv.router = SimpleNamespace(adapters={})
+    srv._reload_channels_runtime = lambda: 0
+    req = _Req({"channel": "whatsapp", "id": "whatsapp"})
+
+    resp = await gateway_server.ElyanGatewayServer.handle_channel_pair_start(srv, req)
+    payload = json.loads(resp.text)
+
+    assert payload["ok"] is True
+    assert seen["token"] == "resolved-token"
+    assert saved["channels"][0]["bridge_token"] == "$WHATSAPP_BRIDGE_TOKEN"
+
+
+@pytest.mark.asyncio
+async def test_handle_v1_cowork_home_includes_autopilot_and_background_tasks(monkeypatch):
+    class _CoworkStore:
+        async def home_snapshot(self, workspace_id, limit=8):
+            return {
+                "recent_threads": [],
+                "last_thread": None,
+                "active_count": 0,
+            }
+
+    class _Billing:
+        @staticmethod
+        def get_workspace_summary(workspace_id):
+            return {"plan": {"label": "Free", "status": "inactive"}, "workspace_id": workspace_id}
+
+    class _MissionStore:
+        @staticmethod
+        def pending_approvals(owner):
+            return []
+
+    class _AwayRecord:
+        def to_dict(self):
+            return {
+                "task_id": "away_123",
+                "user_input": "takvimi kontrol et",
+                "result_summary": "takvim okunuyor",
+                "user_id": "local-workspace",
+                "channel": "desktop",
+                "state": "running",
+                "updated_at": 1710000000.0,
+                "mode": "background",
+                "capability_domain": "calendar",
+            }
+
+    class _Autopilot:
+        @staticmethod
+        def get_status():
+            return {
+                "enabled": True,
+                "running": True,
+                "last_tick_at": 1710000000.0,
+                "last_tick_reason": "desktop_checkin",
+                "last_briefing": {"briefing": "Bugün için iki önemli iş var."},
+                "last_suggestions": [{"user_id": "local-workspace", "task": "Takvimi oku", "description": "Günün toplantılarını çıkar"}],
+                "last_task_review": [{"task_id": "task_1", "objective": "Sunumu bitir", "state": "planning", "action": "resume", "age_minutes": 42}],
+                "last_interventions": [{"id": "int_1", "prompt": "Gönderilsin mi?", "age_minutes": 6}],
+            }
+
+    monkeypatch.setattr(gateway_server, "get_autopilot", lambda: _Autopilot())
+    monkeypatch.setattr(gateway_server.away_task_registry, "list_for_user", lambda user_id, limit=6: [_AwayRecord()])
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    srv._cowork_store = lambda: _CoworkStore()
+    srv._workspace_billing = lambda: _Billing()
+    srv._mission_store = lambda: _MissionStore()
+
+    req = _Req({"workspace_id": "local-workspace", "user_id": "local-workspace"})
+    resp = await gateway_server.ElyanGatewayServer.handle_v1_cowork_home(srv, req)
+
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["ok"] is True
+    assert payload["autopilot"]["running"] is True
+    assert payload["autopilot"]["last_briefing"]["briefing"] == "Bugün için iki önemli iş var."
+    assert payload["background_tasks"][0]["state"] == "running"
+    assert payload["background_tasks"][0]["capability_domain"] == "calendar"
 
 
 @pytest.mark.asyncio
@@ -496,6 +781,11 @@ async def test_handle_product_home_aggregates_readiness_and_reports(monkeypatch)
         "_check_macos_permissions",
         lambda: {"is_macos": True, "osascript_available": True, "screencapture_available": True},
     )
+    monkeypatch.setattr(
+        gateway_server.elyan_config,
+        "get",
+        lambda key, default=None: [{"type": "imessage", "server_url": "http://localhost:1234", "password": "$IMESSAGE_PASSWORD"}, {"type": "whatsapp", "mode": "cloud"}] if key == "channels" else default,
+    )
     monkeypatch.setattr(gateway_server, "is_setup_complete", lambda: True)
     monkeypatch.setattr(gateway_server.importlib.util, "find_spec", lambda name: object() if name == "playwright" else None)
 
@@ -525,6 +815,9 @@ async def test_handle_product_home_aggregates_readiness_and_reports(monkeypatch)
     payload = json.loads(resp.text)
     assert payload["ok"] is True
     assert payload["readiness"]["elyan_ready"] is True
+    assert payload["readiness"]["bluebubbles_ready"] is True
+    assert payload["readiness"]["whatsapp_mode"] == "cloud"
+    assert payload["readiness"]["productivity_apps_ready"] is True
     assert payload["benchmark"]["pass_count"] == 20
     assert payload["preset_workflows"]
     assert payload["recent_workflow_reports"][0]["workflow_name"] == "Telegram-triggered desktop task completion"
@@ -888,7 +1181,63 @@ async def test_handle_product_health_exposes_release_ready_summary(monkeypatch):
     payload = json.loads(resp.text)
     assert payload["ok"] is True
     assert payload["status"] == "ready"
-    assert payload["entrypoint"] == "/dashboard"
+
+
+@pytest.mark.asyncio
+async def test_handle_v1_connector_quick_action_reads_notes(monkeypatch):
+    from core.gateway import server as gateway_server
+
+    async def _json():
+        return {"action": "search", "query": "meeting"}
+
+    async def _search_notes(query, limit=8):
+        _ = limit
+        return {"success": True, "results": [{"title": f"{query} note"}], "count": 1}
+
+    monkeypatch.setattr("tools.note_tools.note_search.search_notes", _search_notes)
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    request = SimpleNamespace(
+        match_info={"connector": "apple_notes"},
+        rel_url=SimpleNamespace(query={}),
+        json=_json,
+        headers={},
+        remote="127.0.0.1",
+    )
+    resp = await gateway_server.ElyanGatewayServer.handle_v1_connector_quick_action(srv, request)
+    payload = json.loads(resp.text)
+    assert payload["ok"] is True
+    assert payload["connector"] == "apple_notes"
+    assert payload["result"]["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_handle_v1_connector_quick_action_reports_imessage_status(monkeypatch):
+    from core.gateway import server as gateway_server
+
+    async def _json():
+        return {"action": "status"}
+
+    monkeypatch.setattr(
+        gateway_server.elyan_config,
+        "get",
+        lambda key, default=None: [{"type": "imessage", "server_url": "http://localhost:1234", "password": "$IMESSAGE_PASSWORD"}] if key == "channels" else default,
+    )
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    srv.router = SimpleNamespace(get_adapter_status=lambda: {"imessage": "connected"})
+    request = SimpleNamespace(
+        match_info={"connector": "imessage"},
+        rel_url=SimpleNamespace(query={}),
+        json=_json,
+        headers={},
+        remote="127.0.0.1",
+    )
+    resp = await gateway_server.ElyanGatewayServer.handle_v1_connector_quick_action(srv, request)
+    payload = json.loads(resp.text)
+    assert payload["ok"] is True
+    assert payload["result"]["ready"] is True
+    assert payload["result"]["status"] == "connected"
 
 
 @pytest.mark.asyncio

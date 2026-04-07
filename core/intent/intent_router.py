@@ -20,7 +20,7 @@ from .tier2_semantic_classifier import SemanticClassifier
 from .tier3_deep_reasoning import DeepReasoner
 from .user_intent_memory import UserIntentMemory
 from .intent_metrics import IntentMetricsTracker
-from core.nlu.phase1_engine import get_phase1_engine
+from core.nlu import get_phase1_engine
 
 logger = get_logger("intent_router")
 
@@ -39,14 +39,38 @@ def initialize_router(llm_orchestrator=None, db_path: str = "~/.elyan/intent_mem
     """Initialize intent router components."""
     global _fast_matcher, _semantic_classifier, _deep_reasoner, _user_memory, _metrics, _phase1_engine
 
-    _fast_matcher = FastMatcher()
-    _semantic_classifier = SemanticClassifier(llm_orchestrator)
-    _deep_reasoner = DeepReasoner(llm_orchestrator)
-    _user_memory = UserIntentMemory(db_path=db_path)
-    _metrics = IntentMetricsTracker()
-    _phase1_engine = get_phase1_engine()
+    created = False
 
-    logger.info(f"Intent router initialized. Tier 1 patterns: {_fast_matcher.get_pattern_count()}")
+    if _fast_matcher is None:
+        _fast_matcher = FastMatcher()
+        created = True
+
+    if _semantic_classifier is None:
+        _semantic_classifier = SemanticClassifier(llm_orchestrator)
+        created = True
+    elif llm_orchestrator is not None:
+        _semantic_classifier.llm = llm_orchestrator
+
+    if _deep_reasoner is None:
+        _deep_reasoner = DeepReasoner(llm_orchestrator)
+        created = True
+    elif llm_orchestrator is not None:
+        _deep_reasoner.llm = llm_orchestrator
+
+    if _user_memory is None:
+        _user_memory = UserIntentMemory(db_path=db_path)
+        created = True
+
+    if _metrics is None:
+        _metrics = IntentMetricsTracker()
+        created = True
+
+    if _phase1_engine is None:
+        _phase1_engine = get_phase1_engine()
+        created = True
+
+    if created:
+        logger.info(f"Intent router initialized. Tier 1 patterns: {_fast_matcher.get_pattern_count()}")
 
 
 class IntentRouter:

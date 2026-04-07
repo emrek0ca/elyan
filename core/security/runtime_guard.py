@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Tuple
 from config.elyan_config import elyan_config
 from core.command_hardening import blocked_command_reason
 from core.operator_policy import get_operator_policy_engine
+from core.security.contracts import decision_for
 from core.security.rbac import Role, rbac
 
 
@@ -166,6 +167,37 @@ class GuardProfile:
 
 
 class RuntimeSecurityGuard:
+    @staticmethod
+    def _map_legacy_risk(legacy_risk: str) -> str:
+        token = str(legacy_risk or "").strip().lower()
+        if token == "dangerous":
+            return "destructive"
+        if token == "guarded":
+            return "write_safe"
+        return "read_only"
+
+    def _decision_payload(
+        self,
+        *,
+        allowed: bool,
+        requires_approval: bool,
+        legacy_risk: str,
+        reason: str,
+        profile: GuardProfile,
+        data: Any = None,
+    ) -> Dict[str, Any]:
+        payload = decision_for(
+            allowed=allowed,
+            requires_approval=requires_approval,
+            risk_level=self._map_legacy_risk(legacy_risk),
+            legacy_risk=legacy_risk,
+            data=data,
+            reason=reason,
+            source="runtime_guard",
+        ).to_dict()
+        payload["profile"] = profile
+        return payload
+
     def _resolve_profile(self, runtime_policy: Dict[str, Any] | None = None) -> GuardProfile:
         policy = runtime_policy if isinstance(runtime_policy, dict) else {}
         security = policy.get("security", {}) if isinstance(policy.get("security"), dict) else {}
@@ -325,13 +357,14 @@ class RuntimeSecurityGuard:
 
         unsupported_reason = blocked_command_reason(str(meta.get("user_input") or ""), tool_name=tool)
         if unsupported_reason and tool in RUNTIME_ACTIONS.union(SYSTEM_ACTIONS):
-            return {
-                "allowed": False,
-                "requires_approval": False,
-                "risk": "dangerous",
-                "reason": unsupported_reason,
-                "profile": profile,
-            }
+            return self._decision_payload(
+                allowed=False,
+                requires_approval=False,
+                legacy_risk="dangerous",
+                reason=unsupported_reason,
+                profile=profile,
+                data=params,
+            )
 
         # RBAC
         role = str(meta.get("user_role", profile.default_user_role) or profile.default_user_role).strip().lower()
@@ -345,40 +378,44 @@ class RuntimeSecurityGuard:
             has_perm = bool(rbac.check_permission(uid, tool))
             # Viewer: strict allow-list.
             if role == Role.VIEWER and not has_perm:
-                return {
-                    "allowed": False,
-                    "requires_approval": False,
-                    "risk": risk,
-                    "reason": f"RBAC blocked for role '{role}': {tool}",
-                    "profile": profile,
-                }
+                return self._decision_payload(
+                    allowed=False,
+                    requires_approval=False,
+                    legacy_risk=risk,
+                    reason=f"RBAC blocked for role '{role}': {tool}",
+                    profile=profile,
+                    data=params,
+                )
 
         # Operator mode
         op_policy = get_operator_policy_engine().resolve(profile.operator_mode)
         if tool in SYSTEM_ACTIONS and not op_policy.allow_system_actions:
-            return {
-                "allowed": False,
-                "requires_approval": False,
-                "risk": risk,
-                "reason": f"Operator policy '{op_policy.level}' blocks system actions",
-                "profile": profile,
-            }
+            return self._decision_payload(
+                allowed=False,
+                requires_approval=False,
+                legacy_risk=risk,
+                reason=f"Operator policy '{op_policy.level}' blocks system actions",
+                profile=profile,
+                data=params,
+            )
         if tool in DESTRUCTIVE_ACTIONS and not op_policy.allow_destructive_actions:
-            return {
-                "allowed": False,
-                "requires_approval": False,
-                "risk": risk,
-                "reason": f"Operator policy '{op_policy.level}' blocks destructive actions",
-                "profile": profile,
-            }
+            return self._decision_payload(
+                allowed=False,
+                requires_approval=False,
+                legacy_risk=risk,
+                reason=f"Operator policy '{op_policy.level}' blocks destructive actions",
+                profile=profile,
+                data=params,
+            )
         if risk == "dangerous" and not profile.dangerous_tools_enabled:
-            return {
-                "allowed": False,
-                "requires_approval": False,
-                "risk": risk,
-                "reason": "Dangerous tools are disabled by runtime security policy",
-                "profile": profile,
-            }
+            return self._decision_payload(
+                allowed=False,
+                requires_approval=False,
+                legacy_risk=risk,
+                reason="Dangerous tools are disabled by runtime security policy",
+                profile=profile,
+                data=params,
+            )
 
         # Command guard
         cmd = self._extract_command(params or {})
@@ -389,13 +426,14 @@ class RuntimeSecurityGuard:
                 if not token:
                     continue
                 if _pattern_to_regex(token).search(compact):
-                    return {
-                        "allowed": False,
-                        "requires_approval": False,
-                        "risk": "dangerous",
-                        "reason": f"Dangerous command pattern blocked: {token.lower()}",
-                        "profile": profile,
-                    }
+                    return self._decision_payload(
+                        allowed=False,
+                        requires_approval=False,
+                        legacy_risk="dangerous",
+                        reason=f"Dangerous command pattern blocked: {token.lower()}",
+                        profile=profile,
+                        data=params,
+                    )
 
         paths, invalid_paths = self._collect_paths(params or {})
 
@@ -403,13 +441,14 @@ class RuntimeSecurityGuard:
         if profile.path_guard_enabled:
             if invalid_paths:
                 sample = invalid_paths[0]
-                return {
-                    "allowed": False,
-                    "requires_approval": False,
-                    "risk": risk,
-                    "reason": f"Invalid path-like parameter blocked: {sample}",
-                    "profile": profile,
-                }
+                return self._decision_payload(
+                    allowed=False,
+                    requires_approval=False,
+                    legacy_risk=risk,
+                    reason=f"Invalid path-like parameter blocked: {sample}",
+                    profile=profile,
+                    data=params,
+                )
             allowed_roots = [self._normalize_path(v) for v in profile.allowed_roots]
             denied_roots = [self._normalize_path(v) for v in profile.denied_roots]
             allowed_roots = [p for p in allowed_roots if p is not None]
@@ -417,21 +456,23 @@ class RuntimeSecurityGuard:
 
             for p in paths:
                 if any(self._path_under(p, root) for root in denied_roots):
-                    return {
-                        "allowed": False,
-                        "requires_approval": False,
-                        "risk": risk,
-                        "reason": f"Path guard denied: {p}",
-                        "profile": profile,
-                    }
+                    return self._decision_payload(
+                        allowed=False,
+                        requires_approval=False,
+                        legacy_risk=risk,
+                        reason=f"Path guard denied: {p}",
+                        profile=profile,
+                        data={"path": str(p)},
+                    )
                 if allowed_roots and not any(self._path_under(p, root) for root in allowed_roots):
-                    return {
-                        "allowed": False,
-                        "requires_approval": False,
-                        "risk": risk,
-                        "reason": f"Path is outside allowed roots: {p}",
-                        "profile": profile,
-                    }
+                    return self._decision_payload(
+                        allowed=False,
+                        requires_approval=False,
+                        legacy_risk=risk,
+                        reason=f"Path is outside allowed roots: {p}",
+                        profile=profile,
+                        data={"path": str(p)},
+                    )
 
         # Contract-first coding write scope guard
         if self._looks_like_write_mutation(tool, params or {}):
@@ -440,42 +481,46 @@ class RuntimeSecurityGuard:
             write_allowed = [p for p in write_allowed if p is not None]
             write_forbidden = [p for p in write_forbidden if p is not None]
             if meta.get("contract_first_coding") and not write_allowed:
-                return {
-                    "allowed": False,
-                    "requires_approval": False,
-                    "risk": "dangerous",
-                    "reason": "Coding runtime write scope missing.",
-                    "profile": profile,
-                }
+                return self._decision_payload(
+                    allowed=False,
+                    requires_approval=False,
+                    legacy_risk="dangerous",
+                    reason="Coding runtime write scope missing.",
+                    profile=profile,
+                    data=params,
+                )
             if tool in RUNTIME_ACTIONS and self._looks_like_write_mutation(tool, params or {}) and not paths:
                 cwd_value = self._normalize_path(str((params or {}).get("cwd") or ""))
                 if cwd_value is not None:
                     paths = [cwd_value]
                 elif meta.get("contract_first_coding"):
-                    return {
-                        "allowed": False,
-                        "requires_approval": False,
-                        "risk": "dangerous",
-                        "reason": "Mutating command requires an explicit scoped path or cwd.",
-                        "profile": profile,
-                    }
+                    return self._decision_payload(
+                        allowed=False,
+                        requires_approval=False,
+                        legacy_risk="dangerous",
+                        reason="Mutating command requires an explicit scoped path or cwd.",
+                        profile=profile,
+                        data=params,
+                    )
             for p in paths:
                 if any(self._path_under(p, root) for root in write_forbidden):
-                    return {
-                        "allowed": False,
-                        "requires_approval": False,
-                        "risk": "dangerous",
-                        "reason": f"Write scope denied: {p}",
-                        "profile": profile,
-                    }
+                    return self._decision_payload(
+                        allowed=False,
+                        requires_approval=False,
+                        legacy_risk="dangerous",
+                        reason=f"Write scope denied: {p}",
+                        profile=profile,
+                        data={"path": str(p)},
+                    )
                 if write_allowed and not any(self._path_under(p, root) for root in write_allowed):
-                    return {
-                        "allowed": False,
-                        "requires_approval": False,
-                        "risk": "dangerous",
-                        "reason": f"Path is outside coding write scope: {p}",
-                        "profile": profile,
-                    }
+                    return self._decision_payload(
+                        allowed=False,
+                        requires_approval=False,
+                        legacy_risk="dangerous",
+                        reason=f"Path is outside coding write scope: {p}",
+                        profile=profile,
+                        data={"path": str(p)},
+                    )
 
         has_runtime_policy = isinstance(runtime_policy, dict) and bool(runtime_policy)
         approval_scope = "dangerous_only"
@@ -498,13 +543,14 @@ class RuntimeSecurityGuard:
         )
         requires_approval = bool(needs_confirmation or needs_policy_confirmation)
 
-        return {
-            "allowed": True,
-            "requires_approval": requires_approval,
-            "risk": risk,
-            "reason": "ok",
-            "profile": profile,
-        }
+        return self._decision_payload(
+            allowed=True,
+            requires_approval=requires_approval,
+            legacy_risk=risk,
+            reason="ok",
+            profile=profile,
+            data=params,
+        )
 
 
 runtime_security_guard = RuntimeSecurityGuard()

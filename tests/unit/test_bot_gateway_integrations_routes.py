@@ -1,8 +1,10 @@
 from pathlib import Path
 
+_REPO = Path(__file__).resolve().parent.parent.parent
+
 
 def test_bot_gateway_server_includes_integration_routes():
-    source = Path("/Users/emrekoca/Desktop/bot/bot/core/gateway/server.py").read_text(encoding="utf-8")
+    source = (_REPO / "core/gateway/server.py").read_text(encoding="utf-8")
 
     assert "add_get('/api/integrations/accounts'" in source
     assert "add_post('/api/integrations/connect'" in source

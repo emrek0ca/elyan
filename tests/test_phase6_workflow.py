@@ -206,6 +206,7 @@ def test_state_machine_start_run():
     assert run is not None
     assert run.workflow_id == "workflow-123"
     assert run.state == WorkflowState.IDLE
+    assert run.state.value == "received"
 
 
 def test_transition_to_done():
@@ -231,6 +232,34 @@ def test_transition_to_failed():
 
     assert run.state == WorkflowState.FAILED
     assert run.history[-1]["metadata"]["error"] == "Step 2 failed"
+
+
+def test_canonical_state_chain():
+    """Test: canonical lifecycle transitions stay legal."""
+    sm = WorkflowStateMachine()
+    run = sm.start_run("workflow-123")
+
+    run.transition_to(WorkflowState.CLASSIFIED)
+    run.transition_to(WorkflowState.SCOPED)
+    run.transition_to(WorkflowState.PLANNED)
+    run.transition_to(WorkflowState.GATHERING_CONTEXT)
+    run.transition_to(WorkflowState.EXECUTING)
+    run.transition_to(WorkflowState.REVIEWING)
+    run.transition_to(WorkflowState.EXPORTING)
+    run.transition_to(WorkflowState.COMPLETED)
+
+    assert run.state == WorkflowState.COMPLETED
+
+
+def test_illegal_transition_rejected():
+    """Test: illegal transitions raise ValueError."""
+    sm = WorkflowStateMachine()
+    run = sm.start_run("workflow-123")
+    run.transition_to(WorkflowState.EXECUTING)
+    run.transition_to(WorkflowState.COMPLETED)
+
+    with pytest.raises(ValueError):
+        run.transition_to(WorkflowState.EXECUTING)
 
 
 # ────────────────────────────────────────────────────────────────────────────

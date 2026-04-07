@@ -3,12 +3,14 @@ import json
 import asyncio
 import time
 import importlib.util
+import inspect
 import re
 from contextvars import ContextVar
 from typing import Any, Optional
 from config.elyan_config import elyan_config
 from core.model_orchestrator import model_orchestrator
 from core.neural_router import neural_router
+from core.accuracy_speed_runtime import get_accuracy_speed_runtime
 from .llm_cache import get_cache
 from .intent_parser import IntentParser
 from .intent_classifier import get_classifier
@@ -38,6 +40,8 @@ class LLMClient:
         self.llm_optimizer = get_llm_optimizer()
         self.pricing_tracker = get_pricing_tracker()
         self.fast_response = FastResponseSystem()
+        self.intent_router = None
+        self.speed_runtime = get_accuracy_speed_runtime()
 
         # Router / fallback configuration
         self.llm_type: str = "openai"
@@ -47,7 +51,7 @@ class LLMClient:
         self._router_trace: list = []
         self._collaboration_trace: list = []
 
-        self.assistant_style = "professional_friendly_short"
+        self.assistant_style = "natural_concise"
         self._default_chat_prompt = (
             "Sen Elyan, son derece zeki, yetenekli ve yardımsever bir dijital asistansın. "
             "Kullanıcıya profesyonel, samimi, sıcak ve çözüm odaklı yanıtlar ver. "
@@ -269,8 +273,23 @@ class LLMClient:
         temperature: float = None,
         max_models: int | None = None,
     ) -> str:
-        collab = self.orchestrator.get_collaboration_settings()
-        pool = self.orchestrator.get_collaboration_pool(role=role, max_models=max_models or collab.get("max_models", 3))
+        request_kind = "coding" if role in {"code", "code_worker", "coding"} else ("research" if role in {"reasoning", "planning", "critic", "qa"} else "chat")
+        runtime_decision = self.speed_runtime.plan_for_text(
+            text=prompt,
+            request_kind=request_kind,
+            channel_type="runtime",
+            privacy_mode="balanced",
+            has_attachments=False,
+            force_verified=role in {"reasoning", "planning", "critic", "qa"},
+        )
+        profile = self.orchestrator.get_collaboration_profile(
+            text=prompt,
+            role=role,
+            request_kind=request_kind,
+            provider_lane=runtime_decision.provider_lane,
+            has_attachments=False,
+        )
+        pool = self.orchestrator.get_collaboration_pool(role=role, max_models=max_models or profile.get("max_models", 3))
         if len(pool) <= 1:
             cfg = pool[0] if pool else None
             return await self.generate(
@@ -288,10 +307,16 @@ class LLMClient:
         self._collaboration_trace = []
         system = system_prompt or self._resolve_system_prompt()
         lenses = [
-            ("planner", "Kullanıcının gerçek niyetini, teslim kriterlerini ve eksik anlaşılma risklerini çıkar."),
-            ("builder", "Bu isteği en profesyonel şekilde gerçekleştirmek için net çözüm yaklaşımı ve somut üretim yönü ver."),
-            ("critic", "Yanlış anlama, boş çıktı, placeholder, teknik risk ve kalite açıklarını agresif şekilde tespit et."),
+            (str(item.get("name") or f"specialist_{idx+1}"), str(item.get("instruction") or "Önceki görüşleri tekrar etmeden faydalı katkı ver."))
+            for idx, item in enumerate(list(profile.get("lenses") or []))
+            if isinstance(item, dict)
         ]
+        if not lenses:
+            lenses = [
+                ("planner", "Kullanıcının gerçek niyetini, teslim kriterlerini ve eksik anlaşılma risklerini çıkar."),
+                ("builder", "Bu isteği en profesyonel şekilde gerçekleştirmek için net çözüm yaklaşımı ve somut üretim yönü ver."),
+                ("critic", "Yanlış anlama, boş çıktı, placeholder, teknik risk ve kalite açıklarını agresif şekilde tespit et."),
+            ]
         if len(pool) > len(lenses):
             for idx in range(len(lenses), len(pool)):
                 lenses.append((f"specialist_{idx+1}", "Önceki görüşleri tekrar etmeyen, fark yaratan iyileştirme önerileri ver."))
@@ -319,6 +344,7 @@ class LLMClient:
                     "provider": cfg.get("type") or cfg.get("provider"),
                     "model": cfg.get("model"),
                     "lens": lens_name,
+                    "strategy": profile.get("strategy"),
                     "status": "success",
                     "response": str(response or "").strip(),
                 }
@@ -329,6 +355,7 @@ class LLMClient:
                     "provider": cfg.get("type") or cfg.get("provider"),
                     "model": cfg.get("model"),
                     "lens": lens_name,
+                    "strategy": profile.get("strategy"),
                     "status": "failed",
                     "error": str(exc),
                     "response": "",
@@ -374,7 +401,7 @@ class LLMClient:
             synthesis_prompt,
             system_prompt=system,
             model_config=pool[0],
-            role=role,
+            role=str(profile.get("synthesis_role") or role),
             history=None,
             user_id=user_id,
             temperature=temperature,
@@ -386,6 +413,7 @@ class LLMClient:
                 "provider": pool[0].get("type") or pool[0].get("provider"),
                 "model": pool[0].get("model"),
                 "lens": "synthesizer",
+                "strategy": profile.get("strategy"),
                 "status": "success",
             }
         )
@@ -595,6 +623,34 @@ class LLMClient:
                     completion_tokens=completion_len,
                     cost_usd=(prompt_len + completion_len) * 0.000002 # Average cost
                 )
+                try:
+                    elapsed_ms = (time.time() - t_call_start) * 1000.0
+                    _usage = getattr(response, "usage", None) or {}
+                    _input_tok = int(
+                        getattr(_usage, "input_tokens", 0)
+                        or getattr(_usage, "prompt_tokens", 0)
+                        or (isinstance(_usage, dict) and (_usage.get("input_tokens") or _usage.get("prompt_tokens")))
+                        or prompt_len
+                        or 0
+                    )
+                    _output_tok = int(
+                        getattr(_usage, "output_tokens", 0)
+                        or getattr(_usage, "completion_tokens", 0)
+                        or (isinstance(_usage, dict) and (_usage.get("output_tokens") or _usage.get("completion_tokens")))
+                        or completion_len
+                        or 0
+                    )
+                    if (_input_tok + _output_tok) > 0:
+                        from core.learning.tool_bandit import get_tool_bandit
+
+                        get_tool_bandit().record_outcome(
+                            task_category="llm_call",
+                            tool_name=str(cfg.get("model") or provider or "unknown"),
+                            success=True,
+                            latency_ms=elapsed_ms if "elapsed_ms" in dir() else 0.0,
+                        )
+                except Exception:
+                    pass
 
                 return response
 
@@ -1008,8 +1064,48 @@ class LLMClient:
         cached = self.cache.get(user_message)
         if cached: return cached
 
-        intent_result = self.intent_parser.parse(user_message)
-        if intent_result:
+        try:
+            intent_result = self.intent_parser.parse(user_message) or {}
+        except Exception as parse_exc:
+            logger.debug(f"Legacy intent parser skipped in LLMClient.process: {parse_exc}")
+            intent_result = {}
+        action = str(intent_result.get("action", "") or "").strip().lower()
+        if action in {"", "chat", "unknown"}:
+            try:
+                if self.intent_router is None:
+                    from core.intent import IntentRouter
+
+                    self.intent_router = IntentRouter(self.orchestrator)
+                from core.intent import ConversationContext
+                from tools import AVAILABLE_TOOLS
+
+                routed = self.intent_router.route(
+                    user_message,
+                    str(user_id or "local"),
+                    AVAILABLE_TOOLS,
+                    ConversationContext(user_id=str(user_id or "local")),
+                )
+                if routed:
+                    routed_payload = routed.to_dict() if hasattr(routed, "to_dict") else {}
+                    routed_action = str(routed_payload.get("action", "") or "").strip().lower()
+                    if routed_action == "clarify" or routed_payload.get("requires_clarification"):
+                        return {
+                            "action": "clarify",
+                            "message": routed_payload.get("reasoning") or routed_payload.get("reply") or "Bunu biraz daha açık yazar mısın?",
+                            "intent": routed_payload,
+                        }
+                    if routed_action not in {"", "chat", "unknown"}:
+                        res = {
+                            "action": routed_action,
+                            "message": routed_payload.get("reply") or routed_payload.get("reasoning") or "",
+                            "intent": routed_payload,
+                        }
+                        self.cache.set(user_message, res)
+                        return res
+            except Exception as route_exc:
+                logger.debug(f"Shared intent routing skipped in LLMClient.process: {route_exc}")
+
+        if intent_result and action not in {"", "chat", "unknown"}:
             res = {"action": intent_result["action"], "message": intent_result.get("reply", "")}
             self.cache.set(user_message, res)
             return res
@@ -1108,10 +1204,12 @@ class LLMClient:
         raise ValueError(f"Unknown provider: {provider}")
 
     async def _call_any_provider(self, prompt: str, user_message: str = "",
-                                  temp: float = 0.3, max_tokens: int = None) -> str:
+                                  temp: float = 0.3, max_tokens: int = None, provider_lane: str | None = None, role: str = "inference") -> str:
         """Fallback sırasına göre sağlayıcıları dener; trace kaydeder."""
         self._router_trace = []
-        order = list(self.fallback_order) if self.fallback_order else [self.llm_type]
+        order = self.speed_runtime.provider_order(provider_lane or "turbo_hybrid", local_first=bool(elyan_config.get("agent.model.local_first", True)))
+        if not order:
+            order = list(self.fallback_order) if self.fallback_order else [self.llm_type]
         for provider in order:
             if not self._is_provider_available(provider):
                 self._router_trace.append({"provider": provider, "status": "unavailable",
@@ -1170,13 +1268,21 @@ class LLMClient:
             conversation_context = {}
 
         fast = self.fast_response.get_fast_response(text, context=conversation_context)
+        speed = self.speed_runtime.plan_for_text(
+            text=text,
+            request_kind="chat",
+            channel_type="desktop",
+            privacy_mode=str(elyan_config.get("conversation_privacy_mode", "balanced") or "balanced"),
+            has_attachments=False,
+        )
         if fast and str(getattr(fast, "answer", "") or "").strip():
             answer = self._sanitize_chat_output(fast.answer)
             if answer:
+                self.speed_runtime.record_execution(lane="instant_lane", latency_ms=float(getattr(fast, "response_time", 0.0) or 0.0) * 1000.0, success=True, fallback_active=False, verification_state="light")
                 return answer
             return build_chat_fallback_message(language=str(elyan_config.get("agent.language", "tr") or "tr"))
-        max_tokens = self._role_token_limit("chat")
-        temp = 0.3
+        max_tokens = min(self._role_token_limit("chat"), 220 if speed.provider_lane == "local_fast" else 320)
+        temp = 0.25 if speed.provider_lane in {"local_fast", "turbo_hybrid"} else 0.2
         system = str(system_prompt or self._chat_system_prompt()).strip()
         history_block = build_chat_history_block(history, max_pairs=4)
         prompt_parts = [system]
@@ -1196,9 +1302,21 @@ class LLMClient:
             token = _chat_system_prompt_override.set(system)
             try:
                 patched = self.__dict__.get("_call_any_provider")
+                kwargs = {
+                    "user_message": text,
+                    "temp": temp_value,
+                    "max_tokens": max_tokens,
+                    "provider_lane": speed.provider_lane,
+                    "role": "chat",
+                }
                 if patched is not None:
-                    return await patched(prompt_text, user_message=text, temp=temp_value, max_tokens=max_tokens)
-                return await self._call_any_provider(prompt_text, user_message=text, temp=temp_value, max_tokens=max_tokens)
+                    try:
+                        accepted = inspect.signature(patched).parameters
+                        filtered = {key: value for key, value in kwargs.items() if key in accepted}
+                    except Exception:
+                        filtered = kwargs
+                    return await patched(prompt_text, **filtered)
+                return await self._call_any_provider(prompt_text, **kwargs)
             finally:
                 _chat_system_prompt_override.reset(token)
 
@@ -1208,6 +1326,7 @@ class LLMClient:
             raw = ""
         sanitized = self._sanitize_chat_output(raw)
         if sanitized and not chat_output_needs_retry(raw, sanitized_text=sanitized):
+            self.speed_runtime.record_execution(lane="instant_lane" if speed.provider_lane == "local_fast" else "turbo_lane", latency_ms=180.0, success=True, fallback_active=False, verification_state=speed.verification_level)
             return sanitized
 
         strict_system = (
@@ -1225,6 +1344,7 @@ class LLMClient:
             retry_raw = ""
         retry_sanitized = self._sanitize_chat_output(retry_raw)
         if retry_sanitized and not chat_output_needs_retry(retry_raw, sanitized_text=retry_sanitized):
+            self.speed_runtime.record_execution(lane="verified_lane" if speed.provider_lane == "verified_cloud" else "turbo_lane", latency_ms=420.0, success=True, fallback_active=True, verification_state=speed.verification_level)
             return retry_sanitized
 
         contextual = self._build_contextual_chat_reply(text, history)

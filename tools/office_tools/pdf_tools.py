@@ -10,6 +10,7 @@ from typing import Any, Iterable
 import fitz
 
 from security.validator import validate_path
+from config.settings_manager import SettingsPanel
 from utils.logger import get_logger
 
 logger = get_logger("office.pdf")
@@ -64,8 +65,8 @@ async def read_pdf(
 ) -> dict[str, Any]:
     """Extract text, layout, tables and chart summaries from a PDF file.
 
-    The implementation uses PyMuPDF as the primary backend. When OCR is
-    requested it will try the document vision pipeline's multimodal fallback.
+    The implementation prefers LiteParse when available, then falls back to the
+    existing document vision / PyMuPDF-backed stack.
     """
     try:
         is_valid, error, _ = validate_path(path)
@@ -82,6 +83,67 @@ async def read_pdf(
                 "success": False,
                 "error": f"Dosya çok büyük ({file_size} bytes). Limit: {MAX_FILE_SIZE} bytes",
             }
+
+        settings = SettingsPanel()
+        try:
+            settings._load()
+        except Exception:
+            pass
+
+        if bool(settings.get("liteparse_enabled", True)):
+            try:
+                from .liteparse_adapter import parse_document_with_liteparse
+
+                liteparse_result = await parse_document_with_liteparse(str(file_path))
+                if liteparse_result.get("success"):
+                    content = str(liteparse_result.get("content") or "").strip()
+                    page_rows = list(liteparse_result.get("pages") or [])
+                    page_filter = _normalize_pages(pages, len(page_rows)) if page_rows else []
+                    if pages and page_filter:
+                        filtered_pages = [page_rows[idx] for idx in page_filter if 0 <= idx < len(page_rows)]
+                    else:
+                        filtered_pages = page_rows
+                    if filtered_pages:
+                        content = "\n\n".join(
+                            f"--- Sayfa {page.get('page_number')} ---\n{str(page.get('text') or '').strip()}".strip()
+                            for page in filtered_pages
+                            if str(page.get("text") or "").strip()
+                        ).strip() or content
+                    return {
+                        "success": True,
+                        "path": str(file_path),
+                        "filename": file_path.name,
+                        "raw_text": content,
+                        "content": content,
+                        "pages": filtered_pages,
+                        "tables": [],
+                        "layout": filtered_pages,
+                        "charts": [],
+                        "vision_summary": "",
+                        "layout_summary": "",
+                        "table_summary": "",
+                        "chart_summary": "",
+                        "prompt_block": "",
+                        "page_summaries": filtered_pages,
+                        "total_pages": int((liteparse_result.get("metadata") or {}).get("page_count") or len(page_rows)),
+                        "ocr_used": False,
+                        "warnings": [],
+                        "backend": "liteparse",
+                        "page_images": list(liteparse_result.get("screenshots") or []),
+                        "screenshots": list(liteparse_result.get("screenshots") or []),
+                        "source_backend": "liteparse",
+                        "ingest_quality": {
+                            "backend_available": True,
+                            "parser_chosen": "liteparse",
+                            "fallback_used": False,
+                            "parse_completeness_score": 0.95 if content else 0.4,
+                            "layout_confidence": 0.88,
+                            "table_confidence": 0.0,
+                            "ocr_backend_used": "none",
+                        },
+                    }
+            except Exception as exc:
+                logger.debug("liteparse_pdf_fallback: %s", exc)
 
         from tools.vision_documents import analyze_document_vision
 
@@ -132,7 +194,9 @@ async def read_pdf(
             "success": True,
             "path": str(file_path),
             "filename": file_path.name,
+            "raw_text": content,
             "content": content,
+            "pages": filtered_pages,
             "tables": tables or table_rows,
             "layout": layout_blocks,
             "charts": charts,
@@ -155,6 +219,18 @@ async def read_pdf(
             "total_pages": total_pages or len(filtered_pages),
             "ocr_used": bool(use_ocr),
             "warnings": list(vision_result.get("warnings") or []),
+            "backend": "vision_documents",
+            "screenshots": list(vision_result.get("page_images") or []),
+            "source_backend": "vision_documents",
+            "ingest_quality": {
+                "backend_available": True,
+                "parser_chosen": "vision_documents",
+                "fallback_used": True,
+                "parse_completeness_score": 0.9 if content else 0.35,
+                "layout_confidence": 0.82,
+                "table_confidence": 0.78 if (tables or table_rows) else 0.0,
+                "ocr_backend_used": "multimodal" if use_ocr else "layout_native",
+            },
         }
     except Exception as e:
         logger.error(f"Read PDF error: {e}")

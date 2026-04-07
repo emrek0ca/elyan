@@ -14,6 +14,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 
+from core.billing.reconciliation_bridge import activate_billing_usage_scope
 from core.persistence import get_runtime_database, sync_runtime_outbox_once
 from core.run_store import RunRecord, RunStore, get_run_store
 from tools.pro_workflows import create_web_project_scaffold, generate_document_pack
@@ -266,6 +267,8 @@ class VerticalWorkflowRunner:
         output_dir: str = "",
         thread_id: str = "",
         workspace_id: str = "",
+        actor_id: str = "",
+        billing_usage_id: str = "",
         background: bool = True,
     ) -> RunRecord:
         normalized_task_type = self._normalize_task_type(task_type)
@@ -277,6 +280,11 @@ class VerticalWorkflowRunner:
         workflow_run = self._state_machine.start_run(workflow_id)
         run_id = workflow_run.run_id
         run_title = self._build_title(normalized_task_type, title=title, brief=normalized_brief)
+        normalized_routing_profile = self._normalize_routing_profile(routing_profile)
+        candidate_chain = self._candidate_chain_for_task(
+            task_type=normalized_task_type,
+            routing_profile=normalized_routing_profile,
+        )
 
         record = RunRecord(
             run_id=run_id,
@@ -290,6 +298,15 @@ class VerticalWorkflowRunner:
             metadata={
                 "thread_id": str(thread_id or "").strip(),
                 "workspace_id": str(workspace_id or "").strip(),
+                "actor_id": str(actor_id or "").strip(),
+                "billing_usage_id": str(billing_usage_id or "").strip(),
+                "candidate_chain": list(candidate_chain),
+                "collaboration_strategy": "parallel_synthesis" if normalized_routing_profile == "quality_first" else "adaptive",
+                "collaboration_trace": self._collaboration_trace_for_candidate_chain(
+                    task_type=normalized_task_type,
+                    routing_profile=normalized_routing_profile,
+                    candidate_chain=candidate_chain,
+                ),
             },
         )
         await get_run_store().record_run(record)
@@ -320,7 +337,7 @@ class VerticalWorkflowRunner:
             )
 
         task = asyncio.create_task(
-            self._execute_workflow(
+            self._execute_workflow_scoped(
                 workflow_run=workflow_run,
                 record=record,
                 brief=normalized_brief,
@@ -334,6 +351,7 @@ class VerticalWorkflowRunner:
                 routing_profile=routing_profile,
                 review_strictness=review_strictness,
                 output_dir=output_dir,
+                billing_usage_id=str(billing_usage_id or "").strip(),
             )
         )
 
@@ -345,6 +363,74 @@ class VerticalWorkflowRunner:
         await task
         updated = await get_run_store().get_run(run_id)
         return updated or record
+
+    async def _execute_workflow_scoped(
+        self,
+        *,
+        workflow_run: WorkflowState,
+        record: RunRecord,
+        brief: str,
+        audience: str,
+        language: str,
+        theme: str,
+        stack: str,
+        preferred_formats: Any,
+        project_template_id: str,
+        project_name: str,
+        routing_profile: str,
+        review_strictness: str,
+        output_dir: str,
+        billing_usage_id: str = "",
+    ) -> None:
+        workspace_id = str((record.metadata or {}).get("workspace_id") or "").strip()
+        session_id = str(record.session_id or "").strip()
+        normalized_usage_id = str(billing_usage_id or "").strip()
+        if not workspace_id or not normalized_usage_id:
+            await self._execute_workflow(
+                workflow_run=workflow_run,
+                record=record,
+                brief=brief,
+                audience=audience,
+                language=language,
+                theme=theme,
+                stack=stack,
+                preferred_formats=preferred_formats,
+                project_template_id=project_template_id,
+                project_name=project_name,
+                routing_profile=routing_profile,
+                review_strictness=review_strictness,
+                output_dir=output_dir,
+            )
+            return
+        with activate_billing_usage_scope(
+            workspace_id=workspace_id,
+            usage_id=normalized_usage_id,
+            metric="workflow_runs",
+            run_id=str(record.run_id or "").strip(),
+            session_id=session_id,
+            metadata={
+                "actor_id": str((record.metadata or {}).get("actor_id") or "").strip(),
+                "thread_id": str((record.metadata or {}).get("thread_id") or "").strip(),
+                "task_type": str(record.task_type or "").strip(),
+                "routing_profile": str(routing_profile or "").strip().lower(),
+                "review_strictness": str(review_strictness or "").strip().lower(),
+            },
+        ):
+            await self._execute_workflow(
+                workflow_run=workflow_run,
+                record=record,
+                brief=brief,
+                audience=audience,
+                language=language,
+                theme=theme,
+                stack=stack,
+                preferred_formats=preferred_formats,
+                project_template_id=project_template_id,
+                project_name=project_name,
+                routing_profile=routing_profile,
+                review_strictness=review_strictness,
+                output_dir=output_dir,
+            )
 
     async def cancel_run(self, run_id: str) -> bool:
         normalized = str(run_id or "").strip()
@@ -934,6 +1020,35 @@ class VerticalWorkflowRunner:
         if task_type == WorkflowTaskType.WEBSITE:
             return ["executive", "planner", "code", "review", "security"]
         return ["executive", "planner", "artifact", "review", "security"]
+
+    @staticmethod
+    def _collaboration_trace_for_candidate_chain(
+        *,
+        task_type: WorkflowTaskType,
+        routing_profile: str,
+        candidate_chain: list[str],
+    ) -> list[dict[str, Any]]:
+        execution_style = "parallel_synthesis" if str(routing_profile or "").strip().lower() == "quality_first" else "adaptive"
+        default_lenses = ["planner", "builder", "critic", "verifier"] if task_type == WorkflowTaskType.WEBSITE else ["planner", "writer", "critic", "verifier"]
+        trace: list[dict[str, Any]] = []
+        for index, raw in enumerate(list(candidate_chain or [])[:4]):
+            token = str(raw or "").strip()
+            if not token:
+                continue
+            provider, _, model = token.partition(":")
+            trace.append(
+                {
+                    "id": f"workflow_model_{index + 1}",
+                    "provider": provider.strip().lower(),
+                    "model": model.strip(),
+                    "lens": default_lenses[index] if index < len(default_lenses) else "support",
+                    "status": "planned",
+                    "strategy": execution_style,
+                    "source": "workflow_candidate_chain",
+                    "order": index + 1,
+                }
+            )
+        return trace
 
     @staticmethod
     def _status_for_state(state: WorkflowLifecycleState) -> str:

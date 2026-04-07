@@ -21,12 +21,12 @@
         "resizable": true,
         "maximized": false,
         "fullscreen": false,
-        "decorations": false,
+        "decorations": true,
         "transparent": false
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://127.0.0.1:1420 http://localhost:1420; font-src 'self' data:; connect-src 'self' http://127.0.0.1:1420 http://localhost:1420 http://127.0.0.1:18789 http://localhost:18789 http://127.0.0.1:18889 http://localhost:18889 ws://127.0.0.1:1420 ws://localhost:1420 ws://127.0.0.1:18789 ws://localhost:18789 ws://127.0.0.1:18889 ws://localhost:18889 tauri: asset:;"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://127.0.0.1:1420 http://localhost:1420; font-src 'self' data:; connect-src 'self' http://127.0.0.1:1420 http://localhost:1420 http://127.0.0.1:18789 http://localhost:18789 ws://127.0.0.1:1420 ws://localhost:1420 ws://127.0.0.1:18789 ws://localhost:18789 tauri: asset:;"
     }
   },
   "bundle": {

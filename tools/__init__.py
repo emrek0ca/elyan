@@ -250,15 +250,20 @@ def _lazy_load_tool(tool_name: str):
 
     # Web Tools
     if tool_name in ["fetch_page", "extract_text", "web_search",
-                     "start_research", "get_research_status"]:
+                     "start_research", "get_research_status",
+                     "internet_search", "internet_read", "internet_discover"]:
         from .web_tools import (
             fetch_page, extract_text, web_search,
             start_research, get_research_status
         )
+        from .internet_tools import internet_search, internet_read, internet_discover
         tools = {
             "fetch_page": fetch_page, "extract_text": extract_text,
             "web_search": web_search, "start_research": start_research,
             "get_research_status": get_research_status,
+            "internet_search": internet_search,
+            "internet_read": internet_read,
+            "internet_discover": internet_discover,
         }
         _loaded_tools.update(tools)
         return _loaded_tools.get(tool_name)
@@ -630,6 +635,7 @@ class LazyToolDict(dict):
             "get_pdf_info", "analyze_pdf_vision", "summarize_document", "analyze_excel_data", "search_in_pdf",
             # Web Tools
             "fetch_page", "extract_text", "web_search", "start_research", "get_research_status",
+            "internet_search", "internet_read", "internet_discover",
             # Advanced Tools
             "smart_summarize", "create_smart_file", "analyze_document", "generate_report", "analyze_image", "process_image_file", "verify_visual_quality",
             # Note Tools

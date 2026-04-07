@@ -129,6 +129,14 @@ def test_execution_preferences_are_extracted_for_draft_and_observe_only_requests
     assert prefs.get("dry_run") is True
 
 
+def test_generic_help_request_prefers_conversation_over_help_screen():
+    parser = IntentParser()
+    result = parser.parse("yardım eder misin")
+    assert result is not None
+    assert result.get("action") in {"chat", "clarify"}
+    assert result.get("action") != "show_help"
+
+
 def test_force_planning_on_complex_query():
     parser = IntentParser()
     result = parser.parse("önce rapor hazırla sonra maille gonder")

@@ -3,9 +3,10 @@
 Local VLM-powered UI detection and scene understanding.
 """
 
-from .analyzer import VisionAnalyzer, ScreenAnalysisResult, UIElement
+from .analyzer import OCRLine, ScreenAnalysisResult, UIElement, VisionAnalyzer
 
 __all__ = [
+    "OCRLine",
     "VisionAnalyzer",
     "ScreenAnalysisResult",
     "UIElement",

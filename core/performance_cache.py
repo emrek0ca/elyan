@@ -17,7 +17,7 @@ import logging
 from typing import Dict, Any, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from threading import RLock
+from threading import Lock
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class PerformanceCache:
         """Initialize cache"""
         self.name = name
         self._cache: Dict[str, CacheEntry] = {}
-        self._lock = RLock()
+        self._lock = Lock()
         self.stats = {
             "hits": 0,
             "misses": 0,

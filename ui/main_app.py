@@ -1,4 +1,7 @@
-"""main_app.py — backward-compat shim (Sprint J)"""
+"""Legacy desktop compatibility shim.
+
+Canonical desktop entrypoint is apps/desktop via the React/Tauri shell.
+"""
 
 from ui.clean_main_app import CleanMainWindow as MainWindow, main  # noqa: F401
 

@@ -54,6 +54,10 @@ def handle_bootstrap(args) -> int:
     if action == "install":
         result = manager.install(headless=bool(getattr(args, "headless", False)), force=bool(getattr(args, "force", False)))
         print(result.get("message") or "Kurulum tamamlandı.")
+        if result.get("ok") and not bool(getattr(args, "headless", False)):
+            from cli.commands import desktop as desktop_command
+
+            desktop_command.open_desktop(detached=True)
         return 0 if result.get("ok") else 1
     if action == "onboard":
         result = manager.onboard(
@@ -63,6 +67,10 @@ def handle_bootstrap(args) -> int:
             force=bool(getattr(args, "force", False)),
         )
         print(result.get("message") or "Onboarding tamamlandı.")
+        if result.get("ok") and not bool(getattr(args, "headless", False)):
+            from cli.commands import desktop as desktop_command
+
+            desktop_command.open_desktop(detached=True)
         return 0 if result.get("ok") else 1
     if action == "repair":
         result = manager.repair(force=bool(getattr(args, "force", False)))

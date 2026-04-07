@@ -74,7 +74,15 @@ class RuntimeControlPlane:
         return {}
 
     @staticmethod
-    def _normalize_request_class(label: str, *, request_contract: dict[str, Any], route_decision: dict[str, Any], capability_plan: dict[str, Any], text: str) -> str:
+    def _normalize_request_class(
+        label: str,
+        *,
+        request_kind: str = "",
+        request_contract: dict[str, Any],
+        route_decision: dict[str, Any],
+        capability_plan: dict[str, Any],
+        text: str,
+    ) -> str:
         normalized = str(label or "").strip().lower()
         if normalized in {"file", "browser", "open_app", "open_url", "read_file", "write_file", "list_files"}:
             return "direct_action"
@@ -84,6 +92,14 @@ class RuntimeControlPlane:
             return "coding"
         if normalized in {"workflow", "task", "operator", "planner"}:
             return "workflow"
+
+        request_kind = str(request_kind or request_contract.get("request_kind") or "").strip().lower()
+        if request_kind in {"code", "filesystem", "browser"}:
+            return "direct_action" if request_kind in {"filesystem", "browser"} else "coding"
+        if request_kind in {"research"}:
+            return "research"
+        if request_kind in {"planning", "summary", "question", "chat"}:
+            return "workflow" if request_kind in {"planning"} else "chat"
 
         route_mode = str(route_decision.get("mode") or request_contract.get("route_mode") or capability_plan.get("suggested_job_type") or "").strip().lower()
         if route_mode in {"file", "browser", "direct_action"}:
@@ -159,7 +175,7 @@ class RuntimeControlPlane:
                 "metadata": meta,
             },
         )
-        model_runtime = self.model_runtime.snapshot()
+        model_runtime = self.model_runtime.snapshot() if self.model_runtime is not None else {}
         intent_prediction = dict(
             self.intent_scorer.score(
                 request,
@@ -170,6 +186,7 @@ class RuntimeControlPlane:
         )
         request_class = self._normalize_request_class(
             str(intent_prediction.get("label") or ""),
+            request_kind=str(meta.get("request_kind") or contract.get("request_kind") or ""),
             request_contract=contract,
             route_decision=route_map,
             capability_plan=capability_map,
@@ -298,6 +315,9 @@ class RuntimeControlPlane:
         payload = context.to_dict()
         payload["route_rankings"] = route_rankings[:5]
         payload["request_prompt"] = str(personalization.get("request_prompt") or request)
+        payload["request_kind"] = str(personalization.get("operator_brief", {}).get("request_kind") or meta.get("request_kind") or request_class)
+        payload["request_contract"] = dict(personalization.get("request_contract") or {})
+        payload["response_contract"] = dict(personalization.get("response_contract") or {})
         return payload
 
     def record_stage(

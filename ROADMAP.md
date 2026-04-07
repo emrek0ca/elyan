@@ -1,211 +1,161 @@
-# ROADMAP.md — Elyan Operator Runtime
+# ROADMAP.md — Elyan Commercialization Execution Roadmap
 
-**Son Guncelleme**: 2026-03-29  
-**Mimari Yonu**: event-sourced core runtime + mediator orchestration + microkernel plugin boundaries  
-**Mevcut Durum**: cowork-first desktop korunuyor; core/runtime split, append-only state truth ve conflict-aware orchestration ana eksen oldu  
-**Test Durumu**: hedefli compile checks, cowork/workflow testleri ve action-lock/orchestrator testleri geciyor
+**Last Updated**: 2026-04-03  
+**Primary Direction**: local-first operator runtime + workspace-first commercial control plane  
+**Current Active Phase**: Commercialization foundation tamamlandi; bundan sonraki aktif cizgi preservation-first architecture hardening (Phase 0 -> Phase 2) + revenue-critical runtime gaps
 
----
+## Strategic Direction
 
-## Genel Durum Ozeti
+Elyan bundan sonra su product line uzerinden ilerler:
 
-| Katman | Durum | Notlar |
-|--------|-------|--------|
-| Cowork Desktop | In Progress | canonical shell korunuyor, UI sade ve read-model odakli ilerliyor |
-| Workspace Billing | In Progress | workspace-owned entitlement zemini aktif, production wiring sonraki adim |
-| Connector Platform | In Progress | workspace-owned connector accounts ve traces aktif, derin capability setleri sirada |
-| Architecture Boundary Program | In Progress | architecture quantum, connascence reduction, ADR ve fitness-function katmani resmilesti |
-| Event-Sourced Run/Session Core | In Progress | append-only event truth ve read-model ayrimi canonical yone cekiliyor |
-| Mediator Orchestration | In Progress | orchestrator ve action-lock event-driven, conflict-aware hale getiriliyor |
-| Security Hardening Program | In Progress | zero-trust, tenant isolation, immutable audit, ingress ve prompt guard aktif gelisim aliyor |
-| Health Checks | Stub | implement edilmesi gerekiyor |
-| Alerting | Stub | implement edilmesi gerekiyor |
+1. Workspace-first ownership
+2. Iyzico-first payment abstraction
+3. Elyan Credits ile immutable usage accounting
+4. Admin control plane + local runtime boundary
+5. User/workspace/global katmanli learning fabric
+6. Replayable commercial, learning ve audit event zinciri
 
----
+Bu line'a ek olarak su engineering discipline canonicaldir:
 
-## Current Implementation Snapshot
+7. Mevcut calisan davranisi once koru
+8. Replacement yerine wrapper, adapter, verifier ve sidecar ile gelistir
+9. Non-trivial runtime degisikliklerini feature flag ile ship et
+10. Planner, router, verifier ve memory degisikliklerini shadow mode olmadan enforce etme
 
-- `apps/desktop` canonical urun yuzeyi olarak korunuyor; Tauri shell managed sidecar ile Python runtime'i baslatabiliyor.
-- `core/cowork_threads.py` canonical `CoworkThread` truth'unu tasiyor; thread session/workspace/run/approval/artifact referanslarini tek modelde birlestiriyor.
-- `core/workflow/vertical_runner.py` `document`, `presentation` ve `website` lane'lerini gercek artifact pipeline olarak calistiriyor.
-- Gateway resmi cowork API ailesini ve telemetry hattini sagliyor; desktop selected thread state'ini eventlerle guncelliyor.
-- Connector platform workspace-owned hesap, scope, health ve trace verisini canonical contract ile sunuyor.
-- Billing user-local degil, workspace-owned entitlement modeli uzerinden ilerliyor.
-- Security programi run payload encryption, session persistence, prompt firewall ve security event timeline ile guclendi.
-- `core/action_lock.py` artik `policy_scope`, `conflict_key`, queued requests, stale release, auto-handoff ve event history tasiyan conflict-aware lock modeli kullanir.
-- `core/multi_agent/orchestrator.py` artik lifecycle event'leri yazar: `flow_started`, `flow_blocked`, `phase_started`, `plan_parsed`, `flow_completed`, `flow_failed`.
-- Gateway status payload'i lock scope, queue depth ve last conflict sinyallerini expose ederek orchestration katmanini daha gozenlenebilir hale getirdi.
+## Phase Order
 
----
+### Phase 0 — Documentation Baseline
+- README, roadmap, progress, memory, architecture truth'unu commercialization line ile hizala
+- commerce, admin, learning ve ledger design docs ekle
+- her implementation slice sonunda docs update zorunlu olsun
 
-## Architecture Direction 2026-03
+### Phase 1 — Canonical Commercial Domain
+- tek workspace billing truth
+- canonical models: plan, token pack, credit balance, ledger entry, provider transaction, entitlement snapshot
+- legacy user quota ve subscription path'lerini compatibility adapter arkasina al
 
-Elyan bundan sonra su cizgiye gore gelistirilir:
+### Phase 2 — Iyzico Provider Abstraction
+- `PaymentProvider` interface
+- `IyzicoProvider` first implementation
+- checkout init, token pack purchase, webhook verification, idempotency, refund/failure mapping
 
-### 1. Core Runtime Quantum
-- session, run, policy, approval, replay, audit ve orchestration truth'u ayni boundary icinde kalir
-- ayni DB truth'unu paylasan bilesenler yapay servis ayrimi ile parcalanmaz
+### Phase 3 — Workspace, RBAC, Memberships, Seats
+- canonical roles: owner, billing_admin, security_admin, operator, viewer
+- invite, accept, role change, seat assignment, seat enforcement
+- login-time auto bootstrap kaldir
+- explicit setup/bootstrap path zorunlu olsun
 
-### 2. Plugin Quantum
-- filesystem, terminal, browser, connector ve model adapter capability'leri microkernel contract ile buyur
-- plugin'ler core state'e dogrudan yazmaz; typed commands ve events ile baglanir
+### Phase 4 — Admin Control Plane
+- workspace overview
+- subscriptions
+- credit ledger
+- token pack purchases
+- members and roles
+- approval queue
+- connector health
+- learning policy
 
-### 3. Workspace Quantum
-- tenant, entitlement, learning, sync ve data policy burada sahiplenilir
+### Phase 5 — Continuous Learning Fabric
+- user memory
+- workspace intelligence
+- global aggregate intelligence
+- privacy classify, consent gate, feature extraction, reward scoring, contextual bandit, offline eval, shadow/canary promotion
 
-### 4. UI Quantum
-- UI yalnizca read model tuketir ve command surface olur
-- runtime truth ve hidden business logic UI icine sizmaz
+### Phase 6 — Runtime Usage and Credit Debiting
+- LLM/tool usage -> commercial ledger
+- calibrated estimator for non-provider cost paths
+- included credits -> purchased credits -> soft degrade ordering
 
-### 5. Observability Quantum
-- immutable audit, telemetry, replay, postmortem ve intelligence surfaces append-only veri modeliyle kurulur
+### Phase 7 — Security Hardening
+- real CSRF enforcement
+- hosted admin/session hardening
+- immutable audit + outbox publishing
+- workspace-scoped query enforcement
 
-Bu boundary cizgisi ayni zamanda Elyan'da connascence azaltma stratejisidir: timing, hidden algorithm ve implicit value bagimliliklari zayiflatilir; schema ve version bagimliligi acik contract olarak tasinir.
+### Phase 8 — Product Documentation Discipline
+- `PROGRESS.md`, `ROADMAP.md`, `memory.md` her faz sonunda guncel tutulur
+- architecture delta varsa ilgili konu dokumani da guncellenir
 
----
+## What Is Already Implemented
 
-## Priority Programs
+- `core/feature_flags.py` ile preservation-first feature flag registry foundation
+- `core/observability/trace_context.py` ile canonical request/trace context foundation
+- gateway request middleware tarafinda canonical trace headers:
+  - `X-Elyan-Trace-Id`
+  - `X-Elyan-Request-Id`
+  - `X-Elyan-Workspace-Id`
+- structured log enrichment artik aktif trace context'i tasiyabiliyor
+- `core/execution_guard.py` ile canonical shadow-only execution guard foundation
+- workflow, cowork ve task-extraction write path'lerinde seat / credit / limit / dispatch outcome telemetry'si artik `execution_guard_shadow` flag'i altinda gozlemlenebiliyor
+- approval engine lifecycle ve verifier engine outcome'lari da ayni shadow guard telemetry line'ina baglandi
+- browser, file_ops ve screen_operator capability runtime sonuc'lari da ayni guard hattina baglandi
+- filesystem ve terminal capability runtime sonuc'lari da ayni guard hattina baglandi
+- post-run billing reconciliation foundation artik var:
+  - `GET /api/v1/billing/events`
+  - `POST /api/v1/billing/reconcile-usage`
+  - immutable refund/debit adjustment flow
+  - `billing_usage_id` response link'i
+  - reconciliation metadata:
+    - `actual_cost_usd`
+    - `total_tokens`
+    - `reconciled_by`
+- automatic pricing->reconcile bridge foundation da geldi:
+  - `core/billing/reconciliation_bridge.py`
+  - workflow/cowork runtime scope activation
+  - pricing tracker -> scoped aggregation
+  - dispatch-failure auto-refund
+  - auto-apply still feature-flagged and default-off
+- `core/billing/commercial_types.py` ile canonical plan ve token pack katalogu
+- `core/billing/payment_provider.py` ile provider abstraction
+- `core/billing/iyzico_provider.py` ile Iyzico-first checkout/webhook foundation
+- `core/billing/workspace_billing.py` ile immutable event + credit ledger + entitlement snapshot tabanli workspace billing flow
+- `core/persistence/runtime_db.py` icinde billing events, credit ledger, entitlement snapshots, workspace invites ve membership repository zemini
+- `core/gateway/server.py` icinde explicit owner bootstrap ve mutating cookie session requests icin CSRF enforcement
+- workspace admin controller foundation, role mutation, invite accept/create ve seat assignment APIs
+- owner bootstrap seat assignment ve ilk execution seat gate
+- desktop setup cockpit:
+  - explicit owner bootstrap screen
+  - workspace flight deck
+  - mobile intake quick-connect
+  - glass-first lightweight shell polish
+- desktop control plane:
+  - invite create/list
+  - role mutation
+  - seat assignment
+  - plans / token packs / credit ledger
+- desktop operator intake:
+  - `GET/POST /api/v1/inbox/events`
+  - `POST /api/v1/tasks/extract`
+  - encrypted inbox persistence
+  - deterministic task extraction
+  - home screen intake + triage + launch flow
+- first runtime credit enforcement:
+  - usage estimator
+  - preflight authorization
+  - 402 insufficient-credit response on revenue-critical operator writes
+- connector-fed mobile intake:
+  - WhatsApp / Telegram / iMessage / SMS inbound capture
+  - workspace-bound channel config
+  - canonical inbox/extraction reuse
 
-### Program A — Architecture Boundary and Connascence Reduction
-- core/runtime, plugin, workspace, observability ve UI ownership matrisi cikarilir
-- timing connascence yalnizca mediator orchestration sinirinda tutulur
-- hidden import coupling ve schema drift azaltılır
-- paylasilan DB truth'u olan bilesenler ayni architecture quantum icinde ele alinir
+## Next Critical Steps
 
-### Program B — Event-Sourced Run and Session Core
-- run/session state canonical truth olarak append-only event log'a tasinir
-- snapshot ve replay mekanizmasi event zincirinden turetilir
-- CQRS ile write model ve read model ayrilir
-- UI ve dashboard yalnizca materialized read model tuketir
+1. Phase 0'in kalan kismini tamamlamak:
+   import-path audit ve capability inventory
+2. `ExecutionGuard` shadow telemetry'sini app/native bridge ve remaining capability wrapper'larina genisletmek
+3. Automatic pricing bridge'i daha fazla runtime/provider yoluna yaymak ve safe apply rollout kriterlerini olcmek
+4. Invite accept + hosted admin web plane
+5. Gmail ve diger connector event ingestion'ini yeni inbox pipeline'ina baglamak
+6. Learning fabric event contracts ve promotion pipeline'ini kod seviyesinde cikarmak
+7. Tenant isolation ve billing/learning replay testlerini genisletmek
 
-### Program C — Mediator Orchestration
-- planner, executor, verifier ve recovery tek kontrol duzleminde calisir
-- broker topolojisi telemetry ve low-risk fan-out icin kalir
-- approval, retry, verification ve recovery state gecisleri event contract ile kaydedilir
+## Open Risks
 
-### Program D — Zero-Trust Security and Immutable Audit
-- deny-by-default authorization
-- least privilege grants
-- immutable audit trail
-- tenant isolation ve blast-radius compartmentalization
-- breakglass yalnizca kisitli ve yogun loglanan yol olarak kalir
-
-### Program E — Microkernel Plugin Platform
-- plugin manifest
-- capability registry
-- permission scope
-- risk metadata
-- health and rollback metadata
-
-### Program F — ADR and Fitness Functions
-- buyuk mimari kararlar ADR ile yazilir
-- boundary, replay, policy, tenant isolation ve secret handling kurallari fitness-function testleri ile korunur
-
----
-
-## Immediate Fixes
-
-### Fix-0: Event-Sourced Canonical State
-**Dosyalar**: `core/run_store.py`, `core/events/event_store.py`, run/session read models  
-**Hedef**: run/session state'i append-only event truth + snapshot uzerine almak
-
-### Fix-1: `run_store` Duplikasyonu ve Truth Netligi
-**Dosyalar**: `core/run_store.py`, run/session projections, testler  
-**Hedef**: tek canonical truth ve replay edilebilir state modeli
-
-### Fix-2: Async Lock ve Event Bus Tutarliligi
-**Dosyalar**: `core/performance_cache.py`, lock/event subscribers  
-**Sorun**: `threading.RLock()` async context ile uyumsuz  
-**Cozum**: `asyncio.Lock()` ve event-driven concurrency modeline hizalama
-
-### Fix-3: Async Bridge ve Blocking Paths
-**Dosyalar**: `api/http_server.py`, sync/async bridge  
-**Hedef**: request handling icinde blocking `asyncio.run()` ve benzeri gecis katmanlarini azaltmak
-
-### Fix-4: Hardcoded Runtime and UI Drift
-**Dosyalar**: runtime config helpers, UI runtime consumers  
-**Hedef**: UI'nin runtime truth'u varsayimla degil config ve read model ile tuketmesi
-
----
-
-## Roadmap Phases
-
-### Phase 6.0 — Architecture Boundary Program
-- architecture quantum inventory
-- connascence reduction rules
-- import boundaries
-- ADR standardi
-
-### Phase 6.1 — Event-Sourced Run and Session Core
-- append-only event log canonical truth olur
-- snapshot + replay zinciri stabilize edilir
-- run/session read models event log'dan turetilir
-- request id ve idempotency zorunlu hale gelir
-
-### Phase 6.2 — Mediator Orchestration and Conflict Resolution
-- orchestrator mediator topolojisine sabitlenir
-- action-lock global + per-policy scope olarak guclendirilir
-- conflict detection, stale release, queue handoff ve recovery event-driven calisir
-- planner / executor / verifier / recovery state gecisleri event contract ile yazilir
-
-### Phase 6.3 — Policy Engine 2.0
-- policy versioning
-- dry-run simulation
-- approval workflow
-- deny-by-default authorization
-- breakglass and high-risk controls
-
-### Phase 6.4 — Immutable Audit and Tenant Isolation
-- immutable audit log
-- workspace and tenant compartmentalization
-- connector trace isolation
-- memory/cache/storage boundary checks
-
-### Phase 6.5 — Microkernel Plugin Platform
-- plugin manifest and capability registry
-- filesystem / terminal / browser / connector plugins
-- policy-aware plugin sandbox
-- rollback and verification metadata
-
-### Phase 6.6 — Fitness Functions and Reliability Gates
-- boundary tests
-- replay determinism tests
-- policy and approval fitness rules
-- secret handling and tenant isolation CI gates
-
-### Phase 6.7 — Intelligence and Operator UX
-- postmortem ve bottleneck read models
-- operator command center replay/diff surfaces
-- minimal home + approvals rail + runtime clarity
-
----
-
-## Test Strategy
-
-### Hedef Test Piramidi
-- Unit: event contracts, lock semantics, policy decisions, plugin manifests
-- Integration: orchestrator + event store + run projections
-- E2E: cowork thread -> approval -> artifact -> replay
-
-### Kritik Fitness Functions
-- core plugin veya UI import edemez
-- plugin core internals import edemez
-- destructive action approval olmadan calisamaz
-- replay ayni event log'dan ayni state'i uretir
-- tenant-scoped veri diger tenant'a sizamaz
-- secrets plaintext olarak log veya run payload'inda kalamaz
-
----
-
-## Ozet: Ne Yapilmali, Hangi Sirada
-
-```text
-[Simdi]     6.0: architecture quantum ve connascence reduction
-[Simdi]     6.1: event-sourced run/session core
-[Simdi]     6.2: mediator orchestration + action-lock conflict resolution
-[Sonra]     6.3: policy engine 2.0 + dry-run + approval lifecycle
-[Sonra]     6.4: immutable audit + tenant isolation
-[Sonra]     6.5: microkernel plugin platform
-[Sonra]     6.6: fitness functions + CI reliability gates
-[Surekli]   desktop/read-model sadelestirme + operator UX polish
-```
+- `core/agent.py` monolith'i commercialization line icin halen yuksek risk tasiyor.
+- `core/gateway/server.py` ve `core/persistence/runtime_db.py` uzerinde invasive refactor yuksek regresyon riski tasir; controller extraction ve adapter yaklasimi korunmalidir.
+- Workspace billing foundation geldi; desktop shell bunun bir kismini tuketiyor ama hosted admin ve mutating admin screens henuz eksik.
+- Home intake usable ve mobil/message lanes canonical pipeline'a baglandi; ama Gmail ve productivity event ingestion henuz ayni hatta tasinmadi.
+- Runtime credits path'i revenue-kritik operator write'larda acildi; pricing bridge foundation geldi ama auto-apply rollout ve provider coverage henuz tamamlanmadi.
+- Learning fabric hala design-truth seviyesinde; runtime promotions ve offline eval pipeline'i eksik.
+- Eski Stripe route'lari deprecated; frontend ve operator flows yeni route'lara alinmali.
+- Feature-flag registry ve shadow rollout disiplini olmadan planner/router/verifier degisiklikleri aktiflestirilmemelidir.

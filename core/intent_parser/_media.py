@@ -3,6 +3,9 @@ _media.py — Medya ve iletişim parser'ları
 Kapsam: email, calendar, reminder, music, video, code_run
 """
 import re
+
+from core.command_hardening import build_chat_fallback_message
+
 from ._base import BaseParser
 
 
@@ -277,4 +280,4 @@ class MediaParser(BaseParser):
     # ── Unknown / Chat ────────────────────────────────────────────────────────
     def _parse_chat_fallback(self, text: str, text_norm: str, original: str) -> dict:
         return {"action": "chat", "params": {"message": original},
-                "reply": "Mesajınız işleniyor..."}
+                "reply": build_chat_fallback_message(language="tr")}

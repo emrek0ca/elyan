@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, List
 import httpx
 from aiohttp import web
 
+from config.elyan_config import elyan_config
 from utils.logger import get_logger
 from .base import BaseChannelAdapter
 from .whatsapp_bridge import (
@@ -24,6 +25,10 @@ from ..message import UnifiedMessage
 from ..response import UnifiedResponse
 
 logger = get_logger("whatsapp_adapter")
+
+
+def _resolve_secret_value(value: Any) -> str:
+    return str(elyan_config._resolve_secret_ref(value) or "").strip()
 
 
 class WhatsAppAdapter(BaseChannelAdapter):
@@ -47,7 +52,7 @@ class WhatsAppAdapter(BaseChannelAdapter):
                 port=int(config.get("bridge_port", DEFAULT_BRIDGE_PORT)),
             )
         ).rstrip("/")
-        self._bridge_token = str(config.get("bridge_token") or "")
+        self._bridge_token = _resolve_secret_value(config.get("bridge_token"))
         self._session_dir = Path(
             str(config.get("session_dir") or default_session_dir(str(config.get("id") or "default")))
         ).expanduser()
@@ -58,8 +63,8 @@ class WhatsAppAdapter(BaseChannelAdapter):
         # Cloud mode config
         self._graph_base_url = str(config.get("graph_base_url") or "https://graph.facebook.com/v20.0").rstrip("/")
         self._phone_number_id = str(config.get("phone_number_id") or "").strip()
-        self._access_token = str(config.get("access_token") or "").strip()
-        self._verify_token = str(config.get("verify_token") or "").strip()
+        self._access_token = _resolve_secret_value(config.get("access_token"))
+        self._verify_token = _resolve_secret_value(config.get("verify_token"))
         allowed = config.get("allowed_senders", [])
         if not isinstance(allowed, list):
             allowed = []
@@ -72,11 +77,14 @@ class WhatsAppAdapter(BaseChannelAdapter):
         if self._mode == "cloud":
             if not self._phone_number_id:
                 raise RuntimeError("WhatsApp Cloud mode: phone_number_id eksik.")
-            if not self._access_token:
+            if not self._access_token or self._access_token.startswith("$"):
                 raise RuntimeError("WhatsApp Cloud mode: access_token eksik.")
             self._is_connected = True
             logger.info("WhatsApp adapter connected via Cloud API mode.")
             return
+
+        if not self._bridge_token or self._bridge_token.startswith("$"):
+            raise RuntimeError("WhatsApp bridge token çözümlenemedi.")
 
         if self._auto_start_bridge:
             await self._ensure_bridge_running()

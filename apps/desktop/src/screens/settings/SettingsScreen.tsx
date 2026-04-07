@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowUpRight, Coins, Crown, CreditCard, MailPlus, RefreshCw, ShieldCheck, Sparkles, Ticket, UsersRound } from "@/vendor/lucide-react";
+import { ArrowUpRight, Coins, CreditCard, MailPlus, RefreshCw, ShieldCheck, Ticket, UsersRound } from "@/vendor/lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/primitives/Button";
@@ -50,26 +50,26 @@ import {
 
 function translateBillingError(raw: string): string {
   if (raw.startsWith("iyzico_plan_checkout_missing:") || raw.startsWith("iyzico_token_pack_checkout_missing:")) {
-    return "Ödeme bağlantısı yapılandırılmamış. Lütfen sistem yöneticinize başvurun.";
+    return "Odeme linki yok.";
   }
   if (raw.startsWith("iyzico_config_missing:")) {
-    return "Ödeme sağlayıcısı yapılandırılmamış (API anahtarları eksik).";
+    return "Odeme ayari eksik.";
   }
   if (raw.startsWith("billing_profile_incomplete:")) {
-    return "Fatura profili tamamlanmamış. Lütfen fatura bilgilerini doldurun.";
+    return "Profil eksik.";
   }
   if (raw.includes("503") || raw.toLowerCase().includes("unavailable")) {
-    return "Ödeme servisi şu an kullanılamıyor. Lütfen tekrar deneyin.";
+    return "Servis kapali.";
   }
   return raw;
 }
 
 const roleOptions = [
-  { value: "owner", label: "Owner" },
-  { value: "billing_admin", label: "Billing" },
-  { value: "security_admin", label: "Security" },
+  { value: "owner", label: "Sahip" },
+  { value: "billing_admin", label: "Fatura" },
+  { value: "security_admin", label: "Guvenlik" },
   { value: "operator", label: "Operator" },
-  { value: "viewer", label: "Viewer" },
+  { value: "viewer", label: "Izleyici" },
 ];
 
 export function SettingsScreen() {
@@ -156,6 +156,58 @@ export function SettingsScreen() {
   const canManageSeats = Boolean(permissions?.manageSeats);
   const activeSeats = workspaceDetail?.seats.seatsUsed || 0;
   const seatLimit = workspaceDetail?.seats.seatLimit || billing?.entitlements.teamSeats || 0;
+  const summaryCards = [
+    {
+      label: "Alan",
+      value: workspaceDetail?.workspace.name || adminWorkspaces[0]?.displayName || "Local",
+      meta: workspaceDetail?.currentRole || adminWorkspaces[0]?.role || "owner",
+    },
+    {
+      label: "Seat",
+      value: `${activeSeats}/${seatLimit || billing?.seats || 1}`,
+      meta: `${workspaceMembers.length} uye`,
+    },
+    {
+      label: "Kredi",
+      value: (billing?.creditBalance?.total || 0).toLocaleString("tr-TR"),
+      meta: `${billing?.plan.label || "Free"} · ${billing?.subscriptionState.status || "inactive"}`,
+    },
+  ];
+  const conversationControls = [
+    {
+      label: "Yanit",
+      value: productSettings.responseMode,
+      options: responseModeOptions,
+      onChange: (value: string) => setProductSettings({ responseMode: value as typeof productSettings.responseMode }),
+    },
+    {
+      label: "Ton",
+      value: productSettings.tone,
+      options: toneOptions,
+      onChange: (value: string) => setProductSettings({ tone: value as typeof productSettings.tone }),
+    },
+    {
+      label: "Model",
+      value: productSettings.providerStrategy,
+      options: providerStrategyOptions,
+      onChange: (value: string) => setProductSettings({ providerStrategy: value as typeof productSettings.providerStrategy }),
+    },
+    {
+      label: "Gizlilik",
+      value: productSettings.privacyMode,
+      options: privacyModeOptions,
+      onChange: (value: string) => setProductSettings({ privacyMode: value as typeof productSettings.privacyMode }),
+    },
+    {
+      label: "Otonomi",
+      value: productSettings.automationLevel,
+      options: automationLevelOptions,
+      onChange: (value: string) => setProductSettings({ automationLevel: value as typeof productSettings.automationLevel }),
+    },
+  ];
+  const inputClassName =
+    "h-[44px] w-full rounded-[16px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 text-[13px] text-[var(--text-primary)] outline-none transition focus:border-[var(--border-focus)]";
+  const panelClassName = "rounded-[18px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] p-4";
 
   async function invalidateControlPlane() {
     await Promise.all([
@@ -195,12 +247,12 @@ export function SettingsScreen() {
         const checkout = await getBillingCheckout(referenceId).catch(() => null);
         if (checkout?.status === "completed") {
           await invalidateControlPlane();
-          setBillingMessage("Odeme tamamlandi. Bakiye guncellendi.");
+          setBillingMessage("Odeme tamam.");
           return;
         }
         if (checkout?.status === "failed") {
           await invalidateControlPlane();
-          setBillingMessage("Odeme tamamlanmadi.");
+          setBillingMessage("Odeme basarisiz.");
           return;
         }
         await new Promise((resolve) => window.setTimeout(resolve, 2000));
@@ -216,9 +268,9 @@ export function SettingsScreen() {
     try {
       await saveBillingProfile(billingProfileForm);
       await invalidateControlPlane();
-      setBillingMessage("Billing profile kaydedildi.");
+      setBillingMessage("Profil kayitli.");
     } catch (error) {
-      setBillingMessage(error instanceof Error ? error.message : "Billing profile kaydedilemedi.");
+      setBillingMessage(error instanceof Error ? error.message : "Profil kaydedilemedi.");
     } finally {
       setBillingProfileBusy(false);
     }
@@ -234,7 +286,7 @@ export function SettingsScreen() {
         void pollCheckout(checkout.referenceId);
       }
     } catch (error) {
-      const raw = error instanceof Error ? error.message : "Checkout baslatilamadi.";
+      const raw = error instanceof Error ? error.message : "Odeme baslamadi.";
       setBillingMessage(translateBillingError(raw));
     } finally {
       setBillingBusy(null);
@@ -263,7 +315,7 @@ export function SettingsScreen() {
         void pollCheckout(checkout.referenceId);
       }
     } catch (error) {
-      const raw = error instanceof Error ? error.message : "Token pack checkout baslatilamadi.";
+      const raw = error instanceof Error ? error.message : "Paket acilmadi.";
       setBillingMessage(translateBillingError(raw));
     } finally {
       setBillingBusy(null);
@@ -311,7 +363,7 @@ export function SettingsScreen() {
 
   async function handleInviteCreate() {
     if (!primaryWorkspaceId || !inviteEmail.trim()) {
-      setWorkspaceMessage("Davet icin e-posta gerekli.");
+      setWorkspaceMessage("E-posta gerekli.");
       return;
     }
     setWorkspaceBusyId("invite");
@@ -324,9 +376,9 @@ export function SettingsScreen() {
       });
       setInviteEmail("");
       await invalidateControlPlane();
-      setWorkspaceMessage("Invite olusturuldu.");
+      setWorkspaceMessage("Davet hazir.");
     } catch (error) {
-      setWorkspaceMessage(error instanceof Error ? error.message : "Invite olusturulamadi.");
+      setWorkspaceMessage(error instanceof Error ? error.message : "Davet olmadi.");
     } finally {
       setWorkspaceBusyId("");
     }
@@ -338,9 +390,9 @@ export function SettingsScreen() {
     try {
       await updateWorkspaceRole({ workspaceId: primaryWorkspaceId, actorId, role });
       await invalidateControlPlane();
-      setWorkspaceMessage("Rol guncellendi.");
+      setWorkspaceMessage("Rol guncel.");
     } catch (error) {
-      setWorkspaceMessage(error instanceof Error ? error.message : "Rol guncellenemedi.");
+      setWorkspaceMessage(error instanceof Error ? error.message : "Rol olmadi.");
     } finally {
       setWorkspaceBusyId("");
     }
@@ -358,81 +410,58 @@ export function SettingsScreen() {
       await invalidateControlPlane();
       setWorkspaceMessage(assigned ? "Seat birakildi." : "Seat atandi.");
     } catch (error) {
-      setWorkspaceMessage(error instanceof Error ? error.message : "Seat durumu guncellenemedi.");
+      setWorkspaceMessage(error instanceof Error ? error.message : "Seat olmadi.");
     } finally {
       setWorkspaceBusyId("");
     }
   }
 
   return (
-    <div className="space-y-6">
-      <Surface tone="hero" className="px-8 py-10">
-        <div className="flex flex-wrap items-start justify-between gap-6">
-          <div className="max-w-[760px] space-y-3">
-            <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Control plane</div>
-            <h1 className="font-display text-[32px] font-semibold tracking-[-0.05em] text-[var(--text-primary)]">
-              Workspace, billing ve operator ayarlari ayni panelde
-            </h1>
-            <div className="text-[14px] leading-7 text-[var(--text-secondary)]">
-              Elyan’in satilabilir olmasi icin owner’in ekip, seat, kredi ve davranis ayarlarini yardimsiz yonetebilmesi gerekiyor.
-              Bu ekran desktop icindeki ilk ticari control plane.
-            </div>
+    <div className="space-y-5">
+      <Surface tone="hero" className="px-6 py-7">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="space-y-2">
+            <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Ayarlar</div>
+            <h1 className="font-display text-[30px] font-semibold tracking-[-0.05em] text-[var(--text-primary)]">Kontrol</h1>
           </div>
-
           <div className="grid gap-3 md:grid-cols-3">
-            <div className="rounded-[20px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] px-4 py-4">
-              <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-tertiary)]">Workspace</div>
-              <div className="mt-2 text-[18px] font-semibold text-[var(--text-primary)]">
-                {workspaceDetail?.workspace.name || adminWorkspaces[0]?.displayName || "Local workspace"}
+            {summaryCards.map((card) => (
+              <div key={card.label} className={`${panelClassName} min-w-[170px] px-4 py-3`}>
+                <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-tertiary)]">{card.label}</div>
+                <div className="mt-2 text-[18px] font-semibold text-[var(--text-primary)]">{card.value}</div>
+                <div className="mt-1 text-[12px] text-[var(--text-secondary)]">{card.meta}</div>
               </div>
-              <div className="mt-1 text-[12px] text-[var(--text-secondary)]">{workspaceDetail?.currentRole || adminWorkspaces[0]?.role || "owner"}</div>
-            </div>
-            <div className="rounded-[20px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] px-4 py-4">
-              <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-tertiary)]">Seats</div>
-              <div className="mt-2 text-[18px] font-semibold text-[var(--text-primary)]">
-                {activeSeats}/{seatLimit || billing?.seats || 1}
-              </div>
-              <div className="mt-1 text-[12px] text-[var(--text-secondary)]">{workspaceMembers.length} members visible</div>
-            </div>
-            <div className="rounded-[20px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] px-4 py-4">
-              <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-tertiary)]">Credits</div>
-              <div className="mt-2 text-[18px] font-semibold text-[var(--text-primary)]">
-                {(billing?.creditBalance?.total || 0).toLocaleString("tr-TR")}
-              </div>
-              <div className="mt-1 text-[12px] text-[var(--text-secondary)]">{billing?.plan.label || "Free"} · {billing?.subscriptionState.status || "inactive"}</div>
-            </div>
+            ))}
           </div>
         </div>
       </Surface>
 
-      <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-        <div className="space-y-6">
-          <Surface tone="card" className="p-6">
+      <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
+        <div className="space-y-5">
+          <Surface tone="card" className="p-5">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Workspace admin</div>
-                <h2 className="mt-2 font-display text-[22px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
-                  Team, roles and seats
-                </h2>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Ekip</div>
+                <h2 className="mt-2 font-display text-[20px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">Uyeler</h2>
               </div>
               <StatusBadge tone={permissions?.manageMembers ? "success" : "neutral"}>
-                {permissions?.manageMembers ? "owner controls" : "read only"}
+                {permissions?.manageMembers ? "Yonetim" : "Salt okur"}
               </StatusBadge>
             </div>
 
-            <div className="mt-5 grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
-              <div className="rounded-[22px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] p-5">
+            <div className="mt-4 grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
+              <div className={panelClassName}>
                 <div className="flex items-center gap-2">
                   <MailPlus className="h-4 w-4 text-[var(--accent-primary)]" />
-                  <div className="text-[13px] font-medium text-[var(--text-primary)]">Invite teammate</div>
+                  <div className="text-[13px] font-medium text-[var(--text-primary)]">Davet</div>
                 </div>
-                <div className="mt-4 space-y-3">
+                <div className="mt-3 space-y-3">
                   <input
                     type="email"
                     value={inviteEmail}
                     onChange={(event) => setInviteEmail(event.target.value)}
-                    placeholder="teammate@company.com"
-                    className="h-[48px] w-full rounded-[18px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 text-[13px] text-[var(--text-primary)] outline-none transition focus:border-[var(--border-focus)]"
+                    placeholder="mail@firma.com"
+                    className={inputClassName}
                     disabled={!canManageMembers}
                   />
                   <SegmentedControl
@@ -441,23 +470,23 @@ export function SettingsScreen() {
                     options={roleOptions.filter((item) => item.value !== "owner")}
                   />
                   <Button variant="primary" onClick={() => void handleInviteCreate()} disabled={!canManageMembers || workspaceBusyId === "invite"}>
-                    {workspaceBusyId === "invite" ? "Sending..." : "Create invite"}
+                    {workspaceBusyId === "invite" ? "Bekle..." : "Gonder"}
                   </Button>
                 </div>
               </div>
 
-              <div className="rounded-[22px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] p-5">
+              <div className={panelClassName}>
                 <div className="flex items-center gap-2">
                   <UsersRound className="h-4 w-4 text-[var(--accent-primary)]" />
-                  <div className="text-[13px] font-medium text-[var(--text-primary)]">Pending invites</div>
+                  <div className="text-[13px] font-medium text-[var(--text-primary)]">Bekleyen</div>
                 </div>
-                <div className="mt-4 space-y-3">
+                <div className="mt-3 space-y-3">
                   {workspaceInvites.length ? (
                     workspaceInvites.slice(0, 5).map((invite) => (
-                      <div key={invite.inviteId} className="rounded-[18px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 py-3">
+                      <div key={invite.inviteId} className="rounded-[16px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 py-3">
                         <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="text-[13px] font-medium text-[var(--text-primary)]">{invite.email}</div>
+                          <div className="min-w-0">
+                            <div className="truncate text-[13px] font-medium text-[var(--text-primary)]">{invite.email}</div>
                             <div className="mt-1 text-[11px] text-[var(--text-secondary)]">{invite.role} · {invite.status}</div>
                           </div>
                           <StatusBadge tone={invite.status === "pending" ? "warning" : "neutral"}>{invite.status}</StatusBadge>
@@ -465,28 +494,28 @@ export function SettingsScreen() {
                       </div>
                     ))
                   ) : (
-                    <div className="rounded-[18px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 py-4 text-[12px] text-[var(--text-secondary)]">
-                      Henuz bekleyen invite yok.
+                    <div className="rounded-[16px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 py-4 text-[12px] text-[var(--text-secondary)]">
+                      Bos
                     </div>
                   )}
                 </div>
               </div>
             </div>
 
-            <div className="mt-5">
+            <div className="mt-4">
               <SearchField
                 value={memberFilter}
                 onChange={(event) => setMemberFilter(event.target.value)}
-                placeholder="Filter members by email, name or role"
-                className="h-12 border-[var(--glass-border)] bg-[var(--glass-elevated)] shadow-none"
+                placeholder="Ara"
+                className="h-11 border-[var(--glass-border)] bg-[var(--glass-elevated)] shadow-none"
               />
             </div>
 
             <div className="mt-4 space-y-3">
               {filteredMembers.length ? (
                 filteredMembers.map((member) => (
-                  <div key={member.actorId} className="rounded-[20px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] p-4">
-                    <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div key={member.actorId} className={panelClassName}>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="truncate text-[14px] font-medium text-[var(--text-primary)]">
                           {member.user?.displayName || member.user?.email || member.actorId}
@@ -497,14 +526,14 @@ export function SettingsScreen() {
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <StatusBadge tone={member.seatAssigned ? "success" : "neutral"}>
-                          {member.seatAssigned ? "seat assigned" : "no seat"}
+                          {member.seatAssigned ? "Seat var" : "Seat yok"}
                         </StatusBadge>
                         <StatusBadge tone={member.role === "owner" ? "info" : member.role === "operator" ? "success" : "neutral"}>
                           {member.role}
                         </StatusBadge>
                       </div>
                     </div>
-                    <div className="mt-4 flex flex-wrap gap-2">
+                    <div className="mt-3 flex flex-wrap gap-2">
                       {roleOptions.map((option) => (
                         <Button
                           key={`${member.actorId}:${option.value}`}
@@ -522,377 +551,327 @@ export function SettingsScreen() {
                         onClick={() => void handleSeatToggle(member.actorId, member.seatAssigned)}
                         disabled={!canManageSeats || workspaceBusyId === `seat:${member.actorId}`}
                       >
-                        {workspaceBusyId === `seat:${member.actorId}` ? "Updating..." : member.seatAssigned ? "Release seat" : "Assign seat"}
+                        {workspaceBusyId === `seat:${member.actorId}` ? "Bekle..." : member.seatAssigned ? "Birak" : "Ata"}
                       </Button>
                     </div>
                   </div>
                 ))
               ) : (
-                <div className="rounded-[20px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] px-4 py-4 text-[13px] text-[var(--text-secondary)]">
-                  Uygun uye bulunamadi.
-                </div>
+                <div className={`${panelClassName} text-[13px] text-[var(--text-secondary)]`}>Uye yok.</div>
               )}
             </div>
 
             {workspaceMessage ? <div className="mt-4 text-[12px] text-[var(--text-secondary)]">{workspaceMessage}</div> : null}
           </Surface>
 
-          <Surface tone="card" className="p-6">
+          <Surface tone="card" className="p-5">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Commercial</div>
-                <h2 className="mt-2 font-display text-[22px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
-                  Plans, token packs and credit ledger
-                </h2>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Fatura</div>
+                <h2 className="mt-2 font-display text-[20px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">Plan</h2>
               </div>
               <div className="flex items-center gap-2">
                 <StatusBadge tone={billing?.plan.status === "active" ? "success" : "neutral"}>{billing?.plan.label || "Free"}</StatusBadge>
                 <Button variant="secondary" size="sm" onClick={() => void openPortal()} disabled={billingBusy !== null}>
                   <CreditCard className="mr-2 h-4 w-4" />
-                  Billing portal
+                  Portal
                 </Button>
               </div>
             </div>
 
-            <div className="mt-5 grid gap-4 lg:grid-cols-3">
-              <div className="rounded-[22px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] p-5 lg:col-span-3">
+            <div className="mt-4 space-y-4">
+              <div className={panelClassName}>
                 <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <div className="text-[13px] font-medium text-[var(--text-primary)]">Billing profile</div>
-                    <div className="mt-1 text-[12px] text-[var(--text-secondary)]">
-                      Gercek Iyzipay checkout icin bireysel fatura bilgileri gerekli.
-                    </div>
-                  </div>
+                  <div className="text-[13px] font-medium text-[var(--text-primary)]">Profil</div>
                   <StatusBadge tone={billingProfile?.isComplete ? "success" : "warning"}>
-                    {billingProfile?.isComplete ? "ready" : "required"}
+                    {billingProfile?.isComplete ? "Hazir" : "Eksik"}
                   </StatusBadge>
                 </div>
-                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
                   <input
                     type="text"
                     value={billingProfileForm.fullName}
                     onChange={(event) => setBillingProfileForm((current) => ({ ...current, fullName: event.target.value }))}
-                    placeholder="Full name"
-                    className="h-[48px] rounded-[18px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 text-[13px] text-[var(--text-primary)] outline-none transition focus:border-[var(--border-focus)]"
+                    placeholder="Ad"
+                    className={inputClassName}
                   />
                   <input
                     type="email"
                     value={billingProfileForm.email}
                     onChange={(event) => setBillingProfileForm((current) => ({ ...current, email: event.target.value }))}
-                    placeholder="Email"
-                    className="h-[48px] rounded-[18px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 text-[13px] text-[var(--text-primary)] outline-none transition focus:border-[var(--border-focus)]"
+                    placeholder="Mail"
+                    className={inputClassName}
                   />
                   <input
                     type="text"
                     value={billingProfileForm.phone}
                     onChange={(event) => setBillingProfileForm((current) => ({ ...current, phone: event.target.value }))}
-                    placeholder="+90..."
-                    className="h-[48px] rounded-[18px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 text-[13px] text-[var(--text-primary)] outline-none transition focus:border-[var(--border-focus)]"
+                    placeholder="+90"
+                    className={inputClassName}
                   />
                   <input
                     type="text"
                     value={billingProfileForm.identityNumber}
                     onChange={(event) => setBillingProfileForm((current) => ({ ...current, identityNumber: event.target.value }))}
-                    placeholder="Identity number"
-                    className="h-[48px] rounded-[18px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 text-[13px] text-[var(--text-primary)] outline-none transition focus:border-[var(--border-focus)]"
+                    placeholder="No"
+                    className={inputClassName}
                   />
                   <input
                     type="text"
                     value={billingProfileForm.addressLine1}
                     onChange={(event) => setBillingProfileForm((current) => ({ ...current, addressLine1: event.target.value }))}
-                    placeholder="Address"
-                    className="h-[48px] rounded-[18px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 text-[13px] text-[var(--text-primary)] outline-none transition focus:border-[var(--border-focus)] md:col-span-2"
+                    placeholder="Adres"
+                    className={`${inputClassName} md:col-span-2`}
                   />
                   <input
                     type="text"
                     value={billingProfileForm.city}
                     onChange={(event) => setBillingProfileForm((current) => ({ ...current, city: event.target.value }))}
-                    placeholder="City"
-                    className="h-[48px] rounded-[18px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 text-[13px] text-[var(--text-primary)] outline-none transition focus:border-[var(--border-focus)]"
+                    placeholder="Sehir"
+                    className={inputClassName}
                   />
                   <input
                     type="text"
                     value={billingProfileForm.zipCode}
                     onChange={(event) => setBillingProfileForm((current) => ({ ...current, zipCode: event.target.value }))}
-                    placeholder="ZIP code"
-                    className="h-[48px] rounded-[18px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 text-[13px] text-[var(--text-primary)] outline-none transition focus:border-[var(--border-focus)]"
+                    placeholder="Posta"
+                    className={inputClassName}
                   />
                   <input
                     type="text"
                     value={billingProfileForm.country}
                     onChange={(event) => setBillingProfileForm((current) => ({ ...current, country: event.target.value }))}
-                    placeholder="Country"
-                    className="h-[48px] rounded-[18px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 text-[13px] text-[var(--text-primary)] outline-none transition focus:border-[var(--border-focus)] md:col-span-2"
+                    placeholder="Ulke"
+                    className={`${inputClassName} md:col-span-2`}
                   />
                 </div>
-                <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
                   <div className="text-[12px] text-[var(--text-secondary)]">
-                    {billingProfile?.missingFields?.length
-                      ? `Eksik alanlar: ${billingProfile.missingFields.join(", ")}`
-                      : "Profile checkout icin hazir."}
+                    {billingProfile?.missingFields?.length ? `Eksik: ${billingProfile.missingFields.join(", ")}` : "Hazir."}
                   </div>
                   <Button variant="secondary" size="sm" onClick={() => void handleBillingProfileSave()} disabled={billingProfileBusy}>
-                    {billingProfileBusy ? "Saving..." : "Save profile"}
+                    {billingProfileBusy ? "Bekle..." : "Kaydet"}
                   </Button>
                 </div>
               </div>
 
-              {(billingCatalog?.plans || []).map((plan) => (
-                <div
-                  key={plan.id}
-                  className="rounded-[22px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] p-5"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-[14px] font-medium text-[var(--text-primary)]">{plan.label}</div>
-                      <div className="mt-1 text-[12px] text-[var(--text-secondary)]">{plan.monthlyCredits.toLocaleString("tr-TR")} monthly credits</div>
-                    </div>
-                    <StatusBadge tone={billing?.plan.id === plan.id ? "success" : "neutral"}>
-                      {billing?.plan.id === plan.id ? "current" : `${plan.seats} seats`}
-                    </StatusBadge>
-                  </div>
-                  <div className="mt-4 text-[12px] leading-6 text-[var(--text-secondary)]">
-                    {plan.maxConnectors} connectors · {plan.seats} seats
-                  </div>
-                  <div className="mt-4">
-                    <Button variant={billing?.plan.id === plan.id ? "secondary" : "primary"} size="sm" onClick={() => void openCheckout(plan.id)} disabled={billingBusy !== null}>
-                      {billing?.plan.id === plan.id ? "Change plan" : "Upgrade"}
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-6 grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
-              <div className="rounded-[22px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] p-5">
-                <div className="flex items-center gap-2">
-                  <Ticket className="h-4 w-4 text-[var(--accent-primary)]" />
-                  <div className="text-[13px] font-medium text-[var(--text-primary)]">Top-up packs</div>
-                </div>
-                <div className="mt-4 space-y-3">
-                  {(billingCatalog?.tokenPacks || []).map((pack) => (
-                    <div key={pack.id} className="rounded-[18px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 py-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-[13px] font-medium text-[var(--text-primary)]">{pack.label}</div>
-                          <div className="mt-1 text-[12px] text-[var(--text-secondary)]">
-                            {pack.credits.toLocaleString("tr-TR")} credits · {pack.price.toLocaleString("tr-TR")} {pack.currency}
-                          </div>
-                        </div>
-                        <Button variant="secondary" size="sm" onClick={() => void openTokenPack(pack.id)} disabled={billingBusy !== null}>
-                          Buy
-                        </Button>
+              <div className="grid gap-4 lg:grid-cols-3">
+                {(billingCatalog?.plans || []).map((plan) => (
+                  <div key={plan.id} className={panelClassName}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-[14px] font-medium text-[var(--text-primary)]">{plan.label}</div>
+                        <div className="mt-1 text-[12px] text-[var(--text-secondary)]">{plan.monthlyCredits.toLocaleString("tr-TR")} kredi</div>
                       </div>
+                      <StatusBadge tone={billing?.plan.id === plan.id ? "success" : "neutral"}>
+                        {billing?.plan.id === plan.id ? "Aktif" : `${plan.seats} seat`}
+                      </StatusBadge>
                     </div>
-                  ))}
-                </div>
+                    <div className="mt-3 text-[12px] text-[var(--text-secondary)]">
+                      {plan.maxConnectors} baglanti · {plan.seats} seat
+                    </div>
+                    <div className="mt-3">
+                      <Button variant={billing?.plan.id === plan.id ? "secondary" : "primary"} size="sm" onClick={() => void openCheckout(plan.id)} disabled={billingBusy !== null}>
+                        {billing?.plan.id === plan.id ? "Degistir" : "Yukselt"}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
               </div>
 
-              <div className="rounded-[22px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] p-5">
-                <div className="flex items-center gap-2">
-                  <Coins className="h-4 w-4 text-[var(--accent-primary)]" />
-                  <div className="text-[13px] font-medium text-[var(--text-primary)]">Credit ledger</div>
-                </div>
-                <div className="mt-4 space-y-3">
-                  {creditLedger.length ? (
-                    creditLedger.slice(0, 8).map((entry) => (
-                      <div key={entry.entryId} className="rounded-[18px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 py-3">
-                        <div className="flex items-center justify-between gap-3">
+              <div className="grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
+                <div className={panelClassName}>
+                  <div className="flex items-center gap-2">
+                    <Ticket className="h-4 w-4 text-[var(--accent-primary)]" />
+                    <div className="text-[13px] font-medium text-[var(--text-primary)]">Paket</div>
+                  </div>
+                  <div className="mt-3 space-y-3">
+                    {(billingCatalog?.tokenPacks || []).map((pack) => (
+                      <div key={pack.id} className="rounded-[16px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 py-3">
+                        <div className="flex items-start justify-between gap-3">
                           <div>
-                            <div className="text-[13px] font-medium text-[var(--text-primary)]">
-                              {entry.entryType} · {entry.bucket}
+                            <div className="text-[13px] font-medium text-[var(--text-primary)]">{pack.label}</div>
+                            <div className="mt-1 text-[12px] text-[var(--text-secondary)]">
+                              {pack.credits.toLocaleString("tr-TR")} kredi · {pack.price.toLocaleString("tr-TR")} {pack.currency}
                             </div>
-                            <div className="mt-1 text-[11px] text-[var(--text-secondary)]">{entry.createdAt}</div>
                           </div>
-                          <div className="text-right">
-                            <div className={`text-[13px] font-semibold ${entry.deltaCredits >= 0 ? "text-[var(--state-success)]" : "text-[var(--state-warning)]"}`}>
-                              {entry.deltaCredits >= 0 ? "+" : ""}{entry.deltaCredits}
-                            </div>
-                            <div className="text-[11px] text-[var(--text-secondary)]">balance {entry.balanceAfter}</div>
-                          </div>
+                          <Button variant="secondary" size="sm" onClick={() => void openTokenPack(pack.id)} disabled={billingBusy !== null}>
+                            Al
+                          </Button>
                         </div>
                       </div>
-                    ))
-                  ) : (
-                    <div className="rounded-[18px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 py-4 text-[12px] text-[var(--text-secondary)]">
-                      Henuz credit ledger hareketi yok.
-                    </div>
-                  )}
+                    ))}
+                  </div>
                 </div>
 
-                <div className="mt-5 border-t border-[var(--glass-border)] pt-5">
+                <div className={panelClassName}>
                   <div className="flex items-center gap-2">
-                    <RefreshCw className="h-4 w-4 text-[var(--accent-primary)]" />
-                    <div className="text-[13px] font-medium text-[var(--text-primary)]">Billing events</div>
+                    <Coins className="h-4 w-4 text-[var(--accent-primary)]" />
+                    <div className="text-[13px] font-medium text-[var(--text-primary)]">Hareket</div>
                   </div>
-                  <div className="mt-4 space-y-3">
-                    {billingEvents.length ? (
-                      billingEvents.slice(0, 6).map((event) => (
-                        <div key={event.eventId} className="rounded-[18px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 py-3">
-                          <div className="flex items-start justify-between gap-3">
+                  <div className="mt-3 space-y-3">
+                    {creditLedger.length ? (
+                      creditLedger.slice(0, 8).map((entry) => (
+                        <div key={entry.entryId} className="rounded-[16px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 py-3">
+                          <div className="flex items-center justify-between gap-3">
                             <div>
-                              <div className="text-[13px] font-medium text-[var(--text-primary)]">{event.eventType}</div>
-                              <div className="mt-1 text-[11px] text-[var(--text-secondary)]">
-                                {event.provider} · {event.referenceId || "no reference"} · {event.createdAt}
+                              <div className="text-[13px] font-medium text-[var(--text-primary)]">
+                                {entry.entryType} · {entry.bucket}
                               </div>
+                              <div className="mt-1 text-[11px] text-[var(--text-secondary)]">{entry.createdAt}</div>
                             </div>
-                            <StatusBadge tone={event.status === "applied" || event.status === "active" ? "success" : event.status === "pending" ? "warning" : "neutral"}>
-                              {event.status}
-                            </StatusBadge>
+                            <div className="text-right">
+                              <div className={`text-[13px] font-semibold ${entry.deltaCredits >= 0 ? "text-[var(--state-success)]" : "text-[var(--state-warning)]"}`}>
+                                {entry.deltaCredits >= 0 ? "+" : ""}
+                                {entry.deltaCredits}
+                              </div>
+                              <div className="text-[11px] text-[var(--text-secondary)]">bakiye {entry.balanceAfter}</div>
+                            </div>
                           </div>
                         </div>
                       ))
                     ) : (
-                      <div className="rounded-[18px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 py-4 text-[12px] text-[var(--text-secondary)]">
-                        Henuz billing event akisi yok.
+                      <div className="rounded-[16px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 py-4 text-[12px] text-[var(--text-secondary)]">
+                        Bos
                       </div>
                     )}
+                  </div>
+
+                  <div className="mt-4 border-t border-[var(--glass-border)] pt-4">
+                    <div className="flex items-center gap-2">
+                      <RefreshCw className="h-4 w-4 text-[var(--accent-primary)]" />
+                      <div className="text-[13px] font-medium text-[var(--text-primary)]">Olay</div>
+                    </div>
+                    <div className="mt-3 space-y-3">
+                      {billingEvents.length ? (
+                        billingEvents.slice(0, 6).map((event) => (
+                          <div key={event.eventId} className="rounded-[16px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 py-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-[13px] font-medium text-[var(--text-primary)]">{event.eventType}</div>
+                                <div className="mt-1 text-[11px] text-[var(--text-secondary)]">
+                                  {event.provider} · {event.referenceId || "ref yok"} · {event.createdAt}
+                                </div>
+                              </div>
+                              <StatusBadge tone={event.status === "applied" || event.status === "active" ? "success" : event.status === "pending" ? "warning" : "neutral"}>
+                                {event.status}
+                              </StatusBadge>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="rounded-[16px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 py-4 text-[12px] text-[var(--text-secondary)]">
+                          Bos
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
+
             {billingMessage ? <div className="mt-4 text-[12px] text-[var(--text-secondary)]">{billingMessage}</div> : null}
           </Surface>
         </div>
 
-        <div className="space-y-6">
-          <Surface tone="card" className="p-6">
+        <div className="space-y-5">
+          <Surface tone="card" className="p-5">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Conversation</div>
-                <h2 className="mt-2 font-display text-[20px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
-                  User-facing behavior
-                </h2>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Davranis</div>
+                <h2 className="mt-2 font-display text-[20px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">Akis</h2>
               </div>
               <Button variant="ghost" size="sm" onClick={() => setProductSettings(defaultProductSettings)}>
-                Reset
+                Sifirla
               </Button>
             </div>
 
-            <div className="mt-5 space-y-5">
-              <div className="space-y-2">
-                <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Response mode</div>
-                <SegmentedControl
-                  value={productSettings.responseMode}
-                  onChange={(value) => setProductSettings({ responseMode: value as typeof productSettings.responseMode })}
-                  options={responseModeOptions}
-                />
-              </div>
-              <div className="space-y-2">
-                <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Tone</div>
-                <SegmentedControl
-                  value={productSettings.tone}
-                  onChange={(value) => setProductSettings({ tone: value as typeof productSettings.tone })}
-                  options={toneOptions}
-                />
-              </div>
-              <div className="grid gap-4 md:grid-cols-3">
-                <div className="space-y-2">
-                  <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Provider strategy</div>
-                  <SegmentedControl
-                    value={productSettings.providerStrategy}
-                    onChange={(value) => setProductSettings({ providerStrategy: value as typeof productSettings.providerStrategy })}
-                    options={providerStrategyOptions}
-                  />
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              {conversationControls.map((control, index) => (
+                <div key={control.label} className={`${panelClassName} ${index === conversationControls.length - 1 ? "md:col-span-2" : ""}`}>
+                  <div className="mb-3 text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">{control.label}</div>
+                  <SegmentedControl value={control.value} onChange={control.onChange} options={control.options} />
                 </div>
-                <div className="space-y-2">
-                  <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Privacy mode</div>
-                  <SegmentedControl
-                    value={productSettings.privacyMode}
-                    onChange={(value) => setProductSettings({ privacyMode: value as typeof productSettings.privacyMode })}
-                    options={privacyModeOptions}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Automation level</div>
-                  <SegmentedControl
-                    value={productSettings.automationLevel}
-                    onChange={(value) => setProductSettings({ automationLevel: value as typeof productSettings.automationLevel })}
-                    options={automationLevelOptions}
-                  />
-                </div>
-              </div>
+              ))}
             </div>
           </Surface>
 
-          <Surface tone="card" className="p-6">
+          <Surface tone="card" className="p-5">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Desktop</div>
-                <h2 className="mt-2 font-display text-[20px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
-                  Shell and diagnostics
-                </h2>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Masaustu</div>
+                <h2 className="mt-2 font-display text-[20px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">Runtime</h2>
               </div>
               <StatusBadge tone={readiness?.status === "ready" ? "success" : readiness?.status === "booting" ? "warning" : "error"}>
                 {readiness?.status || connectionState}
               </StatusBadge>
             </div>
 
-            <div className="mt-5 grid gap-4 md:grid-cols-2">
-              <div className="rounded-[18px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] p-4">
-                <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Theme</div>
-                <div className="mt-3">
-                  <SegmentedControl
-                    value={themeMode}
-                    onChange={(value) => setThemeMode(value as typeof themeMode)}
-                    options={[
-                      { value: "system", label: "System" },
-                      { value: "light", label: "Light" },
-                      { value: "dark", label: "Dark" },
-                    ]}
-                  />
-                </div>
+            <div className="mt-4 grid gap-3">
+              <div className={panelClassName}>
+                <div className="mb-3 text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Tema</div>
+                <SegmentedControl
+                  value={themeMode}
+                  onChange={(value) => setThemeMode(value as typeof themeMode)}
+                  options={[
+                    { value: "system", label: "Sistem" },
+                    { value: "light", label: "Acik" },
+                    { value: "dark", label: "Koyu" },
+                  ]}
+                />
               </div>
-              <div className="rounded-[18px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] p-4">
-                <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Behavior</div>
-                <div className="mt-4 space-y-3">
-                  <ToggleSwitch label="Compact logs" checked={compactLogs} onChange={setCompactLogs} />
-                  <ToggleSwitch label="Reduce motion" checked={reduceMotion} onChange={setReduceMotion} />
-                </div>
-              </div>
-            </div>
 
-            <div className="mt-5 flex flex-wrap gap-3">
-              <Button variant="secondary" onClick={() => void restartRuntime()} disabled={runtimeBusy !== null}>
-                <RefreshCw className="mr-2 h-4 w-4" />
-                {runtimeBusy === "restart" ? "Restarting..." : "Restart local services"}
-              </Button>
-              <div className="rounded-[18px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] px-4 py-3 text-[12px] text-[var(--text-secondary)]">
-                {sidecarHealth.runtimeVersion || "runtime"} · {readiness?.blockingIssue || "Ready for operator work"}
+              <div className={panelClassName}>
+                <div className="mb-3 text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Gorunum</div>
+                <div className="space-y-3">
+                  <ToggleSwitch label="Kompakt" checked={compactLogs} onChange={setCompactLogs} />
+                  <ToggleSwitch label="Az hareket" checked={reduceMotion} onChange={setReduceMotion} />
+                </div>
+              </div>
+
+              <div className={`${panelClassName} flex flex-wrap items-center justify-between gap-3`}>
+                <div className="text-[12px] text-[var(--text-secondary)]">
+                  {sidecarHealth.runtimeVersion || "runtime"} · {readiness?.blockingIssue || "Hazir"}
+                </div>
+                <Button variant="secondary" onClick={() => void restartRuntime()} disabled={runtimeBusy !== null}>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  {runtimeBusy === "restart" ? "Bekle..." : "Yeniden baslat"}
+                </Button>
               </div>
             </div>
           </Surface>
 
-          <Surface tone="card" className="p-6">
+          <Surface tone="card" className="p-5">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Privacy</div>
-                <h2 className="mt-2 font-display text-[20px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
-                  Data and learning
-                </h2>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Gizlilik</div>
+                <h2 className="mt-2 font-display text-[20px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">Veri</h2>
               </div>
               {learning ? (
                 <StatusBadge tone={learning.paused ? "warning" : learning.optOut ? "neutral" : "success"}>
-                  {learning.paused ? "paused" : learning.optOut ? "off" : "learning"}
+                  {learning.paused ? "Durak" : learning.optOut ? "Kapali" : "Acik"}
                 </StatusBadge>
               ) : null}
             </div>
-            <div className="mt-5 rounded-[18px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] p-4 text-[13px] leading-6 text-[var(--text-secondary)]">
+
+            <div className={`${panelClassName} mt-4`}>
               <div className="flex items-center gap-2 text-[14px] font-medium text-[var(--text-primary)]">
                 <ShieldCheck className="h-4 w-4 text-[var(--accent-primary)]" />
                 {learning?.learningMode || "local"} · {privacy?.policy.learningScope || "workspace"}
               </div>
-              <div className="mt-2">
-                {privacy ? `${privacy.totalEntries} entries · ${privacy.redactedEntries} redacted` : "Privacy summary unavailable."}
+              <div className="mt-3 grid gap-2 text-[12px] text-[var(--text-secondary)]">
+                <div>{privacy ? `${privacy.totalEntries} kayit` : "Kayit yok"}</div>
+                <div>{privacy ? `${privacy.redactedEntries} redakte` : "Redakte yok"}</div>
+                <div>{privacy?.whatIsLearned?.length ? privacy.whatIsLearned.join(", ") : "Operasyon"}</div>
               </div>
-              <div>{privacy?.whatIsLearned?.length ? `Learns: ${privacy.whatIsLearned.join(", ")}` : "Learns redacted operational signals."}</div>
             </div>
+
             <div className="mt-4 flex flex-wrap gap-3">
               <Button variant="secondary" onClick={() => void handleExportPrivacy()} disabled={privacyBusy !== null}>
-                {privacyBusy === "export" ? "Exporting..." : "Export data"}
+                {privacyBusy === "export" ? "Bekle..." : "Disa aktar"}
               </Button>
               <Button variant="ghost" onClick={() => void handleDeletePrivacy()} disabled={privacyBusy !== null}>
-                {privacyBusy === "delete" ? "Deleting..." : "Delete data"}
+                {privacyBusy === "delete" ? "Bekle..." : "Sil"}
               </Button>
             </div>
           </Surface>
@@ -900,21 +879,21 @@ export function SettingsScreen() {
           <Surface tone="card" className="p-5">
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0">
-                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Account</div>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Hesap</div>
                 <div className="mt-2 truncate text-[14px] font-medium text-[var(--text-primary)]">
-                  {authenticatedEmail || "Signed in"}
+                  {authenticatedEmail || "Oturum"}
                 </div>
                 <div className="mt-1 text-[12px] text-[var(--text-secondary)]">
-                  {workspaceDetail?.workspace.name || "Local workspace"} · {billing?.plan.label || "Free plan"}
+                  {workspaceDetail?.workspace.name || "Local"} · {billing?.plan.label || "Free"}
                 </div>
               </div>
               <div className="flex gap-2">
                 <Button variant="ghost" onClick={() => void openPortal()} disabled={billingBusy !== null}>
                   <ArrowUpRight className="mr-2 h-4 w-4" />
-                  Billing
+                  Portal
                 </Button>
                 <Button variant="ghost" onClick={() => void finalizeLocalSessionExit()}>
-                  Sign out
+                  Cikis
                 </Button>
               </div>
             </div>

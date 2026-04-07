@@ -507,7 +507,7 @@ class TestMultiAgentOrchestrator:
 
 # ── Phase 8: Billing ─────────────────────────────────────────────────
 
-from core.billing.subscription import (
+from _graveyard.subscription_legacy import (
     UsageTracker, SubscriptionManager, SubscriptionTier, UsageType,
 )
 

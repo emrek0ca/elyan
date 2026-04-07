@@ -13,6 +13,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from core.security.encrypted_vault import EncryptedVault, get_encrypted_vault
 from core.security.session_security import SessionManager, get_session_manager
 from core.security.audit_approval import ApprovalAuditLog, get_approval_audit_log
@@ -223,6 +224,43 @@ class TestSessionManager:
 
         token = manager._sessions[token_id]
         assert token.metadata == metadata
+
+    def test_token_persistence_roundtrip(self):
+        """Disk-backed sessions survive process-local manager restart."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage_path = str(Path(tmpdir) / "sessions.json")
+            manager = SessionManager(token_ttl_seconds=30, storage_path=storage_path, persistence_enabled=True)
+            token_id = manager.issue_token("user_123", {"scope": "local_first"})
+
+            restored = SessionManager(token_ttl_seconds=30, storage_path=storage_path, persistence_enabled=True)
+            assert restored.validate_token(token_id) == {"scope": "local_first"}
+
+    def test_persistence_disabled_skips_writable_data_dir_resolution(self, monkeypatch):
+        monkeypatch.setattr(
+            "core.security.session_security.resolve_elyan_data_dir",
+            lambda: (_ for _ in ()).throw(AssertionError("should not resolve writable dir")),
+        )
+        manager = SessionManager(token_ttl_seconds=30, persistence_enabled=False)
+
+        assert manager.get_session_stats()["persistence_enabled"] is False
+
+    def test_unwritable_storage_falls_back_to_memory_only(self, monkeypatch, tmp_path):
+        blocked_dir = tmp_path / "blocked"
+        storage_path = blocked_dir / "sessions.json"
+        original_mkdir = Path.mkdir
+
+        def _mkdir(self, *args, **kwargs):
+            if Path(self) == blocked_dir:
+                raise PermissionError("blocked")
+            return original_mkdir(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "mkdir", _mkdir)
+
+        manager = SessionManager(token_ttl_seconds=30, storage_path=str(storage_path), persistence_enabled=True)
+
+        assert manager.get_session_stats()["persistence_enabled"] is False
+        token_id = manager.issue_token("user_123", {"scope": "memory_only"})
+        assert manager.validate_token(token_id) == {"scope": "memory_only"}
 
 
 class TestApprovalAuditLog:

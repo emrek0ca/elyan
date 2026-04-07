@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from cli.commands import dashboard, gateway
+from cli.commands import desktop, gateway
 
 
 def run(args) -> int:
@@ -25,6 +25,9 @@ def run(args) -> int:
         print(f"❌  Launch başarısız: {runtime.get('error', 'gateway hazır değil')}")
         return 1
 
-    dashboard.open_dashboard(port=gateway_port, no_browser=no_browser, ops=ops)
+    if ops:
+        print(f"ℹ️  Ops console ürün UI değil. Gerekirse gateway hazırken /ops endpoint'ini ayrı açın (port {gateway_port}).")
+    if not no_browser:
+        desktop.open_desktop(detached=True)
     print("✅  Elyan hazır.")
     return 0

@@ -755,7 +755,7 @@ def test_agent_process_envelope_fast_direct_path_handles_natural_write_command(m
     monkeypatch.setattr("core.agent.pipeline_runner.run", _unexpected_pipeline_run)
     monkeypatch.setattr("core.agent.task_brain.create_task", _unexpected_create_task)
     monkeypatch.setattr("core.evidence.execution_ledger.resolve_proofs_root", lambda: tmp_path / "proofs")
-    monkeypatch.setattr("core.evidence.run_store.resolve_runs_root", lambda: tmp_path / "runs")
+    monkeypatch.setattr("core.run_store.resolve_runs_root", lambda: tmp_path / "runs")
 
     async def _fake_write_file(path: str, content: str = ""):
         target = Path(path).expanduser()
@@ -838,7 +838,7 @@ def test_agent_process_envelope_fast_direct_path_handles_natural_browser_command
     monkeypatch.setattr("core.agent.pipeline_runner.run", _unexpected_pipeline_run)
     monkeypatch.setattr("core.agent.task_brain.create_task", _unexpected_create_task)
     monkeypatch.setattr("core.evidence.execution_ledger.resolve_proofs_root", lambda: tmp_path / "proofs")
-    monkeypatch.setattr("core.evidence.run_store.resolve_runs_root", lambda: tmp_path / "runs")
+    monkeypatch.setattr("core.run_store.resolve_runs_root", lambda: tmp_path / "runs")
 
     async def _fake_open_app(app_name: str):
         calls.append(("open_app", app_name))

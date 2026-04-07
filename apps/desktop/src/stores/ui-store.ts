@@ -1,8 +1,9 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-import type { ProjectTemplate, ThemeMode, WorkflowPreferences } from "@/types/domain";
+import type { ProductSettings, ProjectTemplate, ThemeMode, WorkflowPreferences } from "@/types/domain";
 import { defaultProjectTemplates, defaultWorkflowPreferences } from "@/utils/workflow-preferences";
+import { defaultProductSettings } from "@/utils/product-settings";
 
 type UiState = {
   themeMode: ThemeMode;
@@ -17,6 +18,7 @@ type UiState = {
   autoRouting: boolean;
   compactLogs: boolean;
   reduceMotion: boolean;
+  productSettings: ProductSettings;
   workflowPreferences: WorkflowPreferences;
   projectTemplates: ProjectTemplate[];
   activeProjectTemplateId: string;
@@ -26,6 +28,7 @@ type UiState = {
   openCommandPalette: () => void;
   closeCommandPalette: () => void;
   completeOnboarding: () => void;
+  setOnboardingComplete: (value: boolean) => void;
   signIn: (email: string) => void;
   signOut: () => void;
   setSelectedRunId: (runId: string) => void;
@@ -35,6 +38,7 @@ type UiState = {
   setAutoRouting: (value: boolean) => void;
   setCompactLogs: (value: boolean) => void;
   setReduceMotion: (value: boolean) => void;
+  setProductSettings: (updates: Partial<ProductSettings>) => void;
   setWorkflowPreferences: (updates: Partial<WorkflowPreferences>) => void;
   setActiveProjectTemplateId: (templateId: string) => void;
 };
@@ -54,6 +58,7 @@ export const useUiStore = create<UiState>()(
       autoRouting: true,
       compactLogs: true,
       reduceMotion: false,
+      productSettings: defaultProductSettings,
       workflowPreferences: defaultWorkflowPreferences,
       projectTemplates: defaultProjectTemplates,
       activeProjectTemplateId: defaultProjectTemplates[0]?.id || "",
@@ -63,6 +68,7 @@ export const useUiStore = create<UiState>()(
       openCommandPalette: () => set({ commandPaletteOpen: true }),
       closeCommandPalette: () => set({ commandPaletteOpen: false }),
       completeOnboarding: () => set({ onboardingComplete: true }),
+      setOnboardingComplete: (onboardingComplete) => set({ onboardingComplete }),
       signIn: (authenticatedEmail) => set({ isAuthenticated: true, authenticatedEmail }),
       signOut: () => set({ isAuthenticated: false, authenticatedEmail: "" }),
       setSelectedThreadId: (selectedThreadId) => set({ selectedThreadId }),
@@ -72,6 +78,13 @@ export const useUiStore = create<UiState>()(
       setAutoRouting: (autoRouting) => set({ autoRouting }),
       setCompactLogs: (compactLogs) => set({ compactLogs }),
       setReduceMotion: (reduceMotion) => set({ reduceMotion }),
+      setProductSettings: (updates) =>
+        set((state) => ({
+          productSettings: {
+            ...state.productSettings,
+            ...updates,
+          },
+        })),
       setWorkflowPreferences: (updates) =>
         set((state) => ({
           workflowPreferences: {
@@ -95,6 +108,7 @@ export const useUiStore = create<UiState>()(
         autoRouting: state.autoRouting,
         compactLogs: state.compactLogs,
         reduceMotion: state.reduceMotion,
+        productSettings: state.productSettings,
         workflowPreferences: state.workflowPreferences,
         projectTemplates: state.projectTemplates,
         activeProjectTemplateId: state.activeProjectTemplateId,

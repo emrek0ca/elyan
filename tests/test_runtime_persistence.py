@@ -119,6 +119,105 @@ def test_workspace_billing_backfill_legacy_json_into_runtime_db(tmp_path):
     assert stored["workspace-team"]["billing_customer"] == "ws_customer"
 
 
+def test_workspace_access_invites_roles_and_seats():
+    runtime_db = get_runtime_database()
+    owner = runtime_db.auth.bootstrap_owner(
+        email="owner@example.com",
+        password="secret123",
+        display_name="Owner",
+        workspace_id="workspace-alpha",
+    )
+    runtime_db.billing.upsert_workspace(
+        {
+            "workspace_id": "workspace-alpha",
+            "plan_id": "team",
+            "status": "active",
+            "billing_customer": "ws_alpha",
+            "seats": 2,
+            "metadata": {"workspace_owned": True},
+            "updated_at": 10.0,
+        }
+    )
+
+    listed = runtime_db.access.list_workspaces(actor_id=owner["user_id"])
+    assert listed[0]["membership"]["role"] == "owner"
+    assert runtime_db.access.has_active_seat(workspace_id="workspace-alpha", actor_id=owner["user_id"]) is True
+
+    member = runtime_db.auth.upsert_user(
+        email="member@example.com",
+        password="secret123",
+        display_name="Member",
+        workspace_id="workspace-alpha",
+        metadata={"workspace_role": "member"},
+    )
+    invite = runtime_db.access.create_invite(
+        workspace_id="workspace-alpha",
+        email="member@example.com",
+        role="operator",
+        invited_by=owner["user_id"],
+    )
+    accepted = runtime_db.access.accept_invite(
+        invite_id=invite["invite_id"],
+        actor_id=member["user_id"],
+        email="member@example.com",
+    )
+
+    assert accepted is not None
+    assert accepted["membership"]["role"] == "operator"
+
+    assignment = runtime_db.access.assign_seat(
+        workspace_id="workspace-alpha",
+        actor_id=member["user_id"],
+        assigned_by=owner["user_id"],
+    )
+    assert assignment["actor_id"] == member["user_id"]
+
+    members = runtime_db.access.list_memberships("workspace-alpha", include_users=True)
+    invited_member = next(item for item in members if item["actor_id"] == member["user_id"])
+    assert invited_member["seat_assigned"] is True
+    assert invited_member["user"]["email"] == "member@example.com"
+
+    role_update = runtime_db.access.update_membership_role(
+        workspace_id="workspace-alpha",
+        actor_id=member["user_id"],
+        role="viewer",
+        updated_by=owner["user_id"],
+    )
+    assert role_update["role"] == "viewer"
+    assert runtime_db.access.seat_summary("workspace-alpha")["seats_used"] == 2
+
+
+def test_workspace_access_rejects_last_owner_demotion_and_email_mismatch():
+    runtime_db = get_runtime_database()
+    owner = runtime_db.auth.bootstrap_owner(
+        email="owner@example.com",
+        password="secret123",
+        display_name="Owner",
+        workspace_id="workspace-alpha",
+    )
+    invite = runtime_db.access.create_invite(
+        workspace_id="workspace-alpha",
+        email="member@example.com",
+        role="operator",
+        invited_by=owner["user_id"],
+    )
+
+    with pytest.raises(PermissionError, match="invite_email_mismatch"):
+        runtime_db.access.accept_invite(
+            invite_id=invite["invite_id"],
+            actor_id="user_member",
+            email="wrong@example.com",
+        )
+
+    with pytest.raises(RuntimeError, match="workspace_requires_owner"):
+        runtime_db.access.update_membership_role(
+            workspace_id="workspace-alpha",
+            actor_id=owner["user_id"],
+            role="viewer",
+            updated_by=owner["user_id"],
+        )
+
+
 @pytest.mark.asyncio
 async def test_approval_requests_persist_to_runtime_db(monkeypatch):
     monkeypatch.setenv("ELYAN_APPROVAL_PERSIST", "force")

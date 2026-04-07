@@ -111,6 +111,7 @@ const state = {
   ready: false,
   authenticated: false,
   hasQr: false,
+  qrText: "",
   startedAt: Date.now(),
   lastQrAt: null,
   lastError: "",
@@ -242,24 +243,29 @@ const client = new Client({
 client.on("qr", (qr) => {
   state.hasQr = true;
   state.lastQrAt = Date.now();
-  if (printQr) {
-    console.log("");
-    console.log("[ELYAN] WhatsApp QR hazır. Telefonda WhatsApp > Bağlı Cihazlar > Cihaz Bağla.");
-    qrcode.generate(qr, { small: true });
-    console.log("[QR_READY]");
-    console.log("");
-  }
+  qrcode.generate(qr, { small: true }, (rendered) => {
+    state.qrText = String(rendered || "");
+    if (printQr) {
+      console.log("");
+      console.log("[ELYAN] WhatsApp QR hazır. Telefonda WhatsApp > Bağlı Cihazlar > Cihaz Bağla.");
+      console.log(state.qrText);
+      console.log("[QR_READY]");
+      console.log("");
+    }
+  });
 });
 
 client.on("authenticated", () => {
   state.authenticated = true;
   state.hasQr = false;
+  state.qrText = "";
   console.log("[AUTHENTICATED]");
 });
 
 client.on("ready", async () => {
   state.ready = true;
   state.authenticated = true;
+  state.qrText = "";
   try {
     const wid = client?.info?.wid?._serialized || "";
     state.phone = wid;

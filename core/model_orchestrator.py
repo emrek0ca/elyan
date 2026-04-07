@@ -2,6 +2,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from config.elyan_config import elyan_config
+from core.accuracy_speed_runtime import get_accuracy_speed_runtime
 from core.model_catalog import default_model_for_provider, normalize_model_name
 from core.neural_router import neural_router
 from security.keychain import KeychainManager, keychain
@@ -444,6 +445,35 @@ class ModelOrchestrator:
                 break
         return out
 
+    def get_collaboration_profile(
+        self,
+        *,
+        text: str,
+        role: str = "reasoning",
+        request_kind: str = "chat",
+        provider_lane: str = "",
+        has_attachments: bool = False,
+    ) -> Dict[str, Any]:
+        runtime = get_accuracy_speed_runtime()
+        collab = self.get_collaboration_settings()
+        decision = runtime.recommend_collaboration(
+            text=text,
+            request_kind=request_kind,
+            role=role,
+            provider_lane=provider_lane,
+            has_attachments=has_attachments,
+        )
+        enabled = bool(collab.get("enabled", True)) and bool(decision.enabled)
+        max_models = 1 if not enabled else min(int(collab.get("max_models", 3) or 3), int(decision.max_models or 1))
+        return {
+            "enabled": enabled,
+            "strategy": str(decision.strategy or collab.get("strategy") or "synthesize"),
+            "max_models": max(1, max_models),
+            "synthesis_role": str(decision.synthesis_role or role or "reasoning"),
+            "execution_style": str(decision.execution_style or "single_pass"),
+            "lenses": list(decision.lenses or []),
+        }
+
     def get_best_available(self, role: str = "inference", exclude: set = None) -> Dict[str, Any]:
         ranked = self.rank_candidates(role=role, exclude=exclude)
         if ranked:
@@ -479,6 +509,19 @@ class ModelOrchestrator:
                     resolved["status"] = "missing_runtime"
                 return resolved
         return {"type": "none", "error": f"No providers available (excluded: {exclude})"}
+
+    def get_best_for_lane(self, provider_lane: str, *, role: str = "inference", exclude: set | None = None) -> Dict[str, Any]:
+        runtime = get_accuracy_speed_runtime()
+        preferred_order = runtime.provider_order(provider_lane, local_first=self._local_first_enabled())
+        excluded = {self._normalize_provider(item) for item in (exclude or set())}
+        candidates = self.rank_candidates(role=role, exclude=excluded)
+        for provider_name in preferred_order:
+            for item in candidates:
+                candidate_provider = self._normalize_provider(item.get("provider") or item.get("type"))
+                if candidate_provider != provider_name:
+                    continue
+                return self.get_provider_config(candidate_provider, role=role, model=str(item.get("model") or ""))
+        return self.get_best_available(role=role, exclude=exclude)
 
     def _priority_for_role(self, role: str) -> List[str]:
         """Return provider priority order for a given role.

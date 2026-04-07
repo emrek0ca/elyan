@@ -14,6 +14,17 @@ async def test_generate_collaborative_runs_parallel_views_and_synthesis():
         "max_models": 2,
         "roles": ["reasoning"],
     }
+    client.orchestrator.get_collaboration_profile = lambda **kwargs: {
+        "enabled": True,
+        "strategy": "reason_then_critic",
+        "max_models": 2,
+        "synthesis_role": "reasoning",
+        "execution_style": "parallel_synthesis",
+        "lenses": [
+            {"name": "planner", "instruction": "plan"},
+            {"name": "critic", "instruction": "critic"},
+        ],
+    }
     client.orchestrator.get_collaboration_pool = lambda role="reasoning", max_models=None: [
         {"type": "openai", "provider": "openai", "model": "gpt-4o"},
         {"type": "groq", "provider": "groq", "model": "llama-3.3-70b-versatile"},

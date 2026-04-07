@@ -19,16 +19,20 @@ This integrator is called from task_engine.py execute_task() to:
 import asyncio
 import json
 import logging
+import time
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, asdict
 from datetime import datetime
 
+from .consensus_engine import AgentProposal, get_consensus_engine
 from .ceo_planner import CEOPlanner, CausalNode
 from .agent_deadlock_detector import DeadlockDetector, FailurePattern
 from .cognitive_state_machine import CognitiveStateMachine
 from .time_boxed_scheduler import TimeBoxedScheduler, TimeBudget
 from .sleep_consolidator import SleepConsolidator, SleepReport
 from .execution_modes import ExecutionMode
+from .personalization.policy_learning import get_policy_learning_store
+from security.audit import get_audit_logger
 
 logger = logging.getLogger(__name__)
 
@@ -97,13 +101,115 @@ class CognitiveLayerIntegrator:
         self.state_machine = CognitiveStateMachine()
         self.scheduler = TimeBoxedScheduler()
         self.sleep_consolidator = SleepConsolidator()
+        self.consensus_engine = get_consensus_engine()
+        self.policy_learning = get_policy_learning_store()
+        self.audit = get_audit_logger()
 
         # For tracking daily errors and patterns (reset daily)
         self.daily_errors: List[Dict[str, Any]] = []
         self.daily_patterns: List[List[str]] = []
         self.execution_q_table: Dict[str, Dict[str, float]] = {}
+        self._total_executions = 0
+        self._deadlock_count = 0
+        self._consensus_count = 0
+        self._consensus_override_count = 0
 
         logger.info("Cognitive Layer Integrator initialized")
+
+    @property
+    def current_mode(self) -> str:
+        mode = getattr(self.state_machine, "current_mode", None)
+        if hasattr(mode, "value"):
+            return str(getattr(mode, "value", "focused")).upper()
+        return str(mode or "focused").upper()
+
+    def calculate_success_rate(self) -> float:
+        if not self.daily_errors:
+            return 100.0
+        total = len(self.daily_errors)
+        successes = sum(1 for item in self.daily_errors if bool(item.get("success")))
+        return round((successes / max(1, total)) * 100.0, 2)
+
+    def _standardize_recovery_action(self, action: str, *, fallback: str = "safe_fallback") -> str:
+        token = str(action or "").strip().lower()
+        if token in {"switch_to_diffuse_mode", "switch_to_diffuse"}:
+            return "switch_to_diffuse"
+        if token in {"increase_timeout_and_retry", "queue_task", "retry", "exponential_backoff"}:
+            return "queue_with_backoff"
+        if token in {"escalate_to_approval", "escalate_to_human_approval", "escalate_approval"}:
+            return "escalate_approval"
+        if token in {"safe_fallback", "fallback"}:
+            return "safe_fallback"
+        return fallback
+
+    async def evaluate_consensus(
+        self,
+        *,
+        task_id: str,
+        user_id: str,
+        task_type: str,
+        proposals: List[Dict[str, Any]],
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Phase 2 (new): Weighted consensus + security veto.
+        """
+        ctx = dict(context or {})
+        veto_policy = str(ctx.get("consensus_veto_policy") or "require_approval")
+        explore_exploit = float(ctx.get("consensus_explore_exploit_level", 0.25) or 0.25)
+        latency_budget_ms = float(ctx.get("latency_budget_ms", 120000.0) or 120000.0)
+        proposal_objs: List[AgentProposal] = []
+        for raw in list(proposals or []):
+            if not isinstance(raw, dict):
+                continue
+            proposal_objs.append(
+                AgentProposal(
+                    agent_id=str(raw.get("agent_id") or "unknown"),
+                    action=str(raw.get("action") or ""),
+                    confidence=float(raw.get("confidence", 0.0) or 0.0),
+                    risk=str(raw.get("risk") or "low"),
+                    rationale=str(raw.get("rationale") or ""),
+                    est_cost=float(raw.get("est_cost", 0.0) or 0.0),
+                    est_latency=float(raw.get("est_latency", 0.0) or 0.0),
+                    domain_match=float(raw.get("domain_match", 1.0) or 1.0),
+                    stability=float(raw.get("stability", 0.8) or 0.8),
+                    role=str(raw.get("role") or "worker"),
+                    metadata=dict(raw.get("metadata") or {}),
+                )
+            )
+        self.audit.log_action(
+            user_id=0,
+            action="ConsensusProposed",
+            details={
+                "task_id": str(task_id or ""),
+                "user_id": str(user_id or "local"),
+                "task_type": str(task_type or "general"),
+                "proposal_count": len(proposal_objs),
+            },
+            success=True,
+        )
+        decision = self.consensus_engine.resolve(
+            task_id=str(task_id or ""),
+            user_id=str(user_id or "local"),
+            task_type=str(task_type or "general"),
+            proposals=proposal_objs,
+            veto_policy=veto_policy,
+            explore_exploit_level=explore_exploit,
+            latency_budget_ms=latency_budget_ms,
+            metadata={"context": ctx},
+        )
+        self._consensus_count += 1
+        if proposal_objs:
+            original_action = str(proposal_objs[0].action or "").strip().lower()
+            if original_action and original_action != str(decision.selected_action or "").strip().lower():
+                self._consensus_override_count += 1
+        self.audit.log_action(
+            user_id=0,
+            action="ConsensusResolved",
+            details={"task_id": str(task_id or ""), "decision": decision.to_dict()},
+            success=not bool(decision.blocked),
+        )
+        return decision.to_dict()
 
     async def simulate_task_execution(
         self,
@@ -210,6 +316,7 @@ class CognitiveLayerIntegrator:
             if is_stuck:
                 logger.warning(f"Deadlock detected for {agent_id}")
                 recovery = self.deadlock_detector.suggest_recovery_action(agent_id, [])
+                standardized = self._standardize_recovery_action(str((recovery or {}).get("action") or ""))
 
                 # Track failure for daily analysis
                 self.daily_errors.append({
@@ -218,10 +325,16 @@ class CognitiveLayerIntegrator:
                     "success": False,
                     "timestamp": datetime.now().isoformat()
                 })
+                self.audit.log_action(
+                    user_id=0,
+                    action="DeadlockRecovered",
+                    details={"task_id": task_id, "agent_id": agent_id, "recovery_action": standardized},
+                    success=True,
+                )
 
                 return {
                     "deadlock_detected": True,
-                    "recovery_action": recovery.get("action") if recovery else "none",
+                    "recovery_action": standardized,
                     "recovery_details": recovery or {}
                 }
             else:
@@ -238,6 +351,10 @@ class CognitiveLayerIntegrator:
         except Exception as e:
             logger.error(f"Execution monitoring error: {e}")
             return {"deadlock_detected": False, "error": str(e)}
+        finally:
+            self._total_executions += 1
+            if "is_stuck" in locals() and bool(is_stuck):
+                self._deadlock_count += 1
 
     async def check_execution_timeout(
         self,
@@ -295,7 +412,10 @@ class CognitiveLayerIntegrator:
             # Create dummy deadlock detector for mode switch
             class DummyDetector:
                 def is_stuck(self, r):
-                    return not r.success and r.error_code
+                    return bool((not r.success) and r.error_code)
+
+                def suggest_recovery_action(self, agent_id, available_agents=None):
+                    return {"action": "switch_to_diffuse_mode", "reason": "mode_switch_heuristic"}
 
             # Trigger mode switch if needed
             await self.state_machine.toggle_mode_if_needed(result, DummyDetector())
@@ -305,18 +425,28 @@ class CognitiveLayerIntegrator:
             if mode_before != mode_after:
                 reason = f"Switched from {mode_before} to {mode_after}"
                 logger.info(reason)
+                self.audit.log_action(
+                    user_id=0,
+                    action="ModeSwitched",
+                    details={
+                        "mode_before": str(getattr(mode_before, "value", mode_before)),
+                        "mode_after": str(getattr(mode_after, "value", mode_after)),
+                        "reason": reason,
+                    },
+                    success=True,
+                )
 
             return {
-                "mode_before": str(mode_before),
-                "mode_after": str(mode_after),
+                "mode_before": str(getattr(mode_before, "value", mode_before)),
+                "mode_after": str(getattr(mode_after, "value", mode_after)),
                 "switched": mode_before != mode_after,
                 "reason": reason
             }
         except Exception as e:
             logger.error(f"Mode switch error: {e}")
             return {
-                "mode_before": str(self.state_machine.current_mode),
-                "mode_after": str(self.state_machine.current_mode),
+                "mode_before": str(getattr(self.state_machine.current_mode, "value", self.state_machine.current_mode)),
+                "mode_after": str(getattr(self.state_machine.current_mode, "value", self.state_machine.current_mode)),
                 "switched": False,
                 "error": str(e)
             }
@@ -482,14 +612,45 @@ class CognitiveLayerIntegrator:
     async def check_pomodoro_break(self) -> bool:
         """Check if Pomodoro break is needed"""
         try:
-            # Get accumulated focus time (simplified)
-            needs_break = self.state_machine.needs_pomodoro_break()
+            break_state = self.state_machine.check_pomodoro_timeout()
+            needs_break = bool(break_state)
             if needs_break:
                 logger.info("Pomodoro break needed - take 5 second break")
             return needs_break
         except Exception as e:
             logger.error(f"Pomodoro check error: {e}")
             return False
+
+    def force_mode(self, mode: str) -> dict[str, Any]:
+        token = str(mode or "").strip().lower()
+        if token in {"focused", "focus"}:
+            self.state_machine.reset()
+            return {"success": True, "mode": self.current_mode}
+        if token in {"diffuse", "explore"}:
+            self.state_machine.current_mode = ExecutionMode.DIFFUSE
+            self.state_machine.mode_entered_at = time.time()
+            self.state_machine.state.mode = ExecutionMode.DIFFUSE
+            return {"success": True, "mode": self.current_mode}
+        return {"success": False, "error": "invalid_mode"}
+
+    def get_runtime_metrics(self, user_id: str = "local") -> Dict[str, Any]:
+        deadlock_rate = (
+            (self._deadlock_count / max(1, self._total_executions)) * 100.0
+            if self._total_executions > 0
+            else 0.0
+        )
+        return {
+            "mode": self.current_mode,
+            "success_rate": self.calculate_success_rate(),
+            "deadlock_rate": round(deadlock_rate, 2),
+            "consensus_runs": int(self._consensus_count),
+            "consensus_overrides": int(self._consensus_override_count),
+            "learning_score": float(self.policy_learning.get_learning_score(user_id)),
+            "totals": {
+                "executions": int(self._total_executions),
+                "deadlocks": int(self._deadlock_count),
+            },
+        }
 
 
 # Singleton instance

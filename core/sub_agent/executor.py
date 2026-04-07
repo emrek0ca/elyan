@@ -148,7 +148,11 @@ class SubAgentExecutor:
         mapping = {
             "lead": "planning",
             "researcher": "research_worker",
+            "research_agent": "research_worker",
             "builder": "code_worker",
+            "code_agent": "code_worker",
+            "document_agent": "creative",
+            "thinking_agent": "reasoning",
             "ops": "worker",
             "qa": "qa",
             "communicator": "creative",
@@ -175,11 +179,26 @@ class SubAgentExecutor:
         try:
             uid = str(getattr(self.agent, "current_user_id", "local") or "local")
             try:
-                resp = await llm.generate(
-                    prompt,
-                    role=self._llm_role_for_specialist(getattr(session, "specialist_key", "")),
-                    user_id=uid,
-                )
+                from core.elyan_runtime import get_elyan_runtime
+
+                gateway = getattr(get_elyan_runtime(), "model_gateway", None)
+            except Exception:
+                gateway = None
+            try:
+                if gateway is not None:
+                    resp = await gateway.generate_text(
+                        llm,
+                        prompt,
+                        specialist_key=str(getattr(session, "specialist_key", "") or ""),
+                        role=self._llm_role_for_specialist(getattr(session, "specialist_key", "")),
+                        user_id=uid,
+                    )
+                else:
+                    resp = await llm.generate(
+                        prompt,
+                        role=self._llm_role_for_specialist(getattr(session, "specialist_key", "")),
+                        user_id=uid,
+                    )
             except TypeError:
                 resp = await llm.generate(prompt, user_id=uid)
             return self._parse_llm_directive(resp)

@@ -1,5 +1,5 @@
 import { useLocation } from "react-router-dom";
-import { Layers3, ShieldCheck, Waypoints } from "lucide-react";
+import { Layers3, ShieldCheck, Waypoints } from "@/vendor/lucide-react";
 
 import { Surface } from "@/components/primitives/Surface";
 import { StatusBadge } from "@/components/primitives/StatusBadge";

@@ -70,6 +70,7 @@ class RunRecord:
     workflow_history: List[Dict[str, Any]] = field(default_factory=list)
     assigned_agents: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    workspace_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -95,7 +96,7 @@ class RunStore:
             self.base_dir = (resolve_runs_root() / self.run_id).expanduser()
             self.store_path = self.base_dir
         else:
-            root = Path(store_path or os.path.expanduser("~/.elyan/runs")).expanduser()
+            root = Path(store_path).expanduser() if store_path else resolve_runs_root()
             self.run_id = str(run_id or root.name or "").strip()
             self.base_dir = root
             self.store_path = root

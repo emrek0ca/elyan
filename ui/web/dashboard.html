@@ -411,6 +411,88 @@
       color: var(--tx2);
     }
 
+    /* METRICS */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .metric-card {
+      background: var(--sf);
+      border: 1px solid var(--bd);
+      border-radius: 4px;
+      padding: 16px;
+    }
+
+    .metric-label {
+      font-size: 12px;
+      color: var(--tx3);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+
+    .metric-value {
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1.1;
+    }
+
+    .metric-sub {
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--tx2);
+    }
+
+    .metric-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      margin-left: 8px;
+    }
+
+    .metric-badge.elite { background: rgba(21, 128, 61, 0.12); color: var(--green); }
+    .metric-badge.high { background: rgba(180, 83, 9, 0.12); color: var(--yellow); }
+    .metric-badge.medium { background: rgba(100, 116, 139, 0.12); color: var(--tx2); }
+    .metric-badge.low { background: rgba(190, 18, 60, 0.12); color: var(--red); }
+
+    .metrics-panel {
+      display: grid;
+      gap: 16px;
+    }
+
+    .metrics-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .metrics-table th,
+    .metrics-table td {
+      text-align: left;
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--bd);
+      vertical-align: top;
+    }
+
+    .suggestion-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .suggestion-item {
+      background: var(--sf);
+      border: 1px solid var(--bd);
+      border-radius: 4px;
+      padding: 12px 14px;
+      font-size: 13px;
+    }
+
     /* MEMORY */
     .timeline {
       display: grid;
@@ -559,6 +641,7 @@
       <button class="nav-tab" data-tab="onaylar">Onaylar <span id="approval-count" style="display: none;"></span></button>
       <button class="nav-tab" data-tab="calisma">Çalışmalar</button>
       <button class="nav-tab" data-tab="bellek">Bellek</button>
+      <button class="nav-tab" data-tab="metrikler">Metrikler</button>
       <button class="nav-tab" data-tab="ayarlar">Ayarlar</button>
     </div>
     <div class="nav-pill">
@@ -628,6 +711,18 @@
       <div id="memory-container" class="timeline">
         <div class="empty-state">
           <p>Bellek boş</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- METRİKLER TAB -->
+    <div id="metrikler" class="page">
+      <h2>Metrikler</h2>
+      <p class="sub">DORA, araç sağlığı ve öğrenme durumu</p>
+
+      <div id="metrics-container" class="metrics-panel">
+        <div class="empty-state">
+          <p><span class="loading"></span> Metrikler yükleniyor...</p>
         </div>
       </div>
     </div>
@@ -707,6 +802,8 @@
       filter: 'all'
     };
 
+    let refreshTimers = {};
+
     // ─ TAB SWITCHING ─
     document.querySelectorAll('.nav-tab').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -732,17 +829,37 @@
       // Load data for this tab
       if (tabName === 'onaylar') {
         loadApprovals();
-        // Auto-refresh onaylar
-        setInterval(() => {
-          if (state.currentTab === 'onaylar') loadApprovals();
-        }, REFRESH_INTERVAL);
       } else if (tabName === 'calisma') {
         loadRuns();
       } else if (tabName === 'bellek') {
         loadMemory();
+      } else if (tabName === 'metrikler') {
+        loadMetrics();
+      } else if (tabName === 'kontrol') {
+        loadActivity();
       } else if (tabName === 'ayarlar') {
         loadStats();
       }
+
+      scheduleRefresh(tabName);
+    }
+
+    function scheduleRefresh(tabName) {
+      Object.keys(refreshTimers).forEach(key => {
+        if (key !== tabName && refreshTimers[key]) {
+          clearInterval(refreshTimers[key]);
+          delete refreshTimers[key];
+        }
+      });
+      if (refreshTimers[tabName]) return;
+      const interval = tabName === 'metrikler' ? 30000 : REFRESH_INTERVAL;
+      refreshTimers[tabName] = setInterval(() => {
+        if (state.currentTab !== tabName) return;
+        if (tabName === 'onaylar') loadApprovals();
+        if (tabName === 'calisma') loadRuns();
+        if (tabName === 'bellek') loadMemory();
+        if (tabName === 'metrikler') loadMetrics();
+      }, interval);
     }
 
     // ─ API CALLS ─
@@ -1007,6 +1124,145 @@
       document.getElementById('stats-body').innerHTML = html;
     }
 
+    async function loadMetrics() {
+      const [dora, tools, health, learning, toil, multiAgent] = await Promise.all([
+        apiCall('/metrics/dora?period=24'),
+        apiCall('/metrics/tools'),
+        apiCall('/metrics/health'),
+        apiCall('/metrics/learning'),
+        apiCall('/metrics/toil'),
+        apiCall('/metrics/multi-agent'),
+      ]);
+
+      if (!dora || !dora.snapshot) {
+        document.getElementById('metrics-container').innerHTML = '<div class="empty-state"><p>Metrikler yüklenemedi</p></div>';
+        return;
+      }
+
+      const s = dora.snapshot;
+      const level = String(s.performance_level || 'Low').toLowerCase();
+      const toolRows = (tools && tools.tools ? tools.tools : []).map(item => {
+        const status = (health && health.health && health.health[item.tool_name]) ? health.health[item.tool_name].state : 'CLOSED';
+        return `
+          <tr>
+            <td>${escapeHtml(item.tool_name || '')}</td>
+            <td>${item.total_calls || 0}</td>
+            <td>${((item.success_rate || 0) * 100).toFixed(1)}%</td>
+            <td>${Math.round(item.avg_latency_ms || 0)}ms</td>
+            <td><span class="badge ${status === 'OPEN' ? 'err' : status === 'HALF_OPEN' ? 'warn' : 'ok'}">${status}</span></td>
+          </tr>
+        `;
+      }).join('');
+
+      const bandit = learning && learning.learning && learning.learning.bandit ? learning.learning.bandit : {};
+      const banditInsights = Object.keys(bandit).length
+        ? Object.entries(bandit).map(([category, item]) => `
+          <div class="suggestion-item">
+            <strong>${escapeHtml(category)}</strong>: ${escapeHtml(item.best_tool || '')} (${((item.success_rate || 0) * 100).toFixed(1)}%, güven ${item.confidence || 0})
+          </div>
+        `).join('')
+        : '<div class="suggestion-item">Bandit verisi yok</div>';
+
+      const suggestions = (s.improvement_suggestions || []).map(text => `
+        <div class="suggestion-item">${escapeHtml(text)}</div>
+      `).join('');
+
+      const multiAgentState = multiAgent && multiAgent.multi_agent ? multiAgent.multi_agent : {};
+      const agentRows = (multiAgentState.registered_agents || []).map(item => `
+        <tr>
+          <td>${escapeHtml(item.agent_id || '')}</td>
+          <td>${(item.capabilities || []).map(escapeHtml).join(', ')}</td>
+          <td>${item.current_load || 0}/${item.max_concurrent || 0}</td>
+          <td>${Math.round((item.utilization || 0) * 100)}%</td>
+        </tr>
+      `).join('');
+
+      const html = `
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-label">Task Tamamlama</div>
+            <div class="metric-value">${(s.task_completion_rate * 100).toFixed(1)}%</div>
+            <div class="metric-sub">Orijinal tamamlanan/başlayan oranı</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">İlk Sonuç Süresi</div>
+            <div class="metric-value">${Math.round(s.avg_time_to_first_result_ms || 0)}ms</div>
+            <div class="metric-sub">Lead time analog</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Başarısızlık Oranı</div>
+            <div class="metric-value">${(s.task_failure_rate * 100).toFixed(1)}%</div>
+            <div class="metric-sub">Recovery: ${Math.round(s.avg_recovery_time_ms || 0)}ms</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Performans</div>
+            <div class="metric-value">${escapeHtml(s.performance_level || 'Low')} <span class="metric-badge ${level}">${escapeHtml(s.performance_level || 'Low')}</span></div>
+            <div class="metric-sub">Otonom karar: ${(s.autonomous_decision_rate * 100).toFixed(1)}%</div>
+          </div>
+        </div>
+
+        <div class="metric-card">
+          <div class="metric-label">Araç Sağlığı</div>
+          <table class="metrics-table">
+            <thead>
+              <tr>
+                <th>Araç</th><th>Toplam</th><th>Başarı</th><th>Süre</th><th>Durum</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${toolRows || '<tr><td colspan="5">Veri yok</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="metric-card">
+          <div class="metric-label">Öğrenme</div>
+          <div class="metrics-panel">
+            <div><strong>Cache Hit Rate:</strong> ${((s.cache_hit_rate || 0) * 100).toFixed(1)}%</div>
+            <div><strong>Approval Oranı:</strong> ${((s.approval_rate || 0) * 100).toFixed(1)}%</div>
+            <div><strong>Bandit</strong></div>
+            ${banditInsights}
+          </div>
+        </div>
+
+        <div class="metric-card">
+          <div class="metric-label">İyileştirme Önerileri</div>
+          <div class="suggestion-list">
+            ${suggestions || '<div class="suggestion-item">Öneri yok</div>'}
+          </div>
+        </div>
+
+        <div class="metric-card">
+          <div class="metric-label">Toil</div>
+          <div class="suggestion-list">
+            ${(toil && toil.toil && toil.toil.task_categories ? toil.toil.task_categories : []).map(item => `
+              <div class="suggestion-item">${escapeHtml(item.name || '')}</div>
+            `).join('') || '<div class="suggestion-item">Toil verisi yok</div>'}
+          </div>
+        </div>
+
+        <div class="metric-card">
+          <div class="metric-label">Multi-Agent</div>
+          <div class="metrics-panel">
+            <div><strong>Aktif Sözleşme:</strong> ${multiAgentState.active_contract_count || 0}</div>
+            <div><strong>World Fact:</strong> ${multiAgentState.world_fact_count || 0}</div>
+          </div>
+          <table class="metrics-table">
+            <thead>
+              <tr>
+                <th>Ajan</th><th>Yetenek</th><th>Yük</th><th>Util</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${agentRows || '<tr><td colspan="4">Ajan verisi yok</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      `;
+
+      document.getElementById('metrics-container').innerHTML = html;
+    }
+
     // ─ COLLAPSE TOGGLES ─
     document.querySelectorAll('.collapse-header').forEach(header => {
       header.addEventListener('click', () => {
@@ -1027,6 +1283,7 @@
     // ─ INIT ─
     document.addEventListener('DOMContentLoaded', () => {
       loadActivity();
+      scheduleRefresh('kontrol');
     });
   </script>
 </body>

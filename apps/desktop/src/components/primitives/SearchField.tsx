@@ -1,6 +1,6 @@
 import type { InputHTMLAttributes } from "react";
 
-import { Search } from "lucide-react";
+import { Search } from "@/vendor/lucide-react";
 
 import { cn } from "@/utils/cn";
 

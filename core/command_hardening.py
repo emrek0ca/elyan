@@ -482,8 +482,8 @@ def build_chat_history_block(history: list[Any] | None, *, max_pairs: int = 4) -
 
 def build_chat_fallback_message(*, language: str = "tr") -> str:
     if str(language or "tr").strip().lower().startswith("en"):
-        return "I'm here. How can I help?"
-    return "Buradayım. Nasıl yardımcı olayım?"
+        return "I'm here. Tell me what you need and I'll take it from there."
+    return "Buradayım. Ne yapmak istediğini söyle, birlikte ilerleyelim."
 
 
 def blocked_command_reason(user_input: str, *, tool_name: str = "") -> str:

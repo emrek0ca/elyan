@@ -6,6 +6,7 @@ Conversational flow, real-time streaming, proactive suggestions, context continu
 from __future__ import annotations
 
 from .engine import UXEngine
+from .engine import ConversationProfile, DeliveryPlan, UXResult
 from .conversation_flow import ConversationFlowManager
 from .suggestion_engine import SuggestionEngine
 from .context_continuity import ContextContinuityTracker
@@ -23,6 +24,9 @@ def get_ux_engine() -> UXEngine:
 
 __all__ = [
     "UXEngine",
+    "UXResult",
+    "ConversationProfile",
+    "DeliveryPlan",
     "ConversationFlowManager",
     "SuggestionEngine",
     "ContextContinuityTracker",

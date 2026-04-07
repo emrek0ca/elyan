@@ -327,6 +327,25 @@ def test_integration_registry_resolves_oauth_first_capabilities():
     assert str(quick_plan["integration_type"]) == IntegrationType.EMAIL.value
 
 
+def test_integration_registry_resolves_apple_and_imessage_capabilities():
+    notes_capability = integration_registry.resolve("Apple Notes'ta toplantı notunu bul")
+    reminders_capability = integration_registry.resolve("Reminders'da bugun icin gorev olustur")
+    imessage_capability = integration_registry.resolve("iMessage ile taslak mesaj hazirla")
+
+    assert notes_capability.provider == "apple_notes"
+    assert str(notes_capability.integration_type) == IntegrationType.DESKTOP.value
+    assert str(notes_capability.auth_strategy) == AuthStrategy.NONE.value
+    assert "notes.read" in list(notes_capability.required_scopes)
+
+    assert reminders_capability.provider == "apple_reminders"
+    assert str(reminders_capability.integration_type) == IntegrationType.DESKTOP.value
+    assert str(reminders_capability.fallback_policy) == FallbackPolicy.NATIVE.value
+
+    assert imessage_capability.provider == "imessage"
+    assert str(imessage_capability.integration_type) == IntegrationType.DESKTOP.value
+    assert "imessage.write" in list(imessage_capability.required_scopes)
+
+
 @pytest.mark.asyncio
 async def test_email_connector_uses_google_oauth_when_env_is_missing(monkeypatch):
     connector = EmailConnector(provider="google", connector_name="gmail")

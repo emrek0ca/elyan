@@ -9,6 +9,7 @@ from typing import Any
 
 from utils.logger import get_logger
 
+from core.billing.reconciliation_bridge import record_pricing_usage
 from core.quota import quota_manager
 
 logger = get_logger("pricing_tracker")
@@ -127,6 +128,16 @@ class PricingTracker:
         p["last_model"] = model
 
         self._save()
+        try:
+            record_pricing_usage(
+                provider=provider_key,
+                model=model,
+                prompt_tokens=max(prompt_tokens, 0),
+                completion_tokens=max(completion_tokens, 0),
+                cost_usd=total_cost,
+            )
+        except Exception as exc:
+            logger.debug(f"Billing reconciliation bridge skipped: {exc}")
 
     def summary(self) -> dict[str, Any]:
         return self._data

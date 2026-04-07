@@ -2,9 +2,11 @@
 
 from pathlib import Path
 
+_REPO = Path(__file__).resolve().parent.parent.parent
+
 
 def test_bot_integration_hub_no_placeholder_notes():
-    source = Path("/Users/emrekoca/Desktop/bot/bot/core/integration_hub.py").read_text(encoding="utf-8")
+    source = (_REPO / "core/integration_hub.py").read_text(encoding="utf-8")
 
     assert "This is a placeholder" not in source
     assert "not yet fully implemented" not in source

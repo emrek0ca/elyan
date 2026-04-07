@@ -24,7 +24,7 @@ from core.gateway.adapters.whatsapp_bridge import (
 )
 from security.keychain import KeychainManager, keychain
 
-_SUPPORTED = ["telegram", "discord", "whatsapp", "slack", "signal", "webchat"]
+_SUPPORTED = ["telegram", "discord", "whatsapp", "slack", "signal", "sms", "webchat"]
 
 
 def _mask_sensitive_fields(data: Any) -> Any:
@@ -312,6 +312,27 @@ def run(args):
             "whatsapp": "WHATSAPP_BOT_TOKEN",
             "signal": "SIGNAL_BOT_TOKEN",
         }
+        if t == "sms":
+            account_sid = input("Twilio Account SID: ").strip()
+            auth_token = input("Twilio Auth Token: ").strip()
+            from_number = input("Twilio From Number: ").strip()
+            if not account_sid or not auth_token or not from_number:
+                print("SMS kurulumu için Account SID, Auth Token ve From Number zorunlu.")
+                return
+            auth_token_value = _store_secret("TWILIO_AUTH_TOKEN", auth_token)
+            entry = {
+                "type": "sms",
+                "id": "sms",
+                "account_sid": account_sid,
+                "auth_token": auth_token_value,
+                "from_number": from_number,
+                "webhook_path": "/sms/webhook",
+                "enabled": True,
+            }
+            channels = _upsert_channel(channels, entry)
+            _save_channels(channels)
+            print("✅ SMS kanalı kaydedildi.")
+            return
         env_key = env_key_map.get(t)
         token_value = token
         if env_key:

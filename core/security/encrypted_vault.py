@@ -8,9 +8,9 @@ Provides encryption/decryption for sensitive data with:
 - Memory-safe operations
 """
 
-import os
-import json
 import base64
+import json
+import os
 from typing import Any, Optional, Dict
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -19,6 +19,18 @@ from cryptography.hazmat.backends import default_backend
 from core.observability.logger import get_structured_logger
 
 slog = get_structured_logger("encrypted_vault")
+
+
+class VaultError(RuntimeError):
+    """Base vault error."""
+
+
+class VaultContextError(VaultError):
+    """Raised when a decrypt request uses the wrong context."""
+
+
+class VaultTamperError(VaultError):
+    """Raised when ciphertext authentication fails."""
 
 
 class EncryptedVault:
@@ -59,8 +71,12 @@ class EncryptedVault:
         new_key = os.urandom(32)
         slog.log_event(
             "generated_new_master_key",
-            {"key_b64": base64.b64encode(new_key).decode()},
-            level="info"
+            {
+                "persisted": False,
+                "source": "process_ephemeral",
+                "rotation_required": True,
+            },
+            level="warning"
         )
         return new_key
 
@@ -115,7 +131,7 @@ class EncryptedVault:
                 {"error": str(e)},
                 level="error"
             )
-            raise
+            raise VaultError(str(e)) from e
 
     def decrypt(self, encrypted_data: Dict[str, str], context: str = "general") -> Any:
         """
@@ -137,29 +153,30 @@ class EncryptedVault:
             # Verify context matches
             stored_context = encrypted_data.get("context", "general")
             if stored_context != context:
-                slog.log_event(
-                    "context_mismatch",
-                    {"expected": context, "got": stored_context},
-                    level="warning"
-                )
+                raise VaultContextError(f"vault_context_mismatch:{stored_context}->{context}")
 
             # Derive key with same context
             key = self._derive_key(salt, context)
 
             # Decrypt and verify
             cipher = AESGCM(key)
-            plaintext = cipher.decrypt(nonce, ciphertext, None)
+            try:
+                plaintext = cipher.decrypt(nonce, ciphertext, None)
+            except Exception as exc:
+                raise VaultTamperError("vault_authentication_failed") from exc
 
             # Deserialize
             return json.loads(plaintext.decode("utf-8"))
 
+        except VaultError:
+            raise
         except Exception as e:
             slog.log_event(
                 "decryption_error",
                 {"error": str(e)},
                 level="error"
             )
-            raise
+            raise VaultError(str(e)) from e
 
     def hash_password(self, password: str) -> str:
         """Hash a password using PBKDF2 (for verification)."""
@@ -197,6 +214,23 @@ class EncryptedVault:
                 level="error"
             )
             return False
+
+    def export_master_key_reference(self) -> str:
+        """Return the current master key as a base64 reference for rotation workflows."""
+        return base64.b64encode(self.master_key).decode("utf-8")
+
+    def rotate_master_key(self, new_master_key: Optional[bytes] = None) -> str:
+        """Rotate the in-memory master key. Callers are responsible for re-encryption workflows."""
+        candidate = new_master_key or os.urandom(32)
+        if len(candidate) != 32:
+            raise VaultError("rotation_key_must_be_32_bytes")
+        self.master_key = candidate
+        slog.log_event(
+            "master_key_rotated",
+            {"rotation_required": True},
+            level="info",
+        )
+        return self.export_master_key_reference()
 
 
 # Singleton instance

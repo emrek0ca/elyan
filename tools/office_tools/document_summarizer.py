@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 from utils.logger import get_logger
 from security.validator import validate_path
+from config.settings_manager import SettingsPanel
 
 logger = get_logger("office.summarizer")
 
@@ -38,6 +39,30 @@ async def summarize_document(
             file_path = Path(path).expanduser().resolve()
             filename = file_path.name
             ext = file_path.suffix.lower()
+            settings = SettingsPanel()
+            try:
+                settings._load()
+            except Exception:
+                pass
+
+            if bool(settings.get("liteparse_enabled", True)) and ext in {
+                ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
+                ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif",
+            }:
+                try:
+                    from .liteparse_adapter import parse_document_with_liteparse
+
+                    liteparse_result = await parse_document_with_liteparse(str(file_path), max_chars=MAX_CONTENT_LENGTH * 3)
+                    if liteparse_result.get("success"):
+                        document_content = str(liteparse_result.get("content") or "")[:MAX_CONTENT_LENGTH]
+                        result = {"success": True, "content": document_content, "backend": "liteparse"}
+                    else:
+                        result = {"success": False, "error": str(liteparse_result.get("error") or "liteparse_failed")}
+                except Exception as liteparse_exc:
+                    logger.debug("LiteParse summarizer fallback: %s", liteparse_exc)
+                    result = {"success": False, "error": str(liteparse_exc)}
+            else:
+                result = {"success": False, "error": "liteparse_disabled_or_unsupported"}
 
             vision_result: dict[str, Any] | None = None
             if ext in [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"]:
@@ -66,11 +91,13 @@ async def summarize_document(
                     logger.debug("Vision document analysis fallback: %s", vision_exc)
 
             if ext in [".docx", ".doc"]:
-                from .word_tools import read_word
-                result = await read_word(path, max_chars=MAX_CONTENT_LENGTH)
+                if not result.get("success"):
+                    from .word_tools import read_word
+                    result = await read_word(path, max_chars=MAX_CONTENT_LENGTH)
             elif ext in [".xlsx", ".xls"]:
-                from .excel_tools import read_excel
-                result = await read_excel(path)
+                if not result.get("success"):
+                    from .excel_tools import read_excel
+                    result = await read_excel(path)
                 if result.get("success"):
                     rows = result.get("data")
                     if isinstance(rows, list):
@@ -101,8 +128,9 @@ async def summarize_document(
                     else:
                         document_content = str(result.get("summary", "") or "")
             elif ext == ".pdf":
-                from .pdf_tools import read_pdf
-                result = await read_pdf(path, extract_tables=False, use_ocr=False)
+                if not result.get("success"):
+                    from .pdf_tools import read_pdf
+                    result = await read_pdf(path, extract_tables=False, use_ocr=False)
                 if result.get("success"):
                     document_content = str(result.get("content", "") or "")[:MAX_CONTENT_LENGTH]
                     if vision_result and vision_result.get("success"):
@@ -110,7 +138,9 @@ async def summarize_document(
                         if extra:
                             document_content = f"{document_content}\n\n{extra}".strip()
             elif ext in [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"]:
-                if vision_result and vision_result.get("success"):
+                if result.get("success") and document_content:
+                    pass
+                elif vision_result and vision_result.get("success"):
                     result = vision_result
                     document_content = str(
                         vision_result.get("full_text")

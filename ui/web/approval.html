@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Approval System - ELYAN</title>
+    <script src="/ui/web/runtime_config.js"></script>
     <style>
         /* ═══════════════════════════════════════════════════════════
            GLASSMORPHISM DESIGN SYSTEM
@@ -649,7 +650,7 @@
     </div>
 
     <script>
-        const API_URL = 'http://localhost:18789/api/v1';
+        const API_URL = typeof getElyanApiBaseUrl === 'function' ? getElyanApiBaseUrl() : '/api/v1';
         let approvalData = [];
         let autoRefreshInterval;
         let autoRefreshEnabled = true;

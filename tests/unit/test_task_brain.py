@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from core.evidence.run_store import RunStore
+from core.run_store import RunStore
 from core.task_brain import TaskBrain
 
 
@@ -41,7 +41,7 @@ def test_task_brain_transitions_and_registers_artifacts():
 
 
 def test_run_store_writes_task_state(tmp_path, monkeypatch):
-    monkeypatch.setattr("core.evidence.run_store.resolve_runs_root", lambda: tmp_path / "runs")
+    monkeypatch.setattr("core.run_store.resolve_runs_root", lambda: tmp_path / "runs")
     store = RunStore("run_task_state_001")
     task_state = {
         "task_id": "task_001",
@@ -61,7 +61,7 @@ def test_run_store_writes_task_state(tmp_path, monkeypatch):
 
 
 def test_run_store_emits_lifecycle_events(tmp_path, monkeypatch):
-    monkeypatch.setattr("core.evidence.run_store.resolve_runs_root", lambda: tmp_path / "runs")
+    monkeypatch.setattr("core.run_store.resolve_runs_root", lambda: tmp_path / "runs")
     store = RunStore("run_task_events_001")
     store.write_evidence(manifest_path="/tmp/manifest.json", steps=[{"id": "s1"}], artifacts=[{"path": "/tmp/a.txt"}], metadata={"status": "success"})
     store.write_summary(status="success", response_text="ok", artifacts=[{"path": "/tmp/a.txt"}])
@@ -73,7 +73,7 @@ def test_run_store_emits_lifecycle_events(tmp_path, monkeypatch):
 
 
 def test_run_store_summary_includes_research_quality_metrics(tmp_path, monkeypatch):
-    monkeypatch.setattr("core.evidence.run_store.resolve_runs_root", lambda: tmp_path / "runs")
+    monkeypatch.setattr("core.run_store.resolve_runs_root", lambda: tmp_path / "runs")
     store = RunStore("run_research_metrics_001")
     summary_path = store.write_summary(
         status="partial",
@@ -108,7 +108,7 @@ def test_run_store_summary_includes_research_quality_metrics(tmp_path, monkeypat
 
 
 def test_run_store_summary_includes_workflow_metrics(tmp_path, monkeypatch):
-    monkeypatch.setattr("core.evidence.run_store.resolve_runs_root", lambda: tmp_path / "runs")
+    monkeypatch.setattr("core.run_store.resolve_runs_root", lambda: tmp_path / "runs")
     store = RunStore("run_workflow_metrics_001")
     summary_path = store.write_summary(
         status="partial",
@@ -143,7 +143,7 @@ def test_run_store_summary_includes_workflow_metrics(tmp_path, monkeypatch):
 
 
 def test_run_store_emits_capability_selected_event(tmp_path, monkeypatch):
-    monkeypatch.setattr("core.evidence.run_store.resolve_runs_root", lambda: tmp_path / "runs")
+    monkeypatch.setattr("core.run_store.resolve_runs_root", lambda: tmp_path / "runs")
     store = RunStore("run_capability_selected_001")
     store.write_task(
         {"contract_id": "research_report_v1"},
@@ -168,7 +168,7 @@ def test_run_store_emits_capability_selected_event(tmp_path, monkeypatch):
 
 
 def test_run_store_emits_plan_created_event(tmp_path, monkeypatch):
-    monkeypatch.setattr("core.evidence.run_store.resolve_runs_root", lambda: tmp_path / "runs")
+    monkeypatch.setattr("core.run_store.resolve_runs_root", lambda: tmp_path / "runs")
     store = RunStore("run_plan_created_001")
     store.write_task(
         {"contract_id": "screen_operator_v1"},

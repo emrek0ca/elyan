@@ -12,6 +12,7 @@ from typing import Any
 from core.confidence import coerce_confidence
 from core.contracts.failure_taxonomy import FailureCode
 from core.contracts.verification_result import VerificationCheck, VerificationResult
+from core.execution_guard import get_execution_guard
 from core.storage_paths import resolve_elyan_data_dir
 from core.text_artifacts import preferred_text_path
 
@@ -851,6 +852,73 @@ def _write_text(path: Path, text: str) -> None:
     path.write_text(str(text or ""), encoding="utf-8")
 
 
+def _identity_from_task_state(task_state: dict[str, Any] | None = None, metadata: dict[str, Any] | None = None) -> dict[str, str]:
+    state = task_state if isinstance(task_state, dict) else {}
+    meta = metadata if isinstance(metadata, dict) else {}
+    state_meta = state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
+    return {
+        "workspace_id": str(meta.get("workspace_id") or state.get("workspace_id") or state_meta.get("workspace_id") or "local-workspace").strip() or "local-workspace",
+        "session_id": str(meta.get("session_id") or state.get("session_id") or state_meta.get("session_id") or "").strip(),
+        "run_id": str(meta.get("run_id") or state.get("run_id") or state_meta.get("run_id") or "").strip(),
+        "actor_id": str(meta.get("actor_id") or meta.get("user_id") or state.get("actor_id") or state.get("user_id") or state_meta.get("actor_id") or "").strip(),
+    }
+
+
+def _emit_screen_shadow(
+    *,
+    payload: dict[str, Any],
+    mode: str,
+    task_state: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    elapsed_ms: float = 0.0,
+) -> dict[str, Any]:
+    identity = _identity_from_task_state(task_state, metadata)
+    verifier_outcomes = [item for item in list(payload.get("verifier_outcomes") or []) if isinstance(item, dict)]
+    latest_verify = verifier_outcomes[-1] if verifier_outcomes else {}
+    get_execution_guard().observe_capability_runtime(
+        capability="screen_operator",
+        action=str(mode or "inspect").strip().lower() or "inspect",
+        success=bool(payload.get("success")),
+        workspace_id=identity["workspace_id"],
+        actor_id=identity["actor_id"],
+        session_id=identity["session_id"],
+        run_id=identity["run_id"],
+        reason=str(payload.get("error") or payload.get("message") or ""),
+        verification=latest_verify,
+        metadata={
+            "status": str(payload.get("status") or ""),
+            "goal_achieved": bool(payload.get("goal_achieved", False)),
+            "error_code": str(payload.get("error_code") or ""),
+            "artifact_count": len(list(payload.get("artifacts") or [])),
+            "screenshot_count": len(list(payload.get("screenshots") or [])),
+            "verifier_count": len(verifier_outcomes),
+        },
+        level="warning" if not payload.get("success") else "info",
+    )
+    try:
+        from core.learning.reward_shaper import RewardShaper
+        from core.learning.tool_bandit import get_tool_bandit
+
+        reward = RewardShaper().compute_reward(
+            task_completed=bool(payload.get("success")),
+            user_explicit_feedback=None,
+            response_time_ms=float(elapsed_ms or 0.0),
+            approval_required=False,
+            task_was_in_cache=False,
+            error_occurred=not bool(payload.get("success")),
+        )
+        get_tool_bandit().record_outcome(
+            task_category="screen_operator",
+            tool_name=str(mode or "inspect").strip().lower() or "inspect",
+            success=bool(payload.get("success")),
+            latency_ms=float(elapsed_ms or 0.0),
+            user_satisfaction=max(0.0, (reward + 2.0) / 4.0),
+        )
+    except Exception:
+        pass
+    return payload
+
+
 def _materialize_artifacts(
     *,
     before_path: str,
@@ -900,6 +968,7 @@ async def run_screen_operator(
     max_retries_per_action: int = 2,
     services: ScreenOperatorServices | None = None,
     task_state: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     runtime_services = services or default_screen_operator_services()
     started_at = time.monotonic()
@@ -921,7 +990,12 @@ async def run_screen_operator(
         region=region,
     )
     if not initial.get("success"):
-        return {"success": False, "status": "failed", "error": initial.get("error", "screen_observe_failed")}
+        return _emit_screen_shadow(
+            payload={"success": False, "status": "failed", "error": initial.get("error", "screen_observe_failed")},
+            mode=normalized_mode,
+            task_state=task_state,
+            metadata=metadata,
+        )
 
     before_path = str(((initial.get("screenshot") if isinstance(initial.get("screenshot"), dict) else {}) or {}).get("path") or "")
     ui_state = dict(initial.get("ui_state") or {})
@@ -972,7 +1046,13 @@ async def run_screen_operator(
             },
         }
         payload["recovery_hints"] = _screen_recovery_hints(ui_state=ui_state, action_logs=action_logs, verifier_outcomes=verifier_outcomes)
-        return payload
+        return _emit_screen_shadow(
+            payload=payload,
+            mode=normalized_mode,
+            task_state=task_state,
+            metadata=metadata,
+            elapsed_ms=(time.monotonic() - started_at) * 1000.0,
+        )
 
     if plan_errors:
         artifacts, manifest = _materialize_artifacts(
@@ -1001,7 +1081,13 @@ async def run_screen_operator(
             "task_state": {"current_step": 0, "attempts": 0, "ui_state": ui_state, "last_ui_state": ui_state, "last_target_cache": cache, "verifier_outcomes": verifier_outcomes},
         }
         payload["recovery_hints"] = _screen_recovery_hints(ui_state=ui_state, action_logs=action_logs, verifier_outcomes=[{"failed_codes": plan_errors}])
-        return payload
+        return _emit_screen_shadow(
+            payload=payload,
+            mode=normalized_mode,
+            task_state=task_state,
+            metadata=metadata,
+            elapsed_ms=(time.monotonic() - started_at) * 1000.0,
+        )
 
     goal_achieved = False
     max_steps = max(1, min(int(max_actions or 1), len(actions)))
@@ -1122,7 +1208,13 @@ async def run_screen_operator(
             },
         }
         payload["recovery_hints"] = _screen_recovery_hints(ui_state=ui_state, action_logs=action_logs, verifier_outcomes=verifier_outcomes)
-        return payload
+        return _emit_screen_shadow(
+            payload=payload,
+            mode=normalized_mode,
+            task_state=task_state,
+            metadata=metadata,
+            elapsed_ms=(time.monotonic() - started_at) * 1000.0,
+        )
     payload = {
         "success": True,
         "status": "success" if goal_achieved else "partial",
@@ -1149,7 +1241,13 @@ async def run_screen_operator(
         },
     }
     payload["recovery_hints"] = _screen_recovery_hints(ui_state=ui_state, action_logs=action_logs, verifier_outcomes=verifier_outcomes)
-    return payload
+    return _emit_screen_shadow(
+        payload=payload,
+        mode=normalized_mode,
+        task_state=task_state,
+        metadata=metadata,
+        elapsed_ms=(time.monotonic() - started_at) * 1000.0,
+    )
 
 
 __all__ = ["run_screen_operator"]

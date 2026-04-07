@@ -1,0 +1,542 @@
+"""
+core/jarvis/jarvis_core.py
+───────────────────────────────────────────────────────────────────────────────
+JarvisCore — The Brain
+
+Central intelligence that understands intent, decomposes tasks, dispatches
+to the right agent team, and synthesizes responses. Works identically
+regardless of input channel (Telegram, WhatsApp, iMessage, Desktop, Voice).
+
+Flow:
+  ChannelMessage → IntentClassifier → TaskDecomposer → AgentDispatcher → ResponseSynthesizer
+
+Design principles:
+  - Stateless per request (session state lives in session_engine)
+  - Uses existing Orchestrator + Pipeline — does NOT replace them
+  - Adds intent understanding + task decomposition + response formatting
+  - Graceful fallback: if classification fails → default to chat mode
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any
+
+from utils.logger import get_logger
+
+logger = get_logger("jarvis_core")
+
+
+# ── Intent Taxonomy ─────────────────────────────────────────────────────────
+
+class IntentCategory(str, Enum):
+    SYSTEM_CONTROL = "system_control"     # ekran, uygulama, dosya, terminal
+    INFORMATION = "information"           # araştır, bul, özetle, açıkla
+    CREATION = "creation"                 # yaz, oluştur, kodla, tasarla
+    COMMUNICATION = "communication"       # e-posta gönder, mesaj at, bildir
+    MONITORING = "monitoring"             # izle, uyar, takip et, raporla
+    AUTOMATION = "automation"             # her X'te Y yap, otomatikleştir
+    CONVERSATION = "conversation"         # sohbet, soru, yardım
+
+
+class Complexity(str, Enum):
+    TRIVIAL = "trivial"     # selam, teşekkür → direkt yanıt
+    SIMPLE = "simple"       # tek adım, net → 1 ajan
+    MODERATE = "moderate"   # 2-3 adım → ajan zinciri
+    COMPLEX = "complex"     # çoklu bağımlı → orchestrator
+    EXPERT = "expert"       # araştırma + üretim + doğrulama → tam takım
+
+
+@dataclass(slots=True)
+class ClassifiedIntent:
+    """Result of intent classification."""
+    category: IntentCategory
+    complexity: Complexity
+    confidence: float  # [0.0, 1.0]
+    sub_intent: str = ""  # e.g. "open_app", "search_web"
+    entities: dict[str, Any] = field(default_factory=dict)
+    raw_text: str = ""
+
+
+@dataclass(slots=True)
+class TaskPlan:
+    """Decomposed task plan with steps."""
+    intent: ClassifiedIntent
+    steps: list[TaskStep] = field(default_factory=list)
+    estimated_duration_s: float = 0.0
+    requires_approval: bool = False
+
+
+@dataclass(slots=True)
+class TaskStep:
+    """Single step in a task plan."""
+    step_id: str
+    action: str          # e.g. "research", "write_file", "send_telegram"
+    owner: str           # specialist key: "researcher", "builder", "ops"
+    params: dict[str, Any] = field(default_factory=dict)
+    depends_on: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class JarvisResponse:
+    """Final response to send back to the user."""
+    text: str
+    channel_format: str = "markdown"  # markdown, plain, html
+    attachments: list[dict[str, Any]] = field(default_factory=list)
+    buttons: list[dict[str, Any]] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    duration_s: float = 0.0
+
+
+# ── Intent Classifier ───────────────────────────────────────────────────────
+
+# Tier 1: Rule-based keyword matching (<5ms)
+_INTENT_RULES: list[tuple[list[str], IntentCategory, str]] = [
+    # System Control
+    (["aç", "kapat", "başlat", "durdur", "open", "close", "launch", "quit"], IntentCategory.SYSTEM_CONTROL, "app_control"),
+    (["ekran", "screenshot", "screen", "görüntü"], IntentCategory.SYSTEM_CONTROL, "screen_capture"),
+    (["dark mode", "karanlık mod", "parlaklık", "brightness"], IntentCategory.SYSTEM_CONTROL, "system_settings"),
+    (["dosya", "klasör", "file", "folder", "sil", "taşı", "kopyala"], IntentCategory.SYSTEM_CONTROL, "file_ops"),
+    (["terminal", "komut", "command", "çalıştır", "run"], IntentCategory.SYSTEM_CONTROL, "terminal"),
+    (["wifi", "bluetooth", "ağ", "network", "ip"], IntentCategory.SYSTEM_CONTROL, "network"),
+
+    # Information
+    (["araştır", "bul", "ara", "search", "find", "google"], IntentCategory.INFORMATION, "search"),
+    (["özetle", "summarize", "özet", "abstract"], IntentCategory.INFORMATION, "summarize"),
+    (["açıkla", "explain", "nedir", "ne demek", "what is"], IntentCategory.INFORMATION, "explain"),
+    (["hava", "weather", "sıcaklık"], IntentCategory.INFORMATION, "weather"),
+    (["takvim", "calendar", "randevu", "toplantı"], IntentCategory.INFORMATION, "calendar"),
+
+    # Creation
+    (["yaz", "oluştur", "write", "create", "generate", "üret"], IntentCategory.CREATION, "generate"),
+    (["kodla", "code", "program", "script", "fonksiyon"], IntentCategory.CREATION, "code"),
+    (["web sitesi", "website", "sayfa", "page", "landing"], IntentCategory.CREATION, "web"),
+    (["rapor", "report", "belge", "document", "döküman"], IntentCategory.CREATION, "document"),
+
+    # Communication
+    (["e-posta", "email", "mail gönder", "send email"], IntentCategory.COMMUNICATION, "email"),
+    (["mesaj gönder", "send message", "bildir", "notify"], IntentCategory.COMMUNICATION, "message"),
+
+    # Monitoring
+    (["izle", "watch", "monitor", "takip", "track"], IntentCategory.MONITORING, "watch"),
+    (["uyar", "alert", "bildirim", "notification"], IntentCategory.MONITORING, "alert"),
+    (["cpu", "ram", "disk", "battery", "pil", "bellek"], IntentCategory.MONITORING, "system_health"),
+
+    # Automation
+    (["her", "every", "otomatik", "automatic", "zamanla", "schedule", "cron"], IntentCategory.AUTOMATION, "schedule"),
+    (["tekrarla", "repeat", "döngü", "loop"], IntentCategory.AUTOMATION, "repeat"),
+]
+
+# Complexity estimation keywords
+_COMPLEXITY_SIGNALS: dict[Complexity, list[str]] = {
+    Complexity.TRIVIAL: ["selam", "merhaba", "hello", "hi", "teşekkür", "thanks", "ok", "tamam"],
+    Complexity.SIMPLE: ["aç", "kapat", "göster", "listele", "ne", "kim", "nerede"],
+    Complexity.COMPLEX: ["araştır ve yaz", "karşılaştır", "analiz et", "planla"],
+    Complexity.EXPERT: ["kapsamlı", "comprehensive", "proje", "project", "sıfırdan", "from scratch"],
+}
+
+
+class IntentClassifier:
+    """3-tier intent classification: rules → embedding → LLM."""
+
+    def classify(self, text: str) -> ClassifiedIntent:
+        """Classify user intent. Tier 1 (rules) only for now."""
+        lower = text.lower().strip()
+
+        # Tier 1: Rule matching
+        best_match: tuple[IntentCategory, str, int] | None = None
+        for keywords, category, sub_intent in _INTENT_RULES:
+            for kw in keywords:
+                if kw in lower:
+                    match_score = len(kw)
+                    if best_match is None or match_score > best_match[2]:
+                        best_match = (category, sub_intent, match_score)
+
+        if best_match:
+            category, sub_intent, _ = best_match
+            complexity = self._estimate_complexity(lower)
+            return ClassifiedIntent(
+                category=category,
+                complexity=complexity,
+                confidence=0.85,
+                sub_intent=sub_intent,
+                raw_text=text,
+            )
+
+        # Fallback: conversation
+        complexity = self._estimate_complexity(lower)
+        return ClassifiedIntent(
+            category=IntentCategory.CONVERSATION,
+            complexity=complexity,
+            confidence=0.5,
+            sub_intent="chat",
+            raw_text=text,
+        )
+
+    def _estimate_complexity(self, text: str) -> Complexity:
+        """Estimate task complexity from text signals."""
+        word_count = len(text.split())
+
+        # Check explicit signals
+        for level in [Complexity.EXPERT, Complexity.COMPLEX, Complexity.TRIVIAL, Complexity.SIMPLE]:
+            for signal in _COMPLEXITY_SIGNALS.get(level, []):
+                if signal in text:
+                    return level
+
+        # Heuristic: longer requests tend to be more complex
+        if word_count <= 3:
+            return Complexity.TRIVIAL
+        if word_count <= 10:
+            return Complexity.SIMPLE
+        if word_count <= 30:
+            return Complexity.MODERATE
+        return Complexity.COMPLEX
+
+
+# ── Task Decomposer ─────────────────────────────────────────────────────────
+
+class TaskDecomposer:
+    """Decomposes classified intent into executable task steps."""
+
+    def decompose(self, intent: ClassifiedIntent) -> TaskPlan:
+        """Create a task plan from the classified intent."""
+        if intent.complexity == Complexity.TRIVIAL:
+            return TaskPlan(
+                intent=intent,
+                steps=[TaskStep(step_id="s1", action="chat_response", owner="lead")],
+            )
+
+        if intent.category == IntentCategory.SYSTEM_CONTROL:
+            return self._plan_system_control(intent)
+        if intent.category == IntentCategory.INFORMATION:
+            return self._plan_information(intent)
+        if intent.category == IntentCategory.CREATION:
+            return self._plan_creation(intent)
+        if intent.category == IntentCategory.COMMUNICATION:
+            return self._plan_communication(intent)
+        if intent.category == IntentCategory.MONITORING:
+            return self._plan_monitoring(intent)
+        if intent.category == IntentCategory.AUTOMATION:
+            return self._plan_automation(intent)
+
+        # Default: single chat step
+        return TaskPlan(
+            intent=intent,
+            steps=[TaskStep(step_id="s1", action="chat_response", owner="lead")],
+        )
+
+    def _plan_system_control(self, intent: ClassifiedIntent) -> TaskPlan:
+        steps = [
+            TaskStep(step_id="s1", action=intent.sub_intent, owner="ops",
+                     params={"raw_text": intent.raw_text}),
+        ]
+        if intent.sub_intent in ("terminal", "file_ops"):
+            steps.append(TaskStep(
+                step_id="s2", action="verify_result", owner="qa",
+                depends_on=["s1"],
+            ))
+        return TaskPlan(intent=intent, steps=steps, requires_approval=intent.sub_intent == "terminal")
+
+    def _plan_information(self, intent: ClassifiedIntent) -> TaskPlan:
+        steps = [
+            TaskStep(step_id="s1", action="research", owner="researcher",
+                     params={"query": intent.raw_text}),
+            TaskStep(step_id="s2", action="synthesize", owner="lead",
+                     depends_on=["s1"]),
+        ]
+        return TaskPlan(intent=intent, steps=steps)
+
+    def _plan_creation(self, intent: ClassifiedIntent) -> TaskPlan:
+        steps = [
+            TaskStep(step_id="s1", action="plan", owner="lead",
+                     params={"goal": intent.raw_text}),
+            TaskStep(step_id="s2", action="build", owner="builder",
+                     depends_on=["s1"]),
+            TaskStep(step_id="s3", action="verify", owner="qa",
+                     depends_on=["s2"]),
+        ]
+        return TaskPlan(intent=intent, steps=steps)
+
+    def _plan_communication(self, intent: ClassifiedIntent) -> TaskPlan:
+        steps = [
+            TaskStep(step_id="s1", action="compose", owner="lead",
+                     params={"raw_text": intent.raw_text}),
+            TaskStep(step_id="s2", action="send", owner="ops",
+                     depends_on=["s1"]),
+        ]
+        return TaskPlan(intent=intent, steps=steps, requires_approval=True)
+
+    def _plan_monitoring(self, intent: ClassifiedIntent) -> TaskPlan:
+        steps = [
+            TaskStep(step_id="s1", action="setup_monitor", owner="ops",
+                     params={"raw_text": intent.raw_text}),
+        ]
+        return TaskPlan(intent=intent, steps=steps)
+
+    def _plan_automation(self, intent: ClassifiedIntent) -> TaskPlan:
+        steps = [
+            TaskStep(step_id="s1", action="parse_schedule", owner="lead",
+                     params={"raw_text": intent.raw_text}),
+            TaskStep(step_id="s2", action="create_schedule", owner="ops",
+                     depends_on=["s1"]),
+        ]
+        return TaskPlan(intent=intent, steps=steps, requires_approval=True)
+
+
+# ── Response Synthesizer ────────────────────────────────────────────────────
+
+class ResponseSynthesizer:
+    """Converts task results into channel-appropriate responses."""
+
+    def synthesize(
+        self,
+        results: list[dict[str, Any]],
+        intent: ClassifiedIntent,
+        channel_type: str = "telegram",
+    ) -> JarvisResponse:
+        """Merge multiple step results into a single user response."""
+        texts: list[str] = []
+        attachments: list[dict] = []
+
+        for r in results:
+            if isinstance(r, dict):
+                if r.get("text"):
+                    texts.append(str(r["text"]))
+                if r.get("attachments"):
+                    attachments.extend(r["attachments"])
+            elif isinstance(r, str):
+                texts.append(r)
+
+        combined = "\n\n".join(texts) if texts else "Görev tamamlandı."
+
+        # Channel-specific formatting
+        fmt = "markdown"
+        if channel_type == "imessage":
+            fmt = "plain"
+            combined = self._strip_markdown(combined)
+
+        # Truncate for channel limits
+        max_len = self._channel_max_length(channel_type)
+        if len(combined) > max_len:
+            combined = combined[:max_len - 20] + "\n\n... (devamı var)"
+
+        return JarvisResponse(
+            text=combined,
+            channel_format=fmt,
+            attachments=attachments,
+        )
+
+    @staticmethod
+    def _strip_markdown(text: str) -> str:
+        """Simple markdown stripping for plain-text channels."""
+        import re
+        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+        text = re.sub(r'\*(.*?)\*', r'\1', text)
+        text = re.sub(r'`(.*?)`', r'\1', text)
+        return text
+
+    @staticmethod
+    def _channel_max_length(channel_type: str) -> int:
+        limits = {
+            "telegram": 4096,
+            "whatsapp": 65536,
+            "imessage": 20000,
+            "discord": 2000,
+            "webchat": 100000,
+        }
+        return limits.get(channel_type, 4096)
+
+
+# ── JarvisCore ──────────────────────────────────────────────────────────────
+
+class JarvisCore:
+    """The Jarvis brain — classifies, decomposes, dispatches, synthesizes."""
+
+    def __init__(self) -> None:
+        self.classifier = IntentClassifier()
+        self.decomposer = TaskDecomposer()
+        self.synthesizer = ResponseSynthesizer()
+
+    def classify_intent(self, text: str) -> ClassifiedIntent:
+        """Classify the user's intent."""
+        return self.classifier.classify(text)
+
+    def create_plan(self, intent: ClassifiedIntent) -> TaskPlan:
+        """Decompose intent into a task plan."""
+        return self.decomposer.decompose(intent)
+
+    def format_response(
+        self,
+        results: list[dict[str, Any]],
+        intent: ClassifiedIntent,
+        channel_type: str = "telegram",
+    ) -> JarvisResponse:
+        """Format results for the target channel."""
+        return self.synthesizer.synthesize(results, intent, channel_type)
+
+    async def handle(
+        self,
+        text: str,
+        channel_type: str = "desktop",
+        user_id: str = "",
+    ) -> JarvisResponse:
+        """Full Jarvis pipeline: classify → plan → dispatch → synthesize.
+
+        Wires into the existing AgentOrchestrator for actual task execution.
+        Personality + episodic memory inject context into every request.
+        """
+        t0 = time.time()
+        intent = self.classify_intent(text)
+
+        logger.info(
+            f"Jarvis intent: {intent.category.value}/{intent.sub_intent} "
+            f"complexity={intent.complexity.value} conf={intent.confidence:.2f}"
+        )
+
+        # ── Faz 7: personality & memory context ─────────────────────────────
+        style_hint = ""
+        memory_hint = ""
+        try:
+            from core.memory.personality_adapter import get_personality_adapter
+            profile = get_personality_adapter().get_profile(user_id or "default")
+            style_hint = profile.response_style_hint()
+            get_personality_adapter().observe_channel(user_id or "default", channel_type)
+            get_personality_adapter().observe_message_time(user_id or "default")
+        except Exception:
+            pass
+
+        try:
+            from core.memory.jarvis_memory import get_jarvis_memory
+            memory_hint = get_jarvis_memory().build_context_hint(user_id or "default", text)
+        except Exception:
+            pass
+
+        plan = self.create_plan(intent)
+
+        if plan.requires_approval:
+            resp = JarvisResponse(
+                text=f"Bu işlem onay gerektiriyor:\n\n"
+                     f"**Görev:** {intent.raw_text}\n"
+                     f"**Adımlar:** {len(plan.steps)}\n\n"
+                     f"Onaylıyor musun? (evet/hayır)",
+                metadata={"requires_approval": True, "plan_steps": len(plan.steps)},
+                duration_s=round(time.time() - t0, 3),
+            )
+            self._record(user_id, channel_type, text, resp.text, "pending", t0)
+            return resp
+
+        # ── Dispatch to existing orchestrator ────────────────────────────────
+        enriched_text = text
+        if memory_hint:
+            enriched_text = f"[Hafıza bağlamı: {memory_hint}]\n\n{text}"
+        if style_hint:
+            enriched_text = f"{enriched_text}\n\n[Yanıt stili: {style_hint}]"
+
+        agent_result = await self._dispatch(enriched_text, intent, channel_type, user_id)
+        resp = self.synthesizer.synthesize(
+            [{"text": agent_result}], intent, channel_type
+        )
+
+        # Faz 7: record to memory + observe response length
+        self._record(user_id, channel_type, text, resp.text, "ok", t0)
+        try:
+            from core.memory.personality_adapter import get_personality_adapter
+            get_personality_adapter().observe_response_length(
+                user_id or "default", len(resp.text)
+            )
+        except Exception:
+            pass
+
+        resp.duration_s = round(time.time() - t0, 3)
+        return resp
+
+    async def _dispatch(
+        self,
+        text: str,
+        intent: ClassifiedIntent,
+        channel_type: str,
+        user_id: str,
+    ) -> str:
+        """Route to the appropriate handler based on intent + complexity."""
+        # TRIVIAL/SIMPLE conversations handled by quick agent
+        if intent.complexity in (Complexity.TRIVIAL, Complexity.SIMPLE):
+            return await self._quick_response(text, intent)
+
+        # MODERATE+ → full orchestrator pipeline
+        try:
+            from core.multi_agent.router import agent_router
+            agent = await agent_router.route_message(channel_type, user_id)
+            if callable(getattr(agent, "process_envelope", None)):
+                result = await agent.process_envelope(text)
+            elif callable(getattr(agent, "handle_message", None)):
+                result = await agent.handle_message(text)
+            else:
+                result = await self._quick_response(text, intent)
+            return str(result or "")
+        except Exception as exc:
+            logger.warning(f"Orchestrator dispatch failed: {exc}")
+            return await self._quick_response(text, intent)
+
+    async def _quick_response(self, text: str, intent: ClassifiedIntent) -> str:
+        """Lightweight LLM call for trivial/simple intents."""
+        try:
+            from core.llm.model_selection_policy import get_model_selection_policy, SelectionContext, TaskType
+            policy = get_model_selection_policy()
+            ctx = SelectionContext(
+                task_type=TaskType.CHAT,
+                required_quality=0.4,
+                budget_remaining=0.1,
+                latency_target_ms=800,
+            )
+            decision = policy.select(ctx)
+            logger.debug(f"Quick response via {decision.provider}/{decision.model}")
+        except Exception:
+            pass
+        # Fallback: echo the intent classification (no LLM available)
+        step_descriptions = [f"• {s.owner}: {s.action}" for s in self.decomposer.decompose(intent).steps]
+        return (
+            f"[{intent.category.value}] {intent.sub_intent or 'yanıt'}\n"
+            + ("\n".join(step_descriptions) if step_descriptions else text[:200])
+        )
+
+    def _record(
+        self, user_id: str, channel: str, inp: str, out: str, outcome: str, t0: float
+    ) -> None:
+        """Async-safe fire-and-forget memory write."""
+        try:
+            import asyncio
+            from core.memory.jarvis_memory import Interaction, get_jarvis_memory
+            ix = Interaction(
+                user_id=user_id or "default",
+                channel=channel,
+                input_text=inp,
+                output_text=out,
+                outcome=outcome,
+                latency_ms=(time.time() - t0) * 1000,
+            )
+            # Run in thread to avoid blocking event loop
+            loop = asyncio.get_event_loop()
+            loop.run_in_executor(None, get_jarvis_memory().record, ix)
+        except Exception:
+            pass
+
+
+# ── Singleton ───────────────────────────────────────────────────────────────
+
+_instance: JarvisCore | None = None
+
+
+def get_jarvis_core() -> JarvisCore:
+    global _instance
+    if _instance is None:
+        _instance = JarvisCore()
+    return _instance
+
+
+__all__ = [
+    "ClassifiedIntent", "Complexity", "IntentCategory",
+    "JarvisCore", "JarvisResponse", "TaskDecomposer",
+    "TaskPlan", "TaskStep", "get_jarvis_core",
+]

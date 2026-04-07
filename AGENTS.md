@@ -287,6 +287,28 @@ Responsible for:
 - screenshots
 - node-specific actions
 
+### Mobile Dispatch Boundary
+
+Mobile dispatch and pairing must not create a second runtime.
+
+- `elyan/*` is the canonical runtime owner for:
+  - mobile dispatch
+  - pairing lifecycle
+  - computer use orchestration
+  - evidence/session bridge
+- `core/*` remains the canonical owner for:
+  - privacy and consent truth
+  - SQLite/runtime DB management
+  - tiered learning
+  - project runway
+  - gateway and control-plane bridging
+- `core/*` may normalize and route mobile events into `elyan/*`, but must not:
+  - create a second planner
+  - create a second approval path
+  - create hidden session identifiers outside the existing run/session model
+- Pairing codes must never be persisted in plaintext.
+- Mobile dispatch evidence must remain local-first, approval-gated, and auditable.
+
 ### Layer 7: Memory and Persistence
 Responsible for:
 - profile memory
@@ -1030,11 +1052,115 @@ mix UI logic with execution logic
 bypass logging or policy layers
 write code that “only works on the happy path”
 weaken system safety to make demos easier
+
 ---
 
-## Known Issues & Technical Debt (Updated: 2026-03-26)
+## Agent Runtime Evolution — ADR-008 (2026-04-06)
+
+Elyan is evolving from a single-agent operator into a **multi-agent runtime** where
+specialized agents collaborate on complex tasks.
+
+### Core Architecture Additions
+
+**ADR-008:** Inter-Agent Message Bus
+- All agent-to-agent communication flows through `AgentMessageBus` singleton
+- Topics: `direct` (1-1), `broadcast` (all), `topic` (pattern-based)
+- Persistent message log in SQLite for crash recovery
+- See: `docs/AGENT_RUNTIME_ROADMAP.md` for full plan
+
+**ADR-009:** Agent Task Lifecycle
+- Every delegated task has an `AgentTask` contract with:
+  - parent-child relationship (delegation chain)
+  - deadline, constraints, tool scope
+  - status tracking: pending → running → completed → failed
+- `AgentTaskTracker` manages the task tree and timeout escalation
+
+**ADR-010:** Parallel Agent Execution
+- CDG engine detects independent sub-tasks
+- Independent tasks dispatched to parallel agents via `AgentPool`
+- Resource conflict detection prevents data races
+- Max concurrency configurable (default: 4)
+
+**ADR-011:** Autonomous Model Selection
+- `ModelSelectionPolicy` decides local vs cloud per-call:
+  - Sensitive data → mandatory local (Ollama)
+  - Simple task → local preferred (cost/latency)
+  - Complex reasoning → cloud preferred (capability)
+- Agent doesn't choose model; policy decides
+
+**ADR-012:** Agent Learning Loop
+- Every completed task generates `OutcomeFeedback`
+- Orchestrator uses historical performance for specialist assignment
+- Model selection incorporates past success rates
+- SQLite-persisted, trend-analyzed
+
+**ADR-013:** JarvisCore Mimari — Orchestrator Wrapper
+- JarvisCore mevcut AgentOrchestrator üzerine oturur, onu değiştirmez
+- Multi-channel (Telegram/WA/iMessage) → ChannelGateway → JarvisCore → Orchestrator
+- JarvisCore: intent sınıflandırma + task decomposition + response synthesis
+- Gerekçe: 1731 test geçen orchestrator kodunu bozmamak
+
+**ADR-014:** Bilgisayar Kontrol Katmanı — Hibrit Yaklaşım
+- AppleScript: yüksek seviye uygulama kontrolü (Mail, Calendar, Finder)
+- Accessibility API (pyobjc): hassas UIElement bazlı kontrol
+- PyAutoGUI: koordinat bazlı fallback + fare/klavye
+- VisionAgent (Qwen2.5-VL yerel): ekran anlama, element bulma
+- Güvenlik: tüm aksiyonlar audit log + snapshot + onay kapısı
+
+**ADR-015:** Ses Mimarisi — Tam Yerel Pipeline
+- Wake word: OpenWakeWord (CPU, "hey_elyan" custom model)
+- STT: Whisper Large V3 (Ollama) — Türkçe optimize, streaming
+- TTS: Kokoro (ONNX, yerel) — Jarvis tarzı ses profili
+- Gerekçe: ses mahremiyeti; kullanıcı konuşurken buluta veri gitmez
+
+### Multi-Agent Team Roles
+
+| Role | Emoji | Responsibility | Primary Model |
+|------|-------|---------------|---------------|
+| Lead | :dart: | Task decomposition, coordination | Claude |
+| Researcher | :microscope: | Web search, fact extraction | GPT-4o / Gemini |
+| Builder | :building_construction: | Code, files, creation | Claude |
+| Ops | :gear: | System, filesystem, terminal | Ollama (local) |
+| QA | :white_check_mark: | Verification, testing | Claude |
+
+### Execution Flow (Multi-Agent)
+
+```
+User Request
+  → Intent Parser (Tier 1/2/3)
+  → Orchestrator (CEO)
+    → AgentMessageBus.publish(task.assign)
+    → Specialist A receives via subscribe
+    → Specialist A works (uses tools, LLM calls)
+    → Specialist A may delegate sub-task to Specialist B
+      → B receives via message bus
+      → B completes, publishes result
+      → A receives B's result, continues
+    → A publishes task.result
+  → Orchestrator merges results
+  → Pipeline verify + deliver
+  → UI receives via WebSocket
+```
+
+### UI Integration
+
+- **Agent Workspace Screen** — real-time view of agent collaboration
+- **Agent streaming** via SSE endpoint `/api/v1/agents/live`
+- **Task tree** visualization in Command Center
+- WebSocket events: `agent.started`, `agent.progress`, `agent.completed`
+
+### Implementation Roadmap
+
+Full phased plan with timelines, dependencies, and success metrics:
+→ `docs/AGENT_RUNTIME_ROADMAP.md` — Agent altyapısı (tamamlandı ✓)
+→ `docs/JARVIS_ROADMAP.md` — Jarvis vizyonu (kanal + bilgisayar kontrolü + ses)
+
+---
+
+## Known Issues & Technical Debt (Updated: 2026-04-06)
 
 > Bu bölüm gerçek codebase analizi sonucunda yazılmıştır. Codex veya diğer agent'lar çalışmaya başlamadan önce bu listeyi okuyun.
+> Son güncelleme: 2026-04-06 — kapanan maddeler [KAPANDI] olarak isaretlendi.
 
 ### CRITICAL — Production'ı Bloke Eden Sorunlar
 
@@ -1052,9 +1178,8 @@ weaken system safety to make demos easier
 - `SleepConsolidationWidget` — class yok
 - Silent `except` ile yutuluyorlar → metrics sistemi sessizce kırık
 
-**[C-3] `run_visualizer.js` Hardcoded Localhost**
-- `http://localhost:18789/api/v1/...` hâlâ hardcoded
-- Phase 5.2.3'te `dashboard.html` relative path'e geçildi ama bu dosya atlandı
+**[C-3] `run_visualizer.js` Hardcoded Localhost** [KAPANDI]
+- Relative path'e taşındı, artık hardcoded localhost yok
 
 **[C-4] Threading vs Async Lock Karışıklığı**
 - `core/performance/cache_manager.py`: `asyncio.Lock()` ✓
@@ -1078,17 +1203,20 @@ weaken system safety to make demos easier
 - `EventBroadcaster` (ayrı singleton)
 → Birleştirilmeli, hiçbiri dashboard'a tam entegre değil
 
-**[H-4] Approval Requests Kalıcı Değil**
-- `approval_engine.py` pending request'leri in-memory `dict`'te tutuyor
-- Process crash = bekleyen onaylar kaybolur
-- Fix: SQLite veya dosya tabanlı persistence (audit trail altyapısı zaten var)
+**[H-4] Approval Requests Kalıcı Değil** [KAPANDI]
+- `approval_engine.py` artık `_persist_pending()` ile JSON dosyasına yazıyor
+- `_restore_pending()` ile startup'ta geri yüklüyor
+- SQLite repository da mevcut (`_repository.upsert_pending`)
 
-**[H-5] Web UI'da Güvenlik Eksiklikleri**
-- `dashboard.html`'de CSRF token, CSP header, XSS sanitization yok
+**[H-5] Web UI'da Güvenlik Eksiklikleri** [KISMI KAPANDI]
+- Desktop app (Tauri): CSP header `tauri.conf.json` içinde mevcut ve sıkı
+- CSRF: `elyan_csrf_token` cookie + `X-Elyan-CSRF` header mekanizması mevcut
+- Kalan risk: legacy `dashboard.html` web UI hâlâ CSP/CSRF yok (React/Tauri canonical)
 
-**[H-6] Run Store Payload'ları Şifresiz**
-- JSON'a düz yazılıyor, içinde hassas veri (API key, token) olabilir
-- Encrypted vault altyapısı var, entegre edilmeli
+**[H-6] Run Store Payload'ları Şifresiz** [KAPANDI]
+- `run_store.py` artık `_serialize_run_record()` ile hassas alanları encrypt ediyor
+- `EncryptedVault` entegrasyonu mevcut, `_protect_value` / `_restore_value` çalışıyor
+- Hassas alanlar: steps, tool_calls, error, artifacts, review_report, metadata
 
 ### MEDIUM — Teknik Borç
 
@@ -1131,11 +1259,23 @@ weaken system safety to make demos easier
 **[L-5] Metrics Collector Blocking Sleep**
 - `dashboard_api.py`'de `time.sleep(5)` daemon thread içinde — `asyncio.sleep()` olmalı
 
-### Test Durumu (2026-03-26)
-- **Toplam**: 2781 test toplandı
-- **Geçen**: 81 test
-- **Başarısız**: 1 test (`test_attachment_wallpaper_flow` — `data["steps"]` boş, C-1 nedeniyle)
-- **Event Loop Warning**: Async subprocess cleanup düzgün değil
+### Test Durumu (2026-04-06)
+- **Toplam**: 2791 test (collection error'lu 10 dosya hariç)
+- **Geçen**: 2718 test
+- **Başarısız**: 57 test (tümü pre-existing)
+- **Error**: 9 test (computer_use modülü import hataları)
+- **Atlanan**: 7 test
+- **Yeni eklenen testler**: 13 workspace isolation testi (tümü geçiyor)
+- **Hedefli test suite**: 96/96 geçiyor (gateway + workspace + billing + execution guard)
+- **Desktop build**: Temiz (151 modül, 8.92s)
+
+**Başarısız test dağılımı:**
+- `test_agent_routing` (16) — agent.py monolith mock uyumsuzlukları
+- `test_computer_use_*` (9+9err) — computer use modülü stabil değil
+- `test_dashboard_html/assets` (5) — path uyumsuzlukları (kısmen düzeltildi)
+- `test_llm_router` (4) — LLM mock timeout davranışı
+- `test_operator_control_plane` (3) — operator planlama mock
+- Diğer (10) — dağınık pre-existing sorunlar
 
 ---
 

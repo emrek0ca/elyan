@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Command } from "lucide-react";
+import { Command } from "@/vendor/lucide-react";
 
 import { Button } from "@/components/primitives/Button";
 import { StatusBadge } from "@/components/primitives/StatusBadge";

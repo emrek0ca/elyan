@@ -15,7 +15,7 @@ _elyan_completion() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    local commands="chat doctor health logs status routines config gateway channels skills security models cron memory webhooks agents browser voice message service dashboard launch lean packs quivr cloudflare-agents opengauss onboard setup update version completion subscription quota"
+    local commands="chat doctor health logs status routines config gateway channels skills security models cron memory webhooks agents browser voice message service desktop launch lean packs quivr cloudflare-agents opengauss onboard setup update version completion subscription quota"
 
     case "$prev" in
         elyan)
@@ -135,8 +135,8 @@ _elyan() {
     'voice:Ses komutları'
     'message:Mesaj gönder'
     'service:Sistem servisi'
-    'dashboard:Web paneli aç'
-    'launch:Gateway başlat ve panel aç'
+    'desktop:Desktop uygulamayı başlat'
+    'launch:Gateway başlat ve desktop aç'
     'onboard:Kurulum sihirbazı'
     'setup:Kurulum sihirbazı'
     'update:Güncelle'
@@ -192,7 +192,7 @@ fi
 _FISH_SCRIPT = '''# Elyan CLI — Fish completion
 # Kopyala: ~/.config/fish/completions/elyan.fish
 
-set -l elyan_commands chat doctor health logs status routines config gateway channels skills security models cron memory webhooks agents browser voice message service dashboard launch lean packs quivr cloudflare-agents opengauss onboard setup update version completion subscription quota
+set -l elyan_commands chat doctor health logs status routines config gateway channels skills security models cron memory webhooks agents browser voice message service desktop launch lean packs quivr cloudflare-agents opengauss onboard setup update version completion subscription quota
 
 complete -c elyan -f -n __fish_use_subcommand -a "$elyan_commands"
 complete -c elyan -n "__fish_seen_subcommand_from gateway" -a "start stop status restart logs reload health"

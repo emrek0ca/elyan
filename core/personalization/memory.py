@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import sqlite3
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -136,7 +137,7 @@ class PersonalMemoryStore:
             conn.commit()
 
     def _init_vector_backend(self) -> None:
-        if self.vector_backend_requested.strip().lower() != "lancedb":
+        if sys.platform == "darwin" or self.vector_backend_requested.strip().lower() != "lancedb":
             self.vector_backend_effective = "sqlite_fallback"
             return
         try:

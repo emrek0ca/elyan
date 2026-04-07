@@ -1,4 +1,8 @@
-"""Desktop Application Controller - Main entry point for UI"""
+"""Legacy desktop compatibility controller.
+
+Canonical product UI lives in apps/desktop (React/Tauri). This module remains
+only for short-lived PyQt/menubar compatibility flows.
+"""
 
 import asyncio
 import threading
@@ -36,7 +40,7 @@ def get_current_app():
 
 
 class DesktopApp:
-    """Main desktop application controller"""
+    """Legacy desktop compatibility controller."""
 
     def __init__(self, bot_username: str = None):
         global _current_app_instance
@@ -56,12 +60,12 @@ class DesktopApp:
         self.bot_username = bot_username
 
     def start_with_ui(self, run_bot_callback: Callable = None):
-        """Start the application with desktop UI
+        """Start the legacy compatibility UI.
 
         Args:
             run_bot_callback: Callback to start the Telegram bot in background
         """
-        logger.info("Starting desktop application...")
+        logger.warning("Starting legacy PyQt compatibility UI. Canonical product shell is apps/desktop.")
 
         # Start bot in background thread if callback provided
         if run_bot_callback:
@@ -72,7 +76,7 @@ class DesktopApp:
             )
             self._bot_thread.start()
 
-        # Try to run with PyQt6 main window
+        # Legacy PyQt fallback only. Canonical desktop is React/Tauri.
         try:
             from .main_window import MainWindow, check_pyqt6
 
@@ -85,11 +89,11 @@ class DesktopApp:
                 self._running = True
                 return self._main_window.run()
             else:
-                logger.warning("PyQt6 not available, falling back to menubar only")
+                logger.warning("PyQt6 not available; falling back to legacy menubar compatibility mode")
                 return self._run_menubar_only()
 
         except ImportError as e:
-            logger.warning(f"PyQt6 import error: {e}")
+            logger.warning(f"PyQt6 legacy compatibility import error: {e}")
             return self._run_menubar_only()
 
     def start_menubar_only(self, run_bot_callback: Callable = None):

@@ -103,12 +103,20 @@ class OperatorControlPlane:
             payload["input_text"] = str(context.get("request") or context.get("text") or "")
         return OperatorRequestModel.model_validate(payload)
 
-    def _model_role(self, request_class: str, capability_domain: str, skill_manifest: dict[str, Any] | None) -> str:
+    def _model_role(
+        self,
+        request_class: str,
+        capability_domain: str,
+        skill_manifest: dict[str, Any] | None,
+        request_kind: str = "",
+    ) -> str:
         role_map = dict(self.config.get("model_roles") or {})
         if skill_manifest and str(skill_manifest.get("latency_level") or "").strip().lower() == "real_time":
             return "router"
         if capability_domain in {"screen_operator", "real_time_control", "browser"}:
             return "router"
+        if str(request_kind or "").strip().lower() in {"code", "coding"}:
+            return "coding"
         return str(role_map.get(request_class) or role_map.get("workflow") or "router").strip().lower() or "router"
 
     def _build_capability_manifest(
@@ -393,6 +401,7 @@ class OperatorControlPlane:
             metadata=meta,
         )
         request_class = str(runtime_turn.get("request_class") or "workflow").strip().lower() or "workflow"
+        request_kind = str(runtime_turn.get("request_kind") or meta.get("request_kind") or "").strip().lower()
         route_plan = capability_plan or self.capability_router.route(request_text)
         skill_resolution = self.skill_registry.resolve_from_intent(
             {"text": request_text, "action": str((parsed_intent or {}).get("action") if isinstance(parsed_intent, dict) else ""), "request_class": request_class},
@@ -410,7 +419,7 @@ class OperatorControlPlane:
             request_class=request_class,
             integration_resolution=integration_resolution,
         )
-        model_role = self._model_role(request_class, str(getattr(route_plan, "domain", "") or ""), skill_manifest)
+        model_role = self._model_role(request_class, str(getattr(route_plan, "domain", "") or ""), skill_manifest, request_kind=request_kind)
         selected_model = dict(self.model_orchestrator.get_best_available(model_role) or {})
         if not selected_model:
             selected_model = dict(self.model_orchestrator.get_best_available("router") or {})
@@ -435,8 +444,16 @@ class OperatorControlPlane:
             "local_first": bool(self.config.get("local_first", True)),
             "fallback": bool(selected_model.get("provider") and str(selected_model.get("provider")).strip().lower() not in {"ollama"}),
         }
+        collaboration = self.model_orchestrator.get_collaboration_profile(
+            text=request_text,
+            role=model_role,
+            request_kind=request_kind or request_class,
+            provider_lane=str(model_selection.get("provider") or ""),
+            has_attachments=bool(ctx.get("attachments")),
+        )
         runtime_model = dict(runtime_turn.get("model_runtime") or {})
         runtime_model["selected_model"] = dict(model_selection)
+        runtime_model["collaboration"] = dict(collaboration)
         runtime_model["operator_policy"] = {
             "level": operator_policy.level,
             "allow_system_actions": operator_policy.allow_system_actions,
@@ -493,6 +510,7 @@ class OperatorControlPlane:
             "capability": capability_manifest.model_dump(),
             "integration": dict(integration_resolution or {}),
             "model_selection": model_selection,
+            "collaboration": dict(collaboration),
             "real_time": {
                 "enabled": bool(real_time_cfg.get("enabled", True)),
                 "mode": str(real_time_cfg.get("mode") or "auto"),

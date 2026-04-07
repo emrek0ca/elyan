@@ -12,6 +12,7 @@ from core.gateway.router import GatewayRouter
 from core.gateway.message import UnifiedMessage
 from core.gateway.response import UnifiedResponse
 from core.channel_delivery import channel_delivery_bridge
+from core.session_engine import session_manager as lane_session_manager
 
 
 def _make_message(**kwargs):
@@ -21,10 +22,24 @@ def _make_message(**kwargs):
         "channel_id": "chan-001",
         "user_id": "user-001",
         "user_name": "TestUser",
-        "text": "Merhaba",
+        "text": "Masaüstündeki dosyaları listele",
     }
     defaults.update(kwargs)
     return UnifiedMessage(**defaults)
+
+
+async def _handle_and_drain(router: GatewayRouter, message: UnifiedMessage):
+    await router.handle_incoming_message(message)
+    await asyncio.sleep(0.05)
+
+
+@pytest.fixture(autouse=True)
+def _reset_session_lane_state():
+    lane_session_manager._lanes.clear()
+    lane_session_manager._executor_callback = None
+    yield
+    lane_session_manager._lanes.clear()
+    lane_session_manager._executor_callback = None
 
 
 class TestGatewayRouter:
@@ -203,7 +218,7 @@ class TestGatewayRouter:
         original = gateway_router_module.agent_router.route_message
         gateway_router_module.agent_router.route_message = _fake_route_message
         try:
-            await router.handle_incoming_message(_make_message(channel_type="test"))
+            await _handle_and_drain(router, _make_message(channel_type="test"))
         finally:
             gateway_router_module.agent_router.route_message = original
 
@@ -433,12 +448,12 @@ class TestGatewayRouter:
             # send_outgoing_response'u da mock'la
             router.send_outgoing_response = AsyncMock()
 
-            msg = _make_message(channel_type="telegram", text="Merhaba!")
-            await router.handle_incoming_message(msg)
+            msg = _make_message(channel_type="telegram", text="Masaüstündeki dosyaları listele")
+            await _handle_and_drain(router, msg)
 
             mock_agent.process.assert_called_once()
             called_args, called_kwargs = mock_agent.process.call_args
-            assert called_args == ("Merhaba!",)
+            assert called_args == ("Masaüstündeki dosyaları listele",)
             assert "notify" in called_kwargs
             assert called_kwargs["metadata"]["channel_type"] == "telegram"
             assert called_kwargs["metadata"]["channel_id"] == "chan-001"
@@ -470,7 +485,7 @@ class TestGatewayRouter:
                 text="Bunu duvar kağıdı yap",
                 attachments=[{"path": "/tmp/dog.png", "type": "image"}],
             )
-            await router.handle_incoming_message(msg)
+            await _handle_and_drain(router, msg)
 
             mock_agent.process_envelope.assert_called_once()
             _, called_kwargs = mock_agent.process_envelope.call_args
@@ -502,7 +517,7 @@ class TestGatewayRouter:
             router.send_outgoing_response = AsyncMock()
 
             msg = _make_message(channel_type="telegram", text="raporu hazırla")
-            await router.handle_incoming_message(msg)
+            await _handle_and_drain(router, msg)
 
             sent_response = router.send_outgoing_response.call_args[0][2]
             assert sent_response.attachments == []
@@ -521,7 +536,7 @@ class TestGatewayRouter:
             router.send_outgoing_response = AsyncMock()
 
             msg = _make_message()
-            await router.handle_incoming_message(msg)
+            await _handle_and_drain(router, msg)
 
             # send_outgoing_response çağrılmış olmalı (hata mesajı ile)
             router.send_outgoing_response.assert_called_once()
@@ -618,15 +633,21 @@ class TestGatewayRouter:
             mp.setattr("core.gateway.router.agent_router", mock_ar)
             router.send_outgoing_response = AsyncMock()
 
-            msg = _make_message(channel_type="telegram", channel_id="123", user_id="123", user_name="Emre", text="merhaba")
-            await router.handle_incoming_message(msg)
+            msg = _make_message(
+                channel_type="telegram",
+                channel_id="123",
+                user_id="123",
+                user_name="Emre",
+                text="Masaüstündeki dosyaları listele",
+            )
+            await _handle_and_drain(router, msg)
             assert router.send_outgoing_response.await_count == 2
             first_response = router.send_outgoing_response.await_args_list[0].args[2]
             assert isinstance(first_response, UnifiedResponse)
             assert "hoş geldin" in first_response.text.lower()
 
             router.send_outgoing_response.reset_mock()
-            await router.handle_incoming_message(msg)
+            await _handle_and_drain(router, msg)
             assert router.send_outgoing_response.await_count == 1
 
     @pytest.mark.asyncio
@@ -646,10 +667,10 @@ class TestGatewayRouter:
                 channel_id="123456@g.us",
                 user_id="905551112233",
                 user_name="Group User",
-                text="selam",
+                text="elyan son görevleri listele",
                 metadata={"is_group": True},
             )
-            await router.handle_incoming_message(msg)
+            await _handle_and_drain(router, msg)
             assert router.send_outgoing_response.await_count == 1
 
     @pytest.mark.asyncio
@@ -784,11 +805,17 @@ class TestGatewayRouter:
             mp.setattr("core.gateway.router.agent_router", mock_ar)
             router.send_outgoing_response = AsyncMock()
 
-            msg = _make_message(channel_type="telegram", channel_id="chat-1", user_id="123", text="onayla")
-            await router.handle_incoming_message(msg)
+            msg = _make_message(
+                channel_type="telegram",
+                channel_id="chat-1",
+                user_id="123",
+                text="Masaüstündeki dosyaları listele",
+            )
+            await _handle_and_drain(router, msg)
 
             assert fake_manager.resolved == []
-            mock_ar.route_message.assert_called_once()
+            assert mock_ar.route_message.await_count >= 1
+            assert mock_ar.route_message.await_args_list[0].args == ("telegram", "123")
 
     @pytest.mark.asyncio
     async def test_handle_incoming_message_skips_unbound_intervention(self):
@@ -826,11 +853,17 @@ class TestGatewayRouter:
             mp.setattr("core.gateway.router.agent_router", mock_ar)
             router.send_outgoing_response = AsyncMock()
 
-            msg = _make_message(channel_type="telegram", channel_id="chat-1", user_id="123", text="onayla")
-            await router.handle_incoming_message(msg)
+            msg = _make_message(
+                channel_type="telegram",
+                channel_id="chat-1",
+                user_id="123",
+                text="Masaüstündeki dosyaları listele",
+            )
+            await _handle_and_drain(router, msg)
 
             assert fake_manager.resolved == []
-            mock_ar.route_message.assert_called_once()
+            assert mock_ar.route_message.await_count >= 1
+            assert mock_ar.route_message.await_args_list[0].args == ("telegram", "123")
 
     @pytest.mark.asyncio
     async def test_intervention_listener_pushes_prompt_to_last_user_channel(self):

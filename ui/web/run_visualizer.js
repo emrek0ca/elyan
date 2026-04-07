@@ -17,7 +17,7 @@ class RunVisualizer {
    */
   async loadRun(runId) {
     try {
-      const response = await fetch(`http://localhost:18789/api/v1/runs/${runId}/timeline`);
+      const response = await fetch(`/api/v1/runs/${runId}/timeline`);
       const data = await response.json();
 
       if (!data.success || !data.timeline) {

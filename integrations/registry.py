@@ -31,10 +31,24 @@ def _infer_provider_from_app_name(app_name: str) -> str:
     low = _normalize_text(app_name)
     if not low:
         return ""
+    if any(token in low for token in ("apple notes", "notes.app", "notlar", "apple note", "note app")):
+        return "apple_notes"
+    if any(token in low for token in ("apple reminders", "reminders.app", "hatırlatıcı", "hatirlatici", "reminders")):
+        return "apple_reminders"
+    if any(token in low for token in ("apple contacts", "contacts.app", "kişiler", "kisiler", "contacts")):
+        return "apple_contacts"
+    if any(token in low for token in ("apple calendar", "calendar.app", "ical", "mac calendar")):
+        return "apple_calendar"
+    if any(token in low for token in ("apple mail", "mail.app", "mac mail")):
+        return "apple_mail"
+    if any(token in low for token in ("imessage", "bluebubbles", "messages app", "messages.app")):
+        return "imessage"
     if any(token in low for token in ("gmail", "google mail", "mail.google.com", "google workspace", "google drive", "google docs", "google sheets", "google slides", "google chat")):
         return "google"
     if any(token in low for token in ("calendar", "takvim", "schedule", "remind", "hatırlat", "hatirlat")):
         return "google"
+    if any(token in low for token in ("notion", "database", "workspace wiki", "knowledge base", "page block")):
+        return "notion"
     if any(token in low for token in ("whatsapp",)):
         return "whatsapp"
     if any(token in low for token in ("instagram",)):
@@ -86,12 +100,26 @@ class IntegrationRegistry:
         provider = str(skill.get("provider") or "").strip().lower()
         connector_name = str(skill.get("connector_name") or "").strip().lower()
         if not provider:
-            if any(token in low for token in ("gmail", "google mail", "inbox", "mail.google.com")):
+            if any(token in low for token in ("apple notes", "notes.app", "notlar", "apple note", "note app")):
+                provider = "apple_notes"
+            elif any(token in low for token in ("apple reminders", "reminders.app", "hatırlatıcı", "hatirlatici", "reminders")):
+                provider = "apple_reminders"
+            elif any(token in low for token in ("apple contacts", "contacts.app", "kişiler", "kisiler", "contacts")):
+                provider = "apple_contacts"
+            elif any(token in low for token in ("apple calendar", "calendar.app", "ical", "mac calendar")):
+                provider = "apple_calendar"
+            elif any(token in low for token in ("apple mail", "mail.app", "mac mail")):
+                provider = "apple_mail"
+            elif any(token in low for token in ("imessage", "bluebubbles", "messages app", "messages.app")):
+                provider = "imessage"
+            elif any(token in low for token in ("gmail", "google mail", "inbox", "mail.google.com")):
                 provider = "google"
             elif any(token in low for token in ("calendar", "takvim", "reminder", "hatırlat", "hatirlat")):
                 provider = "google"
             elif any(token in low for token in ("drive", "docs", "sheets", "slides", "workspace")):
                 provider = "google"
+            elif any(token in low for token in ("notion", "database", "wiki", "knowledge base", "workspace page")):
+                provider = "notion"
             elif any(token in low for token in ("whatsapp",)):
                 provider = "whatsapp"
             elif any(token in low for token in ("instagram",)):
@@ -174,6 +202,29 @@ class IntegrationRegistry:
             required_scopes = required_scopes or ["email.read", "email.send"]
             auth_strategy = auth_strategy if auth_strategy != AuthStrategy.NONE else AuthStrategy.IMAP_SMTP
             fallback_policy = fallback_policy if fallback_policy != FallbackPolicy.AUTO else FallbackPolicy.WEB
+        elif provider in {"notion"}:
+            integration_type = IntegrationType.API
+            required_scopes = required_scopes or ["notion.read", "notion.write"]
+            auth_strategy = auth_strategy if auth_strategy != AuthStrategy.NONE else AuthStrategy.OAUTH
+            dependencies = dependencies or ["requests"]
+            fallback_policy = fallback_policy if fallback_policy != FallbackPolicy.AUTO else FallbackPolicy.WEB
+        elif provider in {"apple_mail", "apple_calendar", "apple_reminders", "apple_notes", "apple_contacts", "imessage"}:
+            integration_type = IntegrationType.DESKTOP
+            auth_strategy = AuthStrategy.NONE
+            fallback_policy = fallback_policy if fallback_policy != FallbackPolicy.AUTO else FallbackPolicy.NATIVE
+            dependencies = dependencies or ["pyobjc-framework-Cocoa"]
+            if provider == "apple_mail":
+                required_scopes = required_scopes or ["mail.read", "mail.write"]
+            elif provider == "apple_calendar":
+                required_scopes = required_scopes or ["calendar.read", "calendar.write"]
+            elif provider == "apple_reminders":
+                required_scopes = required_scopes or ["reminders.read", "reminders.write"]
+            elif provider == "apple_notes":
+                required_scopes = required_scopes or ["notes.read", "notes.write"]
+            elif provider == "apple_contacts":
+                required_scopes = required_scopes or ["contacts.read", "contacts.write"]
+            else:
+                required_scopes = required_scopes or ["imessage.read", "imessage.write"]
         elif provider in {"scheduler"}:
             integration_type = IntegrationType.SCHEDULER
             required_scopes = required_scopes or ["calendar.read", "calendar.write"]
@@ -312,6 +363,10 @@ class IntegrationRegistry:
             api_base_urls = ["https://www.googleapis.com/calendar", "https://graph.microsoft.com/v1.0"]
         else:
             desktop_apps = normalize_items(skill.get("commands") or [])
+            if provider in {"apple_mail", "apple_calendar", "apple_reminders", "apple_notes", "apple_contacts"}:
+                desktop_apps = [provider.replace("apple_", "").replace("_", " ")]
+            elif provider == "imessage":
+                desktop_apps = ["Messages", "BlueBubbles"]
 
         manifest = IntegrationManifest(
             name=str(skill.get("name") or bundle.name or connector_name or route_domain or "integration"),

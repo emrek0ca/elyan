@@ -1,6 +1,12 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from core.agent import Agent
+from core.telegram_direct_command import (
+    build_telegram_metadata,
+    is_local_telegram_command,
+    normalize_telegram_instruction,
+)
+from core.ux_engine import get_ux_engine
 from config.settings import HOME_DIR, LOGS_DIR
 from security.rate_limiter import rate_limiter
 from elyan.approval.legacy_adapter import get_approval_manager
@@ -9,6 +15,7 @@ from core.error_handler import ErrorHandler
 from core.tool_health import get_tool_health_manager, ToolStatus
 from core.briefing_manager import get_briefing_manager
 from config.settings_manager import SettingsPanel
+from core.security.ingress_guard import blocked_ingress_text, inspect_ingress
 from utils.logger import get_logger
 from pathlib import Path
 from typing import Any, Optional
@@ -181,6 +188,166 @@ class StatusMessageManager:
             # Fallback if edit fails
             if "Message is not modified" not in str(e):
                 self.message = await self.update.message.reply_text(text, parse_mode=None)
+
+
+def _build_telegram_agent_metadata(
+    update: Update,
+    *,
+    raw_text: str,
+    normalized_text: str,
+    command_name: str = "",
+    source: str = "telegram_text",
+    bot_username: str = "",
+) -> dict[str, Any]:
+    user = update.effective_user
+    chat = update.effective_chat
+    message = update.effective_message
+    chat_type = str(getattr(chat, "type", "") or "").strip().lower()
+    is_group = chat_type in {"group", "supergroup"}
+    reply_to = getattr(message, "reply_to_message", None)
+    entities = list(getattr(message, "entities", []) or [])
+    mentioned = False
+    lowered = str(raw_text or normalized_text or "").lower()
+    normalized_bot_name = str(bot_username or "").strip().lstrip("@").lower()
+    if normalized_bot_name and f"@{normalized_bot_name}" in lowered:
+        mentioned = True
+    elif command_name:
+        mentioned = True
+    elif reply_to is not None:
+        reply_user = getattr(reply_to, "from_user", None)
+        reply_username = str(getattr(reply_user, "username", "") or "").strip().lower()
+        mentioned = bool(normalized_bot_name and reply_username == normalized_bot_name)
+    elif entities and normalized_bot_name:
+        mentioned = any(
+            getattr(entity, "type", "") == "mention"
+            and f"@{normalized_bot_name}" in lowered
+            for entity in entities
+        )
+    metadata = build_telegram_metadata(
+        user_id=getattr(user, "id", "") or "",
+        chat_id=getattr(chat, "id", "") or "",
+        user_name=getattr(user, "first_name", "") or "",
+        source=source,
+        raw_text=raw_text,
+        normalized_text=normalized_text,
+        command_name=command_name,
+        message_id=getattr(message, "message_id", "") or "",
+        chat_type=chat_type,
+        is_group=is_group,
+        mentioned=mentioned,
+        is_inline_reply=reply_to is not None,
+        reply_to_message_id=getattr(reply_to, "message_id", "") or "",
+        has_attachments=bool(getattr(message, "photo", None) or getattr(message, "document", None) or getattr(message, "audio", None) or getattr(message, "voice", None)),
+        is_voice=bool(getattr(message, "voice", None)),
+        bot_username=bot_username,
+    )
+    if command_name:
+        metadata["request_class"] = "direct_action"
+        metadata["execution_path"] = "fast"
+    return metadata
+
+
+async def _process_telegram_agent_turn(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_input: str,
+    *,
+    metadata: dict[str, Any],
+) -> str:
+    user = update.effective_user
+    if not user or not update.message:
+        return ""
+
+    agent.current_user_id = user.id
+    if getattr(agent, "agent_loop", None):
+        agent.agent_loop.current_user_id = user.id
+
+    status_manager = StatusMessageManager(update, context)
+
+    verdict = await inspect_ingress(
+        user_input,
+        platform_origin="telegram",
+        agent=agent,
+        metadata={
+            **metadata,
+            "user_id": str(getattr(user, "id", "") or ""),
+            "channel_type": "telegram",
+            "channel_id": str(getattr(update.effective_chat, "id", "") or ""),
+        },
+    )
+    if not verdict.get("allowed", True):
+        blocked = blocked_ingress_text(verdict)
+        await update.message.reply_text(blocked)
+        return blocked
+
+    async def notify_step(message_data: Any):
+        if isinstance(message_data, dict) and message_data.get("type") == "screenshot":
+            photo_path = message_data.get("path")
+            caption = message_data.get("message", " İşlem görseli")
+            if photo_path and Path(photo_path).exists():
+                try:
+                    await update.message.reply_photo(
+                        photo=open(photo_path, 'rb'),
+                        caption=caption
+                    )
+                except Exception as e:
+                    logger.error(f"Notify screenshot error: {e}")
+                    await status_manager.update_status(f" {caption}")
+        else:
+            text = str(message_data)
+            if "..." in text:
+                text = f" {text}"
+            else:
+                text = f" {text}"
+            await status_manager.update_status(text)
+
+    ux = get_ux_engine()
+    session_id = f"telegram:{getattr(update.effective_chat, 'id', '')}:{getattr(user, 'id', '')}"
+    delivery = ux.should_respond(
+        user_message=user_input,
+        session_id=session_id,
+        channel_type="telegram",
+        metadata=metadata,
+        attachments=[],
+        user_id=str(user.id),
+    )
+    if not delivery.should_respond:
+        logger.info("Telegram group message ignored by conversation policy")
+        return ""
+
+    await update.message.chat.send_action("typing")
+    response = await agent.process(user_input, notify=notify_step, channel="telegram", metadata=metadata)
+    ux_result = await ux.postprocess_response(
+        raw_response=response,
+        user_message=user_input,
+        session_id=session_id,
+        user_id=str(user.id),
+        channel_type="telegram",
+        metadata=metadata,
+        attachments=[],
+    )
+    response = ux_result.response
+
+    video_match = re.search(r"Screen recording saved to (.+\.(?:mp4|mov|avi))", response)
+    if video_match:
+        video_path = video_match.group(1).strip()
+        if Path(video_path).exists():
+            try:
+                await update.message.reply_video(
+                    video=open(video_path, 'rb'),
+                    caption=" Ekran kaydı"
+                )
+            except Exception as e:
+                logger.error(f"Failed to send video: {e}")
+
+    if len(response) > 4000:
+        chunks = [response[i:i+4000] for i in range(0, len(response), 4000)]
+        for chunk in chunks:
+            await update.message.reply_text(chunk)
+    else:
+        await update.message.reply_text(response)
+
+    return response
 
 def init_handlers(agent_instance: Agent):
     global agent
@@ -372,6 +539,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  \"rapor.pdf oku ve ozetle\"\n"
         "  \"yapay zeka hakkinda arastirma yap\"\n"
         "  \"ekran goruntusu al\"\n\n"
+        "Bilinmeyen /komutlar da Elyan tarafinda yorumlanir.\n\n"
         "Komutlar: /help /status /stats /reset /screenshot /myid"
     )
     await update.message.reply_text(welcome)
@@ -406,6 +574,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  - \"sistem durumu\"\n"
         "  - \"Safari ac\"\n"
         "  - \"YouTube'a git\"\n\n"
+        "Bilinmeyen /komutlar Elyan tarafından da yorumlanabilir.\n\n"
         "Komutlar:\n"
         "  /status - Sistem durumu\n"
         "  /stats - İstatistikler\n"
@@ -1672,8 +1841,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     logger.info(f"[{user.id}] {user.first_name}: {user_input[:50]}...")
 
-    await update.message.chat.send_action("typing")
-
     # Inline feedback capture (non-command)
     if isinstance(user_input, str):
         feedback_match = re.match(r"^\s*(feedback|puan)\s+([1-5])\s*(.*)$", user_input, flags=re.IGNORECASE)
@@ -1691,65 +1858,75 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Geri bildirim alındı. Teşekkürler.")
             return
 
-    # Set user_id for audit logging
-    agent.current_user_id = user.id
-    if getattr(agent, "agent_loop", None):
-        agent.agent_loop.current_user_id = user.id
-
-    # Real-time step feedback callback
-    status_manager = StatusMessageManager(update, context)
-
-    async def notify_step(message_data: Any):
-        if isinstance(message_data, dict) and message_data.get("type") == "screenshot":
-            # Proactive screenshot feedback
-            photo_path = message_data.get("path")
-            caption = message_data.get("message", " İşlem görseli")
-            if photo_path and Path(photo_path).exists():
-                try:
-                    await update.message.reply_photo(
-                        photo=open(photo_path, 'rb'),
-                        caption=caption
-                    )
-                except Exception as e:
-                    logger.error(f"Notify screenshot error: {e}")
-                    await status_manager.update_status(f" {caption}")
-        else:
-            # Regular text notification - Use the status manager for live updates
-            text = str(message_data)
-            # Add some "live" flair
-            if "..." in text:
-                text = f" {text}"
-            else:
-                text = f" {text}"
-            await status_manager.update_status(text)
-
     try:
-        response = await agent.process(user_input, notify=notify_step)
-
-        # Check for screen recording output and send video
-        video_match = re.search(r"Screen recording saved to (.+\.(?:mp4|mov|avi))", response)
-        if video_match:
-            video_path = video_match.group(1).strip()
-            if Path(video_path).exists():
-                try:
-                    await update.message.reply_video(
-                        video=open(video_path, 'rb'),
-                        caption=" Ekran kaydı"
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to send video: {e}")
-
-        if len(response) > 4000:
-            chunks = [response[i:i+4000] for i in range(0, len(response), 4000)]
-            for chunk in chunks:
-                await update.message.reply_text(chunk)
-        else:
-            await update.message.reply_text(response)
-
+        metadata = _build_telegram_agent_metadata(
+            update,
+            raw_text=raw_input,
+            normalized_text=user_input,
+            source="telegram_text",
+            bot_username=getattr(context.bot, "username", "") or "",
+        )
+        await _process_telegram_agent_turn(update, context, user_input, metadata=metadata)
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Mesaj isleme hatasi: {error_msg}")
         # Use ErrorHandler for professional error message
+        formatted_error = ErrorHandler.format_error_response(error_msg)
+        await update.message.reply_text(formatted_error)
+
+
+async def handle_semantic_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_user(update):
+        return
+
+    if not update.message:
+        return
+
+    user = update.effective_user
+    if not user:
+        return
+
+    allowed, rate_msg = await rate_limiter.is_allowed(user.id)
+    if not allowed:
+        await update.message.reply_text(f"Lutfen bekleyin: {rate_msg}")
+        return
+
+    raw_input = update.message.text or ""
+    normalized_input, command_name = normalize_telegram_instruction(raw_input)
+    command_name = str(command_name or "").strip().lower()
+
+    if is_local_telegram_command(command_name):
+        local_handlers = {
+            "start": cmd_start,
+            "status": cmd_status,
+            "help": cmd_help,
+        }
+        handler = local_handlers.get(command_name)
+        if handler:
+            await handler(update, context)
+            return
+
+    user_input = sanitize_input(normalized_input or raw_input.lstrip("/"))
+    valid, validation_msg = validate_input(user_input)
+    if not valid:
+        await update.message.reply_text(validation_msg)
+        return
+
+    logger.info(f"[{user.id}] /{command_name or 'unknown'} -> {user_input[:60]}...")
+
+    try:
+        metadata = _build_telegram_agent_metadata(
+            update,
+            raw_text=raw_input,
+            normalized_text=user_input,
+            command_name=command_name,
+            source="telegram_command",
+            bot_username=getattr(context.bot, "username", "") or "",
+        )
+        await _process_telegram_agent_turn(update, context, user_input, metadata=metadata)
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Semantic command hata: {error_msg}")
         formatted_error = ErrorHandler.format_error_response(error_msg)
         await update.message.reply_text(formatted_error)
 
@@ -1952,6 +2129,7 @@ def setup_handlers(app: Application, agent_instance: Agent):
     except ImportError as e:
         logger.warning(f"Browser commands not available: {e}")
     
+    app.add_handler(MessageHandler(filters.COMMAND, _secure_handler(handle_semantic_command)))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("Handler'lar kaydedildi ve approval callback ayarlandi")

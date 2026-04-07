@@ -308,13 +308,15 @@ class StartupChecker:
             ))
 
     def _check_required_packages(self):
-        """Check if required Python packages are installed"""
+        """Check if required Python packages are installed."""
         # (distribution_name, import_module_name)
         required = [
-            ("PyQt6", "PyQt6"),
             ("httpx", "httpx"),
             ("python-telegram-bot", "telegram"),
             ("python-dotenv", "dotenv"),
+        ]
+        optional_legacy = [
+            ("PyQt6", "PyQt6"),
         ]
 
         missing = []
@@ -334,6 +336,19 @@ class StartupChecker:
                 passed=True,
                 message="All required packages installed",
                 severity="info"
+            ))
+
+        missing_optional = []
+        for dist_name, import_name in optional_legacy:
+            if importlib.util.find_spec(import_name) is None:
+                missing_optional.append(dist_name)
+
+        if missing_optional:
+            self.checks.append(HealthCheckResult(
+                passed=True,
+                message=f"Legacy desktop compatibility packages missing: {', '.join(missing_optional)}",
+                severity="info",
+                fix_suggestion="Only install these if you still need the legacy PyQt compatibility shell",
             ))
 
     def _check_file_permissions(self):

@@ -11,9 +11,12 @@ from .response import ChannelEnvelope, UnifiedResponse
 from .adapters.base import BaseChannelAdapter
 from core.multi_agent.router import agent_router
 from core.proactive.intervention import get_intervention_manager
+from core.security.ingress_guard import blocked_ingress_text, inspect_ingress
 from .channel_capabilities import resolve_channel_capabilities
 from core.channel_delivery import channel_delivery_bridge
+from core.intake.task_extraction import extract_task_summary, normalize_intake_source
 from core.runtime.lifecycle import run_lifecycle_manager
+from core.ux_engine import get_ux_engine
 from config.settings import ELYAN_DIR
 from utils.logger import get_logger
 from core.observability.logger import get_structured_logger
@@ -352,10 +355,58 @@ class GatewayRouter:
         logger.info(f"Incoming: [{message.channel_type}] user={message.user_id} text={message.text[:50]}")
         self._remember_user_route(message)
         self._mark_incoming_message(message.channel_type)
-        await self._maybe_send_first_contact_welcome(message)
-
         if await self._handle_intervention_message(message):
             return
+
+        ux_engine = get_ux_engine()
+        preflight = ux_engine.should_respond(
+            user_message=message.text,
+            session_id=f"pre:{message.channel_type}:{message.channel_id}:{message.user_id}",
+            channel_type=message.channel_type,
+            metadata=message.metadata,
+            attachments=message.attachments,
+            user_id=message.user_id,
+        )
+        if not preflight.should_respond:
+            logger.info(
+                "Message-native policy skipped response: channel=%s user=%s",
+                message.channel_type,
+                message.user_id,
+            )
+            return
+
+        verdict = await inspect_ingress(
+            message.text,
+            platform_origin=str(message.channel_type or "gateway"),
+            agent=self.default_agent,
+            metadata={
+                **(message.metadata or {}),
+                "channel_type": str(getattr(message, "channel_type", "") or ""),
+                "channel_id": str(getattr(message, "channel_id", "") or ""),
+                "user_id": str(getattr(message, "user_id", "") or ""),
+            },
+        )
+        if not verdict.get("allowed", True):
+            try:
+                from core.gateway.server import push_activity
+
+                push_activity("security", message.channel_type, str(verdict.get("reason", "blocked"))[:60], success=False)
+            except Exception:
+                pass
+            blocked = UnifiedResponse(
+                text=blocked_ingress_text(verdict),
+                format="plain",
+                metadata={
+                    "security_blocked": True,
+                    "reason": str(verdict.get("reason", "blocked") or "blocked"),
+                    "method": str(verdict.get("method", "firewall") or "firewall"),
+                },
+            )
+            await self.send_outgoing_response(message.channel_type, str(message.channel_id or ""), blocked)
+            return
+
+        self._capture_message_intake(message)
+        await self._maybe_send_first_contact_welcome(message)
 
         # 1. Resolve Actor
         profile_store = get_user_profile_store()
@@ -445,10 +496,6 @@ class GatewayRouter:
         try:
             agent = await agent_router.route_message(message.channel_type, message.user_id)
             agent.current_user_id = message.user_id
-            
-            # ... rest of legacy logic
-            agent = await agent_router.route_message(message.channel_type, message.user_id)
-            agent.current_user_id = message.user_id
 
             # Notify dashboard
             try:
@@ -465,8 +512,9 @@ class GatewayRouter:
             except Exception:
                 specialist_tag = ""
 
-            # Send typing/processing indicator
-            typing_text = f"⏳ Çalışıyorum..." + (f" ({specialist_tag})" if specialist_tag else "")
+            typing_text = "Bakıyorum..."
+            if specialist_tag:
+                typing_text = f"{typing_text} ({specialist_tag})"
             try:
                 await self._send_typing_indicator(message.channel_type, message.channel_id, typing_text)
             except Exception:
@@ -551,7 +599,54 @@ class GatewayRouter:
                     metadata=agent_meta,
                 )
                 response = UnifiedResponse(text=response_text, format="markdown")
+            ux_result = await get_ux_engine().postprocess_response(
+                raw_response=str(getattr(response, "text", "") or ""),
+                user_message=message.text,
+                session_id=session_id,
+                user_id=message.user_id,
+                channel_type=message.channel_type,
+                metadata=agent_meta,
+                attachments=list(getattr(message, "attachments", []) or []),
+            )
+            response.text = ux_result.response
+            response.format = "plain"
+            response.metadata = {
+                **dict(response.metadata or {}),
+                "reply_style": ux_result.reply_style,
+                "delivery_mode": ux_result.delivery_mode,
+                "channel_behavior": ux_result.channel_behavior,
+                "typing_profile_ms": ux_result.typing_profile_ms,
+                "trust_summary": ux_result.trust_summary,
+                "suggested_replies": list(ux_result.suggested_replies or []),
+            }
+            response.channel_hints = {
+                **dict(response.channel_hints or {}),
+                "typing_profile_ms": ux_result.typing_profile_ms,
+                "delivery_mode": ux_result.delivery_mode,
+                "suggested_replies": list(ux_result.suggested_replies or []),
+            }
             await self.send_outgoing_response(message.channel_type, message.channel_id, response)
+
+            # ── Faz 7: record to episodic memory ─────────────────────────────
+            try:
+                from core.memory.jarvis_memory import Interaction, get_jarvis_memory
+                import time as _time
+                _ix = Interaction(
+                    user_id=str(message.user_id or "default"),
+                    channel=str(message.channel_type or ""),
+                    input_text=str(message.text or "")[:500],
+                    output_text=str(response.text or "")[:500],
+                    outcome="ok",
+                )
+                get_jarvis_memory().record(_ix)
+
+                from core.memory.personality_adapter import get_personality_adapter
+                _pa = get_personality_adapter()
+                _pa.observe_channel(str(message.user_id or "default"), str(message.channel_type or ""))
+                _pa.observe_response_length(str(message.user_id or "default"), len(str(response.text or "")))
+                _pa.observe_message_time(str(message.user_id or "default"))
+            except Exception:
+                pass
 
         except Exception as e:
             logger.error(f"Error processing message: {e}", exc_info=True)
@@ -572,6 +667,107 @@ class GatewayRouter:
             "channel_type": str(getattr(message, "channel_type", "") or "").strip(),
             "channel_id": str(getattr(message, "channel_id", "") or "").strip(),
         }
+
+    def _workspace_id_for_message(self, message: UnifiedMessage) -> str:
+        metadata = message.metadata if isinstance(getattr(message, "metadata", None), dict) else {}
+        if str(metadata.get("workspace_id") or "").strip():
+            return str(metadata.get("workspace_id") or "").strip()
+        adapter = self.adapters.get(str(getattr(message, "channel_type", "") or "").strip().lower())
+        if adapter is not None and isinstance(getattr(adapter, "config", None), dict):
+            configured_workspace = str((adapter.config or {}).get("workspace_id") or "").strip()
+            if configured_workspace:
+                return configured_workspace
+        return "local-workspace"
+
+    @staticmethod
+    def _should_capture_intake(message: UnifiedMessage) -> bool:
+        channel_type = str(getattr(message, "channel_type", "") or "").strip().lower()
+        if channel_type not in {"whatsapp", "telegram", "imessage", "sms"}:
+            return False
+        text = str(getattr(message, "text", "") or "").strip()
+        if not text:
+            return False
+        metadata = message.metadata if isinstance(getattr(message, "metadata", None), dict) else {}
+        source = str(metadata.get("source") or metadata.get("telegram_source") or "").strip().lower()
+        if any(flag in source for flag in {"callback", "command", "approval"}):
+            return False
+        return True
+
+    def _capture_message_intake(self, message: UnifiedMessage) -> None:
+        if not self._should_capture_intake(message):
+            return
+        try:
+            from core.billing.workspace_billing import get_workspace_billing_store
+            from core.gateway.server import push_activity
+            from core.persistence.runtime_db import get_runtime_database
+
+            workspace_id = self._workspace_id_for_message(message)
+            source_type = normalize_intake_source(str(getattr(message, "channel_type", "") or "manual"))
+            text = str(getattr(message, "text", "") or "").strip()
+            summary = extract_task_summary(
+                text,
+                source_type=source_type,
+                title=str(getattr(message, "user_name", "") or getattr(message, "channel_id", "") or "").strip(),
+            )
+            event = get_runtime_database().inbox.create_event(
+                workspace_id=workspace_id,
+                source_type=source_type,
+                source_id=str(getattr(message, "id", "") or getattr(message, "channel_id", "") or "").strip(),
+                title=str(summary.get("title") or ""),
+                content=text,
+                summary=summary,
+                status="triaged",
+                metadata={
+                    "captured_via": "channel_router",
+                    "channel_id": str(getattr(message, "channel_id", "") or ""),
+                    "user_id": str(getattr(message, "user_id", "") or ""),
+                    "user_name": str(getattr(message, "user_name", "") or ""),
+                    "attachments": len(list(getattr(message, "attachments", []) or [])),
+                    "message_timestamp": float(getattr(message, "timestamp", 0.0) or 0.0),
+                },
+            )
+            billing = get_workspace_billing_store()
+            billing.record_usage(
+                workspace_id,
+                "inbox_events",
+                1,
+                metadata={"event_id": event.get("event_id"), "source_type": source_type},
+            )
+            try:
+                billing.record_usage(
+                    workspace_id,
+                    "task_extractions",
+                    1,
+                    metadata={
+                        "event_id": event.get("event_id"),
+                        "source_type": source_type,
+                        "task_type": str(summary.get("task_type") or "cowork"),
+                        "estimated_credits": 1,
+                    },
+                )
+            except RuntimeError as exc:
+                slog.log_event(
+                    "connector_intake_credit_warning",
+                    {
+                        "workspace_id": workspace_id,
+                        "channel_type": source_type,
+                        "event_id": str(event.get("event_id") or ""),
+                        "error": str(exc),
+                    },
+                    level="warning",
+                )
+            push_activity("connector_intake", source_type, str(summary.get("title") or text)[:60], True)
+        except Exception as exc:
+            slog.log_event(
+                "connector_intake_capture_failed",
+                {
+                    "channel_type": str(getattr(message, "channel_type", "") or ""),
+                    "channel_id": str(getattr(message, "channel_id", "") or ""),
+                    "user_id": str(getattr(message, "user_id", "") or ""),
+                    "error": str(exc),
+                },
+                level="warning",
+            )
 
     @staticmethod
     def _parse_intervention_decision(text: str) -> Optional[str]:

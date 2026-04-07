@@ -10,6 +10,7 @@ import logging
 from fnmatch import fnmatch
 from typing import Dict, List, Any, Optional
 from config.elyan_config import elyan_config
+from core.security.contracts import decision_for
 from utils.logger import get_logger
 
 logger = get_logger("tool_policy")
@@ -242,13 +243,41 @@ class ToolPolicyEngine:
         if tool_group is None:
             tool_group = self._infer_group(tool_name)
 
+        risk_level = "write_safe" if str(tool_group or "") in {"runtime", "automation", "messaging"} else "read_only"
+        if str(tool_name or "").strip().lower() in {"delete_file", "shutdown_system", "restart_system", "kill_process"}:
+            risk_level = "destructive"
+
         if not self.is_allowed(tool_name, tool_group):
-            return {"allowed": False, "requires_approval": False, "reason": "Policy restriction"}
+            return decision_for(
+                allowed=False,
+                requires_approval=False,
+                risk_level=risk_level,
+                legacy_risk="dangerous" if risk_level == "destructive" else "safe",
+                data={"tool_name": tool_name, "tool_group": tool_group},
+                reason="Policy restriction",
+                source="tool_policy",
+            ).to_dict()
 
         if self.needs_approval(tool_name, tool_group):
-            return {"allowed": True, "requires_approval": True, "reason": "Approval required by policy"}
+            return decision_for(
+                allowed=True,
+                requires_approval=True,
+                risk_level="write_sensitive" if risk_level != "destructive" else "destructive",
+                legacy_risk="dangerous" if risk_level == "destructive" else "guarded",
+                data={"tool_name": tool_name, "tool_group": tool_group},
+                reason="Approval required by policy",
+                source="tool_policy",
+            ).to_dict()
 
-        return {"allowed": True, "requires_approval": False, "reason": "OK"}
+        return decision_for(
+            allowed=True,
+            requires_approval=False,
+            risk_level=risk_level,
+            legacy_risk="safe" if risk_level == "read_only" else "guarded",
+            data={"tool_name": tool_name, "tool_group": tool_group},
+            reason="OK",
+            source="tool_policy",
+        ).to_dict()
 
     def reload(self):
         """Reload policy from config (hot reload support)."""

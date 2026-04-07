@@ -6,6 +6,8 @@ from pathlib import Path
 
 from core.gateway import server as gateway_server
 
+_REPO = Path(__file__).resolve().parent.parent.parent
+
 
 class _Req:
     def __init__(self, filename):
@@ -22,24 +24,24 @@ class _OpsReq:
 
 
 @pytest.mark.asyncio
-async def test_handle_web_asset_serves_dashboard_js():
+async def test_handle_web_asset_returns_deprecation_payload():
     srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
     resp = await gateway_server.ElyanGatewayServer.handle_web_asset(srv, _Req("dashboard.js"))
-    assert isinstance(resp, web.FileResponse)
+    assert resp.status == 410
 
 
 @pytest.mark.asyncio
-async def test_handle_web_asset_serves_ops_console_js():
+async def test_handle_web_asset_returns_deprecation_payload_for_ops_assets():
     srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
     resp = await gateway_server.ElyanGatewayServer.handle_web_asset(srv, _Req("ops_console.js"))
-    assert isinstance(resp, web.FileResponse)
+    assert resp.status == 410
 
 
 @pytest.mark.asyncio
 async def test_handle_web_asset_rejects_traversal():
     srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
     resp = await gateway_server.ElyanGatewayServer.handle_web_asset(srv, _Req("../secret.txt"))
-    assert resp.status == 400
+    assert resp.status == 410
 
 
 @pytest.mark.asyncio
@@ -59,81 +61,14 @@ async def test_handle_ops_console_page_sets_admin_cookie(monkeypatch):
     assert resp.cookies["elyan_admin_session"].value == "ops-token"
 
 
-def test_dashboard_js_includes_mission_control_runtime_hooks():
-    js = Path("/Users/emrekoca/Desktop/bot/ui/web/dashboard.js").read_text(encoding="utf-8")
-    assert "timeoutMs: 130000" in js
-    assert "Istek zaman asimina ugradi" in js
-    assert "friendlyFailure" in js
-    assert "missionFilter" in js
-    assert "renderMissionControlStrip" in js
-    assert "renderMissionQuality" in js
-    assert "traceState" in js
-    assert "renderTraceView" in js
-    assert "appendTraceLive" in js
-    assert "/api/missions" in js
-    assert "/api/missions/" in js
-    assert "/api/missions/overview" in js
-    assert "/api/missions/approvals/resolve" in js
-    assert "/api/missions/skills/save" in js
-    assert "/api/missions/memory" in js
-    assert "/api/trace/" in js
-    assert "Mission baslatildi" in js
-    assert "mission_event" in js
-    assert "URLSearchParams" in js
-    assert "mission_id" in js
-    assert "selected_mission_id" in js
-    assert "trace_id" in js
-    assert "p-trace" in js
-    assert "trace-task-id" in js
-    assert "trace-open-full" in js
-    assert "mission-open-trace" in js
-    assert 'tools: "p-tools"' in js
-    assert "g-refresh-tools" in js
-    assert "loadSkillCatalog" in js
-    assert "refreshSkillRegistry" in js
-    assert "loadMarketplace" in js
-    assert "installMarketplaceSkill" in js
-    assert "loadAutopilot" in js
-    assert "startAutopilot" in js
-    assert "stopAutopilot" in js
-    assert "tickAutopilot" in js
-    assert "/api/autopilot/status" in js
-    assert "/api/autopilot/start" in js
-    assert "/api/autopilot/stop" in js
-    assert "/api/autopilot/tick" in js
-    assert "/api/skills/refresh" in js
-    assert "skills-refresh" in js
-    assert "/api/marketplace/browse" in js
-    assert "/api/marketplace/categories" in js
-    assert "/api/marketplace/install" in js
-    assert "marketplace-refresh" in js
-    assert 'rawStrategy === "hızlı"' in js
-    assert 'normalizedStrategy = "fast"' in js
-    assert "integrationState" in js
-    assert "integrationProviderPresetScopes" in js
-    assert "integrationQuickConnectPlan" in js
-    assert "integrationProviderBadge" in js
-    assert "/api/integrations/accounts" in js
-    assert "/api/integrations/connect" in js
-    assert "/api/integrations/accounts/connect" in js
-    assert "/api/integrations/accounts/revoke" in js
-    assert "/api/integrations/traces" in js
-    assert "/api/integrations/summary" in js
-    assert "integration-app" in js
-    assert "integration-quick-presets" in js
-    assert "integration-redirect-uri" in js
-    assert "js-integration-quick" in js
-    assert "refreshIntegrations" in js
-    assert "renderIntegrationSummary" in js
-    assert "integration-connect" in js
-    assert "integration-revoke" in js
-    assert "integration-trace-search" in js
-    assert 'tools: "p-tools"' in js
-    assert 'integrations: "p-integrations"' in js
+def test_start_script_launches_desktop_not_dashboard():
+    script = (_REPO / "scripts/start_product.sh").read_text(encoding="utf-8")
+    assert "cli.main desktop" in script
+    assert "cli.main dashboard" not in script
 
 
 def test_ops_console_js_points_to_admin_endpoints():
-    js = Path("/Users/emrekoca/Desktop/bot/ui/web/ops_console.js").read_text(encoding="utf-8")
+    js = (_REPO / "ui/web/ops_console.js").read_text(encoding="utf-8")
     assert "/api/admin/overview" in js
     assert "/api/admin/users" in js
     assert "/api/admin/plans" in js

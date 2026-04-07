@@ -4,7 +4,7 @@ Intent System Data Models
 Core dataclasses for intent recognition, task decomposition, and multi-task orchestration.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Any, Optional, Dict, List
 from enum import Enum
 from datetime import datetime
@@ -146,6 +146,30 @@ class IntentResult:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
+        def _serialize_item(item: Any) -> Dict[str, Any]:
+            if isinstance(item, dict):
+                return dict(item)
+            if hasattr(item, "to_dict") and callable(item.to_dict):
+                try:
+                    data = item.to_dict()
+                    if isinstance(data, dict):
+                        return dict(data)
+                except Exception:
+                    pass
+            if is_dataclass(item):
+                try:
+                    data = asdict(item)
+                    if isinstance(data, dict):
+                        return dict(data)
+                except Exception:
+                    pass
+            payload: Dict[str, Any] = {"value": str(item)}
+            if hasattr(item, "__dict__"):
+                for key, value in vars(item).items():
+                    if not str(key).startswith("_"):
+                        payload[str(key)] = value
+            return payload
+
         return {
             "user_input": self.user_input,
             "user_id": self.user_id,
@@ -153,12 +177,16 @@ class IntentResult:
             "confidence": self.confidence,
             "params": self.params,
             "is_multi_task": self.is_multi_task,
+            "tasks": [_serialize_item(task) for task in self.tasks],
             "tasks_count": len(self.tasks),
+            "dependency_graph": asdict(self.dependency_graph) if self.dependency_graph else None,
             "reasoning": self.reasoning,
             "source_tier": self.source_tier,
+            "candidates": [candidate.to_dict() if hasattr(candidate, "to_dict") else _serialize_item(candidate) for candidate in self.candidates],
+            "requires_clarification": self.requires_clarification,
+            "clarification_options": list(self.clarification_options),
             "execution_time_ms": self.execution_time_ms,
             "timestamp": self.timestamp.isoformat(),
-            "requires_clarification": self.requires_clarification,
         }
 
     def was_correct(self) -> bool:

@@ -5,6 +5,7 @@ import json
 import os
 from typing import Any, Dict, List, Optional, Callable
 from pathlib import Path
+from core.execution_guard import ExecutionCheck, get_execution_guard
 from core.persistence import get_runtime_database
 from core.protocol.shared_types import RiskLevel
 from core.observability.logger import get_structured_logger
@@ -121,6 +122,57 @@ class ApprovalEngine:
         if self._persistence_enabled:
             self._restore_pending()
 
+    @staticmethod
+    def _workspace_id_from_payload(payload: Dict[str, Any]) -> str:
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        return str(
+            payload.get("workspace_id")
+            or metadata.get("workspace_id")
+            or "local-workspace"
+        ).strip() or "local-workspace"
+
+    @staticmethod
+    def _actor_id_from_payload(payload: Dict[str, Any], *, fallback: str = "") -> str:
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        return str(
+            payload.get("actor_id")
+            or payload.get("user_id")
+            or metadata.get("actor_id")
+            or metadata.get("user_id")
+            or fallback
+        ).strip()
+
+    def _observe_guard(
+        self,
+        *,
+        request: ApprovalRequest,
+        phase: str,
+        allowed: bool,
+        reason: str = "",
+        metadata: Dict[str, Any] | None = None,
+        checks: List[ExecutionCheck] | None = None,
+        level: str = "info",
+        actor_id: str = "",
+    ) -> None:
+        payload = dict(request.payload or {})
+        get_execution_guard().observe_shadow(
+            action=request.action_type,
+            phase=phase,
+            allowed=allowed,
+            workspace_id=self._workspace_id_from_payload(payload),
+            actor_id=self._actor_id_from_payload(payload, fallback=actor_id),
+            session_id=request.session_id,
+            run_id=request.run_id,
+            reason=reason,
+            checks=checks,
+            metadata={
+                "approval_request_id": request.request_id,
+                "risk_level": request.risk_level.value if hasattr(request.risk_level, "value") else str(request.risk_level),
+                **dict(metadata or {}),
+            },
+            level=level,
+        )
+
     def _persist_pending(self) -> None:
         """Persist current pending approvals for crash recovery."""
         if not self._persistence_enabled or not self._legacy_store_enabled:
@@ -175,6 +227,30 @@ class ApprovalEngine:
                     session_id=session_id,
                     run_id=run_id,
                 )
+                request = ApprovalRequest(
+                    request_id=f"appr_shadow_{uuid.uuid4().hex[:8]}",
+                    session_id=session_id,
+                    run_id=run_id,
+                    action_type=action_type,
+                    payload=payload,
+                    risk_level=risk_level,
+                    reason=reason,
+                )
+                request.status = "implicit_allow"
+                self._observe_guard(
+                    request=request,
+                    phase="approval_bypassed",
+                    allowed=True,
+                    reason="uncertainty_threshold_met",
+                    checks=[
+                        ExecutionCheck(
+                            name="approval_requirement",
+                            allowed=True,
+                            reason="uncertainty_threshold_met",
+                            metadata={"mode": "implicit_allow"},
+                        )
+                    ],
+                )
                 return True
         except Exception as exc:
             slog.log_event(
@@ -203,6 +279,20 @@ class ApprovalEngine:
             "risk": risk_level.value,
             "reason": reason
         }, session_id=session_id, run_id=run_id)
+        self._observe_guard(
+            request=request,
+            phase="approval_requested",
+            allowed=False,
+            reason=reason,
+            checks=[
+                ExecutionCheck(
+                    name="human_approval_required",
+                    allowed=False,
+                    reason=reason,
+                    metadata={"pending": True},
+                )
+            ],
+        )
 
         # Notify via HTTP + event channels
         await self._notify_pending(request)
@@ -213,6 +303,21 @@ class ApprovalEngine:
             return approved
         except asyncio.TimeoutError:
             slog.log_event("approval_timeout", {"request_id": request_id}, level="warning", session_id=session_id, run_id=run_id)
+            self._observe_guard(
+                request=request,
+                phase="approval_timeout",
+                allowed=False,
+                reason="approval timeout",
+                checks=[
+                    ExecutionCheck(
+                        name="approval_resolution",
+                        allowed=False,
+                        reason="approval timeout",
+                        metadata={"status": "timed_out"},
+                    )
+                ],
+                level="warning",
+            )
             return False
         finally:
             self._pending.pop(request_id, None)
@@ -274,6 +379,22 @@ class ApprovalEngine:
                 "approved": approved,
                 "resolver": resolver_id
             }, session_id=request.session_id, run_id=request.run_id)
+            self._observe_guard(
+                request=request,
+                phase="approval_resolved",
+                allowed=approved,
+                reason="" if approved else "approval denied",
+                checks=[
+                    ExecutionCheck(
+                        name="approval_resolution",
+                        allowed=approved,
+                        reason="" if approved else "approval denied",
+                        metadata={"resolver_id": resolver_id, "status": request.status},
+                    )
+                ],
+                actor_id=resolver_id,
+                level="info" if approved else "warning",
+            )
 
             # Broadcast resolution event
             try:
@@ -319,10 +440,44 @@ class ApprovalEngine:
                     "action_type": request.action_type,
                 },
             )
+            self._observe_guard(
+                request=request,
+                phase="approval_grant_issued",
+                allowed=True,
+                checks=[
+                    ExecutionCheck(
+                        name="scoped_permission_grant",
+                        allowed=True,
+                        metadata={
+                            "scope": scope,
+                            "resource": resource,
+                            "allowed_actions": allowed_actions,
+                            "resolver_id": resolver_id,
+                        },
+                    )
+                ],
+                actor_id=resolver_id,
+            )
         except Exception as exc:
             slog.log_event(
                 "approval_grant_issue_failed",
                 {"request_id": request.request_id, "error": str(exc)},
+                level="warning",
+            )
+            self._observe_guard(
+                request=request,
+                phase="approval_grant_failed",
+                allowed=False,
+                reason=str(exc),
+                checks=[
+                    ExecutionCheck(
+                        name="scoped_permission_grant",
+                        allowed=False,
+                        reason=str(exc),
+                        metadata={"scope": scope, "resource": resource},
+                    )
+                ],
+                actor_id=resolver_id,
                 level="warning",
             )
 

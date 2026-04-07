@@ -51,6 +51,7 @@ MatrixAdapter = _load_adapter("matrix_adapter", "MatrixAdapter")
 TeamsAdapter = _load_adapter("teams_adapter", "TeamsAdapter")
 GoogleChatAdapter = _load_adapter("google_chat_adapter", "GoogleChatAdapter")
 IMessageAdapter = _load_adapter("imessage_adapter", "IMessageAdapter")
+SmsAdapter = _load_adapter("sms_adapter", "SmsAdapter")
 
 __all__ = [
     "BaseChannelAdapter",
@@ -64,6 +65,7 @@ __all__ = [
     "TeamsAdapter",
     "GoogleChatAdapter",
     "IMessageAdapter",
+    "SmsAdapter",
 ]
 
 # Kanal tipi → sınıf eşlemesi
@@ -78,6 +80,7 @@ ADAPTER_REGISTRY = {
     "teams": TeamsAdapter,
     "google_chat": GoogleChatAdapter,
     "imessage": IMessageAdapter,
+    "sms": SmsAdapter,
 }
 
 

@@ -62,6 +62,15 @@ class TestRunRecord:
 class TestRunStore:
     """Test RunStore functionality."""
 
+    def test_default_store_path_honors_env_runs_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("ELYAN_DATA_DIR", str(tmp_path / "elyan"))
+        monkeypatch.setenv("ELYAN_RUNS_DIR", str(tmp_path / "runs"))
+
+        store = RunStore()
+
+        assert Path(store.store_path) == (tmp_path / "runs").resolve()
+        assert Path(store.telemetry_store.trace_path).parent == (tmp_path / "runs").resolve()
+
     @pytest.fixture
     def temp_store(self):
         """Create temporary run store."""
@@ -104,6 +113,32 @@ class TestRunStore:
         assert retrieved is not None
         assert retrieved.run_id == "run_002"
         assert retrieved.intent == "test"
+
+    @pytest.mark.asyncio
+    async def test_record_run_encrypts_sensitive_fields(self, temp_store):
+        """Sensitive run fields are persisted encrypted and transparently restored."""
+        record = RunRecord(
+            run_id="run_secured",
+            session_id="sess_secured",
+            status="completed",
+            intent="security test",
+            steps=[{"type": "tool", "secret": "token_123"}],
+            tool_calls=[{"tool": "read_file", "path": "/tmp/demo"}],
+            error="api_key=secret_456",
+        )
+        await temp_store.record_run(record)
+
+        file_path = Path(temp_store.store_path) / "run_secured.json"
+        raw = json.loads(file_path.read_text(encoding="utf-8"))
+        assert raw["steps"]["__elyan_encrypted__"] is True
+        assert raw["tool_calls"]["__elyan_encrypted__"] is True
+        assert raw["error"]["__elyan_encrypted__"] is True
+
+        restored = await temp_store.get_run("run_secured")
+        assert restored is not None
+        assert restored.steps == record.steps
+        assert restored.tool_calls == record.tool_calls
+        assert restored.error == record.error
 
     @pytest.mark.asyncio
     async def test_get_nonexistent_run(self, temp_store):

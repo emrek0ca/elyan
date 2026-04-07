@@ -1,15 +1,90 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, MessageCircle } from "lucide-react";
+import { ArrowRight, Cable, ExternalLink, Mail, MessageSquare, RefreshCw, ScanQrCode, ShieldCheck, Trash2 } from "@/vendor/lucide-react";
 
 import { Button } from "@/components/primitives/Button";
 import { Surface } from "@/components/primitives/Surface";
 import { StatusBadge } from "@/components/primitives/StatusBadge";
-import { useChannels, useChannelsCatalog } from "@/hooks/use-desktop-data";
+import {
+  useAdminWorkspaces,
+  useBillingWorkspace,
+  useChannelPairingStatus,
+  useChannels,
+  useChannelsCatalog,
+  useConnectorAccounts,
+  useConnectorHealth,
+  useConnectorTraces,
+  useConnectors,
+  useInboxEvents,
+  useSystemReadiness,
+} from "@/hooks/use-desktop-data";
 import { runtimeManager } from "@/runtime/runtime-manager";
-import { testChannel, toggleChannel, upsertChannel } from "@/services/api/elyan-service";
+import {
+  connectConnector,
+  refreshConnectorAccount,
+  revokeConnectorAccount,
+  runConnectorQuickAction,
+  startChannelPairing,
+  testChannel,
+  toggleChannel,
+  upsertChannel,
+} from "@/services/api/elyan-service";
 import { useRuntimeStore } from "@/stores/runtime-store";
+import type { ChannelCatalogEntry, ChannelSummary, ConnectorDefinition, ConnectorExecutionResult } from "@/types/domain";
 import { getRuntimeGateReason, hasRuntimeWriteAccess } from "@/utils/runtime-access";
+
+const productivityOrder = ["gmail", "google_calendar", "google_drive", "notion", "slack", "github"];
+const appleOrder = ["apple_mail", "apple_calendar", "apple_reminders", "apple_notes", "apple_contacts"];
+const messagingOrder = ["telegram", "whatsapp", "imessage", "sms"];
+const secretFieldNames = new Set(["token", "password", "bot_token", "app_token", "bridge_token", "access_token", "verify_token", "auth_token"]);
+
+function connectorTone(status: string): "success" | "warning" | "neutral" {
+  if (status === "connected") {
+    return "success";
+  }
+  if (status === "pending" || status === "degraded") {
+    return "warning";
+  }
+  return "neutral";
+}
+
+function channelTone(channel?: ChannelSummary): "success" | "warning" | "info" {
+  if (channel?.connected) {
+    return "success";
+  }
+  if (channel?.enabled) {
+    return "warning";
+  }
+  return "info";
+}
+
+function orderedConnectors(connectors: ConnectorDefinition[], order: string[]): ConnectorDefinition[] {
+  return order
+    .map((connectorId) => connectors.find((item) => item.connector === connectorId))
+    .filter((item): item is ConnectorDefinition => Boolean(item));
+}
+
+function resolveMessagingFields(catalog?: ChannelCatalogEntry, channel?: ChannelSummary, drafts?: Record<string, string>) {
+  if (!catalog) {
+    return [];
+  }
+  const mode = String(drafts?.mode || channel?.mode || "bridge").trim().toLowerCase() || "bridge";
+  if (catalog.type === "whatsapp") {
+    const keep = mode === "cloud"
+      ? new Set(["mode", "phone_number_id", "access_token", "verify_token", "webhook_path"])
+      : new Set(["mode"]);
+    return catalog.fields.filter((field) => keep.has(field.name));
+  }
+  if (Array.isArray(catalog.minimalFields) && catalog.minimalFields.length) {
+    const keep = new Set(catalog.minimalFields);
+    const ordered = catalog.minimalFields
+      .map((name) => catalog.fields.find((field) => field.name === name))
+      .filter((field): field is (typeof catalog.fields)[number] => Boolean(field));
+    const remainder = catalog.fields.filter((field) => !keep.has(field.name) && field.name === "id");
+    return [...ordered, ...remainder];
+  }
+  return catalog.fields;
+}
 
 export function IntegrationsScreen() {
   const queryClient = useQueryClient();
@@ -17,29 +92,68 @@ export function IntegrationsScreen() {
   const sidecarHealth = useRuntimeStore((state) => state.sidecarHealth);
   const runtimeReady = hasRuntimeWriteAccess(connectionState, sidecarHealth);
   const runtimeGateReason = getRuntimeGateReason(connectionState, sidecarHealth);
+
+  const { data: readiness } = useSystemReadiness();
+  const { data: billing } = useBillingWorkspace();
+  const { data: adminWorkspaces = [] } = useAdminWorkspaces();
+  const { data: connectors = [] } = useConnectors();
+  const { data: accounts = [] } = useConnectorAccounts();
+  const { data: connectorHealth = [] } = useConnectorHealth();
+  const { data: traces = [] } = useConnectorTraces();
   const { data: channels = [] } = useChannels();
   const { data: channelCatalog = [] } = useChannelsCatalog();
-  const [busyId, setBusyId] = useState("");
-  const [telegramToken, setTelegramToken] = useState("");
-  const [message, setMessage] = useState("");
+  const primaryWorkspaceId = adminWorkspaces[0]?.workspaceId || billing?.workspaceId || "local-workspace";
+  const { data: inboxEvents = [] } = useInboxEvents(primaryWorkspaceId, 8);
+  const { data: whatsappPairing } = useChannelPairingStatus("whatsapp");
 
-  const telegramChannel = channels.find((item) => item.type === "telegram");
-  const telegramCatalogEntry = channelCatalog.find((item) => item.type === "telegram");
-  const telegramStatus = telegramChannel?.connected
-    ? "connected"
-    : telegramChannel?.enabled
-      ? "configured"
-      : "not connected";
-  const telegramStatusTone = telegramChannel?.connected ? "success" : telegramChannel?.enabled ? "warning" : "info";
-  const primaryLabel = telegramChannel ? "Update" : "Connect";
-  const tokenPlaceholder =
-    telegramCatalogEntry?.fields.find((field) => field.name === "token")?.label || "Telegram bot token";
+  const [busyId, setBusyId] = useState("");
+  const [message, setMessage] = useState("");
+  const [channelDrafts, setChannelDrafts] = useState<Record<string, Record<string, string>>>({});
+  const [quickResults, setQuickResults] = useState<Record<string, ConnectorExecutionResult>>({});
+  const panelClassName = "rounded-[18px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] p-4";
+  const fieldClassName =
+    "h-[44px] w-full rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 text-[13px] text-[var(--text-primary)] outline-none transition focus:border-[var(--border-focus)]";
+
+  const productivityConnectors = useMemo(() => orderedConnectors(connectors, productivityOrder), [connectors]);
+  const appleConnectors = useMemo(() => orderedConnectors(connectors, appleOrder), [connectors]);
+  const messagingChannels = useMemo(
+    () =>
+      messagingOrder
+        .map((type) => ({
+          type,
+          catalog: channelCatalog.find((item) => item.type === type),
+          channel: channels.find((item) => item.type === type),
+        }))
+        .filter((entry) => Boolean(entry.catalog || entry.channel)),
+    [channelCatalog, channels],
+  );
+  const recentTraces = traces.slice(0, 6);
+  const connectedMessagingCount = messagingChannels.filter((entry) => entry.channel?.connected).length;
+  const recentMobileIntake = inboxEvents.filter((entry) => messagingOrder.includes(entry.sourceType)).slice(0, 6);
+  const mobileLaneCards = messagingChannels.map((entry) => ({
+    ...entry,
+    ready: Boolean(entry.channel?.connected),
+    hint:
+      entry.type === "whatsapp"
+        ? "QR / Cloud"
+        : entry.type === "telegram"
+          ? "Bot token"
+          : entry.type === "imessage"
+            ? "BlueBubbles"
+            : "Hat hazirla",
+  }));
 
   async function syncViews() {
     await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["connectors"] }),
+      queryClient.invalidateQueries({ queryKey: ["connector-accounts", "all"] }),
+      queryClient.invalidateQueries({ queryKey: ["connector-health"] }),
       queryClient.invalidateQueries({ queryKey: ["channels"] }),
-      queryClient.invalidateQueries({ queryKey: ["channels-catalog"] }),
+      queryClient.invalidateQueries({ queryKey: ["channel-pairing", "whatsapp"] }),
+      queryClient.invalidateQueries({ queryKey: ["system-readiness"] }),
+      queryClient.invalidateQueries({ queryKey: ["inbox-events"] }),
       queryClient.invalidateQueries({ queryKey: ["home-snapshot"] }),
+      queryClient.invalidateQueries({ queryKey: ["logs"] }),
     ]);
   }
 
@@ -51,126 +165,623 @@ export function IntegrationsScreen() {
     return false;
   }
 
-  async function handleTelegramSave() {
+  function channelValue(type: string, fieldName: string, channel?: ChannelSummary) {
+    const draft = channelDrafts[type]?.[fieldName];
+    if (typeof draft === "string") {
+      return draft;
+    }
+    const source = (channel || {}) as unknown as Record<string, unknown>;
+    if (secretFieldNames.has(fieldName)) {
+      return "";
+    }
+    return String(source[fieldName] || "");
+  }
+
+  function updateChannelDraft(type: string, fieldName: string, value: string) {
+    setChannelDrafts((current) => ({
+      ...current,
+      [type]: {
+        ...(current[type] || {}),
+        [fieldName]: value,
+      },
+    }));
+  }
+
+  async function handleConnect(connector: ConnectorDefinition) {
     if (!(await guardRuntime())) {
       return;
     }
-    setBusyId("telegram-save");
+    setBusyId(`connect:${connector.connector}`);
     setMessage("");
     try {
-      if (!telegramToken.trim() && !telegramChannel) {
-        setMessage("Telegram bot token gerekli.");
-        return;
+      const result = await connectConnector(connector.connector);
+      if (result.launchUrl) {
+        await runtimeManager.openExternalUrl(result.launchUrl);
       }
-      await upsertChannel({
-        type: "telegram",
-        id: telegramChannel?.id || "telegram",
-        token: telegramToken.trim() || undefined,
+      setMessage(result.launchUrl ? `${connector.label} acildi.` : `${connector.label} hazir.`);
+      await syncViews();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : `${connector.label} baglanamadi.`);
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  async function handleRefresh(accountId: string) {
+    if (!(await guardRuntime())) {
+      return;
+    }
+    setBusyId(`refresh:${accountId}`);
+    setMessage("");
+    try {
+      await refreshConnectorAccount(accountId);
+      setMessage("Hesap yenilendi.");
+      await syncViews();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Yenileme olmadi.");
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  async function handleRevoke(accountId: string) {
+    if (!(await guardRuntime())) {
+      return;
+    }
+    setBusyId(`revoke:${accountId}`);
+    setMessage("");
+    try {
+      const ok = await revokeConnectorAccount(accountId);
+      setMessage(ok ? "Hesap kaldirildi." : "Kaldirma olmadi.");
+      await syncViews();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Kaldirma olmadi.");
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  async function handleChannelSave(entry: { type: string; catalog?: ChannelCatalogEntry; channel?: ChannelSummary }) {
+    if (!(await guardRuntime())) {
+      return;
+    }
+    setBusyId(`channel-save:${entry.type}`);
+    setMessage("");
+    try {
+      const payload: Record<string, unknown> = {
+        type: entry.type,
+        id: entry.channel?.id || entry.type,
         enabled: true,
-      });
-      setTelegramToken("");
-      setMessage("Telegram kaydedildi.");
+        workspace_id: primaryWorkspaceId,
+      };
+      for (const field of entry.catalog?.fields || []) {
+        const value = channelValue(entry.type, field.name, entry.channel).trim();
+        if (value) {
+          payload[field.name] = value;
+        }
+      }
+      await upsertChannel(payload);
+      setMessage(`${entry.catalog?.label || entry.type} kayitli.`);
+      setChannelDrafts((current) => ({ ...current, [entry.type]: {} }));
       await syncViews();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Telegram kaydedilemedi.");
+      setMessage(error instanceof Error ? error.message : "Kayit olmadi.");
     } finally {
       setBusyId("");
     }
   }
 
-  async function handleTelegramToggle(enabled: boolean) {
+  async function handleChannelPairStart(type: string) {
     if (!(await guardRuntime())) {
       return;
     }
-    setBusyId("telegram-toggle");
+    setBusyId(`channel-pair:${type}`);
     setMessage("");
     try {
-      await toggleChannel(telegramChannel?.id || "telegram", enabled);
-      setMessage(enabled ? "Telegram açıldı." : "Telegram kapatıldı.");
+      const pairing = await startChannelPairing(type, { workspace_id: primaryWorkspaceId });
+      setMessage(pairing.detail || `${type} eslesti.`);
       await syncViews();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Telegram durumu değiştirilemedi.");
+      setMessage(error instanceof Error ? error.message : "Eslesme olmadi.");
     } finally {
       setBusyId("");
     }
   }
 
-  async function handleTelegramTest() {
+  async function handleChannelToggle(entry: { type: string; channel?: ChannelSummary }, enabled: boolean) {
     if (!(await guardRuntime())) {
       return;
     }
-    setBusyId("telegram-test");
+    setBusyId(`channel-toggle:${entry.type}`);
     setMessage("");
     try {
-      const result = await testChannel("telegram");
-      setMessage(result.message || (result.connected ? "Telegram bağlı." : "Telegram henüz bağlı değil."));
+      await toggleChannel(entry.channel?.id || entry.type, enabled);
+      setMessage(enabled ? `${entry.type} acik.` : `${entry.type} kapali.`);
       await syncViews();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Telegram test edilemedi.");
+      setMessage(error instanceof Error ? error.message : "Durum olmadi.");
     } finally {
       setBusyId("");
     }
+  }
+
+  async function handleChannelTest(type: string) {
+    if (!(await guardRuntime())) {
+      return;
+    }
+    setBusyId(`channel-test:${type}`);
+    setMessage("");
+    try {
+      const result = await testChannel(type);
+      setMessage(result.message || `${type} hazir.`);
+      await syncViews();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Test olmadi.");
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  async function handleQuickAction(connector: string, action: string, payload: Record<string, unknown> = {}) {
+    if (!(await guardRuntime())) {
+      return;
+    }
+    setBusyId(`quick:${connector}:${action}`);
+    setMessage("");
+    try {
+      const result = await runConnectorQuickAction(connector, action, payload);
+      setQuickResults((current) => ({ ...current, [connector]: result }));
+      setMessage(result.blockingIssue ? `${connector}: ${result.blockingIssue}` : `${connector} tamam.`);
+      await syncViews();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Hizli islem olmadi.");
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  function renderQuickResult(connector: string) {
+    const snapshot = quickResults[connector];
+    if (!snapshot) {
+      return null;
+    }
+    const items = Array.isArray(snapshot.result.items) ? snapshot.result.items.slice(0, 3) : [];
+    return (
+      <div className="mt-3 rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-3">
+        <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-tertiary)]">{snapshot.action}</div>
+        {snapshot.blockingIssue ? <div className="mt-1 text-[12px] text-[var(--accent-amber)]">{snapshot.blockingIssue}</div> : null}
+        {items.length ? (
+          <div className="mt-2 space-y-1">
+            {items.map((item, index) => (
+              <div key={`${connector}:${index}`} className="text-[12px] text-[var(--text-secondary)]">
+                {String((item as Record<string, unknown>).title || (item as Record<string, unknown>).name || (item as Record<string, unknown>).summary || JSON.stringify(item))}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-2 text-[12px] text-[var(--text-secondary)]">
+            {String(snapshot.result.message || snapshot.result.status || `${Number(snapshot.result.count || 0)} items`)}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function renderConnectorList(title: string, description: string, items: ConnectorDefinition[]) {
+    return (
+      <Surface tone="card" className="p-5">
+        <div>
+          <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">{title}</div>
+          {description ? <div className="mt-2 text-[13px] text-[var(--text-secondary)]">{description}</div> : null}
+        </div>
+
+        <div className="mt-4 space-y-3">
+          {items.map((connector) => {
+            const relatedAccounts = accounts.filter((item) => item.provider === connector.provider || item.provider === connector.connector);
+            const relatedHealth = connectorHealth.find((item) => item.connector === connector.connector || item.provider === connector.provider);
+            return (
+              <div key={connector.connector} className="rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 text-[15px] font-medium text-[var(--text-primary)]">
+                      <Cable className="h-4 w-4" />
+                      {connector.label}
+                    </div>
+                    <div className="mt-1 text-[12px] text-[var(--text-secondary)]">
+                      {connector.capabilities.slice(0, 4).join(" · ")}
+                    </div>
+                    <div className="mt-2 text-[11px] text-[var(--text-tertiary)]">
+                      {relatedAccounts.length} accounts · {relatedHealth?.traceCount || connector.traceCount} traces
+                      {connector.executionMode ? ` · ${connector.executionMode}` : ""}
+                    </div>
+                    {connector.blockingIssue ? (
+                      <div className="mt-2 text-[11px] text-[var(--accent-amber)]">{connector.blockingIssue}</div>
+                    ) : null}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <StatusBadge tone={connectorTone(connector.status)}>{connector.status}</StatusBadge>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void handleConnect(connector)}
+                      disabled={!runtimeReady || busyId === `connect:${connector.connector}`}
+                    >
+                      <ExternalLink className="mr-2 h-4 w-4" />
+                      {busyId === `connect:${connector.connector}` ? "Opening..." : relatedAccounts.length ? "Reconnect" : "Connect"}
+                    </Button>
+                  </div>
+                </div>
+
+                {connector.connector === "apple_notes" ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void handleQuickAction("apple_notes", "list")}
+                      disabled={!runtimeReady || busyId === "quick:apple_notes:list"}
+                    >
+                      Notlar
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void handleQuickAction("apple_notes", "search", { query: "meeting" })}
+                      disabled={!runtimeReady || busyId === "quick:apple_notes:search"}
+                    >
+                      Ara
+                    </Button>
+                  </div>
+                ) : null}
+                {connector.connector === "apple_calendar" ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void handleQuickAction("apple_calendar", "today")}
+                      disabled={!runtimeReady || busyId === "quick:apple_calendar:today"}
+                    >
+                      Bugun
+                    </Button>
+                  </div>
+                ) : null}
+                {connector.connector === "apple_reminders" ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void handleQuickAction("apple_reminders", "list_due")}
+                      disabled={!runtimeReady || busyId === "quick:apple_reminders:list_due"}
+                    >
+                      Vade
+                    </Button>
+                  </div>
+                ) : null}
+                {renderQuickResult(connector.connector)}
+
+                {relatedAccounts.length ? (
+                  <div className="mt-4 space-y-2">
+                    {relatedAccounts.map((account) => (
+                      <div
+                        key={account.accountId}
+                        className="flex items-center justify-between gap-3 rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-3"
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate text-[13px] font-medium text-[var(--text-primary)]">
+                            {account.displayName || account.email || account.accountAlias}
+                          </div>
+                          <div className="truncate text-[11px] text-[var(--text-tertiary)]">
+                            {account.email || account.accountAlias} · {account.status}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => void handleRefresh(account.accountId)}
+                            disabled={!runtimeReady || busyId === `refresh:${account.accountId}`}
+                          >
+                            <RefreshCw className="mr-2 h-4 w-4" />
+                            Yenile
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => void handleRevoke(account.accountId)}
+                            disabled={!runtimeReady || busyId === `revoke:${account.accountId}`}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Kaldir
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </Surface>
+    );
   }
 
   return (
-    <div className="space-y-6">
-      <Surface tone="hero" className="max-w-[760px] px-8 py-10">
-        <div className="max-w-[560px] space-y-2">
-          <h1 className="font-display text-[38px] font-semibold tracking-[-0.05em] text-[var(--text-primary)]">Telegram</h1>
+    <div className="space-y-5">
+      <Surface tone="hero" className="px-6 py-7">
+        <div className="space-y-3">
+          <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Baglantilar</div>
+          <h1 className="font-display text-[32px] font-semibold tracking-[-0.05em] text-[var(--text-primary)]">Kokpit</h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge tone={runtimeReady ? "success" : "warning"}>{runtimeReady ? "Hazir" : "Kapali"}</StatusBadge>
+            <StatusBadge tone={readiness?.productivityAppsReady ? "success" : "warning"}>
+              {readiness?.productivityAppsReady ? "Apps hazir" : "Apps eksik"}
+            </StatusBadge>
+            <StatusBadge tone={readiness?.bluebubblesReady ? "success" : "info"}>
+              {readiness?.bluebubblesReady ? "Blue acik" : "Blue kapali"}
+            </StatusBadge>
+            <div className="text-[12px] text-[var(--text-secondary)]">
+              WhatsApp {readiness?.whatsappMode || "yok"} · Oto {readiness?.applePermissions.automation ? "acik" : "kapali"}
+            </div>
+          </div>
         </div>
       </Surface>
 
-      <Surface tone="card" className="max-w-[760px] p-6">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-[16px] bg-[var(--accent-soft)] text-[var(--accent-primary)]">
-              <MessageCircle className="h-5 w-5" />
-            </div>
+      <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+        <Surface tone="card" className="p-5">
+          <div className="flex items-start justify-between gap-4">
             <div>
-              <div className="text-[16px] font-semibold text-[var(--text-primary)]">Telegram bot</div>
-              <div className="text-[12px] text-[var(--text-tertiary)]">Workspace channel</div>
+              <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Mobil</div>
+              <div className="mt-2 text-[20px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">Kanallar</div>
+            </div>
+            <StatusBadge tone={connectedMessagingCount > 0 ? "success" : "info"}>
+              {connectedMessagingCount > 0 ? `${connectedMessagingCount} acik` : "Ilk kanal"}
+            </StatusBadge>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {mobileLaneCards.map((entry) => (
+              <div key={entry.type} className={panelClassName}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-[14px] font-medium text-[var(--text-primary)]">{entry.catalog?.label || entry.type}</div>
+                    <div className="mt-1 text-[12px] text-[var(--text-secondary)]">{entry.hint}</div>
+                  </div>
+                  <StatusBadge tone={entry.ready ? "success" : entry.channel?.enabled ? "warning" : "info"}>
+                    {entry.ready ? "Acik" : entry.channel?.enabled ? "Hazir" : "Kur"}
+                  </StatusBadge>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {entry.type === "whatsapp" ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void handleChannelPairStart("whatsapp")}
+                      disabled={!runtimeReady || busyId === "channel-pair:whatsapp"}
+                    >
+                      <ScanQrCode className="mr-2 h-4 w-4" />
+                      {busyId === "channel-pair:whatsapp" ? "Bekle..." : "QR"}
+                    </Button>
+                  ) : null}
+                  <Button variant="ghost" size="sm" onClick={() => setMessage(`${entry.catalog?.label || entry.type}: alanlar asagida.`)}>
+                    Alta git
+                    <ArrowRight className="ml-2 h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Surface>
+
+        <Surface tone="card" className="p-5">
+          <div>
+            <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Akis</div>
+            <div className="mt-2 text-[20px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">Siralama</div>
+          </div>
+          <div className="mt-4 space-y-3">
+            {[
+              "1. Ilk kanal",
+              "2. Test gonder",
+              "3. Inbox kontrol",
+              "4. Apps ekle",
+            ].map((item) => (
+              <div key={item} className="rounded-[18px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] px-4 py-3 text-[13px] text-[var(--text-secondary)]">
+                {item}
+              </div>
+            ))}
+            {whatsappPairing?.detail ? (
+              <div className="rounded-[18px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] px-4 py-4">
+                <div className="text-[13px] font-medium text-[var(--text-primary)]">WhatsApp</div>
+                <div className="mt-1 text-[12px] text-[var(--text-secondary)]">{whatsappPairing.detail}</div>
+              </div>
+            ) : null}
+
+            <div className="pt-2">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Son akis</div>
+                <StatusBadge tone={recentMobileIntake.length ? "success" : "neutral"}>
+                  {recentMobileIntake.length ? `${recentMobileIntake.length} kayit` : "Bos"}
+                </StatusBadge>
+              </div>
+              <div className="mt-3 space-y-3">
+                {recentMobileIntake.length ? (
+                  recentMobileIntake.map((entry) => (
+                    <div key={entry.eventId} className="rounded-[18px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] px-4 py-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-[13px] font-medium text-[var(--text-primary)]">{entry.title}</div>
+                          <div className="mt-1 text-[12px] leading-6 text-[var(--text-secondary)]">
+                            {entry.summary?.summary || entry.contentPreview}
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-2">
+                          <StatusBadge tone={entry.summary?.urgency === "high" ? "warning" : entry.summary ? "info" : "neutral"}>
+                            {entry.sourceType}
+                          </StatusBadge>
+                          <span className="text-[11px] text-[var(--text-tertiary)]">{entry.updatedAt}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-[18px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] px-4 py-4 text-[13px] text-[var(--text-secondary)]">
+                    Bekliyor.
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-          <StatusBadge tone={telegramStatusTone}>{telegramStatus}</StatusBadge>
+        </Surface>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+        <div className="space-y-6">
+          {renderConnectorList(
+            "Apps",
+            "Google, Notion, Slack",
+            productivityConnectors,
+          )}
+
+          {renderConnectorList(
+            "Apple",
+            "Mail, Notes, Calendar",
+            appleConnectors,
+          )}
         </div>
 
-        <div className="mt-5 space-y-4">
-          <input
-            type="password"
-            value={telegramToken}
-            onChange={(event) => setTelegramToken(event.target.value)}
-            placeholder={tokenPlaceholder}
-            className="h-[52px] w-full rounded-[20px] border border-[var(--border-subtle)] bg-[color-mix(in_srgb,var(--bg-surface)_94%,var(--bg-surface-raised))] px-5 text-[14px] text-[var(--text-primary)] outline-none transition focus:border-[var(--border-focus)]"
-          />
+        <div className="space-y-6">
+          <Surface tone="card" className="p-5">
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Mesaj</div>
+              <div className="mt-2 text-[14px] text-[var(--text-secondary)]">Canli kanallar</div>
+            </div>
 
-          <div className="flex flex-wrap gap-3">
-            <Button variant="primary" onClick={() => void handleTelegramSave()} disabled={!runtimeReady || busyId === "telegram-save"}>
-              {busyId === "telegram-save" ? "Saving..." : primaryLabel}
-            </Button>
-            <Button variant="secondary" onClick={() => void handleTelegramTest()} disabled={!runtimeReady || busyId === "telegram-test"}>
-              {busyId === "telegram-test" ? "Testing..." : "Test"}
-            </Button>
-            {telegramChannel ? (
-              <Button variant="ghost" onClick={() => void handleTelegramToggle(!telegramChannel.enabled)} disabled={!runtimeReady || busyId === "telegram-toggle"}>
-                {telegramChannel.enabled ? "Disable" : "Enable"}
-              </Button>
-            ) : null}
-          </div>
+            <div className="mt-4 space-y-3">
+              {messagingChannels.map((entry) => (
+                <div key={entry.type} className="rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 text-[14px] font-medium text-[var(--text-primary)]">
+                      <MessageSquare className="h-4 w-4" />
+                      {entry.catalog?.label || entry.type}
+                    </div>
+                    <StatusBadge tone={channelTone(entry.channel)}>
+                      {entry.channel?.connected ? "Acik" : entry.channel?.enabled ? "Hazir" : "Kapali"}
+                    </StatusBadge>
+                  </div>
 
-          <div className="flex flex-wrap items-center gap-3 text-[12px] text-[var(--text-tertiary)]">
-            <div>Status: {telegramChannel?.status || "disconnected"}</div>
-            {telegramChannel?.enabled ? <div>Enabled</div> : null}
-          </div>
+                  <div className="mt-3 grid gap-3">
+                    {resolveMessagingFields(entry.catalog, entry.channel, channelDrafts[entry.type]).map((field) => (
+                      <input
+                        key={`${entry.type}:${field.name}`}
+                        type={field.secret ? "password" : "text"}
+                        value={channelValue(entry.type, field.name, entry.channel)}
+                        onChange={(event) => updateChannelDraft(entry.type, field.name, event.target.value)}
+                        placeholder={field.label}
+                        className={fieldClassName}
+                      />
+                    ))}
+                  </div>
 
-          {message ? <div className="text-[12px] text-[var(--text-secondary)]">{message}</div> : null}
-          {!message && !runtimeReady ? <div className="text-[12px] text-[var(--text-secondary)]">{runtimeGateReason}</div> : null}
+                  {entry.type === "whatsapp" && whatsappPairing ? (
+                    <div className="mt-3 rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-[12px] font-medium text-[var(--text-primary)]">QR</div>
+                        <StatusBadge tone={whatsappPairing.ready ? "success" : whatsappPairing.pending ? "warning" : "info"}>
+                          {whatsappPairing.status.replace(/_/g, " ")}
+                        </StatusBadge>
+                      </div>
+                      <div className="mt-2 text-[12px] leading-6 text-[var(--text-secondary)]">{whatsappPairing.detail}</div>
+                      {whatsappPairing.qrText ? (
+                        <pre className="mt-3 overflow-auto rounded-[14px] border border-[var(--border-subtle)] bg-[var(--bg-shell)] p-3 text-[8px] leading-[1.05] text-[var(--text-primary)]">
+                          {whatsappPairing.qrText}
+                        </pre>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    {entry.catalog?.supportsPairing ? (
+                      <Button
+                        variant="primary"
+                        onClick={() => void handleChannelPairStart(entry.type)}
+                        disabled={!runtimeReady || busyId === `channel-pair:${entry.type}`}
+                      >
+                        {busyId === `channel-pair:${entry.type}` ? "Bekle..." : "QR baslat"}
+                      </Button>
+                    ) : null}
+                    <Button
+                      variant={entry.catalog?.supportsPairing ? "secondary" : "primary"}
+                      onClick={() => void handleChannelSave(entry)}
+                      disabled={!runtimeReady || busyId === `channel-save:${entry.type}`}
+                    >
+                      {busyId === `channel-save:${entry.type}` ? "Bekle..." : entry.channel ? "Guncelle" : "Kaydet"}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={() => void handleChannelTest(entry.type)}
+                      disabled={!runtimeReady || busyId === `channel-test:${entry.type}`}
+                    >
+                      Test
+                    </Button>
+                    {(entry.type === "whatsapp" || entry.type === "imessage") ? (
+                      <Button
+                        variant="ghost"
+                        onClick={() => void handleQuickAction(entry.type, "status")}
+                        disabled={!runtimeReady || busyId === `quick:${entry.type}:status`}
+                      >
+                        Status
+                      </Button>
+                    ) : null}
+                    {entry.channel ? (
+                      <Button
+                        variant="ghost"
+                        onClick={() => void handleChannelToggle(entry, !entry.channel?.enabled)}
+                        disabled={!runtimeReady || busyId === `channel-toggle:${entry.type}`}
+                      >
+                        {entry.channel.enabled ? "Kapat" : "Ac"}
+                      </Button>
+                    ) : null}
+                  </div>
+                  {renderQuickResult(entry.type)}
+                </div>
+              ))}
+            </div>
+          </Surface>
+
+          <Surface tone="card" className="p-5">
+            <div className="flex items-center gap-2 text-[14px] font-medium text-[var(--text-primary)]">
+              <Mail className="h-4 w-4" />
+              Izler
+            </div>
+            <div className="mt-4 space-y-2">
+              {recentTraces.length ? (
+                recentTraces.map((trace) => (
+                  <div key={trace.traceId} className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-[13px] font-medium text-[var(--text-primary)]">
+                        {trace.connectorName || trace.provider} · {trace.operation}
+                      </div>
+                      <StatusBadge tone={trace.success ? "success" : "warning"}>{trace.status}</StatusBadge>
+                    </div>
+                    <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">{trace.createdAt}</div>
+                  </div>
+                ))
+              ) : (
+                <div className="text-[12px] text-[var(--text-secondary)]">Bos</div>
+              )}
+            </div>
+          </Surface>
+
+          <Surface tone="card" className="p-5">
+            <div className="flex items-center gap-2 text-[14px] font-medium text-[var(--text-primary)]">
+              <ShieldCheck className="h-4 w-4" />
+              Durum
+            </div>
+            <div className="mt-3 text-[12px] text-[var(--text-secondary)]">
+              {message || (!runtimeReady ? runtimeGateReason : "Hazir.")}
+            </div>
+          </Surface>
         </div>
-      </Surface>
-
-      <Button variant="ghost" onClick={() => void runtimeManager.openExternalUrl("https://elyan.dev")} disabled={busyId !== ""}>
-        elyan.dev
-        <ExternalLink className="ml-2 h-4 w-4" />
-      </Button>
+      </div>
     </div>
   );
 }

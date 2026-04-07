@@ -17,12 +17,13 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QLabel,
     QPushButton, QLineEdit, QTextEdit, QFrame, QSizePolicy,
-    QApplication, QFileDialog, QMenu
+    QApplication, QFileDialog, QMenu, QToolButton
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QFont, QPixmap, QColor, QPalette, QAction, QIcon
 
 from utils.logger import get_logger
+from core.operator_status import get_operator_status_sync
 
 logger = get_logger("clean_chat_widget")
 
@@ -56,7 +57,7 @@ class CleanMessageBubble(QFrame):
         if self.is_user:
             avatar.setStyleSheet("""
                 QLabel {
-                    background-color: #0F9AFE;
+                    background-color: #4C82FF;
                     color: white;
                     border-radius: 16px;
                 }
@@ -83,7 +84,7 @@ class CleanMessageBubble(QFrame):
         # Sender label
         sender = QLabel("YOU" if self.is_user else "ELYAN")
         sender.setFont(QFont(".AppleSystemUIFont", 10, QFont.Weight.Bold))
-        sender.setStyleSheet(f"color: {'#0F9AFE' if self.is_user else '#8E8E93'}; border: none; letter-spacing: 0.5px;")
+        sender.setStyleSheet(f"color: {'#4C82FF' if self.is_user else '#8A93A3'}; border: none; letter-spacing: 0.5px;")
         bubble_layout.addWidget(sender)
 
         # Message text
@@ -93,7 +94,7 @@ class CleanMessageBubble(QFrame):
         text_label.setFont(QFont(".AppleSystemUIFont", 13))
         text_label.setTextFormat(Qt.TextFormat.MarkdownText)
         text_label.setStyleSheet(f"""
-            color: {'#FFFFFF' if self.is_user else '#252F33'};
+            color: {'#FFFFFF' if self.is_user else '#111318'};
             line-height: 1.4;
             padding: 2px;
             border: none;
@@ -103,7 +104,7 @@ class CleanMessageBubble(QFrame):
         # Timestamp
         time_label = QLabel(self.timestamp)
         time_label.setFont(QFont(".AppleSystemUIFont", 9))
-        time_label.setStyleSheet(f"color: {'rgba(255,255,255,0.7)' if self.is_user else '#8E8E93'};")
+        time_label.setStyleSheet(f"color: {'rgba(255,255,255,0.72)' if self.is_user else '#8A93A3'};")
         time_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         bubble_layout.addWidget(time_label)
 
@@ -111,7 +112,7 @@ class CleanMessageBubble(QFrame):
         if self.is_user:
             bubble.setStyleSheet("""
                 QFrame {
-                    background-color: #0F9AFE;
+                    background-color: rgba(76, 130, 255, 0.94);
                     border-radius: 18px;
                     border-bottom-right-radius: 4px;
                     border: none;
@@ -122,8 +123,8 @@ class CleanMessageBubble(QFrame):
         else:
             bubble.setStyleSheet("""
                 QFrame {
-                    background-color: #F5F5F7;
-                    border: 1px solid #E5E5EA;
+                    background-color: rgba(255, 255, 255, 0.76);
+                    border: 1px solid rgba(255, 255, 255, 0.58);
                     border-radius: 18px;
                     border-bottom-left-radius: 4px;
                 }
@@ -158,8 +159,8 @@ class CleanTypingIndicator(QFrame):
         avatar.setFont(QFont(".AppleSystemUIFont", 12, QFont.Weight.Bold))
         avatar.setStyleSheet("""
             QLabel {
-                background-color: #E5E5EA;
-                color: #0F9AFE;
+                background-color: #EAF2FF;
+                color: #4C82FF;
                 border-radius: 16px;
             }
         """)
@@ -169,8 +170,8 @@ class CleanTypingIndicator(QFrame):
         indicator_frame = QFrame()
         indicator_frame.setStyleSheet("""
             QFrame {
-                background-color: #E5E5EA;
-                border: none;
+                background-color: rgba(255, 255, 255, 0.74);
+                border: 1px solid rgba(255,255,255,0.54);
                 border-radius: 18px;
                 padding: 8px 16px;
             }
@@ -183,7 +184,7 @@ class CleanTypingIndicator(QFrame):
         for _ in range(3):
             dot = QLabel("•")
             dot.setFont(QFont(".AppleSystemUIFont", 16))
-            dot.setStyleSheet("color: #475569;")
+            dot.setStyleSheet("color: #64748B;")
             indicator_layout.addWidget(dot)
             self._dots.append(dot)
 
@@ -301,6 +302,13 @@ class CleanChatWidget(QWidget):
         self._recording_file: Optional[str] = None
         self._is_recording = False
         self._last_assistant_message = ""
+        self._suggestions: List[str] = [
+            "Bugün neye odaklanalım?",
+            "Bu dosyayı özetle",
+            "Web'de araştır",
+            "Telefon bağlantısını kontrol et",
+        ]
+        self._operator_labels: Dict[str, QLabel] = {}
 
         self._setup_ui()
 
@@ -312,6 +320,9 @@ class CleanChatWidget(QWidget):
         # Header
         header = self._create_header()
         layout.addWidget(header)
+
+        self._operator_strip = self._create_operator_strip()
+        layout.addWidget(self._operator_strip)
 
         # Chat area
         self._scroll_area = QScrollArea()
@@ -344,8 +355,8 @@ class CleanChatWidget(QWidget):
         self._messages_container = QWidget()
         self._messages_container.setStyleSheet("background-color: transparent;")
         self._messages_layout = QVBoxLayout(self._messages_container)
-        self._messages_layout.setContentsMargins(20, 20, 20, 20)
-        self._messages_layout.setSpacing(12)
+        self._messages_layout.setContentsMargins(16, 16, 16, 16)
+        self._messages_layout.setSpacing(10)
         self._messages_layout.addStretch()
 
         self._scroll_area.setWidget(self._messages_container)
@@ -362,56 +373,55 @@ class CleanChatWidget(QWidget):
 
         # Welcome message
         self._add_bot_message(
-            "Merhaba, ben Elyan - kişisel bilgisayar asistanınız.\n\n"
-            "Size dosya yönetimi, araştırma, belge oluşturma ve "
-            "sistem kontrolü konularında yardımcı olabilirim.\n\n"
-            "Nasıl yardımcı olabilirim?"
+            "Buradayım. Dosya, web, vision, telefon bağlantısı ve operator görevlerini aynı akışta yürütebilirim.\n\n"
+            "İstersen direkt bir iş ver ya da alttaki hızlı kartlardan başla."
         )
+        self._refresh_operator_strip()
+        self._operator_timer = QTimer(self)
+        self._operator_timer.timeout.connect(self._refresh_operator_strip)
+        self._operator_timer.start(8000)
 
     def _create_header(self) -> QFrame:
         """Create clean header"""
         header = QFrame()
-        header.setFixedHeight(64)
+        header.setFixedHeight(56)
         header.setStyleSheet("""
             QFrame {
-                background-color: #FFFFFF;
-                border-bottom: 1px solid #E5E5EA;
+                background-color: rgba(255, 255, 255, 0.66);
+                border-bottom: 1px solid rgba(255,255,255,0.44);
             }
         """)
 
         layout = QHBoxLayout(header)
-        layout.setContentsMargins(20, 0, 20, 0)
+        layout.setContentsMargins(16, 0, 16, 0)
 
-        # Bot info
         info_layout = QHBoxLayout()
-        info_layout.setSpacing(12)
+        info_layout.setSpacing(10)
 
-        # Avatar
         avatar = QLabel("E")
-        avatar.setFixedSize(40, 40)
+        avatar.setFixedSize(32, 32)
         avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        avatar.setFont(QFont(".AppleSystemUIFont", 16, QFont.Weight.Bold))
+        avatar.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Bold))
         avatar.setStyleSheet("""
             QLabel {
-                background-color: #0F9AFE;
+                background-color: #4C82FF;
                 color: #ffffff;
-                border-radius: 20px;
+                border-radius: 16px;
             }
         """)
         info_layout.addWidget(avatar)
 
-        # Name and status
         text_layout = QVBoxLayout()
-        text_layout.setSpacing(2)
+        text_layout.setSpacing(0)
 
-        name_label = QLabel("ELYAN")
-        name_label.setFont(QFont(".AppleSystemUIFont", 18, QFont.Weight.Bold))
-        name_label.setStyleSheet("color: #252F33; border: none; letter-spacing: 0.5px;")
+        name_label = QLabel("Chat")
+        name_label.setFont(QFont(".AppleSystemUIFont", 15, QFont.Weight.DemiBold))
+        name_label.setStyleSheet("color: #111318; border: none; letter-spacing: -0.2px;")
         text_layout.addWidget(name_label)
 
-        self._status_label = QLabel("AKTİF")
-        self._status_label.setFont(QFont(".AppleSystemUIFont", 10, QFont.Weight.Bold))
-        self._status_label.setStyleSheet("color: #34C759; border: none; text-transform: uppercase;")
+        self._status_label = QLabel("BOT HAZIR")
+        self._status_label.setFont(QFont(".AppleSystemUIFont", 9, QFont.Weight.Bold))
+        self._status_label.setStyleSheet("color: #16A34A; border: none; text-transform: uppercase; letter-spacing: 0.8px;")
         text_layout.addWidget(self._status_label)
 
         info_layout.addLayout(text_layout)
@@ -419,72 +429,130 @@ class CleanChatWidget(QWidget):
 
         layout.addStretch()
 
-        # Action buttons
-        clear_btn = QPushButton("Temizle")
-        clear_btn.setFont(QFont(".AppleSystemUIFont", 12))
-        clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        clear_btn.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                color: #8E8E93;
-                border: none;
-                padding: 8px 12px;
+        more_btn = QToolButton()
+        more_btn.setText("More ▾")
+        more_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        more_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        more_btn.setFixedHeight(28)
+        more_btn.setStyleSheet("""
+            QToolButton {
+                background: #FFFFFF;
+                color: #5D6675;
+                border: 1px solid #E8ECF2;
+                border-radius: 14px;
+                padding: 0 12px;
+                font-size: 11px;
+                font-weight: 600;
             }
-            QPushButton:hover {
-                color: #252F33;
-            }
+            QToolButton:hover { background: #F7F8FA; color: #111318; }
         """)
-        clear_btn.clicked.connect(self.clear_chat)
-        layout.addWidget(clear_btn)
-
-        export_btn = QPushButton("Dışa Aktar")
-        export_btn.setFont(QFont(".AppleSystemUIFont", 12))
-        export_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        export_btn.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                color: #8E8E93;
-                border: none;
-                padding: 8px 12px;
-            }
-            QPushButton:hover {
-                color: #252F33;
-            }
-        """)
-        export_btn.clicked.connect(self.export_chat)
-        layout.addWidget(export_btn)
+        menu = QMenu(more_btn)
+        clear_action = menu.addAction("Clear chat")
+        clear_action.triggered.connect(lambda checked=False: self.clear_chat())
+        export_action = menu.addAction("Export chat")
+        export_action.triggered.connect(lambda checked=False: self.export_chat())
+        more_btn.setMenu(menu)
+        layout.addWidget(more_btn)
 
         return header
+
+    def _create_operator_strip(self) -> QFrame:
+        frame = QFrame()
+        frame.setStyleSheet("""
+            QFrame {
+                background: rgba(255, 255, 255, 0.48);
+                border-bottom: 1px solid rgba(255,255,255,0.40);
+            }
+        """)
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(16, 10, 16, 10)
+        layout.setSpacing(8)
+        title = QLabel("Operator")
+        title.setFont(QFont(".AppleSystemUIFont", 11, QFont.Weight.Bold))
+        title.setStyleSheet("color: #46556A; letter-spacing: 0.7px;")
+        layout.addWidget(title)
+        for key, label in (
+            ("mobile_dispatch", "Mobile"),
+            ("computer_use", "Computer"),
+            ("internet_reach", "Internet"),
+            ("document_ingest", "Docs"),
+            ("speed_runtime", "Speed"),
+        ):
+            pill = QLabel(f"{label} ...")
+            pill.setStyleSheet(self._pill_style("neutral"))
+            pill.setMinimumHeight(28)
+            pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            pill.setMargin(6)
+            layout.addWidget(pill)
+            self._operator_labels[key] = pill
+        self._operator_meta = QLabel("Lane unknown")
+        self._operator_meta.setStyleSheet("color: #64748B; font-size: 11px; border: none; padding-left: 8px;")
+        layout.addWidget(self._operator_meta)
+        layout.addStretch()
+        return frame
 
     def _create_input_area(self) -> QFrame:
         """Create clean input area"""
         input_frame = QFrame()
         input_frame.setStyleSheet("""
             QFrame {
-                background-color: #FDFDFD;
-                border-top: 1px solid #E5E5EA;
+                background-color: rgba(255, 255, 255, 0.58);
+                border-top: 1px solid rgba(255,255,255,0.42);
             }
         """)
 
-        layout = QHBoxLayout(input_frame)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(12)
+        outer = QVBoxLayout(input_frame)
+        outer.setContentsMargins(16, 10, 16, 12)
+        outer.setSpacing(10)
+
+        suggestions = QHBoxLayout()
+        suggestions.setContentsMargins(0, 0, 0, 0)
+        suggestions.setSpacing(8)
+        self._suggestion_buttons: list[QPushButton] = []
+        for text in self._suggestions[:4]:
+            btn = QPushButton(text)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedHeight(30)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background: rgba(255, 255, 255, 0.78);
+                    color: #334155;
+                    border: 1px solid rgba(255,255,255,0.62);
+                    border-radius: 15px;
+                    padding: 0 12px;
+                    font-size: 11px;
+                    font-weight: 600;
+                }
+                QPushButton:hover {
+                    background: rgba(255, 255, 255, 0.96);
+                    color: #162033;
+                }
+            """)
+            btn.clicked.connect(lambda checked=False, value=text: self.set_draft(value, auto_send=False))
+            suggestions.addWidget(btn)
+            self._suggestion_buttons.append(btn)
+        suggestions.addStretch()
+        outer.addLayout(suggestions)
+
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
 
         # Attachment button
         attach_btn = QPushButton("ADD")
-        attach_btn.setFixedSize(50, 40)
-        attach_btn.setFont(QFont(".AppleSystemUIFont", 11, QFont.Weight.Bold))
+        attach_btn.setFixedSize(42, 38)
+        attach_btn.setFont(QFont(".AppleSystemUIFont", 10, QFont.Weight.Bold))
         attach_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         attach_btn.setToolTip("Dosya ekle")
         attach_btn.setStyleSheet("""
             QPushButton {
-                background-color: #F2F2F7;
-                color: #0F9AFE;
-                border: none;
+                background-color: rgba(255, 255, 255, 0.72);
+                color: #4C82FF;
+                border: 1px solid rgba(255,255,255,0.58);
                 border-radius: 8px;
             }
             QPushButton:hover {
-                background-color: #E5E5EA;
+                background-color: rgba(255,255,255,0.94);
             }
         """)
         attach_btn.clicked.connect(self._attach_file)
@@ -492,19 +560,19 @@ class CleanChatWidget(QWidget):
 
         # Push-to-talk button
         self._voice_btn = QPushButton("VOICE")
-        self._voice_btn.setFixedSize(60, 40)
-        self._voice_btn.setFont(QFont(".AppleSystemUIFont", 11, QFont.Weight.Bold))
+        self._voice_btn.setFixedSize(52, 38)
+        self._voice_btn.setFont(QFont(".AppleSystemUIFont", 10, QFont.Weight.Bold))
         self._voice_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._voice_btn.setToolTip("Basılı tut: kaydet, bırak: otomatik yazıya çevir")
         self._voice_btn.setStyleSheet("""
             QPushButton {
-                background-color: #F2F2F7;
-                color: #1C1C1E;
-                border: none;
+                background-color: rgba(255, 255, 255, 0.72);
+                color: #111318;
+                border: 1px solid rgba(255,255,255,0.58);
                 border-radius: 8px;
             }
             QPushButton:hover {
-                background-color: #E5E5EA;
+                background-color: rgba(255,255,255,0.94);
             }
         """)
         self._voice_btn.pressed.connect(self._start_voice_recording)
@@ -514,45 +582,45 @@ class CleanChatWidget(QWidget):
         # Text input
         self._input_field = QLineEdit()
         self._input_field.setPlaceholderText("Mesajınızı buraya yazın...")
-        self._input_field.setMinimumHeight(44)
-        self._input_field.setFont(QFont(".AppleSystemUIFont", 13))
+        self._input_field.setMinimumHeight(42)
+        self._input_field.setFont(QFont(".AppleSystemUIFont", 12))
         self._input_field.setStyleSheet("""
             QLineEdit {
-                background-color: #FFFFFF;
-                border: 1px solid #E5E5EA;
-                border-radius: 8px;
-                padding: 10px 16px;
-                color: #1C1C1E;
+                background-color: rgba(255, 255, 255, 0.84);
+                border: 1px solid rgba(255,255,255,0.64);
+                border-radius: 13px;
+                padding: 9px 14px;
+                color: #111318;
             }
             QLineEdit:focus {
-                border: 1.5px solid #0F9AFE;
+                border: 1.5px solid #4C82FF;
             }
-            QLineEdit::placeholder { color: #8E8E93; }
+            QLineEdit::placeholder { color: #8A93A3; }
         """)
         self._input_field.returnPressed.connect(self._send_message)
         layout.addWidget(self._input_field, 1)
 
         # Send button
         self._send_btn = QPushButton("SEND")
-        self._send_btn.setMinimumHeight(44)
-        self._send_btn.setMinimumWidth(80)
-        self._send_btn.setFont(QFont(".AppleSystemUIFont", 11, QFont.Weight.Bold))
+        self._send_btn.setMinimumHeight(42)
+        self._send_btn.setMinimumWidth(76)
+        self._send_btn.setFont(QFont(".AppleSystemUIFont", 10, QFont.Weight.Bold))
         self._send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._send_btn.setStyleSheet("""
             QPushButton {
-                background-color: #0F9AFE;
+                background-color: rgba(76, 130, 255, 0.94);
                 color: #FFFFFF;
                 border: none;
-                border-radius: 8px;
-                padding: 0 20px;
+                border-radius: 13px;
+                padding: 0 18px;
                 letter-spacing: 0.5px;
             }
             QPushButton:hover {
-                background-color: #0B84D9;
+                background-color: #3C73F2;
             }
             QPushButton:disabled {
-                background-color: #F2F2F7;
-                color: #C7C7CC;
+                background-color: #F7F8FA;
+                color: #C7D0DD;
             }
         """)
         self._send_btn.clicked.connect(self._send_message)
@@ -560,24 +628,25 @@ class CleanChatWidget(QWidget):
 
         # Speak latest response
         self._speak_btn = QPushButton("🔊")
-        self._speak_btn.setFixedSize(40, 40)
-        self._speak_btn.setFont(QFont(".AppleSystemUIFont", 14))
+        self._speak_btn.setFixedSize(38, 38)
+        self._speak_btn.setFont(QFont(".AppleSystemUIFont", 13))
         self._speak_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._speak_btn.setToolTip("Son ELYAN yanıtını seslendir")
         self._speak_btn.setStyleSheet("""
             QPushButton {
-                background-color: #F2F2F7;
-                color: #0f172a;
-                border: none;
-                border-radius: 20px;
+                background-color: rgba(255, 255, 255, 0.72);
+                color: #111318;
+                border: 1px solid rgba(255,255,255,0.58);
+                border-radius: 19px;
             }
             QPushButton:hover {
-                background-color: #E5E5EA;
+                background-color: rgba(255,255,255,0.94);
             }
         """)
         self._speak_btn.clicked.connect(self._speak_latest_response)
         layout.addWidget(self._speak_btn)
 
+        outer.addLayout(layout)
         return input_frame
 
     def _send_message(self):
@@ -610,6 +679,8 @@ class CleanChatWidget(QWidget):
         self._typing_indicator.stop()
         self._send_btn.setEnabled(True)
         self._add_bot_message(response)
+        self._refresh_suggestions_from_response(response)
+        self.set_status(True, "Hazır")
         self.message_received.emit(response)
 
     def _on_error(self, error: str):
@@ -710,7 +781,7 @@ class CleanChatWidget(QWidget):
         """Set bot status"""
         if online:
             self._status_label.setText(status_text or "AKTİF")
-            self._status_label.setStyleSheet("color: #34C759; font-size: 10px; font-weight: 700;")
+            self._status_label.setStyleSheet("color: #14803E; font-size: 10px; font-weight: 700;")
         else:
             self._status_label.setText(status_text or "PASİF")
             self._status_label.setStyleSheet("color: #FF3B30; font-size: 10px; font-weight: 700;")
@@ -888,3 +959,100 @@ class CleanChatWidget(QWidget):
         self._speak_btn.setEnabled(True)
         if not result.get("success"):
             self._add_bot_message(f"Seslendirme başarısız: {result.get('error', 'bilinmeyen hata')}")
+
+    @staticmethod
+    def _pill_style(tone: str) -> str:
+        styles = {
+            "healthy": "QLabel { background: rgba(226, 247, 234, 0.92); color: #166534; border: 1px solid rgba(187, 240, 204, 0.92); border-radius: 14px; padding: 4px 10px; font-size: 11px; font-weight: 700; }",
+            "degraded": "QLabel { background: rgba(255, 243, 205, 0.92); color: #8A5A00; border: 1px solid rgba(245, 223, 156, 0.92); border-radius: 14px; padding: 4px 10px; font-size: 11px; font-weight: 700; }",
+            "neutral": "QLabel { background: rgba(255, 255, 255, 0.88); color: #475569; border: 1px solid rgba(255,255,255,0.62); border-radius: 14px; padding: 4px 10px; font-size: 11px; font-weight: 700; }",
+            "failed": "QLabel { background: rgba(255, 228, 228, 0.92); color: #991B1B; border: 1px solid rgba(248, 187, 187, 0.92); border-radius: 14px; padding: 4px 10px; font-size: 11px; font-weight: 700; }",
+            "verified": "QLabel { background: rgba(227, 242, 255, 0.92); color: #1D4ED8; border: 1px solid rgba(179, 217, 255, 0.92); border-radius: 14px; padding: 4px 10px; font-size: 11px; font-weight: 700; }",
+            "turbo": "QLabel { background: rgba(240, 233, 255, 0.92); color: #6D28D9; border: 1px solid rgba(219, 202, 255, 0.92); border-radius: 14px; padding: 4px 10px; font-size: 11px; font-weight: 700; }",
+            "blocked": "QLabel { background: rgba(255, 232, 232, 0.92); color: #B91C1C; border: 1px solid rgba(252, 190, 190, 0.92); border-radius: 14px; padding: 4px 10px; font-size: 11px; font-weight: 700; }",
+        }
+        return styles.get(str(tone or "neutral").lower(), styles["neutral"])
+
+    @staticmethod
+    def _operator_tone(row: Dict[str, Any]) -> str:
+        status = str(row.get("status") or "unknown").lower()
+        if status in {"failed", "unavailable"}:
+            return "failed"
+        if status in {"blocked"}:
+            return "blocked"
+        if bool(row.get("fallback_active")):
+            return "degraded"
+        verification = str(row.get("verification_state") or "").lower()
+        lane = str(row.get("current_lane") or "").lower()
+        if verification in {"verified", "strong"}:
+            return "verified"
+        if "turbo" in lane:
+            return "turbo"
+        if status == "healthy":
+            return "healthy"
+        if status in {"degraded", "unknown"}:
+            return "degraded"
+        return "neutral"
+
+    @staticmethod
+    def _operator_caption(label: str, row: Dict[str, Any]) -> str:
+        status = str(row.get("status") or "unknown").lower()
+        if bool(row.get("fallback_active")):
+            return f"{label} fallback"
+        verification = str(row.get("verification_state") or "").lower()
+        lane = str(row.get("current_lane") or "").replace("_", " ").strip()
+        if verification in {"verified", "strong"}:
+            return f"{label} verified"
+        if lane:
+            return f"{label} {lane.split()[0]}"
+        return f"{label} {status}"
+
+    def _refresh_operator_strip(self) -> None:
+        try:
+            payload = get_operator_status_sync()
+        except Exception as exc:
+            logger.debug(f"operator strip refresh failed: {exc}")
+            return
+        summary = dict(payload.get("summary") or {})
+        labels = {
+            "mobile_dispatch": "Mobile",
+            "computer_use": "Computer",
+            "internet_reach": "Internet",
+            "document_ingest": "Docs",
+            "speed_runtime": "Speed",
+        }
+        for key, label in labels.items():
+            pill = self._operator_labels.get(key)
+            if pill is None:
+                continue
+            row = dict(summary.get(key) or {})
+            tone = self._operator_tone(row)
+            pill.setText(self._operator_caption(label, row))
+            pill.setStyleSheet(self._pill_style(tone))
+            tooltip_bits = [
+                f"status={row.get('status', 'unknown')}",
+                f"lane={row.get('current_lane', '-')}",
+                f"verify={row.get('verification_state', '-')}",
+                f"fallback={bool(row.get('fallback_active'))}",
+            ]
+            pill.setToolTip(" · ".join(tooltip_bits))
+        speed = dict(summary.get("speed_runtime") or {})
+        lane = str(speed.get("current_lane") or "unknown").replace("_", " ")
+        verify = str(speed.get("verification_state") or "standard")
+        latency = str(speed.get("average_latency_bucket") or "unknown")
+        self._operator_meta.setText(f"Lane {lane} · {verify} · {latency}")
+        overall = str(payload.get("status") or "unknown").upper()
+        self._status_label.setText(f"OPERATOR {overall}")
+
+    def _refresh_suggestions_from_response(self, response: str) -> None:
+        low = str(response or "").lower()
+        suggestions = ["Bunu biraz daha aç", "Kısa özet çıkar", "Bir sonraki adımı öner", "Bunu kaynağıyla doğrula"]
+        if "telefon" in low or "mobile" in low:
+            suggestions = ["Telefon bağlantısını tekrar kontrol et", "Pairing kodu üret", "Mobil oturumları göster", "Bu işi telefona gönder"]
+        elif "dosya" in low or "pdf" in low or "belge" in low:
+            suggestions = ["Belgeyi özetle", "Ana maddeleri çıkar", "Tabloları bul", "Bunu projeye dönüştür"]
+        elif "araştır" in low or "github" in low or "web" in low:
+            suggestions = ["Daha derin araştır", "Kaynakları sırala", "Bunu özetle", "Aksiyon planı çıkar"]
+        self._suggestions = suggestions
+        for button, text in zip(self._suggestion_buttons, suggestions):
+            button.setText(text)

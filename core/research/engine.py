@@ -13,6 +13,8 @@ from typing import Optional, List
 from pathlib import Path
 
 from utils.logger import get_logger
+from core.internet import get_internet_reach_runtime
+from config.settings_manager import SettingsPanel
 
 logger = get_logger("research.engine")
 
@@ -78,6 +80,8 @@ class ResearchEngine:
 
     def __init__(self):
         self.deep_research_engine: Optional[object] = None
+        self.internet = get_internet_reach_runtime()
+        self.settings = SettingsPanel()
         self._load_engine()
 
     def _load_engine(self):
@@ -134,46 +138,49 @@ class ResearchEngine:
         return result
 
     async def _fetch_sources(self, query: str, depth: str) -> List[dict]:
-        """Fetch sources from DDG (mevcut engine)."""
-        if not self.deep_research_engine:
-            logger.warning("No research engine; returning empty sources")
-            return []
-
+        """Fetch sources through the unified internet reach runtime."""
         try:
-            # Try to use mevcut DeepResearchEngine.search() or similar
-            # If method doesn't exist, fall back to manual DDG search
-            sources = await self._ddg_search(query, depth)
+            self.settings._load()
+            if not bool(self.settings.get("internet_reach_enabled", True)):
+                return []
+            targets = {
+                "basic": 5,
+                "standard": 10,
+                "deep": 16,
+                "academic": 20,
+            }.get(depth, 10)
+            configured = self.settings.get("internet_reach_platforms", ["web", "github", "youtube", "reddit", "rss"])
+            platforms = [str(item).strip().lower() for item in list(configured or []) if str(item).strip()]
+            if not platforms:
+                platforms = ["web"]
+            lowered = str(query or "").lower()
+            if "github" not in platforms and any(token in lowered for token in ("github", "repo", "repository", "pr", "issue")):
+                platforms.append("github")
+            if "youtube" not in platforms and any(token in lowered for token in ("youtube", "video", "podcast")):
+                platforms.append("youtube")
+            if "reddit" not in platforms and any(token in lowered for token in ("reddit", "community", "forum")):
+                platforms.append("reddit")
+            documents = await self.internet.discover(
+                query,
+                platforms=platforms,
+                limit=targets,
+                source_policy="academic" if depth == "academic" else "balanced",
+                language="tr",
+            )
+            sources = [
+                {
+                    "url": doc.url,
+                    "title": doc.title,
+                    "snippet": doc.content[:600],
+                    "source_type": doc.source_type,
+                    "provider": doc.provider,
+                    "metadata": dict(doc.metadata or {}),
+                }
+                for doc in documents
+            ]
             return sources
         except Exception as e:
             logger.error(f"Source fetch failed: {e}")
-            return []
-
-    async def _ddg_search(self, query: str, depth: str) -> List[dict]:
-        """Direct DDG search using web_tools."""
-        try:
-            from tools.web_tools.search_engine import web_search
-            # Get target count based on depth
-            target_count = {
-                "basic": 5,
-                "standard": 12,
-                "deep": 25,
-                "academic": 40,
-            }.get(depth, 12)
-
-            results = await web_search(query)
-            sources = []
-
-            for result in (results or [])[:target_count]:
-                sources.append({
-                    "url": result.get("url", ""),
-                    "title": result.get("title", ""),
-                    "snippet": result.get("snippet", ""),
-                    "source_type": "web",
-                })
-
-            return sources
-        except Exception as e:
-            logger.error(f"DDG search failed: {e}")
             return []
 
     async def _synthesize_answer(self, query: str, sources: List[dict]) -> str:

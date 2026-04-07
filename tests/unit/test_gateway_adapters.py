@@ -24,7 +24,7 @@ class TestAdapterRegistry:
         expected = {
             "telegram", "discord", "slack", "whatsapp",
             "webchat", "signal", "matrix", "teams",
-            "google_chat", "imessage",
+            "google_chat", "imessage", "sms",
         }
         assert expected == set(ADAPTER_REGISTRY.keys())
 

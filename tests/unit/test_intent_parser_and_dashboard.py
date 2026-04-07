@@ -295,30 +295,22 @@ def test_projects_alias_prefers_desktop_folder_when_home_variant_missing(monkeyp
 
 
 def test_dashboard_no_browser_mode_does_not_open(monkeypatch):
-    opened = []
-    monkeypatch.setattr(dashboard.webbrowser, "open", lambda url: opened.append(url))
-    dashboard.open_dashboard(port=18888, no_browser=True)
-    assert opened == []
+    calls = []
+    monkeypatch.setattr(dashboard, "open_desktop", lambda detached=False: calls.append(detached) or 0)
+    result = dashboard.open_dashboard(port=18888, no_browser=True)
+    assert result == 0
+    assert calls == []
 
 
-def test_dashboard_default_mode_uses_dashboard_url(monkeypatch):
-    opened = []
-    monkeypatch.setattr(dashboard.webbrowser, "open", lambda url: opened.append(url))
-
+def test_dashboard_default_mode_opens_desktop_alias(monkeypatch):
+    calls = []
+    monkeypatch.setattr(dashboard, "open_desktop", lambda detached=False: calls.append(detached) or 0)
     dashboard.open_dashboard(port=18888)
+    assert calls == [True]
 
-    assert opened == ["http://localhost:18888/dashboard"]
 
-
-def test_dashboard_ops_mode_uses_tokenized_ops_url(monkeypatch):
-    monkeypatch.setattr(dashboard.elyan_config, "get", lambda key, default=None: "" if key == "gateway.admin.token" else 18888)
-    saved = []
-    monkeypatch.setattr(dashboard.elyan_config, "set", lambda key, value: saved.append((key, value)))
-    monkeypatch.setattr(dashboard.secrets, "token_urlsafe", lambda n: "ops-token")
-    opened = []
-    monkeypatch.setattr(dashboard.webbrowser, "open", lambda url: opened.append(url))
-
+def test_dashboard_ops_mode_keeps_opening_desktop_alias(monkeypatch):
+    calls = []
+    monkeypatch.setattr(dashboard, "open_desktop", lambda detached=False: calls.append(detached) or 0)
     dashboard.open_dashboard(port=18888, ops=True)
-
-    assert saved == [("gateway.admin.token", "ops-token")]
-    assert opened == ["http://localhost:18888/ops?token=ops-token"]
+    assert calls == [True]

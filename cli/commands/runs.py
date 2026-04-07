@@ -16,11 +16,12 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.syntax import Syntax
 from datetime import datetime
+from config import get_gateway_api_base_url
 
 console = Console()
 app = typer.Typer(help="Run inspector commands")
 
-BASE_URL = "http://localhost:18789/api/v1"
+BASE_URL = get_gateway_api_base_url()
 
 
 def format_timestamp(ts: float) -> str:

@@ -155,28 +155,120 @@ class IntentParser(
         if status_intent:
             return self._apply_execution_preferences(status_intent, original)
 
+        phase1 = self._phase1.classify(original, allow_clarify=True) if self._phase1 is not None else None
+        phase1_prefetch = self._prefer_phase1_preparse(original, phase1)
+        if phase1_prefetch:
+            return self._apply_execution_preferences(phase1_prefetch, original)
+
         multi = self._parse_multi_task(original)
         if multi:
             return self._apply_execution_preferences(multi, original)
 
         single = self._parse_single(text, text_norm, original)
         if single:
+            phase1_override = self._prefer_phase1_override(original, single, phase1)
+            if phase1_override:
+                return self._apply_execution_preferences(phase1_override, original)
+            generic_help_override = self._prefer_generic_help_conversation(original, single)
+            if generic_help_override:
+                return self._apply_execution_preferences(generic_help_override, original)
             return self._apply_execution_preferences(single, original)
 
-        if self._phase1 is not None:
-            phase1 = self._phase1.classify(original, allow_clarify=True)
-            if phase1:
-                payload = phase1.to_parser_payload()
-                if payload.get("action") != "chat":
-                    logger.debug(
-                        "[intent_parser] phase1 → %s (intent=%s, confidence=%.2f)",
-                        payload.get("action"),
-                        phase1.intent,
-                        phase1.confidence,
-                    )
-                    return self._apply_execution_preferences(payload, original)
+        if phase1:
+            payload = self._phase1_payload(original, phase1)
+            if payload and payload.get("action") != "chat":
+                logger.debug(
+                    "[intent_parser] phase1 → %s (intent=%s, confidence=%.2f)",
+                    payload.get("action"),
+                    phase1.intent,
+                    phase1.confidence,
+                )
+                return self._apply_execution_preferences(payload, original)
 
         return self._apply_execution_preferences(self._parse_chat_fallback(text, text_norm, original), original)
+
+    def _phase1_payload(self, original: str, phase1: Any) -> dict[str, Any]:
+        payload = phase1.to_parser_payload()
+        if phase1.intent == "clarify" and self._looks_like_assistance_request(original):
+            question = "Tabii, hangi konuda yardımcı olmamı istersin?"
+            payload["params"] = {
+                **dict(payload.get("params") or {}),
+                "question": question,
+            }
+            payload["reply"] = question
+        return payload
+
+    def _prefer_phase1_preparse(self, original: str, phase1: Any) -> dict[str, Any] | None:
+        if not phase1:
+            return None
+        low = original.strip().lower()
+        if self._contains_explicit_operator_signal(low) or self._looks_like_task_request(low):
+            return None
+        if phase1.intent == "chat" and float(phase1.confidence or 0.0) >= 0.9:
+            return self._phase1_payload(original, phase1)
+        if phase1.intent == "clarify" and phase1.needs_clarification:
+            return self._phase1_payload(original, phase1)
+        return None
+
+    def _prefer_phase1_override(
+        self,
+        original: str,
+        parsed: dict[str, Any],
+        phase1: Any,
+    ) -> dict[str, Any] | None:
+        if not phase1:
+            return None
+        parsed_action = str(parsed.get("action") or "").strip().lower()
+        if parsed_action != "show_help":
+            return None
+        if self._contains_explicit_operator_signal(original):
+            return None
+        if phase1.intent not in {"chat", "clarify"}:
+            return None
+        return self._phase1_payload(original, phase1)
+
+    def _prefer_generic_help_conversation(self, original: str, parsed: dict[str, Any]) -> dict[str, Any] | None:
+        parsed_action = str(parsed.get("action") or "").strip().lower()
+        if parsed_action != "show_help":
+            return None
+        if not self._looks_like_assistance_request(original):
+            return None
+        return {
+            "action": "clarify",
+            "params": {"question": "Tabii, hangi konuda yardımcı olmamı istersin?"},
+            "reply": "Tabii, hangi konuda yardımcı olmamı istersin?",
+            "confidence": 0.82,
+        }
+
+    def _contains_explicit_operator_signal(self, text: str) -> bool:
+        low = str(text or "").strip().lower()
+        signals = (
+            "aç", "ac", "kapat", "oluştur", "olustur", "sil", "delete", "write",
+            "yaz", "araştır", "arastir", "search", "listele", "oku", "kaydet",
+            "çalıştır", "calistir", "run", "open", "close", "gönder", "gonder",
+            "click", "tıkla", "tikla", "planla", "uygula", "build", "create",
+        )
+        return any(signal in low for signal in signals)
+
+    def _looks_like_assistance_request(self, text: str) -> bool:
+        low = str(text or "").strip().lower()
+        markers = (
+            "yardım", "yardim", "yardımcı", "yardimci", "help", "assist",
+            "bir şey soracağım", "bir sey soracagim", "soru soracağım", "soru soracagim",
+        )
+        return any(marker in low for marker in markers)
+
+    def _looks_like_task_request(self, text: str) -> bool:
+        low = str(text or "").strip().lower()
+        markers = (
+            "sistem", "system", "ekran", "screen", "screenshot", "dosya", "file",
+            "klasör", "klasor", "folder", "masaüst", "desktop", "takvim", "calendar",
+            "mail", "gmail", "browser", "tarayıcı", "tarayici", "chrome", "safari",
+            "notion", "whatsapp", "telegram", "pdf", "word", "excel", "sunum",
+            "kod", "code", "terminal", "komut", "command", "araştır", "arastir",
+            "web", "site", "uygulama", "application",
+        )
+        return any(marker in low for marker in markers)
 
     def _parse_single(self, text: str, text_norm: str, original: str) -> dict[str, Any] | None:
         for parser_fn in self._pipeline:

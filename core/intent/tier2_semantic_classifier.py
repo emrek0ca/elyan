@@ -11,7 +11,7 @@ import time
 from typing import Optional, Dict, Any, List
 from utils.logger import get_logger
 from .models import IntentCandidate, TaskDefinition
-from core.nlu.phase1_engine import get_phase1_engine
+from core.nlu import get_phase1_engine
 
 logger = get_logger("tier2_semantic_classifier")
 
@@ -85,42 +85,44 @@ class SemanticClassifier:
         start = time.time()
 
         try:
-            phase1_candidate = self._phase1.classify(
-                user_input,
-                context=context,
-                available_tools=available_tools,
-            )
-            if phase1_candidate is not None:
-                if phase1_candidate.needs_clarification and phase1_candidate.confidence >= self.PHASE1_CLARIFY_THRESHOLD:
-                    candidate = phase1_candidate.to_candidate()
-                    candidate.execution_time_ms = (time.time() - start) * 1000
-                    logger.info(
-                        "Tier 2 phase1 clarify (%s) in %.1fms",
-                        candidate.action,
-                        candidate.execution_time_ms,
-                    )
-                    return candidate
-                if phase1_candidate.confidence >= self.PHASE1_DIRECT_THRESHOLD:
-                    candidate = phase1_candidate.to_candidate()
-                    if candidate.action in available_tools or candidate.action in {"chat", "clarify", "multi_task"}:
+            phase1_candidate = None
+            if self._phase1 is not None:
+                phase1_candidate = self._phase1.classify(
+                    user_input,
+                    context=context,
+                    available_tools=available_tools,
+                )
+                if phase1_candidate is not None:
+                    if phase1_candidate.needs_clarification and phase1_candidate.confidence >= self.PHASE1_CLARIFY_THRESHOLD:
+                        candidate = phase1_candidate.to_candidate()
                         candidate.execution_time_ms = (time.time() - start) * 1000
                         logger.info(
-                            "Tier 2 phase1 direct %s (%.2f) in %.1fms",
+                            "Tier 2 phase1 clarify (%s) in %.1fms",
                             candidate.action,
-                            candidate.confidence,
                             candidate.execution_time_ms,
                         )
                         return candidate
-                    if candidate.intent in available_tools:
-                        candidate.action = candidate.intent
-                        candidate.execution_time_ms = (time.time() - start) * 1000
-                        logger.info(
-                            "Tier 2 phase1 direct intent %s (%.2f) in %.1fms",
-                            candidate.intent,
-                            candidate.confidence,
-                            candidate.execution_time_ms,
-                        )
-                        return candidate
+                    if phase1_candidate.confidence >= self.PHASE1_DIRECT_THRESHOLD:
+                        candidate = phase1_candidate.to_candidate()
+                        if candidate.action in available_tools or candidate.action in {"chat", "clarify", "multi_task"}:
+                            candidate.execution_time_ms = (time.time() - start) * 1000
+                            logger.info(
+                                "Tier 2 phase1 direct %s (%.2f) in %.1fms",
+                                candidate.action,
+                                candidate.confidence,
+                                candidate.execution_time_ms,
+                            )
+                            return candidate
+                        if candidate.intent in available_tools:
+                            candidate.action = candidate.intent
+                            candidate.execution_time_ms = (time.time() - start) * 1000
+                            logger.info(
+                                "Tier 2 phase1 direct intent %s (%.2f) in %.1fms",
+                                candidate.intent,
+                                candidate.confidence,
+                                candidate.execution_time_ms,
+                            )
+                            return candidate
 
             # Build tool list for prompt
             tool_list = self._format_tool_list(available_tools)
@@ -308,5 +310,5 @@ class SemanticClassifier:
             "tier": "semantic_classifier",
             "timeout_ms": self.timeout_ms,
             "llm_available": self.llm is not None,
-            "phase1": self._phase1.describe(),
+            "phase1": self._phase1.describe() if self._phase1 is not None else {},
         }

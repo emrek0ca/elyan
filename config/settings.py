@@ -73,3 +73,53 @@ VERSION = APP_VERSION
 # Task Execution
 TASK_TIMEOUT = int(os.getenv("TASK_TIMEOUT", "120"))
 CIRCUIT_BREAKER_THRESHOLD = int(os.getenv("CIRCUIT_BREAKER_THRESHOLD", "5"))
+
+
+def _get_gateway_host_port() -> tuple[str, int]:
+    host = os.getenv("ELYAN_GATEWAY_HOST", "").strip()
+    port = os.getenv("ELYAN_GATEWAY_PORT", "").strip()
+
+    try:
+        from config.elyan_config import elyan_config
+        resolved_host = host or str(elyan_config.get("gateway.host", "127.0.0.1") or "127.0.0.1")
+        resolved_port = int(port or elyan_config.get("gateway.port", 18789) or 18789)
+    except Exception:
+        resolved_host = host or "127.0.0.1"
+        try:
+            resolved_port = int(port or "18789")
+        except Exception:
+            resolved_port = 18789
+
+    return resolved_host, resolved_port
+
+
+def get_gateway_root_url() -> str:
+    explicit = os.getenv("ELYAN_GATEWAY_URL", "").strip().rstrip("/")
+    if explicit:
+        return explicit
+    host, port = _get_gateway_host_port()
+    scheme = os.getenv("ELYAN_GATEWAY_SCHEME", "").strip().lower()
+    if not scheme:
+        try:
+            from config.elyan_config import elyan_config
+
+            scheme = str(elyan_config.get("gateway.scheme", "http") or "http").strip().lower()
+        except Exception:
+            scheme = "http"
+    if scheme not in {"http", "https"}:
+        scheme = "http"
+    return f"{scheme}://{host}:{port}"
+
+
+def get_gateway_api_root_url() -> str:
+    explicit = os.getenv("ELYAN_GATEWAY_API_URL", "").strip().rstrip("/")
+    if explicit:
+        return explicit
+    return f"{get_gateway_root_url()}/api"
+
+
+def get_gateway_api_base_url() -> str:
+    explicit = os.getenv("ELYAN_API_BASE_URL", "").strip().rstrip("/")
+    if explicit:
+        return explicit
+    return f"{get_gateway_root_url()}/api/v1"

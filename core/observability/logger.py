@@ -2,6 +2,8 @@ import json
 import time
 from typing import Any, Dict, Optional
 from utils.logger import get_logger
+from core.feature_flags import get_feature_flag_registry
+from core.observability.trace_context import get_trace_context
 
 logger = get_logger("observability")
 
@@ -20,14 +22,23 @@ class StructuredLogger:
         data: Dict[str, Any], 
         level: str = "info",
         session_id: Optional[str] = None,
-        run_id: Optional[str] = None
+        run_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
     ):
+        trace_context = get_trace_context()
+        registry = get_feature_flag_registry()
+        enrich_trace = registry.is_enabled("structured_log_trace_enrichment", default=True)
         payload = {
             "timestamp": time.time(),
             "component": self.component,
             "event_type": event_type,
-            "session_id": session_id,
+            "session_id": session_id or (trace_context.session_id if enrich_trace and trace_context else None),
             "run_id": run_id,
+            "trace_id": trace_id or (trace_context.trace_id if enrich_trace and trace_context else None),
+            "request_id": request_id or (trace_context.request_id if enrich_trace and trace_context else None),
+            "workspace_id": workspace_id or (trace_context.workspace_id if enrich_trace and trace_context else None),
             "data": data
         }
         

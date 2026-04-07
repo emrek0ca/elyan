@@ -34,6 +34,7 @@ import numpy as np
 from core.embedding_codec import deserialize_embedding, serialize_embedding
 from core.model_manager import LocalHashingEmbedder, get_model_manager
 from core.storage_paths import resolve_elyan_data_dir
+from config.settings_manager import SettingsPanel
 from tools.research_tools.semantic_retrieval import SemanticRetriever
 from utils.logger import get_logger
 
@@ -1012,6 +1013,22 @@ class DocumentRAGEngine:
                 if table_lines:
                     content += "\n\n" + "\n".join(table_lines)
             source_type = "pdf"
+        elif ext in {".doc", ".docx", ".ppt", ".pptx"}:
+            settings = SettingsPanel()
+            try:
+                settings._load()
+            except Exception:
+                pass
+            if bool(settings.get("liteparse_enabled", True)):
+                from tools.office_tools.liteparse_adapter import parse_document_with_liteparse
+
+                liteparse_result = await parse_document_with_liteparse(str(file_path))
+                if not liteparse_result.get("success"):
+                    raise RuntimeError(str(liteparse_result.get("error") or "Belge okunamadı"))
+                content = str(liteparse_result.get("content") or "")
+                source_type = ext.lstrip(".")
+            else:
+                raise RuntimeError("LiteParse kapalı veya kullanılabilir değil")
         elif ext in {".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".html", ".htm", ".xml", ".log"}:
             content = file_path.read_text(encoding="utf-8", errors="ignore")
             source_type = ext.lstrip(".")

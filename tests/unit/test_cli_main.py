@@ -45,10 +45,12 @@ def test_main_without_args_prints_cli_home(monkeypatch, capsys):
     captured = capsys.readouterr()
 
     assert code == 0
-    assert "Elyan CLI hazir." in captured.out
+    assert "Elyan" in captured.out
+    assert "Local operator runtime" in captured.out
     assert "elyan launch" in captured.out
     assert "elyan gateway start --daemon" in captured.out
-    assert "Router modeli: ollama / llama3.1:8b" in captured.out
+    assert "Router model: ollama / llama3.1:8b" in captured.out
+    assert "elyan desktop" in captured.out
 
 
 def test_build_role_map_prefers_local_router_when_ollama_present(monkeypatch):
@@ -127,14 +129,20 @@ def test_main_routes_launch_command(monkeypatch):
     assert captured["ops"] is True
 
 
-def test_main_rejects_desktop_command_and_suggests_dashboard(monkeypatch, capsys):
+def test_main_routes_desktop_command(monkeypatch):
     monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)
+    calls = {}
 
-    code = cli_main.main(["desktop"])
-    captured = capsys.readouterr()
+    monkeypatch.setattr(
+        "cli.commands.desktop.open_desktop",
+        lambda detached=False: (calls.setdefault("detached", detached), 0)[1],
+        raising=False,
+    )
 
-    assert code == 2
-    assert "Şunu mu demek istediniz: 'dashboard'" in captured.err
+    code = cli_main.main(["desktop", "--detached"])
+
+    assert code == 0
+    assert calls["detached"] is True
 
 
 def test_main_routes_integrations_command(monkeypatch):

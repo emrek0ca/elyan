@@ -7,7 +7,7 @@ import { useRuntimeStore } from "@/stores/runtime-store";
 import { useUiStore } from "@/stores/ui-store";
 import { runtimeSocketBridge } from "@/services/websocket/runtime-socket";
 import { apiClient } from "@/services/api/client";
-import { getCurrentLocalUser } from "@/services/api/elyan-service";
+import { getCurrentLocalUser, getSystemReadiness } from "@/services/api/elyan-service";
 
 function RuntimeBridge() {
   const queryClient = useQueryClient();
@@ -27,11 +27,20 @@ function RuntimeBridge() {
       queryClient.invalidateQueries({ queryKey: ["connector-health"] }).catch(() => undefined);
       queryClient.invalidateQueries({ queryKey: ["connector-traces"] }).catch(() => undefined);
       queryClient.invalidateQueries({ queryKey: ["billing-workspace"] }).catch(() => undefined);
+      queryClient.invalidateQueries({ queryKey: ["admin-workspaces"] }).catch(() => undefined);
+      queryClient.invalidateQueries({ queryKey: ["admin-workspace"] }).catch(() => undefined);
+      queryClient.invalidateQueries({ queryKey: ["workspace-members"] }).catch(() => undefined);
+      queryClient.invalidateQueries({ queryKey: ["workspace-invites"] }).catch(() => undefined);
+      queryClient.invalidateQueries({ queryKey: ["inbox-events"] }).catch(() => undefined);
       queryClient.invalidateQueries({ queryKey: ["learning-summary"] }).catch(() => undefined);
       queryClient.invalidateQueries({ queryKey: ["privacy-summary"] }).catch(() => undefined);
       queryClient.invalidateQueries({ queryKey: ["logs"] }).catch(() => undefined);
       queryClient.invalidateQueries({ queryKey: ["security-summary"] }).catch(() => undefined);
       queryClient.invalidateQueries({ queryKey: ["sidecar-logs"] }).catch(() => undefined);
+      queryClient.invalidateQueries({ queryKey: ["provider-descriptors"] }).catch(() => undefined);
+      queryClient.invalidateQueries({ queryKey: ["system-readiness"] }).catch(() => undefined);
+      queryClient.invalidateQueries({ queryKey: ["billing-catalog"] }).catch(() => undefined);
+      queryClient.invalidateQueries({ queryKey: ["credit-ledger"] }).catch(() => undefined);
     };
 
     const handleRuntimeEvent = (event: { type: string; payload: unknown }) => {
@@ -121,9 +130,18 @@ function RuntimeBridge() {
       useUiStore.getState().signIn(currentUser.email);
     };
 
+    const hydrateSetup = async () => {
+      const readiness = await getSystemReadiness().catch(() => null);
+      if (disposed || !readiness) {
+        return;
+      }
+      useUiStore.getState().setOnboardingComplete(Boolean(readiness.setupComplete));
+    };
+
     void (async () => {
       await syncHealth(true);
       await hydrateAuth();
+      await hydrateSetup();
       await syncHealth(false);
     })();
     const interval = window.setInterval(() => {

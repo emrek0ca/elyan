@@ -75,6 +75,12 @@ async def test_cowork_thread_routes_website_lane_and_supports_follow_up():
     assert detail["risk_level"] in {"low", "medium", "high"}
     assert isinstance(detail["tools_in_use"], list)
     assert detail["last_successful_checkpoint"] is not None
+    assert isinstance(detail["collaboration_trace"], list)
+    assert detail["collaboration_trace"]
+    assert any(
+        isinstance(item, dict) and isinstance(item.get("metadata"), dict) and item["metadata"].get("timeline_kind") == "model_collaboration"
+        for item in detail["timeline"]
+    )
     assert any(action["id"] == "retry" for action in detail["control_actions"])
     assert isinstance(detail["replay"]["checkpoints"], list)
 

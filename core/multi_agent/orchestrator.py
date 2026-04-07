@@ -30,6 +30,7 @@ from core.event_system import EventPriority, get_event_bus
 from config.elyan_config import elyan_config
 from core.elyan_runtime import get_elyan_runtime
 from core.multi_agent.contract_net import TaskAnnouncement
+from core.multi_agent.orchestrator_bridge import get_orchestrator_bridge
 
 logger = get_logger("multi_agent.orchestrator")
 
@@ -100,6 +101,7 @@ class AgentOrchestrator:
         """
         job_id = f"job_{int(time.time())}"
         start_time = time.time()
+        self._bridge = get_orchestrator_bridge()
         await self._emit_event(
             "orchestrator.flow_started",
             {"job_id": job_id, "input": str(original_input or "")[:300]},
@@ -137,6 +139,8 @@ class AgentOrchestrator:
                 trace_logger.push_trace("Team", json.dumps(self.team_roster, ensure_ascii=False))
         except Exception:
             pass
+
+        await self._bridge.on_job_started(job_id, template.id, original_input)
 
         workspace_dir = self._derive_workspace_dir(job_id, template.id, original_input)
         plan_hint = self._compact_plan_hint(plan)
@@ -397,6 +401,7 @@ class AgentOrchestrator:
                         )
                         
                     action_lock.update_status(1.0, "Görev Onaylandı ve Paketlendi!")
+                    await self._bridge.on_job_completed(job_id, {"zip": zip_path})
                     action_lock.unlock(reason="completed")
                     await self._emit_event(
                         "orchestrator.flow_completed",
@@ -434,6 +439,7 @@ class AgentOrchestrator:
                         logger.warning("No artifacts detected after QA fail; forcing deterministic fallback on next revision.")
 
             await rollback_mgr.restore_snapshot(initial_snapshot)
+            await self._bridge.on_job_failed(job_id, f"qa_failed: {len(issues)} issues")
             action_lock.unlock(reason="qa_failed")
             await self._emit_event(
                 "orchestrator.flow_failed",
@@ -444,6 +450,7 @@ class AgentOrchestrator:
         
         except BudgetExceededError as e:
             await getattr(rollback_mgr, 'restore_snapshot')(initial_snapshot) if 'rollback_mgr' in locals() else None
+            await self._bridge.on_job_failed(job_id, f"budget_exceeded: {e}")
             action_lock.unlock(reason="budget_exceeded")
             await self._emit_event(
                 "orchestrator.flow_failed",
@@ -458,6 +465,7 @@ class AgentOrchestrator:
                     await rollback_mgr.restore_snapshot(initial_snapshot)
             except Exception:
                 logger.debug("Unexpected orchestrator failure rollback skipped", exc_info=True)
+            await self._bridge.on_job_failed(job_id, f"unexpected_error: {e}")
             action_lock.unlock(reason="unexpected_error")
             await self._emit_event(
                 "orchestrator.flow_failed",
@@ -542,7 +550,16 @@ class AgentOrchestrator:
         role_key = self._specialist_role_key(key)
         if hasattr(self, "budget_tracker"):
             self.budget_tracker.consume(input_tokens=(len(final_prompt) // 4), output_tokens=0)
-            
+
+        # Bridge: track specialist invocation
+        bridge = getattr(self, "_bridge", None)
+        job_id = getattr(self, "_current_job_id", "")
+        child_task_id = None
+        if bridge:
+            child_task_id = await bridge.on_specialist_called(job_id, key, prompt[:200])
+
+        t0 = time.time()
+
         async def _invoke_llm():
             runtime = get_elyan_runtime()
             gateway = getattr(runtime, "model_gateway", None)
@@ -566,10 +583,17 @@ class AgentOrchestrator:
             fallback=f'{{"outputs": ["Hata: {specialist.name} zaman aşımı"], "risks": ["Timeout"]}}',
             context=f"factory:{key}"
         )
-        
+
+        latency_ms = (time.time() - t0) * 1000
+        if bridge and child_task_id:
+            await bridge.on_specialist_completed(
+                child_task_id, key, success=True, latency_ms=latency_ms,
+                model_used=str(getattr(specialist, "preferred_model", "") or ""),
+            )
+
         if hasattr(self, "budget_tracker"):
             self.budget_tracker.consume(input_tokens=0, output_tokens=(len(result) // 4))
-            
+
         return result
 
     def _safe_parse_json(self, text: str) -> Dict[str, Any]:

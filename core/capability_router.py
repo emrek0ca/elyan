@@ -192,21 +192,21 @@ class CapabilityRouter:
         ],
         "email": [
             "mail", "email", "e-posta", "inbox", "outlook", "gmail", "smtp", "imap",
-            "posta kutusu", "gelen kutu", "gelen kutusu",
+            "posta kutusu", "gelen kutu", "gelen kutusu", "apple mail", "mail.app",
         ],
         "calendar": [
             "calendar", "takvim", "event", "reminder", "hatırlat", "hatirlat",
-            "meeting", "meet", "appointment", "randevu",
+            "meeting", "meet", "appointment", "randevu", "apple calendar", "reminders", "hatırlatıcı", "hatirlatici",
         ],
         "social": [
-            "x.com", "twitter", "tweet", "instagram", "whatsapp", "dm", "story",
+            "x.com", "twitter", "tweet", "instagram", "whatsapp", "dm", "story", "imessage", "bluebubbles", "mesajlar",
             "social media", "post at", "yayınla", "yayinla",
         ],
         "scheduler": [
             "schedule", "cron", "zamanla", "planla", "remind later", "heartbeat", "routine",
         ],
         "google": [
-            "google", "gmail", "calendar", "drive", "docs", "sheets", "slides", "workspace",
+            "google", "gmail", "calendar", "drive", "docs", "sheets", "slides", "workspace", "notion",
         ],
         "drive": [
             "drive", "google drive", "dosya sürücü", "dosya surucu", "workspace files",
@@ -236,7 +236,8 @@ class CapabilityRouter:
         ],
         "api_integration": [
             "api", "endpoint", "rest", "graphql", "webhook", "json api",
-            "http", "get istegi", "post istegi", "curl", "token yenileme", "integration"
+            "http", "get istegi", "post istegi", "curl", "token yenileme", "integration", "notion", "workspace app", "productivity app",
+            "apple notes", "notes.app", "apple reminders", "reminders.app", "apple contacts", "contacts.app", "apple calendar", "apple mail"
         ],
         "automation": [
             "otomasyon", "automation", "workflow", "cron", "rutin", "schedule",

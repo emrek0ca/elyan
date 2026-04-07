@@ -1,4 +1,4 @@
-import { Sparkles } from "lucide-react";
+import { Sparkles } from "@/vendor/lucide-react";
 
 import { Button } from "@/components/primitives/Button";
 import { Surface } from "@/components/primitives/Surface";
@@ -24,4 +24,3 @@ export function EmptyState({ title, description, actionLabel, onAction }: EmptyS
     </Surface>
   );
 }
-

@@ -43,6 +43,7 @@ TOP_LEVEL_COMMANDS = [
     "voice",
     "message",
     "service",
+    "desktop",
     "dashboard",
     "dashboard-api",
     "launch",
@@ -54,6 +55,7 @@ TOP_LEVEL_COMMANDS = [
     "opengauss",
     "onboard",
     "setup",
+    "install",
     "bootstrap",
     "update",
     "version",
@@ -70,7 +72,7 @@ TOP_LEVEL_COMMANDS = [
 ]
 
 COMMAND_SUGGESTION_OVERRIDES = {
-    "desktop": "dashboard",
+    "desktop": "desktop",
     "cloudflare_agents": "cloudflare-agents",
 }
 
@@ -78,6 +80,7 @@ COMMAND_SUGGESTION_OVERRIDES = {
 SETUP_OPTIONAL_COMMANDS = {
     "onboard",
     "setup",
+    "install",
     "bootstrap",
     "version",
     "completion",
@@ -165,29 +168,33 @@ def _print_cli_home() -> None:
     gateway_running, gateway_pid = _gateway_running()
     router_role = role_map.get("router", {}) if isinstance(role_map, dict) else {}
 
-    print("Elyan CLI hazir.")
+    print("Elyan")
+    print("Local operator runtime")
+    print("")
     print(f"Gateway: {'active' if gateway_running else 'inactive'}" + (f" (PID {gateway_pid})" if gateway_pid else ""))
-    print(f"Varsayilan model: {default_model.get('provider', '?')} / {default_model.get('model', '?')}")
+    print(f"Default model: {default_model.get('provider', '?')} / {default_model.get('model', '?')}")
     if router_role:
-        print(f"Router modeli: {router_role.get('provider', '?')} / {router_role.get('model', '?')}")
+        print(f"Router model: {router_role.get('provider', '?')} / {router_role.get('model', '?')}")
     if active_channels:
-        print(f"Aktif kanal: {', '.join(active_channels)}")
+        print(f"Active channels: {', '.join(active_channels)}")
 
     print("")
-    print("Hizli baslangic:")
+    print("Quick start")
+    print("  elyan desktop")
     print("  elyan launch")
     if not gateway_running:
         print("  elyan gateway start --daemon")
+    print("  elyan status")
     print("  elyan bootstrap status")
-    print("  elyan bootstrap onboard")
     print("  elyan chat")
     print("  elyan doctor")
-    print("  elyan packs list")
-    print("  elyan quivr status")
-    print("  elyan cloudflare-agents status")
-    print("  elyan opengauss status")
-    print("  elyan status")
-    print("  elyan setup --force")
+    print("")
+    print("Core surfaces")
+    print("  elyan agents")
+    print("  elyan desktop")
+    print("  elyan research \"topic\"")
+    print("  elyan files ls")
+    print("  elyan settings")
 
 
 def _render_agent_response(response) -> int:
@@ -198,7 +205,7 @@ def _render_agent_response(response) -> int:
     attachments = list(getattr(response, "attachments", []) or [])
     if attachments:
         print("")
-        print("Uretilen ciktilar:")
+        print("Artifacts:")
         for item in attachments:
             name = str(getattr(item, "name", "") or "").strip()
             kind = str(getattr(item, "type", "") or "file").strip()
@@ -212,7 +219,7 @@ def _render_agent_response(response) -> int:
     away_task_id = str(metadata.get("away_task_id") or "").strip()
     if away_task_id:
         print("")
-        print(f"Takip: elyan gorev durumu {away_task_id}")
+        print(f"Follow-up: elyan run status {away_task_id}")
 
     return 0 if str(getattr(response, "status", "success") or "success") != "failed" else 1
 
@@ -220,7 +227,7 @@ def _render_agent_response(response) -> int:
 def _run_natural_language(prompt: str) -> int:
     cleaned = str(prompt or "").strip()
     if not cleaned:
-        print("Bos istek calistirilamadi.")
+        print("Empty request.")
         return 1
 
     from core.agent import Agent
@@ -537,8 +544,12 @@ def main(argv: list[str] | None = None):
     p = sub.add_parser("service", help="Sistem servisi")
     p.add_argument("action", choices=["install", "uninstall"])
 
+    # ── desktop ─────────────────────────────────────────────────────────
+    p = sub.add_parser("desktop", help="Desktop uygulamayı başlat")
+    p.add_argument("--detached", action="store_true", help="Arka planda başlat")
+
     # ── dashboard ───────────────────────────────────────────────────────
-    p = sub.add_parser("dashboard", help="Web kontrol panelini aç")
+    p = sub.add_parser("dashboard", help="Uyumluluk alias'ı: desktop aç")
     p.add_argument("--port", type=int)
     p.add_argument("--no-browser", action="store_true")
     p.add_argument("--ops", action="store_true", help="Admin ops console ac")
@@ -552,7 +563,7 @@ def main(argv: list[str] | None = None):
     p.add_argument("--debug", action="store_true", help="Debug modunda başlat")
 
     # ── launch ─────────────────────────────────────────────────────────
-    p = sub.add_parser("launch", help="Gateway'i başlatıp dashboard'u aç")
+    p = sub.add_parser("launch", help="Gateway'i başlatıp desktop uygulamayı aç")
     p.add_argument("--port", type=int)
     p.add_argument("--no-browser", action="store_true")
     p.add_argument("--ops", action="store_true", help="Admin ops console ac")
@@ -676,6 +687,9 @@ def main(argv: list[str] | None = None):
     # ── setup (onboard alias) ──────────────────────────────────────────
     p = sub.add_parser("setup", help="Kurulum sihirbazı (onboard alias)")
     _add_onboard_args(p)
+
+    # ── install ────────────────────────────────────────────────────────
+    sub.add_parser("install", help="Tek komutlu kurulum akışı (bootstrap install alias)")
 
     # ── update ──────────────────────────────────────────────────────────
     p = sub.add_parser("update", help="Güncelleme")
@@ -1128,13 +1142,17 @@ def main(argv: list[str] | None = None):
         else:
             if daemon_manager.uninstall(): print("🛑  Servis kaldırıldı.")
 
+    elif args.command == "desktop":
+        from cli.commands import desktop
+        return int(desktop.open_desktop(detached=bool(getattr(args, "detached", False))))
+
     elif args.command == "dashboard":
         from cli.commands import dashboard
-        dashboard.open_dashboard(
+        return int(dashboard.open_dashboard(
             port=getattr(args, "port", None),
             no_browser=getattr(args, "no_browser", False),
             ops=getattr(args, "ops", False),
-        )
+        ))
 
     elif args.command == "dashboard-api":
         from cli.commands import dashboard_api
@@ -1206,6 +1224,22 @@ def main(argv: list[str] | None = None):
     elif args.command == "bootstrap":
         from cli.commands import bootstrap
         result = bootstrap.handle_bootstrap(args)
+        if isinstance(result, int):
+            return result
+
+    elif args.command == "install":
+        from cli.commands import bootstrap
+        install_args = argparse.Namespace(
+            action="install",
+            headless=False,
+            channel=None,
+            install_daemon=False,
+            force=False,
+            bundle=None,
+            output=None,
+            json=False,
+        )
+        result = bootstrap.handle_bootstrap(install_args)
         if isinstance(result, int):
             return result
 

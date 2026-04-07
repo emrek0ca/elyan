@@ -1,71 +1,64 @@
-"""Office tools package with optional dependency-safe exports."""
+"""Office tools package with lazy, dependency-safe exports."""
 
-__all__ = []
+from __future__ import annotations
 
-try:
-    from .word_tools import read_word, write_word
+from importlib import import_module
 
-    __all__.extend(["read_word", "write_word"])
-except Exception:
-    pass
+__all__ = [
+    "read_word",
+    "write_word",
+    "read_excel",
+    "write_excel",
+    "analyze_excel_data",
+    "read_pdf",
+    "get_pdf_info",
+    "search_in_pdf",
+    "analyze_pdf_vision",
+    "liteparse_available",
+    "parse_document_with_liteparse",
+    "analyze_document_vision",
+    "extract_tables_from_document",
+    "extract_charts_from_document",
+    "get_document_vision_agent",
+    "summarize_document",
+    "OfficeContentManifest",
+    "build_office_content_manifest",
+    "manifest_to_excel_payload",
+    "manifest_to_presentation_sections",
+    "manifest_to_slide_markdown",
+]
 
-try:
-    from .excel_tools import read_excel, write_excel, analyze_excel_data
+_LAZY_EXPORTS = {
+    "read_word": (".word_tools", "read_word"),
+    "write_word": (".word_tools", "write_word"),
+    "read_excel": (".excel_tools", "read_excel"),
+    "write_excel": (".excel_tools", "write_excel"),
+    "analyze_excel_data": (".excel_tools", "analyze_excel_data"),
+    "read_pdf": (".pdf_tools", "read_pdf"),
+    "get_pdf_info": (".pdf_tools", "get_pdf_info"),
+    "search_in_pdf": (".pdf_tools", "search_in_pdf"),
+    "analyze_pdf_vision": (".pdf_tools", "analyze_pdf_vision"),
+    "liteparse_available": (".liteparse_adapter", "liteparse_available"),
+    "parse_document_with_liteparse": (".liteparse_adapter", "parse_document_with_liteparse"),
+    "analyze_document_vision": ("tools.vision_documents", "analyze_document_vision"),
+    "extract_tables_from_document": ("tools.vision_documents", "extract_tables_from_document"),
+    "extract_charts_from_document": ("tools.vision_documents", "extract_charts_from_document"),
+    "get_document_vision_agent": ("tools.vision_documents", "get_document_vision_agent"),
+    "summarize_document": (".document_summarizer", "summarize_document"),
+    "OfficeContentManifest": (".content_manifest", "OfficeContentManifest"),
+    "build_office_content_manifest": (".content_manifest", "build_office_content_manifest"),
+    "manifest_to_excel_payload": (".content_manifest", "manifest_to_excel_payload"),
+    "manifest_to_presentation_sections": (".content_manifest", "manifest_to_presentation_sections"),
+    "manifest_to_slide_markdown": (".content_manifest", "manifest_to_slide_markdown"),
+}
 
-    __all__.extend(["read_excel", "write_excel", "analyze_excel_data"])
-except Exception:
-    pass
 
-try:
-    from .pdf_tools import read_pdf, get_pdf_info, search_in_pdf, analyze_pdf_vision
-
-    __all__.extend(["read_pdf", "get_pdf_info", "search_in_pdf", "analyze_pdf_vision"])
-except Exception:
-    pass
-
-try:
-    from tools.vision_documents import (
-        analyze_document_vision,
-        extract_charts_from_document,
-        extract_tables_from_document,
-        get_document_vision_agent,
-    )
-
-    __all__.extend(
-        [
-            "analyze_document_vision",
-            "extract_tables_from_document",
-            "extract_charts_from_document",
-            "get_document_vision_agent",
-        ]
-    )
-except Exception:
-    pass
-
-try:
-    from .document_summarizer import summarize_document
-
-    __all__.append("summarize_document")
-except Exception:
-    pass
-
-try:
-    from .content_manifest import (
-        OfficeContentManifest,
-        build_office_content_manifest,
-        manifest_to_excel_payload,
-        manifest_to_presentation_sections,
-        manifest_to_slide_markdown,
-    )
-
-    __all__.extend(
-        [
-            "OfficeContentManifest",
-            "build_office_content_manifest",
-            "manifest_to_excel_payload",
-            "manifest_to_presentation_sections",
-            "manifest_to_slide_markdown",
-        ]
-    )
-except Exception:
-    pass
+def __getattr__(name: str):
+    target = _LAZY_EXPORTS.get(name)
+    if not target:
+        raise AttributeError(name)
+    module_name, attr_name = target
+    module = import_module(module_name, __name__)
+    value = getattr(module, attr_name)
+    globals()[name] = value
+    return value

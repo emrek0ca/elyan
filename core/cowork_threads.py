@@ -44,6 +44,31 @@ def _infer_mode(prompt: str, preferred_mode: str = "") -> str:
     return "cowork"
 
 
+def _sanitize_collaboration_trace(raw: Any) -> list[dict[str, Any]]:
+    trace: list[dict[str, Any]] = []
+    for index, item in enumerate(list(raw or [])):
+        if not isinstance(item, dict):
+            continue
+        provider = str(item.get("provider") or "").strip().lower()
+        model = str(item.get("model") or "").strip()
+        if not provider and not model:
+            continue
+        trace.append(
+            {
+                "id": str(item.get("id") or f"collab_{index + 1}"),
+                "provider": provider,
+                "model": model,
+                "lens": str(item.get("lens") or item.get("role") or "support").strip().lower(),
+                "status": str(item.get("status") or "planned").strip().lower(),
+                "strategy": str(item.get("strategy") or "").strip().lower(),
+                "error": str(item.get("error") or "").strip(),
+                "source": str(item.get("source") or "runtime").strip().lower(),
+                "order": int(item.get("order") or (index + 1)),
+            }
+        )
+    return trace
+
+
 @dataclass
 class CoworkTurn:
     turn_id: str
@@ -170,6 +195,8 @@ class CoworkThreadStore:
         user_id: str = "",
         agent: Any = None,
         metadata: dict[str, Any] | None = None,
+        billing_usage_id: str = "",
+        billing_metric: str = "",
     ) -> dict[str, Any]:
         thread = CoworkThread(
             thread_id=f"thread_{uuid.uuid4().hex[:10]}",
@@ -191,6 +218,8 @@ class CoworkThreadStore:
             user_id=user_id or workspace_id,
             agent=agent,
             title=thread.title,
+            billing_usage_id=str(billing_usage_id or "").strip(),
+            billing_metric=str(billing_metric or "").strip().lower(),
         )
 
     async def add_turn(
@@ -205,6 +234,8 @@ class CoworkThreadStore:
         user_id: str = "",
         agent: Any = None,
         title: str = "",
+        billing_usage_id: str = "",
+        billing_metric: str = "",
     ) -> dict[str, Any]:
         async with self._lock:
             thread = self._threads.get(str(thread_id or "").strip())
@@ -254,6 +285,8 @@ class CoworkThreadStore:
                 background=True,
                 thread_id=thread.thread_id,
                 workspace_id=thread.workspace_id,
+                actor_id=str(user_id or thread.workspace_id or "local-workspace"),
+                billing_usage_id=str(billing_usage_id or "").strip(),
             )
             operator_turn.content = f"{mode.title()} lane accepted. Execution started."
             operator_turn.run_id = record.run_id
@@ -283,6 +316,8 @@ class CoworkThreadStore:
                 "routing_profile": str(routing_profile or "balanced"),
                 "review_strictness": str(review_strictness or "balanced"),
                 "project_template_id": str(project_template_id or "").strip(),
+                "billing_usage_id": str(billing_usage_id or "").strip(),
+                "billing_metric": str(billing_metric or "cowork_turns").strip().lower() or "cowork_turns",
             },
             agent=agent,
             auto_start=True,
@@ -362,6 +397,7 @@ class CoworkThreadStore:
         artifact_diffs = runtime_db.execution.list_artifact_diffs(thread.active_run_id) if thread.active_run_id else []
         file_mutations = runtime_db.execution.list_file_mutations(thread.active_run_id) if thread.active_run_id else []
         review = dict(run.review_report or {}) if run and isinstance(run.review_report, dict) else {}
+        collaboration_trace = _sanitize_collaboration_trace((run.metadata or {}).get("collaboration_trace") if run else [])
         approvals = []
         if mission is not None:
             approvals = [item.to_dict() for item in mission.approvals if item.status == "pending"]
@@ -413,6 +449,29 @@ class CoworkThreadStore:
                         "error": str(step.get("error") or ""),
                     }
                 )
+            run_started_at = float(run.started_at or _now())
+            for index, item in enumerate(collaboration_trace):
+                provider = str(item.get("provider") or "").strip()
+                model = str(item.get("model") or "").strip()
+                lens = str(item.get("lens") or "support").strip()
+                label = "/".join(part for part in (provider, model) if part) or "model"
+                timeline.append(
+                    {
+                        "id": str(item.get("id") or f"model_trace_{uuid.uuid4().hex[:8]}"),
+                        "title": f"LLM {lens} · {label}",
+                        "status": str(item.get("status") or "planned"),
+                        "source": "run",
+                        "created_at": run_started_at + (index * 0.001),
+                        "error": str(item.get("error") or ""),
+                        "metadata": {
+                            "timeline_kind": "model_collaboration",
+                            "provider": provider,
+                            "model": model,
+                            "lens": lens,
+                            "strategy": str(item.get("strategy") or ""),
+                        },
+                    }
+                )
         if mission is not None:
             for event in mission.events:
                 timeline.append(
@@ -442,6 +501,8 @@ class CoworkThreadStore:
                     "metadata": {
                         "review_status": str(review.get("status") or ""),
                         "artifact_count": len(artifacts),
+                        "collaboration_count": len(collaboration_trace),
+                        "collaboration_strategy": str((run.metadata or {}).get("collaboration_strategy") or "") if run else "",
                     },
                 }
             )
@@ -557,6 +618,7 @@ class CoworkThreadStore:
             "last_operator_turn": last_operator_turn,
             "turns": turns,
             "timeline": timeline[-40:],
+            "collaboration_trace": collaboration_trace,
             "goal": str((last_user_turn or {}).get("content") or "").strip(),
             "current_step": current_step,
             "risk_level": risk_level,
@@ -588,6 +650,7 @@ class CoworkThreadStore:
                 "mode": thread.current_mode,
                 "run_state": str(run.workflow_state or run.status or "") if run else "",
                 "mission_state": str(mission.status or "") if mission else "",
+                "collaboration_strategy": str((run.metadata or {}).get("collaboration_strategy") or "") if run else "",
                 "assigned_agents": list(run.assigned_agents or []) if run else [],
                 "review": review,
             },

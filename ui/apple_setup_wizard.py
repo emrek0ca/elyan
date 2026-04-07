@@ -473,7 +473,7 @@ class AppleSetupWizard(QDialog):
             "user_id": "",
             "ollama_installed": False,
             "autonomy_level": "Balanced",
-            "communication_tone": "professional_friendly",
+            "communication_tone": "natural_concise",
             "response_length": "short",
             "task_planning_depth": "adaptive",
             "assistant_expertise": "advanced",
@@ -1308,7 +1308,8 @@ class AppleSetupWizard(QDialog):
         tone_label.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Medium))
         layout.addWidget(tone_label)
         self._tone_combo = QComboBox()
-        self._tone_combo.addItem("Professional + Friendly", "professional_friendly")
+        self._tone_combo.addItem("Natural + Concise", "natural_concise")
+        self._tone_combo.addItem("Warm Operator", "warm_operator")
         self._tone_combo.addItem("Mentor / Coaching", "mentor")
         self._tone_combo.addItem("Formal", "formal")
         self._tone_combo.setCurrentIndex(0)
@@ -1519,7 +1520,8 @@ class AppleSetupWizard(QDialog):
                     "llm_fallback_order": [provider, "groq", "gemini", "openai", "ollama"],
                     "full_disk_access": bool(self.config.get("full_disk_access", True)),
                     "autonomy_level": self.config.get("autonomy_level", "Balanced"),
-                    "communication_tone": self.config.get("communication_tone", "professional_friendly"),
+                    "communication_tone": self.config.get("communication_tone", "natural_concise"),
+                    "assistant_style": self.config.get("communication_tone", "natural_concise"),
                     "response_length": self.config.get("response_length", "short"),
                     "task_planning_depth": self.config.get("task_planning_depth", "adaptive"),
                     "assistant_expertise": self.config.get("assistant_expertise", "advanced"),

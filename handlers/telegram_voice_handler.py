@@ -94,6 +94,22 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
             agent_instance = context.bot_data.get('agent_instance')
             
             if agent_instance:
+                from core.security.ingress_guard import blocked_ingress_text, inspect_ingress
+
+                verdict = await inspect_ingress(
+                    transcribed_text,
+                    platform_origin="telegram_voice",
+                    agent=agent_instance,
+                    metadata={
+                        "user_id": str(getattr(update.effective_user, "id", "") or ""),
+                        "channel_type": "telegram_voice",
+                        "channel_id": str(getattr(update.effective_chat, "id", "") or ""),
+                    },
+                )
+                if not verdict.get("allowed", True):
+                    await update.message.reply_text(blocked_ingress_text(verdict))
+                    return
+
                 response = await agent_instance.process(transcribed_text)
                 
                 # Check if voice response is enabled

@@ -152,6 +152,19 @@ FAST_MATCH_DB = {
 class FastMatcher:
     """Exact and fuzzy pattern matching for quick intent recognition."""
 
+    _SAFE_ATOMIC_KEYS = {
+        "screenshot",
+        "record_screen",
+        "greeting",
+        "goodbye",
+        "what_time",
+        "what_date",
+        "help",
+        "mute",
+        "max_volume",
+        "volume_50",
+    }
+
     def __init__(self):
         self.db = FAST_MATCH_DB
         self._build_lookup()
@@ -179,16 +192,18 @@ class FastMatcher:
         # Try exact match first
         if normalized in self.exact_lookup:
             key = self.exact_lookup[normalized]
-            return self._create_candidate(key, 0.99, "exact_match")
+            candidate = self._create_candidate(key, 0.99, "exact_match")
+            if not self._should_skip_single_intent(normalized, key):
+                return candidate
 
         # Try fuzzy match (Levenshtein-like with SequenceMatcher)
         best_match = self._fuzzy_match(normalized)
-        if best_match:
+        if best_match and not self._should_skip_single_intent(normalized, self._candidate_db_key(best_match)):
             return best_match
 
         # Try substring match (full pattern in user input)
         substring_match = self._substring_match(normalized)
-        if substring_match:
+        if substring_match and not self._should_skip_single_intent(normalized, self._candidate_db_key(substring_match)):
             return substring_match
 
         return None
@@ -219,11 +234,44 @@ class FastMatcher:
         for key, entry in self.db.items():
             for pattern in entry.get("patterns", []):
                 pattern_normalized = pattern.lower().strip()
-                if pattern_normalized in normalized and len(pattern_normalized) > 3:
+                if len(pattern_normalized) > 3 and self._pattern_in_text(pattern_normalized, normalized):
                     # Only match if pattern is reasonably long and specific
                     return self._create_candidate(key, 0.85, "substring_match")
 
         return None
+
+    @staticmethod
+    def _pattern_in_text(pattern: str, text: str) -> bool:
+        escaped = re.escape(pattern)
+        return bool(re.search(rf"(?<!\w){escaped}(?!\w)", text))
+
+    def _candidate_db_key(self, candidate: IntentCandidate) -> str:
+        meta = candidate.metadata or {}
+        return str(meta.get("db_key") or "")
+
+    def _is_multi_action_input(self, normalized: str) -> bool:
+        markers = (
+            ",",
+            ";",
+            " ve sonra ",
+            " ardından ",
+            " ardindan ",
+            " sonra ",
+            " açıp ",
+            " acip ",
+            " kapatıp ",
+            " kapatip ",
+            " yapıp ",
+            " yapip ",
+            " and then ",
+            " then ",
+        )
+        return sum(1 for marker in markers if marker in normalized) >= 1
+
+    def _should_skip_single_intent(self, normalized: str, db_key: str) -> bool:
+        if not db_key or db_key in self._SAFE_ATOMIC_KEYS:
+            return False
+        return self._is_multi_action_input(normalized)
 
     def _create_candidate(self, key: str, confidence: float, method: str) -> IntentCandidate:
         """Create IntentCandidate from DB entry."""

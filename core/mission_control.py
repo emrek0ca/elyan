@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Optional
 from urllib.parse import quote_plus
 
+from core.billing.reconciliation_bridge import activate_billing_usage_scope
 from core.conversation_memory import conversation_memory
 from core.capability_router import get_capability_router
 from core.cowork_runtime import get_cowork_runtime
@@ -2233,7 +2234,28 @@ class MissionRuntime:
             return
         async def _runner():
             try:
-                await self.run_mission(mission_id, agent=agent)
+                mission = self._missions.get(mission_id)
+                mission_metadata = dict((mission.metadata if mission else {}) or {})
+                workspace_id = str(mission_metadata.get("workspace_id") or "").strip()
+                billing_usage_id = str(mission_metadata.get("billing_usage_id") or "").strip()
+                if workspace_id and billing_usage_id:
+                    with activate_billing_usage_scope(
+                        workspace_id=workspace_id,
+                        usage_id=billing_usage_id,
+                        metric=str(mission_metadata.get("billing_metric") or "cowork_turns").strip().lower(),
+                        mission_id=str(mission_id or "").strip(),
+                        session_id=str(mission_metadata.get("session_id") or "").strip(),
+                        metadata={
+                            "actor_id": str(mission.owner if mission else ""),
+                            "thread_id": str(mission_metadata.get("thread_id") or "").strip(),
+                            "route_mode": str(mission_metadata.get("current_mode") or mission_metadata.get("route_mode") or "").strip().lower(),
+                            "routing_profile": str(mission_metadata.get("routing_profile") or "").strip().lower(),
+                            "review_strictness": str(mission_metadata.get("review_strictness") or "").strip().lower(),
+                        },
+                    ):
+                        await self.run_mission(mission_id, agent=agent)
+                else:
+                    await self.run_mission(mission_id, agent=agent)
             finally:
                 self._running.pop(mission_id, None)
         self._running[mission_id] = asyncio.create_task(_runner())

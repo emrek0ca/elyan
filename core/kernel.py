@@ -47,11 +47,10 @@ class Kernel:
 
         added = 0
         skipped = 0
-        for name in sorted(AVAILABLE_TOOLS.keys()):
+        loaded_tools = getattr(AVAILABLE_TOOLS, "_loaded_tools", {})
+        for name, func in sorted(getattr(loaded_tools, "items", lambda: [])(), key=lambda item: item[0]):
             if self.tools.get_tool(name):
                 continue
-
-            func = AVAILABLE_TOOLS.get(name)
             if not callable(func):
                 skipped += 1
                 continue

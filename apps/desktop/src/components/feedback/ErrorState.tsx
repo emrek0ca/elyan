@@ -1,4 +1,4 @@
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle } from "@/vendor/lucide-react";
 
 import { Button } from "@/components/primitives/Button";
 import { Surface } from "@/components/primitives/Surface";
@@ -23,4 +23,3 @@ export function ErrorState({ title, description, onRetry }: ErrorStateProps) {
     </Surface>
   );
 }
-

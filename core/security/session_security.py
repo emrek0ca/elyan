@@ -8,14 +8,18 @@ Provides:
 - Token lifecycle management (issuance, validation, revocation)
 """
 
-import uuid
-import time
 import json
+import os
+import time
+import uuid
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from pathlib import Path
+
+from config.elyan_config import elyan_config
 from core.observability.logger import get_structured_logger
 from core.security.encrypted_vault import get_encrypted_vault
+from core.storage_paths import resolve_elyan_data_dir
 
 slog = get_structured_logger("session_security")
 
@@ -49,7 +53,7 @@ class SessionToken:
 class SessionManager:
     """Manages encrypted session tokens."""
 
-    def __init__(self, token_ttl_seconds: int = 3600):
+    def __init__(self, token_ttl_seconds: int = 3600, *, storage_path: Optional[str] = None, persistence_enabled: Optional[bool] = None):
         """
         Initialize session manager.
 
@@ -59,6 +63,117 @@ class SessionManager:
         self.token_ttl = token_ttl_seconds
         self._sessions: Dict[str, SessionToken] = {}
         self._vault = get_encrypted_vault()
+        configured_path = str(elyan_config.get("security.sessionSecurity.path", "") or "").strip()
+        self._persistence_enabled = (
+            bool(persistence_enabled)
+            if persistence_enabled is not None
+            else (
+                bool(elyan_config.get("security.sessionSecurity.persist", True))
+                and os.environ.get("ELYAN_SESSION_SECURITY_PERSIST", "1").strip().lower() not in {"0", "false", "off"}
+            )
+            and "PYTEST_CURRENT_TEST" not in os.environ
+        )
+        self._storage_path = self._resolve_storage_path(storage_path=storage_path, configured_path=configured_path)
+        if self._persistence_enabled:
+            try:
+                self._storage_path.parent.mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                self._disable_persistence("session_storage_unavailable", exc)
+            else:
+                self._restore_sessions()
+
+    def _resolve_storage_path(self, *, storage_path: Optional[str], configured_path: str) -> Path:
+        if storage_path:
+            return Path(storage_path).expanduser()
+        if configured_path:
+            return Path(configured_path).expanduser()
+        if self._persistence_enabled:
+            return (resolve_elyan_data_dir() / "security" / "sessions.json").expanduser()
+
+        data_root = str(os.getenv("ELYAN_DATA_DIR", "") or "").strip()
+        if data_root:
+            return (Path(data_root).expanduser() / "security" / "sessions.json").expanduser()
+        return (Path.home() / ".elyan" / "security" / "sessions.json").expanduser()
+
+    def _disable_persistence(self, event_name: str, exc: Exception) -> None:
+        self._persistence_enabled = False
+        slog.log_event(
+            event_name,
+            {"error": str(exc), "storage_path": str(self._storage_path)},
+            level="warning",
+        )
+
+    @staticmethod
+    def _record_security_event(event_name: str, payload: Dict[str, Any]) -> None:
+        try:
+            from core.elyan_runtime import get_elyan_runtime
+            from core.events.event_store import EventType
+
+            event_type = getattr(EventType, event_name, None)
+            if event_type is None:
+                return
+            get_elyan_runtime().record_event(
+                event_type=event_type,
+                aggregate_id=str(payload.get("token_id") or payload.get("user_id") or "security"),
+                aggregate_type="security",
+                payload=dict(payload or {}),
+            )
+        except Exception:
+            return
+
+    def _persist_sessions(self) -> None:
+        if not self._persistence_enabled:
+            return
+        try:
+            payload = {
+                "ttl_seconds": self.token_ttl,
+                "tokens": [
+                    {
+                        "token_id": token.token_id,
+                        "user_id": token.user_id,
+                        "created_at": token.created_at,
+                        "expires_at": token.expires_at,
+                        "encrypted_payload": token.encrypted_payload,
+                        "metadata": token.metadata,
+                    }
+                    for token in self._sessions.values()
+                ],
+            }
+            tmp = self._storage_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(self._storage_path)
+        except Exception as exc:
+            slog.log_event("session_persist_error", {"error": str(exc)}, level="warning")
+
+    def _restore_sessions(self) -> None:
+        try:
+            if not self._storage_path.exists():
+                return
+            payload = json.loads(self._storage_path.read_text(encoding="utf-8"))
+            rows = payload.get("tokens") if isinstance(payload, dict) else []
+            if not isinstance(rows, list):
+                return
+            restored = 0
+            now = time.time()
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                token = SessionToken(
+                    token_id=str(row.get("token_id") or f"tok_{uuid.uuid4().hex[:16]}"),
+                    user_id=str(row.get("user_id") or "unknown"),
+                    created_at=float(row.get("created_at") or now),
+                    expires_at=float(row.get("expires_at") or now),
+                    encrypted_payload=dict(row.get("encrypted_payload") or {}),
+                    metadata=dict(row.get("metadata") or {}),
+                )
+                if token.expires_at <= now:
+                    continue
+                self._sessions[token.token_id] = token
+                restored += 1
+            if restored:
+                slog.log_event("session_tokens_restored", {"count": restored, "path": str(self._storage_path)})
+        except Exception as exc:
+            self._disable_persistence("session_restore_error", exc)
 
     def issue_token(
         self,
@@ -99,12 +214,17 @@ class SessionManager:
             )
 
             self._sessions[token_id] = token
+            self._persist_sessions()
 
             slog.log_event("token_issued", {
                 "token_id": token_id,
                 "user_id": user_id,
                 "ttl_seconds": self.token_ttl
             })
+            self._record_security_event(
+                "TOKEN_ISSUED",
+                {"token_id": token_id, "user_id": user_id, "ttl_seconds": self.token_ttl},
+            )
 
             return token_id
 
@@ -135,6 +255,7 @@ class SessionManager:
 
             if token.is_expired():
                 self._sessions.pop(token_id, None)
+                self._persist_sessions()
                 slog.log_event("token_expired", {
                     "token_id": token_id,
                     "user_id": token.user_id
@@ -161,10 +282,15 @@ class SessionManager:
         try:
             if token_id in self._sessions:
                 token = self._sessions.pop(token_id)
+                self._persist_sessions()
                 slog.log_event("token_revoked", {
                     "token_id": token_id,
                     "user_id": token.user_id
                 })
+                self._record_security_event(
+                    "TOKEN_REVOKED",
+                    {"token_id": token_id, "user_id": token.user_id},
+                )
                 return True
             return False
         except Exception as e:
@@ -184,6 +310,7 @@ class SessionManager:
             self._sessions.pop(tid, None)
 
         if expired:
+            self._persist_sessions()
             slog.log_event("cleanup_expired_tokens", {
                 "count": len(expired)
             })
@@ -210,7 +337,9 @@ class SessionManager:
             "active_tokens": active,
             "expired_tokens": expired,
             "unique_users": len(users),
-            "ttl_seconds": self.token_ttl
+            "ttl_seconds": self.token_ttl,
+            "persistence_enabled": self._persistence_enabled,
+            "storage_path": str(self._storage_path),
         }
 
 

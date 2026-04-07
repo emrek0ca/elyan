@@ -28,37 +28,37 @@ class SuggestionEngine:
             {
                 "id": "trailing_whitespace",
                 "trigger": r"(paste|file|create)\b",
-                "suggestion": "📎 Dosya yapıştırıldı mı? Trailing whitespace'i kontrol etmek ister misiniz?",
+                "suggestion": "Dosyayı kaydetmeden önce gereksiz boşlukları da temizleyebilirim.",
                 "severity": "low",
             },
             {
                 "id": "missing_import",
                 "trigger": r"(python|code|run)\b",
-                "suggestion": "📦 Gerekli import'ları kontrol ettiniz mi? 'import' ifadesi eksik olabilir.",
+                "suggestion": "İstersen eksik import veya bağımlılık tarafını da hızlıca kontrol edeyim.",
                 "severity": "medium",
             },
             {
                 "id": "type_mismatch",
                 "trigger": r"(error|fail|type|convert)\b",
-                "suggestion": "🔍 Türü kontrol etmek ister misiniz? int <-> str dönüşümü gerekebilir.",
+                "suggestion": "Tip dönüşümü tarafında bir uyumsuzluk olabilir. Onu da tarayabilirim.",
                 "severity": "medium",
             },
             {
                 "id": "incomplete_task",
                 "trigger": r"(test|build|deploy)\b",
-                "suggestion": "✅ Görev tamamlandı mı? Son adım olarak doğrulama çalıştırmanız önerilir.",
+                "suggestion": "İstersen son adımda doğrulamayı da ben çalıştırayım.",
                 "severity": "low",
             },
             {
                 "id": "performance_issue",
                 "trigger": r"(slow|lag|hang|timeout)\b",
-                "suggestion": "⚡ Performans sorunu var mı? Profiling çalıştırarak병목noktasını bulabilirsiniz.",
+                "suggestion": "Darboğazı bulmak için profiling veya log tarafına da bakabilirim.",
                 "severity": "high",
             },
             {
                 "id": "security_concern",
                 "trigger": r"(password|secret|key|token|credential|şifre|gizli)",
-                "suggestion": "🔒 Güvenlik: Şifreyi hardcoded'e koymayın! Environment variable'a taşıyın.",
+                "suggestion": "Güvenlik için bunu düz metin tutmayalım. Ortam değişkeni ya da vault daha doğru olur.",
                 "severity": "critical",
             },
         ]
@@ -94,7 +94,7 @@ class SuggestionEngine:
 
         # 3. Context-based suggestions
         if context_data.get("repeat_question"):
-            suggestions.append("💾 Bu soruya zaten cevap verdim — cached yanıtı görmek ister misiniz?")
+            suggestions.append("Bu soruya benzer bir şeyi az önce konuştuk. İstersen oradan devam edeyim.")
 
         return suggestions[:3]  # Limit to 3 suggestions
 
@@ -132,7 +132,7 @@ class SuggestionEngine:
             )
             if question_count >= 3:
                 suggestions.append(
-                    "🔄 Çok soru soruyorsunuz. Toparlanmak ve adım adım gitmeyi denemek ister misiniz?"
+                    "İstersen bunu tek plan altında toparlayıp adım adım ilerleyeyim."
                 )
 
         # If alternating quick messages (possible loop)
@@ -140,7 +140,7 @@ class SuggestionEngine:
             recent_lengths = [len(m.get("user", "").split()) for m in messages[-3:]]
             if all(l < 5 for l in recent_lengths):
                 suggestions.append(
-                    "🔁 Döngü içinde misiniz? Sorunu daha geniş açıdan ele almayı deneyin."
+                    "Aynı noktada dönüyor olabiliriz. İstersen bir seviye geri çekilip kök nedeni ayıralım."
                 )
 
         return suggestions

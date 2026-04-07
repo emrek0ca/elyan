@@ -53,12 +53,13 @@ DEFAULT_SETTINGS = {
     "llm_fallback_mode": "aggressive",
     "llm_fallback_order": _SETTINGS_PROVIDER_ORDER.copy(),
     "llm_sticky_selection": True,
-    "assistant_style": "professional_friendly_short",
+    "assistant_style": "natural_concise",
     "full_disk_access": True,
     "onboarding_completed": False,
     "show_first_run_tips": True,
-    "communication_tone": "professional_friendly",
+    "communication_tone": "natural_concise",
     "response_length": "short",
+    "conversation_privacy_mode": "balanced",
     "preferred_language": "auto",
     "enabled_languages": ["tr", "en"],
     "task_planning_depth": "adaptive",
@@ -89,6 +90,8 @@ DEFAULT_SETTINGS = {
     "allowed_tools": ["all"],
     "vision_frequency": 30,
     "vision_quality": "balanced",
+    "vision_ocr_backend": "auto",
+    "vision_ocr_model": "glm-4.1v-9b-thinking",
     "media_polling": True,
     "glass_opacity": 0.8,
     "log_level": "INFO",
@@ -116,6 +119,19 @@ DEFAULT_SETTINGS = {
     "sleep_consolidation_time": "02:00",
     "cognitive_trace_logging_enabled": True,
     "cognitive_trace_log_path": "~/.elyan/logs/cognitive_trace.log",
+    # Operator Intelligence
+    "consensus_enabled": True,
+    "consensus_veto_policy": "require_approval",
+    "consensus_explore_exploit_level": 0.25,
+    "learning_mode": "hybrid",
+    "learning_retention_policy": "long",
+    "learning_paused": False,
+    "learning_opt_out": False,
+    "internet_reach_enabled": True,
+    "internet_reach_platforms": ["web", "github", "youtube", "reddit", "rss"],
+    "liteparse_enabled": True,
+    "mobile_channel_enablement": {"telegram": True, "imessage": True, "sms": False},
+    "repair_aggressiveness": "balanced",
 }
 
 class SettingsPanel:
@@ -208,14 +224,23 @@ class SettingsPanel:
                 if not isinstance(self._settings.get("llm_sticky_selection"), bool):
                     self._settings["llm_sticky_selection"] = True
 
-                style = str(self._settings.get("assistant_style", "professional_friendly_short")).strip()
-                if not style:
-                    self._settings["assistant_style"] = "professional_friendly_short"
+                style = str(self._settings.get("assistant_style", "natural_concise")).strip()
+                if style == "professional_friendly_short":
+                    style = "natural_concise"
+                if style not in {"natural_concise", "warm_operator", "mentor", "formal"}:
+                    style = "natural_concise"
+                self._settings["assistant_style"] = style
 
-                if self._settings.get("communication_tone") not in {"professional_friendly", "mentor", "formal"}:
-                    self._settings["communication_tone"] = "professional_friendly"
+                tone = str(self._settings.get("communication_tone", "natural_concise") or "natural_concise").strip()
+                if tone == "professional_friendly":
+                    tone = "natural_concise"
+                if tone not in {"natural_concise", "warm_operator", "mentor", "formal"}:
+                    tone = "natural_concise"
+                self._settings["communication_tone"] = tone
                 if self._settings.get("response_length") not in {"short", "medium", "detailed"}:
                     self._settings["response_length"] = "short"
+                if str(self._settings.get("conversation_privacy_mode", "balanced")).strip().lower() not in {"balanced", "maximum"}:
+                    self._settings["conversation_privacy_mode"] = "balanced"
                 preferred_language = str(self._settings.get("preferred_language", "auto")).lower()
                 if preferred_language not in {"auto", "tr", "en", "es", "de", "fr", "it", "pt", "ar", "ru"}:
                     self._settings["preferred_language"] = "auto"
@@ -271,6 +296,29 @@ class SettingsPanel:
                     self._settings["assistant_expertise"] = "advanced"
                 if self._settings.get("operator_mode_level") not in {"Advisory", "Assisted", "Confirmed", "Trusted", "Operator"}:
                     self._settings["operator_mode_level"] = "Confirmed"
+                if not isinstance(self._settings.get("consensus_enabled"), bool):
+                    self._settings["consensus_enabled"] = True
+                veto_policy = str(self._settings.get("consensus_veto_policy", "require_approval")).strip().lower()
+                if veto_policy not in {"require_approval", "block"}:
+                    veto_policy = "require_approval"
+                self._settings["consensus_veto_policy"] = veto_policy
+                try:
+                    explore = float(self._settings.get("consensus_explore_exploit_level", 0.25))
+                    self._settings["consensus_explore_exploit_level"] = max(0.01, min(1.0, explore))
+                except Exception:
+                    self._settings["consensus_explore_exploit_level"] = 0.25
+                learning_mode = str(self._settings.get("learning_mode", "hybrid")).strip().lower()
+                if learning_mode not in {"hybrid", "explicit"}:
+                    learning_mode = "hybrid"
+                self._settings["learning_mode"] = learning_mode
+                retention = str(self._settings.get("learning_retention_policy", "long")).strip().lower()
+                if retention not in {"long", "short", "aggregate"}:
+                    retention = "long"
+                self._settings["learning_retention_policy"] = retention
+                if not isinstance(self._settings.get("learning_paused"), bool):
+                    self._settings["learning_paused"] = False
+                if not isinstance(self._settings.get("learning_opt_out"), bool):
+                    self._settings["learning_opt_out"] = False
                 if not isinstance(self._settings.get("full_disk_access"), bool):
                     self._settings["full_disk_access"] = True
                 if not str(self._settings.get("photo_save_dir", "")).strip():
