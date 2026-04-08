@@ -1,9 +1,9 @@
 """
-core/jarvis/intent_executor.py
+core/elyan/intent_executor.py
 ───────────────────────────────────────────────────────────────────────────────
 IntentExecutor — ClassifiedIntent → gerçek sistem aksiyonu
 
-JarvisCore._dispatch() buraya çağrı yapar. Her sub_intent için doğru
+ElyanCore._dispatch() buraya çağrı yapar. Her sub_intent için doğru
 computer/system modülünü çağırır ve Türkçe bir sonuç stringi döner.
 
 Desteklenen aksiyonlar:
@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING
 from utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from core.jarvis.jarvis_core import ClassifiedIntent
+    from core.elyan.elyan_core import ClassifiedIntent
 
 logger = get_logger("intent_executor")
 

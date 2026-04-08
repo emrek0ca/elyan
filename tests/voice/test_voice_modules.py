@@ -3,7 +3,7 @@ tests/voice/test_voice_modules.py
 ───────────────────────────────────────────────────────────────────────────────
 Tests for Faz 5 voice modules:
   - WakeWordDetector  (wake_word.py)
-  - JarvisTTS         (jarvis_tts.py)
+  - ElyanTTS         (elyan_tts.py)
   - VoicePipeline     (voice_pipeline.py)
 
 All heavy deps (pyaudio, openwakeword, pyttsx3) are mocked out.
@@ -97,13 +97,13 @@ class TestWakeWordDetector:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# JarvisTTS
+# ElyanTTS
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestJarvisTTS:
+class TestElyanTTS:
     def _get(self, backend="silent"):
-        from core.voice.jarvis_tts import JarvisTTS
-        tts = JarvisTTS.__new__(JarvisTTS)
+        from core.voice.elyan_tts import ElyanTTS
+        tts = ElyanTTS.__new__(ElyanTTS)
         tts._backend = backend
         tts._enabled = True
         return tts
@@ -170,9 +170,9 @@ class TestJarvisTTS:
         assert result is False
 
     def test_clean_text_strips_markdown(self):
-        from core.voice.jarvis_tts import JarvisTTS
+        from core.voice.elyan_tts import ElyanTTS
         text = "**bold** *italic* `code` ## Header [link](url)"
-        cleaned = JarvisTTS._clean_text(text)
+        cleaned = ElyanTTS._clean_text(text)
         assert "**" not in cleaned
         assert "*" not in cleaned
         assert "`" not in cleaned
@@ -182,9 +182,9 @@ class TestJarvisTTS:
         assert "code" in cleaned
 
     def test_clean_text_caps_at_500(self):
-        from core.voice.jarvis_tts import JarvisTTS
+        from core.voice.elyan_tts import ElyanTTS
         long_text = "a" * 1000
-        assert len(JarvisTTS._clean_text(long_text)) <= 500
+        assert len(ElyanTTS._clean_text(long_text)) <= 500
 
     def test_enable_disable(self):
         tts = self._get()
@@ -194,16 +194,16 @@ class TestJarvisTTS:
         assert tts._enabled
 
     def test_detect_backend_macos_when_say_available(self):
-        from core.voice.jarvis_tts import JarvisTTS
+        from core.voice.elyan_tts import ElyanTTS
         with patch("shutil.which", return_value="/usr/bin/say"):
-            backend = JarvisTTS._detect_backend()
+            backend = ElyanTTS._detect_backend()
         assert backend == "macos_say"
 
     def test_detect_backend_silent_when_no_deps(self):
-        from core.voice.jarvis_tts import JarvisTTS
+        from core.voice.elyan_tts import ElyanTTS
         with patch("shutil.which", return_value=None):
             with patch.dict("sys.modules", {"pyttsx3": None}):
-                backend = JarvisTTS._detect_backend()
+                backend = ElyanTTS._detect_backend()
         assert backend in ("silent", "pyttsx3")  # pyttsx3 might be installed
 
 
@@ -240,7 +240,7 @@ class TestVoicePipeline:
         mock_tts.speak = AsyncMock(return_value=True)
 
         with patch("core.voice.voice_pipeline.VoicePipeline._record_audio", new_callable=AsyncMock, return_value=None):
-            with patch("core.voice.jarvis_tts.get_jarvis_tts", return_value=mock_tts):
+            with patch("core.voice.elyan_tts.get_elyan_tts", return_value=mock_tts):
                 await pipeline._run_cycle()
 
         assert pipeline.state == PipelineState.IDLE
@@ -255,7 +255,7 @@ class TestVoicePipeline:
 
         with patch("core.voice.voice_pipeline.VoicePipeline._record_audio", new_callable=AsyncMock, return_value="/tmp/test.wav"):
             with patch("core.voice.voice_pipeline.VoicePipeline._transcribe", new_callable=AsyncMock, return_value=""):
-                with patch("core.voice.jarvis_tts.get_jarvis_tts", return_value=mock_tts):
+                with patch("core.voice.elyan_tts.get_elyan_tts", return_value=mock_tts):
                     await pipeline._run_cycle()
 
         assert pipeline.state == PipelineState.IDLE
@@ -276,9 +276,9 @@ class TestVoicePipeline:
         mock_response.text = "İşte cevabınız."
 
         with patch("core.voice.voice_pipeline.VoicePipeline._record_audio", new_callable=AsyncMock, return_value="/tmp/test.wav"):
-            with patch("core.voice.voice_pipeline.VoicePipeline._transcribe", new_callable=AsyncMock, return_value="Merhaba Jarvis"):
+            with patch("core.voice.voice_pipeline.VoicePipeline._transcribe", new_callable=AsyncMock, return_value="Merhaba Elyan"):
                 with patch("core.voice.voice_pipeline.VoicePipeline._process", new_callable=AsyncMock, return_value="İşte cevabınız."):
-                    with patch("core.voice.jarvis_tts.get_jarvis_tts", return_value=mock_tts):
+                    with patch("core.voice.elyan_tts.get_elyan_tts", return_value=mock_tts):
                         await pipeline._run_cycle()
 
         assert pipeline.state == PipelineState.IDLE
@@ -292,7 +292,7 @@ class TestVoicePipeline:
         mock_tts = MagicMock()
         mock_tts.speak = AsyncMock(side_effect=RuntimeError("crash"))
 
-        with patch("core.voice.jarvis_tts.get_jarvis_tts", return_value=mock_tts):
+        with patch("core.voice.elyan_tts.get_elyan_tts", return_value=mock_tts):
             await pipeline._run_cycle()
 
         assert pipeline.state == PipelineState.IDLE
@@ -315,7 +315,7 @@ class TestVoicePipeline:
     @pytest.mark.asyncio
     async def test_process_returns_fallback_on_error(self):
         pipeline = self._get()
-        with patch("core.jarvis.jarvis_core.get_jarvis_core", side_effect=ImportError("no jarvis")):
+        with patch("core.elyan.elyan_core.get_elyan_core", side_effect=ImportError("no elyan")):
             result = await pipeline._process("test")
         assert isinstance(result, str)
         assert len(result) > 0
@@ -345,11 +345,11 @@ class TestSingletons:
         assert a is b
         ww._instance = None
 
-    def test_get_jarvis_tts_returns_same_instance(self):
-        import core.voice.jarvis_tts as tts_mod
+    def test_get_elyan_tts_returns_same_instance(self):
+        import core.voice.elyan_tts as tts_mod
         tts_mod._instance = None
-        a = tts_mod.get_jarvis_tts()
-        b = tts_mod.get_jarvis_tts()
+        a = tts_mod.get_elyan_tts()
+        b = tts_mod.get_elyan_tts()
         assert a is b
         tts_mod._instance = None
 

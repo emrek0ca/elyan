@@ -1,14 +1,14 @@
 """
 core/channels/channel_gateway.py
 ───────────────────────────────────────────────────────────────────────────────
-Unified Channel Gateway — Jarvis Multi-Channel Entry Point
+Unified Channel Gateway — Elyan Multi-Channel Entry Point
 
 Manages the lifecycle of all channel adapters (Telegram, WhatsApp, iMessage,
 Discord, etc.) and provides:
   - Centralized connect/disconnect with auto-reconnect
   - Auth validation per channel (whitelist + rate limiting)
   - Health monitoring and status aggregation
-  - Proactive message sending (Jarvis → user across any channel)
+  - Proactive message sending (Elyan → user across any channel)
 
 This sits above GatewayRouter, which handles message processing.
 ChannelGateway handles adapter lifecycle + outbound proactive messaging.
@@ -203,7 +203,7 @@ class ChannelGateway:
                 except Exception:
                     pass
 
-    # ── Proactive Messaging (Jarvis → User) ─────────────────────────────────
+    # ── Proactive Messaging (Elyan → User) ─────────────────────────────────
 
     async def send_proactive(
         self,
@@ -214,7 +214,7 @@ class ChannelGateway:
         attachments: list[dict] | None = None,
         buttons: list[dict] | None = None,
     ) -> bool:
-        """Send a message from Jarvis to user on any channel.
+        """Send a message from Elyan to user on any channel.
 
         Used for proactive alerts, scheduled reports, etc.
         """

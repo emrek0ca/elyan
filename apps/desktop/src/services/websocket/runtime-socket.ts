@@ -1,35 +1,35 @@
 import { useRuntimeStore } from "@/stores/runtime-store";
-import type { JarvisAgentActivity } from "@/stores/runtime-store";
+import type { ElyanAgentActivity } from "@/stores/runtime-store";
 
 type RuntimeEventListener = (event: { type: string; payload: unknown }) => void;
 
-// ── Jarvis event dispatchers ─────────────────────────────────────────────────
+// ── Elyan event dispatchers ─────────────────────────────────────────────────
 
-function dispatchJarvisEvent(type: string, payload: unknown): void {
+function dispatchElyanEvent(type: string, payload: unknown): void {
   const store = useRuntimeStore.getState();
   const data = payload as Record<string, unknown>;
 
   switch (type) {
     case "agent.specialist.invoked": {
-      const activity: JarvisAgentActivity = {
+      const activity: ElyanAgentActivity = {
         id: String(data.task_id || data.child_task_id || crypto.randomUUID()),
         agent: String(data.specialist_key || data.agent || "Agent"),
         action: String(data.prompt_preview || data.action || "Çalışıyor…"),
         status: "running",
         ts: Date.now(),
       };
-      store.pushJarvisActivity(activity);
+      store.pushElyanActivity(activity);
       break;
     }
     case "agent.specialist.completed": {
       const id = String(data.task_id || data.child_task_id || "");
       if (id) {
-        store.updateJarvisActivity(id, {
+        store.updateElyanActivity(id, {
           status: data.success === false ? "error" : "done",
         });
       } else {
         // Fallback: push a completion event
-        store.pushJarvisActivity({
+        store.pushElyanActivity({
           id: crypto.randomUUID(),
           agent: String(data.specialist_key || "Agent"),
           action: `Tamamlandı (${data.latency_ms ?? "?"}ms)`,
@@ -40,7 +40,7 @@ function dispatchJarvisEvent(type: string, payload: unknown): void {
       break;
     }
     case "computer.action.executed": {
-      store.pushJarvisActivity({
+      store.pushElyanActivity({
         id: crypto.randomUUID(),
         agent: "MacOS",
         action: String(data.action || data.description || "Bilgisayar komutu"),
@@ -50,7 +50,7 @@ function dispatchJarvisEvent(type: string, payload: unknown): void {
       break;
     }
     case "proactive.alert.fired": {
-      store.pushJarvisActivity({
+      store.pushElyanActivity({
         id: crypto.randomUUID(),
         agent: "Monitor",
         action: String(data.message || data.alert || "Sistem uyarısı"),
@@ -61,10 +61,10 @@ function dispatchJarvisEvent(type: string, payload: unknown): void {
     }
     case "channel.message.received": {
       const channelType = String(data.channel_type || "").toLowerCase();
-      if (channelType === "telegram") store.setJarvisChannelStatus({ telegram: true });
-      else if (channelType === "whatsapp") store.setJarvisChannelStatus({ whatsapp: true });
-      else if (channelType === "imessage") store.setJarvisChannelStatus({ imessage: true });
-      store.pushJarvisActivity({
+      if (channelType === "telegram") store.setElyanChannelStatus({ telegram: true });
+      else if (channelType === "whatsapp") store.setElyanChannelStatus({ whatsapp: true });
+      else if (channelType === "imessage") store.setElyanChannelStatus({ imessage: true });
+      store.pushElyanActivity({
         id: crypto.randomUUID(),
         agent: channelType || "Channel",
         action: String(data.preview || data.text || "Yeni mesaj"),
@@ -75,22 +75,22 @@ function dispatchJarvisEvent(type: string, payload: unknown): void {
     }
     case "channel.connected": {
       const ch = String(data.channel_type || "").toLowerCase();
-      if (ch === "telegram") store.setJarvisChannelStatus({ telegram: true });
-      else if (ch === "whatsapp") store.setJarvisChannelStatus({ whatsapp: true });
-      else if (ch === "imessage") store.setJarvisChannelStatus({ imessage: true });
-      else if (ch === "desktop") store.setJarvisChannelStatus({ desktop: true });
+      if (ch === "telegram") store.setElyanChannelStatus({ telegram: true });
+      else if (ch === "whatsapp") store.setElyanChannelStatus({ whatsapp: true });
+      else if (ch === "imessage") store.setElyanChannelStatus({ imessage: true });
+      else if (ch === "desktop") store.setElyanChannelStatus({ desktop: true });
       break;
     }
     case "channel.disconnected": {
       const ch = String(data.channel_type || "").toLowerCase();
-      if (ch === "telegram") store.setJarvisChannelStatus({ telegram: false });
-      else if (ch === "whatsapp") store.setJarvisChannelStatus({ whatsapp: false });
-      else if (ch === "imessage") store.setJarvisChannelStatus({ imessage: false });
-      else if (ch === "desktop") store.setJarvisChannelStatus({ desktop: false });
+      if (ch === "telegram") store.setElyanChannelStatus({ telegram: false });
+      else if (ch === "whatsapp") store.setElyanChannelStatus({ whatsapp: false });
+      else if (ch === "imessage") store.setElyanChannelStatus({ imessage: false });
+      else if (ch === "desktop") store.setElyanChannelStatus({ desktop: false });
       break;
     }
     case "system.health.update": {
-      store.setJarvisSystemHealth({
+      store.setElyanSystemHealth({
         cpu: typeof data.cpu === "number" ? data.cpu : undefined,
         batteryPct: typeof data.battery_pct === "number" ? data.battery_pct : undefined,
         charging: typeof data.charging === "boolean" ? data.charging : undefined,
@@ -134,8 +134,8 @@ export class RuntimeSocketBridge {
           const eventType = parsed.type || parsed.event || "runtime_event";
           const eventPayload = parsed.data ?? parsed;
 
-          // Dispatch Jarvis-specific events to store
-          dispatchJarvisEvent(eventType, eventPayload);
+          // Dispatch Elyan-specific events to store
+          dispatchElyanEvent(eventType, eventPayload);
 
           // Forward all events to caller
           onEvent({ type: eventType, payload: eventPayload });
@@ -145,7 +145,7 @@ export class RuntimeSocketBridge {
       };
       this.socket.onclose = () => {
         this.socket = null;
-        useRuntimeStore.getState().setJarvisChannelStatus({ desktop: false });
+        useRuntimeStore.getState().setElyanChannelStatus({ desktop: false });
       };
       this.socket.onerror = () => {
         this.socket = null;

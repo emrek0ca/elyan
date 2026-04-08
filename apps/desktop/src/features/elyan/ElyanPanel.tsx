@@ -1,5 +1,5 @@
 /**
- * JarvisPanel — Real-time Jarvis status panel.
+ * ElyanPanel — Real-time Elyan status panel.
  *
  * Shows: active agents, channel status, live activity, system health.
  * Data driven by runtime-store (populated via WebSocket events).
@@ -11,7 +11,7 @@ import {
 import { Surface } from "@/components/primitives/Surface";
 import { StatusBadge } from "@/components/primitives/StatusBadge";
 import { useRuntimeStore } from "@/stores/runtime-store";
-import type { JarvisAgentActivity } from "@/stores/runtime-store";
+import type { ElyanAgentActivity } from "@/stores/runtime-store";
 import { cn } from "@/utils/cn";
 
 // ── VoiceButton ──────────────────────────────────────────────────────────────
@@ -28,7 +28,7 @@ function VoiceButton({ className }: { className?: string }) {
       setListening(next);
       // Fire trigger to backend voice pipeline
       if (next) {
-        await fetch("/api/jarvis/voice/trigger", { method: "POST" }).catch(() => null);
+        await fetch("/api/elyan/voice/trigger", { method: "POST" }).catch(() => null);
       }
     } finally {
       setBusy(false);
@@ -39,7 +39,7 @@ function VoiceButton({ className }: { className?: string }) {
     <button
       onClick={() => void toggle()}
       disabled={busy}
-      title={listening ? "Dinlemeyi durdur" : "Jarvis'e sesli komut ver"}
+      title={listening ? "Dinlemeyi durdur" : "Elyan'e sesli komut ver"}
       className={cn(
         "flex h-10 w-10 items-center justify-center rounded-full border transition-all duration-200",
         listening
@@ -56,7 +56,7 @@ function VoiceButton({ className }: { className?: string }) {
 
 // ── AgentActivityFeed ────────────────────────────────────────────────────────
 
-function AgentActivityFeed({ items }: { items: JarvisAgentActivity[] }) {
+function AgentActivityFeed({ items }: { items: ElyanAgentActivity[] }) {
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -101,7 +101,7 @@ function AgentActivityFeed({ items }: { items: JarvisAgentActivity[] }) {
 // ── ChannelStatusRow ─────────────────────────────────────────────────────────
 
 interface ChannelInfo {
-  key: keyof ReturnType<typeof useRuntimeStore.getState>["jarvisChannelStatus"];
+  key: keyof ReturnType<typeof useRuntimeStore.getState>["elyanChannelStatus"];
   label: string;
 }
 
@@ -113,7 +113,7 @@ const CHANNELS: ChannelInfo[] = [
 ];
 
 function ChannelStatusRow() {
-  const channelStatus = useRuntimeStore((s) => s.jarvisChannelStatus);
+  const channelStatus = useRuntimeStore((s) => s.elyanChannelStatus);
 
   return (
     <div className="flex flex-wrap gap-2">
@@ -146,7 +146,7 @@ function ChannelStatusRow() {
 // ── SystemHealthBar ──────────────────────────────────────────────────────────
 
 function SystemHealthBar() {
-  const health = useRuntimeStore((s) => s.jarvisSystemHealth);
+  const health = useRuntimeStore((s) => s.elyanSystemHealth);
 
   return (
     <div className="flex flex-wrap items-center gap-3 text-[11px] text-[var(--text-secondary)]">
@@ -168,17 +168,17 @@ function SystemHealthBar() {
   );
 }
 
-// ── JarvisPanel (main) ───────────────────────────────────────────────────────
+// ── ElyanPanel (main) ───────────────────────────────────────────────────────
 
-export function JarvisPanel() {
+export function ElyanPanel() {
   const connectionState = useRuntimeStore((s) => s.connectionState);
-  const activities = useRuntimeStore((s) => s.jarvisActivities);
-  const setJarvisChannelStatus = useRuntimeStore((s) => s.setJarvisChannelStatus);
+  const activities = useRuntimeStore((s) => s.elyanActivities);
+  const setElyanChannelStatus = useRuntimeStore((s) => s.setElyanChannelStatus);
 
   // Sync desktop channel status with WebSocket connection state
   useEffect(() => {
-    setJarvisChannelStatus({ desktop: connectionState === "connected" });
-  }, [connectionState, setJarvisChannelStatus]);
+    setElyanChannelStatus({ desktop: connectionState === "connected" });
+  }, [connectionState, setElyanChannelStatus]);
 
   const isActive = connectionState === "connected";
 
@@ -202,7 +202,7 @@ export function JarvisPanel() {
           </div>
           <div>
             <div className="text-[13px] font-semibold tracking-tight text-[var(--text-primary)]">
-              Elyan Jarvis
+              Elyan Elyan
             </div>
             <div className="text-[11px] text-[var(--text-tertiary)]">
               Çoklu ajan operatör

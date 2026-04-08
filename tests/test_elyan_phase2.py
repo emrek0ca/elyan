@@ -1,7 +1,7 @@
 """
-tests/test_jarvis_phase2.py
+tests/test_elyan_phase2.py
 ───────────────────────────────────────────────────────────────────────────────
-Phase 2 Jarvis testi:
+Phase 2 Elyan testi:
   - Türkçe suffix extraction (TR_SUFFIXES, _strip_tr_suffix, _extract_app_name)
   - Terminal/search entity extraction suffix fix
   - Sequential command chain detection
@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 class TestTurkishSuffixStripping:
     def setup_method(self):
-        from core.jarvis.intent_executor import _strip_tr_suffix
+        from core.elyan.intent_executor import _strip_tr_suffix
         self.strip = _strip_tr_suffix
 
     def test_yi_suffix(self):
@@ -62,7 +62,7 @@ class TestTurkishSuffixStripping:
 
 class TestExtractAppName:
     def setup_method(self):
-        from core.jarvis.intent_executor import _extract_app_name
+        from core.elyan.intent_executor import _extract_app_name
         self.extract = _extract_app_name
 
     def test_plain(self):
@@ -101,7 +101,7 @@ class TestExtractAppName:
 
 class TestTerminalCmdExtraction:
     def setup_method(self):
-        from core.jarvis.intent_executor import _extract_terminal_cmd
+        from core.elyan.intent_executor import _extract_terminal_cmd
         self.extract = _extract_terminal_cmd
 
     def test_basic_run(self):
@@ -133,7 +133,7 @@ class TestTerminalCmdExtraction:
 
 class TestSearchQueryExtraction:
     def setup_method(self):
-        from core.jarvis.intent_executor import _extract_search_query
+        from core.elyan.intent_executor import _extract_search_query
         self.extract = _extract_search_query
 
     def test_ara_prefix(self):
@@ -157,8 +157,8 @@ class TestSearchQueryExtraction:
 
 class TestChainDetection:
     def setup_method(self):
-        from core.jarvis.jarvis_core import JarvisCore
-        self.jc = JarvisCore()
+        from core.elyan.elyan_core import ElyanCore
+        self.jc = ElyanCore()
 
     def test_single_command(self):
         segments = self.jc._split_chained_commands("Safari aç")
@@ -200,7 +200,7 @@ class TestChainDetection:
 
 class TestConfidenceCalibration:
     def setup_method(self):
-        from core.jarvis.jarvis_core import IntentClassifier
+        from core.elyan.elyan_core import IntentClassifier
         self.clf = IntentClassifier()
 
     def test_long_keyword_high_confidence(self):
@@ -279,7 +279,7 @@ class TestIntentExecutorRouting:
     """Tests that the right handler is called for each intent."""
 
     def _make_intent(self, category: str, sub: str, text: str = "test"):
-        from core.jarvis.jarvis_core import ClassifiedIntent, IntentCategory, Complexity
+        from core.elyan.elyan_core import ClassifiedIntent, IntentCategory, Complexity
         return ClassifiedIntent(
             category=IntentCategory(category),
             complexity=Complexity.SIMPLE,
@@ -290,7 +290,7 @@ class TestIntentExecutorRouting:
 
     @pytest.mark.asyncio
     async def test_unknown_returns_empty(self):
-        from core.jarvis.intent_executor import IntentExecutor
+        from core.elyan.intent_executor import IntentExecutor
         ex = IntentExecutor()
         intent = self._make_intent("conversation", "chat", "selam")
         result = await ex.execute(intent)
@@ -299,14 +299,14 @@ class TestIntentExecutorRouting:
     @pytest.mark.asyncio
     async def test_system_health_returns_string(self):
         from unittest.mock import AsyncMock, patch, MagicMock
-        from core.jarvis.intent_executor import IntentExecutor
+        from core.elyan.intent_executor import IntentExecutor
 
         mock_ac = MagicMock()
         mock_ac.get_cpu_usage = AsyncMock(return_value=12.5)
         mock_ac.get_battery_info = AsyncMock(return_value={"percent": 80, "charging": False})
         mock_ac.get_disk_usage = AsyncMock(return_value={"free_gb": 100.0, "total_gb": 500.0})
 
-        with patch("core.jarvis.intent_executor.subprocess") as mock_sub:
+        with patch("core.elyan.intent_executor.subprocess") as mock_sub:
             mock_sub.run.return_value = MagicMock(stdout="Pages free: 12345.", returncode=0)
             with patch("core.computer.app_controller.AppController", return_value=mock_ac):
                 ex = IntentExecutor()
@@ -318,13 +318,13 @@ class TestIntentExecutorRouting:
     @pytest.mark.asyncio
     async def test_network_ip_query(self):
         from unittest.mock import patch, MagicMock
-        from core.jarvis.intent_executor import IntentExecutor
+        from core.elyan.intent_executor import IntentExecutor
 
         mock_result = MagicMock()
         mock_result.stdout = "192.168.1.1\n"
         mock_result.returncode = 0
 
-        with patch("core.jarvis.intent_executor.subprocess") as mock_sub:
+        with patch("core.elyan.intent_executor.subprocess") as mock_sub:
             mock_sub.run.return_value = mock_result
             ex = IntentExecutor()
             intent = self._make_intent("system_control", "network", "ip adresim nedir")
@@ -334,7 +334,7 @@ class TestIntentExecutorRouting:
     @pytest.mark.asyncio
     async def test_web_search_opens_url(self):
         from unittest.mock import AsyncMock, patch, MagicMock
-        from core.jarvis.intent_executor import IntentExecutor
+        from core.elyan.intent_executor import IntentExecutor
 
         mock_ac = MagicMock()
         mock_ac.open_url = AsyncMock(return_value=True)
@@ -356,7 +356,7 @@ class TestOllamaStreaming:
         """_ollama_stream calls on_chunk for each chunk and returns full text."""
         import json
         from unittest.mock import patch, MagicMock
-        from core.jarvis.jarvis_core import _ollama_stream
+        from core.elyan.elyan_core import _ollama_stream
 
         # Simulate Ollama streaming response: 3 lines
         chunks_data = [
@@ -388,7 +388,7 @@ class TestOllamaStreaming:
     async def test_stream_handles_network_error_gracefully(self):
         """Network error → returns empty string, no exception raised."""
         from unittest.mock import patch
-        from core.jarvis.jarvis_core import _ollama_stream
+        from core.elyan.elyan_core import _ollama_stream
 
         def on_chunk(c):
             pass
@@ -403,7 +403,7 @@ class TestOllamaStreaming:
         """on_chunk can be an async callable."""
         import json
         from unittest.mock import patch
-        from core.jarvis.jarvis_core import _ollama_stream
+        from core.elyan.elyan_core import _ollama_stream
 
         chunks_data = [json.dumps({"response": "test"}).encode() + b"\n"]
 
@@ -425,16 +425,16 @@ class TestOllamaStreaming:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 10. JarvisCore — handle() chain integration (no real LLM)
+# 10. ElyanCore — handle() chain integration (no real LLM)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class TestJarvisCoreChainIntegration:
+class TestElyanCoreChainIntegration:
     @pytest.mark.asyncio
     async def test_single_command_no_chain(self):
         from unittest.mock import AsyncMock, patch
-        from core.jarvis.jarvis_core import JarvisCore
+        from core.elyan.elyan_core import ElyanCore
 
-        jc = JarvisCore()
+        jc = ElyanCore()
         with patch.object(jc, "_dispatch", new_callable=AsyncMock, return_value="pong"):
             resp = await jc.handle("selam", "desktop", "test_user")
         assert resp.text == "pong"
@@ -442,9 +442,9 @@ class TestJarvisCoreChainIntegration:
     @pytest.mark.asyncio
     async def test_chain_two_steps_both_executed(self):
         from unittest.mock import AsyncMock, patch
-        from core.jarvis.jarvis_core import JarvisCore
+        from core.elyan.elyan_core import ElyanCore
 
-        jc = JarvisCore()
+        jc = ElyanCore()
         call_log = []
 
         async def fake_dispatch(text, intent, channel, user):

@@ -1,5 +1,5 @@
 """
-core/jarvis/jarvis_startup.py — Tüm Jarvis servislerini başlatan merkezi modül
+core/elyan/elyan_startup.py — Tüm Elyan servislerini başlatan merkezi modül
 ───────────────────────────────────────────────────────────────────────────────
 server.start() bu modülü çağırır. Her servis bağımsız başlar; biri çökerse
 diğerleri etkilenmez.
@@ -10,7 +10,7 @@ Başlatılan servisler (sırayla):
   3. SchedulerAgent        — cron görevleri
   4. ContextTracker        — aktif uygulama takibi
   5. WakeWordDetector      — sesli komut tetikleyici (ses kartı gerekli)
-  6. JarvisMemory          — DB başlatma (lazy init'e yedek)
+  6. ElyanMemory          — DB başlatma (lazy init'e yedek)
   7. PersonalityAdapter    — DB başlatma
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ from typing import Callable
 
 from utils.logger import get_logger
 
-logger = get_logger("jarvis_startup")
+logger = get_logger("elyan_startup")
 
 
 # ── Broadcast helper (isteğe bağlı) ──────────────────────────────────────────
@@ -103,10 +103,10 @@ async def _start_morning_brief() -> None:
 
     async def _deliver_brief() -> None:
         try:
-            from core.jarvis.jarvis_core import get_jarvis_core
+            from core.elyan.elyan_core import get_elyan_core
             from core.integrations.calendar import get_today_events
 
-            jc = get_jarvis_core()
+            jc = get_elyan_core()
 
             # 1. Takvim etkinlikleri
             events = get_today_events()
@@ -128,7 +128,7 @@ async def _start_morning_brief() -> None:
                 f"💾 Disk: {disk.get('free_gb', 0):.1f} GB boş"
             )
 
-            _push("jarvis.morning_brief", {"text": brief})
+            _push("elyan.morning_brief", {"text": brief})
             logger.info("Morning brief delivered")
         except Exception as exc:
             logger.warning(f"Morning brief delivery failed: {exc}")
@@ -176,9 +176,9 @@ async def _start_wake_word(notify_fn: BroadcastFn) -> None:
 def _init_memory() -> None:
     """Pre-initialize memory DBs so first request is instant."""
     try:
-        from core.memory.jarvis_memory import get_jarvis_memory
-        get_jarvis_memory()
-        logger.debug("JarvisMemory initialized")
+        from core.memory.elyan_memory import get_elyan_memory
+        get_elyan_memory()
+        logger.debug("ElyanMemory initialized")
     except Exception:
         pass
     try:
@@ -198,8 +198,8 @@ def _init_memory() -> None:
 
 # ── Main startup entry ────────────────────────────────────────────────────────
 
-async def start_jarvis_services(broadcast: BroadcastFn = None) -> None:
-    """Start all Jarvis background services concurrently."""
+async def start_elyan_services(broadcast: BroadcastFn = None) -> None:
+    """Start all Elyan background services concurrently."""
     set_broadcast(broadcast)
     _init_memory()   # sync — fast DB open
 
@@ -215,13 +215,13 @@ async def start_jarvis_services(broadcast: BroadcastFn = None) -> None:
 
     failed = [r for r in results if isinstance(r, BaseException)]
     if failed:
-        logger.warning(f"Jarvis startup: {len(failed)} service(s) failed (non-critical)")
+        logger.warning(f"Elyan startup: {len(failed)} service(s) failed (non-critical)")
     else:
-        logger.info("All Jarvis services started successfully")
+        logger.info("All Elyan services started successfully")
 
 
-async def stop_jarvis_services() -> None:
-    """Graceful shutdown of all Jarvis background services."""
+async def stop_elyan_services() -> None:
+    """Graceful shutdown of all Elyan background services."""
     for name, stopper in [
         ("WakeWordDetector",  _stop("core.voice.wake_word",         "get_wake_word_detector")),
         ("ContextTracker",    _stop("core.proactive.context_tracker", "get_context_tracker")),

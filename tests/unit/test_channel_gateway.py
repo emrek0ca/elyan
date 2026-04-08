@@ -74,7 +74,7 @@ async def test_connect_failure(gw):
 async def test_proactive_send(gw, mock_adapter):
     gw.register("telegram", mock_adapter)
     gw._statuses["telegram"].connected = True
-    ok = await gw.send_proactive("telegram", "chat123", "Hello from Jarvis!")
+    ok = await gw.send_proactive("telegram", "chat123", "Hello from Elyan!")
     assert ok is True
     mock_adapter.send_message.assert_called_once()
 

@@ -280,10 +280,10 @@ class DashboardHTTPServer:
             logger.warning(f"Privacy blueprint registration failed: {exc}")
 
         try:
-            from api.jarvis_api import create_jarvis_blueprint
-            self.app.register_blueprint(create_jarvis_blueprint())
+            from api.elyan_api import create_elyan_blueprint
+            self.app.register_blueprint(create_elyan_blueprint())
         except Exception as exc:
-            logger.warning(f"Jarvis blueprint registration failed: {exc}")
+            logger.warning(f"Elyan blueprint registration failed: {exc}")
 
         # Health check
         @self.app.route("/health", methods=["GET"])

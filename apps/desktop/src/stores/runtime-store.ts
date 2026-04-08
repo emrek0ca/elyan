@@ -15,9 +15,9 @@ export const defaultSidecarHealth: SidecarHealth = {
   compatible: false,
 };
 
-// ── Jarvis state types ───────────────────────────────────────────────────────
+// ── Elyan state types ───────────────────────────────────────────────────────
 
-export interface JarvisAgentActivity {
+export interface ElyanAgentActivity {
   id: string;
   agent: string;
   action: string;
@@ -25,14 +25,14 @@ export interface JarvisAgentActivity {
   ts: number;
 }
 
-export interface JarvisSystemHealth {
+export interface ElyanSystemHealth {
   cpu: number;
   batteryPct: number;
   charging: boolean;
   activeModel: string;
 }
 
-export interface JarvisChannelStatus {
+export interface ElyanChannelStatus {
   telegram: boolean;
   whatsapp: boolean;
   imessage: boolean;
@@ -48,14 +48,14 @@ type RuntimeStore = {
   sidecarHealth: SidecarHealth;
   setSidecarHealth: (health: SidecarHealth) => void;
 
-  // Jarvis live state
-  jarvisActivities: JarvisAgentActivity[];
-  jarvisChannelStatus: JarvisChannelStatus;
-  jarvisSystemHealth: JarvisSystemHealth;
-  pushJarvisActivity: (activity: JarvisAgentActivity) => void;
-  updateJarvisActivity: (id: string, updates: Partial<JarvisAgentActivity>) => void;
-  setJarvisChannelStatus: (updates: Partial<JarvisChannelStatus>) => void;
-  setJarvisSystemHealth: (updates: Partial<JarvisSystemHealth>) => void;
+  // Elyan live state
+  elyanActivities: ElyanAgentActivity[];
+  elyanChannelStatus: ElyanChannelStatus;
+  elyanSystemHealth: ElyanSystemHealth;
+  pushElyanActivity: (activity: ElyanAgentActivity) => void;
+  updateElyanActivity: (id: string, updates: Partial<ElyanAgentActivity>) => void;
+  setElyanChannelStatus: (updates: Partial<ElyanChannelStatus>) => void;
+  setElyanSystemHealth: (updates: Partial<ElyanSystemHealth>) => void;
 };
 
 export const useRuntimeStore = create<RuntimeStore>((set) => ({
@@ -67,30 +67,30 @@ export const useRuntimeStore = create<RuntimeStore>((set) => ({
       connectionState: getRuntimeConnectionState(sidecarHealth),
     }),
 
-  // Jarvis defaults
-  jarvisActivities: [],
-  jarvisChannelStatus: { telegram: false, whatsapp: false, imessage: false, desktop: false },
-  jarvisSystemHealth: { cpu: 0, batteryPct: 100, charging: true, activeModel: "" },
+  // Elyan defaults
+  elyanActivities: [],
+  elyanChannelStatus: { telegram: false, whatsapp: false, imessage: false, desktop: false },
+  elyanSystemHealth: { cpu: 0, batteryPct: 100, charging: true, activeModel: "" },
 
-  pushJarvisActivity: (activity) =>
+  pushElyanActivity: (activity) =>
     set((state) => ({
-      jarvisActivities: [...state.jarvisActivities, activity].slice(-MAX_ACTIVITIES),
+      elyanActivities: [...state.elyanActivities, activity].slice(-MAX_ACTIVITIES),
     })),
 
-  updateJarvisActivity: (id, updates) =>
+  updateElyanActivity: (id, updates) =>
     set((state) => ({
-      jarvisActivities: state.jarvisActivities.map((a) =>
+      elyanActivities: state.elyanActivities.map((a) =>
         a.id === id ? { ...a, ...updates } : a
       ),
     })),
 
-  setJarvisChannelStatus: (updates) =>
+  setElyanChannelStatus: (updates) =>
     set((state) => ({
-      jarvisChannelStatus: { ...state.jarvisChannelStatus, ...updates },
+      elyanChannelStatus: { ...state.elyanChannelStatus, ...updates },
     })),
 
-  setJarvisSystemHealth: (updates) =>
+  setElyanSystemHealth: (updates) =>
     set((state) => ({
-      jarvisSystemHealth: { ...state.jarvisSystemHealth, ...updates },
+      elyanSystemHealth: { ...state.elyanSystemHealth, ...updates },
     })),
 }));

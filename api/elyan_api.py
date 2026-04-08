@@ -1,13 +1,13 @@
 """
-api/jarvis_api.py
+api/elyan_api.py
 ───────────────────────────────────────────────────────────────────────────────
-Jarvis API blueprint
+Elyan API blueprint
 
 Routes:
-  POST /api/jarvis/voice/trigger        — manually fire voice pipeline
-  GET  /api/jarvis/status               — pipeline + wake-word state
-  POST /api/jarvis/chat                 — single-shot text command → JSON response
-  POST /api/jarvis/chat/stream          — streaming SSE text command → chunks
+  POST /api/elyan/voice/trigger        — manually fire voice pipeline
+  GET  /api/elyan/status               — pipeline + wake-word state
+  POST /api/elyan/chat                 — single-shot text command → JSON response
+  POST /api/elyan/chat/stream          — streaming SSE text command → chunks
 """
 from __future__ import annotations
 
@@ -26,25 +26,25 @@ except ImportError:
 
 from utils.logger import get_logger
 
-logger = get_logger("jarvis_api")
+logger = get_logger("elyan_api")
 
 if not _FLASK_OK:
     logger.warning(
-        "api/jarvis_api: Flask not installed — Jarvis API endpoints will be unavailable. "
+        "api/elyan_api: Flask not installed — Elyan API endpoints will be unavailable. "
         "Fix: pip install flask flask-cors"
     )
 
 
-def create_jarvis_blueprint():
+def create_elyan_blueprint():
     """Returns a Flask Blueprint, or None if Flask is not installed."""
     if not _FLASK_OK:
         return None
 
-    bp = Blueprint("jarvis", __name__)
+    bp = Blueprint("elyan", __name__)
 
     # ── Voice trigger ─────────────────────────────────────────────────────────
 
-    @bp.route("/api/jarvis/voice/trigger", methods=["POST"])
+    @bp.route("/api/elyan/voice/trigger", methods=["POST"])
     def voice_trigger():
         """Fire a voice interaction cycle from the UI button."""
         try:
@@ -62,8 +62,8 @@ def create_jarvis_blueprint():
 
     # ── Status ────────────────────────────────────────────────────────────────
 
-    @bp.route("/api/jarvis/status", methods=["GET"])
-    def jarvis_status():
+    @bp.route("/api/elyan/status", methods=["GET"])
+    def elyan_status():
         """Return current pipeline + wake-word detector state."""
         try:
             from core.voice.voice_pipeline import get_voice_pipeline
@@ -76,12 +76,12 @@ def create_jarvis_blueprint():
                 "wake_running":   detector.running,
             })
         except Exception as exc:
-            logger.warning(f"Jarvis status error: {exc}")
+            logger.warning(f"Elyan status error: {exc}")
             return jsonify({"pipeline_state": "idle", "wake_backend": "none", "wake_running": False})
 
     # ── Single-shot chat ──────────────────────────────────────────────────────
 
-    @bp.route("/api/jarvis/chat", methods=["POST"])
+    @bp.route("/api/elyan/chat", methods=["POST"])
     def chat():
         """Non-streaming: send text, get full response as JSON."""
         body    = flask_request.get_json(silent=True) or {}
@@ -93,8 +93,8 @@ def create_jarvis_blueprint():
             return jsonify({"error": "text required"}), 400
 
         try:
-            from core.jarvis.jarvis_core import get_jarvis_core
-            jc   = get_jarvis_core()
+            from core.elyan.elyan_core import get_elyan_core
+            jc   = get_elyan_core()
             loop = _get_or_create_loop()
             resp = loop.run_until_complete(jc.handle(text, channel, user_id))
             return jsonify({
@@ -108,7 +108,7 @@ def create_jarvis_blueprint():
 
     # ── Streaming SSE chat ────────────────────────────────────────────────────
 
-    @bp.route("/api/jarvis/chat/stream", methods=["POST"])
+    @bp.route("/api/elyan/chat/stream", methods=["POST"])
     def chat_stream():
         """Streaming SSE: Ollama chunks arrive in real-time.
 
@@ -126,8 +126,8 @@ def create_jarvis_blueprint():
         def generate():
             """Blocking SSE generator — runs in Flask request thread."""
             try:
-                from core.jarvis.jarvis_core import get_jarvis_core, _ollama_stream
-                jc = get_jarvis_core()
+                from core.elyan.elyan_core import get_elyan_core, _ollama_stream
+                jc = get_elyan_core()
 
                 # First classify intent — if it's an executable action,
                 # run it fully and emit the single result as one chunk.

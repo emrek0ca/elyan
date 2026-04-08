@@ -1,10 +1,10 @@
 """
 core/voice/voice_pipeline.py
 ───────────────────────────────────────────────────────────────────────────────
-VoicePipeline — full voice loop for Jarvis
+VoicePipeline — full voice loop for Elyan
 
 Flow:
-  [Wake Word] → [Record Audio] → [STT] → [JarvisCore] → [TTS] → [Speak]
+  [Wake Word] → [Record Audio] → [STT] → [ElyanCore] → [TTS] → [Speak]
 
 State machine:
   IDLE → LISTENING (on wake) → PROCESSING (STT done) → SPEAKING → IDLE
@@ -91,8 +91,8 @@ class VoicePipeline:
         """Single wake → listen → process → speak cycle."""
         try:
             # Acknowledge wake
-            from core.voice.jarvis_tts import get_jarvis_tts
-            tts = get_jarvis_tts()
+            from core.voice.elyan_tts import get_elyan_tts
+            tts = get_elyan_tts()
             await tts.speak("Dinliyorum.", interrupt=True)
 
             # Record
@@ -112,7 +112,7 @@ class VoicePipeline:
 
             logger.info(f"Voice input: '{text}'")
 
-            # Process with JarvisCore
+            # Process with ElyanCore
             response_text = await self._process(text)
 
             # Speak response
@@ -197,14 +197,14 @@ class VoicePipeline:
                 pass
 
     async def _process(self, text: str) -> str:
-        """Pass text through JarvisCore and return response string."""
+        """Pass text through ElyanCore and return response string."""
         try:
-            from core.jarvis.jarvis_core import get_jarvis_core
-            response = await get_jarvis_core().handle(text, "voice")
+            from core.elyan.elyan_core import get_elyan_core
+            response = await get_elyan_core().handle(text, "voice")
             # Strip markdown for speech
             return response.text[:400]
         except Exception as exc:
-            logger.warning(f"JarvisCore error: {exc}")
+            logger.warning(f"ElyanCore error: {exc}")
             return "Bir hata oluştu, lütfen tekrar dene."
 
 

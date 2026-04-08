@@ -1,7 +1,7 @@
 """
 core/proactive/scheduler_agent.py
 ───────────────────────────────────────────────────────────────────────────────
-SchedulerAgent — cron-like task scheduling for Jarvis.
+SchedulerAgent — cron-like task scheduling for Elyan.
 
 Supported cron expressions:
   "HH:MM"    — daily at that time (e.g. "09:00")

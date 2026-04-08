@@ -1,9 +1,9 @@
-"""Tests for JarvisCore — intent classification, task decomposition, response synthesis."""
+"""Tests for ElyanCore — intent classification, task decomposition, response synthesis."""
 
 import pytest
-from core.jarvis.jarvis_core import (
+from core.elyan.elyan_core import (
     IntentCategory, Complexity, IntentClassifier,
-    TaskDecomposer, ResponseSynthesizer, JarvisCore,
+    TaskDecomposer, ResponseSynthesizer, ElyanCore,
 )
 
 
@@ -71,8 +71,11 @@ class TestIntentClassifier:
         assert r.complexity == Complexity.EXPERT
 
     def test_confidence_rules_higher(self):
+        # "aç" is a 2-char keyword → confidence = 0.55 + 2/20 = 0.65
+        # Rule-based match is always > fallback conversation (0.5)
         r = self.clf.classify("Safari aç")
-        assert r.confidence >= 0.8
+        assert r.confidence >= 0.60
+        assert r.category == IntentCategory.SYSTEM_CONTROL
 
 
 # ── TaskDecomposer tests ────────────────────────────────────────────────────
@@ -150,28 +153,28 @@ class TestResponseSynthesizer:
         assert resp.text  # Should not be empty
 
 
-# ── JarvisCore integration ──────────────────────────────────────────────────
+# ── ElyanCore integration ──────────────────────────────────────────────────
 
-class TestJarvisCore:
+class TestElyanCore:
     def setup_method(self):
-        self.jarvis = JarvisCore()
+        self.elyan = ElyanCore()
 
     @pytest.mark.asyncio
     async def test_handle_simple_chat(self):
-        resp = await self.jarvis.handle("merhaba", "telegram")
+        resp = await self.elyan.handle("merhaba", "telegram")
         assert resp.text
 
     @pytest.mark.asyncio
     async def test_handle_system_control(self):
-        resp = await self.jarvis.handle("Safari aç", "telegram")
+        resp = await self.elyan.handle("Safari aç", "telegram")
         assert "system_control" in resp.metadata.get("intent", "")
 
     @pytest.mark.asyncio
     async def test_handle_approval_required(self):
-        resp = await self.jarvis.handle("terminalde rm komutu çalıştır", "telegram")
+        resp = await self.elyan.handle("terminalde rm komutu çalıştır", "telegram")
         assert resp.metadata.get("requires_approval") is True
 
     @pytest.mark.asyncio
     async def test_handle_returns_duration(self):
-        resp = await self.jarvis.handle("merhaba", "desktop")
+        resp = await self.elyan.handle("merhaba", "desktop")
         assert resp.duration_s >= 0

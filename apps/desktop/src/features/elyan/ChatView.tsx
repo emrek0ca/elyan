@@ -154,7 +154,7 @@ export function ChatView({ className }: { className?: string }) {
     abortRef.current = controller;
 
     try {
-      const resp = await fetch(`${API_BASE}/api/jarvis/chat/stream`, {
+      const resp = await fetch(`${API_BASE}/api/elyan/chat/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: trimmed, user_id: "desktop" }),
@@ -222,7 +222,7 @@ export function ChatView({ className }: { className?: string }) {
 
   const toggleVoice = useCallback(async () => {
     try {
-      await fetch(`${API_BASE}/api/jarvis/voice/trigger`, { method: "POST" });
+      await fetch(`${API_BASE}/api/elyan/voice/trigger`, { method: "POST" });
       setVoiceActive(v => !v);
     } catch { /* ignore */ }
   }, []);

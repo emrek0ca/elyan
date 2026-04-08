@@ -11,17 +11,17 @@ import pytest
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# JarvisMemory
+# ElyanMemory
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestJarvisMemory:
+class TestElyanMemory:
     def _mem(self):
-        from core.memory.jarvis_memory import JarvisMemory
+        from core.memory.elyan_memory import ElyanMemory
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            return JarvisMemory(db=Path(f.name))
+            return ElyanMemory(db=Path(f.name))
 
     def test_record_and_recent(self):
-        from core.memory.jarvis_memory import Interaction
+        from core.memory.elyan_memory import Interaction
         mem = self._mem()
         ix = Interaction("u1", "telegram", "merhaba", "selam", "ok")
         mem.record(ix)
@@ -34,7 +34,7 @@ class TestJarvisMemory:
         assert mem.recent("unknown_user") == []
 
     def test_recipe_not_created_before_threshold(self):
-        from core.memory.jarvis_memory import Interaction
+        from core.memory.elyan_memory import Interaction
         mem = self._mem()
         for _ in range(2):
             mem.record(Interaction("u1", "tg", "rapor hazırla lütfen", "hazırlandı", "ok"))
@@ -42,7 +42,7 @@ class TestJarvisMemory:
         assert recipes == []  # threshold=3, only 2 records
 
     def test_recipe_created_after_threshold(self):
-        from core.memory.jarvis_memory import Interaction
+        from core.memory.elyan_memory import Interaction
         mem = self._mem()
         for _ in range(3):
             mem.record(Interaction("u1", "tg", "rapor hazırla lütfen", "hazırlandı", "ok"))
@@ -50,7 +50,7 @@ class TestJarvisMemory:
         assert len(recipes) >= 1
 
     def test_relevant_recipes_returns_matching_keyword(self):
-        from core.memory.jarvis_memory import Interaction
+        from core.memory.elyan_memory import Interaction
         mem = self._mem()
         for _ in range(3):
             mem.record(Interaction("u1", "tg", "analiz yap veri", "tamam", "ok"))
@@ -60,7 +60,7 @@ class TestJarvisMemory:
         assert any("analiz" in r["trigger_pat"] or "veri" in r["trigger_pat"] for r in recipes)
 
     def test_build_context_hint_returns_string(self):
-        from core.memory.jarvis_memory import Interaction
+        from core.memory.elyan_memory import Interaction
         mem = self._mem()
         mem.record(Interaction("u1", "tg", "test mesajı", "test yanıt", "ok"))
         hint = mem.build_context_hint("u1", "test mesajı")
@@ -72,7 +72,7 @@ class TestJarvisMemory:
         assert hint == ""
 
     def test_record_multiple_users_isolated(self):
-        from core.memory.jarvis_memory import Interaction
+        from core.memory.elyan_memory import Interaction
         mem = self._mem()
         mem.record(Interaction("userA", "tg", "A mesajı", "A yanıt", "ok"))
         mem.record(Interaction("userB", "tg", "B mesajı", "B yanıt", "ok"))
@@ -81,10 +81,10 @@ class TestJarvisMemory:
         assert mem.recent("userA")[0]["input_text"] == "A mesajı"
 
     def test_singleton_returns_same_instance(self):
-        import core.memory.jarvis_memory as m
+        import core.memory.elyan_memory as m
         m._instance = None
-        a = m.get_jarvis_memory()
-        b = m.get_jarvis_memory()
+        a = m.get_elyan_memory()
+        b = m.get_elyan_memory()
         assert a is b
         m._instance = None
 
@@ -191,18 +191,18 @@ class TestPersonalityAdapter:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# JarvisStartup smoke test
+# ElyanStartup smoke test
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestJarvisStartup:
+class TestElyanStartup:
     @pytest.mark.asyncio
     async def test_start_services_completes_without_crashing(self):
         """All services should start gracefully even if deps are missing."""
-        from core.jarvis.jarvis_startup import start_jarvis_services
+        from core.elyan.elyan_startup import start_elyan_services
         # Should not raise even if Ollama is offline, pyaudio is missing, etc.
-        await start_jarvis_services(broadcast=None)
+        await start_elyan_services(broadcast=None)
 
     @pytest.mark.asyncio
     async def test_stop_services_completes_without_crashing(self):
-        from core.jarvis.jarvis_startup import stop_jarvis_services
-        await stop_jarvis_services()
+        from core.elyan.elyan_startup import stop_elyan_services
+        await stop_elyan_services()

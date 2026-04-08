@@ -1,15 +1,15 @@
 /**
- * TaskTreePanel — Hierarchical task tree for active Jarvis jobs.
+ * TaskTreePanel — Hierarchical task tree for active Elyan jobs.
  *
  * Visualizes: job → steps (decomposed tasks from TaskDecomposer)
- * Reads from runtime-store jarvisActivities (running/done/error).
+ * Reads from runtime-store elyanActivities (running/done/error).
  */
 import { ChevronDown, ChevronRight, Layers } from "@/vendor/lucide-react";
 import { useState } from "react";
 import { Surface } from "@/components/primitives/Surface";
 import { StatusBadge } from "@/components/primitives/StatusBadge";
 import { useRuntimeStore } from "@/stores/runtime-store";
-import type { JarvisAgentActivity } from "@/stores/runtime-store";
+import type { ElyanAgentActivity } from "@/stores/runtime-store";
 import { cn } from "@/utils/cn";
 
 // ── Tree node type (derived from flat activities) ────────────────────────────
@@ -18,7 +18,7 @@ interface TaskNode {
   id: string;
   agent: string;
   action: string;
-  status: JarvisAgentActivity["status"];
+  status: ElyanAgentActivity["status"];
   ts: number;
   children: TaskNode[];
 }
@@ -29,7 +29,7 @@ interface TaskNode {
  * "done"/"error" items within the same second are shown as leaves.
  * Simple heuristic — good enough without a full job hierarchy from backend.
  */
-function buildTree(activities: JarvisAgentActivity[]): TaskNode[] {
+function buildTree(activities: ElyanAgentActivity[]): TaskNode[] {
   if (!activities.length) return [];
 
   const roots: TaskNode[] = [];
@@ -56,7 +56,7 @@ function buildTree(activities: JarvisAgentActivity[]): TaskNode[] {
 
 // ── StatusDot ────────────────────────────────────────────────────────────────
 
-function StatusDot({ status }: { status: JarvisAgentActivity["status"] }) {
+function StatusDot({ status }: { status: ElyanAgentActivity["status"] }) {
   return (
     <div
       className={cn(
@@ -140,7 +140,7 @@ function TaskRow({
 // ── TaskTreePanel (main) ─────────────────────────────────────────────────────
 
 export function TaskTreePanel() {
-  const activities = useRuntimeStore((s) => s.jarvisActivities);
+  const activities = useRuntimeStore((s) => s.elyanActivities);
   const tree = buildTree(activities);
 
   const runningCount = activities.filter((a) => a.status === "running").length;

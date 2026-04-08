@@ -2,9 +2,9 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Clock3, RefreshCw, Sparkles } from "@/vendor/lucide-react";
 import { useNavigate } from "react-router-dom";
-import { JarvisPanel } from "@/features/jarvis/JarvisPanel";
-import { TaskTreePanel } from "@/features/jarvis/TaskTreePanel";
-import { ChatView } from "@/features/jarvis/ChatView";
+import { ElyanPanel } from "@/features/elyan/ElyanPanel";
+import { TaskTreePanel } from "@/features/elyan/TaskTreePanel";
+import { ChatView } from "@/features/elyan/ChatView";
 
 import { ErrorState } from "@/components/feedback/ErrorState";
 import { SkeletonBlock } from "@/components/feedback/SkeletonBlock";
@@ -165,8 +165,8 @@ export function HomeScreen() {
       {/* ─── Elyan Chat ─── */}
       <ChatView className="min-h-[460px]" />
 
-      {/* ─── Jarvis Panel ─── */}
-      <JarvisPanel />
+      {/* ─── Elyan Panel ─── */}
+      <ElyanPanel />
 
       {/* ─── Task Tree ─── */}
       <TaskTreePanel />

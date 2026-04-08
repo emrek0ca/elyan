@@ -5546,20 +5546,20 @@ class ElyanGatewayServer:
         if _is_loopback_request(request):
             payload["admin_token"] = _ensure_admin_access_token()
 
-        # Jarvis subsystem status (non-blocking)
-        jarvis_status: dict = {}
+        # Elyan subsystem status (non-blocking)
+        elyan_status: dict = {}
         try:
             from core.voice.voice_pipeline import get_voice_pipeline
             from core.voice.wake_word import get_wake_word_detector
             from core.proactive.system_monitor import get_system_monitor
-            jarvis_status = {
+            elyan_status = {
                 "voice_state": get_voice_pipeline().state.value,
                 "wake_backend": get_wake_word_detector().backend,
                 "monitor_running": get_system_monitor().running,
             }
         except Exception:
             pass
-        payload["jarvis"] = jarvis_status
+        payload["elyan"] = elyan_status
 
         return web.json_response(payload)
 
@@ -9888,29 +9888,29 @@ class ElyanGatewayServer:
         except Exception as e:
             logger.error(f"Runtime sync worker start failed: {e}")
 
-        # ── Jarvis Services (Faz 1-7) ────────────────────────────────────────
+        # ── Elyan Services (Faz 1-7) ────────────────────────────────────────
         try:
-            from core.jarvis.jarvis_startup import start_jarvis_services
+            from core.elyan.elyan_startup import start_elyan_services
 
-            def _jarvis_broadcast(event_type: str, payload: dict) -> None:
+            def _elyan_broadcast(event_type: str, payload: dict) -> None:
                 asyncio.create_task(
                     self.broadcast_to_dashboard(event_type, payload)
                 )
 
-            asyncio.create_task(start_jarvis_services(broadcast=_jarvis_broadcast))
-            logger.info("Jarvis services scheduled for startup")
+            asyncio.create_task(start_elyan_services(broadcast=_elyan_broadcast))
+            logger.info("Elyan services scheduled for startup")
         except Exception as e:
-            logger.warning(f"Jarvis services startup failed (non-critical): {e}")
+            logger.warning(f"Elyan services startup failed (non-critical): {e}")
 
     async def stop(self):
         logger.info("Stopping Gateway Server...")
 
-        # ── Jarvis Services shutdown ──────────────────────────────────────────
+        # ── Elyan Services shutdown ──────────────────────────────────────────
         try:
-            from core.jarvis.jarvis_startup import stop_jarvis_services
-            await stop_jarvis_services()
+            from core.elyan.elyan_startup import stop_elyan_services
+            await stop_elyan_services()
         except Exception as e:
-            logger.warning(f"Jarvis services stop failed: {e}")
+            logger.warning(f"Elyan services stop failed: {e}")
 
         try:
             from core.away_mode import background_task_runner

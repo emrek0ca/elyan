@@ -1094,10 +1094,10 @@ specialized agents collaborate on complex tasks.
 - Model selection incorporates past success rates
 - SQLite-persisted, trend-analyzed
 
-**ADR-013:** JarvisCore Mimari — Orchestrator Wrapper
-- JarvisCore mevcut AgentOrchestrator üzerine oturur, onu değiştirmez
-- Multi-channel (Telegram/WA/iMessage) → ChannelGateway → JarvisCore → Orchestrator
-- JarvisCore: intent sınıflandırma + task decomposition + response synthesis
+**ADR-013:** ElyanCore Mimari — Orchestrator Wrapper
+- ElyanCore mevcut AgentOrchestrator üzerine oturur, onu değiştirmez
+- Multi-channel (Telegram/WA/iMessage) → ChannelGateway → ElyanCore → Orchestrator
+- ElyanCore: intent sınıflandırma + task decomposition + response synthesis
 - Gerekçe: 1731 test geçen orchestrator kodunu bozmamak
 
 **ADR-014:** Bilgisayar Kontrol Katmanı — Hibrit Yaklaşım
@@ -1110,7 +1110,7 @@ specialized agents collaborate on complex tasks.
 **ADR-015:** Ses Mimarisi — Tam Yerel Pipeline
 - Wake word: OpenWakeWord (CPU, "hey_elyan" custom model)
 - STT: Whisper Large V3 (Ollama) — Türkçe optimize, streaming
-- TTS: Kokoro (ONNX, yerel) — Jarvis tarzı ses profili
+- TTS: Kokoro (ONNX, yerel) — Elyan tarzı ses profili
 - Gerekçe: ses mahremiyeti; kullanıcı konuşurken buluta veri gitmez
 
 ### Multi-Agent Team Roles
@@ -1153,7 +1153,7 @@ User Request
 
 Full phased plan with timelines, dependencies, and success metrics:
 → `docs/AGENT_RUNTIME_ROADMAP.md` — Agent altyapısı (tamamlandı ✓)
-→ `docs/JARVIS_ROADMAP.md` — Jarvis vizyonu (kanal + bilgisayar kontrolü + ses)
+→ `docs/ELYAN_CORE_ROADMAP.md` — Elyan vizyonu (kanal + bilgisayar kontrolü + ses)
 
 ---
 

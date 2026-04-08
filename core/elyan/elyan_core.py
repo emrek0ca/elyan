@@ -1,7 +1,7 @@
 """
-core/jarvis/jarvis_core.py
+core/elyan/elyan_core.py
 ───────────────────────────────────────────────────────────────────────────────
-JarvisCore — The Brain
+ElyanCore — The Brain
 
 Central intelligence that understands intent, decomposes tasks, dispatches
 to the right agent team, and synthesizes responses. Works identically
@@ -29,7 +29,7 @@ from typing import Any
 
 from utils.logger import get_logger
 
-logger = get_logger("jarvis_core")
+logger = get_logger("elyan_core")
 
 # ── Ollama helper ─────────────────────────────────────────────────────────────
 
@@ -200,7 +200,7 @@ class TaskStep:
 
 
 @dataclass(slots=True)
-class JarvisResponse:
+class ElyanResponse:
     """Final response to send back to the user."""
     text: str
     channel_format: str = "markdown"  # markdown, plain, html
@@ -435,7 +435,7 @@ class ResponseSynthesizer:
         results: list[dict[str, Any]],
         intent: ClassifiedIntent,
         channel_type: str = "telegram",
-    ) -> JarvisResponse:
+    ) -> ElyanResponse:
         """Merge multiple step results into a single user response."""
         texts: list[str] = []
         attachments: list[dict] = []
@@ -462,7 +462,7 @@ class ResponseSynthesizer:
         if len(combined) > max_len:
             combined = combined[:max_len - 20] + "\n\n... (devamı var)"
 
-        return JarvisResponse(
+        return ElyanResponse(
             text=combined,
             channel_format=fmt,
             attachments=attachments,
@@ -489,10 +489,10 @@ class ResponseSynthesizer:
         return limits.get(channel_type, 4096)
 
 
-# ── JarvisCore ──────────────────────────────────────────────────────────────
+# ── ElyanCore ──────────────────────────────────────────────────────────────
 
-class JarvisCore:
-    """The Jarvis brain — classifies, decomposes, dispatches, synthesizes."""
+class ElyanCore:
+    """The Elyan brain — classifies, decomposes, dispatches, synthesizes."""
 
     # ── Destructive action guard ─────────────────────────────────────────────
     # Commands that require explicit "evet" confirmation before execution.
@@ -524,7 +524,7 @@ class JarvisCore:
         results: list[dict[str, Any]],
         intent: ClassifiedIntent,
         channel_type: str = "telegram",
-    ) -> JarvisResponse:
+    ) -> ElyanResponse:
         """Format results for the target channel."""
         return self.synthesizer.synthesize(results, intent, channel_type)
 
@@ -558,8 +558,8 @@ class JarvisCore:
         text: str,
         channel_type: str = "desktop",
         user_id: str = "",
-    ) -> JarvisResponse:
-        """Full Jarvis pipeline: classify → plan → dispatch → synthesize.
+    ) -> ElyanResponse:
+        """Full Elyan pipeline: classify → plan → dispatch → synthesize.
 
         Supports chained commands: 'X yap ve Y yap' → executes both in sequence.
         Wires into the existing AgentOrchestrator for actual task execution.
@@ -582,7 +582,7 @@ class JarvisCore:
                     return resp
                 if lower in self._CANCEL_WORDS:
                     del self._pending_approvals[uid]
-                    resp = JarvisResponse(text="❌ İşlem iptal edildi.", duration_s=round(time.time()-t0,3))
+                    resp = ElyanResponse(text="❌ İşlem iptal edildi.", duration_s=round(time.time()-t0,3))
                     return resp
             else:
                 del self._pending_approvals[uid]
@@ -595,7 +595,7 @@ class JarvisCore:
         intent = self.classify_intent(text)
 
         logger.info(
-            f"Jarvis intent: {intent.category.value}/{intent.sub_intent} "
+            f"Elyan intent: {intent.category.value}/{intent.sub_intent} "
             f"complexity={intent.complexity.value} conf={intent.confidence:.2f}"
         )
 
@@ -612,15 +612,15 @@ class JarvisCore:
             pass
 
         try:
-            from core.memory.jarvis_memory import get_jarvis_memory
-            memory_hint = get_jarvis_memory().build_context_hint(user_id or "default", text)
+            from core.memory.elyan_memory import get_elyan_memory
+            memory_hint = get_elyan_memory().build_context_hint(user_id or "default", text)
         except Exception:
             pass
 
         plan = self.create_plan(intent)
 
         if plan.requires_approval:
-            resp = JarvisResponse(
+            resp = ElyanResponse(
                 text=f"Bu işlem onay gerektiriyor:\n\n"
                      f"**Görev:** {intent.raw_text}\n"
                      f"**Adımlar:** {len(plan.steps)}\n\n"
@@ -642,6 +642,9 @@ class JarvisCore:
         resp = self.synthesizer.synthesize(
             [{"text": agent_result}], intent, channel_type
         )
+        resp.metadata["intent"] = intent.category.value
+        resp.metadata["sub_intent"] = intent.sub_intent
+        resp.metadata["confidence"] = intent.confidence
 
         # Faz 7: record to memory + observe response length
         self._record(user_id, channel_type, text, resp.text, "ok", t0)
@@ -692,7 +695,7 @@ class JarvisCore:
         }
         if intent.category.value in EXECUTABLE:
             try:
-                from core.jarvis.intent_executor import get_intent_executor
+                from core.elyan.intent_executor import get_intent_executor
                 result = await get_intent_executor().execute(intent)
                 if result:  # non-empty → executor handled it
                     return result
@@ -750,7 +753,7 @@ class JarvisCore:
             logger.debug(f"Cloud LLM: {decision.provider}/{decision.model}")
             # Use existing agent pipeline for cloud routing
             from core.multi_agent.router import agent_router
-            agent = await agent_router.route_message("desktop", "jarvis_internal")
+            agent = await agent_router.route_message("desktop", "elyan_internal")
             if callable(getattr(agent, "process_envelope", None)):
                 resp = await agent.process_envelope(text)
                 out = str(getattr(resp, "text", resp) or "").strip()
@@ -769,7 +772,7 @@ class JarvisCore:
         channel_type: str,
         user_id: str,
         t0: float,
-    ) -> JarvisResponse:
+    ) -> ElyanResponse:
         """Execute a list of command segments sequentially and combine results."""
         results: list[str] = []
         for i, seg in enumerate(segments):
@@ -797,7 +800,7 @@ class JarvisCore:
         """Async-safe fire-and-forget memory write."""
         try:
             import asyncio
-            from core.memory.jarvis_memory import Interaction, get_jarvis_memory
+            from core.memory.elyan_memory import Interaction, get_elyan_memory
             ix = Interaction(
                 user_id=user_id or "default",
                 channel=channel,
@@ -808,25 +811,25 @@ class JarvisCore:
             )
             # Run in thread to avoid blocking event loop
             loop = asyncio.get_event_loop()
-            loop.run_in_executor(None, get_jarvis_memory().record, ix)
+            loop.run_in_executor(None, get_elyan_memory().record, ix)
         except Exception:
             pass
 
 
 # ── Singleton ───────────────────────────────────────────────────────────────
 
-_instance: JarvisCore | None = None
+_instance: ElyanCore | None = None
 
 
-def get_jarvis_core() -> JarvisCore:
+def get_elyan_core() -> ElyanCore:
     global _instance
     if _instance is None:
-        _instance = JarvisCore()
+        _instance = ElyanCore()
     return _instance
 
 
 __all__ = [
     "ClassifiedIntent", "Complexity", "IntentCategory",
-    "JarvisCore", "JarvisResponse", "TaskDecomposer",
-    "TaskPlan", "TaskStep", "get_jarvis_core",
+    "ElyanCore", "ElyanResponse", "TaskDecomposer",
+    "TaskPlan", "TaskStep", "get_elyan_core",
 ]

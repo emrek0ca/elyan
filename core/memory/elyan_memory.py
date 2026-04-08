@@ -1,8 +1,8 @@
 """
-core/memory/jarvis_memory.py — Faz 7 Episodik Hafıza & Tarif Öğrenme
+core/memory/elyan_memory.py — Faz 7 Episodik Hafıza & Tarif Öğrenme
 ───────────────────────────────────────────────────────────────────────────────
 Her etkileşimi kaydeder. Aynı trigger 3+ kez görülünce "tarif" oluşturur.
-JarvisCore, yanıt vermeden önce ilgili geçmişi buradan çeker.
+ElyanCore, yanıt vermeden önce ilgili geçmişi buradan çeker.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from typing import Optional
 from core.storage_paths import resolve_elyan_data_dir
 from utils.logger import get_logger
 
-logger = get_logger("jarvis_memory")
+logger = get_logger("elyan_memory")
 
 _DB_PATH: Path | None = None
 
@@ -24,7 +24,7 @@ _DB_PATH: Path | None = None
 def _db_path() -> Path:
     global _DB_PATH
     if _DB_PATH is None:
-        _DB_PATH = resolve_elyan_data_dir() / "memory" / "jarvis_memory.db"
+        _DB_PATH = resolve_elyan_data_dir() / "memory" / "elyan_memory.db"
         _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     return _DB_PATH
 
@@ -51,10 +51,10 @@ class Recipe:
     last_used: float = field(default_factory=time.time)
 
 
-# ── JarvisMemory ─────────────────────────────────────────────────────────────
+# ── ElyanMemory ─────────────────────────────────────────────────────────────
 
-class JarvisMemory:
-    """Episodic memory + recipe learning for Jarvis."""
+class ElyanMemory:
+    """Episodic memory + recipe learning for Elyan."""
 
     RECIPE_THRESHOLD = 3   # how many times a pattern must repeat to become a recipe
 
@@ -107,7 +107,7 @@ class JarvisMemory:
             self._conn.commit()
             self._maybe_learn_recipe(ix)
         except Exception as exc:
-            logger.warning(f"JarvisMemory.record failed: {exc}")
+            logger.warning(f"ElyanMemory.record failed: {exc}")
 
     def _maybe_learn_recipe(self, ix: Interaction) -> None:
         """Extract trigger keywords and upsert recipe counters."""
@@ -162,7 +162,7 @@ class JarvisMemory:
         return results
 
     def build_context_hint(self, user_id: str, input_text: str) -> str:
-        """Build a short context hint string for JarvisCore prompt injection."""
+        """Build a short context hint string for ElyanCore prompt injection."""
         recipes = self.relevant_recipes(user_id, input_text)
         recent  = self.recent(user_id, limit=3)
         parts: list[str] = []
@@ -193,11 +193,11 @@ def _extract_keywords(text: str) -> list[str]:
 
 # ── Singleton ─────────────────────────────────────────────────────────────────
 
-_instance: JarvisMemory | None = None
+_instance: ElyanMemory | None = None
 
 
-def get_jarvis_memory() -> JarvisMemory:
+def get_elyan_memory() -> ElyanMemory:
     global _instance
     if _instance is None:
-        _instance = JarvisMemory()
+        _instance = ElyanMemory()
     return _instance
