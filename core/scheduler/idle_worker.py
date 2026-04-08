@@ -64,9 +64,12 @@ class IdleWorker:
                     await mutator.auto_refactor()
                 elif chore == "_AUTO_CONTRIBUTE_":
                     logger.info("🟢 IdleWorker triggering Auto-Contributor (GitHub Green Squares)...")
-                    from core.genesis.auto_contributor import AutoContributor
-                    contributor = AutoContributor(self.agent)
-                    await contributor.generate_contribution()
+                    try:
+                        from core.genesis.auto_contributor import AutoContributor
+                        contributor = AutoContributor(self.agent)
+                        await contributor.generate_contribution()
+                    except ImportError:
+                        logger.info("Genesis disabled (ELYAN_GENESIS_ENABLED not set) — skipping auto-contribute")
                 else:
                     logger.info(f"Idle Task Selected: {chore}")
                     try:

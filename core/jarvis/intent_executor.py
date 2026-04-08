@@ -15,12 +15,14 @@ Desteklenen aksiyonlar:
   monitoring / system_health      → CPU, RAM, disk, batarya
   information / search            → Google/tarayıcı aç
   information / weather           → hava durumu (wttr.in)
+  communication / telegram        → Telegram mesaj gönder
   communication / message         → macOS bildirim gönder
   conversation / *                → LLM'e ilet (fallback)
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import shlex
 import subprocess
@@ -269,6 +271,8 @@ class IntentExecutor:
 
             # ── Communication ─────────────────────────────────────────────────
             if cat == "communication":
+                if sub == "telegram":
+                    return await self._communication_telegram(text)
                 if sub == "message":
                     return await self._notify(text)
 
@@ -585,6 +589,58 @@ class IntentExecutor:
             await monitor.start()
             return "✅ Sistem izleme başlatıldı. CPU, disk ve batarya uyarıları aktif."
         return "✅ Sistem izleme zaten aktif."
+
+    async def _communication_telegram(self, text: str) -> str:
+        """Telegram üzerinden mesaj gönder."""
+        import os
+        token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+        if not token or not chat_id:
+            return (
+                "❌ Telegram yapılandırılmamış.\n"
+                "`.env` dosyasına ekle:\n"
+                "`TELEGRAM_BOT_TOKEN=...`\n"
+                "`TELEGRAM_CHAT_ID=...`"
+            )
+
+        # Mesaj içeriğini çıkar: "telegram X gönder", "X'i telegram'a gönder"
+        lower = text.lower()
+        msg = text.strip()
+        for trigger in ["telegram gönder ", "telegram'a gönder ", "telegram yaz ", "tg gönder "]:
+            if trigger in lower:
+                idx = lower.index(trigger) + len(trigger)
+                msg = text[idx:].strip()
+                break
+        # "X'i telegram'a gönder" pattern
+        m = re.search(r"(.+?)['']?[iı]?\s+telegram", text, re.IGNORECASE)
+        if m and len(m.group(1).strip()) > 2:
+            msg = m.group(1).strip()
+
+        if not msg or msg.lower() == text.lower():
+            return "Telegram'a ne göndermemi istiyorsun? Örnek: 'Toplantı başladı telegram'a gönder'"
+
+        try:
+            import urllib.parse
+            import urllib.request
+            payload = urllib.parse.urlencode({
+                "chat_id": chat_id,
+                "text": msg,
+                "parse_mode": "Markdown",
+            }).encode()
+            req = urllib.request.Request(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                data=payload,
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                result = json.loads(resp.read())
+            if result.get("ok"):
+                return f"✅ Telegram'a gönderildi: {msg[:100]}"
+            return f"❌ Telegram hatası: {result.get('description', 'bilinmiyor')}"
+        except Exception as exc:
+            logger.warning(f"Telegram send error: {exc}")
+            return f"❌ Telegram gönderilemedi: {exc}"
 
     async def _notify(self, text: str) -> str:
         from core.computer.app_controller import AppController

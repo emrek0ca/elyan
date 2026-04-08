@@ -340,6 +340,11 @@ def _install_via_subprocess(module_name: str, policy: dict[str, Any]) -> dict[st
 
 
 def _attempt_auto_install(module_name: str) -> None:
+    # Production gate: auto-install is OPT-IN. Set ELYAN_AUTO_INSTALL=1 to enable.
+    _env_flag = os.environ.get("ELYAN_AUTO_INSTALL", "0").strip().lower()
+    if _env_flag not in {"1", "true", "yes", "on"}:
+        return
+
     policy = _load_dependency_policy()
     if not policy.get("enabled", True) or not policy.get("auto_install", True):
         return

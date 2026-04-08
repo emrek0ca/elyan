@@ -246,6 +246,8 @@ _INTENT_RULES: list[tuple[list[str], IntentCategory, str]] = [
     (["rapor", "report", "belge", "document", "döküman"], IntentCategory.CREATION, "document"),
 
     # Communication
+    (["telegram'a gönder", "telegram gönder", "telegram yaz", "tg gönder",
+      "telegram mesaj", "telegram at"], IntentCategory.COMMUNICATION, "telegram"),
     (["e-posta", "email", "mail gönder", "send email"], IntentCategory.COMMUNICATION, "email"),
     (["mesaj gönder", "send message", "bildir", "notify"], IntentCategory.COMMUNICATION, "message"),
 
@@ -492,6 +494,18 @@ class ResponseSynthesizer:
 class JarvisCore:
     """The Jarvis brain — classifies, decomposes, dispatches, synthesizes."""
 
+    # ── Destructive action guard ─────────────────────────────────────────────
+    # Commands that require explicit "evet" confirmation before execution.
+    _DESTRUCTIVE_KEYWORDS = frozenset({
+        "yeniden başlat", "restart", "reboot",
+        "kapat mac", "shutdown", "power off", "kapat bilgisayarı",
+    })
+    # Per-user pending approval buffer: user_id → (intent, expire_time)
+    _pending_approvals: dict[str, tuple["ClassifiedIntent", float]] = {}
+    _APPROVAL_TTL = 60.0  # seconds
+    _CONFIRM_WORDS = frozenset({"evet", "yes", "onayla", "confirm", "ok", "tamam"})
+    _CANCEL_WORDS  = frozenset({"hayır", "no", "iptal", "cancel", "vazgeç"})
+
     def __init__(self) -> None:
         self.classifier = IntentClassifier()
         self.decomposer = TaskDecomposer()
@@ -552,11 +566,31 @@ class JarvisCore:
         Personality + episodic memory inject context into every request.
         """
         t0 = time.time()
+        uid = user_id or "default"
+        lower = text.strip().lower()
+
+        # ── Pending approval resolution ───────────────────────────────────────
+        if uid in self._pending_approvals:
+            pending_intent, expire_at = self._pending_approvals[uid]
+            if time.time() < expire_at:
+                if lower in self._CONFIRM_WORDS:
+                    del self._pending_approvals[uid]
+                    result = await self._dispatch(pending_intent.raw_text, pending_intent, channel_type, uid)
+                    resp = self.synthesizer.synthesize([{"text": result}], pending_intent, channel_type)
+                    self._record(uid, channel_type, text, resp.text, "approved", t0)
+                    resp.duration_s = round(time.time() - t0, 3)
+                    return resp
+                if lower in self._CANCEL_WORDS:
+                    del self._pending_approvals[uid]
+                    resp = JarvisResponse(text="❌ İşlem iptal edildi.", duration_s=round(time.time()-t0,3))
+                    return resp
+            else:
+                del self._pending_approvals[uid]
 
         # ── Sequential chain detection ────────────────────────────────────────
         segments = self._split_chained_commands(text)
         if len(segments) > 1:
-            return await self._handle_chain(segments, channel_type, user_id, t0)
+            return await self._handle_chain(segments, channel_type, uid, t0)
 
         intent = self.classify_intent(text)
 
@@ -637,6 +671,21 @@ class JarvisCore:
           2. Quick LLM response — trivial conversation
           3. Full orchestrator — complex multi-step tasks
         """
+        # ── 0. Destructive action guard ───────────────────────────────────────
+        if intent.sub_intent == "system_settings":
+            raw_lower = intent.raw_text.lower()
+            if any(kw in raw_lower for kw in self._DESTRUCTIVE_KEYWORDS):
+                uid = user_id or "default"
+                self._pending_approvals[uid] = (intent, time.time() + self._APPROVAL_TTL)
+                return (
+                    f"⚠️ **Onay Gerekiyor**\n\n"
+                    f"Şu işlemi gerçekleştirmek üzereyim:\n"
+                    f"→ `{intent.raw_text}`\n\n"
+                    f"Bu işlem **geri alınamaz**. Onaylıyor musun?\n"
+                    f"Devam etmek için **'evet'**, iptal için **'hayır'** yaz.\n"
+                    f"_(60 saniye içinde yanıt vermezsen iptal edilir)_"
+                )
+
         # ── 1. Direct execution for actionable intents ────────────────────────
         EXECUTABLE = {
             "system_control", "monitoring", "information", "communication"

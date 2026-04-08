@@ -373,3 +373,28 @@ export const ChevronDown = createIcon(
 export const ChevronRight = createIcon(
   <path d="m9 6 6 6-6 6" />,
 );
+
+export const Send = createIcon(
+  <>
+    <path d="m22 2-7 20-4-9-9-4Z" />
+    <path d="M22 2 11 13" />
+  </>,
+);
+
+export const User = createIcon(
+  <>
+    <circle cx="12" cy="8" r="4" />
+    <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" />
+  </>,
+);
+
+export const X = createIcon(
+  <>
+    <path d="M18 6 6 18" />
+    <path d="m6 6 12 12" />
+  </>,
+);
+
+export const Check = createIcon(
+  <path d="M20 6 9 17l-5-5" />,
+);

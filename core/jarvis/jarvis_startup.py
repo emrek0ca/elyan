@@ -97,6 +97,61 @@ async def _start_context_tracker() -> None:
         logger.warning(f"ContextTracker start failed (non-critical): {exc}")
 
 
+async def _start_morning_brief() -> None:
+    """Her sabah 09:00'da takvim + hava + sistem özeti."""
+    import datetime, asyncio
+
+    async def _deliver_brief() -> None:
+        try:
+            from core.jarvis.jarvis_core import get_jarvis_core
+            from core.integrations.calendar import get_today_events
+
+            jc = get_jarvis_core()
+
+            # 1. Takvim etkinlikleri
+            events = get_today_events()
+            cal_text = events if events.strip() else "Bugün takvimde etkinlik yok."
+
+            # 2. Sistem sağlığı
+            from core.computer.app_controller import AppController
+            ac = AppController()
+            cpu  = await ac.get_cpu_usage()
+            batt = await ac.get_battery_info()
+            disk = await ac.get_disk_usage()
+            charging = "🔌" if batt.get("charging") else "🔋"
+
+            brief = (
+                f"☀️ **Günaydın! Sabah özeti:**\n\n"
+                f"📅 **Bugünün Etkinlikleri:**\n{cal_text}\n\n"
+                f"📊 **Sistem:**\n"
+                f"🖥️ CPU: %{cpu:.1f}  {charging} Batarya: %{batt.get('percent', '?')}  "
+                f"💾 Disk: {disk.get('free_gb', 0):.1f} GB boş"
+            )
+
+            _push("jarvis.morning_brief", {"text": brief})
+            logger.info("Morning brief delivered")
+        except Exception as exc:
+            logger.warning(f"Morning brief delivery failed: {exc}")
+
+    async def _schedule_loop() -> None:
+        while True:
+            now = datetime.datetime.now()
+            # Bugün 09:00 henüz geçmemişse bugün, geçmişse yarın
+            target = now.replace(hour=9, minute=0, second=0, microsecond=0)
+            if target <= now:
+                target += datetime.timedelta(days=1)
+            wait_s = (target - now).total_seconds()
+            logger.debug(f"Morning brief scheduled in {wait_s/3600:.1f}h")
+            await asyncio.sleep(wait_s)
+            await _deliver_brief()
+
+    try:
+        asyncio.ensure_future(_schedule_loop())
+        logger.info("MorningBrief scheduler registered (fires at 09:00 daily)")
+    except Exception as exc:
+        logger.warning(f"MorningBrief scheduler failed (non-critical): {exc}")
+
+
 async def _start_wake_word(notify_fn: BroadcastFn) -> None:
     try:
         from core.voice.wake_word import get_wake_word_detector
@@ -154,6 +209,7 @@ async def start_jarvis_services(broadcast: BroadcastFn = None) -> None:
         _start_scheduler(),
         _start_context_tracker(),
         _start_wake_word(broadcast),
+        _start_morning_brief(),
         return_exceptions=True,
     )
 

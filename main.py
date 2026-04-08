@@ -467,6 +467,22 @@ def start(port, daemon):
         click.echo("   Desktop: elyan desktop")
         return
 
+    # ── Preflight environment check ──────────────────────────────────────────
+    _env_script = project_root / "validate_environment.py"
+    if _env_script.exists():
+        click.echo(click.style("  🔍 Ortam kontrol ediliyor...", fg="bright_black"))
+        result = subprocess.run(
+            [sys.executable, str(_env_script), "--warn"],
+            capture_output=False,
+        )
+        if result.returncode != 0:
+            click.echo(click.style(
+                "\n  ❌ Ortam sorunları tespit edildi. Önce düzeltin:\n"
+                "     python validate_environment.py",
+                fg="red"
+            ))
+            sys.exit(1)
+
     cfg = _cfg()
     model = cfg.get("model", "not set")
     _banner()
