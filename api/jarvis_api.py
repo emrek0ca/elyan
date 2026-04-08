@@ -9,13 +9,29 @@ Routes:
 """
 from __future__ import annotations
 
-from flask import Blueprint, jsonify
+try:
+    from flask import Blueprint, jsonify
+    _FLASK_OK = True
+except ImportError:
+    _FLASK_OK = False
+    Blueprint = None  # type: ignore[misc,assignment]
+    jsonify = None  # type: ignore[assignment]
+
 from utils.logger import get_logger
 
 logger = get_logger("jarvis_api")
 
+if not _FLASK_OK:
+    logger.warning(
+        "api/jarvis_api: Flask not installed — Jarvis API endpoints will be unavailable. "
+        "Fix: pip install flask flask-cors"
+    )
 
-def create_jarvis_blueprint() -> Blueprint:
+
+def create_jarvis_blueprint():
+    """Returns a Flask Blueprint, or None if Flask is not installed."""
+    if not _FLASK_OK:
+        return None
     bp = Blueprint("jarvis", __name__)
 
     @bp.route("/api/jarvis/voice/trigger", methods=["POST"])

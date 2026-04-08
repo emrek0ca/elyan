@@ -1,4 +1,13 @@
-# Core Architecture
+# ── Web / API Server ──────────────────────────────────────────────────────────
+# NOTE: flask + socketio are used by api/http_server.py (dashboard) and
+#       api/jarvis_api.py. They are NOT optional — the dashboard UI will be
+#       fully non-functional without them.
+flask>=3.0.0
+flask-cors>=4.0.0
+python-socketio>=5.11.0
+python-engineio>=4.9.0
+
+# ── Core Architecture ─────────────────────────────────────────────────────────
 pydantic>=2.0.0
 json5>=0.9.0
 httpx>=0.28.0
