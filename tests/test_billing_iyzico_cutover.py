@@ -119,6 +119,70 @@ def test_iyzico_webhook_v3_validation_for_hpp(monkeypatch):
     assert completion.status == "success"
 
 
+def test_iyzico_webhook_v3_uses_compare_digest(monkeypatch):
+    monkeypatch.setenv("IYZICO_REAL_API_ENABLED", "1")
+    monkeypatch.setenv("IYZICO_SECRET_KEY", "merchant-secret")
+
+    body = {
+        "paymentConversationId": "conv_123",
+        "status": "SUCCESS",
+        "token": "tok_123",
+        "iyziEventType": "CHECKOUT_FORM_AUTH",
+        "iyziPaymentId": "pay_456",
+    }
+    calls: list[tuple[str, str]] = []
+
+    def _fake_compare_digest(left: str, right: str) -> bool:
+        calls.append((left, right))
+        return True
+
+    monkeypatch.setattr(iyzico_provider_module.hmac, "compare_digest", _fake_compare_digest)
+
+    provider = IyzicoProvider()
+    completion = provider.handle_webhook(
+        payload=json.dumps(body).encode("utf-8"),
+        headers={"X-IYZ-SIGNATURE-V3": "wrong-signature"},
+    )
+
+    assert completion.reference_id == "conv_123"
+    assert completion.status == "success"
+    assert calls == [("wrong-signature", provider._webhook_signature_v3(body))]
+
+
+def test_iyzico_fallback_webhook_uses_compare_digest(monkeypatch):
+    monkeypatch.delenv("IYZICO_REAL_API_ENABLED", raising=False)
+    monkeypatch.setenv("IYZICO_WEBHOOK_SECRET", "fallback-secret")
+
+    body = {
+        "event_type": "payment.updated",
+        "workspace_id": "workspace-team",
+        "token_pack_id": "starter_25k",
+        "status": "paid",
+        "reference_id": "pack_ref_1",
+        "credits": 25000,
+    }
+    payload = json.dumps(body).encode("utf-8")
+    calls: list[tuple[str, str]] = []
+
+    def _fake_compare_digest(left: str, right: str) -> bool:
+        calls.append((left, right))
+        return True
+
+    monkeypatch.setattr(iyzico_provider_module.hmac, "compare_digest", _fake_compare_digest)
+
+    provider = IyzicoProvider()
+    completion = provider.handle_webhook(
+        payload=payload,
+        headers={"X-IYZICO-SIGNATURE": "wrong-signature"},
+    )
+
+    assert completion.reference_id == "pack_ref_1"
+    assert completion.credits == 25000
+    assert len(calls) == 1
+    assert calls[0][0] == "wrong-signature"
+    assert calls[0][1] == hmac.new(b"fallback-secret", payload, hashlib.sha256).hexdigest()
+
+
 def test_workspace_billing_real_checkout_requires_complete_profile(monkeypatch):
     monkeypatch.setenv("IYZICO_REAL_API_ENABLED", "1")
     store = get_workspace_billing_store()
