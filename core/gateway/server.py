@@ -8,7 +8,7 @@ import re
 import secrets
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from aiohttp import web, WSMsgType, WSCloseCode
 from types import SimpleNamespace
 from typing import Any, Optional, Set
@@ -98,6 +98,25 @@ _AUTH_FAILURE_ATTEMPTS: dict[str, list[float]] = {}
 _AUTH_RATE_LIMIT_WINDOW_SECONDS = 600.0
 _AUTH_RATE_LIMIT_MAX_FAILURES = 10
 _DASHBOARD_WS_AUTH_TIMEOUT_SECONDS = 5.0
+_UPLOAD_MAX_BYTES = 25 * 1024 * 1024
+_UPLOAD_ALLOWED_MIME_TYPES = {
+    "application/json",
+    "application/pdf",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "audio/mpeg",
+    "audio/ogg",
+    "audio/wav",
+    "audio/webm",
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "text/csv",
+    "text/markdown",
+    "text/plain",
+}
 _tool_health_cache: dict = {
     "ts": 0.0,
     "probe": False,
@@ -344,6 +363,63 @@ def _json_error(error: str, *, status: int = 400, payload: dict[str, Any] | None
 
 def _compact_text(value: str, *, limit: int = 280) -> str:
     return _shared_compact_text(value, limit=limit)
+
+
+class _UploadValidationError(ValueError):
+    def __init__(self, message: str, *, status: int = 400) -> None:
+        super().__init__(message)
+        self.status = int(status or 400)
+
+
+def _normalize_upload_mime(raw_mime: str) -> str:
+    return str(raw_mime or "").split(";", 1)[0].strip().lower()
+
+
+def _is_allowed_upload_mime(raw_mime: str) -> bool:
+    mime = _normalize_upload_mime(raw_mime)
+    return bool(mime) and mime in _UPLOAD_ALLOWED_MIME_TYPES
+
+
+def _sanitize_upload_filename(filename: str, *, fallback_prefix: str = "upload") -> str:
+    decoded = unquote(str(filename or "").strip())
+    candidate = Path(decoded).name
+    candidate = re.sub(r"[^A-Za-z0-9._-]+", "_", candidate)
+    candidate = candidate.lstrip(".")
+    if not candidate:
+        candidate = f"{fallback_prefix}_{int(time.time())}"
+    if len(candidate) > 120:
+        suffix = Path(candidate).suffix[:16]
+        stem = Path(candidate).stem[: max(1, 120 - len(suffix))]
+        candidate = f"{stem}{suffix}"
+    return candidate
+
+
+def _build_upload_path(upload_dir: Path, filename: str, *, fallback_prefix: str = "upload") -> tuple[str, Path]:
+    upload_root = upload_dir.expanduser().resolve()
+    upload_root.mkdir(parents=True, exist_ok=True)
+    safe_name = _sanitize_upload_filename(filename, fallback_prefix=fallback_prefix)
+    filepath = (upload_root / safe_name).resolve()
+    if not filepath.is_relative_to(upload_root):
+        raise _UploadValidationError("unsafe upload path", status=400)
+    return safe_name, filepath
+
+
+async def _save_upload_field(field: Any, filepath: Path, *, max_bytes: int) -> int:
+    size = 0
+    try:
+        with filepath.open("wb") as handle:
+            while True:
+                chunk = await field.read_chunk()
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > max(1, int(max_bytes or 1)):
+                    raise _UploadValidationError("file too large", status=413)
+                handle.write(chunk)
+    except Exception:
+        filepath.unlink(missing_ok=True)
+        raise
+    return size
 
 
 def _normalize_inbox_source(value: str) -> str:
@@ -6147,38 +6223,36 @@ class ElyanGatewayServer:
             reader = await request.multipart()
             field = await reader.next()
             if not field or field.name != 'file':
-                return web.json_response({"ok": False, "error": "file field required"}, status=400)
-            
-            filename = str(field.filename or f"upload_{int(time.time())}")
+                return _json_error("file field required", status=400)
+
+            mime = _normalize_upload_mime(getattr(field, "headers", {}).get("Content-Type", ""))
+            if not _is_allowed_upload_mime(mime):
+                return _json_error("unsupported file type", status=415, payload={"mime": mime})
+
             upload_dir = resolve_elyan_data_dir() / "uploads"
-            upload_dir.mkdir(parents=True, exist_ok=True)
-            filepath = upload_dir / filename
-            
-            size = 0
-            with open(filepath, 'wb') as f:
-                while True:
-                    chunk = await field.read_chunk()
-                    if not chunk:
-                        break
-                    size += len(chunk)
-                    f.write(chunk)
-            
+            filename, filepath = _build_upload_path(
+                upload_dir,
+                str(field.filename or f"upload_{int(time.time())}"),
+                fallback_prefix="upload",
+            )
+            size = await _save_upload_field(field, filepath, max_bytes=_UPLOAD_MAX_BYTES)
+
             logger.info(f"File uploaded via Dashboard: {filename} ({size} bytes)")
             push_activity("upload", "dashboard", f"{filename} ({round(size/1024, 1)} KB)")
-            
-            # Analyze intent based on file type
             prompt = f"Dropped file: {filepath}. Lütfen bu dosyayı analiz et."
             asyncio.create_task(self.agent.process(prompt))
-            
-            return web.json_response({
-                "ok": True, 
-                "filename": filename, 
+
+            return _json_ok({
+                "filename": filename,
                 "path": str(filepath),
-                "size": size
+                "size": size,
+                "mime": mime,
             })
+        except _UploadValidationError as exc:
+            return _json_error(str(exc), status=exc.status)
         except Exception as e:
             logger.error(f"Upload failed: {e}")
-            return web.json_response({"ok": False, "error": str(e)}, status=500)
+            return _json_error(str(e), status=500)
 
     async def handle_voice_upload(self, request):
         """POST /api/voice — Voice command upload."""
@@ -6186,19 +6260,20 @@ class ElyanGatewayServer:
             reader = await request.multipart()
             field = await reader.next()
             if not field or field.name != 'file':
-                return web.json_response({"ok": False, "error": "file field required"}, status=400)
-            
-            filename = f"voice_{int(time.time())}.webm"
+                return _json_error("file field required", status=400)
+
+            mime = _normalize_upload_mime(getattr(field, "headers", {}).get("Content-Type", ""))
+            if mime not in {"audio/mpeg", "audio/ogg", "audio/wav", "audio/webm"}:
+                return _json_error("unsupported voice file type", status=415, payload={"mime": mime})
+
             temp_dir = resolve_elyan_data_dir() / "tmp" / "voice"
-            temp_dir.mkdir(parents=True, exist_ok=True)
-            filepath = temp_dir / filename
-            
-            with open(filepath, 'wb') as f:
-                while True:
-                    chunk = await field.read_chunk()
-                    if not chunk: break
-                    f.write(chunk)
-            
+            filename, filepath = _build_upload_path(
+                temp_dir,
+                str(field.filename or f"voice_{int(time.time())}.webm"),
+                fallback_prefix="voice",
+            )
+            await _save_upload_field(field, filepath, max_bytes=_UPLOAD_MAX_BYTES)
+
             from core.voice.voice_agent import get_voice_agent
             va = get_voice_agent(self.agent)
             
@@ -6213,10 +6288,11 @@ class ElyanGatewayServer:
                 return web.json_response({"ok": True, **result})
             else:
                 return web.json_response({"ok": False, "error": result.get("error")}, status=400)
-                
+        except _UploadValidationError as exc:
+            return _json_error(str(exc), status=exc.status)
         except Exception as e:
             logger.error(f"Voice upload failed: {e}")
-            return web.json_response({"ok": False, "error": str(e)}, status=500)
+            return _json_error(str(e), status=500)
 
     async def handle_voice_file_get(self, request):
         """GET /api/voice/file?path=filename.mp3 — Serve generated speech."""
