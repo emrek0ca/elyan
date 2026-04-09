@@ -1846,6 +1846,7 @@ class ElyanGatewayServer:
         ).strip()
         session = get_runtime_database().auth_sessions.resolve_session(candidate)
         if session:
+            session = self._ensure_conversation_session_context(session)
             return True, "", session
         if candidate:
             return False, "invalid or expired session", {}
@@ -1853,6 +1854,19 @@ class ElyanGatewayServer:
         if admin_allowed:
             return True, "", _build_admin_session_context()
         return False, "user session required", {}
+
+    @staticmethod
+    def _ensure_conversation_session_context(session: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(session or {})
+        if not payload:
+            return payload
+        try:
+            from core.runtime.session_store import get_runtime_session_api
+
+            return get_runtime_session_api().ensure_auth_session(payload)
+        except Exception as exc:
+            logger.debug(f"conversation session hydration skipped: {exc}")
+            return payload
 
     def _setup_routes(self):
         # ── API V1 ────────────────────────────────────────────────────────────
@@ -2817,6 +2831,7 @@ class ElyanGatewayServer:
                 "login_source": "bootstrap_owner",
             },
         )
+        session = self._ensure_conversation_session_context(session)
         # Mark the initial setup complete so subsequent health checks reflect this
         try:
             mark_setup_complete({"bootstrap_source": "gateway_bootstrap_owner"})
@@ -2836,6 +2851,7 @@ class ElyanGatewayServer:
                 },
                 "session": {
                     "session_id": str(session.get("session_id") or ""),
+                    "conversation_session_id": str(session.get("conversation_session_id") or ""),
                     "expires_at": float(session.get("expires_at") or 0.0),
                 },
             }
@@ -2891,6 +2907,7 @@ class ElyanGatewayServer:
                 "login_source": "local_login",
             },
         )
+        session = self._ensure_conversation_session_context(session)
         response = _json_ok(
             {
                 "workspace_id": str(user.get("workspace_id") or workspace_id),
@@ -2908,6 +2925,7 @@ class ElyanGatewayServer:
                 },
                 "session": {
                     "session_id": str(session.get("session_id") or ""),
+                    "conversation_session_id": str(session.get("conversation_session_id") or ""),
                     "expires_at": float(session.get("expires_at") or 0.0),
                 },
             }
@@ -2963,6 +2981,7 @@ class ElyanGatewayServer:
                 },
                 "session": {
                     "session_id": str(session.get("session_id") or ""),
+                    "conversation_session_id": str(session.get("conversation_session_id") or ""),
                     "expires_at": float(session.get("expires_at") or 0.0),
                 },
             }

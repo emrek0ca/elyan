@@ -814,8 +814,23 @@ class Agent:
                 context["preferred_language"] = "tr"
         return context
 
-    def _safe_get_recent_conversations(self, uid: Any, limit: int = 8) -> list:
+    def _safe_get_recent_conversations(self, uid: Any, limit: int = 8, metadata: dict[str, Any] | None = None) -> list:
         try:
+            runtime_metadata = dict(metadata or {})
+            if not runtime_metadata:
+                policy = self._current_runtime_policy()
+                runtime_metadata = dict(policy.get("metadata") or {}) if isinstance(policy.get("metadata"), dict) else {}
+            try:
+                from core.runtime.session_store import get_runtime_session_api
+                rows = get_runtime_session_api().get_recent_conversations(
+                    user_id=str(uid or ""),
+                    limit=limit,
+                    runtime_metadata=runtime_metadata,
+                )
+                if rows:
+                    return list(rows)
+            except Exception as session_exc:
+                logger.debug(f"runtime session history unavailable: {session_exc}")
             numeric_uid = int(uid) if str(uid).isdigit() else uid
             if hasattr(self.kernel.memory, "get_recent_conversations"):
                 return list(self.kernel.memory.get_recent_conversations(numeric_uid, limit=limit) or [])
@@ -825,8 +840,32 @@ class Agent:
         except Exception:
             return []
 
-    def _safe_store_conversation(self, uid: Any, user_input: str, response_text: str, action: str, success: bool):
+    def _safe_store_conversation(
+        self,
+        uid: Any,
+        user_input: str,
+        response_text: str,
+        action: str,
+        success: bool,
+        metadata: dict[str, Any] | None = None,
+    ):
         try:
+            runtime_metadata = dict(metadata or {})
+            if not runtime_metadata:
+                policy = self._current_runtime_policy()
+                runtime_metadata = dict(policy.get("metadata") or {}) if isinstance(policy.get("metadata"), dict) else {}
+            try:
+                from core.runtime.session_store import get_runtime_session_api
+                get_runtime_session_api().append_turn(
+                    user_id=str(uid or ""),
+                    user_input=str(user_input or ""),
+                    response_text=str(response_text or ""),
+                    action=str(action or ""),
+                    success=bool(success),
+                    runtime_metadata=runtime_metadata,
+                )
+            except Exception as session_exc:
+                logger.debug(f"runtime session store failed: {session_exc}")
             numeric_uid = int(uid) if str(uid).isdigit() else uid
             if hasattr(self.kernel.memory, "store_conversation"):
                 self.kernel.memory.store_conversation(
@@ -2504,7 +2543,7 @@ class Agent:
         conversation_history = []
         conversation_context = {}
         try:
-            conversation_history = list(self._safe_get_recent_conversations(uid, limit=8) or [])
+            conversation_history = list(self._safe_get_recent_conversations(uid, limit=8, metadata=runtime_metadata) or [])
         except Exception:
             conversation_history = []
         conversation_context = self._build_conversation_context(conversation_history)
@@ -2891,7 +2930,7 @@ class Agent:
         direct_history = list(conversation_history or [])
         if not direct_history:
             try:
-                direct_history = list(self._safe_get_recent_conversations(uid, limit=6) or [])
+                direct_history = list(self._safe_get_recent_conversations(uid, limit=6, metadata=runtime_metadata) or [])
             except Exception:
                 direct_history = []
 
@@ -11837,7 +11876,7 @@ class Agent:
             logger.debug(f"adaptive learning update failed: {e}")
 
         try:
-            self._safe_store_conversation(uid, user_input, response_text, action, success)
+            self._safe_store_conversation(uid, user_input, response_text, action, success, metadata=runtime_metadata)
         except Exception as exc:
             logger.debug(f"memory store failed: {exc}")
 

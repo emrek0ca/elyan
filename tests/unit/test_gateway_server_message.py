@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.gateway import server as gateway_server
+from core.persistence import get_runtime_database, reset_runtime_database
 
 
 class _Req:
@@ -1013,6 +1014,39 @@ async def test_handle_agent_profile_update_persists_nlu_model_a(monkeypatch):
     assert model_a.get("allowed_actions") == ["open_app", "run_safe_command"]
     assert saved_profiles["local"]["response_length_bias"] == "detailed"
     assert saved_profiles["local"]["preferred_language"] == "tr"
+
+
+def test_require_user_session_hydrates_conversation_session(monkeypatch, tmp_path):
+    monkeypatch.setenv("ELYAN_DATA_DIR", str(tmp_path / "elyan"))
+    monkeypatch.setenv("ELYAN_RUNTIME_DB_PATH", str(tmp_path / "elyan" / "db" / "runtime.sqlite3"))
+    reset_runtime_database()
+    runtime_db = get_runtime_database()
+    user = runtime_db.auth.upsert_user(
+        email="gateway-session@example.com",
+        password="TopSecret123",
+        display_name="Gateway Session",
+    )
+    _session, session_token = runtime_db.auth_sessions.create_session(
+        user=user,
+        metadata={"client": "desktop"},
+    )
+    monkeypatch.setattr(gateway_server, "get_runtime_database", lambda: runtime_db)
+
+    req = _Req({})
+    req.headers["X-Elyan-Session-Token"] = session_token
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+
+    try:
+        allowed, error, session = gateway_server.ElyanGatewayServer._require_user_session(srv, req, allow_cookie=False)
+        resolved = runtime_db.auth_sessions.resolve_session(session_token)
+    finally:
+        reset_runtime_database()
+
+    assert allowed is True
+    assert error == ""
+    assert str(session.get("conversation_session_id") or "").startswith("conv_")
+    assert resolved is not None
+    assert resolved["conversation_session_id"] == session["conversation_session_id"]
 
 
 @pytest.mark.asyncio

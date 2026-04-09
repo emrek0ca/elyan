@@ -10,6 +10,7 @@ from .emre_workflows import (
 from .hosts import DesktopHost, get_desktop_host
 from .live_planner import LiveOperatorTaskPlanner
 from .scenarios import OperatorScenarioRunner
+from .session_store import RuntimeSessionAPI, get_runtime_session_api
 from .task_sessions import OperatorTaskRuntime
 
 __all__ = [
@@ -18,7 +19,9 @@ __all__ = [
     "LiveOperatorTaskPlanner",
     "OperatorScenarioRunner",
     "OperatorTaskRuntime",
+    "RuntimeSessionAPI",
     "get_desktop_host",
+    "get_runtime_session_api",
     "list_emre_workflow_reports",
     "load_latest_benchmark_summary",
     "run_emre_workflow_pack",

@@ -688,6 +688,51 @@ local_user_sessions_table = Table(
 Index("ix_local_user_sessions_workspace_updated", local_user_sessions_table.c.workspace_id, local_user_sessions_table.c.updated_at)
 Index("ix_local_user_sessions_user_updated", local_user_sessions_table.c.user_id, local_user_sessions_table.c.updated_at)
 
+conversation_sessions_table = Table(
+    "conversation_sessions",
+    LOCAL_METADATA,
+    Column("conversation_session_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), nullable=False, default="local-workspace"),
+    Column("actor_id", String(128), nullable=False, default="local-user"),
+    Column("device_id", String(128), nullable=False, default="local-device"),
+    Column("channel", String(64), nullable=False, default="cli"),
+    Column("auth_session_id", String(128), nullable=False, default=""),
+    Column("client_session_id", String(128), nullable=False, default=""),
+    Column("parent_session_id", String(128), nullable=False, default=""),
+    Column("status", String(32), nullable=False, default="active"),
+    Column("title", String(256), nullable=False, default=""),
+    Column("summary_text", Text, nullable=False, default=""),
+    Column("message_count", Integer, nullable=False, default=0),
+    Column("token_input_total", Integer, nullable=False, default=0),
+    Column("token_output_total", Integer, nullable=False, default=0),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+    Column("updated_at", Float, nullable=False, default=_now),
+    Column("closed_at", Float, nullable=False, default=0.0),
+)
+Index("ix_conversation_sessions_workspace_actor_updated", conversation_sessions_table.c.workspace_id, conversation_sessions_table.c.actor_id, conversation_sessions_table.c.updated_at)
+Index("ix_conversation_sessions_auth_session", conversation_sessions_table.c.auth_session_id)
+Index("ix_conversation_sessions_client_session", conversation_sessions_table.c.client_session_id)
+
+conversation_messages_table = Table(
+    "conversation_messages",
+    LOCAL_METADATA,
+    Column("message_id", String(128), primary_key=True),
+    Column("conversation_session_id", String(128), ForeignKey("conversation_sessions.conversation_session_id", ondelete="CASCADE"), nullable=False),
+    Column("workspace_id", String(128), nullable=False, default="local-workspace"),
+    Column("actor_id", String(128), nullable=False, default="local-user"),
+    Column("role", String(32), nullable=False, default="user"),
+    Column("content", Text, nullable=False, default=""),
+    Column("message_index", Integer, nullable=False, default=0),
+    Column("run_id", String(128), nullable=False, default=""),
+    Column("action", String(128), nullable=False, default=""),
+    Column("success", Boolean, nullable=False, default=False),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+)
+Index("ix_conversation_messages_session_index", conversation_messages_table.c.conversation_session_id, conversation_messages_table.c.message_index)
+Index("ix_conversation_messages_workspace_actor_created", conversation_messages_table.c.workspace_id, conversation_messages_table.c.actor_id, conversation_messages_table.c.created_at)
+
 workspaces_table = Table(
     "workspaces",
     WORKSPACE_METADATA,
@@ -3473,6 +3518,284 @@ class LocalAuthSessionRepository:
             )
         return True
 
+    def update_metadata(self, session_id: str, metadata: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        sid = str(session_id or "").strip()
+        if not sid:
+            return None
+        now = _now()
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(local_user_sessions_table, local_users_table)
+                .join(local_users_table, local_users_table.c.user_id == local_user_sessions_table.c.user_id)
+                .where(local_user_sessions_table.c.session_id == sid)
+            ).mappings().first()
+            if not row:
+                return None
+            current_metadata = _json_loads(row.get("metadata_json"), {})
+            merged_metadata = {
+                **dict(current_metadata or {}),
+                **dict(metadata or {}),
+            }
+            conn.execute(
+                local_user_sessions_table.update()
+                .where(local_user_sessions_table.c.session_id == sid)
+                .values(
+                    metadata_json=_json_dumps(merged_metadata),
+                    updated_at=now,
+                )
+            )
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=str(row["workspace_id"] or "local-workspace"),
+                event_type="auth.session.updated",
+                payload={
+                    "session_id": sid,
+                    "user_id": str(row["user_id"] or ""),
+                    "metadata_keys": sorted(str(key) for key in dict(metadata or {}).keys())[:16],
+                },
+            )
+            merged = dict(row)
+            merged["metadata_json"] = _json_dumps(merged_metadata)
+            merged["updated_at"] = now
+        return self._db._decode_local_session_row(merged)
+
+
+class ConversationRepository:
+    def __init__(self, db: "RuntimeDatabase") -> None:
+        self._db = db
+
+    def ensure_session(
+        self,
+        *,
+        workspace_id: str,
+        actor_id: str,
+        device_id: str = "local-device",
+        channel: str = "cli",
+        auth_session_id: str = "",
+        client_session_id: str = "",
+        conversation_session_id: str = "",
+        parent_session_id: str = "",
+        title: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        aid = str(actor_id or "local-user").strip() or "local-user"
+        device = str(device_id or "local-device").strip() or "local-device"
+        channel_name = str(channel or "cli").strip() or "cli"
+        auth_ref = str(auth_session_id or "").strip()
+        client_ref = str(client_session_id or "").strip()
+        requested_id = str(conversation_session_id or "").strip()
+        now = _now()
+        metadata_payload = dict(metadata or {})
+        with self._db.local_engine.begin() as conn:
+            row = None
+            if requested_id:
+                row = conn.execute(
+                    select(conversation_sessions_table).where(
+                        conversation_sessions_table.c.conversation_session_id == requested_id
+                    )
+                ).mappings().first()
+            if row is None and auth_ref:
+                row = conn.execute(
+                    select(conversation_sessions_table)
+                    .where(conversation_sessions_table.c.auth_session_id == auth_ref)
+                    .order_by(conversation_sessions_table.c.updated_at.desc())
+                    .limit(1)
+                ).mappings().first()
+            if row is None and client_ref:
+                row = conn.execute(
+                    select(conversation_sessions_table)
+                    .where(conversation_sessions_table.c.client_session_id == client_ref)
+                    .where(conversation_sessions_table.c.workspace_id == wid)
+                    .where(conversation_sessions_table.c.actor_id == aid)
+                    .order_by(conversation_sessions_table.c.updated_at.desc())
+                    .limit(1)
+                ).mappings().first()
+            if row is None:
+                row = conn.execute(
+                    select(conversation_sessions_table)
+                    .where(conversation_sessions_table.c.workspace_id == wid)
+                    .where(conversation_sessions_table.c.actor_id == aid)
+                    .where(conversation_sessions_table.c.device_id == device)
+                    .where(conversation_sessions_table.c.channel == channel_name)
+                    .where(conversation_sessions_table.c.status == "active")
+                    .order_by(conversation_sessions_table.c.updated_at.desc())
+                    .limit(1)
+                ).mappings().first()
+
+            if row:
+                current_metadata = _json_loads(row.get("metadata_json"), {})
+                merged_metadata = {
+                    **dict(current_metadata or {}),
+                    **metadata_payload,
+                }
+                updates = {
+                    "workspace_id": wid,
+                    "actor_id": aid,
+                    "device_id": device,
+                    "channel": channel_name,
+                    "auth_session_id": auth_ref or str(row.get("auth_session_id") or ""),
+                    "client_session_id": client_ref or str(row.get("client_session_id") or ""),
+                    "parent_session_id": str(parent_session_id or row.get("parent_session_id") or ""),
+                    "title": str(title or row.get("title") or ""),
+                    "metadata_json": _json_dumps(merged_metadata),
+                    "updated_at": now,
+                }
+                conn.execute(
+                    conversation_sessions_table.update()
+                    .where(conversation_sessions_table.c.conversation_session_id == str(row["conversation_session_id"]))
+                    .values(**updates)
+                )
+                merged = dict(row)
+                merged.update(updates)
+                return self._db._decode_conversation_session_row(merged)
+
+            values = {
+                "conversation_session_id": requested_id or f"conv_{uuid.uuid4().hex[:16]}",
+                "workspace_id": wid,
+                "actor_id": aid,
+                "device_id": device,
+                "channel": channel_name,
+                "auth_session_id": auth_ref,
+                "client_session_id": client_ref,
+                "parent_session_id": str(parent_session_id or "").strip(),
+                "status": "active",
+                "title": str(title or "").strip(),
+                "summary_text": "",
+                "message_count": 0,
+                "token_input_total": 0,
+                "token_output_total": 0,
+                "metadata_json": _json_dumps(metadata_payload),
+                "created_at": now,
+                "updated_at": now,
+                "closed_at": 0.0,
+            }
+            conn.execute(conversation_sessions_table.insert().values(**values))
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=wid,
+                event_type="conversation.session.created",
+                payload={
+                    "conversation_session_id": values["conversation_session_id"],
+                    "actor_id": aid,
+                    "auth_session_id": auth_ref,
+                    "channel": channel_name,
+                },
+            )
+        return self._db._decode_conversation_session_row(values)
+
+    def get_session(self, conversation_session_id: str) -> dict[str, Any] | None:
+        session_id = str(conversation_session_id or "").strip()
+        if not session_id:
+            return None
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(conversation_sessions_table).where(
+                    conversation_sessions_table.c.conversation_session_id == session_id
+                )
+            ).mappings().first()
+        return self._db._decode_conversation_session_row(row) if row else None
+
+    def list_recent_messages(self, conversation_session_id: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        session_id = str(conversation_session_id or "").strip()
+        if not session_id:
+            return []
+        query_limit = max(1, int(limit or 20))
+        with self._db.local_engine.begin() as conn:
+            rows = conn.execute(
+                select(conversation_messages_table)
+                .where(conversation_messages_table.c.conversation_session_id == session_id)
+                .order_by(conversation_messages_table.c.message_index.desc())
+                .limit(query_limit)
+            ).mappings().all()
+        decoded = [self._db._decode_conversation_message_row(dict(row)) for row in rows]
+        decoded.reverse()
+        return decoded
+
+    def append_message(
+        self,
+        *,
+        conversation_session_id: str,
+        role: str,
+        content: str,
+        workspace_id: str = "",
+        actor_id: str = "",
+        run_id: str = "",
+        action: str = "",
+        success: bool | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        session_id = str(conversation_session_id or "").strip()
+        if not session_id:
+            raise ValueError("conversation_session_id required")
+        role_name = str(role or "user").strip().lower() or "user"
+        if role_name not in {"user", "assistant", "system", "tool"}:
+            role_name = "user"
+        now = _now()
+        metadata_payload = dict(metadata or {})
+        with self._db.local_engine.begin() as conn:
+            session_row = conn.execute(
+                select(conversation_sessions_table).where(
+                    conversation_sessions_table.c.conversation_session_id == session_id
+                )
+            ).mappings().first()
+            if not session_row:
+                raise ValueError(f"conversation session not found: {session_id}")
+            next_index = int(
+                conn.execute(
+                    select(func.max(conversation_messages_table.c.message_index)).where(
+                        conversation_messages_table.c.conversation_session_id == session_id
+                    )
+                ).scalar()
+                or 0
+            ) + 1
+            wid = str(workspace_id or session_row.get("workspace_id") or "local-workspace")
+            aid = str(actor_id or session_row.get("actor_id") or "local-user")
+            message_values = {
+                "message_id": f"msg_{uuid.uuid4().hex[:16]}",
+                "conversation_session_id": session_id,
+                "workspace_id": wid,
+                "actor_id": aid,
+                "role": role_name,
+                "content": str(content or ""),
+                "message_index": next_index,
+                "run_id": str(run_id or ""),
+                "action": str(action or ""),
+                "success": bool(success) if success is not None else False,
+                "metadata_json": _json_dumps(metadata_payload),
+                "created_at": now,
+            }
+            conn.execute(conversation_messages_table.insert().values(**message_values))
+            input_tokens = int(metadata_payload.get("input_tokens") or metadata_payload.get("prompt_tokens") or 0)
+            output_tokens = int(metadata_payload.get("output_tokens") or metadata_payload.get("completion_tokens") or 0)
+            conn.execute(
+                conversation_sessions_table.update()
+                .where(conversation_sessions_table.c.conversation_session_id == session_id)
+                .values(
+                    message_count=int(session_row.get("message_count") or 0) + 1,
+                    token_input_total=int(session_row.get("token_input_total") or 0) + input_tokens,
+                    token_output_total=int(session_row.get("token_output_total") or 0) + output_tokens,
+                    updated_at=now,
+                )
+            )
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=wid,
+                event_type="conversation.message.appended",
+                payload={
+                    "conversation_session_id": session_id,
+                    "message_id": message_values["message_id"],
+                    "role": role_name,
+                    "actor_id": aid,
+                },
+            )
+            updated_session = dict(session_row)
+            updated_session["message_count"] = int(session_row.get("message_count") or 0) + 1
+            updated_session["token_input_total"] = int(session_row.get("token_input_total") or 0) + input_tokens
+            updated_session["token_output_total"] = int(session_row.get("token_output_total") or 0) + output_tokens
+            updated_session["updated_at"] = now
+        return self._db._decode_conversation_message_row(message_values)
+
 
 class WorkspaceAccessRepository:
     _ALLOWED_ROLES = {"owner", "billing_admin", "security_admin", "operator", "viewer", "member"}
@@ -4771,6 +5094,7 @@ class RuntimeDatabase:
         self.privacy = PrivacyRepository(self)
         self.auth = LocalAuthRepository(self)
         self.auth_sessions = LocalAuthSessionRepository(self)
+        self.conversations = ConversationRepository(self)
         self.access = WorkspaceAccessRepository(self)
         self.execution = ExecutionRepository(self)
         self.run_index = RunIndexRepository(self)
@@ -5028,6 +5352,7 @@ class RuntimeDatabase:
 
     @staticmethod
     def _decode_local_session_row(row: dict[str, Any]) -> dict[str, Any]:
+        metadata = _json_loads(row["metadata_json"], {})
         return {
             "session_id": str(row["session_id"]),
             "workspace_id": str(row["workspace_id"] or "local-workspace"),
@@ -5040,7 +5365,48 @@ class RuntimeDatabase:
             "last_seen_at": float(row["last_seen_at"] or 0.0),
             "created_at": float(row["created_at"] or 0.0),
             "updated_at": float(row["updated_at"] or 0.0),
+            "metadata": metadata,
+            "conversation_session_id": str(metadata.get("conversation_session_id") or ""),
+        }
+
+    @staticmethod
+    def _decode_conversation_session_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "conversation_session_id": str(row["conversation_session_id"]),
+            "workspace_id": str(row["workspace_id"] or "local-workspace"),
+            "actor_id": str(row["actor_id"] or "local-user"),
+            "device_id": str(row["device_id"] or "local-device"),
+            "channel": str(row["channel"] or "cli"),
+            "auth_session_id": str(row["auth_session_id"] or ""),
+            "client_session_id": str(row["client_session_id"] or ""),
+            "parent_session_id": str(row["parent_session_id"] or ""),
+            "status": str(row["status"] or "active"),
+            "title": str(row["title"] or ""),
+            "summary_text": str(row["summary_text"] or ""),
+            "message_count": int(row["message_count"] or 0),
+            "token_input_total": int(row["token_input_total"] or 0),
+            "token_output_total": int(row["token_output_total"] or 0),
             "metadata": _json_loads(row["metadata_json"], {}),
+            "created_at": float(row["created_at"] or 0.0),
+            "updated_at": float(row["updated_at"] or 0.0),
+            "closed_at": float(row["closed_at"] or 0.0),
+        }
+
+    @staticmethod
+    def _decode_conversation_message_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "message_id": str(row["message_id"]),
+            "conversation_session_id": str(row["conversation_session_id"] or ""),
+            "workspace_id": str(row["workspace_id"] or "local-workspace"),
+            "actor_id": str(row["actor_id"] or "local-user"),
+            "role": str(row["role"] or "user"),
+            "content": str(row["content"] or ""),
+            "message_index": int(row["message_index"] or 0),
+            "run_id": str(row["run_id"] or ""),
+            "action": str(row["action"] or ""),
+            "success": bool(row["success"]),
+            "metadata": _json_loads(row["metadata_json"], {}),
+            "created_at": float(row["created_at"] or 0.0),
         }
 
     @staticmethod
@@ -5329,6 +5695,7 @@ def reset_runtime_database() -> None:
 __all__ = [
     "ApprovalRepository",
     "BillingRepository",
+    "ConversationRepository",
     "ConnectorRepository",
     "ExecutionRepository",
     "LearningRepository",

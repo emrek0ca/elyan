@@ -1,6 +1,7 @@
 from .runtime_db import (
     ApprovalRepository,
     BillingRepository,
+    ConversationRepository,
     ConnectorRepository,
     ExecutionRepository,
     LearningRepository,
@@ -18,6 +19,7 @@ from .sync_worker import RuntimeSyncWorker, sync_runtime_outbox_once
 __all__ = [
     "ApprovalRepository",
     "BillingRepository",
+    "ConversationRepository",
     "ConnectorRepository",
     "ExecutionRepository",
     "LearningRepository",

@@ -15,7 +15,14 @@ from core.billing.workspace_billing import get_workspace_billing_store
 from core.cowork_threads import get_cowork_thread_store
 from core.learning.policy_learner import ResponsePolicyLearner
 from core.persistence import get_runtime_database, reset_runtime_database
-from core.persistence.runtime_db import local_user_sessions_table, outbox_events_table, permission_grants_table
+from core.persistence.runtime_db import (
+    conversation_messages_table,
+    conversation_sessions_table,
+    local_user_sessions_table,
+    outbox_events_table,
+    permission_grants_table,
+)
+from core.runtime.session_store import RuntimeSessionAPI
 from core.run_store import RunRecord, RunStore
 from core.security.approval_engine import ApprovalEngine
 from core.protocol.shared_types import RiskLevel
@@ -400,6 +407,70 @@ def test_local_auth_sessions_are_hashed_and_workspace_scoped():
 
     assert row is not None
     assert str(row["session_token_hash"]) != session_token
+
+
+def test_runtime_session_api_persists_conversation_turns_with_workspace_scope():
+    runtime_db = get_runtime_database()
+    user = runtime_db.auth.upsert_user(
+        email="conversation@example.com",
+        password="TopSecret123",
+        display_name="Conversation User",
+    )
+    session, _session_token = runtime_db.auth_sessions.create_session(
+        user=user,
+        metadata={"client": "desktop"},
+    )
+    session_api = RuntimeSessionAPI(runtime_db)
+
+    conversation = session_api.append_turn(
+        user_id=str(user["user_id"]),
+        user_input="Merhaba Elyan",
+        response_text="Merhaba, nasil yardimci olayim?",
+        action="chat",
+        success=True,
+        runtime_metadata={
+            "workspace_id": str(user["workspace_id"]),
+            "session_id": str(session["session_id"]),
+            "channel": "desktop",
+            "device_id": "macbook-pro",
+        },
+    )
+    history = session_api.get_recent_conversations(
+        user_id=str(user["user_id"]),
+        limit=5,
+        runtime_metadata={
+            "workspace_id": str(user["workspace_id"]),
+            "session_id": str(session["session_id"]),
+            "channel": "desktop",
+            "device_id": "macbook-pro",
+        },
+    )
+
+    assert conversation["workspace_id"] == user["workspace_id"]
+    assert conversation["actor_id"] == user["user_id"]
+    assert conversation["message_count"] == 2
+    assert history
+    assert history[0]["user_message"] == "Merhaba Elyan"
+    assert history[0]["bot_response"] == "Merhaba, nasil yardimci olayim?"
+    assert history[0]["workspace_id"] == user["workspace_id"]
+
+    with runtime_db.local_engine.begin() as conn:
+        conversation_row = conn.execute(
+            select(conversation_sessions_table).where(
+                conversation_sessions_table.c.conversation_session_id == conversation["conversation_session_id"]
+            )
+        ).mappings().first()
+        message_rows = conn.execute(
+            select(conversation_messages_table)
+            .where(conversation_messages_table.c.conversation_session_id == conversation["conversation_session_id"])
+            .order_by(conversation_messages_table.c.message_index.asc())
+        ).mappings().all()
+
+    assert conversation_row is not None
+    assert conversation_row["workspace_id"] == user["workspace_id"]
+    assert conversation_row["auth_session_id"] == session["session_id"]
+    assert len(message_rows) == 2
+    assert [str(row["role"]) for row in message_rows] == ["user", "assistant"]
 
 
 def test_outbox_retry_transitions_to_dead_letter():
