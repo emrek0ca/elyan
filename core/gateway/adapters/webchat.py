@@ -18,6 +18,8 @@ class WebChatAdapter(BaseChannelAdapter):
     async def connect(self):
         # The actual HTTP server setup is in gateway/server.py
         # This adapter just manages the socket state
+        if self._is_running:
+            return  # already connected — supervisor should not re-init
         self._is_running = True
         logger.info("WebChat adapter initialized.")
 
@@ -72,7 +74,10 @@ class WebChatAdapter(BaseChannelAdapter):
             await ws.send_str(payload)
 
     def get_status(self) -> str:
-        return f"online ({len(self.sockets)} clients)"
+        # Must return "connected" so the supervisor doesn't keep retrying
+        if self._is_running:
+            return "connected"
+        return "disconnected"
 
     def get_capabilities(self) -> Dict[str, bool]:
         return {"html": True, "images": True, "streaming": True}

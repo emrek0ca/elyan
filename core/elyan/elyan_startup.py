@@ -16,7 +16,7 @@ Başlatılan servisler (sırayla):
 from __future__ import annotations
 
 import asyncio
-from typing import Callable
+from typing import Callable, Optional
 
 from utils.logger import get_logger
 
@@ -27,6 +27,9 @@ logger = get_logger("elyan_startup")
 
 BroadcastFn = Callable[[str, dict], None] | None
 _broadcast: BroadcastFn = None
+
+# ── Morning brief task handle (for clean shutdown) ────────────────────────────
+_morning_brief_task: Optional[asyncio.Task] = None
 
 
 def set_broadcast(fn: BroadcastFn) -> None:
@@ -146,7 +149,8 @@ async def _start_morning_brief() -> None:
             await _deliver_brief()
 
     try:
-        asyncio.ensure_future(_schedule_loop())
+        global _morning_brief_task
+        _morning_brief_task = asyncio.ensure_future(_schedule_loop())
         logger.info("MorningBrief scheduler registered (fires at 09:00 daily)")
     except Exception as exc:
         logger.warning(f"MorningBrief scheduler failed (non-critical): {exc}")
@@ -222,6 +226,16 @@ async def start_elyan_services(broadcast: BroadcastFn = None) -> None:
 
 async def stop_elyan_services() -> None:
     """Graceful shutdown of all Elyan background services."""
+    global _morning_brief_task
+    if _morning_brief_task and not _morning_brief_task.done():
+        _morning_brief_task.cancel()
+        try:
+            await _morning_brief_task
+        except asyncio.CancelledError:
+            pass
+        _morning_brief_task = None
+        logger.debug("MorningBrief scheduler stopped")
+
     for name, stopper in [
         ("WakeWordDetector",  _stop("core.voice.wake_word",         "get_wake_word_detector")),
         ("ContextTracker",    _stop("core.proactive.context_tracker", "get_context_tracker")),

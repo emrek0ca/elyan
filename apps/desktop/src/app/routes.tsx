@@ -14,7 +14,7 @@ const HomeScreen = lazy(() => import("@/screens/home/HomeScreen").then((module) 
 const IntegrationsScreen = lazy(() =>
   import("@/screens/integrations/IntegrationsScreen").then((module) => ({ default: module.IntegrationsScreen })),
 );
-const LogsScreen = lazy(() => import("@/screens/logs/LogsScreen").then((module) => ({ default: module.LogsScreen })));
+const LogsScreen = lazy(() => import("@/screens/activity-logs/LogsScreen").then((module) => ({ default: module.LogsScreen })));
 const OnboardingScreen = lazy(() =>
   import("@/screens/onboarding/OnboardingScreen").then((module) => ({ default: module.OnboardingScreen })),
 );
