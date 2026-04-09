@@ -55,6 +55,13 @@ _DEFAULT_FEATURE_FLAGS: dict[str, FeatureFlagDefinition] = {
         default=True,
         description="Apply automatic scoped billing reconciliation from aggregated runtime token/cost usage.",
     ),
+    "ambient_pattern_engine": FeatureFlagDefinition(
+        name="ambient_pattern_engine",
+        default=False,
+        description="Enable proactive automation suggestions from ambient activity patterns.",
+        owner="ambient",
+        stage="shadow",
+    ),
 }
 
 
