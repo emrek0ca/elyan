@@ -1747,13 +1747,8 @@ class ElyanGatewayServer:
         if not _is_loopback_request(request):
             return False, "admin access is restricted to localhost"
         expected = _ensure_admin_access_token()
-        query = getattr(request, "query", None)
-        if query is None:
-            query = getattr(getattr(request, "rel_url", None), "query", {}) or {}
         candidate = str(
             request.headers.get("X-Elyan-Admin-Token", "")
-            or query.get("token", "")
-            or query.get("admin_token", "")
             or (request.cookies.get("elyan_admin_session", "") if allow_cookie else "")
             or ""
         ).strip()

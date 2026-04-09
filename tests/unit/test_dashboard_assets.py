@@ -56,7 +56,9 @@ async def test_handle_ops_console_page_requires_valid_token(monkeypatch):
 async def test_handle_ops_console_page_sets_admin_cookie(monkeypatch):
     monkeypatch.setattr(gateway_server, "_ensure_admin_access_token", lambda: "ops-token")
     srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
-    resp = await gateway_server.ElyanGatewayServer.handle_ops_console_page(srv, _OpsReq(query={"token": "ops-token"}))
+    req = _OpsReq(cookies={"elyan_admin_session": "ops-token"})
+    req.headers["X-Elyan-Admin-Token"] = "ops-token"
+    resp = await gateway_server.ElyanGatewayServer.handle_ops_console_page(srv, req)
     assert isinstance(resp, web.FileResponse)
     assert resp.cookies["elyan_admin_session"].value == "ops-token"
 

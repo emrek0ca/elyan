@@ -1515,6 +1515,42 @@ async def test_handle_admin_overview_rejects_non_local_without_token(monkeypatch
     assert payload["ok"] is False
 
 
+def test_require_admin_access_rejects_query_string_tokens(monkeypatch):
+    monkeypatch.setattr(gateway_server, "_ensure_admin_access_token", lambda: "token-1")
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    req = SimpleNamespace(
+        headers={},
+        cookies={},
+        query={"token": "token-1", "admin_token": "token-1"},
+        remote="127.0.0.1",
+        transport=None,
+    )
+
+    allowed, error = gateway_server.ElyanGatewayServer._require_admin_access(srv, req)
+
+    assert allowed is False
+    assert error == "admin token required"
+
+
+def test_require_admin_access_accepts_header_token(monkeypatch):
+    monkeypatch.setattr(gateway_server, "_ensure_admin_access_token", lambda: "token-1")
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    req = SimpleNamespace(
+        headers={"X-Elyan-Admin-Token": "token-1"},
+        cookies={},
+        query={},
+        remote="127.0.0.1",
+        transport=None,
+    )
+
+    allowed, error = gateway_server.ElyanGatewayServer._require_admin_access(srv, req)
+
+    assert allowed is True
+    assert error == ""
+
+
 @pytest.mark.asyncio
 async def test_handle_module_automations_action_remove_missing_returns_404(monkeypatch):
     class _FakeRegistry:
