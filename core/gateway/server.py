@@ -9,7 +9,7 @@ import secrets
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
-from aiohttp import web, WSMsgType
+from aiohttp import web, WSMsgType, WSCloseCode
 from types import SimpleNamespace
 from typing import Any, Optional, Set
 from cli.onboard import _check_macos_permissions, is_setup_complete, mark_setup_complete
@@ -97,6 +97,7 @@ _start_time: float = time.time()
 _AUTH_FAILURE_ATTEMPTS: dict[str, list[float]] = {}
 _AUTH_RATE_LIMIT_WINDOW_SECONDS = 600.0
 _AUTH_RATE_LIMIT_MAX_FAILURES = 10
+_DASHBOARD_WS_AUTH_TIMEOUT_SECONDS = 5.0
 _tool_health_cache: dict = {
     "ts": 0.0,
     "probe": False,
@@ -723,6 +724,56 @@ def _clear_auth_failures(ip: str) -> None:
     normalized_ip = str(ip or "").strip()
     if normalized_ip:
         _AUTH_FAILURE_ATTEMPTS.pop(normalized_ip, None)
+
+
+def _build_admin_session_context() -> dict[str, Any]:
+    return {
+        "session_id": "admin",
+        "workspace_id": "local-workspace",
+        "user_id": "local-admin",
+        "email": "",
+        "display_name": "Admin",
+        "role": "admin",
+    }
+
+
+def _resolve_dashboard_ws_token(token: str) -> tuple[bool, str, dict[str, Any]]:
+    candidate = str(token or "").strip()
+    if not candidate:
+        return False, "authentication token required", {}
+    session = get_runtime_database().auth_sessions.resolve_session(candidate)
+    if session:
+        return True, "", session
+    if candidate == _ensure_admin_access_token():
+        return True, "", _build_admin_session_context()
+    return False, "invalid or expired session", {}
+
+
+async def _await_dashboard_ws_auth(ws: web.WebSocketResponse) -> tuple[bool, str]:
+    try:
+        message = await asyncio.wait_for(ws.receive(), timeout=_DASHBOARD_WS_AUTH_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        return False, "authentication required"
+
+    if message.type != WSMsgType.TEXT:
+        return False, "authentication required"
+
+    try:
+        payload = json.loads(str(message.data or "{}"))
+    except json.JSONDecodeError:
+        return False, "invalid websocket auth payload"
+
+    message_type = str(payload.get("type") or payload.get("event") or "").strip().lower()
+    token = payload.get("token")
+    if token is None and isinstance(payload.get("data"), dict):
+        token = payload["data"].get("token")
+    if message_type != "auth":
+        return False, "authentication required"
+
+    allowed, error, _auth_context = _resolve_dashboard_ws_token(str(token or ""))
+    if not allowed:
+        return False, error
+    return True, ""
 
 
 def _iter_memory_candidates(memory_obj: Any) -> list[Any]:
@@ -1729,14 +1780,7 @@ class ElyanGatewayServer:
             return False, "invalid or expired session", {}
         admin_allowed, _admin_error = self._require_admin_access(request, allow_cookie=allow_cookie)
         if admin_allowed:
-            return True, "", {
-                "session_id": "admin",
-                "workspace_id": "local-workspace",
-                "user_id": "local-admin",
-                "email": "",
-                "display_name": "Admin",
-                "role": "admin",
-            }
+            return True, "", _build_admin_session_context()
         return False, "user session required", {}
 
     def _setup_routes(self):
@@ -8699,14 +8743,28 @@ class ElyanGatewayServer:
 
     # ── WebSocket: Dashboard push (new) ───────────────────────────────────────
     async def handle_dashboard_ws(self, request):
+        if not _is_loopback_request(request):
+            return web.json_response({"ok": False, "error": "dashboard websocket is restricted to localhost"}, status=403)
+
         allowed, error, _auth_context = self._require_user_session(request, allow_cookie=True)
         if not allowed:
-            allowed, error = self._require_admin_access(request, allow_cookie=True)
-        if not allowed:
-            return web.json_response({"ok": False, "error": error}, status=403)
+            admin_allowed, admin_error = self._require_admin_access(request, allow_cookie=True)
+            if admin_allowed:
+                allowed = True
+                error = ""
+            else:
+                error = admin_error or error
 
         ws = web.WebSocketResponse(heartbeat=30)
         await ws.prepare(request)
+
+        if not allowed:
+            allowed, error = await _await_dashboard_ws_auth(ws)
+            if not allowed:
+                await ws.send_json({"type": "error", "event": "error", "data": {"error": error}})
+                await ws.close(code=WSCloseCode.POLICY_VIOLATION, message=str(error or "authentication required").encode("utf-8"))
+                return ws
+
         _dashboard_ws_clients.add(ws)
 
         try:

@@ -120,10 +120,21 @@ export class RuntimeSocketBridge {
       }
       const socketUrl = new URL(`${normalizedBaseUrl}/ws/dashboard`);
       socketUrl.protocol = socketUrl.protocol === "https:" ? "wss:" : "ws:";
-      socketUrl.searchParams.set("token", token.trim());
 
       this.socket?.close();
       this.socket = new WebSocket(socketUrl.toString());
+      this.socket.onopen = () => {
+        try {
+          this.socket?.send(JSON.stringify({ type: "auth", token: token.trim() }));
+        } catch (error) {
+          onEvent({
+            type: "runtime_socket_error",
+            payload: {
+              message: error instanceof Error ? error.message : "websocket_auth_send_failed",
+            },
+          });
+        }
+      };
       this.socket.onmessage = (message) => {
         try {
           const parsed = JSON.parse(String(message.data || "{}")) as {
