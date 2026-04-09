@@ -1,6 +1,6 @@
 # ── Web / API Server ──────────────────────────────────────────────────────────
 # NOTE: flask + socketio are used by api/http_server.py (dashboard) and
-#       api/jarvis_api.py. They are NOT optional — the dashboard UI will be
+#       api/elyan_api.py. They are NOT optional — the dashboard UI will be
 #       fully non-functional without them.
 flask>=3.0.0
 flask-cors>=4.0.0

@@ -1564,6 +1564,9 @@ class ElyanGatewayServer:
         method = str(getattr(request, "method", "GET") or "GET").upper()
         if not path.startswith("/api"):
             return False
+        # Elyan chat API — loopback-only, no admin token needed (desktop-local)
+        if path.startswith("/api/elyan/"):
+            return False
         if _is_user_session_path(path):
             return False
         if _is_local_dashboard_write_path(path, method):
@@ -1983,6 +1986,150 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/v2/runs', self.handle_v2_list_runs)
         self.app.router.add_get('/api/v2/sessions', self.handle_v2_list_sessions)
         self.app.router.add_get('/inspector', self.handle_inspector_page)
+
+        # ── Elyan Chat API (no auth — desktop-local only) ────────────────────
+        self.app.router.add_post('/api/elyan/chat', self.handle_elyan_chat)
+        self.app.router.add_post('/api/elyan/chat/stream', self.handle_elyan_chat_stream)
+        self.app.router.add_get('/api/elyan/status', self.handle_elyan_status)
+        self.app.router.add_post('/api/elyan/voice/trigger', self.handle_elyan_voice_trigger)
+
+    # ── Elyan Chat Handlers ───────────────────────────────────────────────────
+
+    async def handle_elyan_chat(self, request):
+        """POST /api/elyan/chat — single-shot Elyan response (no streaming)."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        text = str(body.get("text") or body.get("message") or "").strip()
+        user_id = str(body.get("user_id") or "desktop").strip()
+        channel = str(body.get("channel") or "desktop").strip()
+        if not text:
+            return web.json_response({"ok": False, "error": "text required"}, status=400)
+        try:
+            from core.elyan.elyan_core import get_elyan_core
+            core = get_elyan_core()
+            resp = await core.handle(text, channel, user_id)
+            return web.json_response({
+                "ok": True,
+                "response": resp.text,
+                "intent": resp.metadata.get("intent", ""),
+                "requires_approval": resp.metadata.get("requires_approval", False),
+                "duration_s": resp.duration_s,
+            })
+        except Exception as exc:
+            logger.error(f"elyan_chat error: {exc}")
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+    async def handle_elyan_chat_stream(self, request):
+        """POST /api/elyan/chat/stream — SSE streaming Elyan response."""
+        import asyncio, json as _json
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        text = str(body.get("text") or body.get("message") or "").strip()
+        user_id = str(body.get("user_id") or "desktop").strip()
+        channel = str(body.get("channel") or "desktop").strip()
+        if not text:
+            return web.Response(text='data: {"error":"text required"}\n\ndata: [DONE]\n\n',
+                                content_type="text/event-stream")
+
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def on_chunk(chunk: str):
+            await queue.put(chunk)
+
+        async def generate():
+            try:
+                from core.elyan.elyan_core import get_elyan_core, ElyanCore
+                from core.elyan.elyan_core import IntentCategory
+                core = get_elyan_core()
+
+                # Classify first — if executable intent, run fully then stream result
+                intent = core.classify_intent(text)
+                if intent.category != IntentCategory.CONVERSATION:
+                    resp = await core.handle(text, channel, user_id)
+                    chunk_data = _json.dumps({"chunk": resp.text}, ensure_ascii=False)
+                    yield f"data: {chunk_data}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+
+                # Conversation — stream via Ollama
+                from core.elyan.elyan_core import _ollama_stream
+                full = ""
+                async def _cb(chunk):
+                    nonlocal full
+                    full += chunk
+                    await queue.put(chunk)
+
+                stream_task = asyncio.ensure_future(_ollama_stream(text, _cb))
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(queue.get(), timeout=0.05)
+                        yield f"data: {_json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
+                    except asyncio.TimeoutError:
+                        if stream_task.done():
+                            # Drain remaining
+                            while not queue.empty():
+                                chunk = queue.get_nowait()
+                                yield f"data: {_json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
+                            break
+                yield "data: [DONE]\n\n"
+            except Exception as exc:
+                logger.error(f"elyan_stream error: {exc}")
+                yield f"data: {_json.dumps({'chunk': f'Hata: {exc}'})}\n\n"
+                yield "data: [DONE]\n\n"
+
+        return web.Response(
+            body=self._sse_body(generate()),
+            content_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+
+    def _sse_body(self, gen):
+        """Helper: collect async generator into bytes for aiohttp streaming."""
+        # For aiohttp, use StreamResponse pattern via middleware approach
+        # We return a simple async generator wrapper
+        import asyncio
+
+        async def _collect():
+            chunks = []
+            async for chunk in gen:
+                chunks.append(chunk.encode("utf-8"))
+            return b"".join(chunks)
+
+        loop = asyncio.get_event_loop()
+        return loop.run_until_complete(_collect())
+
+    async def handle_elyan_status(self, request):
+        """GET /api/elyan/status — Elyan core status."""
+        try:
+            from core.elyan.elyan_core import get_elyan_core
+            from core.elyan.elyan_startup import _broadcast
+            core = get_elyan_core()
+            return web.json_response({
+                "ok": True,
+                "status": "ready",
+                "broadcast_active": _broadcast is not None,
+            })
+        except Exception as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+    async def handle_elyan_voice_trigger(self, request):
+        """POST /api/elyan/voice/trigger — Wake voice pipeline."""
+        try:
+            from core.voice.voice_pipeline import get_voice_pipeline
+            pipeline = get_voice_pipeline()
+            await pipeline.trigger()
+            return web.json_response({"ok": True, "message": "Ses pipeline tetiklendi"})
+        except Exception as exc:
+            logger.warning(f"voice trigger: {exc}")
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
 
     async def handle_v2_list_nodes(self, request):
         from core.runtime.node_manager import node_manager

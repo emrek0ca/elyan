@@ -1,224 +1,201 @@
 #!/usr/bin/env bash
-# Elyan installer and remote bootstrap
-# Usage:
-#   curl -fsSL https://get.elyan.ai | bash
-#   bash install.sh [--headless] [--no-ui]
-
+# ──────────────────────────────────────────────────────────────────────────────
+#  Elyan — Tek Komutla Kurulum (macOS / Linux)
+#  Kullanim:
+#    bash install.sh              # interaktif kurulum
+#    bash install.sh --headless   # sessiz kurulum
+#    bash install.sh --no-desktop # desktop derlemeden kur
+# ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-REPO_URL="${ELYAN_REPO_URL:-https://github.com/emrek0ca/elyan.git}"
-INSTALL_DIR="${ELYAN_INSTALL_DIR:-$HOME/.local/share/elyan/src/elyan}"
+RED='\033[0;31m'; GREEN='\033[0;32m'; BLUE='\033[0;34m'
+YELLOW='\033[0;33m'; BOLD='\033[1m'; NC='\033[0m'
 
-HEADLESS=0
-NO_UI=0
+log()    { echo -e "${BLUE}▸${NC}  $*"; }
+ok()     { echo -e "${GREEN}✓${NC}  $*"; }
+warn()   { echo -e "${YELLOW}⚠${NC}  $*"; }
+err()    { echo -e "${RED}✗${NC}  $*"; exit 1; }
+header() { echo ""; echo -e "${BOLD}${BLUE}── $1 ──${NC}"; echo ""; }
+pip()    { "$VENV_PY" -m pip "$@"; }   # pip wrapper — path-safe
+
+HEADLESS=0; NO_DESKTOP=0
 for arg in "$@"; do
   case "$arg" in
-    --headless) HEADLESS=1 ;;
-    --no-ui) NO_UI=1 ;;
+    --headless)   HEADLESS=1 ;;
+    --no-desktop) NO_DESKTOP=1 ;;
   esac
 done
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[0;33m'
-NC='\033[0m'
+# Homebrew ve sistem path'lerini ekle
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
-log()  { echo -e "${BLUE}▸${NC}  $*"; }
-ok()   { echo -e "${GREEN}✓${NC}  $*"; }
-warn() { echo -e "${YELLOW}⚠${NC}  $*"; }
-err()  { echo -e "${RED}✗${NC}  $*"; exit 1; }
-
-resolve_project_dir() {
-  if git_root="$(git rev-parse --show-toplevel 2>/dev/null)" && [[ -f "$git_root/pyproject.toml" ]]; then
-    printf '%s\n' "$git_root"
-    return 0
-  fi
-
-  local cwd
-  cwd="$(pwd -P)"
-  if [[ -f "$cwd/pyproject.toml" && -f "$cwd/cli/main.py" ]]; then
-    printf '%s\n' "$cwd"
-    return 0
-  fi
-
-  printf '%s\n' ""
-}
-
-clone_repo() {
-  local target="$1"
-  local parent
-  parent="$(dirname "$target")"
-  mkdir -p "$parent"
-
-  if [[ -d "$target/.git" ]]; then
-    log "Existing clone found: $target"
-    return 0
-  fi
-
-  rm -rf "$target"
-  if command -v git >/dev/null 2>&1; then
-    log "Cloning Elyan from $REPO_URL"
-    git clone --depth 1 "$REPO_URL" "$target"
-    return 0
-  fi
-
-  if command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1; then
-    log "Downloading Elyan source archive"
-    local archive
-    archive="$(mktemp)"
-    curl -fsSL "https://codeload.github.com/emrek0ca/elyan/tar.gz/refs/heads/main" -o "$archive"
-    tar -xzf "$archive" -C "$parent"
-    mv "$parent/elyan-main" "$target"
-    rm -f "$archive"
-    return 0
-  fi
-
-  err "git or curl/tar not available; cannot fetch Elyan source."
-}
-
-PROJECT_DIR="$(resolve_project_dir)"
-if [[ -z "$PROJECT_DIR" ]]; then
-  log "Source tree not found, bootstrapping a fresh clone"
-  clone_repo "$INSTALL_DIR"
-  PROJECT_DIR="$INSTALL_DIR"
-fi
-
-cd "$PROJECT_DIR"
-export ELYAN_PROJECT_DIR="$PROJECT_DIR"
-WORKSPACE="$PROJECT_DIR"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+PROJECT_DIR="$SCRIPT_DIR"
+[[ ! -f "$PROJECT_DIR/main.py" ]] && err "main.py bulunamadi. Elyan proje kokunde calistir."
 
 echo ""
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}  ELYAN INSTALLER STARTED                  ${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
+echo -e "${BOLD}${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BOLD}${BLUE}  🧠 ELYAN — KURULUM                              ${NC}"
+echo -e "${BOLD}${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+log "Proje: $PROJECT_DIR"
 
-log "Checking Python..."
-PY="$(command -v python3.12 || command -v python3.11 || command -v python3 || true)"
-[[ -z "$PY" ]] && err "Python 3.11+ not found."
-PY_VER="$("$PY" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")"
-log "Python: $PY_VER ($PY)"
+# ── 1. Python ─────────────────────────────────────────────────────────────────
+header "1/7  Python"
+PY=""
+for c in \
+  /opt/homebrew/bin/python3.12 \
+  /opt/homebrew/bin/python3.11 \
+  /usr/local/bin/python3.12 \
+  /usr/local/bin/python3.11 \
+  python3.12 python3.11 python3; do
+  BIN=""
+  [[ -x "$c" ]] && BIN="$c" || BIN="$(command -v "$c" 2>/dev/null || true)"
+  [[ -z "$BIN" || ! -x "$BIN" ]] && continue
+  v="$("$BIN" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")"
+  maj="${v%.*}"; min="${v#*.}"
+  if [[ "$maj" -ge 3 && "$min" -ge 11 ]]; then PY="$BIN"; break; fi
+done
+[[ -z "$PY" ]] && err "Python 3.11+ bulunamadi.\nKur: brew install python@3.11"
+ok "Python: $("$PY" --version)"
 
-if [[ "${PY_VER%.*}" -lt 3 ]] || [[ "${PY_VER#*.}" -lt 11 ]]; then
-  err "Python 3.11+ required."
-fi
-ok "Python version OK"
-
-log "Creating virtual environment"
-"$PY" -m venv .venv
-
-log "Bootstrapping pip"
-if ! .venv/bin/python3 -m ensurepip --upgrade >/dev/null 2>&1; then
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL https://bootstrap.pypa.io/get-pip.py -o .venv/get-pip.py
-    .venv/bin/python3 .venv/get-pip.py
-    rm -f .venv/get-pip.py
+# ── 2. Sanal Ortam ────────────────────────────────────────────────────────────
+header "2/7  Sanal Ortam"
+VENV_DIR="$PROJECT_DIR/.venv"
+if [[ -d "$VENV_DIR" && -f "$VENV_DIR/bin/python3" ]]; then
+  v="$("$VENV_DIR/bin/python3" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")"
+  maj="${v%.*}"; min="${v#*.}"
+  if [[ "$maj" -ge 3 && "$min" -ge 11 ]]; then
+    ok "Mevcut .venv kullaniliyor (Python $v)"
   else
-    err "ensurepip failed and curl is unavailable."
+    warn "Eski .venv ($v), yeniden olusturuluyor..."
+    rm -rf "$VENV_DIR"
+    "$PY" -m venv "$VENV_DIR"
+    ok ".venv olusturuldu"
   fi
-fi
-
-PIP=".venv/bin/python3 -m pip"
-log "Upgrading packaging tools"
-.venv/bin/python3 -m pip install --upgrade pip setuptools wheel --quiet
-
-log "Installing dependencies"
-if [[ "$NO_UI" == "1" || "$HEADLESS" == "1" ]]; then
-  $PIP install --quiet \
-    pydantic json5 httpx aiohttp python-dotenv psutil requests \
-    click croniter python-telegram-bot \
-    groq google-generativeai \
-    beautifulsoup4 lxml Pillow \
-    python-docx openpyxl pdfplumber pypdf reportlab \
-    apscheduler feedparser watchdog \
-    cryptography keyring sqlalchemy
 else
-  $PIP install --quiet -r requirements.txt
+  log ".venv olusturuluyor..."
+  "$PY" -m venv "$VENV_DIR"
+  ok ".venv olusturuldu"
 fi
-ok "Dependencies installed"
+VENV_PY="$VENV_DIR/bin/python3"
+log "pip yukseltiliyor..."
+"$VENV_PY" -m pip install --quiet --upgrade pip setuptools wheel
+ok "pip hazir"
 
-log "Installing Elyan package"
-if $PIP install --quiet -e . --config-settings editable_mode=compat; then
-  ok "Editable install complete"
+# ── 3. Python Bagimliliklari ──────────────────────────────────────────────────
+header "3/7  Python Bagimliliklari"
+log "requirements.txt yukleniyor..."
+if "$VENV_PY" -m pip install --quiet -r "$PROJECT_DIR/requirements.txt"; then
+  ok "Bagimliliklar yuklendi"
 else
-  warn "Editable install failed, retrying as a standard install"
-  $PIP install --quiet .
+  warn "Tam yukleme basarisiz — kritikler deneniyor..."
+  "$VENV_PY" -m pip install --quiet \
+    flask flask-cors python-socketio python-engineio \
+    pydantic aiohttp httpx click psutil cryptography \
+    python-dotenv sqlalchemy python-telegram-bot groq \
+    sentence-transformers pytest pytest-asyncio
+  ok "Kritik bagimliliklar yuklendi"
+fi
+"$VENV_PY" -m pip install --quiet -e "$PROJECT_DIR" 2>/dev/null \
+  || warn "Editable install atlandı (opsiyonel)"
+
+# ── 4. .env ───────────────────────────────────────────────────────────────────
+header "4/7  Ortam Yapilandirmasi"
+ENV_FILE="$PROJECT_DIR/.env"
+if [[ ! -f "$ENV_FILE" ]]; then
+  log ".env olusturuluyor..."
+  cat > "$ENV_FILE" << 'ENVEOF'
+# Elyan Ortam Yapılandırması
+OLLAMA_HOST=http://localhost:11434
+MODEL_NAME=llama3.2:3b
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+GOOGLE_API_KEY=
+GROQ_API_KEY=
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+ELYAN_AUTO_INSTALL=0
+ELYAN_GENESIS_ENABLED=0
+ELYAN_PORT=18789
+ENVEOF
+  ok ".env olusturuldu"
+else
+  ok ".env mevcut"
 fi
 
-if ! .venv/bin/elyan version >/dev/null 2>&1; then
-  warn "CLI check failed, reinstalling package once"
-  $PIP uninstall -y elyan >/dev/null 2>&1 || true
-  $PIP install --quiet .
-fi
+# ── 5. Dizinler ───────────────────────────────────────────────────────────────
+header "5/7  Uygulama Dizinleri"
+mkdir -p "$HOME/.elyan/logs" "$HOME/.elyan/memory" "$HOME/.elyan/workspace"
+ok "Dizinler hazir: $HOME/.elyan"
 
-.venv/bin/elyan version >/dev/null 2>&1 || err "'elyan' CLI is not available."
-ok "CLI available"
+# ── 6. Global CLI ─────────────────────────────────────────────────────────────
+header "6/7  CLI Kurulumu"
+LOCAL_BIN="$HOME/.local/bin"
+mkdir -p "$LOCAL_BIN"
 
-log "Preparing runtime directories"
-.venv/bin/python3 -m elyan.bootstrap dirs --home "$HOME/.elyan" >/dev/null
-mkdir -p "$HOME/.local/bin"
-ok "Runtime directories ready"
-
-log "Creating launcher scripts"
-PROJECT_DIR_ESCAPED=$(printf '%q' "$PROJECT_DIR")
-
-cat > "$HOME/.local/bin/elyan" <<EOF
-#!/usr/bin/env bash
-PROJECT_DIR=$PROJECT_DIR_ESCAPED
-export ELYAN_PROJECT_DIR="\$PROJECT_DIR"
-cd "\$PROJECT_DIR" || exit 1
-exec "\$PROJECT_DIR/.venv/bin/python3" -m elyan_entrypoint "\$@"
-EOF
-chmod +x "$HOME/.local/bin/elyan"
-
-cat > "$PROJECT_DIR/.venv/bin/elyan" <<EOF
-#!/usr/bin/env bash
-PROJECT_DIR=$PROJECT_DIR_ESCAPED
-export ELYAN_PROJECT_DIR="\$PROJECT_DIR"
-cd "\$PROJECT_DIR" || exit 1
-exec "\$PROJECT_DIR/.venv/bin/python3" -m elyan_entrypoint "\$@"
-EOF
-chmod +x "$PROJECT_DIR/.venv/bin/elyan"
+# Launcher — tırnak sorununu önlemek için cat + heredoc yerine printf
+LAUNCHER="$LOCAL_BIN/elyan"
+printf '#!/usr/bin/env bash\n' > "$LAUNCHER"
+printf 'export ELYAN_PROJECT_DIR="%s"\n' "$PROJECT_DIR" >> "$LAUNCHER"
+printf 'export ELYAN_AUTO_INSTALL=0\n' >> "$LAUNCHER"
+printf 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"\n' >> "$LAUNCHER"
+printf 'cd "%s" || exit 1\n' "$PROJECT_DIR" >> "$LAUNCHER"
+printf 'exec "%s" "%s/main.py" "$@"\n' "$VENV_PY" "$PROJECT_DIR" >> "$LAUNCHER"
+chmod +x "$LAUNCHER"
+ok "CLI: $LAUNCHER"
 
 SHELL_NAME="$(basename "${SHELL:-bash}")"
-if [[ "$SHELL_NAME" == "zsh" ]]; then
-  RC_FILE="$HOME/.zshrc"
-elif [[ "$SHELL_NAME" == "bash" ]]; then
-  RC_FILE="$HOME/.bashrc"
+case "$SHELL_NAME" in
+  zsh)  RC="$HOME/.zshrc" ;;
+  bash) RC="$HOME/.bashrc" ;;
+  *)    RC="$HOME/.profile" ;;
+esac
+touch "$RC"
+if ! grep -q '\.local/bin' "$RC" 2>/dev/null; then
+  { printf '\n# Elyan CLI\n'; printf 'export PATH="$HOME/.local/bin:$PATH"\n'; } >> "$RC"
+  ok "PATH guncellendi: $RC"
 else
-  RC_FILE="$HOME/.profile"
+  ok "PATH zaten hazir"
+fi
+export PATH="$LOCAL_BIN:$PATH"
+
+# ── 7. Desktop ────────────────────────────────────────────────────────────────
+header "7/7  Desktop Uygulamasi"
+DESKTOP_DIR="$PROJECT_DIR/apps/desktop"
+if [[ "$NO_DESKTOP" == "0" ]]; then
+  NPM_BIN="$(command -v npm 2>/dev/null || echo /opt/homebrew/bin/npm)"
+  if [[ -x "$NPM_BIN" ]]; then
+    NODE_VER="$(node --version 2>/dev/null || echo N/A)"
+    log "Node.js: $NODE_VER"
+    log "npm install baslatiliyor..."
+    if (cd "$DESKTOP_DIR" && "$NPM_BIN" install --silent 2>/dev/null); then
+      ok "npm install tamamlandi"
+    else
+      warn "npm install basarisiz (desktop olmadan devam)"
+    fi
+  else
+    warn "Node.js bulunamadi — desktop atlanıyor (kur: brew install node)"
+  fi
+else
+  warn "--no-desktop: desktop atlanıyor"
 fi
 
-touch "$RC_FILE"
-PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
-if ! grep -Fq '.local/bin' "$RC_FILE"; then
-  echo "" >> "$RC_FILE"
-  echo "$PATH_LINE" >> "$RC_FILE"
-  ok "PATH updated: $RC_FILE"
-else
-  warn "PATH already contains ~/.local/bin"
-fi
-export PATH="$HOME/.local/bin:$PATH"
-
-log "Creating workspace bootstrap files"
-if [[ "$HEADLESS" == "1" || "$NO_UI" == "1" ]]; then
-  .venv/bin/python3 -m elyan.bootstrap init --workspace "$WORKSPACE" --role operator --headless >/dev/null
-  .venv/bin/python3 -m elyan.bootstrap onboard --workspace "$WORKSPACE" --skip-deps --headless >/dev/null
-else
-  .venv/bin/python3 -m elyan.bootstrap init --workspace "$WORKSPACE" --role operator --open-dashboard >/dev/null
-  .venv/bin/python3 -m elyan.bootstrap onboard --workspace "$WORKSPACE" --skip-deps >/dev/null
-fi
-ok "Workspace files created"
-
+# ── Ortam Dogrulama ───────────────────────────────────────────────────────────
 echo ""
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}  Elyan installation complete             ${NC}"
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+log "Ortam dogrulanıyor..."
+"$VENV_PY" "$PROJECT_DIR/validate_environment.py" 2>&1 || true
+
+# ── Sonuc ─────────────────────────────────────────────────────────────────────
 echo ""
-echo "Next:"
-echo "  source $RC_FILE"
-echo "  elyan status"
-echo "  elyan gateway start --daemon"
-echo "  elyan dashboard"
+echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BOLD}${GREEN}  ✅  Elyan kurulumu tamamlandi!${NC}"
+echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo "  Sonraki adımlar:"
+echo ""
+echo "  1)  Terminali yenile:    source $RC"
+echo "  2)  API anahtarı gir:    nano $ENV_FILE"
+echo "  3)  Gateway'i baslat:    elyan start"
+echo "  4)  Desktop'u aç:        elyan desktop"
+echo "  5)  Durum kontrol:       elyan doctor"
 echo ""
