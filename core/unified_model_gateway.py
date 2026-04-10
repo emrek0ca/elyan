@@ -366,6 +366,7 @@ class UnifiedModelGateway:
                         user_id=user_id,
                         temperature=temperature,
                     )
+                self.orchestrator.provider_pool.record_outcome(candidate.provider, candidate.model, success=True)
                 return UnifiedModelResponse(
                     text=str(text),
                     provider=candidate.provider,
@@ -390,6 +391,7 @@ class UnifiedModelGateway:
                             user_id=user_id,
                             temperature=temperature,
                         )
+                        self.orchestrator.provider_pool.record_outcome(candidate.provider, candidate.model, success=True)
                         return UnifiedModelResponse(
                             text=str(text),
                             provider=candidate.provider,
@@ -404,6 +406,12 @@ class UnifiedModelGateway:
                         logger.warning(
                             f"Unified model native fallback failed: {candidate.provider}:{candidate.model} -> {native_exc}"
                         )
+                self.orchestrator.provider_pool.record_outcome(
+                    candidate.provider,
+                    candidate.model,
+                    success=False,
+                    error_text=str(exc),
+                )
 
         return UnifiedModelResponse(
             text="Hata: Uygun model zinciri yanıt üretemedi.",

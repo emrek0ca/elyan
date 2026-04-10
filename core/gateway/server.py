@@ -5339,6 +5339,7 @@ class ElyanGatewayServer:
         # Keep runtime provider cache aligned after updates.
         try:
             from core.model_orchestrator import model_orchestrator
+            model_orchestrator.active_provider = model_orchestrator._normalize_provider(provider)
             model_orchestrator._load_providers()
             registered_models = model_orchestrator.list_registered_models()
         except Exception:

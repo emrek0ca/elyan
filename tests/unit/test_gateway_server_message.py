@@ -1113,6 +1113,12 @@ async def test_handle_models_update_persists_registry_and_collaboration(monkeypa
     monkeypatch.setattr(gateway_server, "push_activity", lambda *_a, **_k: None)
 
     class _FakeOrchestrator:
+        active_provider = "anthropic"
+
+        @staticmethod
+        def _normalize_provider(provider):
+            return str(provider or "").strip().lower()
+
         def _load_providers(self):
             return None
 
@@ -1120,7 +1126,8 @@ async def test_handle_models_update_persists_registry_and_collaboration(monkeypa
         def list_registered_models():
             return [{"id": "groq:llama-3.3-70b-versatile", "provider": "groq", "model": "llama-3.3-70b-versatile"}]
 
-    monkeypatch.setattr("core.model_orchestrator.model_orchestrator", _FakeOrchestrator())
+    fake_orchestrator = _FakeOrchestrator()
+    monkeypatch.setattr("core.model_orchestrator.model_orchestrator", fake_orchestrator)
 
     req = _Req(
         {
@@ -1156,6 +1163,7 @@ async def test_handle_models_update_persists_registry_and_collaboration(monkeypa
     assert captured["models.collaboration"]["enabled"] is True
     assert payload["collaboration"]["strategy"] == "synthesize"
     assert payload["registry"][0]["roles"] == ["code", "qa"]
+    assert fake_orchestrator.active_provider == "openai"
 
 
 @pytest.mark.asyncio

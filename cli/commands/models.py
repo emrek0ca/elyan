@@ -1,5 +1,8 @@
 """models.py — Model yönetimi CLI"""
 import json
+import urllib.error
+import urllib.request
+
 from config.elyan_config import elyan_config
 from core.model_catalog import QWEN_LIGHT_OLLAMA_MODEL, default_model_for_provider, normalize_model_name
 
@@ -8,7 +11,7 @@ def _default_model_for_provider(provider: str) -> str:
     return default_model_for_provider(provider)
 
 
-def _sync_roles_to_default(provider: str, model: str) -> None:
+def _sync_roles_to_default(provider: str, model: str) -> dict:
     provider = str(provider or "").strip().lower()
     model = normalize_model_name(provider, model)
     router_provider = str(elyan_config.get("models.local.provider", "ollama"))
@@ -37,6 +40,42 @@ def _sync_roles_to_default(provider: str, model: str) -> None:
         "code_worker": worker_role,
     }
     elyan_config.set("models.roles", role_map)
+    return role_map
+
+
+def _sync_default_to_runtime(provider: str, model: str) -> bool:
+    try:
+        from core.model_orchestrator import model_orchestrator as mo
+
+        mo.active_provider = mo._normalize_provider(provider)
+        mo._load_providers()
+        return True
+    except Exception:
+        return False
+
+
+def _sync_default_to_gateway(provider: str, model: str, role_map: dict) -> bool:
+    port = int(elyan_config.get("gateway.port", 18789) or 18789)
+    payload = {
+        "provider": str(provider or "").strip().lower(),
+        "model": str(model or "").strip(),
+        "roles": dict(role_map or {}),
+        "sync_roles": False,
+    }
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/models",
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            raw = json.loads(resp.read().decode("utf-8"))
+        return bool(raw.get("ok"))
+    except urllib.error.URLError:
+        return False
+    except Exception:
+        return False
 
 
 def _is_model_consistent(provider: str, model: str) -> bool:
@@ -57,7 +96,7 @@ def _is_model_consistent(provider: str, model: str) -> bool:
 def run(args):
     sub = getattr(args, "subcommand", None)
     if not sub:
-        print("Usage: elyan models [list|status|test|use|cost|ollama]")
+        print("Usage: elyan models [list|status|test|use|switch|cost|ollama]")
         return
 
     if sub == "list":
@@ -66,7 +105,7 @@ def run(args):
         _status()
     elif sub == "test":
         _test(getattr(args, "provider", None))
-    elif sub == "use":
+    elif sub in ("use", "switch"):
         _use(getattr(args, "name", None))
     elif sub in ("set-default", "set_default"):
         _use(getattr(args, "name", None))
@@ -174,9 +213,15 @@ def _use(name: str):
 
     elyan_config.set("models.default.provider", provider)
     elyan_config.set("models.default.model", model)
-    _sync_roles_to_default(provider, model)
+    role_map = _sync_roles_to_default(provider, model)
+    runtime_synced = _sync_default_to_runtime(provider, model)
+    gateway_synced = _sync_default_to_gateway(provider, model, role_map)
     print(f"✅  Varsayılan: {provider} / {model}")
     print("✅  Rol bazlı model eşlemeleri varsayılan model ile senkronlandı.")
+    if gateway_synced:
+        print("✅  Çalışan gateway runtime modeli güncellendi.")
+    elif runtime_synced:
+        print("ℹ️  Yerel runtime model önbelleği güncellendi.")
 
 
 def _set_fallback(name: str):

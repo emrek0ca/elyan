@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 
 from config.elyan_config import elyan_config
 from core.accuracy_speed_runtime import get_accuracy_speed_runtime
+from core.llm.provider_pool import ProviderPool
 from core.model_catalog import default_model_for_provider, normalize_model_name
 from core.neural_router import neural_router
 from security.keychain import KeychainManager, keychain
@@ -36,6 +37,7 @@ class ModelOrchestrator:
         self.active_provider = self._normalize_provider(
             elyan_config.get("models.default.provider", "ollama") or "ollama"
         )
+        self.provider_pool = ProviderPool()
         self.metrics: Dict[str, Dict[str, Any]] = {}
         self._load_providers()
 
@@ -357,9 +359,12 @@ class ModelOrchestrator:
         seen_keys: set[str] = set()
         for entry in self.registry:
             provider = self._normalize_provider(entry.get("provider") or entry.get("type"))
+            model_name = str(entry.get("model") or "").strip()
             if provider in excluded:
                 continue
             if not bool(entry.get("enabled")):
+                continue
+            if model_name and not self.provider_pool.can_attempt(provider, model_name):
                 continue
             roles = self._normalize_roles(entry.get("roles"))
             if roles and role_name not in roles:
@@ -375,7 +380,7 @@ class ModelOrchestrator:
             pref_bonus_allowed = role_name == "router" or pref_rank <= 1
             if pref_provider and provider == pref_provider and pref_bonus_allowed:
                 score += 100
-            if pref_model and str(entry.get("model") or "").strip().lower() == pref_model and pref_bonus_allowed:
+            if pref_model and model_name.lower() == pref_model and pref_bonus_allowed:
                 score += 120
             if role_match:
                 score += 30
@@ -391,8 +396,8 @@ class ModelOrchestrator:
                 success_rate = float(metrics.get("success", 0)) / total
                 score += int(success_rate * 20)
             score -= min(10, int(entry.get("priority", 50)) // 10)
-            seen_keys.add(f"{provider}:{str(entry.get('model') or '').strip().lower()}")
-            ranked.append(((-score, int(entry.get("priority", 50)), provider, str(entry.get("model") or "")), entry))
+            seen_keys.add(f"{provider}:{model_name.lower()}")
+            ranked.append(((-score, int(entry.get("priority", 50)), provider, model_name), entry))
 
         # Providers may be updated programmatically in tests/runtime without rebuilding registry.
         # Synthesize missing candidates from current provider state so role-aware fallback remains correct.
@@ -401,6 +406,8 @@ class ModelOrchestrator:
             if provider_name in excluded:
                 continue
             model_name = str(provider_cfg.get("model") or "").strip()
+            if model_name and not self.provider_pool.can_attempt(provider_name, model_name):
+                continue
             key = f"{provider_name}:{model_name.lower()}"
             if key in seen_keys:
                 continue

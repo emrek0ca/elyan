@@ -167,6 +167,23 @@ def test_main_routes_integrations_command(monkeypatch):
     assert captured["account_alias"] == "work"
 
 
+def test_main_routes_models_switch_command(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)
+
+    def fake_run(args):
+        captured["subcommand"] = getattr(args, "subcommand", None)
+        captured["name"] = getattr(args, "name", None)
+
+    monkeypatch.setattr("cli.commands.models.run", fake_run, raising=False)
+
+    code = cli_main.main(["models", "switch", "openai/gpt-4o"])
+
+    assert code == 0
+    assert captured["subcommand"] == "switch"
+    assert captured["name"] == "openai/gpt-4o"
+
+
 def test_main_routes_bootstrap_command(monkeypatch):
     captured = {}
     monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)

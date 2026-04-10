@@ -437,7 +437,7 @@ def main(argv: list[str] | None = None):
     # ── models ──────────────────────────────────────────────────────────
     p = sub.add_parser("models", help="Model yönetimi")
     p.add_argument("subcommand", nargs="?",
-                   choices=["list", "status", "test", "use", "add",
+                   choices=["list", "status", "test", "use", "switch", "add",
                              "set-default", "set-fallback", "cost", "ollama", "ollama-check"])
     p.add_argument("name", nargs="?", help="Model/sağlayıcı adı")
     p.add_argument("--provider", metavar="NAME")
