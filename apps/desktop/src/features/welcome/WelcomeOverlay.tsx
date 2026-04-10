@@ -2,7 +2,7 @@ import { useEffect } from "react";
 
 import { Button } from "@/components/primitives/Button";
 
-import heroImage from "@assets/image.png";
+import heroImage from "../../../src-tauri/icons/icon.png";
 
 type WelcomeOverlayProps = {
   open: boolean;
@@ -48,7 +48,7 @@ export function WelcomeOverlay({ open, onClose, reduceMotion = false }: WelcomeO
             <img
               src={heroImage}
               alt="Elyan welcome"
-              className="h-[240px] w-[240px] rounded-[28px] object-cover shadow-[0_18px_48px_rgba(49,74,144,0.14)]"
+              className="h-[240px] w-[240px] rounded-[28px] object-contain shadow-[0_18px_48px_rgba(49,74,144,0.14)]"
             />
           </div>
         </div>

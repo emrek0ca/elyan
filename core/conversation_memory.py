@@ -5,6 +5,7 @@ Stores and retrieves conversation history for context-aware responses.
 """
 
 import sqlite3
+from contextlib import suppress
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -66,6 +67,7 @@ class ConversationMemory:
             content: Message content
             metadata: Optional JSON metadata
         """
+        conn = None
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -76,12 +78,20 @@ class ConversationMemory:
             """, (user_id, role, content, metadata))
             
             conn.commit()
-            conn.close()
             
             logger.debug(f"Added {role} message for user {user_id}")
-        
+        except sqlite3.OperationalError as e:
+            message = str(e or "").strip()
+            if "readonly" in message.lower():
+                logger.debug(f"Conversation memory is read-only, skipping write for user {user_id}: {message}")
+                return
+            logger.error(f"Failed to add message: {message}")
         except Exception as e:
             logger.error(f"Failed to add message: {e}")
+        finally:
+            if conn is not None:
+                with suppress(Exception):
+                    conn.close()
     
     def get_history(
         self,

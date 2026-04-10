@@ -1,4 +1,4 @@
-import brandImage from "@assets/image.png";
+import brandImage from "../../../src-tauri/icons/icon.png";
 import { cn } from "@/utils/cn";
 
 type ElyanMarkProps = {

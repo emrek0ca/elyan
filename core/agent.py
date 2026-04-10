@@ -1312,6 +1312,7 @@ class Agent:
         route_metadata: dict[str, Any],
         runtime_policy_payload: dict[str, Any],
         history: list | None = None,
+        user_understanding_token: Any = None,
     ) -> AgentResponse:
         action = str(intent.get("action") or "").strip().lower()
         if getattr(self, "runtime_control", None):
@@ -2518,11 +2519,23 @@ class Agent:
                 }
         except Exception:
             parsed_intent = None
-        if parsed_intent is None and getattr(self, "intent_parser", None):
+        if getattr(self, "intent_parser", None):
+            parser_intent = None
             try:
-                parsed_intent = self.intent_parser.parse(effective_user_input)
+                parser_intent = self.intent_parser.parse(effective_user_input)
             except Exception:
-                parsed_intent = None
+                parser_intent = None
+            if parsed_intent is None:
+                parsed_intent = parser_intent
+            elif isinstance(parsed_intent, dict) and isinstance(parser_intent, dict):
+                routed_action = str(parsed_intent.get("action") or "").strip().lower()
+                parser_action = str(parser_intent.get("action") or "").strip().lower()
+                routed_requires_clarification = bool(parsed_intent.get("requires_clarification")) or routed_action in {"", "unknown", "clarify"}
+                parser_is_deterministic = parser_action not in {"", "unknown", "clarify"}
+                if routed_requires_clarification and parser_is_deterministic:
+                    parser_payload = dict(parser_intent)
+                    parser_payload.setdefault("source", "intent_parser")
+                    parsed_intent = parser_payload
 
         cowork_runtime = get_cowork_runtime()
         route_decision = None
@@ -2963,6 +2976,7 @@ class Agent:
                 route_metadata=route_metadata,
                 runtime_policy_payload=runtime_policy_payload,
                 history=direct_history,
+                user_understanding_token=user_understanding_token,
             )
 
         cowork_session = None
@@ -5608,7 +5622,7 @@ class Agent:
             else:
                 score -= 0.35
 
-        action_tokens = [tok for tok in re.split(r"[_\s]+", action) if tok]
+        action_tokens = [tok for tok in _re.split(r"[_\s]+", action) if tok]
         match_hits = sum(1 for tok in action_tokens[:4] if tok and tok in text)
         if match_hits:
             score += min(0.22, match_hits * 0.07)
