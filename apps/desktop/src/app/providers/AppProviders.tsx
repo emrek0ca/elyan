@@ -124,7 +124,11 @@ function RuntimeBridge() {
 
     const hydrateAuth = async () => {
       const currentUser = await getCurrentLocalUser().catch(() => null);
-      if (disposed || !currentUser) {
+      if (disposed) {
+        return;
+      }
+      if (!currentUser) {
+        useUiStore.getState().signOut();
         return;
       }
       useUiStore.getState().signIn(currentUser.email);

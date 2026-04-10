@@ -1,8 +1,7 @@
 import { useEffect } from "react";
 
+import { ElyanMark } from "@/components/brand/ElyanMark";
 import { Button } from "@/components/primitives/Button";
-
-import heroImage from "../../../src-tauri/icons/icon.png";
 
 type WelcomeOverlayProps = {
   open: boolean;
@@ -45,10 +44,10 @@ export function WelcomeOverlay({ open, onClose, reduceMotion = false }: WelcomeO
             </div>
           </div>
           <div className={`flex items-center justify-center ${reduceMotion ? "" : "elyan-float"}`}>
-            <img
-              src={heroImage}
+            <ElyanMark
+              size="xl"
               alt="Elyan welcome"
-              className="h-[240px] w-[240px] rounded-[28px] object-contain shadow-[0_18px_48px_rgba(49,74,144,0.14)]"
+              className="h-[240px] w-[240px] rounded-[28px] shadow-[0_18px_48px_rgba(49,74,144,0.14)]"
             />
           </div>
         </div>
