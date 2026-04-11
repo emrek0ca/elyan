@@ -161,6 +161,105 @@ async def test_handle_external_message_async_returns_processing(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_handle_memory_recall_returns_cross_session_results(monkeypatch):
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+
+    session = {
+        "session_id": "session_1",
+        "workspace_id": "workspace-a",
+        "user_id": "user-1",
+        "conversation_session_id": "conv_1",
+    }
+
+    monkeypatch.setattr(
+        gateway_server.ElyanGatewayServer,
+        "_require_user_session",
+        lambda self, request, allow_cookie=True: (True, "", dict(session)),
+    )
+
+    class _FakeRuntimeSessionAPI:
+        def search_history(self, *, user_id, query, limit, runtime_metadata):
+            assert user_id == "user-1"
+            assert query == "iyzico"
+            assert limit == 3
+            assert runtime_metadata["workspace_id"] == "workspace-a"
+            return [
+                {
+                    "conversation_session_id": "conv_2",
+                    "workspace_id": "workspace-a",
+                    "channel": "telegram",
+                    "user_message": "Iyzico checkout sorunu neydi?",
+                    "bot_response": "Webhook imzasini compare_digest ile duzeltmistik.",
+                    "timestamp": 123.0,
+                    "matched_role": "assistant",
+                }
+            ]
+
+    monkeypatch.setattr(
+        "core.runtime.session_store.get_runtime_session_api",
+        lambda: _FakeRuntimeSessionAPI(),
+    )
+
+    req = _Req({})
+    req.rel_url = SimpleNamespace(query={"query": "iyzico", "limit": "3"})
+    resp = await gateway_server.ElyanGatewayServer.handle_memory_recall(srv, req)
+
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["query"] == "iyzico"
+    assert payload["count"] == 1
+    assert payload["results"][0]["channel"] == "telegram"
+
+
+@pytest.mark.asyncio
+async def test_handle_memory_history_returns_recent_turns(monkeypatch):
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+
+    session = {
+        "session_id": "session_1",
+        "workspace_id": "workspace-a",
+        "user_id": "user-1",
+        "conversation_session_id": "conv_1",
+    }
+
+    monkeypatch.setattr(
+        gateway_server.ElyanGatewayServer,
+        "_require_user_session",
+        lambda self, request, allow_cookie=True: (True, "", dict(session)),
+    )
+
+    class _FakeRuntimeSessionAPI:
+        def list_recent_history(self, *, user_id, limit, runtime_metadata):
+            assert user_id == "user-1"
+            assert limit == 2
+            assert runtime_metadata["workspace_id"] == "workspace-a"
+            return [
+                {
+                    "conversation_session_id": "conv_2",
+                    "workspace_id": "workspace-a",
+                    "channel": "desktop",
+                    "user_message": "Dunku toplantiyi ozetle",
+                    "bot_response": "Toplantida odeme akisini kapattik.",
+                    "timestamp": 456.0,
+                }
+            ]
+
+    monkeypatch.setattr(
+        "core.runtime.session_store.get_runtime_session_api",
+        lambda: _FakeRuntimeSessionAPI(),
+    )
+
+    req = _Req({})
+    req.rel_url = SimpleNamespace(query={"limit": "2"})
+    resp = await gateway_server.ElyanGatewayServer.handle_memory_history(srv, req)
+
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["count"] == 1
+    assert payload["history"][0]["channel"] == "desktop"
+
+
+@pytest.mark.asyncio
 async def test_handle_status_includes_runtime_health_and_tool_count(monkeypatch):
     monkeypatch.setattr(
         gateway_server,

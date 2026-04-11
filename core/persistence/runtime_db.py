@@ -25,6 +25,7 @@ from sqlalchemy import (
     create_engine,
     event,
     func,
+    or_,
     select,
 )
 from sqlalchemy.engine import Connection, Engine
@@ -3496,6 +3497,53 @@ class LocalAuthSessionRepository:
                 merged["role"] = str(role)
         return self._db._decode_local_session_row(merged)
 
+    def get_latest_session(
+        self,
+        *,
+        user_ref: str = "",
+        workspace_id: str = "",
+    ) -> dict[str, Any] | None:
+        now = _now()
+        ref = str(user_ref or "").strip()
+        workspace = str(workspace_id or "").strip()
+        with self._db.local_engine.begin() as conn:
+            stmt = (
+                select(local_user_sessions_table, local_users_table)
+                .join(local_users_table, local_users_table.c.user_id == local_user_sessions_table.c.user_id)
+                .where(
+                    local_user_sessions_table.c.status == "active",
+                    local_user_sessions_table.c.expires_at > now,
+                    local_users_table.c.status == "active",
+                )
+            )
+            if workspace:
+                stmt = stmt.where(local_user_sessions_table.c.workspace_id == workspace)
+            if ref:
+                stmt = stmt.where(
+                    or_(
+                        local_user_sessions_table.c.user_id == ref,
+                        func.lower(local_users_table.c.email) == ref.lower(),
+                    )
+                )
+            row = conn.execute(
+                stmt.order_by(
+                    local_user_sessions_table.c.last_seen_at.desc(),
+                    local_user_sessions_table.c.updated_at.desc(),
+                ).limit(1)
+            ).mappings().first()
+            if not row:
+                return None
+            merged = dict(row)
+            role = conn.execute(
+                select(workspace_memberships_table.c.role)
+                .where(workspace_memberships_table.c.workspace_id == str(row["workspace_id"] or "local-workspace"))
+                .where(workspace_memberships_table.c.actor_id == str(row["user_id"] or ""))
+                .where(workspace_memberships_table.c.status == "active")
+            ).scalar()
+            if role:
+                merged["role"] = str(role)
+        return self._db._decode_local_session_row(merged)
+
     def revoke_session(self, session_token: str) -> bool:
         token_hash = self._hash_token(session_token)
         now = _now()
@@ -3563,6 +3611,39 @@ class LocalAuthSessionRepository:
 class ConversationRepository:
     def __init__(self, db: "RuntimeDatabase") -> None:
         self._db = db
+
+    @staticmethod
+    def _normalize_search_terms(query: str) -> list[str]:
+        normalized = re.sub(r"\s+", " ", str(query or "").strip().lower())
+        return [term for term in normalized.split(" ") if term][:6]
+
+    def _load_turn_context(
+        self,
+        conn: Connection,
+        *,
+        conversation_session_id: str,
+        match_index: int,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        user_row = conn.execute(
+            select(conversation_messages_table)
+            .where(conversation_messages_table.c.conversation_session_id == conversation_session_id)
+            .where(conversation_messages_table.c.role == "user")
+            .where(conversation_messages_table.c.message_index <= int(match_index))
+            .order_by(conversation_messages_table.c.message_index.desc())
+            .limit(1)
+        ).mappings().first()
+        assistant_row = conn.execute(
+            select(conversation_messages_table)
+            .where(conversation_messages_table.c.conversation_session_id == conversation_session_id)
+            .where(conversation_messages_table.c.role == "assistant")
+            .where(conversation_messages_table.c.message_index >= int(match_index))
+            .order_by(conversation_messages_table.c.message_index.asc())
+            .limit(1)
+        ).mappings().first()
+        return (
+            self._db._decode_conversation_message_row(dict(user_row)) if user_row else None,
+            self._db._decode_conversation_message_row(dict(assistant_row)) if assistant_row else None,
+        )
 
     def ensure_session(
         self,
@@ -3711,6 +3792,130 @@ class ConversationRepository:
         decoded = [self._db._decode_conversation_message_row(dict(row)) for row in rows]
         decoded.reverse()
         return decoded
+
+    def list_recent_turns(
+        self,
+        *,
+        workspace_id: str,
+        actor_id: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        aid = str(actor_id or "local-user").strip() or "local-user"
+        query_limit = max(1, int(limit or 10))
+        with self._db.local_engine.begin() as conn:
+            rows = conn.execute(
+                select(
+                    conversation_messages_table,
+                    conversation_sessions_table.c.channel.label("session_channel"),
+                    conversation_sessions_table.c.title.label("session_title"),
+                )
+                .join(
+                    conversation_sessions_table,
+                    conversation_sessions_table.c.conversation_session_id == conversation_messages_table.c.conversation_session_id,
+                )
+                .where(conversation_messages_table.c.workspace_id == wid)
+                .where(conversation_messages_table.c.actor_id == aid)
+                .where(conversation_messages_table.c.role == "assistant")
+                .order_by(conversation_messages_table.c.created_at.desc())
+                .limit(query_limit)
+            ).mappings().all()
+
+            out: list[dict[str, Any]] = []
+            for row in rows:
+                decoded = self._db._decode_conversation_message_row(dict(row))
+                user_message, assistant_message = self._load_turn_context(
+                    conn,
+                    conversation_session_id=str(decoded.get("conversation_session_id") or ""),
+                    match_index=int(decoded.get("message_index") or 0),
+                )
+                out.append(
+                    {
+                        "conversation_session_id": str(decoded.get("conversation_session_id") or ""),
+                        "workspace_id": wid,
+                        "channel": str(row.get("session_channel") or "cli"),
+                        "title": str(row.get("session_title") or ""),
+                        "user_message": str((user_message or {}).get("content") or ""),
+                        "bot_response": str((assistant_message or {}).get("content") or decoded.get("content") or ""),
+                        "action": str((assistant_message or {}).get("action") or decoded.get("action") or ""),
+                        "success": bool((assistant_message or {}).get("success") if assistant_message else decoded.get("success")),
+                        "timestamp": float((assistant_message or {}).get("created_at") or decoded.get("created_at") or 0.0),
+                    }
+                )
+        return out
+
+    def search_turns(
+        self,
+        *,
+        workspace_id: str,
+        actor_id: str,
+        query: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        aid = str(actor_id or "local-user").strip() or "local-user"
+        terms = self._normalize_search_terms(query)
+        if not terms:
+            return []
+        query_limit = max(1, int(limit or 10))
+        fetch_limit = max(query_limit * 4, query_limit)
+        with self._db.local_engine.begin() as conn:
+            stmt = (
+                select(
+                    conversation_messages_table,
+                    conversation_sessions_table.c.channel.label("session_channel"),
+                    conversation_sessions_table.c.title.label("session_title"),
+                )
+                .join(
+                    conversation_sessions_table,
+                    conversation_sessions_table.c.conversation_session_id == conversation_messages_table.c.conversation_session_id,
+                )
+                .where(conversation_messages_table.c.workspace_id == wid)
+                .where(conversation_messages_table.c.actor_id == aid)
+                .where(conversation_messages_table.c.role.in_(("user", "assistant")))
+            )
+            for term in terms:
+                stmt = stmt.where(func.lower(conversation_messages_table.c.content).like(f"%{term}%"))
+            rows = conn.execute(
+                stmt.order_by(conversation_messages_table.c.created_at.desc()).limit(fetch_limit)
+            ).mappings().all()
+
+            out: list[dict[str, Any]] = []
+            seen: set[tuple[str, str, str]] = set()
+            for row in rows:
+                decoded = self._db._decode_conversation_message_row(dict(row))
+                session_id = str(decoded.get("conversation_session_id") or "")
+                user_message, assistant_message = self._load_turn_context(
+                    conn,
+                    conversation_session_id=session_id,
+                    match_index=int(decoded.get("message_index") or 0),
+                )
+                dedupe_key = (
+                    session_id,
+                    str((user_message or {}).get("message_id") or ""),
+                    str((assistant_message or {}).get("message_id") or ""),
+                )
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                out.append(
+                    {
+                        "conversation_session_id": session_id,
+                        "workspace_id": wid,
+                        "channel": str(row.get("session_channel") or "cli"),
+                        "title": str(row.get("session_title") or ""),
+                        "matched_role": str(decoded.get("role") or ""),
+                        "matched_content": str(decoded.get("content") or ""),
+                        "user_message": str((user_message or {}).get("content") or ""),
+                        "bot_response": str((assistant_message or {}).get("content") or ""),
+                        "action": str((assistant_message or {}).get("action") or ""),
+                        "success": bool((assistant_message or {}).get("success")) if assistant_message else False,
+                        "timestamp": float(decoded.get("created_at") or 0.0),
+                    }
+                )
+                if len(out) >= query_limit:
+                    break
+        return out
 
     def append_message(
         self,

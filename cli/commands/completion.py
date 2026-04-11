@@ -46,7 +46,7 @@ _elyan_completion() {
             COMPREPLY=($(compgen -W "list info install enable disable update remove search check" -- "$cur"))
             return ;;
         memory)
-            COMPREPLY=($(compgen -W "status index search export import clear stats" -- "$cur"))
+            COMPREPLY=($(compgen -W "status index search recall history export import clear stats" -- "$cur"))
             return ;;
         webhooks)
             COMPREPLY=($(compgen -W "list add remove test logs" -- "$cur"))
@@ -166,7 +166,7 @@ _elyan() {
         security) _values 'eylem' audit status events sandbox ;;
         skills) _values 'eylem' list info install enable disable update edit remove search check ;;
         config) _values 'eylem' show get set unset validate reset export import edit ;;
-        memory) _values 'eylem' status index search export import clear stats ;;
+        memory) _values 'eylem' status index search recall history export import clear stats ;;
         webhooks) _values 'eylem' list add remove test logs ;;
         agents) _values 'eylem' list status add remove start stop logs info create ;;
         browser) _values 'eylem' snapshot screenshot navigate click type extract scroll back forward refresh close profiles list-profiles clear-profile ;;
@@ -203,7 +203,7 @@ complete -c elyan -n "__fish_seen_subcommand_from models" -a "list status test u
 complete -c elyan -n "__fish_seen_subcommand_from cron" -a "list status add rm enable disable run history next"
 complete -c elyan -n "__fish_seen_subcommand_from security" -a "audit status events sandbox"
 complete -c elyan -n "__fish_seen_subcommand_from skills" -a "list info install enable disable update edit remove search check"
-complete -c elyan -n "__fish_seen_subcommand_from memory" -a "status index search export import clear stats"
+complete -c elyan -n "__fish_seen_subcommand_from memory" -a "status index search recall history export import clear stats"
 complete -c elyan -n "__fish_seen_subcommand_from config" -a "show get set unset validate reset export import edit"
 complete -c elyan -n "__fish_seen_subcommand_from lean" -a "status project prove draft autoprove formalize autoformalize swarm"
 complete -c elyan -n "__fish_seen_subcommand_from packs" -a "list status project scaffold workflow bundle ask query quivr cloudflare-agents opengauss all"

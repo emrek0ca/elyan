@@ -193,6 +193,36 @@ class RuntimeSessionAPI:
         turns.reverse()
         return turns
 
+    def list_recent_history(
+        self,
+        *,
+        user_id: str,
+        limit: int = 8,
+        runtime_metadata: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        scope = self._runtime_scope(str(user_id or ""), runtime_metadata)
+        return self.db.conversations.list_recent_turns(
+            workspace_id=scope["workspace_id"],
+            actor_id=scope["actor_id"],
+            limit=max(1, int(limit or 8)),
+        )
+
+    def search_history(
+        self,
+        *,
+        user_id: str,
+        query: str,
+        limit: int = 8,
+        runtime_metadata: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        scope = self._runtime_scope(str(user_id or ""), runtime_metadata)
+        return self.db.conversations.search_turns(
+            workspace_id=scope["workspace_id"],
+            actor_id=scope["actor_id"],
+            query=str(query or ""),
+            limit=max(1, int(limit or 8)),
+        )
+
 
 _runtime_session_api: RuntimeSessionAPI | None = None
 

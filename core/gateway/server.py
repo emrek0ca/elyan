@@ -1926,6 +1926,8 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/trace/{task_id}', self.handle_trace_api)
         self.app.router.add_get('/api/memory/stats', self.handle_memory_stats)
         self.app.router.add_get('/api/memory/profile', self.handle_get_profile)
+        self.app.router.add_get('/api/memory/recall', self.handle_memory_recall)
+        self.app.router.add_get('/api/memory/history', self.handle_memory_history)
         self.app.router.add_get('/api/activity', self.handle_activity_log)
         self.app.router.add_get('/api/runs/recent', self.handle_recent_runs)
         self.app.router.add_get('/api/v1/runs', self.handle_v1_list_runs)
@@ -6549,6 +6551,61 @@ class ElyanGatewayServer:
             "ok": True,
             "profile": memory_v2.profile.__dict__
         })
+
+    async def handle_memory_recall(self, request):
+        allowed, error, session = self._require_user_session(request)
+        if not allowed:
+            return web.json_response({"ok": False, "error": error}, status=401)
+        query = str(request.rel_url.query.get("query") or request.rel_url.query.get("q") or "").strip()
+        if not query:
+            return web.json_response({"ok": False, "error": "query required"}, status=400)
+        try:
+            limit = max(1, min(20, int(request.rel_url.query.get("limit", 8) or 8)))
+        except Exception:
+            limit = 8
+        from core.runtime.session_store import get_runtime_session_api
+
+        results = get_runtime_session_api().search_history(
+            user_id=str(session.get("user_id") or ""),
+            query=query,
+            limit=limit,
+            runtime_metadata=session,
+        )
+        return web.json_response(
+            {
+                "ok": True,
+                "query": query,
+                "count": len(results),
+                "results": results,
+                "workspace_id": str(session.get("workspace_id") or ""),
+                "user_id": str(session.get("user_id") or ""),
+            }
+        )
+
+    async def handle_memory_history(self, request):
+        allowed, error, session = self._require_user_session(request)
+        if not allowed:
+            return web.json_response({"ok": False, "error": error}, status=401)
+        try:
+            limit = max(1, min(20, int(request.rel_url.query.get("limit", 8) or 8)))
+        except Exception:
+            limit = 8
+        from core.runtime.session_store import get_runtime_session_api
+
+        history = get_runtime_session_api().list_recent_history(
+            user_id=str(session.get("user_id") or ""),
+            limit=limit,
+            runtime_metadata=session,
+        )
+        return web.json_response(
+            {
+                "ok": True,
+                "count": len(history),
+                "history": history,
+                "workspace_id": str(session.get("workspace_id") or ""),
+                "user_id": str(session.get("user_id") or ""),
+            }
+        )
 
     async def handle_health_telemetry(self, request):
         """Aggregate all health and performance metrics for the live dashboard."""

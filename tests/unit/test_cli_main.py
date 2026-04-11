@@ -184,6 +184,25 @@ def test_main_routes_models_switch_command(monkeypatch):
     assert captured["name"] == "openai/gpt-4o"
 
 
+def test_main_routes_memory_recall_command(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)
+
+    def fake_run(args):
+        captured["subcommand"] = getattr(args, "subcommand", None)
+        captured["query"] = getattr(args, "query", None)
+        captured["limit"] = getattr(args, "limit", None)
+
+    monkeypatch.setattr("cli.commands.memory.run", fake_run, raising=False)
+
+    code = cli_main.main(["memory", "recall", "iyzico", "--limit", "3"])
+
+    assert code == 0
+    assert captured["subcommand"] == "recall"
+    assert captured["query"] == "iyzico"
+    assert captured["limit"] == 3
+
+
 def test_main_routes_bootstrap_command(monkeypatch):
     captured = {}
     monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)

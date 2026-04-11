@@ -460,8 +460,9 @@ def main(argv: list[str] | None = None):
     # ── memory ──────────────────────────────────────────────────────────
     p = sub.add_parser("memory", help="Bellek yönetimi")
     p.add_argument("subcommand", nargs="?",
-                   choices=["status", "index", "search", "export", "import", "clear", "stats"])
+                   choices=["status", "index", "search", "recall", "history", "export", "import", "clear", "stats"])
     p.add_argument("query", nargs="?")
+    p.add_argument("--limit", type=int, default=10)
     p.add_argument("--size", action="store_true")
     p.add_argument("--user", metavar="USER_ID")
     p.add_argument("--format", default="json")

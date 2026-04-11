@@ -3,7 +3,12 @@ CLI: memory commands — Full implementation
 """
 import asyncio
 import json
+from datetime import datetime
+
 import click
+
+from core.persistence import get_runtime_database
+from core.runtime.session_store import get_runtime_session_api
 
 
 @click.group("memory")
@@ -78,6 +83,23 @@ def memory_search(query, limit, user):
         click.echo(f"✗ Arama başarısız: {e}", err=True)
 
 
+@memory_group.command("recall")
+@click.argument("query")
+@click.option("--limit", default=8, help="Sonuç sayısı")
+@click.option("--user", default=None, help="Kullanıcı ID veya e-posta filtresi")
+def memory_recall(query, limit, user):
+    """Konuşma geçmişinde arama yap."""
+    _run_recall(query, user=user, limit=limit)
+
+
+@memory_group.command("history")
+@click.option("--limit", default=8, help="Sonuç sayısı")
+@click.option("--user", default=None, help="Kullanıcı ID veya e-posta filtresi")
+def memory_history(limit, user):
+    """Son konuşma geçmişini göster."""
+    _run_history(user=user, limit=limit)
+
+
 @memory_group.command("export")
 @click.option("--format", "fmt", default="json", type=click.Choice(["json", "markdown"]), help="Çıktı formatı")
 @click.option("--output", "-o", default=None, help="Çıktı dosyası")
@@ -150,6 +172,11 @@ def run(args):
     elif sub == "search":
         query = getattr(args, "query", None) or ""
         _run_search(query, user=getattr(args, "user", None))
+    elif sub == "recall":
+        query = getattr(args, "query", None) or ""
+        _run_recall(query, user=getattr(args, "user", None), limit=getattr(args, "limit", 8))
+    elif sub == "history":
+        _run_history(user=getattr(args, "user", None), limit=getattr(args, "limit", 8))
     elif sub == "export":
         _run_export(fmt=getattr(args, "format", "json"), output=getattr(args, "file", None))
     elif sub == "clear":
@@ -159,7 +186,7 @@ def run(args):
     elif sub == "import":
         _run_import(getattr(args, "file", None))
     else:
-        print("Usage: elyan memory [status|index|search|export|import|clear|stats]")
+        print("Usage: elyan memory [status|index|search|recall|history|export|import|clear|stats]")
 
 
 def _to_int_or_none(value):
@@ -214,6 +241,73 @@ def _run_search(query: str, user=None):
             print(f"    Tarih: {r.get('timestamp','-')} | Skor: {r.get('score',0):.2f}")
         if not results:
             print("Sonuç bulunamadı.")
+    except Exception as e:
+        print(f"Hata: {e}")
+
+
+def _resolve_runtime_recall_session(user=None) -> dict:
+    session = get_runtime_database().auth_sessions.get_latest_session(user_ref=str(user or ""))
+    if not session:
+        raise RuntimeError("Aktif yerel kullanıcı oturumu bulunamadı. Önce giriş yap.")
+    return get_runtime_session_api().ensure_auth_session(session)
+
+
+def _format_timestamp(timestamp: float) -> str:
+    try:
+        ts = float(timestamp or 0.0)
+    except Exception:
+        ts = 0.0
+    if ts <= 0:
+        return "-"
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+
+
+def _print_recall_rows(rows):
+    for idx, row in enumerate(rows or [], 1):
+        print(f"\n[{idx}] {str(row.get('channel') or 'cli')} • {_format_timestamp(row.get('timestamp', 0.0))}")
+        if str(row.get("title") or "").strip():
+            print(f"    Oturum: {row.get('title')}")
+        if str(row.get("user_message") or "").strip():
+            print(f"    Sen:   {row.get('user_message')}")
+        if str(row.get("bot_response") or "").strip():
+            print(f"    Elyan: {row.get('bot_response')}")
+
+
+def _run_recall(query: str, user=None, limit: int = 8):
+    query_text = str(query or "").strip()
+    if not query_text:
+        print("Hata: arama sorgusu gereklidir.")
+        return
+    print(f"Geçmiş aranıyor: '{query_text}'...")
+    try:
+        session = _resolve_runtime_recall_session(user)
+        rows = get_runtime_session_api().search_history(
+            user_id=str(session.get("user_id") or ""),
+            query=query_text,
+            limit=max(1, int(limit or 8)),
+            runtime_metadata=session,
+        )
+        if not rows:
+            print("Sonuç bulunamadı.")
+            return
+        _print_recall_rows(rows)
+    except Exception as e:
+        print(f"Hata: {e}")
+
+
+def _run_history(user=None, limit: int = 8):
+    print("Son konuşmalar getiriliyor...")
+    try:
+        session = _resolve_runtime_recall_session(user)
+        rows = get_runtime_session_api().list_recent_history(
+            user_id=str(session.get("user_id") or ""),
+            limit=max(1, int(limit or 8)),
+            runtime_metadata=session,
+        )
+        if not rows:
+            print("Geçmiş bulunamadı.")
+            return
+        _print_recall_rows(rows)
     except Exception as e:
         print(f"Hata: {e}")
 

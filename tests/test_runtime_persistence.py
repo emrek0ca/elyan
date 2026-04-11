@@ -473,6 +473,77 @@ def test_runtime_session_api_persists_conversation_turns_with_workspace_scope():
     assert [str(row["role"]) for row in message_rows] == ["user", "assistant"]
 
 
+def test_runtime_session_api_recall_searches_across_conversation_sessions():
+    runtime_db = get_runtime_database()
+    user = runtime_db.auth.upsert_user(
+        email="recall@example.com",
+        password="TopSecret123",
+        display_name="Recall User",
+    )
+    desktop_session, _ = runtime_db.auth_sessions.create_session(
+        user=user,
+        metadata={"client": "desktop"},
+    )
+    telegram_session, _ = runtime_db.auth_sessions.create_session(
+        user=user,
+        metadata={"client": "telegram"},
+    )
+    session_api = RuntimeSessionAPI(runtime_db)
+
+    session_api.append_turn(
+        user_id=str(user["user_id"]),
+        user_input="Iyzico webhook imzasini nasil dogruluyorduk?",
+        response_text="Webhook imzasini hmac.compare_digest ile sabit zamanli karsilastiriyoruz.",
+        action="chat",
+        success=True,
+        runtime_metadata={
+            "workspace_id": str(user["workspace_id"]),
+            "session_id": str(desktop_session["session_id"]),
+            "channel": "desktop",
+            "device_id": "macbook-pro",
+        },
+    )
+    session_api.append_turn(
+        user_id=str(user["user_id"]),
+        user_input="Dun konustugumuz iyzico checkout hatasini hatirlat.",
+        response_text="Telegram akisinda checkout linkini sabitlemistik.",
+        action="chat",
+        success=True,
+        runtime_metadata={
+            "workspace_id": str(user["workspace_id"]),
+            "session_id": str(telegram_session["session_id"]),
+            "channel": "telegram",
+            "device_id": "iphone",
+        },
+    )
+    session_api.append_turn(
+        user_id=str(user["user_id"]),
+        user_input="Bugun hava nasil?",
+        response_text="Bugun gunesli gorunuyor.",
+        action="chat",
+        success=True,
+        runtime_metadata={
+            "workspace_id": str(user["workspace_id"]),
+            "session_id": str(telegram_session["session_id"]),
+            "channel": "telegram",
+            "device_id": "iphone",
+        },
+    )
+
+    results = session_api.search_history(
+        user_id=str(user["user_id"]),
+        query="iyzico",
+        limit=5,
+        runtime_metadata={"workspace_id": str(user["workspace_id"])},
+    )
+
+    assert len(results) == 2
+    assert {item["channel"] for item in results} == {"desktop", "telegram"}
+    assert all(item["workspace_id"] == str(user["workspace_id"]) for item in results)
+    assert any("hmac.compare_digest" in item["bot_response"] for item in results)
+    assert any("checkout linkini sabitlemistik" in item["bot_response"] for item in results)
+
+
 def test_outbox_retry_transitions_to_dead_letter():
     runtime_db = get_runtime_database()
     with runtime_db.local_engine.begin() as conn:
