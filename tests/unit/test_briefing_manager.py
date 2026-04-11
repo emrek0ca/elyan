@@ -123,3 +123,87 @@ async def test_briefing_manager_malformed_tool_output_is_normalized(monkeypatch)
     assert result["briefing"] == "briefing-ready"
     assert result["metrics"]["health_score"] == 100
     assert result["metrics"]["cpu"] is None
+
+
+@pytest.mark.asyncio
+async def test_briefing_manager_returns_structured_morning_digest(monkeypatch):
+    monkeypatch.setattr("core.briefing_manager.get_anomaly_detector", lambda: _DummyAnomalyDetector())
+
+    async def fake_execute(self, tool_func, params):
+        _ = (tool_func, params)
+        return {
+            "success": True,
+            "status": "success",
+            "cpu_percent": 18,
+            "memory_percent": 41,
+            "disk_usage": {"percent": 57},
+            "os_version": "macOS 15",
+        }
+
+    monkeypatch.setattr("core.briefing_manager.TaskExecutor.execute", fake_execute)
+
+    manager = BriefingManager(llm_client=_DummyLLM())
+    monkeypatch.setattr(
+        manager,
+        "_get_weather",
+        lambda: _fake_source_result(
+            {
+                "success": True,
+                "city": "Istanbul",
+                "temperature": 19,
+                "description": "parçalı bulutlu",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_get_calendar",
+        lambda: _fake_source_result(
+            {
+                "success": True,
+                "events": [
+                    {"title": "Standup", "start": "09:30", "end": "10:00"},
+                ],
+                "count": 1,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_get_news",
+        lambda: _fake_source_result(
+            {
+                "success": True,
+                "headlines": [
+                    {"title": "Merkez Bankası faiz kararını açıkladı", "link": "https://example.com/news"},
+                ],
+                "count": 1,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_get_email_digest",
+        lambda: _fake_source_result(
+            {
+                "success": True,
+                "messages": [
+                    {"title": "Bütçe onayı bekliyor", "from": "finance@example.com"},
+                ],
+                "count": 1,
+            }
+        ),
+    )
+
+    result = await manager.get_proactive_briefing()
+
+    assert result["success"] is True
+    assert result["briefing"] == "briefing-ready"
+    digest = result["digest"]
+    assert digest["summary"] == "briefing-ready"
+    assert digest["calendar_items"][0]["title"] == "Standup"
+    assert digest["email_items"][0]["title"] == "Bütçe onayı bekliyor"
+    assert digest["news_items"][0]["title"] == "Merkez Bankası faiz kararını açıkladı"
+    assert "19 derece" in digest["speech_script"]
+    assert digest["source_trace"]["calendar"]["available"] is True
+    assert digest["source_trace"]["email"]["available"] is True

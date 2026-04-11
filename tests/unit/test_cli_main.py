@@ -203,6 +203,44 @@ def test_main_routes_memory_recall_command(monkeypatch):
     assert captured["limit"] == 3
 
 
+def test_main_routes_digest_command(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)
+
+    def fake_run(args):
+        captured["subcommand"] = getattr(args, "subcommand", None)
+        captured["weather"] = getattr(args, "weather", None)
+        return 0
+
+    monkeypatch.setattr("cli.commands.digest.run", fake_run, raising=False)
+
+    code = cli_main.main(["digest", "show", "--no-weather"])
+
+    assert code == 0
+    assert captured["subcommand"] == "show"
+    assert captured["weather"] is False
+
+
+def test_main_routes_research_with_local_paths(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)
+
+    def fake_search(query, depth="standard", format="text", session=None, paths=None, include_web=True):
+        captured["query"] = query
+        captured["depth"] = depth
+        captured["paths"] = list(paths or [])
+        captured["include_web"] = include_web
+
+    monkeypatch.setattr("cli.commands.research.research_search", fake_search, raising=False)
+
+    code = cli_main.main(["research", "search", "yerel", "belgeleri", "tara", "--path", "/tmp/doc.txt", "--local-only"])
+
+    assert code == 0
+    assert captured["query"] == "yerel belgeleri tara"
+    assert captured["paths"] == ["/tmp/doc.txt"]
+    assert captured["include_web"] is False
+
+
 def test_main_routes_bootstrap_command(monkeypatch):
     captured = {}
     monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)

@@ -41,6 +41,7 @@ TOP_LEVEL_COMMANDS = [
     "agents",
     "browser",
     "voice",
+    "digest",
     "message",
     "service",
     "desktop",
@@ -534,6 +535,16 @@ def main(argv: list[str] | None = None):
     p.add_argument("text", nargs="?")
     p.add_argument("--file", metavar="FILE")
 
+    # ── digest ──────────────────────────────────────────────────────────
+    p = sub.add_parser("digest", help="Sabah özeti üret, seslendir veya dışa aktar")
+    p.add_argument("subcommand", nargs="?", choices=["show", "speak", "export", "profile"], default="show")
+    p.add_argument("--format", choices=["text", "json"], default="text")
+    p.add_argument("--file", metavar="FILE")
+    p.add_argument("--weather", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--calendar", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--news", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--email", action=argparse.BooleanOptionalAction, default=True)
+
     # ── message ─────────────────────────────────────────────────────────
     p = sub.add_parser("message", help="Mesaj gönder")
     p.add_argument("action", nargs="?", choices=["send", "poll", "broadcast"])
@@ -719,11 +730,14 @@ def main(argv: list[str] | None = None):
 
     # ── research ─────────────────────────────────────────────────────────
     p = sub.add_parser("research", help="🔬 Araştırma Motoru — Multi-kaynak, atıf")
-    p.add_argument("command", nargs="?", choices=["search", "session", "list"], default="search")
+    p.add_argument("subcommand", nargs="?", choices=["search", "session", "list"], default="search")
     p.add_argument("query", nargs="*", help="Araştırma sorgusu")
     p.add_argument("--depth", choices=["basic", "standard", "deep", "academic"], default="standard")
     p.add_argument("--format", choices=["text", "json", "md"], default="text")
     p.add_argument("--session", metavar="SESSION_ID", help="Oturum ID'si (kaydetmek için)")
+    p.add_argument("--path", dest="paths", action="append", default=[], help="Yerel belge veya klasör yolu")
+    p.add_argument("--local-only", action="store_true", help="Sadece yerel belgelerde ara")
+    p.add_argument("--web-only", action="store_true", help="Sadece web kaynaklarında ara")
 
     # ── screen ───────────────────────────────────────────────────────────
     p = sub.add_parser("screen", help="👁️ Gorsel Analiz — OCR, erisilebilirlik")
@@ -877,26 +891,21 @@ def main(argv: list[str] | None = None):
 
     elif args.command == "research":
         from cli.commands import research
-        research_cmd = getattr(args, "command", "search").strip().lower()
+        if getattr(args, "local_only", False) and getattr(args, "web_only", False):
+            print("Hata: --local-only ve --web-only birlikte kullanılamaz.", file=sys.stderr)
+            return 1
+        if getattr(args, "web_only", False):
+            args.local_only = False
+            args.paths = []
+        research_cmd = str(getattr(args, "command", "search") or "search").strip().lower()
         query = " ".join(getattr(args, "query", []) or []).strip()
-
-        if research_cmd == "search":
-            if not query:
+        if research_cmd in {"search", "session"} and not query and research_cmd != "list":
+            if research_cmd == "search":
                 print("Hata: Sorgu gerekli (örn: elyan research 'Python nedir')", file=sys.stderr)
-                return 1
-            research.research_search(
-                query,
-                depth=getattr(args, "depth", "standard"),
-                format=getattr(args, "format", "text"),
-                session=getattr(args, "session", None),
-            )
-        elif research_cmd == "session":
-            if not query:
+            else:
                 print("Hata: Oturum ID gerekli (örn: elyan research session abc123)", file=sys.stderr)
-                return 1
-            research.research_session(query, format=getattr(args, "format", "text"))
-        elif research_cmd == "list":
-            research.research_list(format=getattr(args, "format", "text"))
+            return 1
+        research.run(args)
 
     elif args.command == "screen":
         from cli.commands import screen
@@ -1127,6 +1136,12 @@ def main(argv: list[str] | None = None):
     elif args.command == "voice":
         from cli.commands import voice
         result = voice.handle_voice(args)
+        if isinstance(result, int):
+            return result
+
+    elif args.command == "digest":
+        from cli.commands import digest
+        result = digest.run(args)
         if isinstance(result, int):
             return result
 

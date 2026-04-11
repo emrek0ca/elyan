@@ -124,3 +124,19 @@ def test_models_use_syncs_runtime_and_gateway(monkeypatch):
     assert captured["gateway_sync"]["model"] == "gpt-4o"
     assert captured["gateway_sync"]["roles"]["router"] == {"provider": "ollama", "model": "llama3.1:8b"}
     assert captured["gateway_sync"]["roles"]["inference"] == {"provider": "ollama", "model": "llama3.1:8b"}
+
+
+def test_models_use_openrouter_provider_only_sets_default_model(monkeypatch):
+    captured = {}
+
+    def fake_set(key, value):
+        captured[key] = value
+
+    monkeypatch.setattr(models.elyan_config, "set", fake_set)
+    monkeypatch.setattr(models, "_sync_default_to_runtime", lambda provider, model: True)
+    monkeypatch.setattr(models, "_sync_default_to_gateway", lambda provider, model, role_map: False)
+
+    models._use("openrouter")
+
+    assert captured["models.default.provider"] == "openrouter"
+    assert captured["models.default.model"] == "openai/gpt-4o-mini"

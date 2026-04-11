@@ -30,6 +30,8 @@ async def research(
     query: str,
     depth: str = "standard",
     session_id: Optional[str] = None,
+    local_paths: Optional[list[str]] = None,
+    include_web: bool = True,
 ) -> ResearchResult:
     """
     Execute research with optional session persistence.
@@ -44,7 +46,7 @@ async def research(
         ResearchResult with answer, citations, confidence, timestamp
     """
     engine = get_research_engine()
-    result = await engine.research(query, depth)
+    result = await engine.research(query, depth, local_paths=local_paths, include_web=include_web)
 
     if session_id:
         session = ResearchSession(session_id=session_id)

@@ -37,15 +37,31 @@ async def test_voice_manager_start_stop_and_status(monkeypatch):
     monkeypatch.setattr(voice_manager, "get_stt_service", lambda: _FakeSTT())
     monkeypatch.setattr(voice_manager, "get_tts_service", lambda: _FakeTTS())
     monkeypatch.setattr(voice_manager, "WakeWordDetector", _FakeWakeDetector)
+    monkeypatch.setattr(
+        voice_manager,
+        "detect_runtime_profile",
+        lambda: type(
+            "_Profile",
+            (),
+            {
+                "to_dict": lambda self: {
+                    "recommended_provider": "ollama",
+                    "tts_backend": "macos_say",
+                    "stt_backend": "whisper",
+                }
+            },
+        )(),
+    )
     monkeypatch.setattr(voice_manager.elyan_config, "get", lambda key, default=None: "elyan" if key == "voice.wake_word" else default)
 
     vm = voice_manager.VoiceManager()
     started = await vm.start()
     assert started["running"] is True
     assert started["stt_provider"] == "whisper"
-    assert started["tts_provider"] == "pyttsx3"
+    assert started["tts_provider"] == "macos_say"
     assert started["wake_word"] == "elyan"
     assert started["wake_word_listener"] is True
+    assert started["runtime_profile"]["recommended_provider"] == "ollama"
 
     stopped = await vm.stop()
     assert stopped["running"] is False

@@ -18,7 +18,7 @@ _PROVIDER_ALIASES = {
     "api": "google",
     "local": "ollama",
 }
-_KNOWN_PROVIDERS = ("openai", "anthropic", "google", "groq", "ollama", "deepseek", "mistral", "together", "cohere", "perplexity", "xai")
+_KNOWN_PROVIDERS = ("openai", "openrouter", "anthropic", "google", "groq", "ollama", "deepseek", "mistral", "together", "cohere", "perplexity", "xai")
 _COLLAB_ROLE_DEFAULTS = [
     "reasoning",
     "planning",
@@ -100,6 +100,8 @@ class ModelOrchestrator:
                 low = model.lower()
         if provider_name == "openai":
             return model if low.startswith(("gpt-", "o1", "o3", "gpt4")) else default_model_for_provider(provider_name)
+        if provider_name == "openrouter":
+            return model or default_model_for_provider(provider_name)
         if provider_name == "anthropic":
             return model if "claude" in low else default_model_for_provider(provider_name)
         if provider_name == "google":
@@ -129,6 +131,8 @@ class ModelOrchestrator:
         endpoint = cfg.get("endpoint") or cfg.get("baseUrl")
         if provider_name == "ollama":
             endpoint = endpoint or local_cfg.get("baseUrl") or "http://localhost:11434"
+        elif provider_name == "openrouter":
+            endpoint = endpoint or "https://openrouter.ai/api/v1"
         api_key = cfg.get("apiKey") or (None if provider_name == "ollama" else self._load_from_keychain(provider_name))
         candidate_model = (
             cfg.get("default_model")
@@ -540,27 +544,27 @@ class ModelOrchestrator:
         role_name = str(role or "inference").strip().lower()
         local_first = self._local_first_enabled()
 
-        cloud_order = ["groq", "google", "openai", "anthropic", "deepseek", "mistral", "together"]
+        cloud_order = ["groq", "google", "openai", "openrouter", "anthropic", "deepseek", "mistral", "together"]
         local_order = ["ollama"]
 
         if role_name == "router":
             return local_order + cloud_order
         if role_name in {"code", "code_worker"}:
             if local_first:
-                return local_order + ["groq", "deepseek", "google", "anthropic", "openai", "mistral", "together"]
-            return ["groq", "deepseek", "google", "anthropic", "openai", "mistral", "together", "ollama"]
+                return local_order + ["groq", "deepseek", "google", "anthropic", "openai", "openrouter", "mistral", "together"]
+            return ["groq", "deepseek", "google", "anthropic", "openai", "openrouter", "mistral", "together", "ollama"]
         if role_name in {"reasoning", "research_worker", "worker", "critic", "planning", "qa"}:
             if local_first:
-                return local_order + ["groq", "google", "deepseek", "anthropic", "openai", "mistral", "together"]
-            return ["groq", "google", "deepseek", "anthropic", "openai", "mistral", "together", "ollama"]
+                return local_order + ["groq", "google", "deepseek", "anthropic", "openai", "openrouter", "mistral", "together"]
+            return ["groq", "google", "deepseek", "anthropic", "openai", "openrouter", "mistral", "together", "ollama"]
         if role_name == "creative":
             if local_first:
-                return local_order + ["google", "groq", "anthropic", "openai", "mistral", "together", "deepseek"]
-            return ["google", "groq", "anthropic", "openai", "mistral", "together", "deepseek", "ollama"]
+                return local_order + ["google", "groq", "anthropic", "openai", "openrouter", "mistral", "together", "deepseek"]
+            return ["google", "groq", "anthropic", "openai", "openrouter", "mistral", "together", "deepseek", "ollama"]
         if local_first:
             return local_order + cloud_order
         # inference / default — quality first
-        return ["groq", "google", "openai", "anthropic", "deepseek", "mistral", "together", "ollama"]
+        return ["groq", "google", "openai", "openrouter", "anthropic", "deepseek", "mistral", "together", "ollama"]
 
     def add_provider(self, p_type: str, api_key: str, model: str = None):
         provider = self._normalize_provider(p_type)

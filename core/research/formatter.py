@@ -30,8 +30,11 @@ def format_cited_answer(result: ResearchResult) -> str:
     if result.citations:
         lines.append("## Kaynaklar")
         for i, source in enumerate(result.citations, 1):
+            location = source.url
+            if source.source_type == "local_document" and source.source_path:
+                location = source.source_path
             lines.append(
-                f"[{i}] {source.title} — {source.url} "
+                f"[{i}] {source.title} — {location} "
                 f"(güvenilirlik: {source.reliability:.0%})"
             )
 
@@ -91,12 +94,13 @@ def format_cli_summary(result: ResearchResult) -> str:
         lines.append("📚 Top Sources:")
         lines.append("-" * 50)
         for i, source in enumerate(result.citations[:5], 1):
-            # Extract domain from URL
             domain = source.url.split("/")[2] if "/" in source.url else source.url
+            if source.source_type == "local_document" and source.source_path:
+                domain = source.source_path
             lines.append(
                 f"[{i}] {source.title[:50]:<50} ({source.reliability:.0%})"
             )
-            lines.append(f"    {source.url}")
+            lines.append(f"    {domain}")
 
     return "\n".join(lines)
 

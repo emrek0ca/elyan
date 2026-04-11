@@ -102,3 +102,47 @@ def test_settings_panel_update_syncs_runtime_models_and_env(tmp_path, monkeypatc
     assert "LLM_TYPE=anthropic" in env_content
     assert "MODEL_NAME=claude-3-5-sonnet-latest" in env_content
     assert "ANTHROPIC_API_KEY=anthropic-secret" in env_content
+
+
+def test_settings_panel_update_syncs_openrouter_models_and_env(tmp_path, monkeypatch):
+    fake_runtime = _FakeRuntimeConfig(
+        {
+            "models": {
+                "default": {"provider": "openai", "model": "gpt-4o"},
+                "fallback": {"provider": "groq", "model": "llama-3.3-70b-versatile"},
+                "registry": [],
+                "providers": {},
+                "local": {"provider": "ollama", "model": "llama3", "baseUrl": "http://localhost:11434"},
+            }
+        }
+    )
+    cfg_path = tmp_path / "settings.json"
+    cfg_path.write_text("{}", encoding="utf-8")
+    env_path = tmp_path / ".env"
+    env_path.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(settings_module, "elyan_config", fake_runtime)
+    monkeypatch.setattr(settings_module.platform, "system", lambda: "Linux")
+
+    panel = settings_module.SettingsPanel(config_path=str(cfg_path))
+    panel.env_path = env_path
+
+    panel.update(
+        {
+            "llm_provider": "openrouter",
+            "llm_model": "openai/gpt-4o-mini",
+            "api_key": "openrouter-secret",
+            "ollama_host": "http://localhost:11434",
+            "llm_fallback_order": ["openrouter", "openai", "ollama"],
+        }
+    )
+
+    assert fake_runtime.get("models.default.provider") == "openrouter"
+    assert fake_runtime.get("models.default.model") == "openai/gpt-4o-mini"
+    assert fake_runtime.get("models.providers.openrouter.model") == "openai/gpt-4o-mini"
+    assert fake_runtime.get("models.providers.openrouter.apiKey") == "$OPENROUTER_API_KEY"
+
+    env_content = env_path.read_text(encoding="utf-8")
+    assert "LLM_TYPE=openrouter" in env_content
+    assert "MODEL_NAME=openai/gpt-4o-mini" in env_content
+    assert "OPENROUTER_API_KEY=openrouter-secret" in env_content

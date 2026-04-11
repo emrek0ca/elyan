@@ -47,7 +47,7 @@ class LLMClient:
         self.llm_type: str = "openai"
         self.cost_guard: bool = False
         self.fallback_mode: str = "standard"
-        self.fallback_order: list = ["openai", "groq", "gemini", "ollama"]
+        self.fallback_order: list = ["openai", "openrouter", "groq", "gemini", "ollama"]
         self._router_trace: list = []
         self._collaboration_trace: list = []
 
@@ -498,7 +498,7 @@ class LLMClient:
         kvkk_strict = bool(elyan_config.get("security.kvkk.strict", True))
         redact_cloud_prompts = bool(elyan_config.get("security.kvkk.redactCloudPrompts", True))
         allow_cloud_fallback = bool(elyan_config.get("security.kvkk.allowCloudFallback", True))
-        external_providers = {"openai", "groq", "gemini", "google", "anthropic"}
+        external_providers = {"openai", "openrouter", "groq", "gemini", "google", "anthropic"}
 
         # Local-first now applies broadly: prefer Ollama for simple and
         # general inference paths, then fall back to cloud providers if needed.
@@ -592,7 +592,7 @@ class LLMClient:
                 response = ""
                 if provider == "ollama":
                     response = await self._call_ollama(full_prompt, system_prompt, cfg, user_id=user_id)
-                elif provider == "openai":
+                elif provider in {"openai", "openrouter"}:
                     response = await self._call_openai(provider_prompt, system_prompt, cfg, provider_history, user_id=user_id)
                 elif provider == "groq":
                     response = await self._call_groq(provider_prompt, system_prompt, cfg, provider_history, user_id=user_id)
@@ -693,9 +693,13 @@ class LLMClient:
         
         logger.info(f"Streaming with {provider}...")
         
-        if provider == "openai":
+        if provider in {"openai", "openrouter"}:
             from openai import AsyncOpenAI
-            client = AsyncOpenAI(api_key=cfg.get("apiKey"))
+            client_kwargs = {"api_key": cfg.get("apiKey")}
+            endpoint = str(cfg.get("endpoint") or "").strip()
+            if endpoint:
+                client_kwargs["base_url"] = endpoint.rstrip("/")
+            client = AsyncOpenAI(**client_kwargs)
             stream = await client.chat.completions.create(
                 model=cfg.get("model", "gpt-4o"),
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}],
@@ -782,7 +786,11 @@ class LLMClient:
 
     async def _call_openai(self, prompt: str, system_prompt: str, cfg: dict, history: list = None, user_id: str = "local") -> str:
         from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=cfg.get("apiKey"))
+        client_kwargs = {"api_key": cfg.get("apiKey")}
+        endpoint = str(cfg.get("endpoint") or "").strip()
+        if endpoint:
+            client_kwargs["base_url"] = endpoint.rstrip("/")
+        client = AsyncOpenAI(**client_kwargs)
         messages = []
         if system_prompt: messages.append({"role": "system", "content": system_prompt})
         
@@ -806,9 +814,10 @@ class LLMClient:
         resp = await client.chat.completions.create(**kwargs)
         content = resp.choices[0].message.content
         usage = resp.usage
+        provider_name = str(cfg.get("provider") or cfg.get("type") or "openai").strip().lower() or "openai"
         if usage:
             self.pricing_tracker.record_usage(
-                provider="openai",
+                provider=provider_name,
                 model=model,
                 prompt_tokens=usage.prompt_tokens,
                 completion_tokens=usage.completion_tokens,
@@ -1143,11 +1152,11 @@ class LLMClient:
         provider_name = self.orchestrator._normalize_provider(provider)
         provider_cfg = dict(cfg or self._get_provider_config(provider_name))
 
-        if provider_name == "openai":
+        if provider_name in {"openai", "openrouter"}:
             if importlib.util.find_spec("openai") is None:
                 return False, "openai_sdk_missing"
             if not provider_cfg.get("apiKey"):
-                return False, "openai_api_key_missing"
+                return False, "openrouter_api_key_missing" if provider_name == "openrouter" else "openai_api_key_missing"
             return True, "ok"
         if provider_name == "groq":
             return (bool(provider_cfg.get("apiKey")), "groq_api_key_missing" if not provider_cfg.get("apiKey") else "ok")
@@ -1187,7 +1196,7 @@ class LLMClient:
         sys_prompt = _chat_system_prompt_override.get() or self._resolve_system_prompt()
         if provider_name == "ollama":
             return await self._call_ollama(prompt, sys_prompt, cfg)
-        elif provider_name == "openai":
+        elif provider_name in {"openai", "openrouter"}:
             return await self._call_openai(prompt, sys_prompt, cfg)
         elif provider_name == "groq":
             return await self._call_groq(prompt, sys_prompt, cfg)

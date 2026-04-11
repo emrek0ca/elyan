@@ -70,4 +70,4 @@ def sanitize_object(payload: Any, depth: int = 0, max_depth: int = 4) -> Any:
 
 def is_external_provider(provider: str) -> bool:
     p = str(provider or "").strip().lower()
-    return p in {"groq", "gemini", "google", "openai", "anthropic"}
+    return p in {"groq", "gemini", "google", "openai", "openrouter", "anthropic"}

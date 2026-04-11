@@ -24,6 +24,25 @@ def research_group():
     pass
 
 
+def research_search(
+    query: str,
+    depth: str = "standard",
+    format: str = "text",
+    session: str | None = None,
+    paths: list[str] | None = None,
+    include_web: bool = True,
+):
+    """Sorgu araştırması yap."""
+    return _run_research_search(
+        query=query,
+        depth=depth,
+        format=format,
+        session=session,
+        paths=paths,
+        include_web=include_web,
+    )
+
+
 @research_group.command("search")
 @click.argument("query")
 @click.option(
@@ -43,18 +62,40 @@ def research_group():
     default=None,
     help="Session ID'si (isteğe bağlı, oturum kaydetmek için)",
 )
-def research_search(query: str, depth: str, format: str, session: str):
-    """Sorgu araştırması yap."""
+@click.option("--path", "paths", multiple=True, help="Yerel belge veya klasör yolu")
+@click.option("--local-only", is_flag=True, default=False, help="Sadece yerel belgelerde ara")
+def research_search_cmd(query: str, depth: str, format: str, session: str | None, paths: tuple[str, ...], local_only: bool):
+    return research_search(
+        query=query,
+        depth=depth,
+        format=format,
+        session=session,
+        paths=list(paths or []),
+        include_web=not bool(local_only),
+    )
+
+
+def _run_research_search(
+    *,
+    query: str,
+    depth: str = "standard",
+    format: str = "text",
+    session: str | None = None,
+    paths: list[str] | None = None,
+    include_web: bool = True,
+):
     async def _run():
         engine = _get_research_engine()
 
         click.echo(f"🔬 Araştırılıyor: {query[:60]}")
         click.echo(f"   Derinlik: {depth}")
+        if paths:
+            click.echo(f"   Yerel Kaynak: {len(list(paths or []))}")
         if session:
             click.echo(f"   Oturum: {session}")
         click.echo("")
 
-        result = await engine.research(query, depth)
+        result = await engine.research(query, depth, local_paths=paths or None, include_web=include_web)
 
         # Save to session if provided
         if session:
@@ -88,6 +129,11 @@ def research_search(query: str, depth: str, format: str, session: str):
         click.echo(f"✗ Araştırma başarısız: {e}", err=True)
 
 
+def research_session(session_id: str, format: str = "text"):
+    """Geçmiş araştırma oturumunu göster."""
+    return _run_research_session(session_id=session_id, format=format)
+
+
 @research_group.command("session")
 @click.argument("session_id")
 @click.option(
@@ -96,8 +142,11 @@ def research_search(query: str, depth: str, format: str, session: str):
     default="text",
     help="Çıktı biçimi",
 )
-def research_session(session_id: str, format: str):
-    """Geçmiş araştırma oturumunu göster."""
+def research_session_cmd(session_id: str, format: str):
+    return research_session(session_id=session_id, format=format)
+
+
+def _run_research_session(*, session_id: str, format: str = "text"):
     try:
         from core.research import get_session
 
@@ -127,6 +176,11 @@ def research_session(session_id: str, format: str):
         click.echo(f"✗ Oturum gösterilemedi: {e}", err=True)
 
 
+def research_list(format: str = "text"):
+    """Tüm araştırma oturumlarını listele."""
+    return _run_research_list(format=format)
+
+
 @research_group.command("list")
 @click.option(
     "--format",
@@ -134,8 +188,11 @@ def research_session(session_id: str, format: str):
     default="text",
     help="Çıktı biçimi",
 )
-def research_list(format: str):
-    """Tüm araştırma oturumlarını listele."""
+def research_list_cmd(format: str):
+    return research_list(format=format)
+
+
+def _run_research_list(*, format: str = "text"):
     try:
         from core.research import list_sessions
 
@@ -165,6 +222,26 @@ def research_list(format: str):
 
     except Exception as e:
         click.echo(f"✗ Oturumlar listelenemiyor: {e}", err=True)
+
+
+def run(args):
+    sub = str(getattr(args, "subcommand", "search") or "search").strip().lower()
+    if sub == "search":
+        query = " ".join(getattr(args, "query", []) or []).strip()
+        return research_search(
+            query=query,
+            depth=getattr(args, "depth", "standard"),
+            format=getattr(args, "format", "text"),
+            session=getattr(args, "session", None),
+            paths=list(getattr(args, "paths", []) or []),
+            include_web=not bool(getattr(args, "local_only", False)),
+        )
+    if sub == "session":
+        session_id = " ".join(getattr(args, "query", []) or []).strip()
+        return _run_research_session(session_id=session_id, format=getattr(args, "format", "text"))
+    if sub == "list":
+        return _run_research_list(format=getattr(args, "format", "text"))
+    click.echo(f"Bilinmeyen research komutu: {sub}", err=True)
 
 
 __all__ = ["research_group"]

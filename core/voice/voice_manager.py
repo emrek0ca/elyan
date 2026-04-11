@@ -8,6 +8,7 @@ from config.elyan_config import elyan_config
 from tools.voice.wake_word import WakeWordDetector
 from core.voice.speech_to_text import get_stt_service
 from core.voice.text_to_speech import get_tts_service
+from core.voice.runtime_profile import detect_runtime_profile
 from utils.logger import get_logger
 
 logger = get_logger("voice_manager")
@@ -65,13 +66,22 @@ class VoiceManager:
         return self.get_status()
 
     def get_status(self) -> dict[str, Any]:
+        profile = detect_runtime_profile()
+        profile_data = profile.to_dict() if hasattr(profile, "to_dict") else dict(profile or {})
+        tts_provider = "unavailable"
+        if self.tts:
+            tts_provider = str(profile_data.get("tts_backend") or "pyttsx3")
+        stt_provider = "unavailable"
+        if self.stt:
+            stt_provider = str(profile_data.get("stt_backend") or "whisper")
         return {
             "running": bool(self.running),
             "started_at": self.started_at or "",
-            "stt_provider": "whisper" if self.stt else "unavailable",
-            "tts_provider": "pyttsx3" if self.tts else "unavailable",
+            "stt_provider": stt_provider,
+            "tts_provider": tts_provider,
             "wake_word": self.wake_word,
             "wake_word_listener": bool(self._wake_task and not self._wake_task.done()),
+            "runtime_profile": profile_data,
         }
 
 

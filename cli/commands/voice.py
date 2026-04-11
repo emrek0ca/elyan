@@ -4,6 +4,7 @@ CLI: voice commands — Full implementation
 import asyncio
 import click
 from core.dependencies import get_dependency_runtime
+from core.voice.elyan_tts import get_elyan_tts
 
 
 def _run_voice_start() -> None:
@@ -42,6 +43,9 @@ def _run_voice_status() -> None:
         click.echo(f"STT:      {status.get('stt_provider', 'whisper')}")
         click.echo(f"TTS:      {status.get('tts_provider', 'pyttsx3')}")
         click.echo(f"Wake:     {status.get('wake_word', 'elyan')}")
+        profile = status.get("runtime_profile") or {}
+        if profile:
+            click.echo(f"Model:    {profile.get('recommended_provider', '-')}/{profile.get('recommended_model', '-')}")
     except Exception as e:
         click.echo(f"Ses modu durumu alınamadı: {e}", err=True)
 
@@ -100,18 +104,14 @@ def _run_voice_transcribe(file: str) -> None:
 def _run_voice_speak(text: str, provider: str) -> None:
     click.echo(f"🔊 Seslendiriliyor ({provider})...")
     try:
-        if provider == "pyttsx3":
-            runtime = get_dependency_runtime()
-            runtime.ensure_module("pyttsx3", install_spec="pyttsx3", source="pypi", trust_level="trusted", skill_name="voice", tool_name="voice_speak", allow_install=True)
-            import pyttsx3
-            engine = pyttsx3.init()
-            engine.say(text)
-            engine.runAndWait()
+        if provider in {"auto", "local", "elyan", "pyttsx3"}:
+            ok = asyncio.run(get_elyan_tts().speak(text, interrupt=True))
+            if not ok:
+                click.echo("⚠️  Yerel TTS şu an kullanılamıyor.", err=True)
+                return
             click.echo("✓ Tamamlandı.")
         else:
             click.echo(f"⚠️  '{provider}' sağlayıcısı henüz desteklenmiyor.", err=True)
-    except ImportError:
-        click.echo("⚠️  pyttsx3 kurulu değil: pip install pyttsx3", err=True)
     except Exception as e:
         click.echo(f"✗ Seslendirme başarısız: {e}", err=True)
 

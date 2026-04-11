@@ -20,11 +20,12 @@ _RUNTIME_PROVIDER_ALIASES = {
     "gemini": "google",
     "local": "ollama",
 }
-_SETTINGS_PROVIDER_ORDER = ["groq", "gemini", "openai", "anthropic", "ollama"]
+_SETTINGS_PROVIDER_ORDER = ["groq", "gemini", "openai", "openrouter", "anthropic", "ollama"]
 _API_ENV_KEYS = {
     "google": "GOOGLE_API_KEY",
     "groq": "GROQ_API_KEY",
     "openai": "OPENAI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
 }
 
@@ -530,6 +531,8 @@ class SettingsPanel:
                         keychain.set_key("groq_api_key", api_key)
                     elif provider == "openai":
                         keychain.set_key("openai_api_key", api_key)
+                    elif provider == "openrouter":
+                        keychain.set_key("openrouter_api_key", api_key)
                     elif provider == "anthropic":
                         keychain.set_key("anthropic_api_key", api_key)
 
@@ -538,6 +541,7 @@ class SettingsPanel:
                 env_updates["GOOGLE_API_KEY"] = ""
                 env_updates["GROQ_API_KEY"] = ""
                 env_updates["OPENAI_API_KEY"] = ""
+                env_updates["OPENROUTER_API_KEY"] = ""
                 env_updates["ANTHROPIC_API_KEY"] = ""
             else:
                 env_updates["TELEGRAM_BOT_TOKEN"] = self._settings.get("telegram_token", "")
@@ -547,6 +551,8 @@ class SettingsPanel:
                     env_updates["GROQ_API_KEY"] = api_key
                 elif provider == "openai":
                     env_updates["OPENAI_API_KEY"] = api_key
+                elif provider == "openrouter":
+                    env_updates["OPENROUTER_API_KEY"] = api_key
                 elif provider == "anthropic":
                     env_updates["ANTHROPIC_API_KEY"] = api_key
 
