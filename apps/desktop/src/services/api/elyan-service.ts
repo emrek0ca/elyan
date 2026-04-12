@@ -33,6 +33,7 @@ import type {
   OperatorStackSkill,
   OperatorStackSnapshot,
   OperatorWorkflow,
+  MultiAgentMetricsSnapshot,
   PrivacyExportBundle,
   RunSummary,
   SecuritySummary,
@@ -3081,6 +3082,36 @@ export async function getOperatorStack(): Promise<OperatorStackSnapshot> {
       routinesEnabled: Number(routinesRaw?.summary?.enabled || 0),
       routinesTotal: Number(routinesRaw?.summary?.total || routines.length),
     },
+  };
+}
+
+export async function getMultiAgentMetrics(): Promise<MultiAgentMetricsSnapshot> {
+  const raw = await safeRequest<SuccessEnvelope<{ multi_agent?: Record<string, unknown> }>>("/api/v1/metrics/multi-agent");
+  const payload = (raw?.success && raw.multi_agent) ? raw.multi_agent : {};
+  const registeredAgents = Array.isArray(payload.registered_agents)
+    ? payload.registered_agents
+        .filter((item) => typeof item === "object" && item)
+        .map((item) => {
+          const row = item as Record<string, unknown>;
+          return {
+            agentId: String(row.agent_id || ""),
+            capabilities: Array.isArray(row.capabilities) ? row.capabilities.map((entry) => String(entry)) : [],
+            maxConcurrent: Number(row.max_concurrent || 0),
+            currentLoad: Number(row.current_load || 0),
+            utilization: Number(row.utilization || 0),
+          };
+        })
+    : [];
+  return {
+    registeredAgents,
+    activeContracts: (payload.active_contracts as Record<string, unknown> | undefined) || {},
+    activeContractCount: Number(payload.active_contract_count || 0),
+    worldFactCount: Number(payload.world_fact_count || 0),
+    handoffs: (payload.handoffs as Record<string, unknown> | undefined) || {},
+    semanticMemory: ((payload.memory as Record<string, unknown> | undefined)?.semantic as Record<string, unknown> | undefined) || {},
+    modelGateway: (payload.model_gateway as Record<string, unknown> | undefined) || {},
+    security: (payload.security as Record<string, unknown> | undefined) || {},
+    specialists: Array.isArray(payload.specialists) ? payload.specialists.map((entry) => String(entry)) : [],
   };
 }
 

@@ -42,6 +42,7 @@ export type AppRoute =
   | "/onboarding"
   | "/home"
   | "/stack"
+  | "/swarm"
   | "/command-center"
   | "/providers"
   | "/integrations"
@@ -332,6 +333,26 @@ export interface OperatorStackSnapshot {
     routinesEnabled: number;
     routinesTotal: number;
   };
+}
+
+export interface MultiAgentMetricAgent {
+  agentId: string;
+  capabilities: string[];
+  maxConcurrent: number;
+  currentLoad: number;
+  utilization: number;
+}
+
+export interface MultiAgentMetricsSnapshot {
+  registeredAgents: MultiAgentMetricAgent[];
+  activeContracts: Record<string, unknown>;
+  activeContractCount: number;
+  worldFactCount: number;
+  handoffs: Record<string, unknown>;
+  semanticMemory: Record<string, unknown>;
+  modelGateway: Record<string, unknown>;
+  security: Record<string, unknown>;
+  specialists: string[];
 }
 
 export interface ModelDescriptor {

@@ -14,6 +14,7 @@ import type {
   IntegrationSummary,
   LogEvent,
   LearningSummary,
+  MultiAgentMetricsSnapshot,
   OperatorStackSnapshot,
   PrivacySummary,
   ProviderDescriptor,
@@ -54,6 +55,7 @@ import {
   getLearningSummary,
   getPrivacySummary,
   getLogs,
+  getMultiAgentMetrics,
   getOperatorPreview,
   getOperatorStack,
   getProviderDescriptors,
@@ -148,6 +150,16 @@ export function useOperatorStack(): UseQueryResult<OperatorStackSnapshot> {
     queryFn: getOperatorStack,
     staleTime: 4000,
     refetchInterval: visibleRefetchInterval(12000),
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function useMultiAgentMetrics(): UseQueryResult<MultiAgentMetricsSnapshot> {
+  return useQuery({
+    queryKey: ["multi-agent-metrics"],
+    queryFn: getMultiAgentMetrics,
+    staleTime: 4000,
+    refetchInterval: visibleRefetchInterval(10000),
     refetchOnWindowFocus: false,
   });
 }

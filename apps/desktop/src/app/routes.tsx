@@ -14,6 +14,9 @@ const HomeScreen = lazy(() => import("@/screens/home/HomeScreen").then((module) 
 const OperatorStackScreen = lazy(() =>
   import("@/screens/stack/OperatorStackScreen").then((module) => ({ default: module.OperatorStackScreen })),
 );
+const SwarmScreen = lazy(() =>
+  import("@/screens/swarm/SwarmScreen").then((module) => ({ default: module.SwarmScreen })),
+);
 const IntegrationsScreen = lazy(() =>
   import("@/screens/integrations/IntegrationsScreen").then((module) => ({ default: module.IntegrationsScreen })),
 );
@@ -92,6 +95,7 @@ export const router = createHashRouter([
     children: [
       { path: "/home", element: withSuspense(<HomeScreen />) },
       { path: "/stack", element: withSuspense(<OperatorStackScreen />) },
+      { path: "/swarm", element: withSuspense(<SwarmScreen />) },
       { path: "/command-center", element: withSuspense(<CommandCenterScreen />) },
       { path: "/providers", element: withSuspense(<ProvidersScreen />) },
       { path: "/integrations", element: withSuspense(<IntegrationsScreen />) },
