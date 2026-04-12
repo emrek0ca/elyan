@@ -217,6 +217,24 @@ def test_main_routes_platforms_command(monkeypatch):
     assert captured["json"] is True
 
 
+def test_main_routes_message_status_command(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)
+
+    def fake_handle(args):
+        captured["action"] = getattr(args, "action", None)
+        captured["json"] = getattr(args, "json", False)
+        return 0
+
+    monkeypatch.setattr("cli.commands.message.handle_message", fake_handle, raising=False)
+
+    code = cli_main.main(["message", "status", "--json"])
+
+    assert code == 0
+    assert captured["action"] == "status"
+    assert captured["json"] is True
+
+
 def test_main_routes_memory_recall_command(monkeypatch):
     captured = {}
     monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)

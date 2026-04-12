@@ -599,9 +599,10 @@ def main(argv: list[str] | None = None):
 
     # ── message ─────────────────────────────────────────────────────────
     p = sub.add_parser("message", help="Mesaj gönder")
-    p.add_argument("action", nargs="?", choices=["send", "poll", "broadcast"])
+    p.add_argument("action", nargs="?", choices=["send", "poll", "broadcast", "status", "platforms", "stack"], default="status")
     p.add_argument("--text", metavar="TEXT")
     p.add_argument("--channel", metavar="CHANNEL")
+    p.add_argument("--json", action="store_true")
     p.add_argument("--options", metavar="OPT1,OPT2")
 
     # ── service ─────────────────────────────────────────────────────────
