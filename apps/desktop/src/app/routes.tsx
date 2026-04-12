@@ -11,6 +11,9 @@ const CommandCenterScreen = lazy(() =>
 );
 const RouteErrorScreen = lazy(() => import("@/screens/error/RouteErrorScreen").then((module) => ({ default: module.RouteErrorScreen })));
 const HomeScreen = lazy(() => import("@/screens/home/HomeScreen").then((module) => ({ default: module.HomeScreen })));
+const OperatorStackScreen = lazy(() =>
+  import("@/screens/stack/OperatorStackScreen").then((module) => ({ default: module.OperatorStackScreen })),
+);
 const IntegrationsScreen = lazy(() =>
   import("@/screens/integrations/IntegrationsScreen").then((module) => ({ default: module.IntegrationsScreen })),
 );
@@ -88,6 +91,7 @@ export const router = createHashRouter([
     errorElement: withSuspense(<RouteErrorScreen />),
     children: [
       { path: "/home", element: withSuspense(<HomeScreen />) },
+      { path: "/stack", element: withSuspense(<OperatorStackScreen />) },
       { path: "/command-center", element: withSuspense(<CommandCenterScreen />) },
       { path: "/providers", element: withSuspense(<ProvidersScreen />) },
       { path: "/integrations", element: withSuspense(<IntegrationsScreen />) },

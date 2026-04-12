@@ -41,6 +41,7 @@ export type RunStatus =
 export type AppRoute =
   | "/onboarding"
   | "/home"
+  | "/stack"
   | "/command-center"
   | "/providers"
   | "/integrations"
@@ -287,6 +288,50 @@ export interface SystemReadiness {
     workflowsEnabled: number;
   };
   blockingIssue?: string;
+}
+
+export interface OperatorStackSkill {
+  name: string;
+  description: string;
+  installed: boolean;
+  enabled: boolean;
+  healthOk: boolean;
+  runtimeReady: boolean;
+  source: string;
+}
+
+export interface OperatorWorkflow {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  executable: boolean;
+  autoIntent: boolean;
+  runtimeReady: boolean;
+}
+
+export interface OperatorRoutine {
+  id: string;
+  name: string;
+  expression: string;
+  enabled: boolean;
+  nextRun?: string;
+  reportChannel?: string;
+  templateId?: string;
+  runCount: number;
+}
+
+export interface OperatorStackSnapshot {
+  skills: OperatorStackSkill[];
+  workflows: OperatorWorkflow[];
+  routines: OperatorRoutine[];
+  summary: {
+    skillsEnabled: number;
+    skillsIssues: number;
+    workflowsEnabled: number;
+    routinesEnabled: number;
+    routinesTotal: number;
+  };
 }
 
 export interface ModelDescriptor {

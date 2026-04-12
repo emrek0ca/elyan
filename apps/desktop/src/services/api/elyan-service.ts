@@ -29,6 +29,10 @@ import type {
   ProviderSummary,
   RecentArtifactSummary,
   ReviewReport,
+  OperatorRoutine,
+  OperatorStackSkill,
+  OperatorStackSnapshot,
+  OperatorWorkflow,
   PrivacyExportBundle,
   RunSummary,
   SecuritySummary,
@@ -3014,6 +3018,118 @@ export async function getSystemReadiness(): Promise<SystemReadiness> {
       blockingIssue,
     };
   });
+}
+
+export async function getOperatorStack(): Promise<OperatorStackSnapshot> {
+  const [skillsRaw, workflowsRaw, routinesRaw] = await Promise.all([
+    safeRequest<{ skills?: Array<Record<string, unknown>>; summary?: Record<string, unknown> }>("/api/skills"),
+    safeRequest<{ workflows?: Array<Record<string, unknown>>; summary?: Record<string, unknown> }>("/api/skills/workflows"),
+    safeRequest<{ routines?: Array<Record<string, unknown>>; summary?: Record<string, unknown> }>("/api/routines"),
+  ]);
+
+  const skills: OperatorStackSkill[] = Array.isArray(skillsRaw?.skills)
+    ? skillsRaw.skills
+        .filter((item) => Boolean(String(item.name || "").trim()) && Boolean(item.installed))
+        .map((item) => ({
+          name: String(item.name || ""),
+          description: String(item.description || ""),
+          installed: Boolean(item.installed),
+          enabled: Boolean(item.enabled),
+          healthOk: Boolean(item.health_ok),
+          runtimeReady: Boolean(item.runtime_ready),
+          source: String(item.source || "local"),
+        }))
+    : [];
+
+  const workflows: OperatorWorkflow[] = Array.isArray(workflowsRaw?.workflows)
+    ? workflowsRaw.workflows
+        .filter((item) => Boolean(String(item.id || item.name || "").trim()))
+        .map((item) => ({
+          id: String(item.id || item.name || ""),
+          name: String(item.name || item.id || "workflow"),
+          description: String(item.description || item.prompt || ""),
+          enabled: Boolean(item.enabled),
+          executable: Boolean(item.executable),
+          autoIntent: Boolean(item.auto_intent),
+          runtimeReady: Boolean(item.runtime_ready),
+        }))
+    : [];
+
+  const routines: OperatorRoutine[] = Array.isArray(routinesRaw?.routines)
+    ? routinesRaw.routines
+        .filter((item) => Boolean(String(item.id || "").trim()))
+        .map((item) => ({
+          id: String(item.id || ""),
+          name: String(item.name || item.id || "routine"),
+          expression: String(item.expression || ""),
+          enabled: Boolean(item.enabled ?? true),
+          nextRun: String(item.next_run || "").trim() || undefined,
+          reportChannel: String(item.report_channel || "").trim() || undefined,
+          templateId: String(item.template_id || "").trim() || undefined,
+          runCount: Number(item.run_count || 0),
+        }))
+    : [];
+
+  return {
+    skills,
+    workflows,
+    routines,
+    summary: {
+      skillsEnabled: Number(skillsRaw?.summary?.enabled || 0),
+      skillsIssues: Number(skillsRaw?.summary?.issues || 0),
+      workflowsEnabled: Number(workflowsRaw?.summary?.enabled || 0),
+      routinesEnabled: Number(routinesRaw?.summary?.enabled || 0),
+      routinesTotal: Number(routinesRaw?.summary?.total || routines.length),
+    },
+  };
+}
+
+export async function setSkillEnabled(name: string, enabled: boolean): Promise<{ ok: boolean; message: string }> {
+  const raw = await apiClient.request<{ ok?: boolean; message?: string }>("/api/skills/toggle", {
+    method: "POST",
+    body: { name, enabled },
+  });
+  invalidateMemoryCache(["system-readiness"]);
+  return {
+    ok: Boolean(raw.ok),
+    message: String(raw.message || ""),
+  };
+}
+
+export async function setWorkflowEnabled(id: string, enabled: boolean): Promise<{ ok: boolean; message: string }> {
+  const raw = await apiClient.request<{ ok?: boolean; message?: string }>("/api/skills/workflows/toggle", {
+    method: "POST",
+    body: { id, enabled },
+  });
+  invalidateMemoryCache(["system-readiness"]);
+  return {
+    ok: Boolean(raw.ok),
+    message: String(raw.message || ""),
+  };
+}
+
+export async function setRoutineEnabled(id: string, enabled: boolean): Promise<{ ok: boolean; message: string }> {
+  const raw = await apiClient.request<{ ok?: boolean; error?: string }>("/api/routines/toggle", {
+    method: "POST",
+    body: { id, enabled },
+  });
+  invalidateMemoryCache(["home-snapshot", "system-readiness"]);
+  return {
+    ok: Boolean(raw.ok),
+    message: String(raw.error || ""),
+  };
+}
+
+export async function runRoutineNow(id: string): Promise<{ ok: boolean; message: string }> {
+  const raw = await apiClient.request<{ ok?: boolean; result?: Record<string, unknown>; error?: string }>("/api/routines/run", {
+    method: "POST",
+    body: { id },
+  });
+  invalidateMemoryCache(["home-snapshot"]);
+  return {
+    ok: Boolean(raw.ok),
+    message: raw.ok ? "Routine çalıştırıldı." : String(raw.error || ""),
+  };
 }
 
 export async function getProviderDescriptors(): Promise<ProviderDescriptor[]> {

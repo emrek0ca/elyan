@@ -14,6 +14,7 @@ import type {
   IntegrationSummary,
   LogEvent,
   LearningSummary,
+  OperatorStackSnapshot,
   PrivacySummary,
   ProviderDescriptor,
   ProviderSummary,
@@ -54,6 +55,7 @@ import {
   getPrivacySummary,
   getLogs,
   getOperatorPreview,
+  getOperatorStack,
   getProviderDescriptors,
   getProviders,
   getSecuritySummary,
@@ -136,6 +138,16 @@ export function useSystemReadiness(): UseQueryResult<SystemReadiness> {
     queryFn: getSystemReadiness,
     staleTime: 2000,
     refetchInterval: visibleRefetchInterval(7000),
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function useOperatorStack(): UseQueryResult<OperatorStackSnapshot> {
+  return useQuery({
+    queryKey: ["operator-stack"],
+    queryFn: getOperatorStack,
+    staleTime: 4000,
+    refetchInterval: visibleRefetchInterval(12000),
     refetchOnWindowFocus: false,
   });
 }

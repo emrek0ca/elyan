@@ -1,4 +1,4 @@
-import { Cable, Command, Cpu, Home, ShieldCheck, SlidersHorizontal } from "@/vendor/lucide-react";
+import { Cable, Command, Cpu, Home, Layers3, ShieldCheck, SlidersHorizontal } from "@/vendor/lucide-react";
 import { NavLink } from "react-router-dom";
 
 import { ElyanMark } from "@/components/brand/ElyanMark";
@@ -6,6 +6,7 @@ import { cn } from "@/utils/cn";
 
 const navItems = [
   { to: "/home", label: "Home", icon: Home },
+  { to: "/stack", label: "Stack", icon: Layers3 },
   { to: "/command-center", label: "Work", icon: Command },
   { to: "/providers", label: "Models", icon: Cpu },
   { to: "/integrations", label: "Apps", icon: Cable },
