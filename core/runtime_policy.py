@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from config.elyan_config import elyan_config
+from core.runtime_modes import build_agent_mode_policy_map, normalize_agent_mode
 
 
 @dataclass
@@ -152,6 +153,7 @@ class RuntimePolicyResolver:
             execution={
                 "mode": execution_mode,
                 "default_mode": str(elyan_config.get("agent.execution.default_mode", execution_mode) or execution_mode),
+                "agent_mode": normalize_agent_mode(elyan_config.get("agent.execution.agent_mode", "chat")),
                 "derive_from_operator_mode": bool(
                     elyan_config.get("agent.execution.derive_from_operator_mode", True)
                 ),
@@ -160,6 +162,7 @@ class RuntimePolicyResolver:
                     elyan_config.get("agent.execution.assist_preview_max_steps", 6) or 6
                 ),
                 "prefer_short_turns": bool(elyan_config.get("agent.execution.prefer_short_turns", False)),
+                "mode_policies": build_agent_mode_policy_map(),
             },
             nlu={
                 "model_a": {

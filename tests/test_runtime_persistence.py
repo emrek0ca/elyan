@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -17,6 +19,7 @@ from core.learning.policy_learner import ResponsePolicyLearner
 from core.persistence import get_runtime_database, reset_runtime_database
 from core.persistence.runtime_db import (
     conversation_messages_table,
+    conversation_message_terms_table,
     conversation_sessions_table,
     local_user_sessions_table,
     outbox_events_table,
@@ -543,6 +546,16 @@ def test_runtime_session_api_recall_searches_across_conversation_sessions():
     assert any("hmac.compare_digest" in item["bot_response"] for item in results)
     assert any("checkout linkini sabitlemistik" in item["bot_response"] for item in results)
 
+    with runtime_db.local_engine.begin() as conn:
+        indexed_terms = conn.execute(
+            select(conversation_message_terms_table)
+            .where(conversation_message_terms_table.c.workspace_id == str(user["workspace_id"]))
+            .where(conversation_message_terms_table.c.actor_id == str(user["user_id"]))
+            .where(conversation_message_terms_table.c.term == "iyzico")
+        ).mappings().all()
+
+    assert indexed_terms
+
 
 def test_outbox_retry_transitions_to_dead_letter():
     runtime_db = get_runtime_database()
@@ -608,3 +621,239 @@ def test_learning_repository_and_policy_learner_persist_to_runtime_db():
     assert loaded_profile is not None
     assert loaded_profile["metadata"]["response_policy_weights"]["concise_answer"][0] == pytest.approx(0.25)
     assert reloaded.snapshot()["policy_weights"]["concise_answer"][0] == pytest.approx(0.25)
+
+
+def test_runtime_session_api_exposes_preference_profile_and_learning_drafts():
+    runtime_db = get_runtime_database()
+    user = runtime_db.auth.upsert_user(
+        email="drafts@example.com",
+        password="TopSecret123",
+        display_name="Draft User",
+    )
+    session_api = RuntimeSessionAPI(runtime_db)
+    session = session_api.ensure_session(
+        user_id=str(user["user_id"]),
+        runtime_metadata={
+            "workspace_id": str(user["workspace_id"]),
+            "user_id": str(user["user_id"]),
+            "channel": "desktop",
+            "device_id": "macbook-pro",
+        },
+    )
+
+    runtime_db.learning.upsert_user_preference_profile(
+        workspace_id=str(user["workspace_id"]),
+        user_id=str(user["user_id"]),
+        explanation_style="concise",
+        approval_sensitivity_hint="strict",
+        metadata={"source": "test"},
+    )
+    runtime_db.learning.enqueue_preference_update(
+        workspace_id=str(user["workspace_id"]),
+        user_id=str(user["user_id"]),
+        conversation_session_id=str(session["conversation_session_id"]),
+        preference_key="response_style",
+        proposed_value={"explanation_style": "concise"},
+        rationale="Kullanıcı kısa cevap istedi.",
+        confidence=0.91,
+    )
+    runtime_db.learning.enqueue_preference_update(
+        workspace_id=str(user["workspace_id"]),
+        user_id=str(user["user_id"]),
+        conversation_session_id=str(session["conversation_session_id"]),
+        preference_key="response_style",
+        proposed_value={"explanation_style": "concise"},
+        rationale="Aynı tercih tekrarlandı.",
+        confidence=0.95,
+    )
+    runtime_db.learning.enqueue_skill_draft(
+        workspace_id=str(user["workspace_id"]),
+        user_id=str(user["user_id"]),
+        conversation_session_id=str(session["conversation_session_id"]),
+        name_hint="daily_digest",
+        description="Her sabah günlük özet gönder.",
+        trigger_text="Her sabah bana günlük özet gönder.",
+        source_action="send_message",
+        tool_names=["send_message"],
+        confidence=0.88,
+    )
+    runtime_db.learning.enqueue_routine_draft(
+        workspace_id=str(user["workspace_id"]),
+        user_id=str(user["user_id"]),
+        conversation_session_id=str(session["conversation_session_id"]),
+        name_hint="daily_summary",
+        description="Her sabah günlük özeti Slack'e gönder.",
+        trigger_text="Her sabah 09:00'da bana günlük özet gönder.",
+        schedule_expression="0 9 * * *",
+        delivery_channel="slack",
+        source_action="schedule_job",
+        confidence=0.86,
+    )
+
+    profile = session_api.get_preference_profile(
+        user_id=str(user["user_id"]),
+        runtime_metadata={
+            "workspace_id": str(user["workspace_id"]),
+            "user_id": str(user["user_id"]),
+        },
+    )
+    drafts = session_api.list_learning_drafts(
+        user_id=str(user["user_id"]),
+        draft_type="all",
+        limit=10,
+        runtime_metadata={
+            "workspace_id": str(user["workspace_id"]),
+            "user_id": str(user["user_id"]),
+        },
+    )
+
+    assert profile is not None
+    assert profile["explanation_style"] == "concise"
+    assert len(drafts["preferences"]) == 1
+    assert drafts["preferences"][0]["confidence"] == pytest.approx(0.95)
+    assert drafts["skills"][0]["name_hint"] == "daily_digest"
+    assert drafts["routines"][0]["schedule_expression"] == "0 9 * * *"
+    assert drafts["routines"][0]["delivery_channel"] == "slack"
+
+
+def test_runtime_session_api_binds_channel_identity_to_canonical_actor():
+    runtime_db = get_runtime_database()
+    user = runtime_db.auth.upsert_user(
+        email="identity@example.com",
+        password="TopSecret123",
+        display_name="Identity User",
+    )
+    session_api = RuntimeSessionAPI(runtime_db)
+
+    telegram_session = session_api.ensure_session(
+        user_id=str(user["user_id"]),
+        runtime_metadata={
+            "workspace_id": str(user["workspace_id"]),
+            "user_id": "telegram-user-1",
+            "actor_id": str(user["user_id"]),
+            "channel": "telegram",
+            "display_name": "Emre Telegram",
+        },
+    )
+    resolved_session = session_api.ensure_session(
+        user_id="telegram-user-1",
+        runtime_metadata={
+            "workspace_id": str(user["workspace_id"]),
+            "user_id": "telegram-user-1",
+            "channel": "telegram",
+            "display_name": "Emre Telegram",
+        },
+    )
+
+    assert telegram_session["actor_id"] == str(user["user_id"])
+    assert resolved_session["actor_id"] == str(user["user_id"])
+
+    link = runtime_db.identities.resolve_actor(
+        workspace_id=str(user["workspace_id"]),
+        channel="telegram",
+        external_user_id="telegram-user-1",
+    )
+    assert link is not None
+    assert link["actor_id"] == str(user["user_id"])
+
+
+def test_runtime_session_api_promotes_routine_draft_to_routine(monkeypatch):
+    runtime_db = get_runtime_database()
+    user = runtime_db.auth.upsert_user(
+        email="promote@example.com",
+        password="TopSecret123",
+        display_name="Promote User",
+    )
+    session_api = RuntimeSessionAPI(runtime_db)
+    runtime_db.learning.enqueue_routine_draft(
+        workspace_id=str(user["workspace_id"]),
+        user_id=str(user["user_id"]),
+        conversation_session_id="conv_promote",
+        name_hint="daily_summary",
+        description="Kişisel günlük özet",
+        trigger_text="Her sabah saat 09:00'da günlük özet gönder",
+        schedule_expression="0 9 * * *",
+        delivery_channel="telegram",
+        source_action="schedule_job",
+        confidence=0.93,
+    )
+    draft = runtime_db.learning.list_routine_drafts(
+        workspace_id=str(user["workspace_id"]),
+        user_id=str(user["user_id"]),
+        limit=5,
+    )[0]
+
+    import core.scheduler.routine_engine as routine_engine_module
+
+    routine_data_dir = os.environ["ELYAN_DATA_DIR"]
+    monkeypatch.setattr(routine_engine_module, "ROUTINE_PERSIST_PATH", Path(routine_data_dir) / "routines.json")
+    monkeypatch.setattr(routine_engine_module, "ROUTINE_REPORT_DIR", Path(routine_data_dir) / "reports")
+    routine_engine_module.routine_engine = routine_engine_module.RoutineEngine()
+
+    promoted = session_api.promote_routine_draft(
+        user_id=str(user["user_id"]),
+        draft_id=str(draft["draft_id"]),
+        runtime_metadata={
+            "workspace_id": str(user["workspace_id"]),
+            "user_id": str(user["user_id"]),
+            "channel": "desktop",
+        },
+    )
+
+    assert promoted["routine"]["expression"] == "0 9 * * *"
+    assert promoted["routine"]["report_channel"] == "telegram"
+    assert promoted["draft"]["status"] == "promoted"
+    assert promoted["draft"]["metadata"]["promoted_routine_id"] == promoted["routine"]["id"]
+    assert promoted["routine"]["metadata"]["actor_id"] == str(user["user_id"])
+    assert promoted["routine"]["metadata"]["workspace_id"] == str(user["workspace_id"])
+
+
+def test_runtime_session_api_promotes_skill_draft_to_skill(tmp_path, monkeypatch):
+    runtime_db = get_runtime_database()
+    user = runtime_db.auth.upsert_user(
+        email="skilldraft@example.com",
+        password="TopSecret123",
+        display_name="Skill Draft User",
+    )
+    session_api = RuntimeSessionAPI(runtime_db)
+    runtime_db.learning.enqueue_skill_draft(
+        workspace_id=str(user["workspace_id"]),
+        user_id=str(user["user_id"]),
+        conversation_session_id="conv_skill_promote",
+        name_hint="daily_digest_skill",
+        description="Sabah günlük özet üretme yeteneği",
+        trigger_text="Bunu skill yap ve sabah özet üret",
+        source_action="send_message",
+        tool_names=["write_file", "send_message"],
+        confidence=0.89,
+    )
+    draft = runtime_db.learning.list_skill_drafts(
+        workspace_id=str(user["workspace_id"]),
+        user_id=str(user["user_id"]),
+        limit=5,
+    )[0]
+
+    import core.skills.manager as skill_manager_module
+
+    store = {"skills.enabled": []}
+    monkeypatch.setattr("core.skills.manager.elyan_config.get", lambda key, default=None: store.get(key, default))
+    monkeypatch.setattr("core.skills.manager.elyan_config.set", lambda key, value: store.__setitem__(key, value))
+    skill_manager_module.skill_manager.skills_dir = tmp_path / "skills"
+    skill_manager_module.skill_manager.skills_dir.mkdir(parents=True, exist_ok=True)
+
+    promoted = session_api.promote_skill_draft(
+        user_id=str(user["user_id"]),
+        draft_id=str(draft["draft_id"]),
+        runtime_metadata={
+            "workspace_id": str(user["workspace_id"]),
+            "user_id": str(user["user_id"]),
+            "channel": "desktop",
+        },
+    )
+
+    assert promoted["skill"]["name"] == "daily_digest_skill"
+    assert promoted["skill"]["source"] == "learning_draft"
+    assert promoted["skill"]["category"] == "learned"
+    assert promoted["skill"]["required_tools"] == ["write_file", "send_message"]
+    assert promoted["draft"]["status"] == "promoted"
+    assert promoted["draft"]["metadata"]["promoted_skill_name"] == "daily_digest_skill"

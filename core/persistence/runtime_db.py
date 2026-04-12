@@ -540,6 +540,89 @@ user_preference_profiles_table = Table(
 Index("ix_user_preference_profiles_workspace_updated", user_preference_profiles_table.c.workspace_id, user_preference_profiles_table.c.updated_at)
 Index("ix_user_preference_profiles_workspace_user", user_preference_profiles_table.c.workspace_id, user_preference_profiles_table.c.user_id)
 
+preference_update_queue_table = Table(
+    "preference_update_queue",
+    LOCAL_METADATA,
+    Column("queue_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), nullable=False, default="local-workspace"),
+    Column("user_id", String(128), nullable=False, default="local-user"),
+    Column("conversation_session_id", String(128), nullable=False, default=""),
+    Column("preference_key", String(128), nullable=False, default=""),
+    Column("proposed_value_json", Text, nullable=False, default="{}"),
+    Column("rationale", Text, nullable=False, default=""),
+    Column("confidence", Float, nullable=False, default=0.0),
+    Column("status", String(32), nullable=False, default="draft"),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+    Column("updated_at", Float, nullable=False, default=_now),
+    Column("reviewed_at", Float, nullable=False, default=0.0),
+    Column("applied_at", Float, nullable=False, default=0.0),
+)
+Index("ix_preference_update_queue_workspace_user_status", preference_update_queue_table.c.workspace_id, preference_update_queue_table.c.user_id, preference_update_queue_table.c.status)
+Index("ix_preference_update_queue_updated", preference_update_queue_table.c.updated_at)
+
+skill_draft_queue_table = Table(
+    "skill_draft_queue",
+    LOCAL_METADATA,
+    Column("draft_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), nullable=False, default="local-workspace"),
+    Column("user_id", String(128), nullable=False, default="local-user"),
+    Column("conversation_session_id", String(128), nullable=False, default=""),
+    Column("name_hint", String(128), nullable=False, default="workflow_draft"),
+    Column("description", Text, nullable=False, default=""),
+    Column("trigger_text", Text, nullable=False, default=""),
+    Column("source_action", String(128), nullable=False, default=""),
+    Column("tool_names_json", Text, nullable=False, default="[]"),
+    Column("confidence", Float, nullable=False, default=0.0),
+    Column("status", String(32), nullable=False, default="draft"),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+    Column("updated_at", Float, nullable=False, default=_now),
+    Column("reviewed_at", Float, nullable=False, default=0.0),
+)
+Index("ix_skill_draft_queue_workspace_user_status", skill_draft_queue_table.c.workspace_id, skill_draft_queue_table.c.user_id, skill_draft_queue_table.c.status)
+Index("ix_skill_draft_queue_updated", skill_draft_queue_table.c.updated_at)
+
+routine_draft_queue_table = Table(
+    "routine_draft_queue",
+    LOCAL_METADATA,
+    Column("draft_id", String(128), primary_key=True),
+    Column("workspace_id", String(128), nullable=False, default="local-workspace"),
+    Column("user_id", String(128), nullable=False, default="local-user"),
+    Column("conversation_session_id", String(128), nullable=False, default=""),
+    Column("name_hint", String(128), nullable=False, default="routine_draft"),
+    Column("description", Text, nullable=False, default=""),
+    Column("trigger_text", Text, nullable=False, default=""),
+    Column("schedule_expression", String(128), nullable=False, default=""),
+    Column("delivery_channel", String(64), nullable=False, default=""),
+    Column("source_action", String(128), nullable=False, default=""),
+    Column("confidence", Float, nullable=False, default=0.0),
+    Column("status", String(32), nullable=False, default="draft"),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+    Column("updated_at", Float, nullable=False, default=_now),
+    Column("reviewed_at", Float, nullable=False, default=0.0),
+)
+Index("ix_routine_draft_queue_workspace_user_status", routine_draft_queue_table.c.workspace_id, routine_draft_queue_table.c.user_id, routine_draft_queue_table.c.status)
+Index("ix_routine_draft_queue_updated", routine_draft_queue_table.c.updated_at)
+
+channel_identity_links_table = Table(
+    "channel_identity_links",
+    LOCAL_METADATA,
+    Column("link_id", String(192), primary_key=True),
+    Column("workspace_id", String(128), nullable=False, default="local-workspace"),
+    Column("channel", String(64), nullable=False, default="cli"),
+    Column("external_user_id", String(256), nullable=False, default=""),
+    Column("actor_id", String(128), nullable=False, default="local-user"),
+    Column("display_name", String(256), nullable=False, default=""),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+    Column("updated_at", Float, nullable=False, default=_now),
+    Column("last_seen_at", Float, nullable=False, default=0.0),
+)
+Index("ix_channel_identity_workspace_channel_user", channel_identity_links_table.c.workspace_id, channel_identity_links_table.c.channel, channel_identity_links_table.c.external_user_id)
+Index("ix_channel_identity_workspace_actor", channel_identity_links_table.c.workspace_id, channel_identity_links_table.c.actor_id)
+
 operational_feedback_table = Table(
     "operational_feedback",
     LOCAL_METADATA,
@@ -733,6 +816,21 @@ conversation_messages_table = Table(
 )
 Index("ix_conversation_messages_session_index", conversation_messages_table.c.conversation_session_id, conversation_messages_table.c.message_index)
 Index("ix_conversation_messages_workspace_actor_created", conversation_messages_table.c.workspace_id, conversation_messages_table.c.actor_id, conversation_messages_table.c.created_at)
+
+conversation_message_terms_table = Table(
+    "conversation_message_terms",
+    LOCAL_METADATA,
+    Column("term_entry_id", String(128), primary_key=True),
+    Column("message_id", String(128), ForeignKey("conversation_messages.message_id", ondelete="CASCADE"), nullable=False),
+    Column("conversation_session_id", String(128), ForeignKey("conversation_sessions.conversation_session_id", ondelete="CASCADE"), nullable=False),
+    Column("workspace_id", String(128), nullable=False, default="local-workspace"),
+    Column("actor_id", String(128), nullable=False, default="local-user"),
+    Column("role", String(32), nullable=False, default="user"),
+    Column("term", String(128), nullable=False, default=""),
+    Column("created_at", Float, nullable=False, default=_now),
+)
+Index("ix_conversation_terms_workspace_actor_term", conversation_message_terms_table.c.workspace_id, conversation_message_terms_table.c.actor_id, conversation_message_terms_table.c.term)
+Index("ix_conversation_terms_session_term", conversation_message_terms_table.c.conversation_session_id, conversation_message_terms_table.c.term)
 
 workspaces_table = Table(
     "workspaces",
@@ -2456,6 +2554,535 @@ class LearningRepository:
     def _stat_id(scope: str, tool_name: str) -> str:
         return f"{str(scope or 'global')}::{str(tool_name or 'unknown')}"
 
+    def enqueue_preference_update(
+        self,
+        *,
+        workspace_id: str = "local-workspace",
+        user_id: str = "local-user",
+        conversation_session_id: str = "",
+        preference_key: str,
+        proposed_value: dict[str, Any] | None = None,
+        rationale: str = "",
+        confidence: float = 0.0,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        uid = str(user_id or "local-user").strip() or "local-user"
+        pref_key = str(preference_key or "").strip().lower()
+        if not pref_key:
+            raise ValueError("preference_key required")
+        proposed_payload = dict(proposed_value or {})
+        rationale_text = str(rationale or "").strip()
+        status = "draft"
+        now = _now()
+        with self._db.local_engine.begin() as conn:
+            existing = conn.execute(
+                select(preference_update_queue_table)
+                .where(preference_update_queue_table.c.workspace_id == wid)
+                .where(preference_update_queue_table.c.user_id == uid)
+                .where(preference_update_queue_table.c.preference_key == pref_key)
+                .where(preference_update_queue_table.c.status == status)
+                .where(preference_update_queue_table.c.proposed_value_json == _json_dumps(proposed_payload))
+                .order_by(preference_update_queue_table.c.updated_at.desc())
+                .limit(1)
+            ).mappings().first()
+            if existing:
+                update_values = {
+                    "rationale": rationale_text or str(existing.get("rationale") or ""),
+                    "confidence": max(float(existing.get("confidence") or 0.0), float(confidence or 0.0)),
+                    "metadata_json": _json_dumps({**_json_loads(existing.get("metadata_json"), {}), **dict(metadata or {})}),
+                    "updated_at": now,
+                }
+                conn.execute(
+                    preference_update_queue_table.update()
+                    .where(preference_update_queue_table.c.queue_id == str(existing["queue_id"]))
+                    .values(**update_values)
+                )
+                row = dict(existing)
+                row.update(update_values)
+                return self._db._decode_preference_update_queue_row(row)
+
+            queue_id = f"prefdraft_{uuid.uuid4().hex[:12]}"
+            values = {
+                "queue_id": queue_id,
+                "workspace_id": wid,
+                "user_id": uid,
+                "conversation_session_id": str(conversation_session_id or "").strip(),
+                "preference_key": pref_key,
+                "proposed_value_json": _json_dumps(proposed_payload),
+                "rationale": rationale_text,
+                "confidence": max(0.0, min(1.0, float(confidence or 0.0))),
+                "status": status,
+                "metadata_json": _json_dumps(dict(metadata or {})),
+                "created_at": now,
+                "updated_at": now,
+                "reviewed_at": 0.0,
+                "applied_at": 0.0,
+            }
+            conn.execute(preference_update_queue_table.insert().values(**values))
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=wid,
+                event_type="learning.preference_draft.created",
+                payload={
+                    "queue_id": queue_id,
+                    "user_id": uid,
+                    "preference_key": pref_key,
+                    "confidence": values["confidence"],
+                },
+            )
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=wid,
+                aggregate_type="learning_feedback",
+                aggregate_id=queue_id,
+                event_type="learning.preference_draft.created",
+                payload={
+                    "queue_id": queue_id,
+                    "workspace_id": wid,
+                    "user_id": uid,
+                    "preference_key": pref_key,
+                    "proposed_value": proposed_payload,
+                    "confidence": values["confidence"],
+                },
+            )
+        return self._db._decode_preference_update_queue_row(values)
+
+    def list_preference_updates(
+        self,
+        *,
+        workspace_id: str = "local-workspace",
+        user_id: str = "local-user",
+        status: str = "draft",
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        uid = str(user_id or "local-user").strip() or "local-user"
+        row_limit = max(1, int(limit or 20))
+        with self._db.local_engine.begin() as conn:
+            stmt = (
+                select(preference_update_queue_table)
+                .where(preference_update_queue_table.c.workspace_id == wid)
+                .where(preference_update_queue_table.c.user_id == uid)
+                .order_by(preference_update_queue_table.c.updated_at.desc())
+                .limit(row_limit)
+            )
+            if status:
+                stmt = stmt.where(preference_update_queue_table.c.status == str(status).strip().lower())
+            rows = conn.execute(stmt).mappings().all()
+        return [self._db._decode_preference_update_queue_row(dict(row)) for row in rows]
+
+    def enqueue_skill_draft(
+        self,
+        *,
+        workspace_id: str = "local-workspace",
+        user_id: str = "local-user",
+        conversation_session_id: str = "",
+        name_hint: str,
+        description: str = "",
+        trigger_text: str = "",
+        source_action: str = "",
+        tool_names: list[str] | None = None,
+        confidence: float = 0.0,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        uid = str(user_id or "local-user").strip() or "local-user"
+        normalized_name = str(name_hint or "").strip().lower() or "workflow_draft"
+        description_text = str(description or "").strip()
+        trigger = str(trigger_text or "").strip()
+        status = "draft"
+        tools_json = _json_dumps([str(item).strip() for item in list(tool_names or []) if str(item).strip()][:12])
+        now = _now()
+        with self._db.local_engine.begin() as conn:
+            existing = conn.execute(
+                select(skill_draft_queue_table)
+                .where(skill_draft_queue_table.c.workspace_id == wid)
+                .where(skill_draft_queue_table.c.user_id == uid)
+                .where(skill_draft_queue_table.c.name_hint == normalized_name)
+                .where(skill_draft_queue_table.c.status == status)
+                .where(skill_draft_queue_table.c.trigger_text == trigger)
+                .order_by(skill_draft_queue_table.c.updated_at.desc())
+                .limit(1)
+            ).mappings().first()
+            if existing:
+                update_values = {
+                    "description": description_text or str(existing.get("description") or ""),
+                    "tool_names_json": tools_json if tools_json != "[]" else str(existing.get("tool_names_json") or "[]"),
+                    "confidence": max(float(existing.get("confidence") or 0.0), float(confidence or 0.0)),
+                    "metadata_json": _json_dumps({**_json_loads(existing.get("metadata_json"), {}), **dict(metadata or {})}),
+                    "updated_at": now,
+                }
+                conn.execute(
+                    skill_draft_queue_table.update()
+                    .where(skill_draft_queue_table.c.draft_id == str(existing["draft_id"]))
+                    .values(**update_values)
+                )
+                row = dict(existing)
+                row.update(update_values)
+                return self._db._decode_skill_draft_queue_row(row)
+
+            draft_id = f"skilldraft_{uuid.uuid4().hex[:12]}"
+            values = {
+                "draft_id": draft_id,
+                "workspace_id": wid,
+                "user_id": uid,
+                "conversation_session_id": str(conversation_session_id or "").strip(),
+                "name_hint": normalized_name,
+                "description": description_text,
+                "trigger_text": trigger,
+                "source_action": str(source_action or "").strip(),
+                "tool_names_json": tools_json,
+                "confidence": max(0.0, min(1.0, float(confidence or 0.0))),
+                "status": status,
+                "metadata_json": _json_dumps(dict(metadata or {})),
+                "created_at": now,
+                "updated_at": now,
+                "reviewed_at": 0.0,
+            }
+            conn.execute(skill_draft_queue_table.insert().values(**values))
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=wid,
+                event_type="learning.skill_draft.created",
+                payload={
+                    "draft_id": draft_id,
+                    "user_id": uid,
+                    "name_hint": normalized_name,
+                    "confidence": values["confidence"],
+                },
+            )
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=wid,
+                aggregate_type="learning_feedback",
+                aggregate_id=draft_id,
+                event_type="learning.skill_draft.created",
+                payload={
+                    "draft_id": draft_id,
+                    "workspace_id": wid,
+                    "user_id": uid,
+                    "name_hint": normalized_name,
+                    "tool_names": _json_loads(tools_json, []),
+                    "confidence": values["confidence"],
+                },
+            )
+        return self._db._decode_skill_draft_queue_row(values)
+
+    def list_skill_drafts(
+        self,
+        *,
+        workspace_id: str = "local-workspace",
+        user_id: str = "local-user",
+        status: str = "draft",
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        uid = str(user_id or "local-user").strip() or "local-user"
+        row_limit = max(1, int(limit or 20))
+        with self._db.local_engine.begin() as conn:
+            stmt = (
+                select(skill_draft_queue_table)
+                .where(skill_draft_queue_table.c.workspace_id == wid)
+                .where(skill_draft_queue_table.c.user_id == uid)
+                .order_by(skill_draft_queue_table.c.updated_at.desc())
+                .limit(row_limit)
+            )
+            if status:
+                stmt = stmt.where(skill_draft_queue_table.c.status == str(status).strip().lower())
+            rows = conn.execute(stmt).mappings().all()
+        return [self._db._decode_skill_draft_queue_row(dict(row)) for row in rows]
+
+    def get_skill_draft(
+        self,
+        *,
+        workspace_id: str = "local-workspace",
+        user_id: str = "local-user",
+        draft_id: str,
+    ) -> dict[str, Any] | None:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        uid = str(user_id or "local-user").strip() or "local-user"
+        needle = str(draft_id or "").strip()
+        if not needle:
+            return None
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(skill_draft_queue_table)
+                .where(skill_draft_queue_table.c.workspace_id == wid)
+                .where(skill_draft_queue_table.c.user_id == uid)
+                .where(skill_draft_queue_table.c.draft_id == needle)
+                .limit(1)
+            ).mappings().first()
+            if not row:
+                matches = conn.execute(
+                    select(skill_draft_queue_table)
+                    .where(skill_draft_queue_table.c.workspace_id == wid)
+                    .where(skill_draft_queue_table.c.user_id == uid)
+                    .where(skill_draft_queue_table.c.draft_id.like(f"{needle}%"))
+                    .order_by(skill_draft_queue_table.c.updated_at.desc())
+                    .limit(3)
+                ).mappings().all()
+                if len(matches) == 1:
+                    row = matches[0]
+        return self._db._decode_skill_draft_queue_row(dict(row)) if row else None
+
+    def update_skill_draft_status(
+        self,
+        *,
+        workspace_id: str = "local-workspace",
+        user_id: str = "local-user",
+        draft_id: str,
+        status: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        uid = str(user_id or "local-user").strip() or "local-user"
+        target = self.get_skill_draft(workspace_id=wid, user_id=uid, draft_id=draft_id)
+        if not target:
+            return None
+        now = _now()
+        updated = {
+            **target,
+            "status": str(status or "draft").strip().lower() or "draft",
+            "metadata": {
+                **dict(target.get("metadata") or {}),
+                **dict(metadata or {}),
+            },
+            "updated_at": now,
+            "reviewed_at": now,
+        }
+        with self._db.local_engine.begin() as conn:
+            conn.execute(
+                skill_draft_queue_table.update()
+                .where(skill_draft_queue_table.c.draft_id == str(target["draft_id"]))
+                .values(
+                    status=updated["status"],
+                    metadata_json=_json_dumps(updated["metadata"]),
+                    updated_at=now,
+                    reviewed_at=now,
+                )
+            )
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=wid,
+                event_type="learning.skill_draft.status_updated",
+                payload={
+                    "draft_id": str(target["draft_id"]),
+                    "user_id": uid,
+                    "status": updated["status"],
+                },
+            )
+        return updated
+
+    def enqueue_routine_draft(
+        self,
+        *,
+        workspace_id: str = "local-workspace",
+        user_id: str = "local-user",
+        conversation_session_id: str = "",
+        name_hint: str,
+        description: str = "",
+        trigger_text: str = "",
+        schedule_expression: str = "",
+        delivery_channel: str = "",
+        source_action: str = "",
+        confidence: float = 0.0,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        uid = str(user_id or "local-user").strip() or "local-user"
+        normalized_name = str(name_hint or "").strip().lower() or "routine_draft"
+        description_text = str(description or "").strip()
+        trigger = str(trigger_text or "").strip()
+        schedule = str(schedule_expression or "").strip()
+        channel = str(delivery_channel or "").strip().lower()
+        status = "draft"
+        now = _now()
+        with self._db.local_engine.begin() as conn:
+            existing = conn.execute(
+                select(routine_draft_queue_table)
+                .where(routine_draft_queue_table.c.workspace_id == wid)
+                .where(routine_draft_queue_table.c.user_id == uid)
+                .where(routine_draft_queue_table.c.name_hint == normalized_name)
+                .where(routine_draft_queue_table.c.status == status)
+                .where(routine_draft_queue_table.c.trigger_text == trigger)
+                .order_by(routine_draft_queue_table.c.updated_at.desc())
+                .limit(1)
+            ).mappings().first()
+            if existing:
+                update_values = {
+                    "description": description_text or str(existing.get("description") or ""),
+                    "schedule_expression": schedule or str(existing.get("schedule_expression") or ""),
+                    "delivery_channel": channel or str(existing.get("delivery_channel") or ""),
+                    "confidence": max(float(existing.get("confidence") or 0.0), float(confidence or 0.0)),
+                    "metadata_json": _json_dumps({**_json_loads(existing.get("metadata_json"), {}), **dict(metadata or {})}),
+                    "updated_at": now,
+                }
+                conn.execute(
+                    routine_draft_queue_table.update()
+                    .where(routine_draft_queue_table.c.draft_id == str(existing["draft_id"]))
+                    .values(**update_values)
+                )
+                row = dict(existing)
+                row.update(update_values)
+                return self._db._decode_routine_draft_queue_row(row)
+
+            draft_id = f"routinedraft_{uuid.uuid4().hex[:12]}"
+            values = {
+                "draft_id": draft_id,
+                "workspace_id": wid,
+                "user_id": uid,
+                "conversation_session_id": str(conversation_session_id or "").strip(),
+                "name_hint": normalized_name,
+                "description": description_text,
+                "trigger_text": trigger,
+                "schedule_expression": schedule,
+                "delivery_channel": channel,
+                "source_action": str(source_action or "").strip(),
+                "confidence": max(0.0, min(1.0, float(confidence or 0.0))),
+                "status": status,
+                "metadata_json": _json_dumps(dict(metadata or {})),
+                "created_at": now,
+                "updated_at": now,
+                "reviewed_at": 0.0,
+            }
+            conn.execute(routine_draft_queue_table.insert().values(**values))
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=wid,
+                event_type="learning.routine_draft.created",
+                payload={
+                    "draft_id": draft_id,
+                    "user_id": uid,
+                    "name_hint": normalized_name,
+                    "schedule_expression": schedule,
+                    "delivery_channel": channel,
+                    "confidence": values["confidence"],
+                },
+            )
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=wid,
+                aggregate_type="learning_feedback",
+                aggregate_id=draft_id,
+                event_type="learning.routine_draft.created",
+                payload={
+                    "draft_id": draft_id,
+                    "workspace_id": wid,
+                    "user_id": uid,
+                    "name_hint": normalized_name,
+                    "schedule_expression": schedule,
+                    "delivery_channel": channel,
+                    "confidence": values["confidence"],
+                },
+            )
+        return self._db._decode_routine_draft_queue_row(values)
+
+    def list_routine_drafts(
+        self,
+        *,
+        workspace_id: str = "local-workspace",
+        user_id: str = "local-user",
+        status: str = "draft",
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        uid = str(user_id or "local-user").strip() or "local-user"
+        row_limit = max(1, int(limit or 20))
+        with self._db.local_engine.begin() as conn:
+            stmt = (
+                select(routine_draft_queue_table)
+                .where(routine_draft_queue_table.c.workspace_id == wid)
+                .where(routine_draft_queue_table.c.user_id == uid)
+                .order_by(routine_draft_queue_table.c.updated_at.desc())
+                .limit(row_limit)
+            )
+            if status:
+                stmt = stmt.where(routine_draft_queue_table.c.status == str(status).strip().lower())
+            rows = conn.execute(stmt).mappings().all()
+        return [self._db._decode_routine_draft_queue_row(dict(row)) for row in rows]
+
+    def get_routine_draft(
+        self,
+        *,
+        workspace_id: str = "local-workspace",
+        user_id: str = "local-user",
+        draft_id: str,
+    ) -> dict[str, Any] | None:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        uid = str(user_id or "local-user").strip() or "local-user"
+        needle = str(draft_id or "").strip()
+        if not needle:
+            return None
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(routine_draft_queue_table)
+                .where(routine_draft_queue_table.c.workspace_id == wid)
+                .where(routine_draft_queue_table.c.user_id == uid)
+                .where(routine_draft_queue_table.c.draft_id == needle)
+                .limit(1)
+            ).mappings().first()
+            if not row:
+                matches = conn.execute(
+                    select(routine_draft_queue_table)
+                    .where(routine_draft_queue_table.c.workspace_id == wid)
+                    .where(routine_draft_queue_table.c.user_id == uid)
+                    .where(routine_draft_queue_table.c.draft_id.like(f"{needle}%"))
+                    .order_by(routine_draft_queue_table.c.updated_at.desc())
+                    .limit(3)
+                ).mappings().all()
+                if len(matches) == 1:
+                    row = matches[0]
+        return self._db._decode_routine_draft_queue_row(dict(row)) if row else None
+
+    def update_routine_draft_status(
+        self,
+        *,
+        workspace_id: str = "local-workspace",
+        user_id: str = "local-user",
+        draft_id: str,
+        status: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        uid = str(user_id or "local-user").strip() or "local-user"
+        target = self.get_routine_draft(workspace_id=wid, user_id=uid, draft_id=draft_id)
+        if not target:
+            return None
+        now = _now()
+        updated = {
+            **target,
+            "status": str(status or "draft").strip().lower() or "draft",
+            "metadata": {
+                **dict(target.get("metadata") or {}),
+                **dict(metadata or {}),
+            },
+            "updated_at": now,
+            "reviewed_at": now,
+        }
+        with self._db.local_engine.begin() as conn:
+            conn.execute(
+                routine_draft_queue_table.update()
+                .where(routine_draft_queue_table.c.draft_id == str(target["draft_id"]))
+                .values(
+                    status=updated["status"],
+                    metadata_json=_json_dumps(updated["metadata"]),
+                    updated_at=now,
+                    reviewed_at=now,
+                )
+            )
+            self._db._insert_audit_event(
+                conn,
+                workspace_id=wid,
+                event_type="learning.routine_draft.status_updated",
+                payload={
+                    "draft_id": str(target["draft_id"]),
+                    "user_id": uid,
+                    "status": updated["status"],
+                },
+            )
+        return updated
+
     def upsert_user_preference_profile(
         self,
         *,
@@ -3614,8 +4241,23 @@ class ConversationRepository:
 
     @staticmethod
     def _normalize_search_terms(query: str) -> list[str]:
-        normalized = re.sub(r"\s+", " ", str(query or "").strip().lower())
-        return [term for term in normalized.split(" ") if term][:6]
+        return ConversationRepository._extract_terms(query, limit=6)
+
+    @staticmethod
+    def _extract_terms(text: str, *, limit: int = 48) -> list[str]:
+        matches = re.findall(r"[0-9a-zçğıöşü_]{2,}", str(text or "").strip().lower(), flags=re.IGNORECASE)
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in matches:
+            token = str(raw or "").strip().lower()
+            if not token or token in seen:
+                continue
+            seen.add(token)
+            out.append(token)
+            if len(out) >= max(1, int(limit or 48)):
+                break
+        return out
+
 
     def _load_turn_context(
         self,
@@ -3860,6 +4502,14 @@ class ConversationRepository:
         query_limit = max(1, int(limit or 10))
         fetch_limit = max(query_limit * 4, query_limit)
         with self._db.local_engine.begin() as conn:
+            matched_ids_subquery = (
+                select(conversation_message_terms_table.c.message_id)
+                .where(conversation_message_terms_table.c.workspace_id == wid)
+                .where(conversation_message_terms_table.c.actor_id == aid)
+                .where(conversation_message_terms_table.c.term.in_(terms))
+                .group_by(conversation_message_terms_table.c.message_id)
+                .having(func.count(func.distinct(conversation_message_terms_table.c.term)) >= len(terms))
+            )
             stmt = (
                 select(
                     conversation_messages_table,
@@ -3873,9 +4523,8 @@ class ConversationRepository:
                 .where(conversation_messages_table.c.workspace_id == wid)
                 .where(conversation_messages_table.c.actor_id == aid)
                 .where(conversation_messages_table.c.role.in_(("user", "assistant")))
+                .where(conversation_messages_table.c.message_id.in_(matched_ids_subquery))
             )
-            for term in terms:
-                stmt = stmt.where(func.lower(conversation_messages_table.c.content).like(f"%{term}%"))
             rows = conn.execute(
                 stmt.order_by(conversation_messages_table.c.created_at.desc()).limit(fetch_limit)
             ).mappings().all()
@@ -3971,6 +4620,21 @@ class ConversationRepository:
                 "created_at": now,
             }
             conn.execute(conversation_messages_table.insert().values(**message_values))
+            term_rows = [
+                {
+                    "term_entry_id": f"term_{uuid.uuid4().hex[:16]}",
+                    "message_id": message_values["message_id"],
+                    "conversation_session_id": session_id,
+                    "workspace_id": wid,
+                    "actor_id": aid,
+                    "role": role_name,
+                    "term": term,
+                    "created_at": now,
+                }
+                for term in self._extract_terms(message_values["content"])
+            ]
+            if term_rows:
+                conn.execute(conversation_message_terms_table.insert(), term_rows)
             input_tokens = int(metadata_payload.get("input_tokens") or metadata_payload.get("prompt_tokens") or 0)
             output_tokens = int(metadata_payload.get("output_tokens") or metadata_payload.get("completion_tokens") or 0)
             conn.execute(
@@ -4000,6 +4664,91 @@ class ConversationRepository:
             updated_session["token_output_total"] = int(session_row.get("token_output_total") or 0) + output_tokens
             updated_session["updated_at"] = now
         return self._db._decode_conversation_message_row(message_values)
+
+
+class ChannelIdentityRepository:
+    def __init__(self, db: "RuntimeDatabase") -> None:
+        self._db = db
+
+    @staticmethod
+    def _link_id(workspace_id: str, channel: str, external_user_id: str) -> str:
+        return f"channel::{str(workspace_id or 'local-workspace').strip()}::{str(channel or 'cli').strip().lower()}::{str(external_user_id or '').strip()}"
+
+    def bind_identity(
+        self,
+        *,
+        workspace_id: str = "local-workspace",
+        channel: str,
+        external_user_id: str,
+        actor_id: str,
+        display_name: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        channel_name = str(channel or "cli").strip().lower() or "cli"
+        external_id = str(external_user_id or "").strip()
+        actor = str(actor_id or "").strip()
+        if not external_id:
+            raise ValueError("external_user_id required")
+        if not actor:
+            raise ValueError("actor_id required")
+        link_id = self._link_id(wid, channel_name, external_id)
+        now = _now()
+        values = {
+            "link_id": link_id,
+            "workspace_id": wid,
+            "channel": channel_name,
+            "external_user_id": external_id,
+            "actor_id": actor,
+            "display_name": str(display_name or "").strip(),
+            "metadata_json": _json_dumps(dict(metadata or {})),
+            "created_at": now,
+            "updated_at": now,
+            "last_seen_at": now,
+        }
+        with self._db.local_engine.begin() as conn:
+            existing = conn.execute(
+                select(channel_identity_links_table).where(channel_identity_links_table.c.link_id == link_id)
+            ).mappings().first()
+            if existing:
+                values["created_at"] = float(existing.get("created_at") or now)
+                values["metadata_json"] = _json_dumps({**_json_loads(existing.get("metadata_json"), {}), **dict(metadata or {})})
+                conn.execute(
+                    channel_identity_links_table.update()
+                    .where(channel_identity_links_table.c.link_id == link_id)
+                    .values(**values)
+                )
+            else:
+                conn.execute(channel_identity_links_table.insert().values(**values))
+        return self._db._decode_channel_identity_link_row(values)
+
+    def resolve_actor(
+        self,
+        *,
+        workspace_id: str = "local-workspace",
+        channel: str,
+        external_user_id: str,
+    ) -> dict[str, Any] | None:
+        wid = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        channel_name = str(channel or "cli").strip().lower() or "cli"
+        external_id = str(external_user_id or "").strip()
+        if not external_id:
+            return None
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(channel_identity_links_table)
+                .where(channel_identity_links_table.c.workspace_id == wid)
+                .where(channel_identity_links_table.c.channel == channel_name)
+                .where(channel_identity_links_table.c.external_user_id == external_id)
+                .limit(1)
+            ).mappings().first()
+            if row:
+                conn.execute(
+                    channel_identity_links_table.update()
+                    .where(channel_identity_links_table.c.link_id == str(row["link_id"]))
+                    .values(last_seen_at=_now(), updated_at=_now())
+                )
+        return self._db._decode_channel_identity_link_row(dict(row)) if row else None
 
 
 class WorkspaceAccessRepository:
@@ -5296,6 +6045,7 @@ class RuntimeDatabase:
         self.billing = BillingRepository(self)
         self.connectors = ConnectorRepository(self)
         self.learning = LearningRepository(self)
+        self.identities = ChannelIdentityRepository(self)
         self.privacy = PrivacyRepository(self)
         self.auth = LocalAuthRepository(self)
         self.auth_sessions = LocalAuthSessionRepository(self)
@@ -5847,6 +6597,81 @@ class RuntimeDatabase:
         }
 
     @staticmethod
+    def _decode_preference_update_queue_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "queue_id": str(row["queue_id"]),
+            "workspace_id": str(row["workspace_id"] or "local-workspace"),
+            "user_id": str(row["user_id"] or "local-user"),
+            "conversation_session_id": str(row["conversation_session_id"] or ""),
+            "preference_key": str(row["preference_key"] or ""),
+            "proposed_value": _json_loads(row["proposed_value_json"], {}),
+            "rationale": str(row["rationale"] or ""),
+            "confidence": float(row["confidence"] or 0.0),
+            "status": str(row["status"] or "draft"),
+            "metadata": _json_loads(row["metadata_json"], {}),
+            "created_at": float(row["created_at"] or 0.0),
+            "updated_at": float(row["updated_at"] or 0.0),
+            "reviewed_at": float(row["reviewed_at"] or 0.0),
+            "applied_at": float(row["applied_at"] or 0.0),
+        }
+
+    @staticmethod
+    def _decode_skill_draft_queue_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "draft_id": str(row["draft_id"]),
+            "workspace_id": str(row["workspace_id"] or "local-workspace"),
+            "user_id": str(row["user_id"] or "local-user"),
+            "conversation_session_id": str(row["conversation_session_id"] or ""),
+            "name_hint": str(row["name_hint"] or ""),
+            "description": str(row["description"] or ""),
+            "trigger_text": str(row["trigger_text"] or ""),
+            "source_action": str(row["source_action"] or ""),
+            "tool_names": _json_loads(row["tool_names_json"], []),
+            "confidence": float(row["confidence"] or 0.0),
+            "status": str(row["status"] or "draft"),
+            "metadata": _json_loads(row["metadata_json"], {}),
+            "created_at": float(row["created_at"] or 0.0),
+            "updated_at": float(row["updated_at"] or 0.0),
+            "reviewed_at": float(row["reviewed_at"] or 0.0),
+        }
+
+    @staticmethod
+    def _decode_routine_draft_queue_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "draft_id": str(row["draft_id"]),
+            "workspace_id": str(row["workspace_id"] or "local-workspace"),
+            "user_id": str(row["user_id"] or "local-user"),
+            "conversation_session_id": str(row["conversation_session_id"] or ""),
+            "name_hint": str(row["name_hint"] or ""),
+            "description": str(row["description"] or ""),
+            "trigger_text": str(row["trigger_text"] or ""),
+            "schedule_expression": str(row.get("schedule_expression") or ""),
+            "delivery_channel": str(row.get("delivery_channel") or ""),
+            "source_action": str(row["source_action"] or ""),
+            "confidence": float(row["confidence"] or 0.0),
+            "status": str(row["status"] or "draft"),
+            "metadata": _json_loads(row["metadata_json"], {}),
+            "created_at": float(row["created_at"] or 0.0),
+            "updated_at": float(row["updated_at"] or 0.0),
+            "reviewed_at": float(row["reviewed_at"] or 0.0),
+        }
+
+    @staticmethod
+    def _decode_channel_identity_link_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "link_id": str(row["link_id"]),
+            "workspace_id": str(row["workspace_id"] or "local-workspace"),
+            "channel": str(row["channel"] or "cli"),
+            "external_user_id": str(row["external_user_id"] or ""),
+            "actor_id": str(row["actor_id"] or "local-user"),
+            "display_name": str(row.get("display_name") or ""),
+            "metadata": _json_loads(row["metadata_json"], {}),
+            "created_at": float(row["created_at"] or 0.0),
+            "updated_at": float(row["updated_at"] or 0.0),
+            "last_seen_at": float(row.get("last_seen_at") or 0.0),
+        }
+
+    @staticmethod
     def _decode_operational_feedback_row(row: dict[str, Any]) -> dict[str, Any]:
         return {
             "feedback_id": str(row["feedback_id"]),
@@ -5902,6 +6727,7 @@ __all__ = [
     "BillingRepository",
     "ConversationRepository",
     "ConnectorRepository",
+    "ChannelIdentityRepository",
     "ExecutionRepository",
     "LearningRepository",
     "LocalAuthRepository",

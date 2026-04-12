@@ -36,6 +36,28 @@ def handle_skills(args):
         print(("✅  " if ok else "❌  ") + msg)
         return
 
+    if action == "promote-draft":
+        if not name:
+            print("Hata: draft id gerekli.")
+            return
+        from cli.commands.routines import _api_request
+
+        payload = {
+            "draft_id": str(name).strip(),
+            "name": str(getattr(args, "skill_name", "") or "").strip(),
+            "description": str(getattr(args, "description", "") or "").strip(),
+            "enabled": not bool(getattr(args, "disabled", False)),
+        }
+        port = int(getattr(args, "port", None) or 18789)
+        result = _api_request("POST", "/api/skills/from-draft", payload=payload, port=port)
+        if result.get("ok"):
+            _refresh_skill_registry()
+            skill = ((result.get("data") or {}).get("skill") or {})
+            print(f"✅  Draft beceriye dönüştü: {skill.get('name', '?')}")
+        else:
+            print(f"❌  Draft promote edilemedi: {(result.get('data') or {}).get('error', 'unknown')}")
+        return
+
     if action == "enable":
         if not name:
             print("Hata: beceri adı gerekli.")
@@ -114,7 +136,7 @@ def handle_skills(args):
         return
 
     print(f"Bilinmeyen eylem: {action}")
-    print("Usage: elyan skills [list|info|install|enable|disable|update|edit|remove|search|check] <name>")
+    print("Usage: elyan skills [list|info|install|promote-draft|enable|disable|update|edit|remove|search|check] <name>")
 
 
 def _parse_edit_updates(set_values: list[Any], file_path: str | None) -> dict[str, Any]:

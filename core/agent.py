@@ -882,6 +882,110 @@ class Agent:
         except Exception as exc:
             logger.debug(f"memory store failed: {exc}")
 
+    def _queue_learning_drafts(
+        self,
+        uid: Any,
+        *,
+        user_input: str,
+        response_text: str,
+        action: str,
+        success: bool,
+        context: dict[str, Any] | None = None,
+        runtime_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, int]:
+        queued = {"preferences": 0, "skills": 0}
+        try:
+            from core.learning.draft_extractor import collect_learning_drafts
+            from core.runtime.session_store import get_runtime_session_api
+
+            runtime_meta = dict(runtime_metadata or {})
+            if not runtime_meta:
+                policy = self._current_runtime_policy()
+                runtime_meta = dict(policy.get("metadata") or {}) if isinstance(policy.get("metadata"), dict) else {}
+            batch = collect_learning_drafts(
+                user_input=str(user_input or ""),
+                response_text=str(response_text or ""),
+                action=str(action or ""),
+                success=bool(success),
+                context=dict(context or {}),
+                runtime_metadata=runtime_meta,
+            )
+            if not batch.has_items():
+                return queued
+
+            session_api = get_runtime_session_api()
+            session = session_api.ensure_session(
+                user_id=str(uid or ""),
+                runtime_metadata=runtime_meta,
+                metadata={"source": "learning_draft_queue"},
+            )
+            workspace_id = str(session.get("workspace_id") or runtime_meta.get("workspace_id") or "local-workspace")
+            actor_id = str(session.get("actor_id") or runtime_meta.get("user_id") or uid or "local-user")
+            conversation_session_id = str(
+                session.get("conversation_session_id") or runtime_meta.get("conversation_session_id") or ""
+            )
+            channel = str(runtime_meta.get("channel") or runtime_meta.get("channel_type") or "cli")
+            agent_mode = str(runtime_meta.get("agent_mode") or "chat")
+
+            for candidate in list(batch.preference_updates or []):
+                session_api.db.learning.enqueue_preference_update(
+                    workspace_id=workspace_id,
+                    user_id=actor_id,
+                    conversation_session_id=conversation_session_id,
+                    preference_key=str(candidate.preference_key or ""),
+                    proposed_value=dict(candidate.proposed_value or {}),
+                    rationale=str(candidate.rationale or ""),
+                    confidence=float(candidate.confidence or 0.0),
+                    metadata={
+                        **dict(candidate.metadata or {}),
+                        "channel": channel,
+                        "agent_mode": agent_mode,
+                    },
+                )
+                queued["preferences"] += 1
+
+            for candidate in list(batch.skill_drafts or []):
+                session_api.db.learning.enqueue_skill_draft(
+                    workspace_id=workspace_id,
+                    user_id=actor_id,
+                    conversation_session_id=conversation_session_id,
+                    name_hint=str(candidate.name_hint or "workflow_draft"),
+                    description=str(candidate.description or ""),
+                    trigger_text=str(candidate.trigger_text or ""),
+                    source_action=str(action or ""),
+                    tool_names=list(candidate.tool_names or []),
+                    confidence=float(candidate.confidence or 0.0),
+                    metadata={
+                        **dict(candidate.metadata or {}),
+                        "channel": channel,
+                        "agent_mode": agent_mode,
+                    },
+                )
+                queued["skills"] += 1
+
+            for candidate in list(getattr(batch, "routine_drafts", []) or []):
+                session_api.db.learning.enqueue_routine_draft(
+                    workspace_id=workspace_id,
+                    user_id=actor_id,
+                    conversation_session_id=conversation_session_id,
+                    name_hint=str(candidate.name_hint or "routine_draft"),
+                    description=str(candidate.description or ""),
+                    trigger_text=str(candidate.trigger_text or ""),
+                    schedule_expression=str(candidate.schedule_expression or ""),
+                    delivery_channel=str(candidate.delivery_channel or channel),
+                    source_action=str(action or ""),
+                    confidence=float(candidate.confidence or 0.0),
+                    metadata={
+                        **dict(candidate.metadata or {}),
+                        "channel": channel,
+                        "agent_mode": agent_mode,
+                    },
+                )
+                queued["routines"] = int(queued.get("routines") or 0) + 1
+        except Exception as exc:
+            logger.debug(f"learning draft queue skipped: {exc}")
+        return queued
+
     @staticmethod
     def _build_information_question_prompt(user_input: str) -> str:
         question = str(user_input or "").strip()
@@ -1057,15 +1161,28 @@ class Agent:
             for key, value in metadata.items():
                 if isinstance(key, str):
                     payload["metadata"][key] = value
-            exec_mode = str(
-                metadata.get("execution_mode")
-                or metadata.get("agent_mode")
-                or ""
-            ).strip()
+            exec_mode = str(metadata.get("execution_mode") or "").strip()
             if exec_mode:
                 exec_cfg = payload.get("execution", {}) if isinstance(payload.get("execution"), dict) else {}
                 exec_cfg["mode"] = exec_mode
                 payload["execution"] = exec_cfg
+        try:
+            from core.runtime_modes import infer_agent_mode
+
+            resolved_agent_mode = infer_agent_mode(
+                metadata=payload.get("metadata", {}) if isinstance(payload.get("metadata"), dict) else {},
+                route_metadata=route_map,
+                channel=str(channel or "cli"),
+            )
+        except Exception:
+            resolved_agent_mode = str(
+                (payload.get("execution", {}) if isinstance(payload.get("execution"), dict) else {}).get("agent_mode")
+                or "chat"
+            ).strip() or "chat"
+        exec_cfg = payload.get("execution", {}) if isinstance(payload.get("execution"), dict) else {}
+        exec_cfg["agent_mode"] = str(resolved_agent_mode or "chat")
+        payload["execution"] = exec_cfg
+        payload["metadata"]["agent_mode"] = str(resolved_agent_mode or "chat")
         return payload
 
     async def _resolve_fast_direct_intent(
@@ -3310,11 +3427,7 @@ class Agent:
             for k, v in metadata.items():
                 if isinstance(k, str):
                     ctx.runtime_policy["metadata"][k] = v
-            exec_mode = str(
-                metadata.get("execution_mode")
-                or metadata.get("agent_mode")
-                or ""
-            ).strip()
+            exec_mode = str(metadata.get("execution_mode") or "").strip()
             if exec_mode:
                 exec_cfg = ctx.runtime_policy.get("execution", {}) if isinstance(ctx.runtime_policy.get("execution"), dict) else {}
                 exec_cfg["mode"] = exec_mode
@@ -3335,6 +3448,25 @@ class Agent:
             ctx.runtime_policy["metadata"]["execution_path"] = str(route_metadata.get("execution_path") or "")
         if route_metadata.get("sync"):
             ctx.runtime_policy["metadata"]["sync"] = dict(route_metadata.get("sync") or {})
+        try:
+            from core.runtime_modes import infer_agent_mode
+
+            resolved_agent_mode = infer_agent_mode(
+                metadata=ctx.runtime_policy.get("metadata", {}) if isinstance(ctx.runtime_policy.get("metadata"), dict) else {},
+                route_metadata=route_metadata,
+                user_input=effective_user_input,
+                action=str(route_metadata.get("request_kind") or ""),
+                channel=str(channel or "cli"),
+            )
+        except Exception:
+            resolved_agent_mode = str(
+                (ctx.runtime_policy.get("execution", {}) if isinstance(ctx.runtime_policy.get("execution"), dict) else {}).get("agent_mode")
+                or "chat"
+            ).strip() or "chat"
+        exec_cfg = ctx.runtime_policy.get("execution", {}) if isinstance(ctx.runtime_policy.get("execution"), dict) else {}
+        exec_cfg["agent_mode"] = str(resolved_agent_mode or "chat")
+        ctx.runtime_policy["execution"] = exec_cfg
+        ctx.runtime_policy["metadata"]["agent_mode"] = str(resolved_agent_mode or "chat")
 
         ledger_token = _active_ledger.set(ledger)
         runtime_policy_token = _active_runtime_policy.set(dict(ctx.runtime_policy or {}))
@@ -11182,6 +11314,21 @@ class Agent:
             )
         except Exception as _wi_exc:
             logger.debug(f"workspace intelligence record skipped: {_wi_exc}")
+
+        try:
+            queued = self._queue_learning_drafts(
+                uid_raw,
+                user_input=user_input,
+                response_text=response_text,
+                action=action,
+                success=success,
+                context=context or {},
+                runtime_metadata=runtime_metadata,
+            )
+            if queued.get("preferences") or queued.get("skills"):
+                self._last_turn_context["learning_drafts"] = dict(queued)
+        except Exception as draft_exc:
+            logger.debug(f"learning draft finalize skipped: {draft_exc}")
 
     @staticmethod
     def _strip_markdown_fence(content: str) -> str:

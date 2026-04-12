@@ -14,6 +14,7 @@ On detection it calls the registered async callback.
 from __future__ import annotations
 
 import asyncio
+import audioop
 from typing import Callable, Awaitable
 from utils.logger import get_logger
 
@@ -23,6 +24,7 @@ WakeCallback = Callable[[], Awaitable[None]]
 
 # Keywords that trigger wake (Turkish + English variants)
 _WAKE_PHRASES = {"hey elyan", "elyan", "hey elian", "elian"}
+_MIN_WAKE_RMS = 250
 
 
 class WakeWordDetector:
@@ -139,6 +141,10 @@ class WakeWordDetector:
                     if not self._running:
                         break
 
+                if not self._has_speech_energy(frames):
+                    await asyncio.sleep(0.1)
+                    continue
+
                 # Write temp wav and transcribe
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                     tmp_path = f.name
@@ -157,9 +163,26 @@ class WakeWordDetector:
                     os.unlink(tmp_path)
 
                 await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            raise
+        except KeyboardInterrupt:
+            logger.info("PyAudio keyword loop interrupted during shutdown.")
+            return
         except Exception as exc:
             logger.warning(f"PyAudio keyword loop failed: {exc}")
             await self._loop_noop()
+
+    @staticmethod
+    def _has_speech_energy(frames: list[bytes]) -> bool:
+        for frame in frames:
+            if not frame:
+                continue
+            try:
+                if audioop.rms(frame, 2) >= _MIN_WAKE_RMS:
+                    return True
+            except Exception:
+                continue
+        return False
 
     async def _loop_noop(self) -> None:
         """No audio backend — detector is passive. Wake via API call only."""
@@ -169,9 +192,8 @@ class WakeWordDetector:
 
     async def _transcribe(self, wav_path: str) -> str:
         try:
-            from tools.voice.local_stt import stt_engine
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, stt_engine.transcribe, wav_path)
+            from core.voice.stt_engine import get_stt_engine
+            result = await get_stt_engine().transcribe_async(wav_path)
             return str(result or "")
         except Exception:
             return ""

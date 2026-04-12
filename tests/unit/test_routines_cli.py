@@ -114,3 +114,40 @@ def test_routines_add_with_text_uses_from_text_endpoint(monkeypatch, capsys):
     payload = json.loads(out)
     assert payload["ok"] is True
     assert captured["path"] == "/api/routines/from-text"
+
+
+def test_routines_promote_draft_uses_from_draft_endpoint(monkeypatch, capsys):
+    captured = {}
+
+    def _fake_request(method, path, payload=None, port=18789):
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload or {}
+        return {
+            "ok": True,
+            "status": 200,
+            "data": {
+                "draft": {"draft_id": "routinedraft_1", "status": "promoted"},
+                "routine": {"id": "rt123", "name": "Kişisel Günlük Özet"},
+            },
+        }
+
+    monkeypatch.setattr(routines, "_api_request", _fake_request)
+    args = SimpleNamespace(
+        action="promote-draft",
+        id="routinedraft_1",
+        name="",
+        expression="",
+        report_channel="telegram",
+        report_chat_id="",
+        disabled=False,
+        json=True,
+        port=18789,
+    )
+    routines.run(args)
+    out = capsys.readouterr().out.strip()
+    payload = json.loads(out)
+    assert payload["ok"] is True
+    assert payload["routine"]["id"] == "rt123"
+    assert captured["path"] == "/api/routines/from-draft"
+    assert captured["payload"]["draft_id"] == "routinedraft_1"

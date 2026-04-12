@@ -7,6 +7,7 @@ from typing import Any
 
 from config.elyan_config import elyan_config
 from core.command_hardening import requires_screen_state, screen_state_is_actionable
+from core.feature_flags import get_feature_flag_registry
 from core.self_healing import get_healing_engine
 from core.knowledge_base import get_knowledge_base
 from core.pipeline_state import get_pipeline_state
@@ -17,6 +18,7 @@ from core.security.runtime_guard import runtime_security_guard
 from core.timeout_guard import RESEARCH_TIMEOUT, TOOL_TIMEOUT, friendly_timeout_message
 from core.tool_request import get_tool_request_log
 from core.tool_usage import record_tool_usage
+from core.runtime_modes import get_agent_mode_policy, normalize_agent_mode
 from security.privacy_guard import is_external_provider, redact_text
 from security.tool_policy import tool_policy
 from utils.logger import get_logger
@@ -37,6 +39,35 @@ def _available_tools():
 
 
 class ToolRuntimeExecutor:
+    @staticmethod
+    def _evaluate_mode_policy(tool_name: str, runtime_policy: dict[str, Any], *, user_id: str = "") -> dict[str, Any]:
+        policy = dict(runtime_policy or {})
+        metadata = policy.get("metadata", {}) if isinstance(policy.get("metadata"), dict) else {}
+        flag_enabled = get_feature_flag_registry().is_enabled(
+            "capability_mode_policy",
+            runtime_policy=policy,
+            user_id=str(user_id or ""),
+            context=metadata,
+        )
+        mode = normalize_agent_mode(
+            metadata.get("agent_mode")
+            or (policy.get("execution", {}) if isinstance(policy.get("execution"), dict) else {}).get("agent_mode")
+            or "chat"
+        )
+        mode_policy = get_agent_mode_policy(mode)
+        tool_group = tool_policy.infer_group(tool_name) or ""
+        allowed = mode_policy.allows_tool(tool_name, tool_group)
+        if not flag_enabled:
+            allowed = True
+        return {
+            "enabled": bool(flag_enabled),
+            "mode": mode,
+            "tool_group": tool_group,
+            "allowed": bool(allowed),
+            "reason": "" if allowed else f"Agent mode '{mode}' bu aracı desteklemiyor.",
+            "policy": mode_policy.to_dict(),
+        }
+
     def _resolve_spec(self, agent: Any, request: ExecutionRequest) -> ToolSpec:
         safe_params = request.params if isinstance(request.params, dict) else {}
         clean_params = {k: v for k, v in safe_params.items() if k not in ("action", "type")}
@@ -276,6 +307,34 @@ class ToolRuntimeExecutor:
                 agent._audit_security_event(uid, f"tool_policy_block:{mapped_tool}", err_text, params={"tool": mapped_tool}, channel=channel)
                 return {"success": False, "error": err_text, "error_code": "TOOL_POLICY_BLOCKED"}
             policy_check = {"allowed": True, "requires_approval": False, "reason": "allowlist_soft_compat"}
+
+        mode_policy_check = self._evaluate_mode_policy(mapped_tool, runtime_policy, user_id=uid)
+        if not mode_policy_check.get("allowed", False):
+            err_text = str(mode_policy_check.get("reason") or "Mode policy blocked this action.")
+            agent._audit_security_event(
+                uid,
+                f"mode_policy_block:{mapped_tool}",
+                err_text,
+                params={
+                    "tool": mapped_tool,
+                    "mode": str(mode_policy_check.get("mode") or ""),
+                    "tool_group": str(mode_policy_check.get("tool_group") or ""),
+                },
+                channel=channel,
+            )
+            _agent_runtime()._push_tool_event(
+                "end",
+                mapped_tool,
+                step=step_name,
+                request_id=str(getattr(request_record, "request_id", "") or ""),
+                success=False,
+                payload={
+                    "error": err_text,
+                    "error_code": "MODE_POLICY_BLOCKED",
+                    "mode": str(mode_policy_check.get("mode") or ""),
+                },
+            )
+            return {"success": False, "error": err_text, "error_code": "MODE_POLICY_BLOCKED"}
 
         requires_approval = bool(policy_check.get("requires_approval") or guard.get("requires_approval"))
         risk_level = str(guard.get("risk") or "").strip().lower()

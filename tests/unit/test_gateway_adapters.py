@@ -3,6 +3,9 @@ Unit testler: Gateway kanal adaptörleri
 Gerçek ağ bağlantısı gerektirmeyen mock tabanlı testler.
 """
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import time
 import pytest
@@ -793,6 +796,38 @@ class TestWhatsAppAdapter:
         assert resp.text == "ok123"
 
     @pytest.mark.asyncio
+    async def test_cloud_webhook_verification_uses_compare_digest(self, monkeypatch):
+        from aiohttp.test_utils import make_mocked_request
+        from core.gateway.adapters.whatsapp import WhatsAppAdapter
+        import core.gateway.adapters.whatsapp as whatsapp_module
+
+        adapter = WhatsAppAdapter(
+            {
+                "type": "whatsapp",
+                "mode": "cloud",
+                "phone_number_id": "123456",
+                "access_token": "token",
+                "verify_token": "verify-me",
+            }
+        )
+        req = make_mocked_request(
+            "GET",
+            "/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=wrong-token&hub.challenge=ok123",
+        )
+        calls = []
+
+        def _fake_compare_digest(left: str, right: str) -> bool:
+            calls.append((left, right))
+            return False
+
+        monkeypatch.setattr(whatsapp_module.secrets, "compare_digest", _fake_compare_digest)
+
+        resp = await adapter.handle_webhook_verification(req)
+
+        assert resp.status == 403
+        assert calls == [("wrong-token", "verify-me")]
+
+    @pytest.mark.asyncio
     async def test_cloud_webhook_maps_incoming_text(self):
         from aiohttp.test_utils import make_mocked_request
         from core.gateway.adapters.whatsapp import WhatsAppAdapter
@@ -1073,6 +1108,77 @@ class TestGoogleChatAdapter:
         assert caps["cards"] is False  # webhook modunda card yok
         assert caps["threads"] is True
 
+
+class TestSmsAdapter:
+    def _make(self, **kwargs):
+        from core.gateway.adapters.sms_adapter import SmsAdapter
+
+        cfg = {
+            "account_sid": "AC123",
+            "auth_token": "secret-token",
+            "from_number": "+15550001111",
+            **kwargs,
+        }
+        return SmsAdapter(cfg)
+
+    @staticmethod
+    def _sign(url: str, payload: dict[str, str], token: str) -> str:
+        data = url
+        for key, value in sorted(payload.items()):
+            data += key + value
+        digest = hmac.new(token.encode("utf-8"), data.encode("utf-8"), hashlib.sha1).digest()
+        return base64.b64encode(digest).decode("utf-8")
+
+    @pytest.mark.asyncio
+    async def test_handle_webhook_rejects_invalid_signature(self):
+        from aiohttp.test_utils import make_mocked_request
+
+        adapter = self._make()
+        request = make_mocked_request(
+            "POST",
+            "/sms/webhook",
+            headers={"Host": "example.com", "X-Twilio-Signature": "bad-signature"},
+        )
+        request.post = AsyncMock(return_value={"From": "+15551234567", "Body": "Selam", "MessageSid": "SM1"})
+
+        resp = await adapter.handle_webhook(request)
+
+        assert resp.status == 403
+        assert resp.text == "invalid_signature"
+
+    @pytest.mark.asyncio
+    async def test_handle_webhook_accepts_valid_signature_and_dispatches_message(self):
+        from aiohttp.test_utils import make_mocked_request
+
+        adapter = self._make()
+        received = []
+
+        async def _on_message(msg):
+            received.append(msg)
+
+        adapter.on_message(_on_message)
+        payload = {"From": "+15551234567", "Body": "Selam", "MessageSid": "SM1", "To": "+15550001111"}
+        signature = self._sign("http://example.com/sms/webhook", payload, "secret-token")
+        request = make_mocked_request(
+            "POST",
+            "/sms/webhook",
+            headers={"Host": "example.com", "X-Twilio-Signature": signature},
+        )
+        request.post = AsyncMock(return_value=payload)
+
+        resp = await adapter.handle_webhook(request)
+
+        assert resp.status == 200
+        assert len(received) == 1
+        assert received[0].channel_type == "sms"
+        assert received[0].text == "Selam"
+
+class TestGoogleChatAdapter:
+    def _make(self, **kwargs):
+        from core.gateway.adapters.google_chat_adapter import GoogleChatAdapter
+        cfg = {"mode": "webhook", "webhook_url": "https://chat.googleapis.com/v1/...", **kwargs}
+        return GoogleChatAdapter(cfg)
+
     def test_get_capabilities_bot(self):
         from core.gateway.adapters.google_chat_adapter import GoogleChatAdapter
         adapter = GoogleChatAdapter({"mode": "bot"})
@@ -1153,6 +1259,75 @@ class TestSlackAdapter:
 
         fake_client.chat_postMessage.assert_awaited_once()
         fake_client.files_upload_v2.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_build_unified_message_transcribes_voice_attachment(self, tmp_path):
+        pytest.importorskip("slack_bolt")
+        from core.gateway.adapters.slack import SlackAdapter
+
+        adapter = SlackAdapter({"app_token": "xapp-1", "bot_token": "xoxb-1"})
+        audio_file = tmp_path / "voice-note.ogg"
+        audio_file.write_bytes(b"voice")
+        event = {
+            "ts": "1710000000.001",
+            "channel": "C123",
+            "user": "U123",
+            "text": "Bunu not al",
+            "files": [
+                {
+                    "name": "voice-note.ogg",
+                    "mimetype": "audio/ogg",
+                    "url_private_download": "https://files.example.test/voice-note.ogg",
+                }
+            ],
+        }
+        fake_stt = SimpleNamespace(transcribe_async=AsyncMock(return_value="Toplantı özeti hazır"))
+
+        with patch("core.voice.stt_engine.get_stt_engine", return_value=fake_stt):
+            adapter._download_slack_file = AsyncMock(return_value=str(audio_file))
+            msg = await adapter._build_unified_message(event)
+
+        assert msg.channel_type == "slack"
+        assert msg.metadata["is_voice"] is True
+        assert msg.metadata["voice_transcript"] == "Toplantı özeti hazır"
+        assert msg.attachments[0]["type"] == "audio"
+        assert "Toplantı özeti hazır" in msg.text
+
+
+class TestDiscordAdapter:
+    @pytest.mark.asyncio
+    async def test_build_unified_message_transcribes_voice_attachment(self, tmp_path):
+        pytest.importorskip("discord")
+        from core.gateway.adapters.discord import DiscordAdapter
+
+        adapter = DiscordAdapter({"token": "discord-token"})
+        audio_file = tmp_path / "voice-note.ogg"
+        audio_file.write_bytes(b"voice")
+
+        class _Attachment:
+            filename = "voice-note.ogg"
+            content_type = "audio/ogg"
+
+            async def save(self, path):
+                Path(path).write_bytes(audio_file.read_bytes())
+
+        message = SimpleNamespace(
+            id=123,
+            content="Bunu hatırla",
+            attachments=[_Attachment()],
+            channel=SimpleNamespace(id=456),
+            author=SimpleNamespace(id=789, name="emre"),
+        )
+        fake_stt = SimpleNamespace(transcribe_async=AsyncMock(return_value="Discord ses notu"))
+
+        with patch("core.voice.stt_engine.get_stt_engine", return_value=fake_stt):
+            msg = await adapter._build_unified_message(message)
+
+        assert msg.channel_type == "discord"
+        assert msg.metadata["is_voice"] is True
+        assert msg.metadata["voice_transcript"] == "Discord ses notu"
+        assert msg.attachments[0]["type"] == "audio"
+        assert "Discord ses notu" in msg.text
 
 
 # ── iMessage Adapter ──────────────────────────────────────────────────────────
@@ -1263,3 +1438,46 @@ class TestIMessageAdapter:
         data["message"]["chats"][0]["guid"] = "allowed-chat-001"
         await adapter._process_message(data)
         assert len(received) == 1
+
+    @pytest.mark.asyncio
+    async def test_connect_skips_websocket_when_it_requires_url_secret(self):
+        adapter = self._make()
+        adapter._ping = AsyncMock(return_value=True)
+
+        with patch("core.gateway.adapters.imessage_adapter.aiohttp.ClientSession", return_value=AsyncMock()), \
+             patch("core.gateway.adapters.imessage_adapter.asyncio.create_task") as create_task:
+            await adapter.connect()
+
+        assert adapter._is_connected is True
+        create_task.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ws_loop_does_not_embed_password_in_url(self):
+        adapter = self._make()
+        captured = {}
+
+        class _FakeConnect:
+            async def __aenter__(self_inner):
+                adapter._is_connected = False
+                return self_inner
+
+            async def __aexit__(self_inner, exc_type, exc, tb):
+                return False
+
+            def __aiter__(self_inner):
+                async def _iter():
+                    if False:
+                        yield None
+                return _iter()
+
+        class _FakeSession:
+            def ws_connect(self_inner, url, **kwargs):
+                captured["url"] = url
+                return _FakeConnect()
+
+        adapter._session = _FakeSession()
+        adapter._is_connected = True
+
+        await adapter._ws_loop()
+
+        assert "password=" not in captured["url"]

@@ -1,5 +1,6 @@
 import os
 import importlib
+import asyncio
 import warnings
 from pathlib import Path
 from core.dependencies import get_dependency_runtime
@@ -50,8 +51,8 @@ class LocalSTT:
             except Exception as e:
                 logger.error(f"Whisper load error: {e}")
 
-    async def transcribe(self, audio_path: str) -> str:
-        """Convert audio file to text."""
+    def transcribe_sync(self, audio_path: str) -> str:
+        """Convert audio file to text in a synchronous context."""
         self._load_model()
         if self.model is None:
             return "[Whisper not available]"
@@ -68,6 +69,11 @@ class LocalSTT:
         except Exception as e:
             logger.error(f"STT Error: {e}")
             return ""
+
+    async def transcribe(self, audio_path: str) -> str:
+        """Convert audio file to text without blocking the event loop."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.transcribe_sync, audio_path)
 
 
 # Global instance

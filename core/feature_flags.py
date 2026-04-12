@@ -62,6 +62,13 @@ _DEFAULT_FEATURE_FLAGS: dict[str, FeatureFlagDefinition] = {
         owner="ambient",
         stage="shadow",
     ),
+    "capability_mode_policy": FeatureFlagDefinition(
+        name="capability_mode_policy",
+        default=True,
+        description="Enforce explicit agent-mode capability policies in the canonical tool runtime.",
+        owner="runtime",
+        stage="runtime",
+    ),
 }
 
 

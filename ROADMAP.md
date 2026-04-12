@@ -1,161 +1,266 @@
-# ROADMAP.md — Elyan Commercialization Execution Roadmap
+# ROADMAP.md — Elyan Stratejik Yol Haritası
 
-**Last Updated**: 2026-04-03  
-**Primary Direction**: local-first operator runtime + workspace-first commercial control plane  
-**Current Active Phase**: Commercialization foundation tamamlandi; bundan sonraki aktif cizgi preservation-first architecture hardening (Phase 0 -> Phase 2) + revenue-critical runtime gaps
+**Son Güncelleme**: 2026-04-12
+**Strateji**: A ile Kazan (Türkiye KOBİ) → B ile Büyü (Ambient/Proaktif Global)
+**Aktif Faz**: P1 kullanıcı deneyimi + Faza A connector altyapısı
 
-## Strategic Direction
+---
 
-Elyan bundan sonra su product line uzerinden ilerler:
+## STRATEJİK YÖNELIM
 
-1. Workspace-first ownership
-2. Iyzico-first payment abstraction
-3. Elyan Credits ile immutable usage accounting
-4. Admin control plane + local runtime boundary
-5. User/workspace/global katmanli learning fabric
-6. Replayable commercial, learning ve audit event zinciri
+### Neden A + B?
 
-Bu line'a ek olarak su engineering discipline canonicaldir:
+Piyasadaki tüm büyük oyuncular (Anthropic, OpenAI, Google, Microsoft) reaktif kuruyorlar — sen sormadan hareket etmiyorlar. Hepsi İngilizce-first, cloud-first, genel amaçlı.
 
-7. Mevcut calisan davranisi once koru
-8. Replacement yerine wrapper, adapter, verifier ve sidecar ile gelistir
-9. Non-trivial runtime degisikliklerini feature flag ile ship et
-10. Planner, router, verifier ve memory degisikliklerini shadow mode olmadan enforce etme
+Elyan iki aşamada farklılaşır:
 
-## Phase Order
+**Faza A — Türkiye KOBİ Operatörü**
+- Yabancı şirketlerin asla değmeyeceği derinlik: e-Fatura, Logo/Netsis, SGK, KEP
+- Iyzico zaten entegre → ilk gelir buradan
+- KVKK uyumlu by design — veri yerinden çıkmıyor
+- Gerçek müşteri + gerçek kullanım verisi = Faza B'nin yakıtı
 
-### Phase 0 — Documentation Baseline
-- README, roadmap, progress, memory, architecture truth'unu commercialization line ile hizala
-- commerce, admin, learning ve ledger design docs ekle
-- her implementation slice sonunda docs update zorunlu olsun
+**Faza B — Ambient/Proaktif Global Ajan**
+- Reaktif → Proaktif dönüşüm: dünyada kimse ciddiye almıyor
+- A fazından toplanan veriyle eğitilmiş pattern engine
+- "Sessiz ortak" konumu — arka planda yaşar, önemli anlarda ortaya çıkar
+- Global çıkış: Türkiye'de kanıtlanmış ürün
 
-### Phase 1 — Canonical Commercial Domain
-- tek workspace billing truth
-- canonical models: plan, token pack, credit balance, ledger entry, provider transaction, entitlement snapshot
-- legacy user quota ve subscription path'lerini compatibility adapter arkasina al
+---
 
-### Phase 2 — Iyzico Provider Abstraction
-- `PaymentProvider` interface
-- `IyzicoProvider` first implementation
-- checkout init, token pack purchase, webhook verification, idempotency, refund/failure mapping
+## STRATEJİK FAZLAR
 
-### Phase 3 — Workspace, RBAC, Memberships, Seats
-- canonical roles: owner, billing_admin, security_admin, operator, viewer
-- invite, accept, role change, seat assignment, seat enforcement
-- login-time auto bootstrap kaldir
-- explicit setup/bootstrap path zorunlu olsun
+### Faza A — Türkiye KOBİ Operatörü (0-12 Ay)
 
-### Phase 4 — Admin Control Plane
-- workspace overview
-- subscriptions
-- credit ledger
-- token pack purchases
-- members and roles
-- approval queue
-- connector health
-- learning policy
+#### A-1: Türkiye Connector Paketi (Ay 1-3)
+**Hedef**: Türk iş dünyasının günlük acılarını çözen connector'lar
 
-### Phase 5 — Continuous Learning Fabric
-- user memory
-- workspace intelligence
-- global aggregate intelligence
-- privacy classify, consent gate, feature extraction, reward scoring, contextual bandit, offline eval, shadow/canary promotion
+| Connector | Açıklama | Öncelik |
+|-----------|----------|---------|
+| e-Fatura | GİB entegrasyonu, fatura oluştur/gönder/arşivle | P0 |
+| e-Arşiv | e-Arşiv fatura portalı | P0 |
+| Iyzico (mevcut) | Ödeme al, abonelik yönet | ✓ |
+| Logo | Logo GO/Tiger muhasebe entegrasyonu | P1 |
+| Netsis | Netsis Wings/Standard entegrasyon | P1 |
+| Luca | Luca muhasebe connector | P1 |
+| e-Devlet | Belge sorgulama, vergi borcu, sicil | P2 |
+| SGK | Bildirim takibi, borç sorgulama | P2 |
+| KEP | Kayıtlı Elektronik Posta yönetimi | P2 |
 
-### Phase 6 — Runtime Usage and Credit Debiting
-- LLM/tool usage -> commercial ledger
-- calibrated estimator for non-provider cost paths
-- included credits -> purchased credits -> soft degrade ordering
+**Teknik gereksinim**:
+- Her connector `integrations/turkey/` altında kendi paketi
+- `ConnectorBase` abstract class'tan türetilmeli
+- Her connector: bağlantı testi, health check, retry logic
+- Tüm çağrılar audit log'a düşmeli
+- KVKK: kişisel veri işlenmeden önce consent kaydı
 
-### Phase 7 — Security Hardening
-- real CSRF enforcement
-- hosted admin/session hardening
-- immutable audit + outbox publishing
-- workspace-scoped query enforcement
+#### A-2: Türkçe Dil ve Kültür Katmanı (Ay 1-2)
+- Tüm UI metinleri Türkçe-first (mevcut bazıları İngilizce)
+- Tarih formatı: DD.MM.YYYY (GİB standardı)
+- Para birimi: TRY öncelikli
+- İş yazışması şablonları: Türk iş kültürüne uygun
+- Hata mesajları Türkçe (mevcut `translateBillingError` genişletilmeli)
 
-### Phase 8 — Product Documentation Discipline
-- `PROGRESS.md`, `ROADMAP.md`, `memory.md` her faz sonunda guncel tutulur
-- architecture delta varsa ilgili konu dokumani da guncellenir
+#### A-3: KOBİ Operatör Senaryoları (Ay 2-4)
+Tek komutla çalışan, gerçek KOBİ acılarını çözen akışlar:
 
-## What Is Already Implemented
+```
+"Bu ayın KDV özetini çıkar"
+→ Muhasebe yazılımından veri çek
+→ GİB formatına dönüştür
+→ Taslak hazırla, göster, onayla, gönder
 
-- `core/feature_flags.py` ile preservation-first feature flag registry foundation
-- `core/observability/trace_context.py` ile canonical request/trace context foundation
-- gateway request middleware tarafinda canonical trace headers:
-  - `X-Elyan-Trace-Id`
-  - `X-Elyan-Request-Id`
-  - `X-Elyan-Workspace-Id`
-- structured log enrichment artik aktif trace context'i tasiyabiliyor
-- `core/execution_guard.py` ile canonical shadow-only execution guard foundation
-- workflow, cowork ve task-extraction write path'lerinde seat / credit / limit / dispatch outcome telemetry'si artik `execution_guard_shadow` flag'i altinda gozlemlenebiliyor
-- approval engine lifecycle ve verifier engine outcome'lari da ayni shadow guard telemetry line'ina baglandi
-- browser, file_ops ve screen_operator capability runtime sonuc'lari da ayni guard hattina baglandi
-- filesystem ve terminal capability runtime sonuc'lari da ayni guard hattina baglandi
-- post-run billing reconciliation foundation artik var:
-  - `GET /api/v1/billing/events`
-  - `POST /api/v1/billing/reconcile-usage`
-  - immutable refund/debit adjustment flow
-  - `billing_usage_id` response link'i
-  - reconciliation metadata:
-    - `actual_cost_usd`
-    - `total_tokens`
-    - `reconciled_by`
-- automatic pricing->reconcile bridge foundation da geldi:
-  - `core/billing/reconciliation_bridge.py`
-  - workflow/cowork runtime scope activation
-  - pricing tracker -> scoped aggregation
-  - dispatch-failure auto-refund
-  - auto-apply still feature-flagged and default-off
-- `core/billing/commercial_types.py` ile canonical plan ve token pack katalogu
-- `core/billing/payment_provider.py` ile provider abstraction
-- `core/billing/iyzico_provider.py` ile Iyzico-first checkout/webhook foundation
-- `core/billing/workspace_billing.py` ile immutable event + credit ledger + entitlement snapshot tabanli workspace billing flow
-- `core/persistence/runtime_db.py` icinde billing events, credit ledger, entitlement snapshots, workspace invites ve membership repository zemini
-- `core/gateway/server.py` icinde explicit owner bootstrap ve mutating cookie session requests icin CSRF enforcement
-- workspace admin controller foundation, role mutation, invite accept/create ve seat assignment APIs
-- owner bootstrap seat assignment ve ilk execution seat gate
-- desktop setup cockpit:
-  - explicit owner bootstrap screen
-  - workspace flight deck
-  - mobile intake quick-connect
-  - glass-first lightweight shell polish
-- desktop control plane:
-  - invite create/list
-  - role mutation
-  - seat assignment
-  - plans / token packs / credit ledger
-- desktop operator intake:
-  - `GET/POST /api/v1/inbox/events`
-  - `POST /api/v1/tasks/extract`
-  - encrypted inbox persistence
-  - deterministic task extraction
-  - home screen intake + triage + launch flow
-- first runtime credit enforcement:
-  - usage estimator
-  - preflight authorization
-  - 402 insufficient-credit response on revenue-critical operator writes
-- connector-fed mobile intake:
-  - WhatsApp / Telegram / iMessage / SMS inbound capture
-  - workspace-bound channel config
-  - canonical inbox/extraction reuse
+"Tedarikçi faturalarını işle"
+→ e-posta eklerini tara
+→ e-Fatura/PDF oku, muhasebe yazılımına kaydet
+→ ödeme planını takvime ekle
 
-## Next Critical Steps
+"Aylık raporu hazırla"
+→ Muhasebe verisi + banka ekstreleri + müşteri listesi
+→ Şablona dök, PDF oluştur, yetkililere gönder
+```
 
-1. Phase 0'in kalan kismini tamamlamak:
-   import-path audit ve capability inventory
-2. `ExecutionGuard` shadow telemetry'sini app/native bridge ve remaining capability wrapper'larina genisletmek
-3. Automatic pricing bridge'i daha fazla runtime/provider yoluna yaymak ve safe apply rollout kriterlerini olcmek
-4. Invite accept + hosted admin web plane
-5. Gmail ve diger connector event ingestion'ini yeni inbox pipeline'ina baglamak
-6. Learning fabric event contracts ve promotion pipeline'ini kod seviyesinde cikarmak
-7. Tenant isolation ve billing/learning replay testlerini genisletmek
+#### A-4: Decision Fabric — Karar Hafızası (Ay 3-5)
+Elyan'ın en kritik farklılaştırıcılarından biri: sadece **ne** yaptığını değil **neden** yaptığını hatırlamak.
 
-## Open Risks
+```python
+# Her kritik aksiyonla birlikte bağlam kaydedilir
+{
+  "karar": "Tedarikçi X sözleşme yenilenmedi",
+  "bağlam": "Q3 fiyat artışı + 3 kargo gecikmesi",
+  "onaylayan": "kullanıcı",
+  "tarih": "2026-03-14",
+  "workspace_id": "...",
+  "referans_event_ids": [...]
+}
+```
 
-- `core/agent.py` monolith'i commercialization line icin halen yuksek risk tasiyor.
-- `core/gateway/server.py` ve `core/persistence/runtime_db.py` uzerinde invasive refactor yuksek regresyon riski tasir; controller extraction ve adapter yaklasimi korunmalidir.
-- Workspace billing foundation geldi; desktop shell bunun bir kismini tuketiyor ama hosted admin ve mutating admin screens henuz eksik.
-- Home intake usable ve mobil/message lanes canonical pipeline'a baglandi; ama Gmail ve productivity event ingestion henuz ayni hatta tasinmadi.
-- Runtime credits path'i revenue-kritik operator write'larda acildi; pricing bridge foundation geldi ama auto-apply rollout ve provider coverage henuz tamamlanmadi.
-- Learning fabric hala design-truth seviyesinde; runtime promotions ve offline eval pipeline'i eksik.
-- Eski Stripe route'lari deprecated; frontend ve operator flows yeni route'lara alinmali.
-- Feature-flag registry ve shadow rollout disiplini olmadan planner/router/verifier degisiklikleri aktiflestirilmemelidir.
+Arayüz: "Neden bu tedarikçiyle çalışmıyoruz?" → Elyan cevaplar.
+
+#### A-5: Türkiye İlk Müşteri Edinimi (Ay 2-6)
+- 10 pilot KOBİ (muhasebe yoğun sektörler: inşaat, tekstil, ithalat-ihracat)
+- Onboarding: 15 dakikada çalışan sistem
+- Ölçüm: günlük aktif kullanım, zaman tasarrufu, hata azalması
+- Feedback döngüsü: 2 haftada bir kullanıcı görüşmesi
+
+---
+
+### Faza B — Ambient/Proaktif Global Ajan (12-24 Ay)
+
+#### B-1: Pattern Engine (Ay 10-13)
+A fazından toplanan gerçek kullanım verisi pattern engine'i besler.
+
+```python
+class PatternEngine:
+    """
+    Kullanıcı davranışını izler, tekrarlayan işleri tespit eder,
+    proaktif öneri üretir.
+
+    Girdi: activity_log events (her tool çağrısı, her onay, her red)
+    Çıktı: PatternProposal (öneri tipi, güven skoru, tetikleyici)
+    """
+
+    def detect_recurring(self, window_days=30) -> list[Pattern]:
+        # "Her Pazartesi 09:00'da aynı 3 adım"
+        pass
+
+    def suggest_automation(self, pattern: Pattern) -> AutomationProposal:
+        # Otomasyona almayı öner, kullanıcı onayı iste
+        pass
+
+    def score_confidence(self, pattern: Pattern) -> float:
+        # Öneri güveni: kaç kez tekrarlandı, ne kadar benzer
+        pass
+```
+
+**Kritik kural**: Düşük güvenli öneri asla gösterilmez. Kullanıcı rahatsız edilmemeli.
+
+#### B-2: Proaktif Bildirim Sistemi (Ay 12-14)
+```
+"Yarın 09:00'da Müşteri X sunumu — geçen ay şunları konuşmuştunuz.
+ Slaytları o bağlamla güncelledim. Onaylarsanız kaydedeyim."
+
+"Bu tedarikçiyle son iletişimden 3 hafta geçti.
+ Takip mesajı hazırladım. Göndermemi ister misiniz?"
+
+"Her ay sonu aynı raporu hazırlıyorsun.
+ Bu ay verilerini topladım, taslak hazır."
+```
+
+Bildirim kuralları:
+- Gün içinde maksimum 3 proaktif bildirim
+- Reddedilen öneri tipi 30 gün sessiz kalır
+- Kullanıcı "şimdi değil" diyebilir, hatırlatma zamanı seçebilir
+
+#### B-3: Ambient Context Engine (Ay 13-16)
+A fazındaki `PersonalContextEngine`'i genişlet:
+- Takvim: "1 saat sonra toplantı var, bağlamı hazırlayayım mı?"
+- Uygulama değişimi: "Faturalamaya geçtin — devam eden görev var"
+- Mesai sonu: "Bugün 3 yarım kalan görev — yarın için sıralayayım mı?"
+
+#### B-4: Global Çıkış Hazırlığı (Ay 18-24)
+- İngilizce UI (çeviri katmanı, Türkçe core bozulmadan)
+- Connector API: üçüncü parti connector marketplace
+- Multi-tenant SaaS hazırlığı (hosted version)
+- Pricing: global plan + Türkiye özel plan
+
+---
+
+## TEKNİK FAZLAR (Devam Eden)
+
+### Tamamlanan ✓
+- Phase 1: Canonical commercial domain (billing types, plan kataloğu)
+- Phase 2: Iyzico provider abstraction
+- Phase 3: Workspace RBAC + membership + owner bootstrap
+- Phase 7 (kısmi): Gateway CSRF enforcement
+
+### Aktif
+
+#### Phase 0 — P0 Taskları (Tamamlandı / Doğrulandı)
+1. `getCurrentLocalUser()` boş email guard mevcut
+2. `OnboardingScreen 2.tsx` repo yüzeyinden kaldırıldı
+3. Vite build doğrulandı
+4. `.env.example` güncellemesi mevcut (`ELYAN_ADMIN_TOKEN`, `ELYAN_PORT`)
+
+#### Phase 4 — Admin Control Plane
+- Workspace overview
+- Subscription management
+- Credit ledger UI
+- Token pack purchase flow
+- Member/role management
+- Approval queue
+- Connector health dashboard
+
+#### Phase 5 — Learning Fabric
+- User memory (mevcut foundation üzerine)
+- Workspace intelligence (mevcut temel çalışıyor)
+- Global aggregate intelligence
+- Privacy classify + consent gate
+- Offline eval + shadow/canary promotion
+
+#### Phase 6 — Runtime Credit Enforcement
+- LLM/tool usage → commercial ledger bağlantısı
+- Calibrated usage estimator
+- Soft degrade ordering (included → purchased → degraded)
+
+### Güvenlik Fazı (Paralel)
+
+#### SEC-1: Kritik Güvenlik Düzeltmeleri
+1. WebSocket token URL'den çıkar → WS message payload'a taşı
+2. `hmac.compare_digest` ile webhook imzası
+3. Query string admin auth kaldır (`query.get("token")`)
+4. Dosya yükleme MIME whitelist + boyut sınırı
+5. Prompt injection firewall → case-insensitive + semantic
+
+#### SEC-2: Auth Güçlendirme
+6. Rate limiter'ı auth endpoint'lerine bağla (altyapı mevcut)
+7. Session token localStorage → HttpOnly cookie
+8. Sign-out: localStorage + WebSocket + in-flight temizlik
+9. Path traversal: symlink-safe `resolve()`
+
+#### SEC-3: Altyapı
+10. `requirements.txt` exact pin (`==`)
+11. SQLite transaction isolation seviyesi
+12. Audit log şifrelemesi
+
+---
+
+## Mühendislik Disiplini
+
+### Preservation-First (Değiştirme Değil, Genişlet)
+- Çalışan davranışı önce koru
+- Replacement yerine wrapper, adapter, verifier
+- Non-trivial değişiklikler feature flag ile
+- Planner/router/verifier değişiklikleri shadow mode olmadan aktifleştirme
+
+### Test Protokolü
+Her değişiklik sonrası:
+```bash
+# 1. Python syntax
+.venv/bin/python -c "import ast; ast.parse(open('core/gateway/server.py').read()); print('OK')"
+
+# 2. TypeScript
+cd apps/desktop && PATH="/opt/homebrew/bin:$PATH" node node_modules/.bin/tsc --noEmit
+
+# 3. Backend + healthz
+.venv/bin/python main.py start --port 18789 &
+sleep 6
+curl -s http://127.0.0.1:18789/healthz | python3 -m json.tool | grep admin_token
+
+# 4. Frontend build
+cd apps/desktop && PATH="/opt/homebrew/bin:$PATH" node node_modules/.bin/vite build 2>&1 | tail -10
+```
+
+---
+
+## Açık Riskler
+
+| Risk | Seviye | Mitigation |
+|------|--------|------------|
+| `core/agent.py` 14.766 satır monolith | YÜKSEk | Dokunmadan çalıştır, yavaş refactor |
+| `core/gateway/server.py` 10K satır | YÜKSEK | Modul extraction plan hazırlanıyor |
+| WebSocket token URL'de açıkta | KRİTİK | SEC-1'de düzeltiliyor |
+| Webhook imzası timing attack | KRİTİK | SEC-1'de düzeltiliyor |
+| Rate limiting tanımlandı ama bağlanmamış | ORTA | SEC-2'de tamamlanıyor |
+| Stripe route'ları deprecated, frontend taşınmadı | ORTA | Iyzico migration devam ediyor |
+| Learning fabric hala design seviyesinde | ORTA | Phase 5'te implemente ediliyor |

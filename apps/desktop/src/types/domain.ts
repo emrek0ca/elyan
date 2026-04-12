@@ -949,6 +949,28 @@ export interface HomeSnapshot {
   backgroundTasks?: CoworkHomeSnapshot["backgroundTasks"];
   autopilot?: CoworkHomeSnapshot["autopilot"];
   billing?: WorkspaceBillingSummary;
+  setupChecklist?: Array<{
+    key: string;
+    label: string;
+    ready: boolean;
+    detail?: string;
+  }>;
+  learningQueue?: {
+    preferences: number;
+    skills: number;
+    routines: number;
+    total: number;
+    items: Array<{
+      id: string;
+      type: "skill" | "routine";
+      title: string;
+      detail: string;
+      status: string;
+      confidence?: number;
+      deliveryChannel?: string;
+      scheduleExpression?: string;
+    }>;
+  };
 }
 
 export type HomeSnapshotV2 = HomeSnapshot;

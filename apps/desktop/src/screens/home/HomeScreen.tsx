@@ -16,7 +16,7 @@ import {
   useHomeSnapshot,
   useProviderDescriptors,
 } from "@/hooks/use-desktop-data";
-import { createCoworkThread, triggerAutopilotTick } from "@/services/api/elyan-service";
+import { createCoworkThread, promoteRoutineDraft, promoteSkillDraft, triggerAutopilotTick } from "@/services/api/elyan-service";
 import { useRuntimeStore } from "@/stores/runtime-store";
 import { useUiStore } from "@/stores/ui-store";
 import type { CoworkMode } from "@/types/domain";
@@ -35,6 +35,8 @@ export function HomeScreen() {
   const [command, setCommand] = useState("");
   const [launchingFlow, setLaunchingFlow] = useState<string | null>(null);
   const [launchError, setLaunchError] = useState("");
+  const [draftActionId, setDraftActionId] = useState<string | null>(null);
+  const [draftActionError, setDraftActionError] = useState("");
   const [checkInBusy, setCheckInBusy] = useState(false);
   const { data: providers } = useProviderDescriptors();
   const connectionState = useRuntimeStore((s) => s.connectionState);
@@ -62,6 +64,18 @@ export function HomeScreen() {
   const backgroundTasks = (data.backgroundTasks || []).filter((t) => !["completed", "failed", "cancelled"].includes(t.state)).slice(0, 3);
   const suggestions = (autopilot?.suggestions || []).slice(0, 3);
   const providerCount = (providers || []).filter((p) => p.enabled && p.healthState === "available").length;
+  const learningQueue = data.learningQueue;
+  const setupPriority = ["provider_model", "channel_connection", "first_routine", "first_daily_summary", "learning_queue"];
+  const setupChecklist = (data.setupChecklist || [])
+    .filter((item) => !item.ready)
+    .sort((left, right) => {
+      const leftIndex = setupPriority.indexOf(left.key);
+      const rightIndex = setupPriority.indexOf(right.key);
+      const a = leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex;
+      const b = rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex;
+      return a - b;
+    })
+    .slice(0, 5);
 
   function inferTaskType(value: string): "document" | "presentation" | "website" {
     const t = value.toLowerCase();
@@ -109,6 +123,32 @@ export function HomeScreen() {
       void queryClient.invalidateQueries({ queryKey: ["home-snapshot"] });
     } finally {
       setCheckInBusy(false);
+    }
+  }
+
+  async function handlePromoteDraft(draft: NonNullable<HomeSnapshotLike["learningQueue"]>["items"][number]) {
+    setDraftActionError("");
+    setDraftActionId(draft.id);
+    try {
+      if (draft.type === "skill") {
+        const result = await promoteSkillDraft(draft.id, { skillName: draft.title });
+        if (!result.ok) {
+          setDraftActionError(result.message || "Skill draft promote edilemedi.");
+          return;
+        }
+      } else {
+        const result = await promoteRoutineDraft(draft.id, {
+          name: draft.title,
+          reportChannel: draft.deliveryChannel,
+        });
+        if (!result.ok) {
+          setDraftActionError(result.message || "Routine draft promote edilemedi.");
+          return;
+        }
+      }
+      await queryClient.invalidateQueries({ queryKey: ["home-snapshot"] });
+    } finally {
+      setDraftActionId(null);
     }
   }
 
@@ -161,6 +201,67 @@ export function HomeScreen() {
         <StatusTile label="Autopilot" value={autopilot?.running ? "Aktif" : "Pasif"} tone={autopilot?.running ? "success" : "neutral"} />
         <StatusTile label="Arka plan" value={backgroundTasks.length ? `${backgroundTasks.length} iş` : "Boş"} tone={backgroundTasks.length ? "info" : "neutral"} />
       </div>
+
+      {learningQueue && learningQueue.total > 0 ? (
+        <Surface tone="card" className="p-5">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h2 className="text-[13px] font-medium text-[var(--text-primary)]">Learned drafts</h2>
+              <p className="mt-1 text-[12px] text-[var(--text-secondary)]">
+                {learningQueue.skills} skill, {learningQueue.routines} routine, {learningQueue.preferences} preference draft review bekliyor.
+              </p>
+            </div>
+            <StatusBadge tone="warning">{`${learningQueue.total} pending`}</StatusBadge>
+          </div>
+          <div className="mt-4 grid gap-3 xl:grid-cols-2">
+            {learningQueue.items.map((draft) => (
+              <div key={draft.id} className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] px-4 py-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-[13px] font-medium text-[var(--text-primary)]">{draft.title}</div>
+                    <div className="mt-1 text-[12px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">{draft.type}</div>
+                  </div>
+                  <StatusBadge tone="warning">{draft.status}</StatusBadge>
+                </div>
+                <p className="mt-3 text-[12px] leading-6 text-[var(--text-secondary)]">{draft.detail || "Açıklama yok."}</p>
+                {draft.type === "routine" && draft.scheduleExpression ? (
+                  <p className="mt-2 text-[11px] text-[var(--text-tertiary)]">
+                    {draft.scheduleExpression}{draft.deliveryChannel ? ` · ${draft.deliveryChannel}` : ""}
+                  </p>
+                ) : null}
+                <div className="mt-4 flex items-center gap-2">
+                  <Button variant="secondary" onClick={() => void handlePromoteDraft(draft)} disabled={draftActionId === draft.id}>
+                    {draftActionId === draft.id ? "Promoting…" : draft.type === "skill" ? "Promote skill" : "Promote routine"}
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+          {draftActionError ? <p className="mt-3 text-[12px] text-[var(--state-warning)]">{draftActionError}</p> : null}
+        </Surface>
+      ) : null}
+
+      {setupChecklist.length ? (
+        <Surface tone="card" className="p-5">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h2 className="text-[13px] font-medium text-[var(--text-primary)]">Release path</h2>
+              <p className="mt-1 text-[12px] text-[var(--text-secondary)]">Kalan kritik setup adımları.</p>
+            </div>
+          </div>
+          <div className="mt-4 space-y-2">
+            {setupChecklist.map((item) => (
+              <div key={item.key} className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-[13px] text-[var(--text-primary)]">{item.label}</span>
+                  <StatusBadge tone="warning">pending</StatusBadge>
+                </div>
+                {item.detail ? <p className="mt-1 text-[12px] text-[var(--text-secondary)]">{item.detail}</p> : null}
+              </div>
+            ))}
+          </div>
+        </Surface>
+      ) : null}
 
       {/* ─── Elyan Chat ─── */}
       <ChatView className="min-h-[460px]" />
@@ -220,6 +321,20 @@ export function HomeScreen() {
     </div>
   );
 }
+
+type HomeSnapshotLike = {
+  learningQueue?: {
+    items: Array<{
+      id: string;
+      type: "skill" | "routine";
+      title: string;
+      detail: string;
+      status: string;
+      deliveryChannel?: string;
+      scheduleExpression?: string;
+    }>;
+  };
+};
 
 /* ─── Compact status tile ─── */
 function StatusTile({ label, value, tone }: { label: string; value: string; tone: "success" | "warning" | "info" | "neutral" }) {

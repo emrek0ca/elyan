@@ -5,6 +5,13 @@ from typing import Any
 from core.persistence.runtime_db import RuntimeDatabase, get_runtime_database
 
 
+def _draft_name_hint_to_title(value: str) -> str:
+    parts = [part for part in str(value or "").strip().replace("-", " ").replace("_", " ").split() if part]
+    if not parts:
+        return ""
+    return " ".join(part[:1].upper() + part[1:] for part in parts[:8])
+
+
 class RuntimeSessionAPI:
     def __init__(self, runtime_db: RuntimeDatabase | None = None) -> None:
         self._runtime_db = runtime_db
@@ -13,17 +20,36 @@ class RuntimeSessionAPI:
     def db(self) -> RuntimeDatabase:
         return self._runtime_db or get_runtime_database()
 
-    @staticmethod
-    def _runtime_scope(user_id: str, runtime_metadata: dict[str, Any] | None = None) -> dict[str, str]:
+    def _runtime_scope(self, user_id: str, runtime_metadata: dict[str, Any] | None = None) -> dict[str, str]:
         runtime_metadata = dict(runtime_metadata or {})
         sync = runtime_metadata.get("sync") if isinstance(runtime_metadata.get("sync"), dict) else {}
         session_id = str(sync.get("session_id") or runtime_metadata.get("session_id") or "").strip()
         channel_session_id = str(runtime_metadata.get("channel_session_id") or session_id).strip()
+        workspace_id = str(runtime_metadata.get("workspace_id") or "local-workspace").strip() or "local-workspace"
+        channel = str(runtime_metadata.get("channel") or runtime_metadata.get("channel_type") or "cli").strip() or "cli"
+        external_user_id = str(
+            runtime_metadata.get("external_user_id")
+            or runtime_metadata.get("channel_user_id")
+            or runtime_metadata.get("user_id")
+            or user_id
+            or "local-user"
+        ).strip() or "local-user"
+        actor_id = str(runtime_metadata.get("actor_id") or "").strip()
+        if not actor_id and channel != "cli":
+            linked = self.db.identities.resolve_actor(
+                workspace_id=workspace_id,
+                channel=channel,
+                external_user_id=external_user_id,
+            )
+            if linked:
+                actor_id = str(linked.get("actor_id") or "").strip()
+        actor_id = actor_id or external_user_id or "local-user"
         return {
-            "workspace_id": str(runtime_metadata.get("workspace_id") or "local-workspace").strip() or "local-workspace",
-            "actor_id": str(runtime_metadata.get("user_id") or user_id or "local-user").strip() or "local-user",
+            "workspace_id": workspace_id,
+            "actor_id": actor_id,
             "device_id": str(sync.get("device_id") or runtime_metadata.get("device_id") or runtime_metadata.get("client_id") or "local-device").strip() or "local-device",
-            "channel": str(runtime_metadata.get("channel") or runtime_metadata.get("channel_type") or "cli").strip() or "cli",
+            "channel": channel,
+            "external_user_id": external_user_id,
             "auth_session_id": session_id,
             "client_session_id": channel_session_id,
             "conversation_session_id": str(runtime_metadata.get("conversation_session_id") or "").strip(),
@@ -41,6 +67,18 @@ class RuntimeSessionAPI:
             **dict(runtime_metadata or {}),
             **dict(metadata or {}),
         }
+        if scope["channel"] != "cli" and scope["external_user_id"]:
+            self.db.identities.bind_identity(
+                workspace_id=scope["workspace_id"],
+                channel=scope["channel"],
+                external_user_id=scope["external_user_id"],
+                actor_id=scope["actor_id"],
+                display_name=str(session_metadata.get("user_name") or session_metadata.get("display_name") or "").strip(),
+                metadata={
+                    "auth_session_id": scope["auth_session_id"],
+                    "client_session_id": scope["client_session_id"],
+                },
+            )
         return self.db.conversations.ensure_session(
             workspace_id=scope["workspace_id"],
             actor_id=scope["actor_id"],
@@ -222,6 +260,180 @@ class RuntimeSessionAPI:
             query=str(query or ""),
             limit=max(1, int(limit or 8)),
         )
+
+    def get_preference_profile(
+        self,
+        *,
+        user_id: str,
+        runtime_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        scope = self._runtime_scope(str(user_id or ""), runtime_metadata)
+        return self.db.learning.get_user_preference_profile(
+            workspace_id=scope["workspace_id"],
+            user_id=scope["actor_id"],
+        )
+
+    def list_learning_drafts(
+        self,
+        *,
+        user_id: str,
+        draft_type: str = "all",
+        limit: int = 20,
+        runtime_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        scope = self._runtime_scope(str(user_id or ""), runtime_metadata)
+        normalized = str(draft_type or "all").strip().lower() or "all"
+        result = {"preferences": [], "skills": [], "routines": []}
+        if normalized in {"all", "preferences", "preference"}:
+            result["preferences"] = self.db.learning.list_preference_updates(
+                workspace_id=scope["workspace_id"],
+                user_id=scope["actor_id"],
+                limit=max(1, int(limit or 20)),
+            )
+        if normalized in {"all", "skills", "skill"}:
+            result["skills"] = self.db.learning.list_skill_drafts(
+                workspace_id=scope["workspace_id"],
+                user_id=scope["actor_id"],
+                limit=max(1, int(limit or 20)),
+            )
+        if normalized in {"all", "routines", "routine"}:
+            result["routines"] = self.db.learning.list_routine_drafts(
+                workspace_id=scope["workspace_id"],
+                user_id=scope["actor_id"],
+                limit=max(1, int(limit or 20)),
+            )
+        return result
+
+    def promote_routine_draft(
+        self,
+        *,
+        user_id: str,
+        draft_id: str,
+        runtime_metadata: dict[str, Any] | None = None,
+        enabled: bool = True,
+        name: str = "",
+        expression: str = "",
+        report_channel: str = "",
+        report_chat_id: str = "",
+    ) -> dict[str, Any]:
+        scope = self._runtime_scope(str(user_id or ""), runtime_metadata)
+        draft = self.db.learning.get_routine_draft(
+            workspace_id=scope["workspace_id"],
+            user_id=scope["actor_id"],
+            draft_id=str(draft_id or ""),
+        )
+        if not draft:
+            raise KeyError("routine draft not found")
+        status = str(draft.get("status") or "draft").strip().lower()
+        if status not in {"draft", "approved"}:
+            raise ValueError(f"routine draft not promotable: {status}")
+
+        from core.scheduler.routine_engine import routine_engine
+
+        source_text = (
+            str(draft.get("trigger_text") or "").strip()
+            or str(draft.get("description") or "").strip()
+            or _draft_name_hint_to_title(str(draft.get("name_hint") or ""))
+        )
+        if not source_text:
+            raise ValueError("routine draft source text missing")
+        final_name = str(name or "").strip() or str(draft.get("description") or "").strip() or _draft_name_hint_to_title(str(draft.get("name_hint") or ""))
+        routine = routine_engine.create_from_text(
+            text=source_text,
+            enabled=bool(enabled),
+            created_by="learning-draft",
+            report_chat_id=str(report_chat_id or "").strip(),
+            report_channel=str(report_channel or draft.get("delivery_channel") or "").strip(),
+            expression=str(expression or draft.get("schedule_expression") or "").strip(),
+            name=final_name,
+            tags=["learned", "approved-draft"],
+            metadata={
+                "workspace_id": scope["workspace_id"],
+                "actor_id": scope["actor_id"],
+                "source_draft_id": str(draft.get("draft_id") or ""),
+            },
+        )
+        updated_draft = self.db.learning.update_routine_draft_status(
+            workspace_id=scope["workspace_id"],
+            user_id=scope["actor_id"],
+            draft_id=str(draft["draft_id"]),
+            status="promoted",
+            metadata={
+                "promoted_routine_id": str(routine.get("id") or ""),
+                "promoted_at": str(routine.get("updated_at") or ""),
+            },
+        )
+        return {
+            "draft": updated_draft or draft,
+            "routine": routine,
+        }
+
+    def promote_skill_draft(
+        self,
+        *,
+        user_id: str,
+        draft_id: str,
+        runtime_metadata: dict[str, Any] | None = None,
+        name: str = "",
+        description: str = "",
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        scope = self._runtime_scope(str(user_id or ""), runtime_metadata)
+        draft = self.db.learning.get_skill_draft(
+            workspace_id=scope["workspace_id"],
+            user_id=scope["actor_id"],
+            draft_id=str(draft_id or ""),
+        )
+        if not draft:
+            raise KeyError("skill draft not found")
+        status = str(draft.get("status") or "draft").strip().lower()
+        if status not in {"draft", "approved"}:
+            raise ValueError(f"skill draft not promotable: {status}")
+
+        from core.skills.manager import skill_manager
+
+        skill_name = str(name or draft.get("name_hint") or "").strip().lower().replace(" ", "_").replace("-", "_")
+        if not skill_name:
+            raise ValueError("skill draft name missing")
+        skill_description = str(description or draft.get("description") or "").strip() or f"{skill_name} workflow skill"
+
+        ok, msg, info = skill_manager.install_skill(skill_name)
+        if not ok:
+            raise RuntimeError(msg or "skill install failed")
+        ok, msg, info = skill_manager.edit_skill(
+            skill_name,
+            {
+                "description": skill_description,
+                "category": "learned",
+                "source": "learning_draft",
+                "required_tools": list(draft.get("tool_names") or []),
+                "commands": [],
+                "enabled": bool(enabled),
+                "metadata": {
+                    "workspace_id": scope["workspace_id"],
+                    "actor_id": scope["actor_id"],
+                    "source_draft_id": str(draft.get("draft_id") or ""),
+                    "trigger_text": str(draft.get("trigger_text") or ""),
+                    "confidence": float(draft.get("confidence") or 0.0),
+                },
+            },
+        )
+        if not ok:
+            raise RuntimeError(msg or "skill manifest update failed")
+        updated_draft = self.db.learning.update_skill_draft_status(
+            workspace_id=scope["workspace_id"],
+            user_id=scope["actor_id"],
+            draft_id=str(draft["draft_id"]),
+            status="promoted",
+            metadata={
+                "promoted_skill_name": skill_name,
+                "promoted_at": str((info or {}).get("updated_at") or ""),
+            },
+        )
+        return {
+            "draft": updated_draft or draft,
+            "skill": info or {"name": skill_name},
+        }
 
 
 _runtime_session_api: RuntimeSessionAPI | None = None

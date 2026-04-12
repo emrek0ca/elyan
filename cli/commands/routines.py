@@ -92,7 +92,7 @@ def run(args):
     action = getattr(args, "action", None)
     as_json = bool(getattr(args, "json", False))
     if not action:
-        print("Usage: elyan routines [list|templates|suggest|add|rm|enable|disable|run|history]")
+        print("Usage: elyan routines [list|templates|suggest|add|promote-draft|rm|enable|disable|run|history]")
         return
     port = _port(args)
 
@@ -260,6 +260,32 @@ def run(args):
             _emit_json({"ok": True, "action": action, "status": r["status"], "routine": item})
             return
         print(f"✅  Rutin eklendi: {item.get('id')} — {item.get('name')}")
+    elif action == "promote-draft":
+        draft_id = str(getattr(args, "id", "") or "").strip()
+        if not draft_id:
+            print("❌  draft id gerekli.")
+            print("Örn: elyan routines promote-draft routinedraft_ab12cd34")
+            return
+        payload = {
+            "draft_id": draft_id,
+            "name": str(getattr(args, "name", "") or "").strip(),
+            "expression": str(getattr(args, "expression", "") or "").strip(),
+            "report_channel": getattr(args, "report_channel", "telegram"),
+            "report_chat_id": getattr(args, "report_chat_id", ""),
+            "enabled": not bool(getattr(args, "disabled", False)),
+        }
+        r = _api_request("POST", "/api/routines/from-draft", payload=payload, port=port)
+        if not r["ok"]:
+            if as_json:
+                _emit_json({"ok": False, "action": action, "draft_id": draft_id, "status": r["status"], "error": r["data"].get("error", "unknown")})
+                return
+            print(f"❌  Draft promote edilemedi: {r['data'].get('error', 'unknown')}")
+            return
+        item = r["data"].get("routine", {})
+        if as_json:
+            _emit_json({"ok": True, "action": action, "status": r["status"], "draft": r["data"].get("draft", {}), "routine": item})
+            return
+        print(f"✅  Draft rutine dönüştü: {item.get('id')} — {item.get('name')}")
     elif action == "rm":
         rid, rid_err = _resolve_routine_id(port, getattr(args, "id", ""))
         if rid_err:

@@ -1928,6 +1928,7 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/memory/profile', self.handle_get_profile)
         self.app.router.add_get('/api/memory/recall', self.handle_memory_recall)
         self.app.router.add_get('/api/memory/history', self.handle_memory_history)
+        self.app.router.add_get('/api/learning/drafts', self.handle_learning_drafts)
         self.app.router.add_get('/api/activity', self.handle_activity_log)
         self.app.router.add_get('/api/runs/recent', self.handle_recent_runs)
         self.app.router.add_get('/api/v1/runs', self.handle_v1_list_runs)
@@ -2006,6 +2007,7 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/routines/templates', self.handle_routine_templates)
         self.app.router.add_post('/api/routines/suggest', self.handle_routine_suggest)
         self.app.router.add_post('/api/routines/from-text', self.handle_routine_from_text)
+        self.app.router.add_post('/api/routines/from-draft', self.handle_routine_from_draft)
         self.app.router.add_post('/api/routines', self.handle_routine_create)
         self.app.router.add_post('/api/routines/from-template', self.handle_routine_from_template)
         self.app.router.add_post('/api/routines/toggle', self.handle_routine_toggle)
@@ -2026,6 +2028,7 @@ class ElyanGatewayServer:
         self.app.router.add_post('/api/tools/test', self.handle_tools_test)
         self.app.router.add_get('/api/skills', self.handle_skills)
         self.app.router.add_get('/api/skills/detail', self.handle_skill_detail)
+        self.app.router.add_post('/api/skills/from-draft', self.handle_skill_from_draft)
         self.app.router.add_post('/api/skills/install', self.handle_skill_install)
         self.app.router.add_post('/api/skills/toggle', self.handle_skill_toggle)
         self.app.router.add_post('/api/skills/remove', self.handle_skill_remove)
@@ -5670,12 +5673,36 @@ class ElyanGatewayServer:
         desktop_ready = bool(permissions.get("osascript_available")) and bool(permissions.get("screencapture_available"))
         browser_ready = bool(playwright_ready or desktop_ready)
         productivity_apps_ready = bool(desktop_ready or bluebubbles_ready or telegram_ready)
+        channel_connected = any(
+            str(state or "").strip().lower() in {"connected", "online", "ok", "active", "healthy"}
+            for state in adapter_status.values()
+        )
         provider = str(model_info.get("active_provider") or "—").strip()
         model = str(model_info.get("active_model") or "—").strip()
         provider_ready = provider not in {"", "—"} and model not in {"", "—"}
         benchmark_green = int(benchmark.get("pass_count") or 0) == int(benchmark.get("total") or 0) and int(benchmark.get("total") or 0) > 0
         runtime_health_status = str(((status_payload.get("runtime_health") if isinstance(status_payload.get("runtime_health"), dict) else {}) or {}).get("status") or "").strip().lower()
         setup_complete = bool(is_setup_complete())
+        routines = routine_engine.list_routines()
+        has_routine = bool(routines)
+        has_daily_summary_run = any(
+            str(item.get("template_id") or "").strip() == "personal-daily-summary"
+            and (int(item.get("run_count") or 0) > 0 or bool(item.get("history")))
+            for item in routines
+        )
+        learning_counts = {"preferences": 0, "skills": 0, "routines": 0, "total": 0}
+        try:
+            runtime_db = get_runtime_database()
+            latest_session = runtime_db.auth_sessions.get_latest_session()
+            if latest_session:
+                workspace_id = str(latest_session.get("workspace_id") or "local-workspace")
+                actor_id = str(latest_session.get("user_id") or "local-user")
+                learning_counts["preferences"] = len(runtime_db.learning.list_preference_updates(workspace_id=workspace_id, user_id=actor_id, limit=5))
+                learning_counts["skills"] = len(runtime_db.learning.list_skill_drafts(workspace_id=workspace_id, user_id=actor_id, limit=5))
+                learning_counts["routines"] = len(runtime_db.learning.list_routine_drafts(workspace_id=workspace_id, user_id=actor_id, limit=5))
+                learning_counts["total"] = int(learning_counts["preferences"]) + int(learning_counts["skills"]) + int(learning_counts["routines"])
+        except Exception:
+            learning_counts = {"preferences": 0, "skills": 0, "routines": 0, "total": 0}
         core_ready = bool(
             status_payload.get("status") == "online"
             and provider_ready
@@ -5699,16 +5726,33 @@ class ElyanGatewayServer:
                 "detail": f"osascript={bool(permissions.get('osascript_available'))} screencapture={bool(permissions.get('screencapture_available'))}",
             },
             {
-                "key": "telegram",
-                "label": "Telegram connection readiness",
-                "ready": telegram_ready,
-                "detail": telegram_status or "not_connected",
+                "key": "channel_connection",
+                "label": "Channel connection readiness",
+                "ready": channel_connected,
+                "detail": ",".join(
+                    sorted(
+                        key for key, value in adapter_status.items()
+                        if str(value or "").strip().lower() in {"connected", "online", "ok", "active", "healthy"}
+                    )
+                ) or "not_connected",
             },
             {
                 "key": "browser",
                 "label": "Browser readiness",
                 "ready": browser_ready,
                 "detail": "playwright" if playwright_ready else "screen-operator fallback",
+            },
+            {
+                "key": "first_routine",
+                "label": "First routine created",
+                "ready": has_routine,
+                "detail": str(routines[0].get("name") or "not_created") if routines else "not_created",
+            },
+            {
+                "key": "first_daily_summary",
+                "label": "First daily summary executed",
+                "ready": has_daily_summary_run,
+                "detail": "personal-daily-summary" if has_daily_summary_run else "run a daily summary routine once",
             },
             {
                 "key": "apple_apps",
@@ -5728,6 +5772,12 @@ class ElyanGatewayServer:
                 "ready": bool(recent_reports),
                 "detail": str(recent_reports[0].get("workflow_name") or first_demo or "not_run") if recent_reports else (first_demo or "not_run"),
             },
+            {
+                "key": "learning_queue",
+                "label": "Learned draft review",
+                "ready": int(learning_counts["total"]) == 0,
+                "detail": f"preferences={learning_counts['preferences']} skills={learning_counts['skills']} routines={learning_counts['routines']}",
+            },
         ]
         return {
             "ok": True,
@@ -5736,6 +5786,7 @@ class ElyanGatewayServer:
                 "desktop_operator_ready": desktop_ready,
                 "browser_ready": browser_ready,
                 "telegram_ready": telegram_ready,
+                "channel_connected": channel_connected,
                 "apple_permissions": {
                     "automation": bool(permissions.get("osascript_available")),
                     "screen_capture": bool(permissions.get("screencapture_available")),
@@ -5748,6 +5799,9 @@ class ElyanGatewayServer:
                 "runtime_health": runtime_health_status,
                 "desktop_state_available": desktop_state_path.exists(),
                 "setup_complete": setup_complete,
+                "learning_queue": learning_counts,
+                "has_routine": has_routine,
+                "has_daily_summary_run": has_daily_summary_run,
             },
             "recent_tasks": {
                 "active": list(tasks_payload.get("active") or [])[:5],
@@ -5763,8 +5817,11 @@ class ElyanGatewayServer:
                 "recommended_steps": [
                     {"label": "Provider / model sec", "ready": provider_ready},
                     {"label": "Desktop izinlerini dogrula", "ready": desktop_ready},
-                    {"label": "Telegram baglantisini kontrol et", "ready": telegram_ready},
+                    {"label": "Bir kanal bagla", "ready": channel_connected},
                     {"label": "Browser hazirligini kontrol et", "ready": browser_ready},
+                    {"label": "Ilk rutini olustur", "ready": has_routine},
+                    {"label": "Ilk gunluk ozeti calistir", "ready": has_daily_summary_run},
+                    {"label": "Ogrenilen draftlari gozden gecir", "ready": int(learning_counts["total"]) == 0},
                     {"label": "Ilk demo workflow'u calistir", "ready": bool(recent_reports)},
                 ],
             },
@@ -6607,6 +6664,32 @@ class ElyanGatewayServer:
             }
         )
 
+    async def handle_learning_drafts(self, request):
+        allowed, error, session = self._require_user_session(request)
+        if not allowed:
+            return web.json_response({"ok": False, "error": error}, status=401)
+        try:
+            limit = max(1, min(20, int(request.rel_url.query.get("limit", 8) or 8)))
+        except Exception:
+            limit = 8
+        draft_type = str(request.rel_url.query.get("type", "all") or "all").strip().lower() or "all"
+        from core.runtime.session_store import get_runtime_session_api
+
+        drafts = get_runtime_session_api().list_learning_drafts(
+            user_id=str(session.get("user_id") or ""),
+            draft_type=draft_type,
+            limit=limit,
+            runtime_metadata=session,
+        )
+        return web.json_response(
+            {
+                "ok": True,
+                "workspace_id": str(session.get("workspace_id") or ""),
+                "user_id": str(session.get("user_id") or ""),
+                **drafts,
+            }
+        )
+
     async def handle_health_telemetry(self, request):
         """Aggregate all health and performance metrics for the live dashboard."""
         try:
@@ -7328,14 +7411,21 @@ class ElyanGatewayServer:
             rid = str(routine.get("id", "")).strip()
             if not rid:
                 continue
-            active_ids.add(self._routine_job_id(rid))
-            self.cron.sync_job(self._routine_to_job(routine))
+            job_id = self._routine_job_id(rid)
+            try:
+                self.cron.sync_job(self._routine_to_job(routine))
+                active_ids.add(job_id)
+            except Exception as exc:
+                logger.warning(f"Routine cron sync skipped for {rid}: {exc}")
 
         # Cleanup deleted routines from cron runtime jobs.
         for job in self.cron.list_jobs():
             jid = str(job.get("id", "")).strip()
             if jid.startswith("routine:") and jid not in active_ids:
-                self.cron.remove_job(jid)
+                try:
+                    self.cron.remove_job(jid)
+                except Exception as exc:
+                    logger.warning(f"Routine cron cleanup skipped for {jid}: {exc}")
 
     async def _on_cron_report(self, job: dict, success: bool, report: str) -> None:
         channel = str(job.get("channel", "")).strip().lower()
@@ -7438,6 +7528,91 @@ class ElyanGatewayServer:
             self.cron.sync_job(self._routine_to_job(routine))
             push_activity("routine_nl_create", "dashboard", f"{routine.get('name')} ({routine.get('id')})", True)
             return web.json_response({"ok": True, "routine": routine})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
+
+    async def handle_routine_from_draft(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+
+        draft_id = str(data.get("draft_id", "")).strip()
+        if not draft_id:
+            return web.json_response({"ok": False, "error": "draft_id required"}, status=400)
+
+        runtime_db = get_runtime_database()
+        user_ref = str(data.get("user_id", "") or data.get("user", "")).strip()
+        workspace_id = str(data.get("workspace_id", "")).strip()
+        session = runtime_db.auth_sessions.get_latest_session(user_ref=user_ref, workspace_id=workspace_id)
+        if not session:
+            return web.json_response({"ok": False, "error": "active local session required"}, status=403)
+
+        from core.runtime.session_store import get_runtime_session_api
+
+        try:
+            promoted = get_runtime_session_api().promote_routine_draft(
+                user_id=str(session.get("user_id") or ""),
+                draft_id=draft_id,
+                runtime_metadata={
+                    "workspace_id": str(session.get("workspace_id") or "local-workspace"),
+                    "user_id": str(session.get("user_id") or ""),
+                    "channel": str((session.get("metadata") or {}).get("client") or "desktop"),
+                    "session_id": str(session.get("session_id") or ""),
+                },
+                enabled=bool(data.get("enabled", True)),
+                name=str(data.get("name", "")).strip(),
+                expression=str(data.get("expression", "")).strip(),
+                report_channel=str(data.get("report_channel", "")).strip(),
+                report_chat_id=str(data.get("report_chat_id", "")).strip(),
+            )
+            routine = dict(promoted.get("routine") or {})
+            if routine:
+                self.cron.sync_job(self._routine_to_job(routine))
+            push_activity("routine_draft_promote", "dashboard", f"{draft_id} -> {routine.get('id', '?')}", True)
+            return web.json_response({"ok": True, **promoted})
+        except KeyError:
+            return web.json_response({"ok": False, "error": "routine draft not found"}, status=404)
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
+
+    async def handle_skill_from_draft(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+
+        draft_id = str(data.get("draft_id", "")).strip()
+        if not draft_id:
+            return web.json_response({"ok": False, "error": "draft_id required"}, status=400)
+
+        runtime_db = get_runtime_database()
+        user_ref = str(data.get("user_id", "") or data.get("user", "")).strip()
+        workspace_id = str(data.get("workspace_id", "")).strip()
+        session = runtime_db.auth_sessions.get_latest_session(user_ref=user_ref, workspace_id=workspace_id)
+        if not session:
+            return web.json_response({"ok": False, "error": "active local session required"}, status=403)
+
+        from core.runtime.session_store import get_runtime_session_api
+
+        try:
+            promoted = get_runtime_session_api().promote_skill_draft(
+                user_id=str(session.get("user_id") or ""),
+                draft_id=draft_id,
+                runtime_metadata={
+                    "workspace_id": str(session.get("workspace_id") or "local-workspace"),
+                    "user_id": str(session.get("user_id") or ""),
+                    "channel": str((session.get("metadata") or {}).get("client") or "desktop"),
+                    "session_id": str(session.get("session_id") or ""),
+                },
+                name=str(data.get("name", "")).strip(),
+                description=str(data.get("description", "")).strip(),
+                enabled=bool(data.get("enabled", True)),
+            )
+            push_activity("skill_draft_promote", "dashboard", f"{draft_id} -> {promoted.get('skill', {}).get('name', '?')}", True)
+            return web.json_response({"ok": True, **promoted})
+        except KeyError:
+            return web.json_response({"ok": False, "error": "skill draft not found"}, status=404)
         except Exception as e:
             return web.json_response({"ok": False, "error": str(e)}, status=400)
 

@@ -100,6 +100,22 @@ def memory_history(limit, user):
     _run_history(user=user, limit=limit)
 
 
+@memory_group.command("profile")
+@click.option("--user", default=None, help="Kullanıcı ID veya e-posta filtresi")
+def memory_profile(user):
+    """Kullanıcı tercih profilini göster."""
+    _run_profile(user=user)
+
+
+@memory_group.command("drafts")
+@click.option("--user", default=None, help="Kullanıcı ID veya e-posta filtresi")
+@click.option("--limit", default=10, help="Sonuç sayısı")
+@click.option("--type", "draft_type", default="all", type=click.Choice(["all", "preferences", "skills", "routines"]), help="Draft tipi")
+def memory_drafts(user, limit, draft_type):
+    """Öğrenme taslak kuyruğunu göster."""
+    _run_drafts(user=user, limit=limit, draft_type=draft_type)
+
+
 @memory_group.command("export")
 @click.option("--format", "fmt", default="json", type=click.Choice(["json", "markdown"]), help="Çıktı formatı")
 @click.option("--output", "-o", default=None, help="Çıktı dosyası")
@@ -177,6 +193,14 @@ def run(args):
         _run_recall(query, user=getattr(args, "user", None), limit=getattr(args, "limit", 8))
     elif sub == "history":
         _run_history(user=getattr(args, "user", None), limit=getattr(args, "limit", 8))
+    elif sub == "profile":
+        _run_profile(user=getattr(args, "user", None))
+    elif sub == "drafts":
+        _run_drafts(
+            user=getattr(args, "user", None),
+            limit=getattr(args, "limit", 10),
+            draft_type=getattr(args, "draft_type", "all"),
+        )
     elif sub == "export":
         _run_export(fmt=getattr(args, "format", "json"), output=getattr(args, "file", None))
     elif sub == "clear":
@@ -186,7 +210,7 @@ def run(args):
     elif sub == "import":
         _run_import(getattr(args, "file", None))
     else:
-        print("Usage: elyan memory [status|index|search|recall|history|export|import|clear|stats]")
+        print("Usage: elyan memory [status|index|search|recall|history|profile|drafts|export|import|clear|stats]")
 
 
 def _to_int_or_none(value):
@@ -308,6 +332,78 @@ def _run_history(user=None, limit: int = 8):
             print("Geçmiş bulunamadı.")
             return
         _print_recall_rows(rows)
+    except Exception as e:
+        print(f"Hata: {e}")
+
+
+def _print_profile(profile):
+    if not profile:
+        print("Tercih profili bulunamadı.")
+        return
+    print("Tercih Profili")
+    if str(profile.get("explanation_style") or "").strip():
+        print(f"  Açıklama: {profile.get('explanation_style')}")
+    if str(profile.get("approval_sensitivity_hint") or "").strip():
+        print(f"  Onay:     {profile.get('approval_sensitivity_hint')}")
+    if str(profile.get("preferred_route") or "").strip():
+        print(f"  Rota:     {profile.get('preferred_route')}")
+    if str(profile.get("preferred_model") or "").strip():
+        print(f"  Model:    {profile.get('preferred_model')}")
+    templates = list(profile.get("task_templates") or [])
+    if templates:
+        print(f"  Şablonlar: {', '.join(str(item) for item in templates[:6])}")
+
+
+def _run_profile(user=None):
+    try:
+        session = _resolve_runtime_recall_session(user)
+        profile = get_runtime_session_api().get_preference_profile(
+            user_id=str(session.get("user_id") or ""),
+            runtime_metadata=session,
+        )
+        _print_profile(profile)
+    except Exception as e:
+        print(f"Hata: {e}")
+
+
+def _run_drafts(user=None, limit: int = 10, draft_type: str = "all"):
+    print("Öğrenme taslakları getiriliyor...")
+    try:
+        session = _resolve_runtime_recall_session(user)
+        drafts = get_runtime_session_api().list_learning_drafts(
+            user_id=str(session.get("user_id") or ""),
+            draft_type=str(draft_type or "all"),
+            limit=max(1, int(limit or 10)),
+            runtime_metadata=session,
+        )
+        preferences = list(drafts.get("preferences") or [])
+        skills = list(drafts.get("skills") or [])
+        routines = list(drafts.get("routines") or [])
+        if not preferences and not skills and not routines:
+            print("Draft bulunamadı.")
+            return
+        if preferences:
+            print("\nPreference Drafts")
+            for idx, row in enumerate(preferences, 1):
+                print(f"  [{idx}] {row.get('preference_key')} -> {json.dumps(row.get('proposed_value') or {}, ensure_ascii=False)}")
+                if str(row.get("rationale") or "").strip():
+                    print(f"       Neden: {row.get('rationale')}")
+        if skills:
+            print("\nSkill Drafts")
+            for idx, row in enumerate(skills, 1):
+                print(f"  [{idx}] {row.get('name_hint')} ({row.get('status')})")
+                if str(row.get("description") or "").strip():
+                    print(f"       Açıklama: {row.get('description')}")
+        if routines:
+            print("\nRoutine Drafts")
+            for idx, row in enumerate(routines, 1):
+                print(f"  [{idx}] {row.get('name_hint')} ({row.get('status')})")
+                if str(row.get("schedule_expression") or "").strip():
+                    print(f"       Zamanlama: {row.get('schedule_expression')}")
+                if str(row.get("delivery_channel") or "").strip():
+                    print(f"       Kanal: {row.get('delivery_channel')}")
+                if str(row.get("description") or "").strip():
+                    print(f"       Açıklama: {row.get('description')}")
     except Exception as e:
         print(f"Hata: {e}")
 

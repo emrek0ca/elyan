@@ -21,7 +21,6 @@ Yapılandırma (elyan.json):
 import asyncio
 import json
 from typing import Dict, Any, List, Optional
-from urllib.parse import quote
 
 import aiohttp
 
@@ -75,8 +74,12 @@ class IMessageAdapter(BaseChannelAdapter):
                 return
             self._is_connected = True
             logger.info(f"iMessage adapter bağlandı: {self.server_url}")
-            # WebSocket dinleyici başlat
-            self._ws_task = asyncio.create_task(self._ws_loop())
+            # BlueBubbles Socket.IO kimlik doğrulaması query-string gerektiriyor.
+            # Release build'de secret'ı URL'e koymak yerine bu yolu kapatıyoruz.
+            if self._supports_secure_websocket():
+                self._ws_task = asyncio.create_task(self._ws_loop())
+            else:
+                logger.warning("iMessage WebSocket devre dışı: secret URL üzerinden taşınmıyor.")
         except Exception as exc:
             logger.error(f"iMessage bağlantı hatası: {exc}")
 
@@ -112,10 +115,13 @@ class IMessageAdapter(BaseChannelAdapter):
 
     # ── WebSocket ─────────────────────────────────────────────────────────────
 
+    def _supports_secure_websocket(self) -> bool:
+        return False
+
     async def _ws_loop(self):
         """BlueBubbles WebSocket üzerinden canlı mesaj dinleme."""
         ws_url = self.server_url.replace("http://", "ws://").replace("https://", "wss://")
-        ws_url = f"{ws_url}/api/v1/socket.io/?password={quote(self.password)}&EIO=4&transport=websocket"
+        ws_url = f"{ws_url}/api/v1/socket.io/?EIO=4&transport=websocket"
 
         while self._is_connected:
             try:

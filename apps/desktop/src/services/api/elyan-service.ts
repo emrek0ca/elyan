@@ -1222,11 +1222,13 @@ export async function getCoworkHome(): Promise<CoworkHomeSnapshot> {
 }
 
 export async function getHomeSnapshot(): Promise<HomeSnapshotV2> {
-  const [coworkHome, runsRaw, providers, integrations] = await Promise.all([
+  const [coworkHome, runsRaw, providers, integrations, productHomeRaw, draftQueueRaw] = await Promise.all([
     getCoworkHome(),
     safeRequest<SuccessEnvelope<{ runs: unknown[] }>>("/api/v1/runs?limit=6"),
     getProviders(),
     getIntegrations(),
+    safeRequest<Record<string, unknown>>("/api/product/home"),
+    safeRequest<Record<string, unknown>>("/api/learning/drafts?limit=6"),
   ]);
 
   const runs = Array.isArray(runsRaw?.runs)
@@ -1382,6 +1384,49 @@ export async function getHomeSnapshot(): Promise<HomeSnapshotV2> {
     summary: thread.lastOperatorTurn?.content || thread.lastUserTurn?.content || thread.status,
   }));
 
+  const setupChecklist = Array.isArray(productHomeRaw?.setup)
+    ? productHomeRaw.setup
+        .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+        .map((item) => ({
+          key: String(item.key || crypto.randomUUID()),
+          label: String(item.label || "Setup item"),
+          ready: Boolean(item.ready),
+          detail: String(item.detail || ""),
+        }))
+    : [];
+
+  const draftSkills = Array.isArray(draftQueueRaw?.skills) ? draftQueueRaw.skills : [];
+  const draftRoutines = Array.isArray(draftQueueRaw?.routines) ? draftQueueRaw.routines : [];
+  const learningQueue = {
+    preferences: Array.isArray(draftQueueRaw?.preferences) ? draftQueueRaw.preferences.length : 0,
+    skills: draftSkills.length,
+    routines: draftRoutines.length,
+    total:
+      (Array.isArray(draftQueueRaw?.preferences) ? draftQueueRaw.preferences.length : 0) +
+      draftSkills.length +
+      draftRoutines.length,
+    items: [
+      ...draftSkills.slice(0, 3).map((item) => ({
+        id: String((item as Record<string, unknown>).draft_id || crypto.randomUUID()),
+        type: "skill" as const,
+        title: String((item as Record<string, unknown>).name_hint || "skill_draft"),
+        detail: String((item as Record<string, unknown>).description || ""),
+        status: String((item as Record<string, unknown>).status || "draft"),
+        confidence: Number((item as Record<string, unknown>).confidence || 0) || undefined,
+      })),
+      ...draftRoutines.slice(0, 3).map((item) => ({
+        id: String((item as Record<string, unknown>).draft_id || crypto.randomUUID()),
+        type: "routine" as const,
+        title: String((item as Record<string, unknown>).name_hint || "routine_draft"),
+        detail: String((item as Record<string, unknown>).description || ""),
+        status: String((item as Record<string, unknown>).status || "draft"),
+        confidence: Number((item as Record<string, unknown>).confidence || 0) || undefined,
+        deliveryChannel: String((item as Record<string, unknown>).delivery_channel || ""),
+        scheduleExpression: String((item as Record<string, unknown>).schedule_expression || ""),
+      })),
+    ],
+  };
+
   return {
     workspace: coworkHome.workspace,
     providers,
@@ -1409,6 +1454,55 @@ export async function getHomeSnapshot(): Promise<HomeSnapshotV2> {
     backgroundTasks,
     autopilot,
     billing: coworkHome.billing,
+    setupChecklist,
+    learningQueue,
+  };
+}
+
+export async function promoteSkillDraft(
+  draftId: string,
+  payload?: { skillName?: string; description?: string; enabled?: boolean },
+): Promise<{ ok: boolean; name: string; message: string }> {
+  const raw = await apiClient.request<{ ok?: boolean; skill?: { name?: string }; error?: string }>("/api/skills/from-draft", {
+    method: "POST",
+    body: {
+      draft_id: draftId,
+      name: payload?.skillName || "",
+      description: payload?.description || "",
+      enabled: payload?.enabled ?? true,
+    },
+  });
+  if (raw.ok) {
+    invalidateMemoryCache(["home-snapshot"]);
+  }
+  return {
+    ok: Boolean(raw.ok),
+    name: String(raw.skill?.name || ""),
+    message: String(raw.error || ""),
+  };
+}
+
+export async function promoteRoutineDraft(
+  draftId: string,
+  payload?: { name?: string; expression?: string; reportChannel?: string; enabled?: boolean },
+): Promise<{ ok: boolean; name: string; message: string }> {
+  const raw = await apiClient.request<{ ok?: boolean; routine?: { name?: string }; error?: string }>("/api/routines/from-draft", {
+    method: "POST",
+    body: {
+      draft_id: draftId,
+      name: payload?.name || "",
+      expression: payload?.expression || "",
+      report_channel: payload?.reportChannel || "",
+      enabled: payload?.enabled ?? true,
+    },
+  });
+  if (raw.ok) {
+    invalidateMemoryCache(["home-snapshot"]);
+  }
+  return {
+    ok: Boolean(raw.ok),
+    name: String(raw.routine?.name || ""),
+    message: String(raw.error || ""),
   };
 }
 

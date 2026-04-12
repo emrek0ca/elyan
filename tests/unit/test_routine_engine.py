@@ -203,6 +203,78 @@ def test_create_from_text_uses_template_when_detected(tmp_path, monkeypatch):
     assert routine["created_by"] == "unit-test"
 
 
+def test_suggest_from_text_detects_personal_daily_summary_template(tmp_path, monkeypatch):
+    path = tmp_path / "routines.json"
+    monkeypatch.setattr(re_mod, "ROUTINE_PERSIST_PATH", path)
+    engine = re_mod.RoutineEngine()
+
+    suggestion = engine.suggest_from_text("Her sabah saat 09:00 günlük özet gönder")
+    assert suggestion["template_id"] == "personal-daily-summary"
+    assert suggestion["expression"] == "0 9 * * *"
+
+
+@pytest.mark.asyncio
+async def test_run_personal_daily_summary_collects_runtime_context(tmp_path, monkeypatch):
+    path = tmp_path / "routines.json"
+    monkeypatch.setattr(re_mod, "ROUTINE_PERSIST_PATH", path)
+    monkeypatch.setattr(re_mod, "ROUTINE_REPORT_DIR", tmp_path / "reports")
+    engine = re_mod.RoutineEngine()
+
+    class _AuthSessions:
+        def get_latest_session(self, *, user_ref="", workspace_id=""):
+            _ = (user_ref, workspace_id)
+            return {"workspace_id": "workspace-a", "user_id": "user-1"}
+
+    class _Conversations:
+        def list_recent_turns(self, *, workspace_id, actor_id, limit):
+            _ = (workspace_id, actor_id, limit)
+            return [
+                {"user_message": "Dünkü toplantıyı özetle", "bot_response": "Ödeme akışı kapanacak."},
+                {"user_message": "Slack botunu bağla", "bot_response": "Token eksik."},
+            ]
+
+    class _Approvals:
+        def list_pending(self, *, limit=100):
+            _ = limit
+            return [{"workspace_id": "workspace-a", "action_type": "execute_shell", "reason": "Deploy için onay bekleniyor"}]
+
+    class _Learning:
+        def list_preference_updates(self, *, workspace_id, user_id, limit):
+            _ = (workspace_id, user_id, limit)
+            return [{"preference_key": "response_style"}]
+
+        def list_skill_drafts(self, *, workspace_id, user_id, limit):
+            _ = (workspace_id, user_id, limit)
+            return [{"name_hint": "slack_sync", "description": "Slack senkronu"}]
+
+        def list_routine_drafts(self, *, workspace_id, user_id, limit):
+            _ = (workspace_id, user_id, limit)
+            return [{"name_hint": "daily_summary", "description": "Sabah özeti"}]
+
+    fake_runtime_db = type(
+        "_FakeRuntimeDB",
+        (),
+        {
+            "auth_sessions": _AuthSessions(),
+            "conversations": _Conversations(),
+            "approvals": _Approvals(),
+            "learning": _Learning(),
+        },
+    )()
+    monkeypatch.setattr("core.persistence.get_runtime_database", lambda: fake_runtime_db)
+
+    item = engine.create_from_text(
+        text="Her sabah saat 09:00 günlük özet gönder",
+        created_by="unit-test",
+        metadata={"workspace_id": "workspace-a", "actor_id": "user-1"},
+    )
+    out = await engine.run_routine(item["id"], _ToolAgent())
+
+    assert out["success"] is True
+    assert any("Son konuşma: 2 kayıt" in step["output"] for step in out["steps"])
+    assert "Bekleyen onay: 1" in out["report"]
+
+
 def test_suggest_from_text_detects_interval_hours(tmp_path, monkeypatch):
     path = tmp_path / "routines.json"
     monkeypatch.setattr(re_mod, "ROUTINE_PERSIST_PATH", path)

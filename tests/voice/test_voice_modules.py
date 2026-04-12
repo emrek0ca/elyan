@@ -81,6 +81,14 @@ class TestWakeWordDetector:
             # "none" when all imports fail; pyaudio might still be importable in test env
             assert backend in ("none", "pyaudio_keyword", "openwakeword")
 
+    def test_has_speech_energy_skips_silence(self):
+        det = self._get()
+        assert det._has_speech_energy([b"\x00\x00" * 256]) is False
+
+    def test_has_speech_energy_accepts_loud_audio(self):
+        det = self._get()
+        assert det._has_speech_energy([b"\xff\x7f" * 256]) is True
+
     @pytest.mark.asyncio
     async def test_double_start_is_idempotent(self):
         det = self._get()

@@ -52,6 +52,27 @@ class _StatusCron:
     scheduler = _Sched()
 
 
+class _RoutineSyncCron:
+    def __init__(self):
+        self.synced = []
+        self.removed = []
+
+    def sync_job(self, job):
+        if job.get("routine_id") == "bad123":
+            raise RuntimeError("invalid cron")
+        self.synced.append(job)
+
+    def list_jobs(self):
+        return [
+            {"id": "routine:good456"},
+            {"id": "routine:bad123"},
+            {"id": "routine:stale999"},
+        ]
+
+    def remove_job(self, job_id):
+        self.removed.append(job_id)
+
+
 class _OperatorControlPlane:
     async def plan_request(self, **kwargs):
         return {
@@ -257,6 +278,51 @@ async def test_handle_memory_history_returns_recent_turns(monkeypatch):
     payload = json.loads(resp.text)
     assert payload["count"] == 1
     assert payload["history"][0]["channel"] == "desktop"
+
+
+@pytest.mark.asyncio
+async def test_handle_learning_drafts_returns_skill_and_routine_drafts(monkeypatch):
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+
+    session = {
+        "session_id": "session_1",
+        "workspace_id": "workspace-a",
+        "user_id": "user-1",
+        "conversation_session_id": "conv_1",
+    }
+
+    monkeypatch.setattr(
+        gateway_server.ElyanGatewayServer,
+        "_require_user_session",
+        lambda self, request, allow_cookie=True: (True, "", dict(session)),
+    )
+
+    class _FakeRuntimeSessionAPI:
+        def list_learning_drafts(self, *, user_id, draft_type, limit, runtime_metadata):
+            assert user_id == "user-1"
+            assert draft_type == "all"
+            assert limit == 4
+            assert runtime_metadata["workspace_id"] == "workspace-a"
+            return {
+                "preferences": [{"queue_id": "pref_1"}],
+                "skills": [{"draft_id": "skill_1", "name_hint": "daily_digest"}],
+                "routines": [{"draft_id": "routine_1", "name_hint": "daily_summary"}],
+            }
+
+    monkeypatch.setattr(
+        "core.runtime.session_store.get_runtime_session_api",
+        lambda: _FakeRuntimeSessionAPI(),
+    )
+
+    req = _Req({})
+    req.rel_url = SimpleNamespace(query={"limit": "4", "type": "all"})
+    resp = await gateway_server.ElyanGatewayServer.handle_learning_drafts(srv, req)
+
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["workspace_id"] == "workspace-a"
+    assert payload["skills"][0]["name_hint"] == "daily_digest"
+    assert payload["routines"][0]["name_hint"] == "daily_summary"
 
 
 @pytest.mark.asyncio
@@ -888,6 +954,31 @@ async def test_handle_product_home_aggregates_readiness_and_reports(monkeypatch)
     )
     monkeypatch.setattr(gateway_server, "is_setup_complete", lambda: True)
     monkeypatch.setattr(gateway_server.importlib.util, "find_spec", lambda name: object() if name == "playwright" else None)
+    monkeypatch.setattr(
+        gateway_server.routine_engine,
+        "list_routines",
+        lambda: [
+            {
+                "id": "rt1",
+                "name": "Kişisel Günlük Özet",
+                "template_id": "personal-daily-summary",
+                "run_count": 1,
+                "history": [{"summary": "ok"}],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_runtime_database",
+        lambda: SimpleNamespace(
+            auth_sessions=SimpleNamespace(get_latest_session=lambda: {"workspace_id": "workspace-a", "user_id": "user-1"}),
+            learning=SimpleNamespace(
+                list_preference_updates=lambda **kwargs: [{"queue_id": "pref1"}],
+                list_skill_drafts=lambda **kwargs: [{"draft_id": "skill1"}],
+                list_routine_drafts=lambda **kwargs: [{"draft_id": "routine1"}],
+            ),
+        ),
+    )
 
     async def _status(_request):
         return gateway_server.web.json_response(
@@ -918,14 +1009,42 @@ async def test_handle_product_home_aggregates_readiness_and_reports(monkeypatch)
     assert payload["readiness"]["bluebubbles_ready"] is True
     assert payload["readiness"]["whatsapp_mode"] == "cloud"
     assert payload["readiness"]["productivity_apps_ready"] is True
+    assert payload["readiness"]["learning_queue"]["total"] == 3
+    assert payload["readiness"]["channel_connected"] is True
+    assert payload["readiness"]["has_routine"] is True
+    assert payload["readiness"]["has_daily_summary_run"] is True
     assert payload["benchmark"]["pass_count"] == 20
     assert payload["preset_workflows"]
     assert payload["recent_workflow_reports"][0]["workflow_name"] == "Telegram-triggered desktop task completion"
     assert payload["onboarding"]["first_demo_workflow"]
     assert payload["release"]["entrypoint"] == "elyan desktop"
-    checks = payload["release"]["quickstart_checks"]
-    assert any(item["label"] == "Desktop start script" for item in checks)
-    assert any(item["label"] == "Production benchmark gate" for item in checks)
+    assert any(item["key"] == "first_routine" and item["ready"] is True for item in payload["setup"])
+    assert any(item["key"] == "first_daily_summary" and item["ready"] is True for item in payload["setup"])
+    assert any(item["key"] == "learning_queue" for item in payload["setup"])
+    assert any(item["label"] == "Bir kanal bagla" and item["ready"] is True for item in payload["onboarding"]["recommended_steps"])
+    assert any(item["label"] == "Ilk rutini olustur" and item["ready"] is True for item in payload["onboarding"]["recommended_steps"])
+    assert any(item["label"] == "Ilk gunluk ozeti calistir" and item["ready"] is True for item in payload["onboarding"]["recommended_steps"])
+    assert any(item["label"] == "Ogrenilen draftlari gozden gecir" for item in payload["onboarding"]["recommended_steps"])
+
+
+def test_sync_all_routines_to_cron_skips_bad_routine_and_cleans_stale_jobs(monkeypatch):
+    monkeypatch.setattr(
+        gateway_server.routine_engine,
+        "list_routines",
+        lambda: [
+            {"id": "bad123", "name": "Broken", "expression": "bad cron", "enabled": True},
+            {"id": "good456", "name": "Healthy", "expression": "0 9 * * *", "enabled": True},
+        ],
+    )
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    srv.cron = _RoutineSyncCron()
+
+    gateway_server.ElyanGatewayServer._sync_all_routines_to_cron(srv)
+
+    assert [job["routine_id"] for job in srv.cron.synced] == ["good456"]
+    assert "routine:stale999" in srv.cron.removed
+    assert "routine:bad123" in srv.cron.removed
 
 
 @pytest.mark.asyncio

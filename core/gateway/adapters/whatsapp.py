@@ -1,4 +1,5 @@
 import asyncio
+import secrets
 import mimetypes
 from pathlib import Path
 import re
@@ -319,7 +320,7 @@ class WhatsAppAdapter(BaseChannelAdapter):
         token = str(request.query.get("hub.verify_token") or "").strip()
         challenge = str(request.query.get("hub.challenge") or "").strip()
 
-        if mode == "subscribe" and token and token == self._verify_token:
+        if mode == "subscribe" and token and secrets.compare_digest(token, self._verify_token):
             return web.Response(text=challenge or "ok", status=200)
         return web.Response(text="forbidden", status=403)
 

@@ -24,6 +24,8 @@ _DEFAULT_ALLOW = [
     "group:messaging",
     "group:automation",
     "group:memory",
+    "group:research",
+    "group:code",
     "browser",
 ]
 _DEFAULT_DENY: list[str] = []
@@ -84,6 +86,18 @@ _TOOL_GROUP_HINTS: Dict[str, str] = {
     "cron_add": "automation",
     "cron_remove": "automation",
     "cron_list": "automation",
+    # research
+    "research": "research",
+    "advanced_research": "research",
+    "deep_research": "research",
+    "research_document_delivery": "research",
+    "generate_report": "research",
+    # code
+    "code_scan": "code",
+    "code_run": "code",
+    "code_test": "code",
+    "create_software_project_pack": "code",
+    "apply_patch": "code",
     # memory
     "memory_store": "memory",
     "memory_recall": "memory",
@@ -201,6 +215,10 @@ class ToolPolicyEngine:
             return "runtime"
         if any(k in name for k in ("web", "url", "browser", "fetch", "search")):
             return "web"
+        if any(k in name for k in ("research", "report", "citation", "source")):
+            return "research"
+        if any(k in name for k in ("code", "repo", "patch", "test", "lint", "build")):
+            return "code"
         if any(k in name for k in ("message", "email", "mail", "slack", "telegram", "discord")):
             return "messaging"
         if any(k in name for k in ("cron", "reminder", "event", "schedule", "heartbeat")):

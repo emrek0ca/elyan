@@ -98,8 +98,7 @@ class _OpenAIWhisperSTT:
     def transcribe(self, wav_path: str, language: str = "tr") -> str:
         try:
             from tools.voice.local_stt import stt_engine as _legacy
-            # legacy is sync
-            result = _legacy.transcribe(wav_path)
+            result = _legacy.transcribe_sync(wav_path)
             return str(result or "").strip()
         except Exception as exc:
             logger.debug(f"openai-whisper fallback hatası: {exc}")

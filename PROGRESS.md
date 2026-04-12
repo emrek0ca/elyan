@@ -1,18 +1,22 @@
-# Elyan — Codex Çalışma Brifing
+# Elyan — Aktif Çalışma Brifing
 
-> Bu dosya Codex'in bağlamı kaybetmeden tam olarak devam edebilmesi için yazılmıştır.
-> Tüm değişiklikler `codex/cowork-desktop-platform` branch'inde yapılır.
+> Bu dosyayı her çalışmaya başlamadan önce oku.
+> Nereden kaldığını anla, öncelik sırasına göre devam et.
+
+**Son Güncelleme**: 2026-04-12
+**Aktif Branch**: `main` (ya da `codex/cowork-desktop-platform`)
+**Strateji**: Faza A (Türkiye KOBİ) → Faza B (Ambient Global)
 
 ---
 
 ## Proje Özeti
 
-**Elyan**, macOS masaüstü için yerel çalışan bir AI ajan çerçevesidir.
-- **Backend**: Python 3.11+ async (aiohttp), SQLite WAL (SQLAlchemy 2.0), port 18789
-- **Frontend**: React 18 + TypeScript + Vite + Tailwind + Tauri (desktop app)
-- **DB**: `~/.elyan/runtime.db` — `LOCAL_METADATA.create_all()` ile otomatik migrate
-- **venv**: `.venv/bin/python` (Python 3.11.15)
-- **Node**: `/opt/homebrew/bin/node`
+**Elyan**, macOS masaüstü için local-first AI operatör runtime'ı.
+
+- **Backend**: Python 3.11+, aiohttp async, SQLite WAL, port 18789
+- **Frontend**: React 18 + TypeScript + Vite + Tauri
+- **DB**: `~/.elyan/runtime.db` — `LOCAL_METADATA.create_all()` otomatik
+- **venv**: `.venv/bin/python`
 
 ---
 
@@ -20,39 +24,16 @@
 
 ```bash
 # Backend
-cd /Users/emrekoca/Desktop/Bot\ \&\ Ticaret/bot
 .venv/bin/python main.py start --port 18789
 
 # Frontend (geliştirme)
 cd apps/desktop
 PATH="/opt/homebrew/bin:$PATH" node node_modules/.bin/vite dev
 
-# Frontend (build test)
-cd apps/desktop
-PATH="/opt/homebrew/bin:$PATH" node node_modules/.bin/vite build
-
-# TypeScript tip kontrolü
+# TypeScript kontrol
 cd apps/desktop
 PATH="/opt/homebrew/bin:$PATH" node node_modules/.bin/tsc --noEmit
 ```
-
----
-
-## Git Durumu
-
-**Branch**: `codex/cowork-desktop-platform`
-**Main**: `main`
-
-### Son commit'ler (en yeni → en eski)
-| Hash | İçerik |
-|------|--------|
-| `13f937cb` | Production-readiness: auth flow, onboarding, billing, startup validation |
-| `6ea5fe54` | PersonalContextEngine OS polling at backend startup |
-| `cab23ff9` | SQLAlchemy 2.0 text() fixes + prompt_fragment API |
-| `1b0afec1` | Workspace learning loop: record outcomes, inject into LLM |
-| `d0d4dd08` | 4-layer intelligence stack (workspace, personal context, task continuity) |
-| `06424f82` | Billing auth stabilized |
-| `f20a4a25` | Iyzipay real API |
 
 ---
 
@@ -61,96 +42,64 @@ PATH="/opt/homebrew/bin:$PATH" node node_modules/.bin/tsc --noEmit
 | Dosya | Rol |
 |-------|-----|
 | `main.py` | Backend entry point, `_run_gateway()` |
-| `core/gateway/server.py` | Tüm HTTP endpoint'leri, auth middleware |
-| `core/agent.py` | Ana ajan — `_finalize_turn()` learning loop |
-| `core/pipeline.py` | `StageContext` — LLM prompt assembly |
+| `core/gateway/server.py` | HTTP endpoint'leri, auth middleware (10K satır — dikkatli) |
+| `core/agent.py` | Ana ajan, `_finalize_turn()` learning loop (14K satır — dikkatli) |
+| `core/pipeline.py` | StageContext, LLM prompt assembly |
 | `core/workspace/intelligence.py` | Workspace learning engine |
-| `core/task_continuity.py` | Stalled task surface |
 | `core/personal_context_engine.py` | OS context (AppleScript, 30s polling) |
-| `core/persistence/runtime_db.py` | SQLite DB — tüm tablolar burada |
+| `core/persistence/runtime_db.py` | SQLite DB, tüm tablolar burada |
 | `core/billing/iyzico_provider.py` | Iyzico payment provider |
 | `apps/desktop/src/app/providers/AppProviders.tsx` | Frontend auth hydration |
-| `apps/desktop/src/app/routes.tsx` | Routing — onboarding/login/home guard'ları |
-| `apps/desktop/src/services/api/client.ts` | `apiClient` — tüm HTTP çağrıları |
-| `apps/desktop/src/services/desktop/sidecar.ts` | `probeRuntimeHealth()` — `/healthz` → `SidecarHealth` |
-| `apps/desktop/src/stores/ui-store.ts` | `onboardingComplete`, `isAuthenticated`, `authenticatedEmail` |
-| `apps/desktop/src/screens/onboarding/OnboardingScreen.tsx` | İlk kurulum sihirbazı |
-| `apps/desktop/src/screens/auth/LoginScreen.tsx` | Giriş ekranı |
+| `apps/desktop/src/app/routes.tsx` | Routing guard'ları |
+| `apps/desktop/src/services/api/client.ts` | apiClient — tüm HTTP çağrıları |
 
 ---
 
-## Tamamlanan İşler (13f937cb)
+## P0 — Yayın Öncesi Kritik (Doğrulandı)
 
-### Auth akışı (kritik düzeltme)
-- `GET /healthz` loopback isteklerde `admin_token` döndürüyor
-- `probeRuntimeHealth()` bu token'ı `SidecarHealth.adminToken` olarak alıyor
-- `AppProviders.tsx:117` → `apiClient.setAdminToken(health.adminToken || "")`
-- Sonuç: Tauri olmayan browser/dev modunda da auth çalışıyor
+### 1. `getCurrentLocalUser()` Boş Email Bug'u ✓
 
-### OnboardingScreen — gerçek ilk kurulum sihirbazı
-```
-apps/desktop/src/screens/onboarding/OnboardingScreen.tsx
-```
-- 3 adım: hoş geldin → hesap formu (isim/e-posta/parola) → tamam
-- `POST /api/v1/auth/bootstrap-owner` → session token → `signIn()` + `completeOnboarding()`
-- Bootstrap sonrası `mark_setup_complete()` çağrılıyor (sonraki `/healthz` setup_complete:true döndürüyor)
-
-### LoginScreen — backend bağlantısı
-- Parola alanı eklendi
-- `POST /api/v1/auth/login` çağrısı
-- 409 + `bootstrap_required` → `/onboarding`'e yönlendirme
-
-### Startup validation
-- `main.py:_log_startup_config_warnings()` — LLM/billing/admin-token eksikliği startup logunda
-
-### Billing hata mesajları
-- `SettingsScreen.tsx:translateBillingError()` — iyzico teknik kodları → Türkçe mesaj
-
----
-
-## Kalan İşler — Öncelik Sırasıyla
-
-### P0 — Yayın öncesi mutlaka yapılmalı
-
-#### 1. `getCurrentLocalUser()` boş email bug'u
-**Dosya**: `apps/desktop/src/services/api/elyan-service.ts`
-**Satır**: ~1889
+**Dosya**: `apps/desktop/src/services/api/elyan-service.ts` ~satır 1889
 
 **Sorun**: `/api/v1/auth/me` admin token ile çağrıldığında (henüz kullanıcı yokken)
-`session.email = ""` döner. `getCurrentLocalUser()` bunu `{email: ""}` olarak parse eder,
-`!currentUser` kontrolü pas geçer ve `signIn("")` çağrılır → `isAuthenticated: true` empty email ile.
+`session.email = ""` dönüyor. `getCurrentLocalUser()` bunu `{email: ""}` olarak parse ediyor,
+`signIn("")` çağrılıyor → `isAuthenticated: true` ama email boş.
 
-**Düzeltme**: `getCurrentLocalUser()` içinde email boşsa `null` döndür:
+**Düzeltme** (tek satır ekle):
 ```typescript
-// apps/desktop/src/services/api/elyan-service.ts ~ satır 1893
 const email = String(raw.user.email || "").trim().toLowerCase();
-if (!email) return null;    // ← bu satırı ekle
+if (!email) return null;    // ← BU SATIRI EKLE
 return { email, displayName: String(raw.user.display_name || "").trim() };
 ```
 
+**Durum**: Guard mevcut. Boş email geldiğinde `null` dönüyor.
+
 ---
 
-#### 2. Artık olmayan `OnboardingScreen 2.tsx` dosyasını sil
+### 2. Eski Dosyayı Sil ✓
+
 **Dosya**: `apps/desktop/src/screens/onboarding/OnboardingScreen 2.tsx`
 
-Bu dosya hiçbir yerde import edilmiyor, eski bir çalışma kopyası.
-Sadece sil, başka bir değişiklik yapma.
+**Durum**: Dosya repo yüzeyinde yok.
 
 ---
 
-#### 3. Frontend Vite build'i doğrula
+### 3. Vite Build Doğrulama ✓
+
 ```bash
 cd apps/desktop
 PATH="/opt/homebrew/bin:$PATH" node node_modules/.bin/vite build 2>&1
 ```
-Build hatasız geçmeli. Hata varsa düzelt ve commit et.
+
+**Durum**: `PATH="/opt/homebrew/bin:$PATH" node node_modules/.bin/vite build` başarılı.
 
 ---
 
-#### 4. `.env.example`'a eksik değerleri ekle
+### 4. `.env.example` Güncellemesi ✓
+
 **Dosya**: `.env.example`
 
-Şu an eksik olan satırlar:
+**Durum**: Gerekli env anahtarları mevcut:
 ```bash
 # Gateway admin token (opsiyonel — yoksa /healthz'de otomatik üretilir)
 ELYAN_ADMIN_TOKEN=
@@ -161,19 +110,16 @@ ELYAN_PORT=18789
 
 ---
 
-### P1 — Kullanıcı deneyimi için önemli
+## P1 — Kullanıcı Deneyimi (Aktif Yüzey)
 
-#### 5. Session token localStorage'a yedekle
+### 5. Session Token localStorage Yedekleme
+
 **Dosya**: `apps/desktop/src/services/api/client.ts`
 
-**Sorun**: `apiClient.sessionToken` sadece memory'de. Sayfa yenilenince temizlenir.
-`elyan_user_session` cookie `httponly:true` olduğu için JS okuyamaz.
-Cookie browser'dan gönderilir ama Tauri webview'de cross-port cookie sorunları olabilir.
+**Durum**: Uygulandı. `ApiClient` localStorage üzerinden session token restore/persist ediyor.
 
-**Düzeltme**: `setSessionToken()` çağrılınca `localStorage.setItem("elyan_session_token", ...)` yaz,
-constructor'da `localStorage.getItem("elyan_session_token")` ile restore et:
 ```typescript
-// ApiClient constructor'una ekle:
+// Constructor'a ekle:
 constructor(baseUrl = DEFAULT_BASE_URL) {
   this.baseUrl = baseUrl;
   const saved = typeof localStorage !== "undefined"
@@ -182,7 +128,7 @@ constructor(baseUrl = DEFAULT_BASE_URL) {
   if (saved) this.sessionToken = saved;
 }
 
-// setSessionToken'ı güncelle:
+// setSessionToken güncelle:
 setSessionToken(sessionToken: string) {
   this.sessionToken = sessionToken.trim();
   if (typeof localStorage !== "undefined") {
@@ -193,33 +139,24 @@ setSessionToken(sessionToken: string) {
     }
   }
 }
-
-// clearSessionToken'ı güncelle:
-clearSessionToken() {
-  this.sessionToken = "";
-  if (typeof localStorage !== "undefined") {
-    localStorage.removeItem("elyan_session_token");
-  }
-}
 ```
 
 ---
 
-#### 6. Auth endpoint'lerine basit rate limit ekle
+### 6. Auth Rate Limit Aktifleştirme
+
 **Dosya**: `core/gateway/server.py`
 
-`POST /api/v1/auth/login` ve `POST /api/v1/auth/bootstrap-owner` endpoint'lerine
-aynı IP'den 10 dakikada 10 başarısız denemede 429 dön.
+**Durum**: Uygulandı. Login ve owner bootstrap endpoint'leri IP bazlı auth failure rate limit kullanıyor.
 
-Bunu yapmak için server.py başına basit in-memory dict ekle:
 ```python
 import time as _time
-_LOGIN_ATTEMPTS: dict[str, list[float]] = {}   # ip → [timestamp, ...]
+_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 _RATE_LIMIT_WINDOW = 600   # 10 dakika
 _RATE_LIMIT_MAX = 10
 
 def _check_login_rate_limit(ip: str) -> bool:
-    """True if allowed, False if rate limited."""
+    """True = izin ver, False = rate limited."""
     now = _time.time()
     attempts = _LOGIN_ATTEMPTS.get(ip, [])
     attempts = [t for t in attempts if now - t < _RATE_LIMIT_WINDOW]
@@ -231,105 +168,186 @@ def _check_login_rate_limit(ip: str) -> bool:
     return True
 ```
 
-`handle_v1_auth_login`'de başarısız denemelerde bu fonksiyonu çağır.
+`handle_v1_auth_login` başına ekle, başarısız denemelerde çağır.
 
 ---
 
-#### 7. LLM provider kurulum adımı — OnboardingScreen'e model setup ekle
+### 7. OnboardingScreen'e LLM Kurulum Adımı
+
 **Dosya**: `apps/desktop/src/screens/onboarding/OnboardingScreen.tsx`
 
-Şu an onboarding sadece hesap oluşturuyor ama LLM provider yapılandırmıyor.
-Hesap oluşturulduktan sonra mevcut 3 adıma 4. adım ekle:
-
+Mevcut 3 adıma 4. adım ekle:
 ```
 Adım 4: "Model ayarla (opsiyonel)"
-- GET /api/llm/setup/ollama → çalışıyorsa "Ollama hazır, model: X" göster
-- Ollama yoksa "API key gir" formu göster (OPENAI / ANTHROPIC / GROQ)
+- GET /api/llm/setup/ollama → çalışıyorsa "Ollama hazır" göster
+- Ollama yoksa "API key gir" formu (OPENAI / ANTHROPIC / GROQ)
 - POST /api/llm/setup/save-key ile kaydet
-- "Atla" butonu olsun — zorunlu değil
+- "Atla" butonu olsun
 ```
 
-Mevcut `/api/llm/setup/*` endpoint'leri zaten var (server.py:1856-1862).
-`getSystemReadiness()` ve `getProviderDescriptors()` fonksiyonları da zaten var.
+`/api/llm/setup/*` endpoint'leri server.py'de mevcut.
 
 ---
 
-### P2 — Kararlılık ve temizlik
+## Hazırlık Notları
 
-#### 8. Proses ölünce portun temizlenmesi
-**Dosya**: `main.py`
+- Voice startup yolunda `LocalSTT.transcribe was never awaited` uyarısı giderildi.
+- Hedefli doğrulama: `tests/unit/test_local_stt.py`, `tests/voice/test_voice_modules.py`
+- Runtime şu an kalkıyor; ancak tam local LLM deneyimi için `ollama pull llama3.2:3b` hâlâ gerekli.
 
-Şu an `SIGTERM` handler yok. Backend crash olunca port 18789 bir süre meşgul kalıyor.
+---
+
+## P2 — Güvenlik (Sprint 1)
+
+### 8. WebSocket Token URL'den Kaldır
+
+**Dosya**: `apps/desktop/src/services/websocket/runtime-socket.ts:123`
+
+```typescript
+// YASAK — browser history'ye düşer:
+socketUrl.searchParams.set("token", token.trim());
+
+// DOĞRU: bağlantı kurulduktan sonra ilk message'da gönder
+socket.onopen = () => {
+  socket.send(JSON.stringify({ type: "auth", token: token.trim() }));
+};
+```
+
+### 9. Webhook Signature — hmac.compare_digest
+
+**Dosya**: `core/billing/iyzico_provider.py:455`
+
 ```python
-import signal
-def _handle_sigterm(sig, frame):
-    raise KeyboardInterrupt
-signal.signal(signal.SIGTERM, _handle_sigterm)
+import hmac
+# Mevcut:
+if computed_signature == received_signature:  # TIMING ATTACK
+
+# Düzeltme:
+if hmac.compare_digest(computed_signature, received_signature):
+    ...
 ```
-`_run_gateway()` başına ekle.
+
+### 10. Query String Admin Auth Kaldır
+
+**Dosya**: `core/gateway/server.py:1704`
+
+```python
+# Kaldır:
+or query.get("token", "")
+or query.get("admin_token", "")
+```
+
+Token sadece header üzerinden gelmeli.
 
 ---
 
-#### 9. React error boundary
-**Dosya**: `apps/desktop/src/app/App.tsx`
+## P3 — Türkiye Connector Altyapısı (Faza A)
 
-Beklenmedik React hataları beyaz ekran gösteriyor.
-`errorElement: <RouteErrorScreen />` zaten routes.tsx'te var ama
-genel uygulama seviyesinde de bir error boundary olmalı:
+### 11. Connector Altyapısı Kur
 
-```tsx
-// App.tsx'e ekle — RouterProvider'ı ErrorBoundary ile sar
-class AppErrorBoundary extends React.Component<...> { ... }
+**Dizin**: `integrations/turkey/`
+
+```
+integrations/turkey/
+├── __init__.py
+├── base.py          # ConnectorBase abstract class
+├── e_fatura.py      # GİB e-Fatura connector
+├── e_arsiv.py       # e-Arşiv connector
+├── logo.py          # Logo muhasebe connector
+├── netsis.py        # Netsis connector
+├── sgk.py           # SGK connector
+└── tests/
+    ├── test_e_fatura.py
+    └── test_logo.py
+```
+
+Her connector şu interface'i implement eder:
+```python
+class ConnectorBase(ABC):
+    @abstractmethod
+    def health_check(self) -> bool: ...
+
+    @abstractmethod
+    def test_credentials(self) -> bool: ...
+
+    @abstractmethod
+    def get_name(self) -> str: ...
+```
+
+### 12. Decision Fabric — Karar Hafızası
+
+**Dosya**: `core/decision_fabric.py` (yeni)
+
+Her kritik kararla birlikte bağlamı kaydet:
+```python
+@dataclass
+class Decision:
+    id: str
+    summary: str          # "Tedarikçi X sözleşme yenilenmedi"
+    context: str          # "Q3 fiyat artışı + 3 kargo gecikmesi"
+    actor_id: str
+    workspace_id: str
+    timestamp: str
+    related_event_ids: list[str]
+
+class DecisionFabric:
+    def record(self, decision: Decision) -> str: ...
+    def search(self, query: str, workspace_id: str) -> list[Decision]: ...
 ```
 
 ---
 
-## Kritik Kurallar (Kodları Bozma)
+## P4 — Ambient Engine Temeli (Faza B Hazırlığı)
+
+> Bu katmanı şimdi tasarla ama aktive etme. Feature flag ile kapalı gelecek.
+
+### 13. Pattern Engine İskeleti
+
+**Dosya**: `core/ambient/pattern_engine.py` (yeni, feature flag ile kapalı)
+
+```python
+@dataclass
+class Pattern:
+    id: str
+    description: str      # "Her Pazartesi 09:00'da rapor hazırlama"
+    frequency: int        # Kaç kez gözlemlendi
+    confidence: float     # 0.0 - 1.0
+    trigger_conditions: dict
+
+class PatternEngine:
+    """
+    Kullanıcı davranışını izler, tekrarlayan işleri tespit eder.
+
+    ŞIMDI: veri topla, öğren
+    FAZA B: proaktif öner
+    """
+
+    def record_activity(self, event: dict) -> None: ...
+
+    def detect_patterns(self, window_days: int = 30) -> list[Pattern]: ...
+
+    def suggest_automation(self, pattern: Pattern) -> dict | None:
+        """Güven skoru 0.8'den düşükse None döndür."""
+        ...
+```
+
+---
+
+## Kritik Kurallar (Özet)
 
 ### Python
-
-1. **SQLAlchemy 2.0** — Raw SQL her zaman `text()` ile ve `:named_param` sözdizimi:
-   ```python
-   from sqlalchemy import text
-   conn.execute(text("SELECT * FROM t WHERE id = :id"), {"id": val})
-   ```
-   `?` placeholder KULLANMA — çalışmaz.
-
-2. **DB tablolar** — `core/persistence/runtime_db.py`'de `LOCAL_METADATA` ile tanımlı.
-   Yeni tablo ekleyeceksen `LOCAL_METADATA` altına `Table(...)` tanımla,
-   `create_all()` otomatik yaratır. Alembic yok.
-
-3. **Auth middleware** — `_require_user_session()` hem `X-Elyan-Session-Token` header
-   hem `elyan_user_session` cookie hem de `X-Elyan-Admin-Token` kabul eder.
-   Admin token için `_is_loopback_request(request)` zorunlu.
-
-4. **Workspace intelligence loop** — `_finalize_turn()` sonunda `record_task_outcome()` çağrılıyor.
-   Bu akışı bozma.
-
-5. **`mark_setup_complete()`** — Bootstrap sonrası çağrılmalı.
-   `from cli.onboard import mark_setup_complete` şeklinde import edilir.
+1. SQLAlchemy 2.0 — `text()` + `:named_param` zorunlu, `?` yasak
+2. DB tabloları — `core/persistence/runtime_db.py`'de `LOCAL_METADATA` altına
+3. Auth — `_require_user_session()` üç yolu var, loopback kontrolü zorunlu
+4. Learning loop — `_finalize_turn()` → `record_task_outcome()` bozma
+5. Bootstrap — `mark_setup_complete()` sonrasında çağrılmalı
 
 ### TypeScript / React
-
-6. **`apiClient`** — `apps/desktop/src/services/api/client.ts`'den import edilir.
-   `apiClient.setAdminToken()` AppProviders'da `/healthz` sonrası set edilir.
-   `apiClient.setSessionToken()` login/bootstrap sonrası set edilir.
-
-7. **`useUiStore`** — `onboardingComplete`, `isAuthenticated`, `authenticatedEmail` persist edilir (Zustand + localStorage).
-   `signIn(email)` → `isAuthenticated: true` + `authenticatedEmail: email`
-   `completeOnboarding()` → `onboardingComplete: true`
-
-8. **Routing guard sırası** — `routes.tsx`:
-   - `onboardingComplete: false` → `/onboarding`
-   - `onboardingComplete: true` + `isAuthenticated: false` → `/login`
-   - `onboardingComplete: true` + `isAuthenticated: true` → `/home`
-   Bu sıralamayı değiştirme.
-
-9. **React import** — JSX için React import gerekmez (yeni JSX transform).
-   Tip için: `import { type ReactNode } from "react"` kullan, `React.ReactNode` değil.
-
-10. **Tailwind CSS** — `var(--text-primary)`, `var(--bg-surface)`, `var(--border-subtle)` gibi CSS değişkenler kullanılıyor.
-    Yeni renkler için bu değişkenleri kullan, hardcoded hex/rgb yazma.
+6. `apiClient` — `client.ts`'den import, admin token `/healthz` sonrası set
+7. `useUiStore` — `onboardingComplete`, `isAuthenticated`, `authenticatedEmail` persist
+8. Routing guard sırası — kesinlikle değiştirme
+9. React import — JSX için gerekmiyor, tip için `import { type ReactNode } from "react"`
+10. Tailwind — CSS değişkenler kullan: `var(--text-primary)`, `var(--bg-surface)`
 
 ---
 
@@ -338,25 +356,23 @@ class AppErrorBoundary extends React.Component<...> { ... }
 Her P0 değişikliği sonrasında:
 
 ```bash
-# 1. Python syntax check
+# 1. Python syntax
 .venv/bin/python -c "import ast; ast.parse(open('core/gateway/server.py').read()); print('OK')"
 
-# 2. TypeScript check
+# 2. TypeScript
 cd apps/desktop && PATH="/opt/homebrew/bin:$PATH" node node_modules/.bin/tsc --noEmit
 
-# 3. Backend başlat
+# 3. Backend + healthz
 .venv/bin/python main.py start --port 18789 &
 sleep 6
-
-# 4. /healthz admin_token döndürüyor mu?
 curl -s http://127.0.0.1:18789/healthz | python3 -m json.tool | grep admin_token
 
-# 5. Auth akışı — login endpoint çalışıyor mu?
+# 4. Auth endpoint
 curl -s -X POST http://127.0.0.1:18789/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"x@x.com","password":"wrong"}' | python3 -m json.tool
 
-# 6. Frontend build
+# 5. Frontend build
 cd apps/desktop && PATH="/opt/homebrew/bin:$PATH" node node_modules/.bin/vite build 2>&1 | tail -10
 ```
 
@@ -381,9 +397,9 @@ Her P0 maddesi ayrı commit. P1/P2 gruplandırılabilir.
 
 ---
 
-## Mevcut Çevre Durumu
+## Mevcut Çevre
 
-- Backend v20.1.0 çalışıyor (port 18789), commit `13f937cb`
-- DB'de zaten bir kullanıcı var (bootstrap tamamlanmış)
-- TypeScript build `tsc --noEmit` sıfır hata
-- `venv` Python 3.11.15 at `.venv/`
+- Backend v20.1.0, commit `13f937cb`
+- DB'de zaten kullanıcı var (bootstrap tamamlanmış)
+- TypeScript `tsc --noEmit` sıfır hata
+- venv Python 3.11.x `.venv/`

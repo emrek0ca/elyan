@@ -1,5 +1,8 @@
 import asyncio
 import discord
+import os
+import tempfile
+from pathlib import Path
 from typing import Dict, Any
 from .base import BaseChannelAdapter
 from ..message import UnifiedMessage
@@ -38,18 +41,88 @@ class DiscordAdapter(BaseChannelAdapter):
         async def on_message(message):
             if message.author == self.client.user:
                 return
-            
-            msg = UnifiedMessage(
-                id=str(message.id),
-                channel_type="discord",
-                channel_id=str(message.channel.id),
-                user_id=str(message.author.id),
-                user_name=message.author.name,
-                text=message.content
-            )
-            
+
+            msg = await self._build_unified_message(message)
             if self.on_message_callback:
                 await self.on_message_callback(msg)
+
+    @staticmethod
+    def _is_audio_attachment(content_type: str, filename: str) -> bool:
+        mime = str(content_type or "").strip().lower()
+        name = str(filename or "").strip().lower()
+        return mime.startswith("audio/") or name.endswith((".wav", ".mp3", ".m4a", ".ogg", ".webm"))
+
+    @staticmethod
+    def _compose_text(text: str, transcript: str) -> str:
+        raw = str(text or "").strip()
+        transcribed = str(transcript or "").strip()
+        if raw and transcribed:
+            return f"{raw}\n\nVoice transcript:\n{transcribed}"
+        return transcribed or raw
+
+    async def _transcribe_attachment(self, attachment: Any) -> tuple[str, str]:
+        filename = str(getattr(attachment, "filename", "") or "voice-note").strip() or "voice-note"
+        suffix = Path(filename).suffix or ".bin"
+        tmp_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(prefix="elyan_discord_", suffix=suffix, delete=False) as tmp:
+                tmp_path = tmp.name
+            save = getattr(attachment, "save", None)
+            if callable(save):
+                maybe = save(tmp_path)
+                if asyncio.iscoroutine(maybe):
+                    await maybe
+            elif hasattr(attachment, "read"):
+                payload = attachment.read()
+                if asyncio.iscoroutine(payload):
+                    payload = await payload
+                Path(tmp_path).write_bytes(payload or b"")
+            else:
+                return "", ""
+            from core.voice.stt_engine import get_stt_engine
+
+            transcript = await get_stt_engine().transcribe_async(tmp_path)
+            return tmp_path, str(transcript or "").strip()
+        except Exception as exc:
+            logger.warning(f"Discord audio transcription failed: {exc}")
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+            return "", ""
+
+    async def _build_unified_message(self, message: Any) -> UnifiedMessage:
+        attachments = []
+        transcript = ""
+        for attachment in list(getattr(message, "attachments", []) or []):
+            if not self._is_audio_attachment(
+                str(getattr(attachment, "content_type", "") or ""),
+                str(getattr(attachment, "filename", "") or ""),
+            ):
+                continue
+            path, transcript = await self._transcribe_attachment(attachment)
+            if path:
+                attachments.append(
+                    {
+                        "type": "audio",
+                        "path": path,
+                        "name": str(getattr(attachment, "filename", "") or Path(path).name),
+                        "mime": str(getattr(attachment, "content_type", "") or ""),
+                    }
+                )
+            if transcript:
+                break
+        return UnifiedMessage(
+            id=str(message.id),
+            channel_type="discord",
+            channel_id=str(message.channel.id),
+            user_id=str(message.author.id),
+            user_name=message.author.name,
+            text=self._compose_text(getattr(message, "content", ""), transcript),
+            attachments=attachments,
+            metadata={"is_voice": bool(transcript), "voice_transcript": transcript} if transcript else {},
+        )
 
     async def connect(self):
         if not self.token:
@@ -100,4 +173,4 @@ class DiscordAdapter(BaseChannelAdapter):
         return "connected" if self._is_connected else "disconnected"
 
     def get_capabilities(self) -> Dict[str, bool]:
-        return {"buttons": True, "images": True, "markdown": True}
+        return {"buttons": True, "images": True, "markdown": True, "voice": True, "files": True}

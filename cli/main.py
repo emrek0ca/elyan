@@ -350,7 +350,7 @@ def main(argv: list[str] | None = None):
 
     # ── routines ────────────────────────────────────────────────────────
     p = sub.add_parser("routines", help="Rutin otomasyon yönetimi")
-    p.add_argument("action", nargs="?", choices=["list", "templates", "suggest", "add", "rm", "enable", "disable", "run", "history"])
+    p.add_argument("action", nargs="?", choices=["list", "templates", "suggest", "add", "promote-draft", "rm", "enable", "disable", "run", "history"])
     p.add_argument("id", nargs="?")
     p.add_argument("--json", action="store_true")
     p.add_argument("--text", metavar="TEXT")
@@ -395,7 +395,7 @@ def main(argv: list[str] | None = None):
     # ── skills ──────────────────────────────────────────────────────────
     p = sub.add_parser("skills", help="Beceri yönetimi")
     p.add_argument("action", nargs="?",
-                   choices=["list", "info", "install", "enable", "disable", "update", "edit", "remove", "search", "check"])
+                   choices=["list", "info", "install", "promote-draft", "enable", "disable", "update", "edit", "remove", "search", "check"])
     p.add_argument("name", nargs="?")
     p.add_argument("--available", action="store_true")
     p.add_argument("--enabled", dest="enabled_only", action="store_true")
@@ -403,6 +403,10 @@ def main(argv: list[str] | None = None):
     p.add_argument("--set", dest="set_values", action="append", default=[], help="key=value manifest alanı güncelle")
     p.add_argument("--file", dest="file", metavar="JSON_FILE", help="Manifest güncellemesi için JSON dosyası")
     p.add_argument("--replace", action="store_true", help="Manifesti tamamen verilen alanlarla değiştir")
+    p.add_argument("--skill-name", dest="skill_name", metavar="NAME")
+    p.add_argument("--description", metavar="TEXT")
+    p.add_argument("--disabled", action="store_true")
+    p.add_argument("--port", type=int)
     p.add_argument("--json", action="store_true")
 
     # ── integrations ───────────────────────────────────────────────────
@@ -461,11 +465,12 @@ def main(argv: list[str] | None = None):
     # ── memory ──────────────────────────────────────────────────────────
     p = sub.add_parser("memory", help="Bellek yönetimi")
     p.add_argument("subcommand", nargs="?",
-                   choices=["status", "index", "search", "recall", "history", "export", "import", "clear", "stats"])
+                   choices=["status", "index", "search", "recall", "history", "profile", "drafts", "export", "import", "clear", "stats"])
     p.add_argument("query", nargs="?")
     p.add_argument("--limit", type=int, default=10)
     p.add_argument("--size", action="store_true")
     p.add_argument("--user", metavar="USER_ID")
+    p.add_argument("--type", dest="draft_type", default="all")
     p.add_argument("--format", default="json")
     p.add_argument("--file", metavar="FILE")
 

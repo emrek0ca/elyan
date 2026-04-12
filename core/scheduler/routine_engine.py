@@ -194,11 +194,13 @@ def _detect_template_id(text: str) -> str:
         "agency-daily": 0,
         "academic-daily": 0,
         "office-daily": 0,
+        "personal-daily-summary": 0,
     }
     ecommerce_keys = ("e-ticaret", "eticaret", "sipariş", "siparis", "kargo", "stok", "satıcı", "satici", "marketplace")
     agency_keys = ("ajans", "danışman", "danisman", "form", "lead", "crm", "müşteri", "musteri", "kampanya")
     academic_keys = ("akademik", "öğrenci", "ogrenci", "duyuru", "sınav", "sinav", "ders", "fakülte", "fakulte")
     office_keys = ("ofis", "muhasebe", "tahsilat", "cari", "fatura", "ödeme", "odeme", "finans")
+    personal_summary_keys = ("günlük özet", "gunluk ozet", "daily summary", "daily digest", "sabah özeti", "sabah ozeti", "gün özeti", "gun ozeti", "özet gönder", "ozet gonder")
 
     for key in ecommerce_keys:
         if key in low:
@@ -212,6 +214,9 @@ def _detect_template_id(text: str) -> str:
     for key in office_keys:
         if key in low:
             score_map["office-daily"] += 2
+    for key in personal_summary_keys:
+        if key in low:
+            score_map["personal-daily-summary"] += 3
 
     best_template = max(score_map.keys(), key=lambda k: score_map[k])
     return best_template if score_map[best_template] > 0 else ""
@@ -332,6 +337,17 @@ ROUTINE_TEMPLATES: dict[str, dict[str, Any]] = {
             "Telegram / WhatsApp gönder",
         ],
     },
+    "personal-daily-summary": {
+        "id": "personal-daily-summary",
+        "name": "Kişisel Günlük Özet",
+        "category": "personal",
+        "description": "Son konuşmalar, bekleyen işler ve kısa günlük özet",
+        "steps": [
+            "Son konuşmaları ve bekleyen işleri topla",
+            "Günlük özet raporu hazırla",
+            "Telegram / WhatsApp gönder",
+        ],
+    },
 }
 
 
@@ -341,6 +357,13 @@ def _now_iso() -> str:
 
 def _clean_text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _truncate_text(value: Any, limit: int = 220) -> str:
+    text = _clean_text(value)
+    if len(text) <= max(1, int(limit or 220)):
+        return text
+    return text[: max(1, int(limit or 220))].rstrip() + "..."
 
 
 def _normalize_steps(raw_steps: Any) -> List[str]:
@@ -554,6 +577,7 @@ class RoutineEngine:
         name: str = "",
         panels: Optional[List[str] | str] = None,
         tags: Optional[List[str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         template = self.get_template(template_id)
         if not template:
@@ -571,7 +595,7 @@ class RoutineEngine:
             tags=tags or [template.get("category", "template")],
             panels=panels,
             template_id=str(template.get("id", "")),
-            metadata={"template": template},
+            metadata={**dict(metadata or {}), "template": template},
         )
 
     def suggest_from_text(
@@ -652,6 +676,7 @@ class RoutineEngine:
         name: str = "",
         panels: Optional[List[str] | str] = None,
         tags: Optional[List[str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         suggestion = self.suggest_from_text(text)
         final_name = _clean_text(name) or suggestion.get("name", "Akıllı Rutin")
@@ -672,6 +697,7 @@ class RoutineEngine:
                 name=final_name,
                 panels=panel_list,
                 tags=tags or [suggestion.get("category", "nl")],
+                metadata=metadata,
             )
 
         return self.add_routine(
@@ -685,7 +711,7 @@ class RoutineEngine:
             tags=tags or [suggestion.get("category", "nl")],
             panels=panel_list,
             template_id="",
-            metadata={"source_text": _clean_text(text), "suggestion": suggestion},
+            metadata={**dict(metadata or {}), "source_text": _clean_text(text), "suggestion": suggestion},
         )
 
     def update_routine(self, routine_id: str, **patch: Any) -> Optional[Dict[str, Any]]:
@@ -1038,6 +1064,111 @@ class RoutineEngine:
 
         return "\n".join(lines)
 
+    @staticmethod
+    def _resolve_personal_scope(routine: dict[str, Any]) -> tuple[str, str]:
+        metadata = dict(routine.get("metadata") or {}) if isinstance(routine.get("metadata"), dict) else {}
+        workspace_id = _clean_text(metadata.get("workspace_id"))
+        actor_id = _clean_text(metadata.get("actor_id") or metadata.get("user_id"))
+        try:
+            from core.persistence import get_runtime_database
+
+            runtime_db = get_runtime_database()
+            latest = runtime_db.auth_sessions.get_latest_session(
+                user_ref=actor_id,
+                workspace_id=workspace_id,
+            ) or runtime_db.auth_sessions.get_latest_session(workspace_id=workspace_id)
+            if latest:
+                workspace_id = workspace_id or _clean_text(latest.get("workspace_id"))
+                actor_id = actor_id or _clean_text(latest.get("user_id"))
+        except Exception:
+            pass
+        return workspace_id, actor_id
+
+    def _collect_personal_summary(self, routine: dict[str, Any]) -> dict[str, Any]:
+        from core.persistence import get_runtime_database
+
+        runtime_db = get_runtime_database()
+        workspace_id, actor_id = self._resolve_personal_scope(routine)
+        findings: list[dict[str, Any]] = []
+        lines = [f"Rutin: {routine.get('name')}"]
+
+        if not workspace_id or not actor_id:
+            lines.append("Aktif kullanıcı oturumu bulunamadı.")
+            return {"summary": "\n".join(lines), "findings": findings, "workspace_id": workspace_id, "actor_id": actor_id}
+
+        recent_turns = runtime_db.conversations.list_recent_turns(
+            workspace_id=workspace_id,
+            actor_id=actor_id,
+            limit=5,
+        )
+        pending_approvals = [
+            item
+            for item in runtime_db.approvals.list_pending(limit=20)
+            if str(item.get("workspace_id") or workspace_id) == workspace_id
+        ]
+        preference_drafts = runtime_db.learning.list_preference_updates(
+            workspace_id=workspace_id,
+            user_id=actor_id,
+            limit=3,
+        )
+        skill_drafts = runtime_db.learning.list_skill_drafts(
+            workspace_id=workspace_id,
+            user_id=actor_id,
+            limit=3,
+        )
+        routine_drafts = runtime_db.learning.list_routine_drafts(
+            workspace_id=workspace_id,
+            user_id=actor_id,
+            limit=3,
+        )
+
+        lines.append(f"Son konuşma: {len(recent_turns)} kayıt")
+        lines.append(f"Bekleyen onay: {len(pending_approvals)}")
+        draft_total = len(preference_drafts) + len(skill_drafts) + len(routine_drafts)
+        lines.append(f"Bekleyen öğrenme taslağı: {draft_total}")
+
+        for row in recent_turns[:3]:
+            user_message = _truncate_text(row.get("user_message") or "")
+            bot_response = _truncate_text(row.get("bot_response") or "")
+            findings.append(
+                {
+                    "source": "conversation",
+                    "title": user_message or "Konuşma",
+                    "summary": bot_response or "Yanıt yok",
+                }
+            )
+        for row in pending_approvals[:3]:
+            findings.append(
+                {
+                    "source": "approval",
+                    "title": _clean_text(row.get("action_type") or "approval"),
+                    "summary": _truncate_text(row.get("reason") or row.get("payload") or "Bekleyen onay"),
+                }
+            )
+        for row in routine_drafts[:2]:
+            findings.append(
+                {
+                    "source": "routine_draft",
+                    "title": _clean_text(row.get("name_hint") or "routine_draft"),
+                    "summary": _truncate_text(row.get("description") or row.get("schedule_expression") or ""),
+                }
+            )
+        for row in skill_drafts[:2]:
+            findings.append(
+                {
+                    "source": "skill_draft",
+                    "title": _clean_text(row.get("name_hint") or "skill_draft"),
+                    "summary": _truncate_text(row.get("description") or ""),
+                }
+            )
+
+        return {
+            "summary": "\n".join(lines),
+            "findings": findings,
+            "workspace_id": workspace_id,
+            "actor_id": actor_id,
+        }
+
     async def _execute_step_with_defaults(
         self,
         agent,
@@ -1095,6 +1226,29 @@ class RoutineEngine:
                     step_ok = step_ok and ok
                     outs.append(f"{url} ({'OK' if ok else 'FAIL'})")
                 return True, step_ok, "Panel açılışları: " + ", ".join(outs)
+
+            if any(
+                k in low
+                for k in (
+                    "son konuşmaları",
+                    "son konusmalari",
+                    "bekleyen işleri",
+                    "bekleyen isleri",
+                    "günlük özet",
+                    "gunluk ozet",
+                    "daily summary",
+                    "daily digest",
+                )
+            ):
+                collected = self._collect_personal_summary(routine)
+                findings = run_context.setdefault("findings", [])
+                findings.extend(list(collected.get("findings") or []))
+                run_context["generated_summary"] = str(collected.get("summary") or "")
+                if collected.get("workspace_id"):
+                    run_context["workspace_id"] = collected.get("workspace_id")
+                if collected.get("actor_id"):
+                    run_context["actor_id"] = collected.get("actor_id")
+                return True, True, str(collected.get("summary") or "Kişisel özet toplandı.")
 
             if any(
                 k in low

@@ -153,6 +153,16 @@ def test_runtime_policy_resolve_includes_workflow_defaults(monkeypatch):
     assert workflow.get("workspace_policy") == "auto"
 
 
+def test_runtime_policy_resolve_exposes_agent_mode_policy_map(monkeypatch):
+    monkeypatch.setattr("core.runtime_policy.elyan_config.get", lambda key, default=None: default)
+
+    policy = RuntimePolicyResolver().resolve()
+
+    assert policy.execution["agent_mode"] == "chat"
+    assert "coding" in policy.execution["mode_policies"]
+    assert policy.execution["mode_policies"]["research"]["preferred_model_role"] == "research_worker"
+
+
 def test_runtime_policy_resolve_includes_coding_defaults(monkeypatch):
     monkeypatch.setattr("core.runtime_policy.elyan_config.get", lambda key, default=None: default)
 

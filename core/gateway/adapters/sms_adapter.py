@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 from typing import Any, Dict, Optional
 
 import aiohttp
@@ -74,15 +77,33 @@ class SmsAdapter(BaseChannelAdapter):
         except asyncio.TimeoutError as exc:
             raise RuntimeError("Twilio SMS timed out.") from exc
 
+    def _twilio_signature_payload(self, request: web.Request, payload: Dict[str, Any]) -> bytes:
+        data = str(request.url)
+        for key, value in sorted((str(k), str(v)) for k, v in payload.items()):
+            data += key + value
+        digest = hmac.new(self.auth_token.encode("utf-8"), data.encode("utf-8"), hashlib.sha1).digest()
+        return base64.b64encode(digest)
+
+    def _is_valid_twilio_signature(self, request: web.Request, payload: Dict[str, Any]) -> bool:
+        signature = str(request.headers.get("X-Twilio-Signature") or "").strip()
+        if not signature or not self.auth_token:
+            return False
+        expected = self._twilio_signature_payload(request, payload).decode("utf-8")
+        return hmac.compare_digest(signature, expected)
+
     async def handle_webhook(self, request: web.Request) -> web.StreamResponse:
         try:
             payload = await request.post()
         except Exception:
             return web.Response(status=400, text="invalid form payload")
+        payload_dict = {str(key): str(value) for key, value in payload.items()}
 
-        from_number = str(payload.get("From") or "").strip()
-        body = str(payload.get("Body") or "").strip()
-        message_sid = str(payload.get("MessageSid") or payload.get("SmsSid") or "").strip()
+        if not self._is_valid_twilio_signature(request, payload_dict):
+            return web.Response(status=403, text="invalid_signature")
+
+        from_number = str(payload_dict.get("From") or "").strip()
+        body = str(payload_dict.get("Body") or "").strip()
+        message_sid = str(payload_dict.get("MessageSid") or payload_dict.get("SmsSid") or "").strip()
 
         if self.allowed_numbers and from_number not in self.allowed_numbers:
             return web.Response(status=403, text="sender_not_allowed")
@@ -99,7 +120,7 @@ class SmsAdapter(BaseChannelAdapter):
             metadata={
                 "source": "twilio_webhook",
                 "from_number": from_number,
-                "to_number": str(payload.get("To") or "").strip(),
+                "to_number": str(payload_dict.get("To") or "").strip(),
             },
         )
         if self.on_message_callback:

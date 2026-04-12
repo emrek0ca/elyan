@@ -203,6 +203,44 @@ def test_main_routes_memory_recall_command(monkeypatch):
     assert captured["limit"] == 3
 
 
+def test_main_routes_memory_drafts_command(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)
+
+    def fake_run(args):
+        captured["subcommand"] = getattr(args, "subcommand", None)
+        captured["draft_type"] = getattr(args, "draft_type", None)
+        captured["limit"] = getattr(args, "limit", None)
+
+    monkeypatch.setattr("cli.commands.memory.run", fake_run, raising=False)
+
+    code = cli_main.main(["memory", "drafts", "--type", "skills", "--limit", "4"])
+
+    assert code == 0
+    assert captured["subcommand"] == "drafts"
+    assert captured["draft_type"] == "skills"
+
+
+def test_main_routes_skills_promote_draft_command(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)
+
+    def fake_handle(args):
+        captured["action"] = getattr(args, "action", None)
+        captured["name"] = getattr(args, "name", None)
+        captured["skill_name"] = getattr(args, "skill_name", None)
+        captured["description"] = getattr(args, "description", None)
+
+    monkeypatch.setattr("cli.commands.skills.handle_skills", fake_handle, raising=False)
+
+    code = cli_main.main(["skills", "promote-draft", "skilldraft_123", "--skill-name", "daily_digest"])
+
+    assert code == 0
+    assert captured["action"] == "promote-draft"
+    assert captured["name"] == "skilldraft_123"
+    assert captured["skill_name"] == "daily_digest"
+
+
 def test_main_routes_digest_command(monkeypatch):
     captured = {}
     monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)

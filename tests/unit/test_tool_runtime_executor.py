@@ -98,3 +98,16 @@ def test_verification_envelope_extracts_runtime_fields():
     assert envelope.warning == "screen mismatch"
     assert envelope.evidence["screenshot"] == "/tmp/proof.png"
     assert envelope.metadata["error_code"] == "VERIFY_FAILED"
+
+
+def test_tool_runtime_executor_mode_policy_blocks_messaging_in_coding_mode():
+    decision = ToolRuntimeExecutor._evaluate_mode_policy(
+        "send_message",
+        {"metadata": {"agent_mode": "coding"}},
+        user_id="user-1",
+    )
+
+    assert decision["enabled"] is True
+    assert decision["mode"] == "coding"
+    assert decision["tool_group"] == "messaging"
+    assert decision["allowed"] is False
