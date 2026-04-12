@@ -1101,9 +1101,13 @@ class RoutineEngine:
             actor_id=actor_id,
             limit=5,
         )
+        try:
+            pending_rows = runtime_db.approvals.list_pending(limit=20)
+        except TypeError:
+            pending_rows = runtime_db.approvals.list_pending()
         pending_approvals = [
             item
-            for item in runtime_db.approvals.list_pending(limit=20)
+            for item in list(pending_rows or [])
             if str(item.get("workspace_id") or workspace_id) == workspace_id
         ]
         preference_drafts = runtime_db.learning.list_preference_updates(

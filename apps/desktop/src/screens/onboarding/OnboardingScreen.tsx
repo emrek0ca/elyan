@@ -9,7 +9,7 @@ import { getProviderDescriptors, getSystemReadiness, saveProviderKey } from "@/s
 import { useUiStore } from "@/stores/ui-store";
 import type { ProviderDescriptor, SystemReadiness } from "@/types/domain";
 
-type Step = "welcome" | "account" | "model" | "done";
+type Step = "welcome" | "account" | "model" | "channel" | "done";
 type CloudProviderId = "openai" | "anthropic" | "groq";
 
 const cloudProviderOrder: CloudProviderId[] = ["openai", "anthropic", "groq"];
@@ -61,6 +61,27 @@ export function OnboardingScreen() {
     } finally {
       setModelSetupLoading(false);
     }
+  }
+
+  async function loadReleaseReadiness() {
+    setModelSetupLoading(true);
+    setModelSetupError("");
+    try {
+      const nextReadiness = await getSystemReadiness();
+      setReadiness(nextReadiness);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setModelSetupError(msg || "Sistem durumu alınamadı.");
+    } finally {
+      setModelSetupLoading(false);
+    }
+  }
+
+  function moveToChannelStep() {
+    setModelSetupMessage("");
+    setModelSetupError("");
+    setStep("channel");
+    void loadReleaseReadiness();
   }
 
   function finishOnboarding() {
@@ -154,7 +175,7 @@ export function OnboardingScreen() {
         return;
       }
       setModelSetupMessage(result.message || "Provider hazır.");
-      finishOnboarding();
+      moveToChannelStep();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setModelSetupError(msg || "API key kaydedilemedi.");
@@ -281,19 +302,98 @@ export function OnboardingScreen() {
               <Button variant="secondary" onClick={() => void loadModelSetup()} disabled={modelSetupLoading || modelSetupBusy}>
                 Tekrar kontrol et
               </Button>
-              <Button variant="ghost" onClick={() => finishOnboarding()} disabled={modelSetupBusy}>
+              <Button variant="ghost" onClick={() => moveToChannelStep()} disabled={modelSetupBusy}>
                 Atla
               </Button>
               <Button
                 variant="primary"
-                onClick={() => (readiness?.ollamaReady ? finishOnboarding() : void handleSaveProviderKey())}
+                onClick={() => (readiness?.ollamaReady ? moveToChannelStep() : void handleSaveProviderKey())}
                 disabled={modelSetupLoading || modelSetupBusy}
               >
                 {modelSetupBusy
                   ? "Kaydediliyor…"
                   : readiness?.ollamaReady
-                    ? "Devam et →"
+                    ? "Sonraki adım →"
                     : "API key kaydet →"}
+              </Button>
+            </div>
+          </div>
+        </Surface>
+      </div>
+    );
+  }
+
+  if (step === "channel") {
+    const checks = [
+      {
+        key: "runtime",
+        label: "Runtime",
+        ready: Boolean(readiness?.runtimeReady),
+        detail: readiness?.runtimeReady ? "Gateway erişilebilir." : readiness?.blockingIssue || "Gateway henüz hazır değil.",
+      },
+      {
+        key: "channel",
+        label: "Kanal",
+        ready: Boolean(readiness?.channelConnected),
+        detail: readiness?.channelConnected ? "En az bir kanal bağlı." : "İlk olarak Telegram veya başka bir kanal bağla.",
+      },
+      {
+        key: "routine",
+        label: "İlk rutin",
+        ready: Boolean(readiness?.hasRoutine),
+        detail: readiness?.hasRoutine ? "İlk rutin oluşturuldu." : "Home ekranından ilk routine'i oluştur.",
+      },
+      {
+        key: "summary",
+        label: "İlk günlük özet",
+        ready: Boolean(readiness?.hasDailySummaryRun),
+        detail: readiness?.hasDailySummaryRun ? "Günlük özet en az bir kez çalıştı." : "Kişisel günlük özet rutinini bir kez çalıştır.",
+      },
+    ];
+
+    return (
+      <div className="flex min-h-[calc(100vh-44px)] items-center justify-center px-6 py-10">
+        <Surface tone="hero" className="w-full max-w-[640px] px-8 py-10 md:px-10 md:py-12">
+          <div className="space-y-6">
+            <div>
+              <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-[var(--text-tertiary)]">Desktop handoff</div>
+              <h2 className="font-display text-[28px] font-semibold tracking-tight text-[var(--text-primary)]">
+                Gelişmiş arayüze geç
+              </h2>
+              <p className="mt-2 text-[13px] leading-6 text-[var(--text-secondary)]">
+                CLI kurulumu tamamlandı. Şimdi desktop yüzeyinden kanal, rutin ve günlük özet akışını kapat.
+              </p>
+            </div>
+
+            <div className="grid gap-3">
+              {checks.map((item) => (
+                <div key={item.key} className="rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] px-4 py-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[14px] font-medium text-[var(--text-primary)]">{item.label}</div>
+                    <div className={`text-[11px] uppercase tracking-[0.14em] ${item.ready ? "text-[var(--state-success)]" : "text-[var(--state-warning)]"}`}>
+                      {item.ready ? "hazır" : "bekliyor"}
+                    </div>
+                  </div>
+                  <div className="mt-1 text-[12px] text-[var(--text-secondary)]">{item.detail}</div>
+                </div>
+              ))}
+            </div>
+
+            {modelSetupError ? <div className="text-[12px] text-[var(--state-warning)]">{modelSetupError}</div> : null}
+
+            <div className="flex flex-wrap gap-3">
+              <Button variant="secondary" onClick={() => void loadReleaseReadiness()} disabled={modelSetupLoading}>
+                {modelSetupLoading ? "Kontrol ediliyor…" : "Tekrar kontrol et"}
+              </Button>
+              <Button variant="ghost" onClick={() => finishOnboarding()}>
+                Masaüstüne geç
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => finishOnboarding()}
+                disabled={Boolean(readiness && (!readiness.runtimeReady || !readiness.channelConnected))}
+              >
+                Home'a geç →
               </Button>
             </div>
           </div>

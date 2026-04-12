@@ -1,0 +1,41 @@
+{
+  "name": "@emrek0ca/elyan",
+  "version": "20.1.0",
+  "private": false,
+  "description": "GitHub-installable Elyan CLI bootstrap wrapper",
+  "license": "MIT",
+  "bin": {
+    "elyan": "bin/elyan.cjs"
+  },
+  "files": [
+    "bin/",
+    "cli/",
+    "config/",
+    "core/",
+    "docs/",
+    "elyan/",
+    "security/",
+    "tools/",
+    "utils/",
+    "README.md",
+    "pyproject.toml",
+    "setup.py",
+    "elyan_entrypoint.py",
+    "main.py",
+    "!**/__pycache__/",
+    "!**/*.pyc",
+    "!**/*.pyo",
+    "!tests/",
+    "!apps/",
+    "!artifacts/",
+    "!logs/",
+    "!site/",
+    "!_graveyard/",
+    "!.elyan/",
+    "!.elyan_audit/",
+    "!.venv/"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

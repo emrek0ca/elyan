@@ -38,6 +38,41 @@ Bu katman A fazından toplanan gerçek kullanım verisiyle eğitilir ve global �
 | Auth | Session token + CSRF enforcement |
 | venv | `.venv/bin/python` (Python 3.11.x) |
 
+## Install
+
+### Homebrew
+
+GitHub'daki güncel sürümü doğrudan kur:
+
+```bash
+brew install --formula https://raw.githubusercontent.com/emrek0ca/elyan/main/Formula/elyan.rb
+```
+
+### npm
+
+Node tabanlı bootstrap wrapper ile güncel sürümü GitHub'dan kur:
+
+```bash
+npm install -g github:emrek0ca/elyan
+```
+
+Bu komut `elyan` binary'sini açar, ilk çalıştırmada gerekli Python virtualenv'ini `~/.elyan/npm-runtime/venv` altında kurar.
+
+### İlk Çalıştırma
+
+```bash
+elyan start --port 18789
+elyan desktop
+```
+
+Opsiyonel local model lane:
+
+```bash
+brew install ollama
+ollama serve
+ollama pull llama3.2:3b
+```
+
 ---
 
 ## Mevcut Durum (Nisan 2026)

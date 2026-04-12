@@ -256,6 +256,11 @@ export interface SystemReadiness {
   runtimeReady: boolean;
   setupComplete: boolean;
   ollamaReady: boolean;
+  channelConnected: boolean;
+  hasRoutine: boolean;
+  hasDailySummaryRun: boolean;
+  connectedProvider?: string;
+  connectedModel?: string;
   productivityAppsReady: boolean;
   bluebubblesReady: boolean;
   whatsappMode: "bridge" | "cloud" | "unavailable";

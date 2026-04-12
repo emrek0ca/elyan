@@ -275,6 +275,63 @@ async def test_run_personal_daily_summary_collects_runtime_context(tmp_path, mon
     assert "Bekleyen onay: 1" in out["report"]
 
 
+@pytest.mark.asyncio
+async def test_run_personal_daily_summary_supports_legacy_approval_repository(tmp_path, monkeypatch):
+    path = tmp_path / "routines.json"
+    monkeypatch.setattr(re_mod, "ROUTINE_PERSIST_PATH", path)
+    monkeypatch.setattr(re_mod, "ROUTINE_REPORT_DIR", tmp_path / "reports")
+    engine = re_mod.RoutineEngine()
+
+    class _AuthSessions:
+        def get_latest_session(self, *, user_ref="", workspace_id=""):
+            _ = (user_ref, workspace_id)
+            return {"workspace_id": "workspace-a", "user_id": "user-1"}
+
+    class _Conversations:
+        def list_recent_turns(self, *, workspace_id, actor_id, limit):
+            _ = (workspace_id, actor_id, limit)
+            return []
+
+    class _Approvals:
+        def list_pending(self):
+            return [{"workspace_id": "workspace-a", "action_type": "execute_shell", "reason": "Onay bekleniyor"}]
+
+    class _Learning:
+        def list_preference_updates(self, *, workspace_id, user_id, limit):
+            _ = (workspace_id, user_id, limit)
+            return []
+
+        def list_skill_drafts(self, *, workspace_id, user_id, limit):
+            _ = (workspace_id, user_id, limit)
+            return []
+
+        def list_routine_drafts(self, *, workspace_id, user_id, limit):
+            _ = (workspace_id, user_id, limit)
+            return []
+
+    fake_runtime_db = type(
+        "_FakeRuntimeDB",
+        (),
+        {
+            "auth_sessions": _AuthSessions(),
+            "conversations": _Conversations(),
+            "approvals": _Approvals(),
+            "learning": _Learning(),
+        },
+    )()
+    monkeypatch.setattr("core.persistence.get_runtime_database", lambda: fake_runtime_db)
+
+    item = engine.create_from_text(
+        text="Her sabah saat 09:00 günlük özet gönder",
+        created_by="unit-test",
+        metadata={"workspace_id": "workspace-a", "actor_id": "user-1"},
+    )
+    out = await engine.run_routine(item["id"], _ToolAgent())
+
+    assert out["success"] is True
+    assert "Bekleyen onay: 1" in out["report"]
+
+
 def test_suggest_from_text_detects_interval_hours(tmp_path, monkeypatch):
     path = tmp_path / "routines.json"
     monkeypatch.setattr(re_mod, "ROUTINE_PERSIST_PATH", path)
