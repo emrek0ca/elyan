@@ -5,7 +5,7 @@ import { ElyanMark } from "@/components/brand/ElyanMark";
 import { Button } from "@/components/primitives/Button";
 import { Surface } from "@/components/primitives/Surface";
 import { runtimeManager } from "@/runtime/runtime-manager";
-import { apiClient } from "@/services/api/client";
+import { loginLocalUser } from "@/services/api/elyan-service";
 import { useUiStore } from "@/stores/ui-store";
 import { ArrowRight, ExternalLink } from "@/vendor/lucide-react";
 
@@ -42,38 +42,18 @@ export function LoginScreen() {
 
     setLoading(true);
     try {
-      const result = await apiClient.request<{
-        ok: boolean;
-        session_token?: string;
-        user?: { email: string };
-        error?: string;
-        bootstrap_required?: boolean;
-      }>("/api/v1/auth/login", {
-        method: "POST",
-        body: { email: normalizedEmail, password },
-      });
-
-      if (!result.ok) {
-        if (result.bootstrap_required) {
-          // No owner yet — go to onboarding to create account
-          navigate("/onboarding", { replace: true });
-          return;
-        }
-        setError(result.error || "E-posta veya parola hatalı.");
-        return;
-      }
-
-      if (result.session_token) {
-        apiClient.setSessionToken(result.session_token);
-      }
-
-      signIn(normalizedEmail);
+      const user = await loginLocalUser(normalizedEmail, password);
+      signIn(user.email);
       completeOnboarding();
       navigate("/home", { replace: true });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("409")) {
+      if (msg.includes("owner bootstrap required before login") || msg.includes("409")) {
         navigate("/onboarding", { replace: true });
+        return;
+      }
+      if (msg.includes("invalid credentials") || msg.includes("401")) {
+        setError("E-posta veya parola hatalı.");
         return;
       }
       setError("Giriş başarısız. Backend çalışıyor mu?");

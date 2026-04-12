@@ -3025,22 +3025,15 @@ class ElyanGatewayServer:
         response = _json_ok()
         response.del_cookie("elyan_user_session", path="/")
         self._clear_csrf_cookie(response)
-        response.headers["X-Elyan-Session-Token"] = ""
         return response
 
     async def handle_v1_auth_me(self, request):
         allowed, error, session = self._require_user_session(request, allow_cookie=True)
         if not allowed:
             return _json_error(error, status=403)
-        session_token = str(
-            request.headers.get("X-Elyan-Session-Token", "")
-            or request.cookies.get("elyan_user_session", "")
-            or ""
-        ).strip()
         response = _json_ok(
             {
                 "workspace_id": str(session.get("workspace_id") or "local-workspace"),
-                "session_token": session_token,
                 "csrf_token": str(request.cookies.get("elyan_csrf_token", "") or ""),
                 "user": {
                     "user_id": str(session.get("user_id") or ""),
@@ -3056,7 +3049,6 @@ class ElyanGatewayServer:
                 },
             }
         )
-        response.headers["X-Elyan-Session-Token"] = session_token
         return response
 
     async def handle_v1_admin_workspaces(self, request):

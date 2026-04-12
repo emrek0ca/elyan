@@ -2018,7 +2018,6 @@ type BootstrapOwnerResponse = SuccessEnvelope<{
 
 type LocalAuthSessionResponse = SuccessEnvelope<{
   workspace_id: string;
-  session_token?: string;
   user: {
     user_id: string;
     email: string;

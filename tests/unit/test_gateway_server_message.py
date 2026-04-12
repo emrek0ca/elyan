@@ -1376,6 +1376,78 @@ def test_require_user_session_rejects_query_param_token(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_handle_v1_auth_me_uses_cookie_session_without_echoing_token(monkeypatch):
+    session = {
+        "workspace_id": "local-workspace",
+        "user_id": "user-1",
+        "email": "operator@example.com",
+        "display_name": "Operator",
+        "status": "active",
+        "role": "owner",
+        "session_id": "session-1",
+        "conversation_session_id": "conv-1",
+        "expires_at": 123.0,
+    }
+
+    monkeypatch.setattr(
+        gateway_server.ElyanGatewayServer,
+        "_require_user_session",
+        lambda self, request, allow_cookie=True: (True, "", dict(session)),
+    )
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    req = _Req({})
+    req.cookies["elyan_user_session"] = "secret-token"
+    req.cookies["elyan_csrf_token"] = "csrf-1"
+
+    resp = await gateway_server.ElyanGatewayServer.handle_v1_auth_me(srv, req)
+    payload = json.loads(resp.text)
+
+    assert resp.status == 200
+    assert payload["ok"] is True
+    assert payload["user"]["email"] == "operator@example.com"
+    assert payload["csrf_token"] == "csrf-1"
+    assert "session_token" not in payload
+    assert "X-Elyan-Session-Token" not in resp.headers
+
+
+@pytest.mark.asyncio
+async def test_handle_v1_auth_logout_clears_cookie_without_echoing_token(monkeypatch, tmp_path):
+    monkeypatch.setenv("ELYAN_DATA_DIR", str(tmp_path / "elyan"))
+    monkeypatch.setenv("ELYAN_RUNTIME_DB_PATH", str(tmp_path / "elyan" / "db" / "runtime.sqlite3"))
+    reset_runtime_database()
+    runtime_db = get_runtime_database()
+    user = runtime_db.auth.upsert_user(
+        email="logout@example.com",
+        password="TopSecret123",
+        display_name="Logout User",
+    )
+    _session, session_token = runtime_db.auth_sessions.create_session(
+        user=user,
+        metadata={"client": "desktop"},
+    )
+    monkeypatch.setattr(gateway_server, "get_runtime_database", lambda: runtime_db)
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    req = _Req({})
+    req.cookies["elyan_user_session"] = session_token
+
+    try:
+        resp = await gateway_server.ElyanGatewayServer.handle_v1_auth_logout(srv, req)
+        resolved = runtime_db.auth_sessions.resolve_session(session_token)
+    finally:
+        reset_runtime_database()
+
+    payload = json.loads(resp.text)
+    assert resp.status == 200
+    assert payload["ok"] is True
+    assert resolved is None
+    assert "X-Elyan-Session-Token" not in resp.headers
+    assert "elyan_user_session" in resp.cookies
+    assert resp.cookies["elyan_user_session"].value == ""
+
+
+@pytest.mark.asyncio
 async def test_handle_recent_runs_uses_short_cache(monkeypatch, tmp_path):
     runs_root = tmp_path / "runs"
     run_dir = runs_root / "run_1"
