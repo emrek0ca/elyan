@@ -18,7 +18,7 @@ export class ApiClient {
 
   constructor(baseUrl = DEFAULT_BASE_URL) {
     this.baseUrl = baseUrl;
-    this.sessionToken = this.readStoredSessionToken();
+    this.clearLegacyStoredSessionToken();
   }
 
   setBaseUrl(baseUrl: string) {
@@ -44,37 +44,20 @@ export class ApiClient {
 
   setSessionToken(sessionToken: string) {
     this.sessionToken = sessionToken.trim();
-    this.persistSessionToken();
   }
 
   clearSessionToken() {
     this.sessionToken = "";
-    this.persistSessionToken();
   }
 
-  private readStoredSessionToken(): string {
-    if (typeof localStorage === "undefined") {
-      return "";
-    }
-    try {
-      return (localStorage.getItem(SESSION_TOKEN_STORAGE_KEY) || "").trim();
-    } catch {
-      return "";
-    }
-  }
-
-  private persistSessionToken() {
+  private clearLegacyStoredSessionToken() {
     if (typeof localStorage === "undefined") {
       return;
     }
     try {
-      if (this.sessionToken) {
-        localStorage.setItem(SESSION_TOKEN_STORAGE_KEY, this.sessionToken);
-      } else {
-        localStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
-      }
+      localStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
     } catch {
-      // Ignore storage failures and keep the in-memory token usable.
+      // Ignore storage failures and keep auth cookie driven.
     }
   }
 
