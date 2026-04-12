@@ -2861,6 +2861,84 @@ function buildProviderDescriptors(
 
 export async function getSystemReadiness(): Promise<SystemReadiness> {
   return withMemoryCache("system-readiness", 2500, async () => {
+    const overviewRaw = await safeRequest<
+      SuccessEnvelope<{
+        readiness?: Record<string, unknown>;
+        platforms?: { summary?: Record<string, unknown> };
+        skills?: Record<string, unknown>;
+        providers?: { summary?: Record<string, unknown> };
+        ollama?: { ready?: boolean };
+      }>
+    >("/api/v1/system/overview").catch(() => null);
+
+    if (overviewRaw?.success && overviewRaw.readiness) {
+      const readiness = overviewRaw.readiness || {};
+      const platformSummary = overviewRaw.platforms?.summary || {};
+      const skillSummary = overviewRaw.skills || {};
+      const providerSummary = overviewRaw.providers?.summary || {};
+
+      let bootStage: SystemReadiness["bootStage"] = "ready";
+      let status: SystemReadiness["status"] = "ready";
+      let blockingIssue = "";
+
+      if (!Boolean(readiness.elyan_ready ?? true)) {
+        bootStage = "starting_services";
+        status = "booting";
+        blockingIssue = "Local services are still starting.";
+      } else if (!Boolean(overviewRaw.ollama?.ready)) {
+        bootStage = "loading_local_models";
+        status = "needs_attention";
+        blockingIssue = "Ollama is unavailable. Local model lanes are limited.";
+      } else if (Number(providerSummary.auth_required || 0) > 0 || Number(providerSummary.degraded || 0) > 0) {
+        bootStage = "checking_providers";
+        status = "needs_attention";
+        blockingIssue = Number(providerSummary.auth_required || 0) > 0
+          ? "Some cloud providers need API keys."
+          : "Some providers are degraded right now.";
+      }
+
+      return {
+        status,
+        bootStage,
+        runtimeReady: Boolean(readiness.elyan_ready ?? true),
+        setupComplete: Boolean(readiness.setup_complete ?? readiness.elyan_ready),
+        ollamaReady: Boolean(overviewRaw.ollama?.ready),
+        channelConnected: Boolean(readiness.channel_connected),
+        hasRoutine: Boolean(readiness.has_routine),
+        hasDailySummaryRun: Boolean(readiness.has_daily_summary_run),
+        connectedProvider: String(readiness.connected_provider || ""),
+        connectedModel: String(readiness.connected_model || ""),
+        productivityAppsReady: Boolean(readiness.productivity_apps_ready),
+        bluebubblesReady: Boolean(readiness.bluebubbles_ready),
+        whatsappMode: (String(readiness.whatsapp_mode || "unavailable") as SystemReadiness["whatsappMode"]) || "unavailable",
+        applePermissions: {
+          automation: Boolean((readiness.apple_permissions as Record<string, unknown> | undefined)?.automation),
+          screenCapture: Boolean((readiness.apple_permissions as Record<string, unknown> | undefined)?.screen_capture),
+        },
+        providerSummary: {
+          available: Number(providerSummary.available || 0),
+          authRequired: Number(providerSummary.auth_required || 0),
+          degraded: Number(providerSummary.degraded || 0),
+        },
+        platforms: {
+          activeSurfaces: Number(platformSummary.active || 0),
+          configuredChannels: Number(platformSummary.configured_channels || 0),
+          connectedChannels: Number(platformSummary.connected_channels || 0),
+          connectedLabels: Array.isArray(platformSummary.connected_labels)
+            ? platformSummary.connected_labels.map((item) => String(item || "").trim()).filter(Boolean)
+            : [],
+        },
+        skills: {
+          installed: Number(skillSummary.installed || 0),
+          enabled: Number(skillSummary.enabled || 0),
+          issues: Number(skillSummary.issues || 0),
+          runtimeReady: Number(skillSummary.runtime_ready || 0),
+          workflowsEnabled: Number(skillSummary.workflows_enabled || 0),
+        },
+        blockingIssue: blockingIssue,
+      };
+    }
+
     const [healthRaw, setupRaw, ollamaRaw, platformsRaw, skillsRaw] = await Promise.all([
       safeRequest<HealthEnvelope>("/healthz"),
       safeRequest<LlmSetupStatusEnvelope>("/api/llm/setup/status"),

@@ -1937,6 +1937,7 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/v1/metrics/tools', self.handle_v1_tool_metrics)
         self.app.router.add_get('/api/v1/metrics/multi-agent', self.handle_v1_multi_agent_metrics)
         self.app.router.add_get('/api/v1/system/backends', self.handle_v1_runtime_backends)
+        self.app.router.add_get('/api/v1/system/overview', self.handle_v1_system_overview)
         self.app.router.add_get('/api/v1/system/platforms', self.handle_v1_system_platforms)
         self.app.router.add_get('/api/v1/security/summary', self.handle_v1_security_summary)
         self.app.router.add_get('/api/v1/security/events', self.handle_v1_security_events)
@@ -2399,6 +2400,73 @@ class ElyanGatewayServer:
 
     async def handle_v1_runtime_backends(self, request):
         return web.json_response(await self._dashboard_api().get_runtime_backends())
+
+    async def handle_v1_system_overview(self, request):
+        from core.platforms_overview import build_platforms_payload
+        from core.skills_overview import build_skills_summary
+        from core.llm_setup import get_llm_setup
+
+        home = await self._build_product_home_payload()
+        readiness = dict(home.get("readiness") or {})
+        channels = elyan_config.get("channels", [])
+        if not isinstance(channels, list):
+            channels = []
+        status_map = self.router.get_adapter_status() if hasattr(self.router, "get_adapter_status") else {}
+        live_channels = []
+        for item in channels:
+            if not isinstance(item, dict):
+                continue
+            channel_type = str(item.get("type") or "").strip().lower()
+            if not channel_type:
+                continue
+            live_channels.append(
+                {
+                    "type": channel_type,
+                    "status": str(status_map.get(channel_type) or ""),
+                    "detail": str(item.get("mode") or item.get("id") or ""),
+                }
+            )
+
+        platforms = build_platforms_payload(
+            config={"channels": channels},
+            gateway={"running": True, "pid": None},
+            live_channels=live_channels,
+        )
+        skills = build_skills_summary()
+
+        setup = get_llm_setup()
+        provider_rows = await setup.get_all_provider_status()
+        ollama_status = await setup.ollama_status()
+        provider_summary = {
+            "available": sum(
+                1 for provider in provider_rows if str(provider.get("status") or "").strip().lower() in {"connected", "available", "ready"}
+            ),
+            "auth_required": sum(
+                1
+                for provider in provider_rows
+                if "key" in str(provider.get("status") or "").strip().lower()
+                or "auth" in str(provider.get("status") or "").strip().lower()
+            ),
+            "degraded": sum(
+                1 for provider in provider_rows if str(provider.get("status") or "").strip().lower() in {"degraded", "error", "unreachable"}
+            ),
+        }
+
+        return _json_ok(
+            {
+                "readiness": readiness,
+                "platforms": platforms,
+                "skills": skills.get("summary", {}),
+                "providers": {
+                    "summary": provider_summary,
+                    "rows": provider_rows,
+                },
+                "ollama": {
+                    "ready": bool(ollama_status.get("running")),
+                    "status": ollama_status,
+                },
+            }
+        )
 
     async def handle_v1_security_summary(self, request):
         return web.json_response(await self._dashboard_api().get_security_summary())

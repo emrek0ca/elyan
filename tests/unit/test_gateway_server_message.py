@@ -1,5 +1,7 @@
 import json
+import sys
 from types import SimpleNamespace
+import types
 
 import pytest
 
@@ -447,6 +449,59 @@ async def test_handle_v1_system_platforms_returns_connected_channel_summary(monk
     assert payload["summary"]["configured_channels"] == 1
     assert payload["summary"]["connected_channels"] == 1
     assert "Telegram" in payload["summary"]["connected_labels"]
+
+
+@pytest.mark.asyncio
+async def test_handle_v1_system_overview_aggregates_readiness_platforms_and_skills(monkeypatch):
+    async def _fake_home():
+        return {
+            "readiness": {
+                "elyan_ready": True,
+                "setup_complete": True,
+                "channel_connected": True,
+                "has_routine": True,
+                "has_daily_summary_run": False,
+                "connected_provider": "ollama",
+                "connected_model": "llama3.2",
+                "productivity_apps_ready": True,
+                "bluebubbles_ready": False,
+                "whatsapp_mode": "bridge",
+                "apple_permissions": {"automation": True, "screen_capture": True},
+            }
+        }
+
+    fake_llm_setup = types.ModuleType("core.llm_setup")
+
+    class _FakeSetup:
+        async def get_all_provider_status(self):
+            return [{"provider": "ollama", "status": "ready"}, {"provider": "openai", "status": "auth_required"}]
+
+        async def ollama_status(self):
+            return {"running": True}
+
+    fake_llm_setup.get_llm_setup = lambda: _FakeSetup()
+    monkeypatch.setitem(sys.modules, "core.llm_setup", fake_llm_setup)
+    monkeypatch.setattr(
+        gateway_server.elyan_config,
+        "get",
+        lambda key, default=None: [{"type": "telegram", "id": "tg-main", "enabled": True, "mode": "bot"}] if key == "channels" else default,
+    )
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    srv.router = SimpleNamespace(get_adapter_status=lambda: {"telegram": "connected"})
+    srv._build_product_home_payload = _fake_home
+
+    resp = await gateway_server.ElyanGatewayServer.handle_v1_system_overview(srv, SimpleNamespace())
+
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["ok"] is True
+    assert payload["readiness"]["connected_provider"] == "ollama"
+    assert payload["platforms"]["summary"]["connected_channels"] == 1
+    assert payload["skills"]["installed"] >= 0
+    assert payload["providers"]["summary"]["available"] == 1
+    assert payload["providers"]["summary"]["auth_required"] == 1
+    assert payload["ollama"]["ready"] is True
 
 
 @pytest.mark.asyncio
