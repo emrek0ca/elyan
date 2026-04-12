@@ -53,6 +53,7 @@ import {
   getLearningSummary,
   getPrivacySummary,
   getLogs,
+  getOperatorPreview,
   getProviderDescriptors,
   getProviders,
   getSecuritySummary,
@@ -93,6 +94,20 @@ export function useCommandCenterSnapshot(selectedThreadId?: string, selectedRunI
     queryFn: () => getCommandCenterSnapshot(selectedThreadId, selectedRunId),
     staleTime: 4000,
     refetchInterval: visibleRefetchInterval(8000),
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function useOperatorPreview(
+  text?: string,
+  sessionId?: string,
+  cacheKey?: string,
+): UseQueryResult<CommandCenterSnapshot["orchestration"] | undefined> {
+  return useQuery({
+    queryKey: ["operator-preview", cacheKey || sessionId || "latest", text || ""],
+    queryFn: () => getOperatorPreview(text || "", sessionId, cacheKey),
+    enabled: Boolean(String(text || "").trim()),
+    staleTime: 5000,
     refetchOnWindowFocus: false,
   });
 }

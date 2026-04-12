@@ -63,3 +63,27 @@ def test_status_json_includes_launch_readiness(monkeypatch, capsys, tmp_path):
     assert payload["launch"]["ready"] is True
     assert payload["launch"]["next_action"] == "elyan launch"
     assert payload["channels"]["active"] == 1
+    assert "platforms" in payload
+
+
+def test_status_uses_platform_summary_for_connected_channels(monkeypatch, capsys, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    elyan_dir = tmp_path / ".elyan"
+    elyan_dir.mkdir(parents=True, exist_ok=True)
+    (elyan_dir / "elyan.json").write_text('{"channels":[{"enabled":true}]}', encoding="utf-8")
+
+    fake_module = types.ModuleType("core.autopilot")
+    fake_module.get_autopilot = lambda: FakeAutopilot()
+    monkeypatch.setitem(sys.modules, "core.autopilot", fake_module)
+
+    monkeypatch.setattr(
+        "cli.commands.platforms._build_payload",
+        lambda: {"summary": {"configured_channels": 1, "connected_channels": 0}, "surfaces": []},
+        raising=False,
+    )
+
+    status_cmd.run_status(SimpleNamespace(deep=False, json=True))
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["channels"]["connected"] == 0
+    assert payload["channels"]["configured"] == 1

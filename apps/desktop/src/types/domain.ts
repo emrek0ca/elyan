@@ -273,6 +273,12 @@ export interface SystemReadiness {
     authRequired: number;
     degraded: number;
   };
+  platforms?: {
+    activeSurfaces: number;
+    configuredChannels: number;
+    connectedChannels: number;
+    connectedLabels: string[];
+  };
   blockingIssue?: string;
 }
 
@@ -1108,6 +1114,34 @@ export interface CommandCenterSnapshot {
         name: string;
         kind: string;
         tool: string;
+      }>;
+    };
+    goalGraph?: {
+      workflowChain: string[];
+      primaryDeliveryDomain: string;
+      stageCount: number;
+      complexityScore: number;
+      constraints: {
+        preferredOutput: string;
+        urgency: string;
+        qualityMode: string;
+        deliverables: string[];
+        requiresEvidence: boolean;
+        autonomyPreference: string;
+        proofFormats: string[];
+        hasSchedule: boolean;
+        scheduleExpression: string;
+      };
+      automationCandidate?: {
+        type: string;
+        cron: string;
+        task: string;
+      };
+      nodes: Array<{
+        id: string;
+        text: string;
+        domain: string;
+        objective: string;
       }>;
     };
   };

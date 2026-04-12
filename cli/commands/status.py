@@ -147,10 +147,19 @@ def _build_status_payload(deep: bool = False) -> dict[str, Any]:
     config = _read_config()
     models = config.get("models", {}) if isinstance(config, dict) else {}
     default = models.get("default", {}) if isinstance(models, dict) else {}
+    try:
+        from cli.commands import platforms as platforms_cmd
+
+        platforms_payload = platforms_cmd._build_payload()
+    except Exception:
+        platforms_payload = {"summary": {"configured_channels": 0, "connected_channels": 0}, "surfaces": []}
 
     provider = str(default.get("provider", "") or "").strip() or "?"
     model = str(default.get("model", "") or "").strip() or "?"
     active_channels, total_channels = _count_active_channels(config.get("channels", []))
+    platform_summary = platforms_payload.get("summary", {}) if isinstance(platforms_payload, dict) else {}
+    connected_channels = int(platform_summary.get("connected_channels", active_channels) or 0)
+    configured_channels = int(platform_summary.get("configured_channels", total_channels) or 0)
     active_cron, total_cron = _count_active_cron_jobs(config.get("cron", []))
     gateway = _gateway_snapshot()
     autopilot = _autopilot_snapshot()
@@ -187,6 +196,8 @@ def _build_status_payload(deep: bool = False) -> dict[str, Any]:
         "channels": {
             "active": active_channels,
             "total": total_channels,
+            "connected": connected_channels,
+            "configured": configured_channels,
         },
         "cron": {
             "active": active_cron,
@@ -195,6 +206,7 @@ def _build_status_payload(deep: bool = False) -> dict[str, Any]:
         "autopilot": autopilot,
         "skills": skill_count,
         "subscription": subscription,
+        "platforms": platforms_payload,
     }
     if deep:
         payload["deep"] = _deep_snapshot(bool(gateway["running"]), gateway.get("pid"))
@@ -218,6 +230,7 @@ def run(args):
     model = payload["model"]["name"]
     active_channels = payload["channels"]["active"]
     total_channels = payload["channels"]["total"]
+    connected_channels = payload["channels"].get("connected", active_channels)
     active_jobs = payload["cron"]["active"]
     total_cron = payload["cron"]["total"]
     autopilot_state = payload["autopilot"]["state"]
@@ -233,10 +246,11 @@ def run(args):
     print(f"  Gateway:     {'ACTIVE (PID: ' + str(gateway_pid) + ')' if gateway_running else 'INACTIVE'}")
     print(f"  AI Provider: {provider}")
     print(f"  Model:       {model}")
-    print(f"  Kanallar:    {active_channels}/{total_channels} aktif")
+    print(f"  Kanallar:    {active_channels}/{total_channels} aktif · {connected_channels} canlı")
     print(f"  Cron:        {active_jobs}/{total_cron} aktif gorev")
     print(f"  Autopilot:   {autopilot_state} (tick: {last_tick})")
     print(f"  Skills:      {skill_count} harici skill")
+    print("  Surfaces:    elyan platforms")
 
     if subscription.get("available"):
         daily_limit = subscription.get("daily_limit")

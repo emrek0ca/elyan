@@ -15,7 +15,7 @@ from typing import Any, Optional, Set
 from cli.onboard import _check_macos_permissions, is_setup_complete, mark_setup_complete
 from .router import GatewayRouter
 from .response import UnifiedResponse
-from core.scheduler.cron_engine import CronEngine
+from core.scheduler.cron_engine import get_cron_engine
 from core.scheduler.heartbeat import HeartbeatManager
 from core.scheduler.routine_engine import routine_engine
 from core.skills.manager import skill_manager
@@ -1127,7 +1127,7 @@ class ElyanGatewayServer:
         self.autopilot = get_autopilot()
         self.app = web.Application(middlewares=[self._cors_middleware, self._trace_middleware, self._api_security_middleware])
         self.webchat_adapter: Optional[object] = None
-        self.cron = CronEngine(agent)
+        self.cron = get_cron_engine(agent)
         self.heartbeat = HeartbeatManager(agent)
         self.cron.set_report_callback(self._on_cron_report)
         self.connected_nodes: Dict[str, web.WebSocketResponse] = {}
@@ -1835,12 +1835,8 @@ class ElyanGatewayServer:
     def _require_user_session(self, request, *, allow_cookie: bool = True) -> tuple[bool, str, dict[str, Any]]:
         if not _is_loopback_request(request):
             return False, "user session is restricted to localhost", {}
-        query = getattr(request, "query", None)
-        if query is None:
-            query = getattr(getattr(request, "rel_url", None), "query", {}) or {}
         candidate = str(
             request.headers.get("X-Elyan-Session-Token", "")
-            or query.get("session_token", "")
             or (request.cookies.get("elyan_user_session", "") if allow_cookie else "")
             or ""
         ).strip()
@@ -1941,6 +1937,7 @@ class ElyanGatewayServer:
         self.app.router.add_get('/api/v1/metrics/tools', self.handle_v1_tool_metrics)
         self.app.router.add_get('/api/v1/metrics/multi-agent', self.handle_v1_multi_agent_metrics)
         self.app.router.add_get('/api/v1/system/backends', self.handle_v1_runtime_backends)
+        self.app.router.add_get('/api/v1/system/platforms', self.handle_v1_system_platforms)
         self.app.router.add_get('/api/v1/security/summary', self.handle_v1_security_summary)
         self.app.router.add_get('/api/v1/security/events', self.handle_v1_security_events)
         self.app.router.add_get('/api/v1/learning/summary', self.handle_v1_learning_summary)
@@ -4311,6 +4308,8 @@ class ElyanGatewayServer:
         )
 
     async def handle_v1_operator_preview(self, request):
+        from core.goal_graph import get_goal_graph_planner
+
         try:
             data = await request.json()
         except Exception:
@@ -4346,6 +4345,7 @@ class ElyanGatewayServer:
         autonomy = dict(plan.get("autonomy") or {})
         operator_trace = dict(plan.get("operator_trace") or {})
         steps = list(task_plan.get("steps") or [])
+        goal_graph = get_goal_graph_planner().build(text)
         return _json_ok(
             {
                 "preview": {
@@ -4393,9 +4393,39 @@ class ElyanGatewayServer:
                     },
                     "fast_path": bool(plan.get("fast_path")),
                     "real_time_required": bool(((plan.get("real_time") if isinstance(plan.get("real_time"), dict) else {}) or {}).get("needs_real_time")),
+                    "goal_graph": goal_graph,
                 }
             }
         )
+
+    async def handle_v1_system_platforms(self, request):
+        from core.platforms_overview import build_platforms_payload
+
+        channels = elyan_config.get("channels", [])
+        if not isinstance(channels, list):
+            channels = []
+        status_map = self.router.get_adapter_status() if hasattr(self.router, "get_adapter_status") else {}
+        live_channels = []
+        for item in channels:
+            if not isinstance(item, dict):
+                continue
+            channel_type = str(item.get("type") or "").strip().lower()
+            if not channel_type:
+                continue
+            live_channels.append(
+                {
+                    "type": channel_type,
+                    "status": str(status_map.get(channel_type) or ""),
+                    "detail": str(item.get("mode") or item.get("id") or ""),
+                }
+            )
+
+        payload = build_platforms_payload(
+            config={"channels": channels},
+            gateway={"running": True, "pid": None},
+            live_channels=live_channels,
+        )
+        return _json_ok(payload)
 
     async def handle_v1_connector_revoke(self, request):
         from integrations import oauth_broker

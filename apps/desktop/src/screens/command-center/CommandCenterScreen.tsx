@@ -8,7 +8,7 @@ import { Button } from "@/components/primitives/Button";
 import { Surface } from "@/components/primitives/Surface";
 import { StatusBadge } from "@/components/primitives/StatusBadge";
 import { useCommandCenterSnapshot } from "@/hooks/use-desktop-data";
-import { addCoworkTurn, resolveCoworkApproval } from "@/services/api/elyan-service";
+import { addCoworkTurn, createRoutineFromText, resolveCoworkApproval } from "@/services/api/elyan-service";
 import { useRuntimeStore } from "@/stores/runtime-store";
 import { useUiStore } from "@/stores/ui-store";
 import { getRuntimeGateReason, hasRuntimeWriteAccess } from "@/utils/runtime-access";
@@ -57,7 +57,9 @@ export function CommandCenterScreen() {
   const [followUp, setFollowUp] = useState("");
   const [turnBusy, setTurnBusy] = useState(false);
   const [approvalBusyId, setApprovalBusyId] = useState("");
+  const [automationBusy, setAutomationBusy] = useState(false);
   const [actionMessage, setActionMessage] = useState("");
+  const [actionMessageTone, setActionMessageTone] = useState<"success" | "warning">("warning");
   const connectionState = useRuntimeStore((state) => state.connectionState);
   const sidecarHealth = useRuntimeStore((state) => state.sidecarHealth);
 
@@ -120,6 +122,7 @@ export function CommandCenterScreen() {
     if (runtimeReady) {
       return true;
     }
+    setActionMessageTone("warning");
     setActionMessage(runtimeGateReason);
     return false;
   }
@@ -164,6 +167,34 @@ export function CommandCenterScreen() {
       await invalidateAll();
     } finally {
       setApprovalBusyId("");
+    }
+  }
+
+  async function handleCreateAutomation() {
+    if (!selectedThread || !orchestration?.goalGraph?.automationCandidate || !guardRuntimeWrite()) {
+      return;
+    }
+    setAutomationBusy(true);
+    setActionMessage("");
+    try {
+      const automation = orchestration.goalGraph.automationCandidate;
+      const result = await createRoutineFromText({
+        text: `${automation.task} ${automation.cron ? `(${automation.cron})` : ""}`.trim(),
+        name: automation.task,
+        expression: automation.cron || orchestration.goalGraph.constraints.scheduleExpression || "",
+        reportChannel: "telegram",
+        enabled: true,
+      });
+      if (!result.ok) {
+        setActionMessageTone("warning");
+        setActionMessage(result.message || "Automation oluşturulamadı.");
+        return;
+      }
+      setActionMessageTone("success");
+      setActionMessage(`Automation hazır: ${result.name || result.routineId}`);
+      await invalidateAll();
+    } finally {
+      setAutomationBusy(false);
     }
   }
 
@@ -414,6 +445,74 @@ export function CommandCenterScreen() {
               </div>
             ) : null}
 
+            {orchestration.goalGraph ? (
+              <div className="mt-4 rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <div className="text-[12px] font-medium text-[var(--text-primary)]">Goal analysis</div>
+                    <div className="mt-1 text-[12px] text-[var(--text-secondary)]">
+                      {orchestration.goalGraph.stageCount} stage · {orchestration.goalGraph.primaryDeliveryDomain || "general"} · complexity {orchestration.goalGraph.complexityScore}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {orchestration.goalGraph.workflowChain.slice(0, 4).map((item) => (
+                      <StatusBadge key={item} tone="neutral">{item}</StatusBadge>
+                    ))}
+                    {orchestration.goalGraph.constraints.requiresEvidence ? <StatusBadge tone="warning">evidence required</StatusBadge> : null}
+                    {orchestration.goalGraph.constraints.autonomyPreference ? (
+                      <StatusBadge tone="info">{orchestration.goalGraph.constraints.autonomyPreference}</StatusBadge>
+                    ) : null}
+                  </div>
+                </div>
+
+                {orchestration.goalGraph.automationCandidate ? (
+                  <div className="mt-4 rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-4">
+                    <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">Automation candidate</div>
+                    <div className="mt-2 text-[13px] font-medium text-[var(--text-primary)]">
+                      {orchestration.goalGraph.automationCandidate.task || "Scheduled automation"}
+                    </div>
+                    <div className="mt-1 text-[12px] text-[var(--text-secondary)]">
+                      {orchestration.goalGraph.automationCandidate.cron || orchestration.goalGraph.constraints.scheduleExpression || "schedule not detected"}
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => void handleCreateAutomation()}
+                        disabled={turnBusy || automationBusy || !runtimeReady}
+                      >
+                        {automationBusy ? "Scheduling…" : "Schedule this"}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void handleFollowUp(`Bu hedef için cron ifadesini ve rutin planını netleştir: ${orchestration.goalGraph?.automationCandidate?.task || selectedThread.goal}`)}
+                        disabled={turnBusy || !runtimeReady}
+                      >
+                        Refine automation
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+
+                {orchestration.goalGraph.nodes.length ? (
+                  <div className="mt-4 space-y-2">
+                    {orchestration.goalGraph.nodes.slice(0, 4).map((node, index) => (
+                      <div key={`${node.id}-${index}`} className="rounded-[14px] border border-[var(--border-subtle)] px-3 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-[13px] font-medium text-[var(--text-primary)]">
+                            {index + 1}. {node.text}
+                          </div>
+                          <StatusBadge tone="neutral">{node.domain || "general"}</StatusBadge>
+                        </div>
+                        <div className="mt-1 text-[12px] text-[var(--text-secondary)]">{node.objective}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             {orchestration.collaboration.enabled && orchestration.collaboration.lenses.length ? (
               <div className="mt-4 rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4">
                 <div className="flex items-center justify-between gap-4">
@@ -540,7 +639,11 @@ export function CommandCenterScreen() {
               </Button>
             </div>
           </div>
-          {actionMessage ? <div className="mt-3 text-[12px] text-[var(--state-warning)]">{actionMessage}</div> : null}
+          {actionMessage ? (
+            <div className={`mt-3 text-[12px] ${actionMessageTone === "success" ? "text-[var(--state-success)]" : "text-[var(--state-warning)]"}`}>
+              {actionMessage}
+            </div>
+          ) : null}
           {!actionMessage && !runtimeReady ? <div className="mt-3 text-[12px] text-[var(--text-secondary)]">{runtimeGateReason}</div> : null}
         </Surface>
       </div>

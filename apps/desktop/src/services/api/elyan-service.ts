@@ -288,6 +288,147 @@ function inferTaskTypeFromText(value: string): WorkflowTaskType {
   return "document";
 }
 
+function mapOperatorPreview(
+  preview: Record<string, unknown> | undefined,
+  previewText: string,
+): CommandCenterSnapshot["orchestration"] | undefined {
+  if (!preview) {
+    return undefined;
+  }
+  return {
+    requestText: String(preview.request_text || previewText),
+    requestClass: String(preview.request_class || ""),
+    domain: String(preview.domain || ""),
+    objective: String(preview.objective || ""),
+    preview: String(preview.preview || ""),
+    primaryAction: String(preview.primary_action || ""),
+    orchestrationMode: String(preview.orchestration_mode || "single_agent"),
+    fastPath: Boolean(preview.fast_path),
+    realTimeRequired: Boolean(preview.real_time_required),
+    modelSelection: {
+      provider: String(((preview.model_selection as Record<string, unknown> | undefined) || {}).provider || ""),
+      model: String(((preview.model_selection as Record<string, unknown> | undefined) || {}).model || ""),
+      role: String(((preview.model_selection as Record<string, unknown> | undefined) || {}).role || ""),
+      fallback: Boolean(((preview.model_selection as Record<string, unknown> | undefined) || {}).fallback),
+    },
+    collaboration: {
+      enabled: Boolean(((preview.collaboration as Record<string, unknown> | undefined) || {}).enabled),
+      strategy: String(((preview.collaboration as Record<string, unknown> | undefined) || {}).strategy || ""),
+      maxModels: Number(((preview.collaboration as Record<string, unknown> | undefined) || {}).max_models || 1),
+      synthesisRole: String(((preview.collaboration as Record<string, unknown> | undefined) || {}).synthesis_role || ""),
+      executionStyle: String(((preview.collaboration as Record<string, unknown> | undefined) || {}).execution_style || ""),
+      lenses: Array.isArray(((preview.collaboration as Record<string, unknown> | undefined) || {}).lenses)
+        ? ((((preview.collaboration as Record<string, unknown> | undefined) || {}).lenses as Array<Record<string, unknown>>) || []).map((item) => ({
+            name: String(item.name || ""),
+            instruction: String(item.instruction || ""),
+          }))
+        : [],
+    },
+    integration: {
+      provider: String(((preview.integration as Record<string, unknown> | undefined) || {}).provider || ""),
+      connectorName: String(((preview.integration as Record<string, unknown> | undefined) || {}).connector_name || ""),
+      integrationType: String(((preview.integration as Record<string, unknown> | undefined) || {}).integration_type || ""),
+      authStrategy: String(((preview.integration as Record<string, unknown> | undefined) || {}).auth_strategy || ""),
+      fallbackPolicy: String(((preview.integration as Record<string, unknown> | undefined) || {}).fallback_policy || ""),
+    },
+    autonomy: {
+      mode: String(((preview.autonomy as Record<string, unknown> | undefined) || {}).mode || ""),
+      shouldAsk: Boolean(((preview.autonomy as Record<string, unknown> | undefined) || {}).should_ask),
+      shouldResume: Boolean(((preview.autonomy as Record<string, unknown> | undefined) || {}).should_resume),
+    },
+    taskPlan: {
+      name: String(((preview.task_plan as Record<string, unknown> | undefined) || {}).name || ""),
+      goal: String(((preview.task_plan as Record<string, unknown> | undefined) || {}).goal || ""),
+      constraints: Array.isArray(((preview.task_plan as Record<string, unknown> | undefined) || {}).constraints)
+        ? ((((preview.task_plan as Record<string, unknown> | undefined) || {}).constraints as unknown[]) || []).map((item) => String(item))
+        : [],
+      approvals: Array.isArray(((preview.task_plan as Record<string, unknown> | undefined) || {}).approvals)
+        ? ((((preview.task_plan as Record<string, unknown> | undefined) || {}).approvals as unknown[]) || []).map((item) => String(item))
+        : [],
+      evidence: Array.isArray(((preview.task_plan as Record<string, unknown> | undefined) || {}).evidence)
+        ? ((((preview.task_plan as Record<string, unknown> | undefined) || {}).evidence as unknown[]) || []).map((item) => String(item))
+        : [],
+      steps: Array.isArray(((preview.task_plan as Record<string, unknown> | undefined) || {}).steps)
+        ? ((((preview.task_plan as Record<string, unknown> | undefined) || {}).steps as Array<Record<string, unknown>>) || []).map((item) => ({
+            name: String(item.name || ""),
+            kind: String(item.kind || ""),
+            tool: String(item.tool || ""),
+          }))
+        : [],
+    },
+    goalGraph: (() => {
+      const rawGoalGraph = (preview.goal_graph as Record<string, unknown> | undefined) || undefined;
+      if (!rawGoalGraph) {
+        return undefined;
+      }
+      const rawConstraints = (rawGoalGraph.constraints as Record<string, unknown> | undefined) || {};
+      const rawAutomation = (rawGoalGraph.automation_candidate as Record<string, unknown> | undefined) || undefined;
+      return {
+        workflowChain: Array.isArray(rawGoalGraph.workflow_chain)
+          ? (rawGoalGraph.workflow_chain as unknown[]).map((item) => String(item))
+          : [],
+        primaryDeliveryDomain: String(rawGoalGraph.primary_delivery_domain || ""),
+        stageCount: Number(rawGoalGraph.stage_count || 0),
+        complexityScore: Number(rawGoalGraph.complexity_score || 0),
+        constraints: {
+          preferredOutput: String(rawConstraints.preferred_output || ""),
+          urgency: String(rawConstraints.urgency || ""),
+          qualityMode: String(rawConstraints.quality_mode || ""),
+          deliverables: Array.isArray(rawConstraints.deliverables)
+            ? (rawConstraints.deliverables as unknown[]).map((item) => String(item))
+            : [],
+          requiresEvidence: Boolean(rawConstraints.requires_evidence),
+          autonomyPreference: String(rawConstraints.autonomy_preference || ""),
+          proofFormats: Array.isArray(rawConstraints.proof_formats)
+            ? (rawConstraints.proof_formats as unknown[]).map((item) => String(item))
+            : [],
+          hasSchedule: Boolean(rawConstraints.has_schedule),
+          scheduleExpression: String(rawConstraints.schedule_expression || ""),
+        },
+        automationCandidate: rawAutomation
+          ? {
+              type: String(rawAutomation.type || ""),
+              cron: String(rawAutomation.cron || ""),
+              task: String(rawAutomation.task || ""),
+            }
+          : undefined,
+        nodes: Array.isArray(rawGoalGraph.nodes)
+          ? (rawGoalGraph.nodes as Array<Record<string, unknown>>).map((item) => ({
+              id: String(item.id || ""),
+              text: String(item.text || ""),
+              domain: String(item.domain || ""),
+              objective: String(item.objective || ""),
+            }))
+          : [],
+      };
+    })(),
+  };
+}
+
+export async function getOperatorPreview(
+  text: string,
+  sessionId?: string,
+  cacheKey?: string,
+): Promise<CommandCenterSnapshot["orchestration"] | undefined> {
+  const previewText = String(text || "").trim();
+  if (!previewText) {
+    return undefined;
+  }
+  const previewRaw = await withMemoryCache(
+    `operator-preview:${cacheKey || sessionId || "latest"}:${previewText}`,
+    5000,
+    () =>
+      safePost<{
+        ok?: boolean;
+        preview?: Record<string, unknown>;
+      }>("/api/v1/operator/preview", {
+        text: previewText,
+        session_id: sessionId || cacheKey || "desktop-preview",
+      }),
+  );
+  return previewRaw?.ok ? mapOperatorPreview(previewRaw.preview, previewText) : undefined;
+}
+
 function toRunSummary(row: {
   run_id?: string;
   id?: string;
@@ -1506,6 +1647,41 @@ export async function promoteRoutineDraft(
   };
 }
 
+export async function createRoutineFromText(
+  payload: {
+    text: string;
+    name?: string;
+    expression?: string;
+    reportChannel?: string;
+    reportChatId?: string;
+    enabled?: boolean;
+    panels?: string[];
+  },
+): Promise<{ ok: boolean; routineId: string; name: string; message: string }> {
+  const raw = await apiClient.request<{ ok?: boolean; routine?: { id?: string; name?: string }; error?: string }>("/api/routines/from-text", {
+    method: "POST",
+    body: {
+      text: payload.text,
+      name: payload.name || "",
+      expression: payload.expression || "",
+      report_channel: payload.reportChannel || "",
+      report_chat_id: payload.reportChatId || "",
+      enabled: payload.enabled ?? true,
+      panels: payload.panels || [],
+      created_by: "desktop-command-center",
+    },
+  });
+  if (raw.ok) {
+    invalidateMemoryCache(["home-snapshot", "command-center"]);
+  }
+  return {
+    ok: Boolean(raw.ok),
+    routineId: String(raw.routine?.id || ""),
+    name: String(raw.routine?.name || ""),
+    message: String(raw.error || ""),
+  };
+}
+
 export async function getAutopilotStatus(): Promise<CoworkHomeSnapshot["autopilot"] | null> {
   const raw = await safeRequest<Record<string, unknown>>("/api/autopilot/status");
   if (!raw || typeof raw !== "object") {
@@ -1667,84 +1843,11 @@ export async function getCommandCenterSnapshot(selectedThreadId?: string, select
       : undefined;
 
   const previewText = selectedThread?.goal || selectedThread?.lastUserTurn?.content || "";
-  const previewRaw = previewText
-    ? await withMemoryCache(
-        `operator-preview:${selectedThread?.threadId || "latest"}:${previewText}`,
-        5000,
-        () =>
-          safePost<{
-            ok?: boolean;
-            preview?: Record<string, unknown>;
-          }>("/api/v1/operator/preview", {
-            text: previewText,
-            session_id: selectedThread?.sessionId || selectedThread?.threadId || "desktop-preview",
-          }),
-      )
-    : null;
-  const orchestration = previewRaw?.ok && previewRaw.preview
-    ? {
-        requestText: String(previewRaw.preview.request_text || previewText),
-        requestClass: String(previewRaw.preview.request_class || ""),
-        domain: String(previewRaw.preview.domain || ""),
-        objective: String(previewRaw.preview.objective || ""),
-        preview: String(previewRaw.preview.preview || ""),
-        primaryAction: String(previewRaw.preview.primary_action || ""),
-        orchestrationMode: String(previewRaw.preview.orchestration_mode || "single_agent"),
-        fastPath: Boolean(previewRaw.preview.fast_path),
-        realTimeRequired: Boolean(previewRaw.preview.real_time_required),
-        modelSelection: {
-          provider: String(((previewRaw.preview.model_selection as Record<string, unknown> | undefined) || {}).provider || ""),
-          model: String(((previewRaw.preview.model_selection as Record<string, unknown> | undefined) || {}).model || ""),
-          role: String(((previewRaw.preview.model_selection as Record<string, unknown> | undefined) || {}).role || ""),
-          fallback: Boolean(((previewRaw.preview.model_selection as Record<string, unknown> | undefined) || {}).fallback),
-        },
-        collaboration: {
-          enabled: Boolean(((previewRaw.preview.collaboration as Record<string, unknown> | undefined) || {}).enabled),
-          strategy: String(((previewRaw.preview.collaboration as Record<string, unknown> | undefined) || {}).strategy || ""),
-          maxModels: Number(((previewRaw.preview.collaboration as Record<string, unknown> | undefined) || {}).max_models || 1),
-          synthesisRole: String(((previewRaw.preview.collaboration as Record<string, unknown> | undefined) || {}).synthesis_role || ""),
-          executionStyle: String(((previewRaw.preview.collaboration as Record<string, unknown> | undefined) || {}).execution_style || ""),
-          lenses: Array.isArray(((previewRaw.preview.collaboration as Record<string, unknown> | undefined) || {}).lenses)
-            ? ((((previewRaw.preview.collaboration as Record<string, unknown> | undefined) || {}).lenses as Array<Record<string, unknown>>) || []).map((item) => ({
-                name: String(item.name || ""),
-                instruction: String(item.instruction || ""),
-              }))
-            : [],
-        },
-        integration: {
-          provider: String(((previewRaw.preview.integration as Record<string, unknown> | undefined) || {}).provider || ""),
-          connectorName: String(((previewRaw.preview.integration as Record<string, unknown> | undefined) || {}).connector_name || ""),
-          integrationType: String(((previewRaw.preview.integration as Record<string, unknown> | undefined) || {}).integration_type || ""),
-          authStrategy: String(((previewRaw.preview.integration as Record<string, unknown> | undefined) || {}).auth_strategy || ""),
-          fallbackPolicy: String(((previewRaw.preview.integration as Record<string, unknown> | undefined) || {}).fallback_policy || ""),
-        },
-        autonomy: {
-          mode: String(((previewRaw.preview.autonomy as Record<string, unknown> | undefined) || {}).mode || ""),
-          shouldAsk: Boolean(((previewRaw.preview.autonomy as Record<string, unknown> | undefined) || {}).should_ask),
-          shouldResume: Boolean(((previewRaw.preview.autonomy as Record<string, unknown> | undefined) || {}).should_resume),
-        },
-        taskPlan: {
-          name: String(((previewRaw.preview.task_plan as Record<string, unknown> | undefined) || {}).name || ""),
-          goal: String(((previewRaw.preview.task_plan as Record<string, unknown> | undefined) || {}).goal || ""),
-          constraints: Array.isArray(((previewRaw.preview.task_plan as Record<string, unknown> | undefined) || {}).constraints)
-            ? ((((previewRaw.preview.task_plan as Record<string, unknown> | undefined) || {}).constraints as unknown[]) || []).map((item) => String(item))
-            : [],
-          approvals: Array.isArray(((previewRaw.preview.task_plan as Record<string, unknown> | undefined) || {}).approvals)
-            ? ((((previewRaw.preview.task_plan as Record<string, unknown> | undefined) || {}).approvals as unknown[]) || []).map((item) => String(item))
-            : [],
-          evidence: Array.isArray(((previewRaw.preview.task_plan as Record<string, unknown> | undefined) || {}).evidence)
-            ? ((((previewRaw.preview.task_plan as Record<string, unknown> | undefined) || {}).evidence as unknown[]) || []).map((item) => String(item))
-            : [],
-          steps: Array.isArray(((previewRaw.preview.task_plan as Record<string, unknown> | undefined) || {}).steps)
-            ? ((((previewRaw.preview.task_plan as Record<string, unknown> | undefined) || {}).steps as Array<Record<string, unknown>>) || []).map((item) => ({
-                name: String(item.name || ""),
-                kind: String(item.kind || ""),
-                tool: String(item.tool || ""),
-              }))
-            : [],
-        },
-      }
-    : undefined;
+  const orchestration = await getOperatorPreview(
+    previewText,
+    selectedThread?.sessionId || selectedThread?.threadId || "desktop-preview",
+    selectedThread?.threadId || "latest",
+  );
 
   const presence = (() => {
     type PresenceNote = NonNullable<CommandCenterSnapshot["presence"]>["operatorNotes"][number];
@@ -2758,10 +2861,11 @@ function buildProviderDescriptors(
 
 export async function getSystemReadiness(): Promise<SystemReadiness> {
   return withMemoryCache("system-readiness", 2500, async () => {
-    const [healthRaw, setupRaw, ollamaRaw] = await Promise.all([
+    const [healthRaw, setupRaw, ollamaRaw, platformsRaw] = await Promise.all([
       safeRequest<HealthEnvelope>("/healthz"),
       safeRequest<LlmSetupStatusEnvelope>("/api/llm/setup/status"),
       safeRequest<OllamaStatusEnvelope>("/api/llm/setup/ollama"),
+      safeRequest<SuccessEnvelope<{ summary?: Record<string, unknown> }>>("/api/v1/system/platforms").catch(() => null),
     ]);
 
     const runtimeReady = Boolean(healthRaw?.ok);
@@ -2813,6 +2917,14 @@ export async function getSystemReadiness(): Promise<SystemReadiness> {
         screenCapture: Boolean((readiness.apple_permissions as Record<string, unknown> | undefined)?.screen_capture),
       },
       providerSummary,
+      platforms: {
+        activeSurfaces: Number(platformsRaw?.summary?.active || 0),
+        configuredChannels: Number(platformsRaw?.summary?.configured_channels || 0),
+        connectedChannels: Number(platformsRaw?.summary?.connected_channels || 0),
+        connectedLabels: Array.isArray(platformsRaw?.summary?.connected_labels)
+          ? platformsRaw.summary.connected_labels.map((item) => String(item || "").trim()).filter(Boolean)
+          : [],
+      },
       blockingIssue,
     };
   });

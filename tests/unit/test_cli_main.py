@@ -184,6 +184,39 @@ def test_main_routes_models_switch_command(monkeypatch):
     assert captured["name"] == "openai/gpt-4o"
 
 
+def test_main_routes_model_alias_defaults_to_switch(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)
+
+    def fake_run(args):
+        captured["subcommand"] = getattr(args, "subcommand", None)
+        captured["name"] = getattr(args, "name", None)
+
+    monkeypatch.setattr("cli.commands.models.run", fake_run, raising=False)
+
+    code = cli_main.main(["model", "openai/gpt-4o"])
+
+    assert code == 0
+    assert captured["subcommand"] == "switch"
+    assert captured["name"] == "openai/gpt-4o"
+
+
+def test_main_routes_platforms_command(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)
+
+    def fake_run(args):
+        captured["json"] = getattr(args, "json", False)
+        return 0
+
+    monkeypatch.setattr("cli.commands.platforms.run", fake_run, raising=False)
+
+    code = cli_main.main(["platforms", "--json"])
+
+    assert code == 0
+    assert captured["json"] is True
+
+
 def test_main_routes_memory_recall_command(monkeypatch):
     captured = {}
     monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)
@@ -219,6 +252,42 @@ def test_main_routes_memory_drafts_command(monkeypatch):
     assert code == 0
     assert captured["subcommand"] == "drafts"
     assert captured["draft_type"] == "skills"
+
+
+def test_main_routes_schedule_command(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)
+
+    def fake_run(args):
+        captured["text"] = getattr(args, "text", None)
+        captured["report_channel"] = getattr(args, "report_channel", None)
+        return 0
+
+    monkeypatch.setattr("cli.commands.schedule.run", fake_run, raising=False)
+
+    code = cli_main.main(["schedule", "Her", "gün", "09:00", "günlük", "özet", "gönder", "--report-channel", "telegram"])
+
+    assert code == 0
+    assert captured["text"] == ["Her", "gün", "09:00", "günlük", "özet", "gönder"]
+    assert captured["report_channel"] == "telegram"
+
+
+def test_main_routes_goals_command(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)
+
+    def fake_run(args):
+        captured["action"] = getattr(args, "action", None)
+        captured["text"] = getattr(args, "text", None)
+        return 0
+
+    monkeypatch.setattr("cli.commands.goals.run", fake_run, raising=False)
+
+    code = cli_main.main(["goals", "analyze", "ERP'den", "satışları", "çek", "ve", "mail", "at"])
+
+    assert code == 0
+    assert captured["action"] == "analyze"
+    assert captured["text"] == ["ERP'den", "satışları", "çek", "ve", "mail", "at"]
 
 
 def test_main_routes_skills_promote_draft_command(monkeypatch):

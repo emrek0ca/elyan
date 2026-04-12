@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .capability_router import get_capability_router
+from .nl_cron import nl_cron
 
 
 @dataclass
@@ -177,6 +178,22 @@ class GoalGraphPlanner:
         if primary_delivery == "general" and workflow_chain:
             primary_delivery = workflow_chain[-1]
         constraints = self._extract_constraints(text)
+        automation_candidate = None
+        try:
+            parsed_schedule = nl_cron.parse(text)
+        except Exception:
+            parsed_schedule = None
+        if isinstance(parsed_schedule, dict):
+            automation_candidate = {
+                "type": str(parsed_schedule.get("type") or "scheduled_workflow"),
+                "cron": str(parsed_schedule.get("cron") or ""),
+                "task": str(parsed_schedule.get("original_task") or ""),
+            }
+            constraints["has_schedule"] = True
+            constraints["schedule_expression"] = automation_candidate["cron"]
+        else:
+            constraints["has_schedule"] = False
+            constraints["schedule_expression"] = ""
 
         return {
             "nodes": [n.to_dict() for n in nodes],
@@ -186,6 +203,7 @@ class GoalGraphPlanner:
             "stage_count": len(nodes),
             "complexity_score": round(complexity_score, 2),
             "constraints": constraints,
+            "automation_candidate": automation_candidate,
         }
 
 

@@ -29,3 +29,15 @@ def test_goal_graph_ssh_phrase_does_not_trigger_evidence_mode():
     assert constraints.get("requires_evidence") is False
     formats = constraints.get("proof_formats", [])
     assert "screenshot" not in formats
+
+
+def test_goal_graph_extracts_automation_candidate_for_scheduled_prompt():
+    planner = get_goal_graph_planner()
+    graph = planner.build("Her gün saat 09:00 satış raporunu özetle ve yönetime gönder")
+
+    constraints = graph.get("constraints", {})
+    assert constraints.get("has_schedule") is True
+    assert constraints.get("schedule_expression") == "0 9 * * *"
+    candidate = graph.get("automation_candidate", {})
+    assert candidate.get("cron") == "0 9 * * *"
+    assert "satış raporunu özetle" in candidate.get("task", "")

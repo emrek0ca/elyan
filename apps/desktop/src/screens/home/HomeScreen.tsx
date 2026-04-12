@@ -14,9 +14,11 @@ import { StatusBadge } from "@/components/primitives/StatusBadge";
 import { Surface } from "@/components/primitives/Surface";
 import {
   useHomeSnapshot,
+  useOperatorPreview,
   useProviderDescriptors,
+  useSystemReadiness,
 } from "@/hooks/use-desktop-data";
-import { createCoworkThread, promoteRoutineDraft, promoteSkillDraft, triggerAutopilotTick } from "@/services/api/elyan-service";
+import { createCoworkThread, createRoutineFromText, promoteRoutineDraft, promoteSkillDraft, triggerAutopilotTick } from "@/services/api/elyan-service";
 import { useRuntimeStore } from "@/stores/runtime-store";
 import { useUiStore } from "@/stores/ui-store";
 import type { CoworkMode } from "@/types/domain";
@@ -38,7 +40,11 @@ export function HomeScreen() {
   const [draftActionId, setDraftActionId] = useState<string | null>(null);
   const [draftActionError, setDraftActionError] = useState("");
   const [checkInBusy, setCheckInBusy] = useState(false);
+  const [automationBusy, setAutomationBusy] = useState(false);
+  const [automationMessage, setAutomationMessage] = useState("");
+  const [automationMessageTone, setAutomationMessageTone] = useState<"success" | "warning">("warning");
   const { data: providers } = useProviderDescriptors();
+  const { data: readiness } = useSystemReadiness();
   const connectionState = useRuntimeStore((s) => s.connectionState);
   const sidecarHealth = useRuntimeStore((s) => s.sidecarHealth);
   const setSelectedThreadId = useUiStore((s) => s.setSelectedThreadId);
@@ -65,6 +71,13 @@ export function HomeScreen() {
   const suggestions = (autopilot?.suggestions || []).slice(0, 3);
   const providerCount = (providers || []).filter((p) => p.enabled && p.healthState === "available").length;
   const learningQueue = data.learningQueue;
+  const resumePreviewText = resumeCandidate?.lastUserTurn?.content || resumeCandidate?.title || "";
+  const { data: resumePreview } = useOperatorPreview(
+    resumePreviewText,
+    resumeCandidate?.sessionId || resumeCandidate?.threadId || "home-preview",
+    resumeCandidate?.threadId || "home-latest",
+  );
+  const automationCandidate = resumePreview?.goalGraph?.automationCandidate;
   const setupPriority = ["provider_model", "channel_connection", "first_routine", "first_daily_summary", "learning_queue"];
   const setupChecklist = (data.setupChecklist || [])
     .filter((item) => !item.ready)
@@ -76,6 +89,27 @@ export function HomeScreen() {
       return a - b;
     })
     .slice(0, 5);
+  const readinessTone: "success" | "warning" | "neutral" = readiness
+    ? readiness.status === "ready"
+      ? "success"
+      : readiness.status === "needs_attention"
+        ? "warning"
+        : "neutral"
+    : "neutral";
+  const readinessLabel = readiness
+    ? readiness.status === "ready"
+      ? "Hazır"
+      : readiness.status === "needs_attention"
+        ? "Dikkat gerekiyor"
+        : "Başlatılıyor"
+    : "Bilinmiyor";
+  const connectedChannelSummary = readiness?.platforms?.connectedLabels?.length
+    ? readiness.platforms.connectedLabels.join(", ")
+    : readiness?.channelConnected
+      ? "Connected"
+      : readiness?.whatsappMode === "bridge"
+        ? "Bridge mode"
+        : "Pending";
 
   function inferTaskType(value: string): "document" | "presentation" | "website" {
     const t = value.toLowerCase();
@@ -152,6 +186,41 @@ export function HomeScreen() {
     }
   }
 
+  async function handleCreateAutomation() {
+    if (!automationCandidate) {
+      return;
+    }
+    if (!runtimeReady) {
+      setAutomationMessageTone("warning");
+      setAutomationMessage(runtimeGateReason);
+      return;
+    }
+    setAutomationBusy(true);
+    setAutomationMessage("");
+    try {
+      const result = await createRoutineFromText({
+        text: `${automationCandidate.task} ${automationCandidate.cron ? `(${automationCandidate.cron})` : ""}`.trim(),
+        name: automationCandidate.task,
+        expression: automationCandidate.cron || resumePreview?.goalGraph?.constraints.scheduleExpression || "",
+        reportChannel: "telegram",
+        enabled: true,
+      });
+      if (!result.ok) {
+        setAutomationMessageTone("warning");
+        setAutomationMessage(result.message || "Routine oluşturulamadı.");
+        return;
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["home-snapshot"] }),
+        queryClient.invalidateQueries({ queryKey: ["command-center"] }),
+      ]);
+      setAutomationMessageTone("success");
+      setAutomationMessage(`Automation hazır: ${result.name || result.routineId}`);
+    } finally {
+      setAutomationBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-5">
       {/* ─── Command ─── */}
@@ -201,6 +270,124 @@ export function HomeScreen() {
         <StatusTile label="Autopilot" value={autopilot?.running ? "Aktif" : "Pasif"} tone={autopilot?.running ? "success" : "neutral"} />
         <StatusTile label="Arka plan" value={backgroundTasks.length ? `${backgroundTasks.length} iş` : "Boş"} tone={backgroundTasks.length ? "info" : "neutral"} />
       </div>
+
+      {readiness ? (
+        <Surface tone="card" className="p-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Operator readiness</div>
+              <h2 className="mt-2 text-[18px] font-medium text-[var(--text-primary)]">
+                {readiness.connectedProvider || "local"}{readiness.connectedModel ? ` / ${readiness.connectedModel}` : ""}
+              </h2>
+              <p className="mt-2 text-[12px] text-[var(--text-secondary)]">
+                {readiness.blockingIssue || "Runtime, provider ve automations hizalanmış görünüyor."}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <StatusBadge tone={readinessTone}>{readinessLabel}</StatusBadge>
+              <StatusBadge tone={readiness.runtimeReady ? "success" : "warning"}>
+                {readiness.runtimeReady ? "runtime live" : "runtime waiting"}
+              </StatusBadge>
+              <StatusBadge tone={readiness.channelConnected ? "success" : "neutral"}>
+                {readiness.channelConnected ? "channel connected" : "channel pending"}
+              </StatusBadge>
+              <StatusBadge tone={readiness.hasRoutine ? "success" : "neutral"}>
+                {readiness.hasRoutine ? "automation ready" : "no routine yet"}
+              </StatusBadge>
+            </div>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <ReadinessItem
+              label="Providers"
+              value={`${readiness.providerSummary.available} ready`}
+              meta={
+                readiness.providerSummary.authRequired
+                  ? `${readiness.providerSummary.authRequired} auth gerekiyor`
+                  : readiness.providerSummary.degraded
+                    ? `${readiness.providerSummary.degraded} degraded`
+                    : "Tüm lane'ler temiz"
+              }
+            />
+            <ReadinessItem
+              label="Channels"
+              value={`${readiness.platforms?.connectedChannels || 0} live / ${readiness.platforms?.configuredChannels || 0} configured`}
+              meta={
+                readiness.whatsappMode === "unavailable"
+                  ? `Channels: ${connectedChannelSummary}`
+                  : `${connectedChannelSummary} · WhatsApp: ${readiness.whatsappMode}`
+              }
+            />
+            <ReadinessItem
+              label="Permissions"
+              value={readiness.applePermissions.automation ? "Automation ok" : "Permission needed"}
+              meta={readiness.applePermissions.screenCapture ? "Screen capture ready" : "Screen capture pending"}
+            />
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {!readiness.runtimeReady || readiness.blockingIssue ? (
+              <Button variant="secondary" onClick={() => navigate("/settings")}>
+                Fix readiness
+              </Button>
+            ) : null}
+            {!readiness.channelConnected ? (
+              <Button variant="ghost" onClick={() => navigate("/integrations")}>
+                Connect channels
+              </Button>
+            ) : null}
+            {readiness.providerSummary.authRequired || readiness.providerSummary.degraded ? (
+              <Button variant="ghost" onClick={() => navigate("/providers")}>
+                Review providers
+              </Button>
+            ) : null}
+          </div>
+        </Surface>
+      ) : null}
+
+      {resumeCandidate && automationCandidate ? (
+        <Surface tone="card" className="p-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Suggested automation</div>
+              <h2 className="mt-2 text-[18px] font-medium text-[var(--text-primary)]">
+                {automationCandidate.task || "Scheduled routine"}
+              </h2>
+              <p className="mt-2 text-[12px] text-[var(--text-secondary)]">
+                {automationCandidate.cron || resumePreview?.goalGraph?.constraints.scheduleExpression || "schedule not detected"}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {resumePreview?.goalGraph?.primaryDeliveryDomain ? (
+                <StatusBadge tone="info">{resumePreview.goalGraph.primaryDeliveryDomain}</StatusBadge>
+              ) : null}
+              {resumePreview?.goalGraph?.stageCount ? (
+                <StatusBadge tone="neutral">{resumePreview.goalGraph.stageCount} stage</StatusBadge>
+              ) : null}
+            </div>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => void handleCreateAutomation()} disabled={automationBusy || !runtimeReady}>
+              {automationBusy ? "Scheduling…" : "Create routine"}
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setSelectedThreadId(resumeCandidate.threadId);
+                if (resumeCandidate.activeRunId) {
+                  setSelectedRunId(resumeCandidate.activeRunId);
+                }
+                navigate("/command-center");
+              }}
+            >
+              Open thread
+            </Button>
+          </div>
+          {automationMessage ? (
+            <p className={`mt-3 text-[12px] ${automationMessageTone === "success" ? "text-[var(--state-success)]" : "text-[var(--state-warning)]"}`}>
+              {automationMessage}
+            </p>
+          ) : null}
+        </Surface>
+      ) : null}
 
       {learningQueue && learningQueue.total > 0 ? (
         <Surface tone="card" className="p-5">
@@ -345,6 +532,16 @@ function StatusTile({ label, value, tone }: { label: string; value: string; tone
         <span className="text-[15px] font-medium text-[var(--text-primary)]">{value}</span>
         <StatusBadge tone={tone}>{value}</StatusBadge>
       </div>
+    </div>
+  );
+}
+
+function ReadinessItem({ label, value, meta }: { label: string; value: string; meta: string }) {
+  return (
+    <div className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] px-4 py-4">
+      <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-tertiary)]">{label}</div>
+      <div className="mt-2 text-[14px] font-medium text-[var(--text-primary)]">{value}</div>
+      <div className="mt-1 text-[12px] text-[var(--text-secondary)]">{meta}</div>
     </div>
   );
 }

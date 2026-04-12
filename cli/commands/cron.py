@@ -1,12 +1,14 @@
 """cron.py — Cron/zamanlayıcı CLI"""
+import asyncio
 import json
 from datetime import datetime
 from config.elyan_config import elyan_config
 
 def _get_engine():
     try:
-        from core.scheduler.cron_engine import cron_engine
-        return cron_engine
+        from core.scheduler.cron_engine import get_cron_engine
+
+        return get_cron_engine()
     except Exception:
         return None
 
@@ -42,9 +44,7 @@ def run(args):
 
 
 def _list_jobs(engine):
-    jobs = elyan_config.get("cron", [])
-    if engine and hasattr(engine, "jobs"):
-        jobs = engine.jobs or jobs
+    jobs = engine.list_jobs() if engine and hasattr(engine, "list_jobs") else elyan_config.get("cron", [])
     if not jobs:
         print("Kayıtlı cron işi yok.")
         return
@@ -57,7 +57,7 @@ def _list_jobs(engine):
 
 
 def _status(engine):
-    jobs = elyan_config.get("cron", [])
+    jobs = engine.list_jobs() if engine and hasattr(engine, "list_jobs") else elyan_config.get("cron", [])
     active = len([j for j in jobs if j.get("enabled", True)])
     print(f"\n⏰  Cron Durumu")
     print(f"  Toplam iş: {len(jobs)}")
@@ -77,10 +77,15 @@ def _add(args, engine):
 
     if engine:
         job_id = engine.add_job(
-            expression=expression,
-            prompt=prompt,
-            channel_id=getattr(args, "channel", None),
-            user_id=getattr(args, "user_id", "admin"),
+            {
+                "expression": expression,
+                "prompt": prompt,
+                "channel_id": getattr(args, "channel", None),
+                "user_id": getattr(args, "user_id", "admin"),
+                "enabled": True,
+                "job_type": "prompt",
+                "source": "runtime",
+            }
         )
     else:
         import uuid
@@ -118,14 +123,18 @@ def _toggle(args, enable: bool, engine):
     if not job_id:
         print("Hata: iş ID'si gerekli.")
         return
-    jobs = elyan_config.get("cron", [])
-    found = False
-    for j in jobs:
-        if j.get("id") == job_id:
-            j["enabled"] = enable
-            found = True
+    if engine and hasattr(engine, "enable_job") and hasattr(engine, "disable_job"):
+        found = engine.enable_job(job_id) if enable else engine.disable_job(job_id)
+    else:
+        jobs = elyan_config.get("cron", [])
+        found = False
+        for j in jobs:
+            if j.get("id") == job_id:
+                j["enabled"] = enable
+                found = True
+        if found:
+            elyan_config.set("cron", jobs)
     if found:
-        elyan_config.set("cron", jobs)
         verb = "etkinleştirildi" if enable else "durduruldu"
         print(f"✅  {job_id} {verb}.")
     else:
@@ -139,8 +148,11 @@ def _run_now(args, engine):
         return
     if engine and hasattr(engine, "run_job"):
         print(f"▶  {job_id} tetikleniyor...")
-        engine.run_job(job_id)
-        print("✅  Tamamlandı.")
+        result = asyncio.run(engine.run_job(job_id))
+        if result.get("success", False):
+            print("✅  Tamamlandı.")
+        else:
+            print(f"⚠️  Çalıştırılamadı: {result.get('error') or result.get('report') or 'unknown_error'}")
     else:
         print(f"⚠️  Cron motoru çalışmıyor. Gateway'i başlatın: elyan gateway start")
 
@@ -159,7 +171,7 @@ def _next(args, engine):
     job_id = getattr(args, "job_id", None)
     try:
         from croniter import croniter
-        jobs = elyan_config.get("cron", [])
+        jobs = engine.list_jobs() if engine and hasattr(engine, "list_jobs") else elyan_config.get("cron", [])
         targets = [j for j in jobs if not job_id or j.get("id") == job_id]
         for j in targets:
             expr = j.get("expression")

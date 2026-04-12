@@ -42,7 +42,7 @@ def _now_iso() -> str:
 class CronEngine:
     """Handles scheduled tasks using cron expressions — with disk persistence."""
 
-    def __init__(self, agent):
+    def __init__(self, agent: Any | None = None):
         self.agent = agent
         self.scheduler = AsyncIOScheduler()
         self._is_running = False
@@ -52,6 +52,10 @@ class CronEngine:
     @property
     def running(self) -> bool:
         return self._is_running
+
+    def bind_agent(self, agent: Any | None) -> None:
+        if agent is not None:
+            self.agent = agent
 
     def set_report_callback(self, callback: Optional[JobReportCallback]) -> None:
         self._report_callback = callback
@@ -255,6 +259,8 @@ class CronEngine:
 
     async def _execute_job(self, job: Dict[str, Any]) -> str:
         job_type = str(job.get("job_type", "prompt") or "prompt").lower()
+        if self.agent is None:
+            raise RuntimeError("cron agent is not bound; start gateway or bind an agent first")
         if job_type == "routine":
             routine_id = str(job.get("routine_id", "")).strip()
             if not routine_id:
@@ -319,3 +325,21 @@ class CronEngine:
         except Exception as e:
             logger.error(f"Failed to load persisted cron jobs: {e}")
             return {}
+
+
+_cron_engine: CronEngine | None = None
+
+
+def get_cron_engine(agent: Any | None = None) -> CronEngine:
+    global _cron_engine
+    if _cron_engine is None:
+        _cron_engine = CronEngine(agent)
+    elif agent is not None:
+        _cron_engine.bind_agent(agent)
+    return _cron_engine
+
+
+cron_engine = get_cron_engine()
+
+
+__all__ = ["CronEngine", "cron_engine", "get_cron_engine"]

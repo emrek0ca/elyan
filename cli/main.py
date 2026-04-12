@@ -22,12 +22,16 @@ from core.version import APP_VERSION
 
 TOP_LEVEL_COMMANDS = [
     "chat",
+    "model",
     "doctor",
     "health",
     "logs",
     "status",
+    "platforms",
     "cognitive",
     "routines",
+    "schedule",
+    "goals",
     "config",
     "gateway",
     "channels",
@@ -294,6 +298,27 @@ def main(argv: list[str] | None = None):
     # Backward-compat gateway aliases (legacy habit: `elyan restart`).
     if argv:
         first = str(argv[0]).strip().lower()
+        model_subcommands = {
+            "list",
+            "status",
+            "test",
+            "use",
+            "switch",
+            "add",
+            "set-default",
+            "set-fallback",
+            "cost",
+            "ollama",
+            "ollama-check",
+        }
+        if first == "model":
+            if len(argv) == 1:
+                argv = ["models", "status"]
+            elif str(argv[1]).strip().lower() in model_subcommands:
+                argv = ["models", *argv[1:]]
+            else:
+                argv = ["models", "switch", *argv[1:]]
+            first = "models"
         if first in {"start", "stop", "restart"}:
             argv = ["gateway", *argv]
             # Legacy top-level behavior: keep shell responsive by default.
@@ -337,6 +362,10 @@ def main(argv: list[str] | None = None):
     p.add_argument("--deep", action="store_true")
     p.add_argument("--json", action="store_true")
 
+    # ── platforms ───────────────────────────────────────────────────────
+    p = sub.add_parser("platforms", help="CLI, desktop ve kanal yüzeylerini tek yerde göster")
+    p.add_argument("--json", action="store_true")
+
     # ── cognitive ───────────────────────────────────────────────────────
     p = sub.add_parser("cognitive", help="Bilişsel katman (Phase 4)")
     p.add_argument("subcommand", nargs="?",
@@ -363,6 +392,24 @@ def main(argv: list[str] | None = None):
     p.add_argument("--report-chat-id", dest="report_chat_id", default="")
     p.add_argument("--disabled", action="store_true")
     p.add_argument("--port", type=int)
+
+    # ── schedule ────────────────────────────────────────────────────────
+    p = sub.add_parser("schedule", help="Doğal dille rutin oluştur")
+    p.add_argument("text", nargs="+", help="Örn: Her gün saat 09:00 günlük özet gönder")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--name", metavar="NAME")
+    p.add_argument("--expression", metavar="CRON_EXPR")
+    p.add_argument("--panels", metavar="URL1,URL2")
+    p.add_argument("--report-channel", dest="report_channel", default="telegram")
+    p.add_argument("--report-chat-id", dest="report_chat_id", default="")
+    p.add_argument("--disabled", action="store_true")
+    p.add_argument("--port", type=int)
+
+    # ── goals ───────────────────────────────────────────────────────────
+    p = sub.add_parser("goals", help="Hedefi analiz et ve otomasyon adayını çıkar")
+    p.add_argument("action", nargs="?", choices=["analyze"], default="analyze")
+    p.add_argument("text", nargs="+", help="Örn: ERP'den satışları çek sonra PDF üret ve yönetime mail at")
+    p.add_argument("--json", action="store_true")
 
     # ── config ──────────────────────────────────────────────────────────
     p = sub.add_parser("config", help="Yapılandırma yönetimi")
@@ -882,6 +929,10 @@ def main(argv: list[str] | None = None):
             print("Status komutu bulunamadı.")
             return 1
 
+    elif args.command == "platforms":
+        from cli.commands import platforms
+        return platforms.run(args)
+
     elif args.command == "cognitive":
         from cli.commands import cognitive
         cognitive.run(args)
@@ -1053,6 +1104,14 @@ def main(argv: list[str] | None = None):
     elif args.command == "routines":
         from cli.commands import routines
         routines.run(args)
+
+    elif args.command == "schedule":
+        from cli.commands import schedule
+        schedule.run(args)
+
+    elif args.command == "goals":
+        from cli.commands import goals
+        goals.run(args)
 
     elif args.command == "config":
         from cli.commands import config
