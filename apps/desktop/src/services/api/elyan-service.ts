@@ -2861,11 +2861,12 @@ function buildProviderDescriptors(
 
 export async function getSystemReadiness(): Promise<SystemReadiness> {
   return withMemoryCache("system-readiness", 2500, async () => {
-    const [healthRaw, setupRaw, ollamaRaw, platformsRaw] = await Promise.all([
+    const [healthRaw, setupRaw, ollamaRaw, platformsRaw, skillsRaw] = await Promise.all([
       safeRequest<HealthEnvelope>("/healthz"),
       safeRequest<LlmSetupStatusEnvelope>("/api/llm/setup/status"),
       safeRequest<OllamaStatusEnvelope>("/api/llm/setup/ollama"),
       safeRequest<SuccessEnvelope<{ summary?: Record<string, unknown> }>>("/api/v1/system/platforms").catch(() => null),
+      safeRequest<{ summary?: Record<string, unknown> }>("/api/skills").catch(() => null),
     ]);
 
     const runtimeReady = Boolean(healthRaw?.ok);
@@ -2924,6 +2925,13 @@ export async function getSystemReadiness(): Promise<SystemReadiness> {
         connectedLabels: Array.isArray(platformsRaw?.summary?.connected_labels)
           ? platformsRaw.summary.connected_labels.map((item) => String(item || "").trim()).filter(Boolean)
           : [],
+      },
+      skills: {
+        installed: Number(skillsRaw?.summary?.installed || 0),
+        enabled: Number(skillsRaw?.summary?.enabled || 0),
+        issues: Number(skillsRaw?.summary?.issues || 0),
+        runtimeReady: Number(skillsRaw?.summary?.runtime_ready || 0),
+        workflowsEnabled: Number(skillsRaw?.summary?.workflows_enabled || 0),
       },
       blockingIssue,
     };

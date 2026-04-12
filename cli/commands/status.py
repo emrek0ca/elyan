@@ -101,6 +101,27 @@ def _skill_count() -> int:
         return 0
 
 
+def _skill_summary() -> dict[str, int]:
+    try:
+        from core.skills_overview import build_skills_summary
+
+        summary = build_skills_summary().get("summary", {})
+        return {
+            "installed": int(summary.get("installed", 0) or 0),
+            "enabled": int(summary.get("enabled", 0) or 0),
+            "issues": int(summary.get("issues", 0) or 0),
+            "runtime_ready": int(summary.get("runtime_ready", 0) or 0),
+        }
+    except Exception:
+        count = _skill_count()
+        return {
+            "installed": count,
+            "enabled": count,
+            "issues": 0,
+            "runtime_ready": 0,
+        }
+
+
 def _deep_snapshot(gateway_running: bool, gateway_pid: int | None) -> dict[str, Any]:
     snapshot: dict[str, Any] = {}
 
@@ -164,7 +185,7 @@ def _build_status_payload(deep: bool = False) -> dict[str, Any]:
     gateway = _gateway_snapshot()
     autopilot = _autopilot_snapshot()
     subscription = _subscription_snapshot()
-    skill_count = _skill_count()
+    skills = _skill_summary()
 
     missing = []
     if not config:
@@ -204,7 +225,7 @@ def _build_status_payload(deep: bool = False) -> dict[str, Any]:
             "total": total_cron,
         },
         "autopilot": autopilot,
-        "skills": skill_count,
+        "skills": skills,
         "subscription": subscription,
         "platforms": platforms_payload,
     }
@@ -235,7 +256,7 @@ def run(args):
     total_cron = payload["cron"]["total"]
     autopilot_state = payload["autopilot"]["state"]
     last_tick = payload["autopilot"]["last_tick_reason"]
-    skill_count = payload["skills"]
+    skills = payload["skills"]
     subscription = payload["subscription"]
 
     print(f"\n  Lansman:     {'HAZIR' if payload['launch']['ready'] else 'EKSIK'}")
@@ -249,7 +270,9 @@ def run(args):
     print(f"  Kanallar:    {active_channels}/{total_channels} aktif · {connected_channels} canlı")
     print(f"  Cron:        {active_jobs}/{total_cron} aktif gorev")
     print(f"  Autopilot:   {autopilot_state} (tick: {last_tick})")
-    print(f"  Skills:      {skill_count} harici skill")
+    print(f"  Skills:      {skills['enabled']}/{skills['installed']} aktif")
+    if skills["issues"]:
+        print(f"    Issues:    {skills['issues']} skill attention istiyor")
     print("  Surfaces:    elyan platforms")
 
     if subscription.get("available"):

@@ -8592,25 +8592,9 @@ class ElyanGatewayServer:
         available = request.rel_url.query.get("available", "0") in {"1", "true", "yes"}
         enabled_only = request.rel_url.query.get("enabled", "0") in {"1", "true", "yes"}
         q = (request.rel_url.query.get("q", "") or "").strip()
-        items = skill_manager.list_skills(available=available, enabled_only=enabled_only, query=q)
-        installed = [s for s in items if s.get("installed")]
-        enabled = [s for s in installed if s.get("enabled")]
-        unhealthy = [s for s in installed if not s.get("health_ok")]
-        runtime_ready = [s for s in installed if s.get("runtime_ready")]
-        workflows = skill_manager.list_workflows()
-        workflows_enabled = [w for w in workflows if w.get("enabled")]
-        return web.json_response({
-            "skills": items,
-            "summary": {
-                "total": len(items),
-                "installed": len(installed),
-                "enabled": len(enabled),
-                "issues": len(unhealthy),
-                "runtime_ready": len(runtime_ready),
-                "workflows_total": len(workflows),
-                "workflows_enabled": len(workflows_enabled),
-            },
-        })
+        from core.skills_overview import build_skills_summary
+
+        return web.json_response(build_skills_summary(query=q, available=available, enabled_only=enabled_only))
 
     async def handle_skill_detail(self, request):
         name = str(request.rel_url.query.get("name", "") or "").strip()

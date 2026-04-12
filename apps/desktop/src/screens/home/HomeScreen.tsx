@@ -296,7 +296,7 @@ export function HomeScreen() {
               </StatusBadge>
             </div>
           </div>
-          <div className="mt-4 grid gap-3 md:grid-cols-3">
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <ReadinessItem
               label="Providers"
               value={`${readiness.providerSummary.available} ready`}
@@ -322,6 +322,15 @@ export function HomeScreen() {
               value={readiness.applePermissions.automation ? "Automation ok" : "Permission needed"}
               meta={readiness.applePermissions.screenCapture ? "Screen capture ready" : "Screen capture pending"}
             />
+            <ReadinessItem
+              label="Skills"
+              value={`${readiness.skills?.enabled || 0} enabled / ${readiness.skills?.installed || 0} installed`}
+              meta={
+                readiness.skills?.issues
+                  ? `${readiness.skills.issues} skill attention istiyor`
+                  : `${readiness.skills?.runtimeReady || 0} runtime ready · ${readiness.skills?.workflowsEnabled || 0} workflow active`
+              }
+            />
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
             {!readiness.runtimeReady || readiness.blockingIssue ? (
@@ -337,6 +346,11 @@ export function HomeScreen() {
             {readiness.providerSummary.authRequired || readiness.providerSummary.degraded ? (
               <Button variant="ghost" onClick={() => navigate("/providers")}>
                 Review providers
+              </Button>
+            ) : null}
+            {Boolean(readiness.skills?.issues) ? (
+              <Button variant="ghost" onClick={() => navigate("/settings")}>
+                Review skills
               </Button>
             ) : null}
           </div>

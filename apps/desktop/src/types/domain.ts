@@ -279,6 +279,13 @@ export interface SystemReadiness {
     connectedChannels: number;
     connectedLabels: string[];
   };
+  skills?: {
+    installed: number;
+    enabled: number;
+    issues: number;
+    runtimeReady: number;
+    workflowsEnabled: number;
+  };
   blockingIssue?: string;
 }
 
