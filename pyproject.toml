@@ -53,7 +53,7 @@ dependencies = [
     "reportlab>=4.0.0",
     # Scheduling
     "apscheduler>=3.10.0",
-    "feedparser>=6.0.0",
+    "feedparser>=6.0.12",
     "watchdog>=3.0.0",
     # Security
     "cryptography>=42.0.0",
