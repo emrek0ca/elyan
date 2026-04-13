@@ -56,8 +56,8 @@ dependencies = [
     "feedparser>=6.0.0",
     "watchdog>=3.0.0",
     # Security
-    "cryptography>=42.0.0",
-    "keyring>=25.0.0",
+    "cryptography>=46.0.7",
+    "keyring>=25.7.0",
     "docker>=7.0.0",
     # DB
     "sqlalchemy>=2.0.0",
