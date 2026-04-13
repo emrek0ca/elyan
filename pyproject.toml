@@ -67,7 +67,7 @@ dependencies = [
 windows = ["pywin32>=306"]
 linux = ["ewmh>=0.1.6"]
 darwin = ["pyobjc-framework-Cocoa>=10.1", "rumps>=0.4.0"]
-voice = ["pyttsx3>=2.90", "pydub>=0.25.0"]
+voice = ["pyttsx3>=2.90", "pydub>=0.25.1"]
 telegram = ["python-telegram-bot>=22.0"]
 discord = ["discord.py>=2.3.0"]
 slack = ["slack-bolt>=1.18.0"]
@@ -95,7 +95,7 @@ all = [
     "scikit-learn>=1.4.0",
     "sentence-transformers>=3.0.0",
     "pyttsx3>=2.90",
-    "pydub>=0.25.0",
+    "pydub>=0.25.1",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "bandit>=1.7.0",
