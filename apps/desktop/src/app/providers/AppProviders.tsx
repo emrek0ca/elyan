@@ -12,6 +12,7 @@ import { getCurrentLocalUser, getSystemReadiness } from "@/services/api/elyan-se
 function RuntimeBridge() {
   const queryClient = useQueryClient();
   const setSidecarHealth = useRuntimeStore((state) => state.setSidecarHealth);
+  const setAuthHydrated = useUiStore((state) => state.setAuthHydrated);
 
   useEffect(() => {
     let disposed = false;
@@ -123,15 +124,25 @@ function RuntimeBridge() {
     };
 
     const hydrateAuth = async () => {
-      const currentUser = await getCurrentLocalUser().catch(() => null);
-      if (disposed) {
-        return;
+      try {
+        const currentUser = await getCurrentLocalUser();
+        if (disposed) {
+          return;
+        }
+        if (!currentUser) {
+          useUiStore.getState().signOut();
+          return;
+        }
+        useUiStore.getState().signIn(currentUser.email);
+      } catch (error) {
+        if (!disposed) {
+          console.warn("auth hydration skipped after transient failure", error);
+        }
+      } finally {
+        if (!disposed) {
+          setAuthHydrated(true);
+        }
       }
-      if (!currentUser) {
-        useUiStore.getState().signOut();
-        return;
-      }
-      useUiStore.getState().signIn(currentUser.email);
     };
 
     const hydrateSetup = async () => {
@@ -157,7 +168,7 @@ function RuntimeBridge() {
       window.clearInterval(interval);
       disconnectSocket();
     };
-  }, [queryClient, setSidecarHealth]);
+  }, [queryClient, setAuthHydrated, setSidecarHealth]);
 
   return null;
 }

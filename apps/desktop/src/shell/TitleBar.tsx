@@ -8,6 +8,8 @@ import { useUiStore } from "@/stores/ui-store";
 
 const routeLabels: Record<string, string> = {
   "/home": "Elyan",
+  "/stack": "Stack",
+  "/swarm": "Swarm",
   "/command-center": "İşler",
   "/providers": "Modeller",
   "/integrations": "Bağlantılar",
@@ -27,7 +29,6 @@ export function TitleBar() {
 
   return (
     <header className="eylan-titlebar flex items-center justify-between gap-4">
-      {/* Left: page label */}
       <div className="eylan-mac-offset flex items-center gap-3">
         <span className="text-[14px] font-medium text-[var(--text-primary)]">{routeLabel}</span>
         <StatusBadge tone={isReady ? "success" : connectionState === "connected" ? "info" : "warning"}>
@@ -35,18 +36,16 @@ export function TitleBar() {
         </StatusBadge>
       </div>
 
-      {/* Center: command palette trigger */}
       <button
         type="button"
         onClick={() => openCommandPalette()}
-        className="hidden min-w-[320px] items-center gap-3 rounded-[16px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] px-4 py-2 text-left text-[13px] text-[var(--text-tertiary)] transition hover:border-[var(--glass-border-strong)] hover:bg-[var(--bg-surface)] lg:flex"
+        className="hidden min-w-[280px] items-center gap-3 rounded-[16px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] px-4 py-2 text-left text-[13px] text-[var(--text-tertiary)] transition hover:border-[var(--glass-border-strong)] hover:bg-[var(--bg-surface)] xl:flex"
       >
         <Search className="h-3.5 w-3.5" />
         <span className="flex-1">Ara veya komut yaz…</span>
         <kbd className="rounded-[8px] border border-[var(--glass-border)] px-1.5 py-0.5 text-[10px]">⌘K</kbd>
       </button>
 
-      {/* Right: user */}
       <div className="flex items-center gap-2">
         <span className="max-w-[160px] truncate text-[12px] text-[var(--text-secondary)]">
           {authenticatedEmail || "local"}

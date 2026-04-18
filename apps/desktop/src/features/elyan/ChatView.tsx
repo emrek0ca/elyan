@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState, KeyboardEvent } from "react";
 import { Bot, Mic, MicOff, Send, User, X, AlertTriangle, Check } from "@/vendor/lucide-react";
 import { Surface } from "@/components/primitives/Surface";
+import { apiClient } from "@/services/api/client";
 import { cn } from "@/utils/cn";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -25,8 +26,6 @@ interface Message {
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const API_BASE = "";  // same origin
-
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function genId() {
@@ -35,6 +34,11 @@ function genId() {
 
 function isApprovalRequest(text: string): boolean {
   return text.includes("Onay Gerekiyor") || text.includes("geri alınamaz");
+}
+
+function resolveApiUrl(path: string): string {
+  const baseUrl = apiClient.getBaseUrl().trim().replace(/\/+$/, "");
+  return `${baseUrl}${path}`;
 }
 
 // ── Message Bubble ─────────────────────────────────────────────────────────────
@@ -154,8 +158,9 @@ export function ChatView({ className }: { className?: string }) {
     abortRef.current = controller;
 
     try {
-      const resp = await fetch(`${API_BASE}/api/elyan/chat/stream`, {
+      const resp = await fetch(resolveApiUrl("/api/elyan/chat/stream"), {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: trimmed, user_id: "desktop" }),
         signal: controller.signal,
@@ -222,7 +227,7 @@ export function ChatView({ className }: { className?: string }) {
 
   const toggleVoice = useCallback(async () => {
     try {
-      await fetch(`${API_BASE}/api/elyan/voice/trigger`, { method: "POST" });
+      await fetch(resolveApiUrl("/api/elyan/voice/trigger"), { method: "POST", credentials: "include" });
       setVoiceActive(v => !v);
     } catch { /* ignore */ }
   }, []);

@@ -9,7 +9,7 @@ def test_launch_starts_gateway_without_opening_desktop_when_disabled(monkeypatch
     calls = {}
 
     monkeypatch.setattr(launch.gateway, "start_gateway", lambda daemon=False, port=None: calls.setdefault("start", (daemon, port)))
-    monkeypatch.setattr(launch.gateway, "_fetch_gateway_status", lambda port: {"ok": True, "data": {"status": "online"}})
+    monkeypatch.setattr(launch.gateway, "_fetch_gateway_launch_health", lambda port: {"ok": True, "data": {"ok": True, "status": "ready", "readiness": {"launch_ready": True, "launch_blockers": []}}})
     monkeypatch.setattr(
         launch.desktop,
         "open_desktop",
@@ -23,6 +23,8 @@ def test_launch_starts_gateway_without_opening_desktop_when_disabled(monkeypatch
     assert calls["start"] == (True, 18888)
     assert "desktop" not in calls
     assert "Elyan launch başlıyor" in out
+    assert "Kurulumdan UI'ya" in out
+    assert "bootstrap-owner -> login -> auth/me -> logout" in out
     assert "Ops console ürün UI değil." in out
     assert "Elyan hazır" in out
 
@@ -31,7 +33,7 @@ def test_launch_opens_desktop_when_enabled(monkeypatch, capsys):
     calls = {}
 
     monkeypatch.setattr(launch.gateway, "start_gateway", lambda daemon=False, port=None: calls.setdefault("start", (daemon, port)))
-    monkeypatch.setattr(launch.gateway, "_fetch_gateway_status", lambda port: {"ok": True, "data": {"status": "online"}})
+    monkeypatch.setattr(launch.gateway, "_fetch_gateway_launch_health", lambda port: {"ok": True, "data": {"ok": True, "status": "ready", "readiness": {"launch_ready": True, "launch_blockers": []}}})
     monkeypatch.setattr(
         launch.desktop,
         "open_desktop",
@@ -43,6 +45,7 @@ def test_launch_opens_desktop_when_enabled(monkeypatch, capsys):
 
     assert code == 0
     assert calls["desktop"] is True
+    assert "Kurulumdan UI'ya" in out
     assert "Elyan hazır" in out
 
 
@@ -50,7 +53,7 @@ def test_launch_stops_when_gateway_not_ready(monkeypatch, capsys):
     calls = {}
 
     monkeypatch.setattr(launch.gateway, "start_gateway", lambda daemon=False, port=None: calls.setdefault("start", (daemon, port)))
-    monkeypatch.setattr(launch.gateway, "_fetch_gateway_status", lambda port: {"ok": False, "error": "connection refused"})
+    monkeypatch.setattr(launch.gateway, "_fetch_gateway_launch_health", lambda port: {"ok": False, "error": "connection refused"})
     monkeypatch.setattr(launch.gateway, "_wait_until_gateway_ready", lambda port, timeout_s=4.0: False)
     monkeypatch.setattr(
         launch.desktop,

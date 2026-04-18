@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import inspect
 from typing import Any, Callable, Dict, Optional
 from ..message import UnifiedMessage
 from ..response import UnifiedResponse
@@ -27,7 +28,21 @@ class BaseChannelAdapter(ABC):
 
     def on_message(self, callback: Callable[[UnifiedMessage], Any]):
         """Register a callback for incoming messages."""
-        self.on_message_callback = callback
+        if callback is None:
+            self.on_message_callback = None
+            return
+
+        if inspect.iscoroutinefunction(callback):
+            self.on_message_callback = callback
+            return
+
+        async def _async_callback(message: UnifiedMessage):
+            result = callback(message)
+            if inspect.isawaitable(result):
+                return await result
+            return result
+
+        self.on_message_callback = _async_callback
 
     @abstractmethod
     def get_status(self) -> str:

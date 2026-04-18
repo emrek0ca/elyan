@@ -20,6 +20,7 @@ Yapılandırma (elyan.json):
 """
 import asyncio
 import json
+from collections import deque
 from typing import Dict, Any, List, Optional
 
 import aiohttp
@@ -58,6 +59,9 @@ class IMessageAdapter(BaseChannelAdapter):
         self._poll_task: Optional[asyncio.Task] = None
         self._is_connected: bool = False
         self._last_poll_ts: int = 0
+        self._poll_failure_streak: int = 0
+        self._recent_message_ids: deque[str] = deque(maxlen=512)
+        self._seen_message_ids: set[str] = set()
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -66,22 +70,32 @@ class IMessageAdapter(BaseChannelAdapter):
             logger.error("iMessage: server_url veya password yapılandırılmamış.")
             return
         try:
+            if self._session and not self._session.closed:
+                await self._session.close()
             self._session = aiohttp.ClientSession()
             # Bağlantıyı doğrula
             ok = await self._ping()
             if not ok:
                 logger.error("iMessage: BlueBubbles sunucusuna ulaşılamıyor.")
+                await self._session.close()
+                self._session = None
                 return
             self._is_connected = True
+            self._poll_failure_streak = 0
             logger.info(f"iMessage adapter bağlandı: {self.server_url}")
             # BlueBubbles Socket.IO kimlik doğrulaması query-string gerektiriyor.
             # Release build'de secret'ı URL'e koymak yerine bu yolu kapatıyoruz.
             if self._supports_secure_websocket():
                 self._ws_task = asyncio.create_task(self._ws_loop())
             else:
-                logger.warning("iMessage WebSocket devre dışı: secret URL üzerinden taşınmıyor.")
+                if not self._poll_task or self._poll_task.done():
+                    self._poll_task = asyncio.create_task(self._poll_loop())
+                logger.info("iMessage polling modu aktif: BlueBubbles REST API izleniyor.")
         except Exception as exc:
             logger.error(f"iMessage bağlantı hatası: {exc}")
+            if self._session and not self._session.closed:
+                await self._session.close()
+            self._session = None
 
     async def disconnect(self):
         for task in (self._ws_task, self._poll_task):
@@ -91,11 +105,16 @@ class IMessageAdapter(BaseChannelAdapter):
                     await task
                 except asyncio.CancelledError:
                     pass
+        self._ws_task = None
+        self._poll_task = None
         if self._ws and not self._ws.closed:
             await self._ws.close()
+        self._ws = None
         if self._session:
             await self._session.close()
+            self._session = None
         self._is_connected = False
+        self._poll_failure_streak = 0
         logger.info("iMessage adapter kapatıldı.")
 
     # ── Ping ──────────────────────────────────────────────────────────────────
@@ -138,6 +157,103 @@ class IMessageAdapter(BaseChannelAdapter):
             except Exception as exc:
                 logger.warning(f"iMessage WebSocket hatası: {exc}, yeniden bağlanıyor...")
                 await asyncio.sleep(5)
+
+    @staticmethod
+    def _message_timestamp_ms(message: dict[str, Any]) -> int:
+        for key in ("dateCreated", "timestamp", "createdAt", "dateCreatedEpoch"):
+            raw = message.get(key)
+            if raw is None:
+                continue
+            try:
+                if isinstance(raw, str):
+                    cleaned = raw.strip()
+                    if not cleaned:
+                        continue
+                    value = int(float(cleaned))
+                else:
+                    value = int(float(raw))
+            except Exception:
+                continue
+            if value < 1_000_000_000_000:
+                value *= 1000
+            return max(0, value)
+        return 0
+
+    @staticmethod
+    def _message_identifier(message: dict[str, Any]) -> str:
+        for key in ("guid", "id", "messageGuid", "chatGuid"):
+            value = str(message.get(key) or "").strip()
+            if value:
+                return value
+        return ""
+
+    def _remember_message_id(self, message_id: str) -> bool:
+        mid = str(message_id or "").strip()
+        if not mid:
+            return True
+        if mid in self._seen_message_ids:
+            return False
+        if self._recent_message_ids.maxlen and len(self._recent_message_ids) >= self._recent_message_ids.maxlen:
+            oldest = self._recent_message_ids.popleft()
+            self._seen_message_ids.discard(oldest)
+        self._recent_message_ids.append(mid)
+        self._seen_message_ids.add(mid)
+        return True
+
+    async def _poll_loop(self):
+        """BlueBubbles REST API üzerinden düzenli polling."""
+        while self._is_connected:
+            try:
+                if not self._session or self._session.closed:
+                    self._session = aiohttp.ClientSession()
+
+                url = f"{self.server_url}/api/v1/message"
+                params = {
+                    "password": self.password,
+                    "limit": 10,
+                    "offset": 0,
+                    "sort": "DESC",
+                    "after": self._last_poll_ts,
+                }
+                timeout = aiohttp.ClientTimeout(total=10)
+                async with self._session.get(url, params=params, timeout=timeout) as resp:
+                    if resp.status != 200:
+                        body = await resp.text()
+                        raise RuntimeError(f"BlueBubbles polling HTTP {resp.status}: {body[:240]}")
+                    data = await resp.json()
+
+                items: list[dict[str, Any]] = []
+                if isinstance(data, dict):
+                    raw_items = data.get("data") or data.get("messages") or []
+                    if isinstance(raw_items, list):
+                        items = [item for item in raw_items if isinstance(item, dict)]
+
+                if items:
+                    for item in reversed(items):
+                        timestamp = self._message_timestamp_ms(item)
+                        if timestamp > self._last_poll_ts:
+                            self._last_poll_ts = timestamp
+                        identifier = self._message_identifier(item)
+                        if identifier and not self._remember_message_id(identifier):
+                            continue
+                        await self._process_message(item)
+                    self._poll_failure_streak = 0
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                self._poll_failure_streak += 1
+                logger.warning(f"iMessage poll error: {exc}")
+                if self._poll_failure_streak >= 3:
+                    logger.error("iMessage polling kesildi; adapter pasif moda alınıyor.")
+                    self._is_connected = False
+                    break
+            try:
+                await asyncio.sleep(2.0)
+            except asyncio.CancelledError:
+                break
+
+        if self._session and not self._session.closed and not self._is_connected:
+            await self._session.close()
 
     async def _handle_ws_message(self, raw: str):
         """Socket.IO mesaj protokolünü parse et."""

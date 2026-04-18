@@ -12,6 +12,7 @@ from typing import Any
 import click
 
 from config.elyan_config import elyan_config
+from cli.commands.guide import render_install_to_ui_guide
 from core.model_catalog import default_model_for_provider, normalize_model_name
 from core.runtime_policy import get_runtime_policy_resolver
 
@@ -270,9 +271,10 @@ def onboard(
                     )
 
         print(
-            "✅ Onboarding tamamlandı! Artık 'elyan status', 'elyan chat' veya dashboard'dan devam edebilirsiniz.",
+            "✅ Onboarding tamamlandı! Artık terminalden UI yüzeyine geçebilirsin.",
             flush=True,
         )
+        render_install_to_ui_guide(setup_ready=True, gateway_running=False, prefix="  ")
         return True
     except Exception as exc:
         print(f"❌ Onboarding hatası: {exc}", flush=True)

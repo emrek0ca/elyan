@@ -36,7 +36,78 @@ import { getRuntimeGateReason, hasRuntimeWriteAccess } from "@/utils/runtime-acc
 const productivityOrder = ["gmail", "google_calendar", "google_drive", "notion", "slack", "github"];
 const appleOrder = ["apple_mail", "apple_calendar", "apple_reminders", "apple_notes", "apple_contacts"];
 const messagingOrder = ["telegram", "whatsapp", "imessage", "sms"];
+const turkeyOrder = ["e_fatura", "e_arsiv", "logo", "netsis", "sgk"];
 const secretFieldNames = new Set(["token", "password", "bot_token", "app_token", "bridge_token", "access_token", "verify_token", "auth_token"]);
+const turkeySecretFieldNames = new Set(["password", "api_key"]);
+
+const turkeyConnectorCopy: Record<string, { summary: string; detail: string }> = {
+  e_fatura: {
+    summary: "GIB akışları",
+    detail: "Fatura gönderimi, health check ve kimlik doğrulama zemini hazır.",
+  },
+  e_arsiv: {
+    summary: "Arşiv operasyonu",
+    detail: "e-Arşiv erişimi ve teslim kayıtları için yerel connector yüzeyi.",
+  },
+  logo: {
+    summary: "Muhasebe senkronu",
+    detail: "Logo GO/Tiger tarafına kontrollü veri akışı için hazırlık katmanı.",
+  },
+  netsis: {
+    summary: "ERP bağlantısı",
+    detail: "Netsis muhasebe ve operasyon verisini Elyan akışına bağlayan yüzey.",
+  },
+  sgk: {
+    summary: "İşyeri takibi",
+    detail: "SGK durum kontrolü ve işyeri odaklı doğrulama hattı.",
+  },
+};
+
+const turkeyConnectorFields: Record<
+  string,
+  Array<{ name: string; label: string; secret?: boolean; placeholder?: string }>
+> = {
+  e_fatura: [
+    { name: "username", label: "Kullanıcı adı", placeholder: "gib-demo" },
+    { name: "password", label: "Parola", secret: true, placeholder: "Parola" },
+    { name: "api_key", label: "API key", secret: true, placeholder: "Opsiyonel" },
+    { name: "integrator_alias", label: "Integrator alias", placeholder: "entegrator" },
+    { name: "health_path", label: "Health path", placeholder: "/health" },
+    { name: "credential_check_path", label: "Kimlik doğrulama path", placeholder: "/auth/check" },
+  ],
+  e_arsiv: [
+    { name: "username", label: "Kullanıcı adı", placeholder: "earsiv-user" },
+    { name: "password", label: "Parola", secret: true, placeholder: "Parola" },
+    { name: "api_key", label: "API key", secret: true, placeholder: "Opsiyonel" },
+    { name: "test_base_url", label: "Test base URL", placeholder: "https://..." },
+    { name: "health_path", label: "Health path", placeholder: "/health" },
+    { name: "credential_check_path", label: "Kimlik doğrulama path", placeholder: "/auth/check" },
+  ],
+  logo: [
+    { name: "username", label: "Kullanıcı adı", placeholder: "logo-user" },
+    { name: "password", label: "Parola", secret: true, placeholder: "Parola" },
+    { name: "api_key", label: "API key", secret: true, placeholder: "Opsiyonel" },
+    { name: "company_code", label: "Şirket kodu", placeholder: "001" },
+    { name: "test_base_url", label: "Test base URL", placeholder: "https://..." },
+    { name: "credential_check_path", label: "Kimlik doğrulama path", placeholder: "/auth/check" },
+  ],
+  netsis: [
+    { name: "username", label: "Kullanıcı adı", placeholder: "netsis-user" },
+    { name: "password", label: "Parola", secret: true, placeholder: "Parola" },
+    { name: "api_key", label: "API key", secret: true, placeholder: "Opsiyonel" },
+    { name: "company_code", label: "Şirket kodu", placeholder: "001" },
+    { name: "test_base_url", label: "Test base URL", placeholder: "https://..." },
+    { name: "credential_check_path", label: "Kimlik doğrulama path", placeholder: "/auth/check" },
+  ],
+  sgk: [
+    { name: "username", label: "Kullanıcı adı", placeholder: "sgk-user" },
+    { name: "password", label: "Parola", secret: true, placeholder: "Parola" },
+    { name: "api_key", label: "API key", secret: true, placeholder: "Opsiyonel" },
+    { name: "workplace_code", label: "İşyeri kodu", placeholder: "34XXXX" },
+    { name: "test_base_url", label: "Test base URL", placeholder: "https://..." },
+    { name: "credential_check_path", label: "Kimlik doğrulama path", placeholder: "/auth/check" },
+  ],
+};
 
 function connectorTone(status: string): "success" | "warning" | "neutral" {
   if (status === "connected") {
@@ -108,7 +179,10 @@ export function IntegrationsScreen() {
 
   const [busyId, setBusyId] = useState("");
   const [message, setMessage] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [channelDrafts, setChannelDrafts] = useState<Record<string, Record<string, string>>>({});
+  const [turkeyDrafts, setTurkeyDrafts] = useState<Record<string, Record<string, string>>>({});
+  const [turkeyConsent, setTurkeyConsent] = useState<Record<string, boolean>>({});
   const [quickResults, setQuickResults] = useState<Record<string, ConnectorExecutionResult>>({});
   const panelClassName = "rounded-[18px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] p-4";
   const fieldClassName =
@@ -116,6 +190,7 @@ export function IntegrationsScreen() {
 
   const productivityConnectors = useMemo(() => orderedConnectors(connectors, productivityOrder), [connectors]);
   const appleConnectors = useMemo(() => orderedConnectors(connectors, appleOrder), [connectors]);
+  const turkeyConnectors = useMemo(() => orderedConnectors(connectors, turkeyOrder), [connectors]);
   const messagingChannels = useMemo(
     () =>
       messagingOrder
@@ -187,6 +262,20 @@ export function IntegrationsScreen() {
     }));
   }
 
+  function turkeyDraftValue(connector: string, fieldName: string) {
+    return turkeyDrafts[connector]?.[fieldName] || "";
+  }
+
+  function updateTurkeyDraft(connector: string, fieldName: string, value: string) {
+    setTurkeyDrafts((current) => ({
+      ...current,
+      [connector]: {
+        ...(current[connector] || {}),
+        [fieldName]: value,
+      },
+    }));
+  }
+
   async function handleConnect(connector: ConnectorDefinition) {
     if (!(await guardRuntime())) {
       return;
@@ -205,6 +294,47 @@ export function IntegrationsScreen() {
     } finally {
       setBusyId("");
     }
+  }
+
+  async function handleTurkeySave(connector: ConnectorDefinition) {
+    if (!(await guardRuntime())) {
+      return;
+    }
+    setBusyId(`turkey-save:${connector.connector}`);
+    setMessage("");
+    try {
+      const draft = turkeyDrafts[connector.connector] || {};
+      const payload: Record<string, unknown> = {
+        workspace_id: primaryWorkspaceId,
+        consent_granted: Boolean(turkeyConsent[connector.connector]),
+      };
+      for (const field of turkeyConnectorFields[connector.connector] || []) {
+        const value = String(draft[field.name] || "").trim();
+        if (value) {
+          payload[field.name] = value;
+        }
+      }
+      const result = await connectConnector(connector.connector, payload);
+      setMessage(String(result.connectResult?.message || `${connector.label} kaydedildi.`));
+      setTurkeyDrafts((current) => ({
+        ...current,
+        [connector.connector]: Object.fromEntries(
+          Object.entries(current[connector.connector] || {}).map(([key, value]) => [
+            key,
+            turkeySecretFieldNames.has(key) ? "" : value,
+          ]),
+        ),
+      }));
+      await syncViews();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : `${connector.label} kaydedilemedi.`);
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  async function handleTurkeyQuickAction(connector: ConnectorDefinition, action: "health_check" | "test_credentials") {
+    await handleQuickAction(connector.connector, action);
   }
 
   async function handleRefresh(accountId: string) {
@@ -505,28 +635,177 @@ export function IntegrationsScreen() {
     );
   }
 
+  function renderTurkeyConnectorList(items: ConnectorDefinition[]) {
+    return (
+      <Surface tone="card" className="p-5">
+        <div>
+          <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Türkiye Operasyonları</div>
+          <div className="mt-2 text-[13px] leading-6 text-[var(--text-secondary)]">
+            Elyan’ın asıl iş yüzeyi burada başlıyor: e-Fatura, muhasebe ve SGK akışları local-first ilerleyecek.
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3">
+          {items.map((connector) => {
+            const copy = turkeyConnectorCopy[connector.connector] || {
+              summary: connector.label,
+              detail: connector.capabilities.slice(0, 3).join(" · "),
+            };
+            const relatedHealth = connectorHealth.find((item) => item.connector === connector.connector || item.provider === connector.provider);
+            const tone = connector.status === "connected" ? "success" : connector.status === "degraded" ? "warning" : "neutral";
+            const statusLabel =
+              connector.status === "connected"
+                ? "Hazır"
+                : connector.status === "degraded"
+                  ? "Dikkat"
+                  : connector.status === "pending"
+                    ? "Kurulum"
+                    : "Bekliyor";
+            const blocker =
+              connector.blockingIssue === "manual_setup_required"
+                ? "Manuel kurulum ve KVKK onayı gerekiyor."
+                : connector.blockingIssue === "manual_review_required"
+                  ? "Son kontrol sonucu gözden geçirilmeli."
+                  : relatedHealth?.blockingIssue || "";
+            const fields = turkeyConnectorFields[connector.connector] || [];
+            const quickResult = quickResults[connector.connector];
+
+            return (
+              <div key={connector.connector} className="rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <div className="text-[15px] font-medium text-[var(--text-primary)]">{connector.label}</div>
+                      <StatusBadge tone={tone}>{statusLabel}</StatusBadge>
+                    </div>
+                    <div className="mt-1 text-[12px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">{copy.summary}</div>
+                    <div className="mt-2 text-[13px] leading-6 text-[var(--text-secondary)]">{copy.detail}</div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {connector.capabilities.slice(0, 3).map((capability) => (
+                        <span
+                          key={`${connector.connector}:${capability}`}
+                          className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-3 py-1 text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]"
+                        >
+                          {capability.replaceAll("_", " ")}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="mt-3 text-[11px] text-[var(--text-tertiary)]">
+                      {connector.executionMode ? `${connector.executionMode} · ` : ""}{relatedHealth?.traceCount || connector.traceCount} trace
+                    </div>
+                    {blocker ? <div className="mt-2 text-[12px] text-[var(--accent-amber)]">{blocker}</div> : null}
+                  </div>
+                  <StatusBadge tone={tone}>{statusLabel}</StatusBadge>
+                </div>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  {fields.map((field) => (
+                    <input
+                      key={`${connector.connector}:${field.name}`}
+                      type={field.secret ? "password" : "text"}
+                      value={turkeyDraftValue(connector.connector, field.name)}
+                      onChange={(event) => updateTurkeyDraft(connector.connector, field.name, event.target.value)}
+                      placeholder={field.placeholder || field.label}
+                      className={fieldClassName}
+                    />
+                  ))}
+                </div>
+
+                <label className="mt-4 flex items-center gap-3 rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-3 text-[12px] text-[var(--text-secondary)]">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(turkeyConsent[connector.connector])}
+                    onChange={(event) =>
+                      setTurkeyConsent((current) => ({
+                        ...current,
+                        [connector.connector]: event.target.checked,
+                      }))
+                    }
+                  />
+                  KVKK onayı mevcut. Kimlik doğrulama akışına izin ver.
+                </label>
+
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => void handleTurkeySave(connector)}
+                    disabled={!runtimeReady || busyId === `turkey-save:${connector.connector}`}
+                  >
+                    {busyId === `turkey-save:${connector.connector}` ? "Kaydediliyor..." : "Kaydet"}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => void handleTurkeyQuickAction(connector, "health_check")}
+                    disabled={!runtimeReady || busyId === `quick:${connector.connector}:health_check`}
+                  >
+                    Health check
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void handleTurkeyQuickAction(connector, "test_credentials")}
+                    disabled={!runtimeReady || busyId === `quick:${connector.connector}:test_credentials`}
+                  >
+                    Kimlik testi
+                  </Button>
+                </div>
+
+                {quickResult ? (
+                  <div className="mt-3 rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-3">
+                    <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-tertiary)]">{quickResult.action}</div>
+                    <div className="mt-2 text-[12px] text-[var(--text-secondary)]">
+                      {String(
+                        quickResult.result.error ||
+                          quickResult.result.message ||
+                          quickResult.result.status ||
+                          (quickResult.result.healthy === true ? "healthy" : ""),
+                      )}
+                    </div>
+                    {typeof quickResult.result.latency_ms === "number" ? (
+                      <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">{quickResult.result.latency_ms} ms</div>
+                    ) : null}
+                    {quickResult.blockingIssue ? (
+                      <div className="mt-1 text-[11px] text-[var(--accent-amber)]">{quickResult.blockingIssue}</div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                <div className="mt-4 flex items-center gap-2 text-[11px] text-[var(--text-tertiary)]">
+                  <ArrowRight className="h-4 w-4" />
+                  İlk dilim: kurulum, health ve credential doğrulama.
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Surface>
+    );
+  }
+
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <Surface tone="hero" className="px-6 py-7">
         <div className="space-y-3">
           <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Baglantilar</div>
-          <h1 className="font-display text-[32px] font-semibold tracking-[-0.05em] text-[var(--text-primary)]">Kokpit</h1>
+          <h1 className="font-display text-[30px] font-semibold tracking-[-0.05em] text-[var(--text-primary)]">Mesaj kanalları</h1>
+          <p className="max-w-[680px] text-[13px] leading-6 text-[var(--text-secondary)]">
+            İlk kurulum için yalnızca Telegram ve WhatsApp’ı gösteriyorum. Diğer uygulamalar isteğe bağlı.
+          </p>
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge tone={runtimeReady ? "success" : "warning"}>{runtimeReady ? "Hazir" : "Kapali"}</StatusBadge>
-            <StatusBadge tone={readiness?.productivityAppsReady ? "success" : "warning"}>
-              {readiness?.productivityAppsReady ? "Apps hazir" : "Apps eksik"}
-            </StatusBadge>
-            <StatusBadge tone={readiness?.bluebubblesReady ? "success" : "info"}>
-              {readiness?.bluebubblesReady ? "Blue acik" : "Blue kapali"}
+            <StatusBadge tone={connectedMessagingCount > 0 ? "success" : "info"}>
+              {connectedMessagingCount > 0 ? `${connectedMessagingCount} kanal açık` : "ilk kanal"}
             </StatusBadge>
             <div className="text-[12px] text-[var(--text-secondary)]">
-              WhatsApp {readiness?.whatsappMode || "yok"} · Oto {readiness?.applePermissions.automation ? "acik" : "kapali"}
+              WhatsApp {readiness?.whatsappMode || "yok"} · Telegram {channels.find((item) => item.type === "telegram")?.connected ? "açık" : "bekliyor"}
             </div>
           </div>
         </div>
       </Surface>
 
-      <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+      <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
         <Surface tone="card" className="p-5">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -539,7 +818,7 @@ export function IntegrationsScreen() {
           </div>
 
           <div className="mt-4 grid gap-3 md:grid-cols-2">
-            {mobileLaneCards.map((entry) => (
+            {mobileLaneCards.filter((entry) => entry.type === "telegram" || entry.type === "whatsapp").map((entry) => (
               <div key={entry.type} className={panelClassName}>
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -562,9 +841,8 @@ export function IntegrationsScreen() {
                       {busyId === "channel-pair:whatsapp" ? "Bekle..." : "QR"}
                     </Button>
                   ) : null}
-                  <Button variant="ghost" size="sm" onClick={() => setMessage(`${entry.catalog?.label || entry.type}: alanlar asagida.`)}>
-                    Alta git
-                    <ArrowRight className="ml-2 h-4 w-4" />
+                  <Button variant="ghost" size="sm" onClick={() => setMessage(`${entry.catalog?.label || entry.type}: alanlar aşağıda.`)}>
+                    Düzenle
                   </Button>
                 </div>
               </div>
@@ -578,12 +856,7 @@ export function IntegrationsScreen() {
             <div className="mt-2 text-[20px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">Siralama</div>
           </div>
           <div className="mt-4 space-y-3">
-            {[
-              "1. Ilk kanal",
-              "2. Test gonder",
-              "3. Inbox kontrol",
-              "4. Apps ekle",
-            ].map((item) => (
+            {["1. Telegram veya WhatsApp kur", "2. Test gönder", "3. Inbox akışını kontrol et"].map((item) => (
               <div key={item} className="rounded-[18px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] px-4 py-3 text-[13px] text-[var(--text-secondary)]">
                 {item}
               </div>
@@ -635,28 +908,14 @@ export function IntegrationsScreen() {
 
       <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <div className="space-y-6">
-          {renderConnectorList(
-            "Apps",
-            "Google, Notion, Slack",
-            productivityConnectors,
-          )}
-
-          {renderConnectorList(
-            "Apple",
-            "Mail, Notes, Calendar",
-            appleConnectors,
-          )}
-        </div>
-
-        <div className="space-y-6">
           <Surface tone="card" className="p-5">
             <div>
               <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Mesaj</div>
-              <div className="mt-2 text-[14px] text-[var(--text-secondary)]">Canli kanallar</div>
+              <div className="mt-2 text-[14px] text-[var(--text-secondary)]">Canlı kanallar</div>
             </div>
 
             <div className="mt-4 space-y-3">
-              {messagingChannels.map((entry) => (
+              {messagingChannels.filter((entry) => entry.type === "telegram" || entry.type === "whatsapp").map((entry) => (
                 <div key={entry.type} className="rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2 text-[14px] font-medium text-[var(--text-primary)]">
@@ -722,7 +981,7 @@ export function IntegrationsScreen() {
                     >
                       Test
                     </Button>
-                    {(entry.type === "whatsapp" || entry.type === "imessage") ? (
+                    {entry.type === "whatsapp" ? (
                       <Button
                         variant="ghost"
                         onClick={() => void handleQuickAction(entry.type, "status")}
@@ -749,36 +1008,60 @@ export function IntegrationsScreen() {
 
           <Surface tone="card" className="p-5">
             <div className="flex items-center gap-2 text-[14px] font-medium text-[var(--text-primary)]">
-              <Mail className="h-4 w-4" />
-              Izler
-            </div>
-            <div className="mt-4 space-y-2">
-              {recentTraces.length ? (
-                recentTraces.map((trace) => (
-                  <div key={trace.traceId} className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] px-4 py-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-[13px] font-medium text-[var(--text-primary)]">
-                        {trace.connectorName || trace.provider} · {trace.operation}
-                      </div>
-                      <StatusBadge tone={trace.success ? "success" : "warning"}>{trace.status}</StatusBadge>
-                    </div>
-                    <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">{trace.createdAt}</div>
-                  </div>
-                ))
-              ) : (
-                <div className="text-[12px] text-[var(--text-secondary)]">Bos</div>
-              )}
-            </div>
-          </Surface>
-
-          <Surface tone="card" className="p-5">
-            <div className="flex items-center gap-2 text-[14px] font-medium text-[var(--text-primary)]">
               <ShieldCheck className="h-4 w-4" />
               Durum
             </div>
             <div className="mt-3 text-[12px] text-[var(--text-secondary)]">
               {message || (!runtimeReady ? runtimeGateReason : "Hazir.")}
             </div>
+          </Surface>
+        </div>
+
+        <div className="space-y-6">
+          <Surface tone="card" className="p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">İsteğe bağlı</div>
+                <div className="mt-2 text-[14px] text-[var(--text-secondary)]">Google, Apple ve diğer bağlantılar</div>
+              </div>
+              <Button variant="ghost" size="sm" onClick={() => setShowAdvanced((value) => !value)}>
+                {showAdvanced ? "Gizle" : "Göster"}
+              </Button>
+            </div>
+            {!showAdvanced ? (
+              <div className="mt-4 rounded-[18px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] px-4 py-4 text-[12px] leading-6 text-[var(--text-secondary)]">
+                İlk kullanım için bu alanı gizledim. Mesaj kanalları stabil olduktan sonra diğer uygulamaları bağla.
+              </div>
+            ) : (
+              <div className="mt-4 space-y-6">
+                {renderTurkeyConnectorList(turkeyConnectors)}
+                {renderConnectorList("Apps", "Google, Notion, Slack", productivityConnectors)}
+                {renderConnectorList("Apple", "Mail, Notes, Calendar", appleConnectors)}
+                <Surface tone="card" className="p-5">
+                  <div className="flex items-center gap-2 text-[14px] font-medium text-[var(--text-primary)]">
+                    <Mail className="h-4 w-4" />
+                    İzler
+                  </div>
+                  <div className="mt-4 space-y-2">
+                    {recentTraces.length ? (
+                      recentTraces.map((trace) => (
+                        <div key={trace.traceId} className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] px-4 py-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="text-[13px] font-medium text-[var(--text-primary)]">
+                              {trace.connectorName || trace.provider} · {trace.operation}
+                            </div>
+                            <StatusBadge tone={trace.success ? "success" : "warning"}>{trace.status}</StatusBadge>
+                          </div>
+                          <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">{trace.createdAt}</div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-[12px] text-[var(--text-secondary)]">Boş</div>
+                    )}
+                  </div>
+                </Surface>
+              </div>
+            )}
           </Surface>
         </div>
       </div>

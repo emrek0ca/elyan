@@ -363,6 +363,12 @@ class LLMSetupManager:
             "models": [],
             "recommended": OLLAMA_RECOMMENDED_MODELS,
             "install_url": "https://ollama.ai/download",
+            "configured_model": self._get_configured_model("ollama"),
+            "lane_ready": False,
+            "probe_model": "",
+            "probe_latency_ms": 0.0,
+            "probe_error": "",
+            "probe_response": "",
         }
 
         try:
@@ -388,6 +394,55 @@ class LLMSetupManager:
                     # Mark recommended as installed/not
                     for rec in result["recommended"]:
                         rec["installed"] = rec["name"] in installed_names
+
+                    probe_model = result["configured_model"] or PROVIDERS["ollama"]["default_model"]
+                    if probe_model not in installed_names:
+                        for rec in OLLAMA_RECOMMENDED_MODELS:
+                            candidate = str(rec.get("name") or "").strip()
+                            if candidate in installed_names:
+                                probe_model = candidate
+                                break
+                        else:
+                            if installed_names:
+                                probe_model = sorted(installed_names)[0]
+
+                    result["probe_model"] = probe_model
+                    if probe_model and installed_names:
+                        probe_started = time.time()
+                        try:
+                            async with httpx.AsyncClient(timeout=12.0) as probe_client:
+                                probe_resp = await probe_client.post(
+                                    "http://localhost:11434/api/generate",
+                                    json={
+                                        "model": probe_model,
+                                        "prompt": "ping",
+                                        "stream": False,
+                                        "options": {"num_predict": 1},
+                                    },
+                                )
+                            probe_elapsed_ms = (time.time() - probe_started) * 1000
+                            result["probe_latency_ms"] = probe_elapsed_ms
+                            probe_data = {}
+                            try:
+                                probe_data = probe_resp.json() if probe_resp.content else {}
+                            except Exception:
+                                probe_data = {}
+                            response_text = str(probe_data.get("response") or "").strip()
+                            if probe_resp.status_code == 200 and not str(probe_data.get("error") or "").strip():
+                                result["lane_ready"] = True
+                                result["probe_response"] = response_text[:120]
+                            else:
+                                error_text = str(probe_data.get("error") or f"HTTP {probe_resp.status_code}").strip()
+                                result["probe_error"] = error_text[:240]
+                                result["probe_response"] = response_text[:120]
+                        except httpx.TimeoutException:
+                            result["probe_error"] = "Ollama lane probe timed out."
+                        except httpx.ConnectError:
+                            result["probe_error"] = "Ollama çalışmıyor. Önce 'ollama serve' komutunu çalıştır."
+                        except Exception as exc:
+                            result["probe_error"] = str(exc)[:240]
+                    elif result["running"] and not installed_names:
+                        result["probe_error"] = "Ollama çalışıyor ama model yüklü değil."
         except Exception:
             pass
 
@@ -432,7 +487,16 @@ class LLMSetupManager:
     async def quick_health(self) -> Dict[str, Any]:
         """Quick health check — which providers work right now?"""
         statuses = await self.get_all_provider_status()
-        working = [s for s in statuses if s.get("reachable")]
+        ollama = await self.ollama_status()
+        working = []
+        for status in statuses:
+            provider = str(status.get("provider") or "").strip().lower()
+            if provider == "ollama":
+                if bool(ollama.get("lane_ready")):
+                    working.append(status)
+                continue
+            if status.get("reachable"):
+                working.append(status)
         configured = [s for s in statuses if s.get("configured")]
 
         return {
@@ -442,6 +506,8 @@ class LLMSetupManager:
             "configured_count": len(configured),
             "total_providers": len(PROVIDERS),
             "needs_setup": len(working) == 0,
+            "ollama_lane_ready": bool(ollama.get("lane_ready")),
+            "ollama": ollama,
             "providers": statuses,
         }
 

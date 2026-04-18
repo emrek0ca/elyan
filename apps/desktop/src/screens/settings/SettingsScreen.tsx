@@ -151,6 +151,12 @@ export function SettingsScreen() {
   }, [memberFilter, workspaceMembers]);
 
   const permissions = workspaceDetail?.permissions;
+  const billingControlsReady = Boolean(
+    billing?.checkoutUrl ||
+    billing?.portalUrl ||
+    billing?.activeCheckout?.launchUrl ||
+    billing?.billingCustomer,
+  );
   const canManageMembers = Boolean(permissions?.manageMembers);
   const canManageRoles = Boolean(permissions?.manageRoles);
   const canManageSeats = Boolean(permissions?.manageSeats);
@@ -572,10 +578,12 @@ export function SettingsScreen() {
               </div>
               <div className="flex items-center gap-2">
                 <StatusBadge tone={billing?.plan.status === "active" ? "success" : "neutral"}>{billing?.plan.label || "Free"}</StatusBadge>
-                <Button variant="secondary" size="sm" onClick={() => void openPortal()} disabled={billingBusy !== null}>
-                  <CreditCard className="mr-2 h-4 w-4" />
-                  Portal
-                </Button>
+                {billingControlsReady ? (
+                  <Button variant="secondary" size="sm" onClick={() => void openPortal()} disabled={billingBusy !== null}>
+                    <CreditCard className="mr-2 h-4 w-4" />
+                    Portal
+                  </Button>
+                ) : null}
               </div>
             </div>
 
@@ -655,29 +663,38 @@ export function SettingsScreen() {
                 </div>
               </div>
 
-              <div className="grid gap-4 lg:grid-cols-3">
-                {(billingCatalog?.plans || []).map((plan) => (
-                  <div key={plan.id} className={panelClassName}>
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-[14px] font-medium text-[var(--text-primary)]">{plan.label}</div>
-                        <div className="mt-1 text-[12px] text-[var(--text-secondary)]">{plan.monthlyCredits.toLocaleString("tr-TR")} kredi</div>
+              {billingControlsReady ? (
+                <div className="grid gap-4 lg:grid-cols-3">
+                  {(billingCatalog?.plans || []).map((plan) => (
+                    <div key={plan.id} className={panelClassName}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-[14px] font-medium text-[var(--text-primary)]">{plan.label}</div>
+                          <div className="mt-1 text-[12px] text-[var(--text-secondary)]">{plan.monthlyCredits.toLocaleString("tr-TR")} kredi</div>
+                        </div>
+                        <StatusBadge tone={billing?.plan.id === plan.id ? "success" : "neutral"}>
+                          {billing?.plan.id === plan.id ? "Aktif" : `${plan.seats} seat`}
+                        </StatusBadge>
                       </div>
-                      <StatusBadge tone={billing?.plan.id === plan.id ? "success" : "neutral"}>
-                        {billing?.plan.id === plan.id ? "Aktif" : `${plan.seats} seat`}
-                      </StatusBadge>
+                      <div className="mt-3 text-[12px] text-[var(--text-secondary)]">
+                        {plan.maxConnectors} baglanti · {plan.seats} seat
+                      </div>
+                      <div className="mt-3">
+                        <Button variant={billing?.plan.id === plan.id ? "secondary" : "primary"} size="sm" onClick={() => void openCheckout(plan.id)} disabled={billingBusy !== null}>
+                          {billing?.plan.id === plan.id ? "Degistir" : "Yukselt"}
+                        </Button>
+                      </div>
                     </div>
-                    <div className="mt-3 text-[12px] text-[var(--text-secondary)]">
-                      {plan.maxConnectors} baglanti · {plan.seats} seat
-                    </div>
-                    <div className="mt-3">
-                      <Button variant={billing?.plan.id === plan.id ? "secondary" : "primary"} size="sm" onClick={() => void openCheckout(plan.id)} disabled={billingBusy !== null}>
-                        {billing?.plan.id === plan.id ? "Degistir" : "Yukselt"}
-                      </Button>
-                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className={panelClassName}>
+                  <div className="text-[13px] font-medium text-[var(--text-primary)]">Ödeme yüzeyi kapalı</div>
+                  <div className="mt-2 text-[12px] leading-6 text-[var(--text-secondary)]">
+                    Bu kurulumda billing aktif değil. Plan değiştirme ve satın alma akışlarını gizledim.
                   </div>
-                ))}
-              </div>
+                </div>
+              )}
 
               <div className="grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
                 <div className={panelClassName}>
@@ -686,7 +703,7 @@ export function SettingsScreen() {
                     <div className="text-[13px] font-medium text-[var(--text-primary)]">Paket</div>
                   </div>
                   <div className="mt-3 space-y-3">
-                    {(billingCatalog?.tokenPacks || []).map((pack) => (
+                    {billingControlsReady ? (billingCatalog?.tokenPacks || []).map((pack) => (
                       <div key={pack.id} className="rounded-[16px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 py-3">
                         <div className="flex items-start justify-between gap-3">
                           <div>
@@ -700,7 +717,11 @@ export function SettingsScreen() {
                           </Button>
                         </div>
                       </div>
-                    ))}
+                    )) : (
+                      <div className="rounded-[16px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 py-4 text-[12px] text-[var(--text-secondary)]">
+                        Billing devre dışı. Paketler gizlendi.
+                      </div>
+                    )}
                   </div>
                 </div>
 

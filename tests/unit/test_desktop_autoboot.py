@@ -8,8 +8,8 @@ def test_ensure_gateway_ready_skips_start_when_healthy(monkeypatch):
 
     class _Gateway:
         @staticmethod
-        def _fetch_gateway_status(port):
-            return {"ok": True, "data": {"port": port}}
+        def _fetch_gateway_launch_health(port):
+            return {"ok": True, "data": {"ok": True, "port": port, "readiness": {"launch_ready": True, "launch_blockers": []}}}
 
         @staticmethod
         def start_gateway(daemon=False, port=None):
@@ -28,9 +28,9 @@ def test_ensure_gateway_ready_starts_gateway_when_unhealthy(monkeypatch):
 
     class _Gateway:
         @staticmethod
-        def _fetch_gateway_status(port):
+        def _fetch_gateway_launch_health(port):
             state["count"] += 1
-            return {"ok": state["count"] >= 3, "data": {"port": port}}
+            return {"ok": state["count"] >= 3, "data": {"ok": state["count"] >= 3, "port": port, "readiness": {"launch_ready": state["count"] >= 3, "launch_blockers": []}}}
 
         @staticmethod
         def start_gateway(daemon=False, port=None):

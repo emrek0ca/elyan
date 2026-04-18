@@ -198,7 +198,7 @@ def _kickstart_launchd_service(label: str = LAUNCHD_LABEL) -> tuple[bool, str | 
 def _wait_until_gateway_ready(port: int, timeout_s: float = 15.0) -> bool:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        status = _fetch_gateway_status(port)
+        status = _fetch_gateway_launch_health(port)
         if status.get("ok"):
             return True
         time.sleep(0.5)
@@ -235,6 +235,16 @@ def _fetch_gateway_json(port: int, path: str) -> dict:
 
 def _fetch_gateway_status(port: int) -> dict:
     return _fetch_gateway_json(port, "/api/status")
+
+
+def _fetch_gateway_launch_health(port: int) -> dict:
+    runtime = _fetch_gateway_json(port, "/healthz")
+    if not runtime.get("ok"):
+        return runtime
+    data = runtime.get("data", {})
+    if not isinstance(data, dict):
+        return {"ok": False, "data": {}, "error": "invalid gateway health payload"}
+    return {"ok": bool(data.get("ok")), "data": data}
 
 
 def _fetch_gateway_channels(port: int) -> dict:
@@ -329,12 +339,12 @@ def start_gateway(daemon=False, port: int | None = None):
             if proc.poll() is not None:
                 # Process may exit if launchd/service reclaims startup. Re-check health.
                 adopted_pid = _running_gateway_pid(gateway_port)
-                status = _fetch_gateway_status(gateway_port)
+                status = _fetch_gateway_launch_health(gateway_port)
                 if status.get("ok"):
                     ready = True
                     break
                 continue
-            status = _fetch_gateway_status(gateway_port)
+            status = _fetch_gateway_launch_health(gateway_port)
             if status.get("ok"):
                 ready = True
                 break
@@ -377,7 +387,7 @@ def start_gateway(daemon=False, port: int | None = None):
                 retry_ready = False
                 for _ in range(30):  # ~15s max
                     time.sleep(0.5)
-                    retry_status = _fetch_gateway_status(gateway_port)
+                    retry_status = _fetch_gateway_launch_health(gateway_port)
                     if retry_status.get("ok"):
                         retry_ready = True
                         break
@@ -513,7 +523,9 @@ def gateway_status(as_json: bool = False, port: int | None = None):
     else:
         _clear_pidfile()
 
-    runtime = _fetch_gateway_status(gateway_port)
+    launch_health = _fetch_gateway_launch_health(gateway_port)
+    runtime_status = _fetch_gateway_status(gateway_port)
+    runtime = launch_health if launch_health.get("ok") else runtime_status
     runtime_data = runtime.get("data", {}) if runtime.get("ok") else {}
     channels_resp = _fetch_gateway_channels(gateway_port) if runtime.get("ok") else {"ok": False}
     channels_data = channels_resp.get("data", {}) if channels_resp.get("ok") else {}
@@ -578,25 +590,35 @@ def gateway_status(as_json: bool = False, port: int | None = None):
 
 def gateway_health(as_json: bool = False, port: int | None = None):
     gateway_port = int(port or DEFAULT_PORT)
-    runtime = _fetch_gateway_status(gateway_port)
+    runtime = _fetch_gateway_launch_health(gateway_port)
     if runtime.get("ok"):
         data = runtime.get("data", {})
+        readiness = data.get("readiness", {}) if isinstance(data.get("readiness"), dict) else {}
         payload = {
-            "healthy": data.get("status") == "online",
+            "healthy": bool(data.get("ok")),
             "port": gateway_port,
             "status": data.get("status", "unknown"),
+            "runtime_ready": bool(readiness.get("elyan_ready")),
+            "launch_ready": bool(readiness.get("launch_ready")),
+            "launch_blockers": list(readiness.get("launch_blockers") or []),
+            "model_lane_ready": bool(readiness.get("model_lane_ready")),
             "cpu_pct": data.get("cpu_pct"),
             "ram_pct": data.get("ram_pct"),
             "uptime_s": data.get("uptime_s"),
         }
     else:
+        data = runtime.get("data", {}) if isinstance(runtime.get("data"), dict) else {}
+        readiness = data.get("readiness", {}) if isinstance(data.get("readiness"), dict) else {}
         running_pid = _running_gateway_pid(gateway_port)
         payload = {
             "healthy": False,
             "port": gateway_port,
-            "status": "starting" if running_pid else "unreachable",
-            "error": runtime.get("error"),
+            "status": str(data.get("status") or ("starting" if running_pid else "unreachable")),
+            "error": runtime.get("error") or (", ".join(readiness.get("launch_blockers") or []) if isinstance(readiness.get("launch_blockers"), list) else ""),
             "pid": running_pid,
+            "launch_ready": bool(readiness.get("launch_ready", False)),
+            "launch_blockers": list(readiness.get("launch_blockers") or []),
+            "model_lane_ready": bool(readiness.get("model_lane_ready")),
         }
 
     if as_json:

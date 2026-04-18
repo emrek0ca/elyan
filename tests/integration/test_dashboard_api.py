@@ -407,6 +407,22 @@ class TestHTTPServer:
         assert "success" in data
 
     @pytest.mark.skipif(not _has_flask(), reason="Flask not available")
+    def test_session_cookie_is_http_only(self):
+        """Test that the dashboard session cookie is not readable from browser JS."""
+        from flask import Response
+
+        from api.http_server import DashboardHTTPServer
+
+        server = DashboardHTTPServer(port=5007)
+        with server.app.test_request_context("/api/v1/cognitive/state", headers={"Origin": "http://localhost:5007"}):
+            response = Response()
+            updated = server._ensure_session_cookie(response)
+
+        set_cookie_headers = updated.headers.getlist("Set-Cookie")
+        assert any("elyan_session=" in header and "HttpOnly" in header for header in set_cookie_headers)
+        assert updated.headers.get("X-Elyan-Session-Token")
+
+    @pytest.mark.skipif(not _has_flask(), reason="Flask not available")
     def test_404_response(self):
         """Test 404 error handling"""
         from api.http_server import DashboardHTTPServer

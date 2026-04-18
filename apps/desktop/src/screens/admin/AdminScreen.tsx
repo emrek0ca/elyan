@@ -15,12 +15,25 @@ import {
   useLearningSummary,
   useWorkspaceMembers,
 } from "@/hooks/use-desktop-data";
-import { getBillingCheckout, purchaseTokenPack } from "@/services/api/elyan-service";
+import { assignWorkspaceSeat, getBillingCheckout, purchaseTokenPack } from "@/services/api/elyan-service";
 import { runtimeManager } from "@/runtime/runtime-manager";
+
+function formatResetLabel(timestamp?: number) {
+  if (!timestamp || timestamp <= 0) {
+    return "Yok";
+  }
+  return new Date(timestamp * 1000).toLocaleString("tr-TR", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 export function AdminScreen() {
   const queryClient = useQueryClient();
   const [billingMessage, setBillingMessage] = useState("");
+  const [workspaceBusyId, setWorkspaceBusyId] = useState("");
   const { data: billing } = useBillingWorkspace();
   const { data: adminWorkspaces = [] } = useAdminWorkspaces();
   const primaryWorkspaceId = adminWorkspaces[0]?.workspaceId || billing?.workspaceId || "";
@@ -30,6 +43,13 @@ export function AdminScreen() {
   const { data: creditLedger = [] } = useCreditLedger(10);
   const { data: billingEvents = [] } = useBillingEvents(10);
   const { data: learning } = useLearningSummary();
+  const canManageSeats = Boolean(workspaceDetail?.permissions.manageSeats);
+  const billingControlsReady = Boolean(
+    billing?.checkoutUrl ||
+    billing?.portalUrl ||
+    billing?.activeCheckout?.launchUrl ||
+    billing?.billingCustomer,
+  );
 
   async function invalidateBillingViews() {
     await Promise.all([
@@ -39,7 +59,28 @@ export function AdminScreen() {
       queryClient.invalidateQueries({ queryKey: ["billing-events"] }),
       queryClient.invalidateQueries({ queryKey: ["home-snapshot"] }),
       queryClient.invalidateQueries({ queryKey: ["cowork-home"] }),
+      queryClient.invalidateQueries({ queryKey: ["admin-workspace", primaryWorkspaceId] }),
+      queryClient.invalidateQueries({ queryKey: ["workspace-members", primaryWorkspaceId] }),
+      queryClient.invalidateQueries({ queryKey: ["admin-workspaces"] }),
     ]);
+  }
+
+  async function handleSeatToggle(actorId: string, assigned: boolean) {
+    setWorkspaceBusyId(`seat:${actorId}`);
+    setBillingMessage("");
+    try {
+      await assignWorkspaceSeat({
+        workspaceId: primaryWorkspaceId,
+        actorId,
+        action: assigned ? "release" : "assign",
+      });
+      await invalidateBillingViews();
+      setBillingMessage(assigned ? "Seat birakildi." : "Seat atandi.");
+    } catch (error) {
+      setBillingMessage(error instanceof Error ? error.message : "Seat islemi basarisiz.");
+    } finally {
+      setWorkspaceBusyId("");
+    }
   }
 
   async function pollCheckout(referenceId: string) {
@@ -89,7 +130,7 @@ export function AdminScreen() {
             </div>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-4">
             <div className="rounded-[20px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] px-4 py-4">
               <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-tertiary)]">Workspace</div>
               <div className="mt-2 text-[18px] font-semibold text-[var(--text-primary)]">
@@ -101,6 +142,7 @@ export function AdminScreen() {
               <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-tertiary)]">Plan</div>
               <div className="mt-2 text-[18px] font-semibold text-[var(--text-primary)]">{billing?.plan.label || "Free"}</div>
               <div className="mt-1 text-[12px] text-[var(--text-secondary)]">{billing?.subscriptionState.status || "inactive"}</div>
+              <div className="mt-1 text-[12px] text-[var(--text-secondary)]">Reset: {formatResetLabel(billing?.resetAt || billing?.creditBalance?.resetAt)}</div>
             </div>
             <div className="rounded-[20px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] px-4 py-4">
               <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-tertiary)]">Credits</div>
@@ -109,6 +151,21 @@ export function AdminScreen() {
               </div>
               <div className="mt-1 text-[12px] text-[var(--text-secondary)]">
                 included {(billing?.creditBalance?.included || 0).toLocaleString("tr-TR")} · purchased {(billing?.creditBalance?.purchased || 0).toLocaleString("tr-TR")}
+              </div>
+              <div className="mt-1 text-[12px] text-[var(--text-secondary)]">
+                recent {(billing?.recentUsageSummary?.requests || billing?.usageSummary?.requests || 0).toLocaleString("tr-TR")} request · top source {billing?.topCostSources?.[0]?.source || "—"}
+              </div>
+            </div>
+            <div className="rounded-[20px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] px-4 py-4">
+              <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-tertiary)]">Seats</div>
+              <div className="mt-2 text-[18px] font-semibold text-[var(--text-primary)]">
+                {(workspaceDetail?.seats.seatsUsed || 0).toLocaleString("tr-TR")}/{(workspaceDetail?.seats.seatLimit || billing?.seats || 1).toLocaleString("tr-TR")}
+              </div>
+              <div className="mt-1 text-[12px] text-[var(--text-secondary)]">
+                available {(workspaceDetail?.seats.seatsAvailable || 0).toLocaleString("tr-TR")} · manage {canManageSeats ? "on" : "off"}
+              </div>
+              <div className="mt-1 text-[12px] text-[var(--text-secondary)]">
+                {workspaceDetail?.seats.assignments?.length ? `${workspaceDetail.seats.assignments.length} active assignment` : "No active assignment"}
               </div>
             </div>
           </div>
@@ -163,6 +220,16 @@ export function AdminScreen() {
                       {member.role}
                     </StatusBadge>
                   </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void handleSeatToggle(member.actorId, member.seatAssigned)}
+                      disabled={!canManageSeats || workspaceBusyId === `seat:${member.actorId}`}
+                    >
+                      {workspaceBusyId === `seat:${member.actorId}` ? "Bekle..." : member.seatAssigned ? "Birak" : "Ata"}
+                    </Button>
+                  </div>
                 </div>
               ))
             ) : (
@@ -184,21 +251,27 @@ export function AdminScreen() {
             </div>
           ) : null}
           <div className="mt-4 space-y-3">
-            {(billingCatalog?.tokenPacks || []).map((pack) => (
-              <div key={pack.id} className="rounded-[18px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 py-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-[13px] font-medium text-[var(--text-primary)]">{pack.label}</div>
-                    <div className="mt-1 text-[12px] text-[var(--text-secondary)]">
-                      {pack.credits.toLocaleString("tr-TR")} credits · {pack.price.toLocaleString("tr-TR")} {pack.currency}
+            {billingControlsReady ? (
+              (billingCatalog?.tokenPacks || []).map((pack) => (
+                <div key={pack.id} className="rounded-[18px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 py-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-[13px] font-medium text-[var(--text-primary)]">{pack.label}</div>
+                      <div className="mt-1 text-[12px] text-[var(--text-secondary)]">
+                        {pack.credits.toLocaleString("tr-TR")} credits · {pack.price.toLocaleString("tr-TR")} {pack.currency}
+                      </div>
                     </div>
+                    <Button variant="secondary" size="sm" onClick={() => void openTokenPack(pack.id)}>
+                      Buy
+                    </Button>
                   </div>
-                  <Button variant="secondary" size="sm" onClick={() => void openTokenPack(pack.id)}>
-                    Buy
-                  </Button>
                 </div>
+              ))
+            ) : (
+              <div className="rounded-[18px] border border-[var(--glass-border)] bg-[var(--bg-surface)] px-4 py-4 text-[12px] text-[var(--text-secondary)]">
+                Billing aktif değil. Satın alma yüzeyini gizledim.
               </div>
-            ))}
+            )}
           </div>
           {billingMessage ? <div className="mt-4 text-[12px] text-[var(--text-secondary)]">{billingMessage}</div> : null}
         </Surface>

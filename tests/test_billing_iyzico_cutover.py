@@ -244,6 +244,88 @@ def test_workspace_billing_callback_retrieve_is_idempotent_for_token_pack(monkey
     assert int(after["purchased"]) == int(middle["purchased"])
 
 
+def test_subscription_checkout_completion_scopes_included_credits_by_plan(monkeypatch):
+    store = get_workspace_billing_store()
+    store._repository.upsert_workspace({"workspace_id": "workspace-team", "plan_id": "free"})
+    store._repository.upsert_checkout_session(
+        {
+            "reference_id": "plan_ref_pro",
+            "workspace_id": "workspace-team",
+            "mode": "subscription",
+            "catalog_id": "pro",
+            "provider": "iyzico",
+            "provider_token": "tok_pro",
+            "status": "pending",
+            "payment_page_url": "https://billing.local/pro",
+            "callback_url": "https://callback.example/iyzico",
+            "raw_last_payload": {"token": "tok_pro"},
+        }
+    )
+    store._repository.upsert_checkout_session(
+        {
+            "reference_id": "plan_ref_team",
+            "workspace_id": "workspace-team",
+            "mode": "subscription",
+            "catalog_id": "team",
+            "provider": "iyzico",
+            "provider_token": "tok_team",
+            "status": "pending",
+            "payment_page_url": "https://billing.local/team",
+            "callback_url": "https://callback.example/iyzico",
+            "raw_last_payload": {"token": "tok_team"},
+        }
+    )
+
+    def _fake_retrieve(*, token: str, reference_id: str = "") -> ProviderCompletion:
+        if token == "tok_pro":
+            return ProviderCompletion(
+                provider="iyzico",
+                mode="subscription",
+                reference_id=reference_id,
+                status="paid",
+                workspace_id="workspace-team",
+                catalog_id="pro",
+                provider_token=token,
+                provider_payment_id="pay_pro",
+                subscription_reference_code="sub_pro",
+                completed_at=1_713_000_000.0,
+                raw={"token": token, "paymentStatus": "SUCCESS"},
+            )
+        return ProviderCompletion(
+            provider="iyzico",
+            mode="subscription",
+            reference_id=reference_id,
+            status="paid",
+            workspace_id="workspace-team",
+            catalog_id="team",
+            provider_token=token,
+            provider_payment_id="pay_team",
+            subscription_reference_code="sub_team",
+            completed_at=1_713_000_100.0,
+            raw={"token": token, "paymentStatus": "SUCCESS"},
+        )
+
+    monkeypatch.setattr(store._provider, "retrieve_subscription_checkout", _fake_retrieve)
+
+    first = store.complete_checkout_callback(token="tok_pro", reference_id="plan_ref_pro", mode="subscription")
+    first_balance = store.get_credit_balance("workspace-team")
+    second = store.complete_checkout_callback(token="tok_team", reference_id="plan_ref_team", mode="subscription")
+    second_balance = store.get_credit_balance("workspace-team")
+    ledger = store.get_credit_ledger("workspace-team")["items"]
+    included_grants = [
+        item
+        for item in ledger
+        if item.get("bucket") == "included" and item.get("entry_type") == "grant"
+    ]
+
+    assert first["checkout_status"] == "completed"
+    assert first["effective_plan_id"] == "pro"
+    assert second["checkout_status"] == "completed"
+    assert second["effective_plan_id"] == "team"
+    assert int(second_balance["included"]) > int(first_balance["included"])
+    assert {str(item.get("reference_id") or "").split(":", 1)[0] for item in included_grants} == {"pro", "team"}
+
+
 @pytest.mark.asyncio
 async def test_handle_v1_billing_checkout_detail_returns_payload():
     srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)

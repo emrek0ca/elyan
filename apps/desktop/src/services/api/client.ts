@@ -90,7 +90,6 @@ export class ApiClient {
         headers: {
           "Content-Type": "application/json",
           ...(csrfToken ? { "X-Elyan-CSRF": decodeURIComponent(csrfToken) } : {}),
-          ...(this.sessionToken ? { "X-Elyan-Session-Token": this.sessionToken } : {}),
           ...(this.adminToken ? { "X-Elyan-Admin-Token": this.adminToken } : {}),
         },
         body: options.body ? JSON.stringify(options.body) : undefined,
@@ -120,6 +119,8 @@ export class ApiClient {
       throw new Error(detail || `HTTP ${response.status} for ${path}`);
     }
 
+    // User auth is cookie-first. Keep the session token only as a local
+    // compatibility fallback for websocket auth during transition.
     const responseSessionToken =
       response.headers.get("X-Elyan-Session-Token") ||
       (responseIsJson && responseBody && typeof responseBody === "object"

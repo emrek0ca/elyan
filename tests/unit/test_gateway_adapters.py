@@ -86,6 +86,7 @@ class TestTelegramAdapter:
         assert adapter.get_status() == "unavailable"
         assert adapter._is_connected is False
         assert adapter._polling_conflict is True
+        assert adapter.config["reconnect_backoff_schedule_sec"][0] == 30.0
 
     def test_polling_conflict_schedules_shutdown(self, monkeypatch):
         adapter = self._make()
@@ -1449,7 +1450,82 @@ class TestIMessageAdapter:
             await adapter.connect()
 
         assert adapter._is_connected is True
-        create_task.assert_not_called()
+        create_task.assert_called_once()
+        scheduled = create_task.call_args.args[0]
+        if hasattr(scheduled, "close"):
+            scheduled.close()
+
+    @pytest.mark.asyncio
+    async def test_poll_loop_processes_recent_messages(self, monkeypatch):
+        adapter = self._make()
+        received = []
+        adapter.on_message(lambda m: received.append(m))
+
+        class _Response:
+            status = 200
+
+            async def json(self):
+                return {
+                    "data": [
+                        {
+                            "guid": "msg-002",
+                            "text": "İkinci",
+                            "isFromMe": False,
+                            "itemType": 0,
+                            "dateCreated": 1710000002000,
+                            "handle": {"address": "+905551111112"},
+                            "chats": [{"guid": "chat-001", "isGroupChat": False}],
+                        },
+                        {
+                            "guid": "msg-001",
+                            "text": "Birinci",
+                            "isFromMe": False,
+                            "itemType": 0,
+                            "dateCreated": 1710000001000,
+                            "handle": {"address": "+905551111111"},
+                            "chats": [{"guid": "chat-001", "isGroupChat": False}],
+                        },
+                    ]
+                }
+
+            async def text(self):
+                return "{}"
+
+        class _Ctx:
+            async def __aenter__(self):
+                return _Response()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class _Session:
+            def __init__(self):
+                self.closed = False
+                self.calls = 0
+
+            def get(self, url, params=None, timeout=None):
+                self.calls += 1
+                self.url = url
+                self.params = params
+                return _Ctx()
+
+            async def close(self):
+                self.closed = True
+
+        adapter._session = _Session()
+        adapter._is_connected = True
+
+        monkeypatch.setattr(
+            "core.gateway.adapters.imessage_adapter.asyncio.sleep",
+            AsyncMock(side_effect=asyncio.CancelledError()),
+        )
+
+        await adapter._poll_loop()
+
+        assert adapter._session.calls == 1
+        assert [msg.text for msg in received] == ["Birinci", "İkinci"]
+        assert adapter._last_poll_ts == 1710000002000
+        assert adapter._poll_failure_streak == 0
 
     @pytest.mark.asyncio
     async def test_ws_loop_does_not_embed_password_in_url(self):

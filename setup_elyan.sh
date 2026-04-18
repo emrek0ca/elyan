@@ -233,14 +233,59 @@ create_launch_script() {
         LAUNCHER="${INSTALL_DIR}/Elyan.sh"
 
         cat > "$LAUNCHER" << 'EOF'
-#!/bin/bash
-INSTALL_DIR="${HOME}/.elyan"
-VENV_DIR="${INSTALL_DIR}/venv"
-REPO_DIR="${INSTALL_DIR}/repo"
+#!/usr/bin/env bash
+set -euo pipefail
 
-source "$VENV_DIR/bin/activate"
-cd "$REPO_DIR"
-python3 -m cli.main "$@"
+resolve_repo_dir() {
+    if [ -n "${ELYAN_PROJECT_DIR:-}" ] && [ -f "${ELYAN_PROJECT_DIR}/cli/main.py" ]; then
+        printf '%s\n' "${ELYAN_PROJECT_DIR}"
+        return 0
+    fi
+
+    if command -v git >/dev/null 2>&1; then
+        git_root="$(git -C "${PWD}" rev-parse --show-toplevel 2>/dev/null || true)"
+        if [ -n "${git_root}" ] && [ -f "${git_root}/cli/main.py" ]; then
+            printf '%s\n' "${git_root}"
+            return 0
+        fi
+    fi
+
+    if [ -f "${PWD}/cli/main.py" ]; then
+        printf '%s\n' "${PWD}"
+        return 0
+    fi
+
+    if [ -f "${HOME}/.elyan/repo/cli/main.py" ]; then
+        printf '%s\n' "${HOME}/.elyan/repo"
+        return 0
+    fi
+
+    return 1
+}
+
+REPO_DIR="$(resolve_repo_dir)" || {
+    echo "Error: Elyan repository not found. Run setup_elyan.sh or cd into the repo checkout." >&2
+    exit 1
+}
+
+if [ -x "${REPO_DIR}/.venv/bin/python" ]; then
+    PYTHON_BIN="${REPO_DIR}/.venv/bin/python"
+elif [ -x "${HOME}/.elyan/venv/bin/python" ]; then
+    PYTHON_BIN="${HOME}/.elyan/venv/bin/python"
+else
+    echo "Error: Python virtualenv not found. Expected ${REPO_DIR}/.venv/bin/python or ${HOME}/.elyan/venv/bin/python" >&2
+    exit 1
+fi
+
+export ELYAN_PROJECT_DIR="${REPO_DIR}"
+export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
+export PYTHONPATH="${REPO_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+if [ -f "${REPO_DIR}/cli/main.py" ]; then
+    cd "${REPO_DIR}"
+    exec "${PYTHON_BIN}" -m cli.main "$@"
+fi
+
+exec "${PYTHON_BIN}" "${REPO_DIR}/main.py" "$@"
 EOF
 
         chmod +x "$LAUNCHER"
@@ -251,19 +296,59 @@ EOF
     CLI_WRAPPER="${INSTALL_DIR}/elyan"
 
     cat > "$CLI_WRAPPER" << 'EOF'
-#!/bin/bash
-INSTALL_DIR="${HOME}/.elyan"
-VENV_DIR="${INSTALL_DIR}/venv"
-REPO_DIR="${INSTALL_DIR}/repo"
+#!/usr/bin/env bash
+set -euo pipefail
 
-if [ ! -d "$VENV_DIR" ]; then
-    echo "Error: Elyan is not installed. Run: bash setup_elyan.sh"
+resolve_repo_dir() {
+    if [ -n "${ELYAN_PROJECT_DIR:-}" ] && [ -f "${ELYAN_PROJECT_DIR}/cli/main.py" ]; then
+        printf '%s\n' "${ELYAN_PROJECT_DIR}"
+        return 0
+    fi
+
+    if command -v git >/dev/null 2>&1; then
+        git_root="$(git -C "${PWD}" rev-parse --show-toplevel 2>/dev/null || true)"
+        if [ -n "${git_root}" ] && [ -f "${git_root}/cli/main.py" ]; then
+            printf '%s\n' "${git_root}"
+            return 0
+        fi
+    fi
+
+    if [ -f "${PWD}/cli/main.py" ]; then
+        printf '%s\n' "${PWD}"
+        return 0
+    fi
+
+    if [ -f "${HOME}/.elyan/repo/cli/main.py" ]; then
+        printf '%s\n' "${HOME}/.elyan/repo"
+        return 0
+    fi
+
+    return 1
+}
+
+REPO_DIR="$(resolve_repo_dir)" || {
+    echo "Error: Elyan repository not found. Run setup_elyan.sh or cd into the repo checkout." >&2
+    exit 1
+}
+
+if [ -x "${REPO_DIR}/.venv/bin/python" ]; then
+    PYTHON_BIN="${REPO_DIR}/.venv/bin/python"
+elif [ -x "${HOME}/.elyan/venv/bin/python" ]; then
+    PYTHON_BIN="${HOME}/.elyan/venv/bin/python"
+else
+    echo "Error: Python virtualenv not found. Expected ${REPO_DIR}/.venv/bin/python or ${HOME}/.elyan/venv/bin/python" >&2
     exit 1
 fi
 
-source "$VENV_DIR/bin/activate"
-cd "$REPO_DIR"
-python3 -m cli.main "$@"
+export ELYAN_PROJECT_DIR="${REPO_DIR}"
+export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
+export PYTHONPATH="${REPO_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+if [ -f "${REPO_DIR}/cli/main.py" ]; then
+    cd "${REPO_DIR}"
+    exec "${PYTHON_BIN}" -m cli.main "$@"
+fi
+
+exec "${PYTHON_BIN}" "${REPO_DIR}/main.py" "$@"
 EOF
 
     chmod +x "$CLI_WRAPPER"

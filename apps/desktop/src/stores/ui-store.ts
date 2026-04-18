@@ -12,6 +12,7 @@ type UiState = {
   commandPaletteOpen: boolean;
   onboardingComplete: boolean;
   isAuthenticated: boolean;
+  authHydrated: boolean;
   authenticatedEmail: string;
   selectedThreadId: string;
   selectedRunId: string;
@@ -29,6 +30,7 @@ type UiState = {
   closeCommandPalette: () => void;
   completeOnboarding: () => void;
   setOnboardingComplete: (value: boolean) => void;
+  setAuthHydrated: (value: boolean) => void;
   signIn: (email: string) => void;
   signOut: () => void;
   setSelectedRunId: (runId: string) => void;
@@ -52,6 +54,7 @@ export const useUiStore = create<UiState>()(
       commandPaletteOpen: false,
       onboardingComplete: false,
       isAuthenticated: false,
+      authHydrated: false,
       authenticatedEmail: "",
       selectedThreadId: "",
       selectedRunId: "",
@@ -69,8 +72,9 @@ export const useUiStore = create<UiState>()(
       closeCommandPalette: () => set({ commandPaletteOpen: false }),
       completeOnboarding: () => set({ onboardingComplete: true }),
       setOnboardingComplete: (onboardingComplete) => set({ onboardingComplete }),
-      signIn: (authenticatedEmail) => set({ isAuthenticated: true, authenticatedEmail }),
-      signOut: () => set({ isAuthenticated: false, authenticatedEmail: "" }),
+      setAuthHydrated: (authHydrated) => set({ authHydrated }),
+      signIn: (authenticatedEmail) => set({ isAuthenticated: true, authenticatedEmail, authHydrated: true }),
+      signOut: () => set({ isAuthenticated: false, authenticatedEmail: "", authHydrated: true }),
       setSelectedThreadId: (selectedThreadId) => set({ selectedThreadId }),
       clearSelectedThreadId: () => set({ selectedThreadId: "" }),
       setSelectedRunId: (selectedRunId) => set({ selectedRunId }),

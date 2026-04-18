@@ -23,6 +23,7 @@ from core.dependencies.autoinstall_hook import activate as _activate_autoinstall
 _activate_autoinstall_hook()
 
 from cli.commands.bootstrap import handle_bootstrap
+from cli.commands.guide import render_install_to_ui_guide
 
 try:
     import click
@@ -31,9 +32,9 @@ except ImportError:
     sys.exit(1)
 
 from utils.logger import get_logger
+from core.version import APP_VERSION as VERSION
 
 logger = get_logger("main")
-VERSION = "20.1.0"
 PORT = int(os.environ.get("ELYAN_PORT", 18789))
 HOME = Path.home() / ".elyan"
 CFG_FILE = HOME / "elyan.json"
@@ -156,7 +157,7 @@ def cli(ctx):
 
     \b
     İlk kurulum:    elyan setup
-    Başlat:         elyan start  
+    UI yolu:        elyan launch
     Desktop:        elyan desktop
     Model seç:      elyan models
     Durum:          elyan status
@@ -185,8 +186,15 @@ def cli(ctx):
             click.echo(f"  Gateway:   {gw}")
             click.echo("  Desktop:   elyan desktop")
             click.echo()
+            render_install_to_ui_guide(
+                setup_ready=bool(cfg.get("model")) and bool(cfg.get("provider")),
+                gateway_running=_port_alive(),
+                prefix="  ",
+            )
+            click.echo()
             click.echo(click.style("  Komutlar:", bold=True))
             click.echo("    elyan start      — Gateway başlat")
+            click.echo("    elyan launch     — Gateway + UI yolunu tek komutta aç")
             click.echo("    elyan models     — Model yönetimi")
             click.echo("    elyan desktop    — Desktop uygulamayı aç")
             click.echo("    elyan status     — Sistem durumu")
@@ -442,7 +450,8 @@ def setup():
     click.echo(click.style("  ✅ Kurulum tamamlandı!", fg="green", bold=True))
     click.echo()
     click.echo("  Sonraki adımlar:")
-    click.echo(click.style("    elyan start", fg="cyan") + "       — Gateway'i başlat")
+    render_install_to_ui_guide(setup_ready=True, gateway_running=False, prefix="  ")
+    click.echo(click.style("    elyan launch", fg="cyan") + "      — Gateway'i başlat ve UI yolunu hazırla")
     click.echo(click.style("    elyan desktop", fg="cyan") + "     — Desktop uygulamayı aç")
     click.echo(click.style("    elyan status", fg="cyan") + "      — Sistem durumunu kontrol et")
     click.echo(click.style("    elyan models", fg="cyan") + "      — Model değiştir")
@@ -489,20 +498,8 @@ def start(port, daemon):
     click.echo(f"  Model:    {model}")
     click.echo(f"  Port:     {port}")
 
-    if daemon:
-        (HOME / "logs").mkdir(parents=True, exist_ok=True)
-        proc = subprocess.Popen(
-            [sys.executable, "-c",
-             f"import sys; sys.path.insert(0,'{project_root}'); "
-             f"from main import _run_gateway; _run_gateway({port})"],
-            stdout=open(HOME / "logs" / "gateway.out.log", "a"),
-            stderr=open(HOME / "logs" / "gateway.err.log", "a"),
-            start_new_session=True, cwd=str(project_root)
-        )
-        click.echo(f"  ✅ Arka planda başlatıldı (PID: {proc.pid})")
-        click.echo("  Desktop: elyan desktop")
-    else:
-        _run_gateway(port)
+    from cli.commands import gateway as gateway_command
+    gateway_command.start_gateway(daemon=bool(daemon), port=port)
 
 
 def _log_startup_config_warnings() -> None:
@@ -662,7 +659,10 @@ def dashboard(port):
     _ = port
     from cli.commands.desktop import open_desktop
     click.echo("ℹ️  Web dashboard kaldırıldı. Elyan Desktop açılıyor...")
-    raise SystemExit(open_desktop(detached=False))
+    result = open_desktop(detached=False)
+    if result == 0:
+        render_install_to_ui_guide(setup_ready=True, gateway_running=True, prefix="  ")
+    raise SystemExit(result)
 
 
 @cli.command()
@@ -670,7 +670,10 @@ def dashboard(port):
 def desktop(detached):
     """🖥️  Desktop uygulamayı başlat."""
     from cli.commands.desktop import open_desktop
-    raise SystemExit(open_desktop(detached=bool(detached)))
+    result = open_desktop(detached=bool(detached))
+    if result == 0:
+        render_install_to_ui_guide(setup_ready=True, gateway_running=True, prefix="  ")
+    raise SystemExit(result)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -895,6 +898,11 @@ def doctor(fix):
         gateway_line = str(health.get("health_status") or "online")
     click.echo(f"  {'✅' if gateway_ok and health.get('ok') is not False else 'ℹ️ '} Gateway {gateway_line}")
     click.echo(f"  {'✅' if _ollama_ok() else 'ℹ️ '} Ollama {'running' if _ollama_ok() else 'kapalı'}")
+    render_install_to_ui_guide(
+        setup_ready=bool(m and m != "not set"),
+        gateway_running=gateway_ok and health.get("ok") is not False,
+        prefix="  ",
+    )
 
     # Deps
     for dep in ["cryptography", "aiohttp", "httpx", "click", "psutil"]:

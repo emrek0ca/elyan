@@ -11,8 +11,8 @@ export function AppShell() {
         <TitleBar />
         <div className="flex min-h-0 flex-1">
           <SidebarRail />
-          <main className="min-w-0 flex-1 overflow-auto bg-transparent px-5 py-5 lg:px-7 lg:py-7">
-            <div className="mx-auto max-w-[1240px]">
+          <main className="min-w-0 flex-1 overflow-auto bg-transparent px-4 py-4 lg:px-5 lg:py-5">
+            <div className="mx-auto max-w-[1320px]">
               <Outlet />
             </div>
           </main>

@@ -66,6 +66,7 @@ from core.gateway.adapters.whatsapp_bridge import (
 )
 from elyan.dashboard.routes.trace import render_trace_page
 from elyan.verifier.evidence import build_trace_bundle, resolve_evidence_path
+from core.decision_fabric import Decision, get_decision_fabric
 from core.text_artifacts import existing_text_path
 from core.version import APP_VERSION, RUNTIME_PROTOCOL_VERSION
 from core.compliance.audit_trail import audit_trail
@@ -94,9 +95,12 @@ _activity_log: list = []  # Rolling buffer of last 50 events
 _tool_event_log: list = []  # Rolling buffer of last 200 tool events
 _cowork_event_log: list = []  # Rolling buffer of last 200 cowork events
 _start_time: float = time.time()
-_AUTH_FAILURE_ATTEMPTS: dict[str, list[float]] = {}
-_AUTH_RATE_LIMIT_WINDOW_SECONDS = 600.0
-_AUTH_RATE_LIMIT_MAX_FAILURES = 10
+_AUTH_ATTEMPTS: dict[str, list[float]] = {}
+_AUTH_RATE_LIMITS: dict[str, dict[str, float]] = {
+    "failure": {"window_seconds": 600.0, "max_attempts": 10},
+    "session": {"window_seconds": 300.0, "max_attempts": 20},
+    "logout": {"window_seconds": 60.0, "max_attempts": 30},
+}
 _DASHBOARD_WS_AUTH_TIMEOUT_SECONDS = 5.0
 _UPLOAD_MAX_BYTES = 25 * 1024 * 1024
 _UPLOAD_ALLOWED_MIME_TYPES = {
@@ -249,6 +253,7 @@ _USER_SESSION_PATHS = {
     "/api/v1/billing/events",
     "/api/v1/billing/profile",
     "/api/v1/billing/reconcile-usage",
+    "/api/v1/decision-fabric",
     "/api/v1/billing/checkout-session",
     "/api/v1/billing/portal-session",
     "/api/v1/billing/checkout/init",
@@ -305,7 +310,15 @@ def _adapter_health_bucket(name: str, status: Any, health: dict[str, Any]) -> st
         or "getupdates request" in last_error
     ):
         return "optional"
-    if low_name == "whatsapp" and ("node.js bulunamadı" in last_error or "not configured" in last_error):
+    if low_name == "whatsapp" and (
+        "node.js bulunamadı" in last_error
+        or "not configured" in last_error
+        or "bridge hazır değil" in last_error
+        or "bridge hazir degil" in last_error
+        or "bridge not ready" in last_error
+        or "qr eşleşmesi" in last_error
+        or "qr eslesmesi" in last_error
+    ):
         return "optional"
     if health_status in {"disabled", "optional"}:
         return "optional"
@@ -764,42 +777,76 @@ def _is_loopback_request(request) -> bool:
     return _is_loopback_host(host)
 
 
-def _prune_auth_failures(ip: str) -> list[float]:
+def _auth_rate_limit_config(bucket: str) -> dict[str, float]:
+    return _AUTH_RATE_LIMITS.get(str(bucket or "").strip().lower(), _AUTH_RATE_LIMITS["failure"])
+
+
+def _auth_attempts_key(ip: str, bucket: str) -> str:
+    return f"{str(bucket or 'failure').strip().lower()}::{str(ip or '').strip()}"
+
+
+def _log_auth_event(event: str, request=None, **fields: Any) -> None:
+    payload = {
+        "event": event,
+        "path": str(getattr(request, "path", "") or fields.pop("path", "") or ""),
+        "remote_ip": _request_remote_host(request) if request is not None else str(fields.pop("remote_ip", "") or ""),
+    }
+    payload.update({key: value for key, value in fields.items() if value not in {None, ""}})
+    logger.warning("auth_event %s", json.dumps(payload, ensure_ascii=True, sort_keys=True))
+
+
+def _prune_auth_attempts(ip: str, bucket: str = "failure") -> list[float]:
     normalized_ip = str(ip or "").strip()
     if not normalized_ip:
         return []
+    config = _auth_rate_limit_config(bucket)
     now = time.time()
     attempts = [
-        ts for ts in _AUTH_FAILURE_ATTEMPTS.get(normalized_ip, [])
-        if now - ts < _AUTH_RATE_LIMIT_WINDOW_SECONDS
+        ts for ts in _AUTH_ATTEMPTS.get(_auth_attempts_key(normalized_ip, bucket), [])
+        if now - ts < float(config.get("window_seconds", 600.0))
     ]
+    storage_key = _auth_attempts_key(normalized_ip, bucket)
     if attempts:
-        _AUTH_FAILURE_ATTEMPTS[normalized_ip] = attempts
+        _AUTH_ATTEMPTS[storage_key] = attempts
     else:
-        _AUTH_FAILURE_ATTEMPTS.pop(normalized_ip, None)
+        _AUTH_ATTEMPTS.pop(storage_key, None)
     return attempts
 
 
-def _is_auth_rate_limited(ip: str) -> bool:
+def _is_auth_rate_limited(ip: str, bucket: str = "failure") -> bool:
     normalized_ip = str(ip or "").strip()
     if not normalized_ip:
         return False
-    return len(_prune_auth_failures(normalized_ip)) >= _AUTH_RATE_LIMIT_MAX_FAILURES
+    config = _auth_rate_limit_config(bucket)
+    return len(_prune_auth_attempts(normalized_ip, bucket)) >= int(config.get("max_attempts", 10))
 
 
-def _record_auth_failure(ip: str) -> None:
+def _record_auth_failure(ip: str, bucket: str = "failure", *, request=None, reason: str = "") -> None:
     normalized_ip = str(ip or "").strip()
     if not normalized_ip:
         return
-    attempts = _prune_auth_failures(normalized_ip)
+    attempts = _prune_auth_attempts(normalized_ip, bucket)
     attempts.append(time.time())
-    _AUTH_FAILURE_ATTEMPTS[normalized_ip] = attempts
+    _AUTH_ATTEMPTS[_auth_attempts_key(normalized_ip, bucket)] = attempts
+    _log_auth_event(
+        "auth.rate_recorded",
+        request,
+        remote_ip=normalized_ip,
+        bucket=bucket,
+        attempt_count=len(attempts),
+        reason=reason,
+    )
 
 
-def _clear_auth_failures(ip: str) -> None:
+def _clear_auth_failures(ip: str, bucket: str | None = None) -> None:
     normalized_ip = str(ip or "").strip()
-    if normalized_ip:
-        _AUTH_FAILURE_ATTEMPTS.pop(normalized_ip, None)
+    if not normalized_ip:
+        return
+    if bucket:
+        _AUTH_ATTEMPTS.pop(_auth_attempts_key(normalized_ip, bucket), None)
+        return
+    for bucket_name in tuple(_AUTH_RATE_LIMITS.keys()):
+        _AUTH_ATTEMPTS.pop(_auth_attempts_key(normalized_ip, bucket_name), None)
 
 
 def _build_admin_session_context() -> dict[str, Any]:
@@ -811,6 +858,60 @@ def _build_admin_session_context() -> dict[str, Any]:
         "display_name": "Admin",
         "role": "admin",
     }
+
+
+def _cookie_policy() -> dict[str, Any]:
+    def _parse_bool(raw: Any, default: bool) -> bool:
+        if raw is None:
+            return default
+        token = str(raw).strip().lower()
+        if not token:
+            return default
+        if token in {"1", "true", "yes", "on"}:
+            return True
+        if token in {"0", "false", "no", "off"}:
+            return False
+        return default
+
+    deployment_env = str(
+        os.getenv("ELYAN_ENV", "")
+        or os.getenv("APP_ENV", "")
+        or os.getenv("ENV", "")
+        or ""
+    ).strip().lower()
+    secure_default = deployment_env in {"prod", "production", "staging"}
+    configured_secure = elyan_config.get("security.cookies.secure", None)
+    configured_samesite = elyan_config.get("security.cookies.samesite", None)
+    configured_domain = elyan_config.get("security.cookies.domain", None)
+
+    secure = _parse_bool(os.getenv("ELYAN_COOKIE_SECURE", configured_secure), secure_default)
+    same_site_raw = str(os.getenv("ELYAN_COOKIE_SAMESITE", configured_samesite or "Strict") or "Strict").strip().lower()
+    same_site = {"lax": "Lax", "none": "None"}.get(same_site_raw, "Strict")
+    domain = str(os.getenv("ELYAN_COOKIE_DOMAIN", configured_domain or "") or "").strip() or None
+    return {
+        "secure": secure,
+        "samesite": same_site,
+        "domain": domain,
+        "path": "/",
+    }
+
+
+def _set_session_cookie(response: web.StreamResponse, name: str, value: str, *, httponly: bool = True) -> None:
+    cookie_policy = _cookie_policy()
+    response.set_cookie(
+        name,
+        value,
+        httponly=httponly,
+        samesite=cookie_policy["samesite"],
+        secure=bool(cookie_policy["secure"]),
+        path=str(cookie_policy["path"]),
+        domain=cookie_policy["domain"],
+    )
+
+
+def _clear_session_cookie(response: web.StreamResponse, name: str) -> None:
+    cookie_policy = _cookie_policy()
+    response.del_cookie(name, path=str(cookie_policy["path"]), domain=cookie_policy["domain"])
 
 
 def _resolve_dashboard_ws_token(token: str) -> tuple[bool, str, dict[str, Any]]:
@@ -1216,11 +1317,28 @@ class ElyanGatewayServer:
         amount: int = 1,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        usage_metadata = dict(metadata or {})
+        workspace_id = self._workspace_id(request, payload)
+        actor_id = self._actor_id(request, payload)
+        session_id = self._session_id(request, payload, default="desktop")
+        if workspace_id and not usage_metadata.get("workspace_id"):
+            usage_metadata["workspace_id"] = workspace_id
+        if actor_id and not usage_metadata.get("actor_id"):
+            usage_metadata["actor_id"] = actor_id
+        if session_id and not usage_metadata.get("session_id"):
+            usage_metadata["session_id"] = session_id
+        if payload:
+            run_id = str(payload.get("run_id") or payload.get("active_run_id") or "").strip()
+            mission_id = str(payload.get("mission_id") or payload.get("thread_id") or "").strip()
+            if run_id and not usage_metadata.get("run_id"):
+                usage_metadata["run_id"] = run_id
+            if mission_id and not usage_metadata.get("mission_id"):
+                usage_metadata["mission_id"] = mission_id
         return self._workspace_billing().authorize_usage(
-            self._workspace_id(request, payload),
+            workspace_id,
             metric,
             amount=amount,
-            metadata=metadata,
+            metadata=usage_metadata,
         )
 
     @staticmethod
@@ -1240,11 +1358,40 @@ class ElyanGatewayServer:
         amount: int = 1,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        usage_metadata = dict(metadata or {})
+        workspace_id = self._workspace_id(request, payload)
+        actor_id = self._actor_id(request, payload)
+        session_id = self._session_id(request, payload, default="desktop")
+        if workspace_id and not usage_metadata.get("workspace_id"):
+            usage_metadata["workspace_id"] = workspace_id
+        if actor_id and not usage_metadata.get("actor_id"):
+            usage_metadata["actor_id"] = actor_id
+        if session_id and not usage_metadata.get("session_id"):
+            usage_metadata["session_id"] = session_id
+        if payload:
+            run_id = str(payload.get("run_id") or payload.get("active_run_id") or "").strip()
+            mission_id = str(payload.get("mission_id") or payload.get("thread_id") or "").strip()
+            if run_id and not usage_metadata.get("run_id"):
+                usage_metadata["run_id"] = run_id
+            if mission_id and not usage_metadata.get("mission_id"):
+                usage_metadata["mission_id"] = mission_id
+        trace_context = get_trace_context()
+        if trace_context is not None:
+            if str(getattr(trace_context, "trace_id", "") or "").strip() and not usage_metadata.get("trace_id"):
+                usage_metadata["trace_id"] = str(getattr(trace_context, "trace_id", "") or "").strip()
+            if str(getattr(trace_context, "request_id", "") or "").strip() and not usage_metadata.get("request_id"):
+                usage_metadata["request_id"] = str(getattr(trace_context, "request_id", "") or "").strip()
+            if str(getattr(trace_context, "source", "") or "").strip() and not usage_metadata.get("trace_source"):
+                usage_metadata["trace_source"] = str(getattr(trace_context, "source", "") or "").strip()
+            if str(getattr(trace_context, "session_id", "") or "").strip() and not usage_metadata.get("session_id"):
+                usage_metadata["session_id"] = str(getattr(trace_context, "session_id", "") or "").strip()
+            if str(getattr(trace_context, "workspace_id", "") or "").strip() and not usage_metadata.get("workspace_id"):
+                usage_metadata["workspace_id"] = str(getattr(trace_context, "workspace_id", "") or "").strip()
         return self._workspace_billing().record_usage(
-            self._workspace_id(request, payload),
+            workspace_id,
             metric,
             amount,
-            metadata=metadata,
+            metadata=usage_metadata,
         )
 
     def _reconcile_failed_usage(
@@ -1408,22 +1555,25 @@ class ElyanGatewayServer:
 
     @staticmethod
     def _set_csrf_cookie(response: web.StreamResponse, token: str = "") -> str:
+        cookie_policy = _cookie_policy()
         csrf_token = str(token or secrets.token_urlsafe(24))
         response.headers["X-Elyan-CSRF"] = csrf_token
         response.set_cookie(
             "elyan_csrf_token",
             csrf_token,
             httponly=False,
-            samesite="Strict",
-            secure=False,
-            path="/",
+            samesite=cookie_policy["samesite"],
+            secure=bool(cookie_policy["secure"]),
+            path=str(cookie_policy["path"]),
+            domain=cookie_policy["domain"],
         )
         return csrf_token
 
     @staticmethod
     def _clear_csrf_cookie(response: web.StreamResponse) -> None:
+        cookie_policy = _cookie_policy()
         response.headers["X-Elyan-CSRF"] = ""
-        response.del_cookie("elyan_csrf_token", path="/")
+        response.del_cookie("elyan_csrf_token", path=str(cookie_policy["path"]), domain=cookie_policy["domain"])
 
     def _workspace_role_for_request(self, request, payload: dict[str, Any] | None = None) -> str:
         auth_context = self._auth_context(request)
@@ -1494,6 +1644,51 @@ class ElyanGatewayServer:
     @staticmethod
     def _connector_catalog() -> list[dict[str, Any]]:
         return [
+            {
+                "connector": "e_fatura",
+                "provider": "e_fatura",
+                "label": "e-Fatura",
+                "category": "turkey_ops",
+                "integration_type": "api",
+                "capabilities": ["health_check", "test_credentials", "invoice_delivery"],
+                "scopes": ["kvkk.consent", "invoice.read", "invoice.write"],
+            },
+            {
+                "connector": "e_arsiv",
+                "provider": "e_arsiv",
+                "label": "e-Arşiv",
+                "category": "turkey_ops",
+                "integration_type": "api",
+                "capabilities": ["health_check", "test_credentials", "archive_invoice"],
+                "scopes": ["kvkk.consent", "invoice.read", "invoice.write"],
+            },
+            {
+                "connector": "logo",
+                "provider": "logo",
+                "label": "Logo",
+                "category": "turkey_ops",
+                "integration_type": "api",
+                "capabilities": ["health_check", "test_credentials", "sync_accounting"],
+                "scopes": ["kvkk.consent", "accounting.read", "accounting.write"],
+            },
+            {
+                "connector": "netsis",
+                "provider": "netsis",
+                "label": "Netsis",
+                "category": "turkey_ops",
+                "integration_type": "api",
+                "capabilities": ["health_check", "test_credentials", "sync_accounting"],
+                "scopes": ["kvkk.consent", "accounting.read", "accounting.write"],
+            },
+            {
+                "connector": "sgk",
+                "provider": "sgk",
+                "label": "SGK",
+                "category": "turkey_ops",
+                "integration_type": "api",
+                "capabilities": ["health_check", "test_credentials", "query_workplace_status"],
+                "scopes": ["kvkk.consent", "workplace.read"],
+            },
             {
                 "connector": "google_drive",
                 "provider": "drive",
@@ -1603,6 +1798,135 @@ class ElyanGatewayServer:
                 "scopes": ["repo", "read:user"],
             },
         ]
+
+    @staticmethod
+    def _turkey_connector_names() -> set[str]:
+        return {"e_fatura", "e_arsiv", "logo", "netsis", "sgk"}
+
+    @classmethod
+    def _turkey_connector_settings_key(cls, connector_name: str) -> str:
+        return f"turkey_connectors.{str(connector_name or '').strip().lower()}"
+
+    @classmethod
+    def _get_turkey_connector_settings(cls, connector_name: str) -> dict[str, Any]:
+        from core.persistence.runtime_db import get_runtime_database
+
+        normalized = str(connector_name or "").strip().lower()
+        account = get_runtime_database().connectors.get_account(normalized, "default", workspace_id="local-workspace")
+        if isinstance(account, dict):
+            metadata = dict(account.get("metadata") or {})
+            settings = metadata.get("turkey_connector_settings")
+            if isinstance(settings, dict):
+                return dict(settings)
+        raw = elyan_config.get(cls._turkey_connector_settings_key(connector_name), {})
+        return dict(raw or {}) if isinstance(raw, dict) else {}
+
+    @classmethod
+    def _save_turkey_connector_settings(
+        cls,
+        connector_name: str,
+        *,
+        workspace_id: str,
+        user_id: str,
+        credentials: dict[str, Any],
+        config: dict[str, Any],
+        consent_granted: bool,
+    ) -> dict[str, Any]:
+        from core.persistence.runtime_db import get_runtime_database
+
+        normalized = str(connector_name or "").strip().lower()
+        settings = {
+            "workspace_id": str(workspace_id or "local-workspace"),
+            "user_id": str(user_id or "local-user"),
+            "connector": normalized,
+            "credentials": dict(credentials or {}),
+            "config": dict(config or {}),
+            "consent_granted": bool(consent_granted),
+            "updated_at": time.time(),
+        }
+        get_runtime_database().connectors.upsert_account(
+            {
+                "provider": normalized,
+                "connector_name": normalized,
+                "account_alias": "default",
+                "workspace_id": settings["workspace_id"],
+                "display_name": normalized.replace("_", " ").title(),
+                "status": "ready" if consent_granted else "needs_input",
+                "auth_strategy": "api_key",
+                "scopes": [],
+                "metadata": {
+                    "workspace_id": settings["workspace_id"],
+                    "connector": normalized,
+                    "execution_mode": "kvkk_local",
+                    "turkey_connector_settings": settings,
+                },
+            }
+        )
+        # Legacy fallback during migration; new reads prefer connector repository metadata.
+        elyan_config.set(cls._turkey_connector_settings_key(connector_name), settings)
+        return settings
+
+    @classmethod
+    def _build_turkey_connector(cls, connector_name: str, settings: dict[str, Any]):
+        from integrations.turkey import (
+            EArsivConfig,
+            EArsivConnector,
+            EArsivCredentials,
+            EFaturaConfig,
+            EFaturaConnector,
+            EFaturaCredentials,
+            LogoConfig,
+            LogoConnector,
+            LogoCredentials,
+            NetsisConfig,
+            NetsisConnector,
+            NetsisCredentials,
+            SGKConfig,
+            SGKConnector,
+            SGKCredentials,
+        )
+
+        config_payload = dict(settings.get("config") or {})
+        credentials_payload = dict(settings.get("credentials") or {})
+        workspace_id = str(settings.get("workspace_id") or "local-workspace")
+        user_id = str(settings.get("user_id") or "local-user")
+
+        if connector_name == "e_fatura":
+            return EFaturaConnector(
+                config=EFaturaConfig(**config_payload),
+                credentials=EFaturaCredentials(**credentials_payload),
+                workspace_id=workspace_id,
+                user_id=user_id,
+            )
+        if connector_name == "e_arsiv":
+            return EArsivConnector(
+                config=EArsivConfig(**config_payload),
+                credentials=EArsivCredentials(**credentials_payload),
+                workspace_id=workspace_id,
+                user_id=user_id,
+            )
+        if connector_name == "logo":
+            return LogoConnector(
+                config=LogoConfig(**config_payload),
+                credentials=LogoCredentials(**credentials_payload),
+                workspace_id=workspace_id,
+                user_id=user_id,
+            )
+        if connector_name == "netsis":
+            return NetsisConnector(
+                config=NetsisConfig(**config_payload),
+                credentials=NetsisCredentials(**credentials_payload),
+                workspace_id=workspace_id,
+                user_id=user_id,
+            )
+        if connector_name == "sgk":
+            return SGKConnector(
+                config=SGKConfig(**config_payload),
+                credentials=SGKCredentials(**credentials_payload),
+                workspace_id=workspace_id,
+                user_id=user_id,
+            )
+        raise KeyError(f"unknown turkey connector: {connector_name}")
 
     @classmethod
     def _connector_lookup(cls, connector_name: str) -> dict[str, Any] | None:
@@ -1807,10 +2131,14 @@ class ElyanGatewayServer:
         if self._request_requires_user_session(request):
             allowed, error, auth_context = self._require_user_session(request, allow_cookie=True)
             if not allowed:
-                return web.json_response({"ok": False, "error": error}, status=403)
+                if error and error not in {"user session required", "invalid or expired session"}:
+                    _log_auth_event("auth.session_rejected", request, reason=error)
+                status = 429 if error.startswith("too many ") else 403
+                return web.json_response({"ok": False, "error": error}, status=status)
             if self._request_requires_csrf(request):
                 csrf_allowed, csrf_error = self._validate_csrf(request)
                 if not csrf_allowed:
+                    _log_auth_event("auth.csrf_rejected", request, reason=csrf_error)
                     return web.json_response({"ok": False, "error": csrf_error}, status=403)
             request["elyan_auth"] = auth_context
         elif self._request_requires_admin(request):
@@ -1835,6 +2163,9 @@ class ElyanGatewayServer:
     def _require_user_session(self, request, *, allow_cookie: bool = True) -> tuple[bool, str, dict[str, Any]]:
         if not _is_loopback_request(request):
             return False, "user session is restricted to localhost", {}
+        remote_ip = _request_remote_host(request)
+        if _is_auth_rate_limited(remote_ip, bucket="session"):
+            return False, "too many invalid session attempts, try again later", {}
         candidate = str(
             request.headers.get("X-Elyan-Session-Token", "")
             or (request.cookies.get("elyan_user_session", "") if allow_cookie else "")
@@ -1845,6 +2176,7 @@ class ElyanGatewayServer:
             session = self._ensure_conversation_session_context(session)
             return True, "", session
         if candidate:
+            _record_auth_failure(remote_ip, bucket="session", request=request, reason="invalid_session")
             return False, "invalid or expired session", {}
         admin_allowed, _admin_error = self._require_admin_access(request, allow_cookie=allow_cookie)
         if admin_allowed:
@@ -1968,6 +2300,8 @@ class ElyanGatewayServer:
         self.app.router.add_post('/api/v1/cowork/threads/{thread_id}/turns', self.handle_v1_cowork_thread_turn)
         self.app.router.add_post('/api/v1/cowork/threads/{thread_id}/actions', self.handle_v1_cowork_thread_action)
         self.app.router.add_post('/api/v1/cowork/approvals/{approval_id}/resolve', self.handle_v1_cowork_resolve_approval)
+        self.app.router.add_get('/api/v1/decision-fabric', self.handle_v1_decision_fabric)
+        self.app.router.add_post('/api/v1/decision-fabric', self.handle_v1_decision_fabric)
         self.app.router.add_get('/api/v1/billing/workspace', self.handle_v1_billing_workspace)
         self.app.router.add_get('/api/v1/billing/usage', self.handle_v1_billing_usage)
         self.app.router.add_get('/api/v1/billing/entitlements', self.handle_v1_billing_entitlements)
@@ -2255,6 +2589,20 @@ class ElyanGatewayServer:
     async def handle_elyan_voice_trigger(self, request):
         """POST /api/elyan/voice/trigger — Wake voice pipeline."""
         try:
+            workspace_id = self._workspace_id(request)
+            workspace_allowed, workspace_error = self._require_workspace_access(request, workspace_id)
+            if not workspace_allowed:
+                return _json_error(workspace_error, status=403)
+            voice_access = self._workspace_billing().check_feature_access(workspace_id, "voice_features")
+            if not voice_access.get("allowed", False):
+                return _json_error(
+                    "voice_features not available on the current plan",
+                    status=402,
+                    payload={
+                        "feature_access": voice_access,
+                        "upgrade_hint": voice_access.get("upgrade_hint"),
+                    },
+                )
             from core.voice.voice_pipeline import get_voice_pipeline
             pipeline = get_voice_pipeline()
             await pipeline.trigger()
@@ -2406,7 +2754,7 @@ class ElyanGatewayServer:
         from core.skills_overview import build_skills_summary
         from core.llm_setup import get_llm_setup
 
-        home = await self._build_product_home_payload()
+        home = await self._build_product_home_payload(request)
         readiness = dict(home.get("readiness") or {})
         channels = elyan_config.get("channels", [])
         if not isinstance(channels, list):
@@ -2455,6 +2803,7 @@ class ElyanGatewayServer:
         return _json_ok(
             {
                 "readiness": readiness,
+                "billing": home.get("billing"),
                 "platforms": platforms,
                 "skills": skills.get("summary", {}),
                 "providers": {
@@ -2462,7 +2811,7 @@ class ElyanGatewayServer:
                     "rows": provider_rows,
                 },
                 "ollama": {
-                    "ready": bool(ollama_status.get("running")),
+                    "ready": bool(ollama_status.get("lane_ready")),
                     "status": ollama_status,
                 },
             }
@@ -2544,13 +2893,21 @@ class ElyanGatewayServer:
                 **(dict(data.get("metadata") or {}) if isinstance(data.get("metadata"), dict) else {}),
             },
         )
+        billing_metadata = {
+            "event_id": event.get("event_id"),
+            "source_type": source_type,
+            "workspace_id": workspace_id,
+            "actor_id": self._actor_id(request, data),
+            "session_id": self._session_id(request, data, default="desktop"),
+            "run_id": str(data.get("run_id") or "").strip(),
+        }
         billing_warning = ""
         try:
             self._workspace_billing().record_usage(
                 workspace_id,
                 "inbox_events",
                 1,
-                metadata={"event_id": event.get("event_id"), "source_type": source_type},
+                metadata=billing_metadata,
             )
             if summary is not None:
                 self._workspace_billing().record_usage(
@@ -2558,8 +2915,7 @@ class ElyanGatewayServer:
                     "task_extractions",
                     1,
                     metadata={
-                        "event_id": event.get("event_id"),
-                        "source_type": source_type,
+                        **billing_metadata,
                         "task_type": str(summary.get("task_type") or "cowork"),
                         "estimated_credits": 1,
                     },
@@ -2865,7 +3221,8 @@ class ElyanGatewayServer:
         if not _is_loopback_request(request):
             return _json_error("owner bootstrap is restricted to localhost", status=403)
         remote_ip = _request_remote_host(request)
-        if _is_auth_rate_limited(remote_ip):
+        if _is_auth_rate_limited(remote_ip, bucket="failure"):
+            _log_auth_event("auth.rate_limited", request, bucket="failure")
             return _json_error("too many failed authentication attempts, try again later", status=429)
         try:
             data = await request.json()
@@ -2875,10 +3232,10 @@ class ElyanGatewayServer:
         password = str(data.get("password") or "")
         workspace_id = str(data.get("workspace_id") or "local-workspace").strip() or "local-workspace"
         if not email:
-            _record_auth_failure(remote_ip)
+            _record_auth_failure(remote_ip, bucket="failure", request=request, reason="missing_email")
             return _json_error("email required", status=400)
         if not password:
-            _record_auth_failure(remote_ip)
+            _record_auth_failure(remote_ip, bucket="failure", request=request, reason="missing_password")
             return _json_error("password required", status=400)
         runtime_db = get_runtime_database()
         if self._local_user_count(runtime_db) > 0:
@@ -2892,7 +3249,7 @@ class ElyanGatewayServer:
                 metadata={"bootstrap_source": "gateway_setup"},
             )
         except ValueError as exc:
-            _record_auth_failure(remote_ip)
+            _record_auth_failure(remote_ip, bucket="failure", request=request, reason="bootstrap_validation_error")
             return _json_error(str(exc), status=400)
         session, session_token = runtime_db.auth_sessions.create_session(
             user=user,
@@ -2926,16 +3283,9 @@ class ElyanGatewayServer:
                 },
             }
         )
-        _clear_auth_failures(remote_ip)
+        _clear_auth_failures(remote_ip, bucket="failure")
         response.headers["X-Elyan-Session-Token"] = session_token
-        response.set_cookie(
-            "elyan_user_session",
-            session_token,
-            httponly=True,
-            samesite="Strict",
-            secure=False,
-            path="/",
-        )
+        _set_session_cookie(response, "elyan_user_session", session_token, httponly=True)
         csrf_token = self._set_csrf_cookie(response)
         response.text = json.dumps({**json.loads(response.text), "csrf_token": csrf_token})
         return response
@@ -2944,7 +3294,8 @@ class ElyanGatewayServer:
         if not _is_loopback_request(request):
             return _json_error("local login is restricted to localhost", status=403)
         remote_ip = _request_remote_host(request)
-        if _is_auth_rate_limited(remote_ip):
+        if _is_auth_rate_limited(remote_ip, bucket="failure"):
+            _log_auth_event("auth.rate_limited", request, bucket="failure")
             return _json_error("too many failed authentication attempts, try again later", status=429)
         try:
             data = await request.json()
@@ -2954,10 +3305,10 @@ class ElyanGatewayServer:
         password = str(data.get("password") or "")
         workspace_id = str(data.get("workspace_id") or "").strip()
         if not email:
-            _record_auth_failure(remote_ip)
+            _record_auth_failure(remote_ip, bucket="failure", request=request, reason="missing_email")
             return _json_error("email required", status=400)
         if not password:
-            _record_auth_failure(remote_ip)
+            _record_auth_failure(remote_ip, bucket="failure", request=request, reason="missing_password")
             return _json_error("password required", status=400)
         runtime_db = get_runtime_database()
         user = runtime_db.auth.authenticate_user(
@@ -2968,7 +3319,7 @@ class ElyanGatewayServer:
         if not user:
             if self._local_user_count(runtime_db) == 0:
                 return _json_error("owner bootstrap required before login", status=409, payload={"bootstrap_required": True})
-            _record_auth_failure(remote_ip)
+            _record_auth_failure(remote_ip, bucket="failure", request=request, reason="invalid_credentials")
             return _json_error("invalid credentials", status=401)
         session, session_token = runtime_db.auth_sessions.create_session(
             user=user,
@@ -2978,6 +3329,10 @@ class ElyanGatewayServer:
             },
         )
         session = self._ensure_conversation_session_context(session)
+        resolved_role = runtime_db.access.get_actor_role(
+            workspace_id=str(user.get("workspace_id") or workspace_id or "local-workspace"),
+            actor_id=str(user.get("user_id") or ""),
+        )
         response = _json_ok(
             {
                 "workspace_id": str(user.get("workspace_id") or workspace_id),
@@ -2988,10 +3343,7 @@ class ElyanGatewayServer:
                     "email": str(user.get("email") or email),
                     "display_name": str(user.get("display_name") or ""),
                     "status": str(user.get("status") or "active"),
-                    "role": str(user.get("role") or session.get("role") or runtime_db.access.get_actor_role(
-                        workspace_id=str(user.get("workspace_id") or workspace_id or "local-workspace"),
-                        actor_id=str(user.get("user_id") or ""),
-                    )),
+                    "role": str(user.get("role") or resolved_role or session.get("role") or "member"),
                 },
                 "session": {
                     "session_id": str(session.get("session_id") or ""),
@@ -3000,21 +3352,19 @@ class ElyanGatewayServer:
                 },
             }
         )
-        _clear_auth_failures(remote_ip)
+        _clear_auth_failures(remote_ip, bucket="failure")
         response.headers["X-Elyan-Session-Token"] = session_token
-        response.set_cookie(
-            "elyan_user_session",
-            session_token,
-            httponly=True,
-            samesite="Strict",
-            secure=False,
-            path="/",
-        )
+        _set_session_cookie(response, "elyan_user_session", session_token, httponly=True)
         csrf_token = self._set_csrf_cookie(response)
         response.text = json.dumps({**json.loads(response.text), "csrf_token": csrf_token})
         return response
 
     async def handle_v1_auth_logout(self, request):
+        remote_ip = _request_remote_host(request)
+        if _is_auth_rate_limited(remote_ip, bucket="logout"):
+            _log_auth_event("auth.rate_limited", request, bucket="logout")
+            return _json_error("too many logout requests, try again later", status=429)
+        _record_auth_failure(remote_ip, bucket="logout", request=request, reason="logout_request")
         session_token = str(
             request.headers.get("X-Elyan-Session-Token", "")
             or request.cookies.get("elyan_user_session", "")
@@ -3023,14 +3373,16 @@ class ElyanGatewayServer:
         if session_token:
             get_runtime_database().auth_sessions.revoke_session(session_token)
         response = _json_ok()
-        response.del_cookie("elyan_user_session", path="/")
+        _clear_session_cookie(response, "elyan_user_session")
         self._clear_csrf_cookie(response)
         return response
 
     async def handle_v1_auth_me(self, request):
         allowed, error, session = self._require_user_session(request, allow_cookie=True)
         if not allowed:
-            return _json_error(error, status=403)
+            if error and error not in {"user session required", "invalid or expired session"}:
+                _log_auth_event("auth.session_rejected", request, reason=error)
+            return _json_error(error, status=429 if error.startswith("too many ") else 403)
         response = _json_ok(
             {
                 "workspace_id": str(session.get("workspace_id") or "local-workspace"),
@@ -3994,6 +4346,19 @@ class ElyanGatewayServer:
                 else:
                     state = "offline"
                     blocking_issue = "auth_required"
+            elif str(definition.get("category") or "").strip().lower() == "turkey_ops":
+                execution_mode = "kvkk_local"
+                latest_trace = provider_traces[0] if provider_traces else None
+                latest_success = bool((latest_trace or {}).get("success"))
+                latest_status = str((latest_trace or {}).get("status") or "").strip().lower()
+                if latest_success and latest_status in {"connected", "ready", "ok", "healthy"}:
+                    state = "connected"
+                elif latest_trace:
+                    state = "degraded"
+                    blocking_issue = "manual_review_required"
+                else:
+                    state = "pending"
+                    blocking_issue = "manual_setup_required"
             rows.append(
                 {
                     **definition,
@@ -4056,7 +4421,123 @@ class ElyanGatewayServer:
         from core.integration_trace import get_integration_trace_store
 
         local_connector_names = {"apple_mail", "apple_calendar", "apple_reminders", "apple_notes", "apple_contacts"}
+        turkey_connector_names = self._turkey_connector_names()
         trace_store = get_integration_trace_store()
+        usage_metadata = {
+            "workspace_id": workspace_id,
+            "actor_id": self._actor_id(request, data),
+            "session_id": self._session_id(request, data, default="desktop"),
+            "run_id": str(data.get("run_id") or "").strip(),
+            "connector": connector_name,
+        }
+        if connector_name in turkey_connector_names:
+            user_id = self._actor_id(request, data)
+            credentials = {
+                "username": str(data.get("username") or "").strip(),
+                "password": str(data.get("password") or "").strip(),
+                "api_key": str(data.get("api_key") or "").strip(),
+                "integrator_alias": str(data.get("integrator_alias") or "").strip(),
+                "company_code": str(data.get("company_code") or "").strip(),
+                "workplace_code": str(data.get("workplace_code") or "").strip(),
+            }
+            config = {
+                "production_base_url": str(data.get("production_base_url") or "").strip(),
+                "test_base_url": str(data.get("test_base_url") or "").strip(),
+                "use_test_endpoint": bool(data.get("use_test_endpoint", True)),
+                "health_path": str(data.get("health_path") or "").strip(),
+                "credential_check_path": str(data.get("credential_check_path") or "").strip(),
+            }
+            normalized_credentials = {key: value for key, value in credentials.items() if value}
+            normalized_config = {
+                key: value
+                for key, value in config.items()
+                if value not in {"", None}
+            }
+            if "use_test_endpoint" not in normalized_config:
+                normalized_config["use_test_endpoint"] = True
+            consent_granted = bool(data.get("consent_granted"))
+            if not normalized_credentials and not any(
+                key in normalized_config for key in {"production_base_url", "test_base_url", "health_path", "credential_check_path"}
+            ):
+                return _json_error("connector configuration required", status=400)
+            settings = self._save_turkey_connector_settings(
+                connector_name,
+                workspace_id=workspace_id,
+                user_id=user_id,
+                credentials=normalized_credentials,
+                config=normalized_config,
+                consent_granted=consent_granted,
+            )
+            from core.privacy.data_governance import get_privacy_engine
+
+            get_privacy_engine().set_consent(
+                user_id,
+                workspace_id=workspace_id,
+                scope=f"turkey_connector.{connector_name}",
+                granted=bool(consent_granted),
+                source="turkey_connector_setup",
+                metadata={"connector": connector_name, "workspace_id": workspace_id},
+            )
+            account = OAuthAccount(
+                provider=str(connector.get("provider") or connector_name),
+                account_alias=str(data.get("account_alias") or "default").strip() or "default",
+                display_name=str(connector.get("label") or connector_name),
+                auth_strategy=AuthStrategy.API_KEY,
+                fallback_mode=FallbackPolicy.MANUAL,
+                granted_scopes=list(connector.get("scopes") or []),
+                status=ConnectorState.READY if consent_granted else ConnectorState.NEEDS_INPUT,
+                metadata={
+                    "workspace_id": workspace_id,
+                    "connector": connector_name,
+                    "consent_granted": bool(consent_granted),
+                    "execution_mode": "kvkk_local",
+                    "has_credentials": bool(normalized_credentials),
+                    "configured_fields": sorted(normalized_credentials.keys()),
+                    "config_fields": sorted(normalized_config.keys()),
+                    "turkey_connector_settings": settings,
+                },
+            )
+            account = oauth_broker._save_account(account)
+            trace_store.record_trace(
+                operation="workspace_connector_connect",
+                provider=account.provider,
+                connector_name=connector_name,
+                integration_type="api",
+                status="configured",
+                success=True,
+                auth_state=str(account.status),
+                auth_strategy=str(account.auth_strategy),
+                account_alias=str(account.account_alias or "default"),
+                metadata={
+                    "workspace_id": workspace_id,
+                    "connector": connector_name,
+                    "execution_mode": "kvkk_local",
+                    "consent_granted": bool(consent_granted),
+                    "configured_fields": sorted(normalized_credentials.keys()),
+                    "config_fields": sorted(normalized_config.keys()),
+                },
+            )
+            self._workspace_billing().record_usage(workspace_id, "connectors", 1, metadata=usage_metadata)
+            return _json_ok(
+                {
+                    "connector": connector,
+                    "account": {**account.public_dump(), "workspace_id": workspace_id, "account_id": f"{account.provider}::{account.account_alias}"},
+                    "connect_result": {
+                        "success": True,
+                        "status": "configured",
+                        "message": "Türkiye connector ayarlari kaydedildi.",
+                        "consent_granted": bool(consent_granted),
+                        "configured_fields": sorted(normalized_credentials.keys()),
+                        "config_fields": sorted(normalized_config.keys()),
+                        "settings": {
+                            "workspace_id": settings.get("workspace_id"),
+                            "user_id": settings.get("user_id"),
+                            "consent_granted": bool(settings.get("consent_granted")),
+                        },
+                    },
+                    "launch_url": "",
+                }
+            )
         if connector_name in local_connector_names:
             permissions = _check_macos_permissions()
             ready = bool(permissions.get("osascript_available"))
@@ -4089,7 +4570,7 @@ class ElyanGatewayServer:
                 account_alias=str(account.account_alias or "default"),
                 metadata={"workspace_id": workspace_id, "connector": connector_name, "local_first": True},
             )
-            self._workspace_billing().record_usage(workspace_id, "connectors", 1, metadata={"connector": connector_name})
+            self._workspace_billing().record_usage(workspace_id, "connectors", 1, metadata=usage_metadata)
             return _json_ok(
                 {
                     "connector": connector,
@@ -4141,7 +4622,7 @@ class ElyanGatewayServer:
                 account_alias=str(account.account_alias or "default"),
                 metadata={"workspace_id": workspace_id, "connector": connector_name, "execution_mode": "bluebubbles"},
             )
-            self._workspace_billing().record_usage(workspace_id, "connectors", 1, metadata={"connector": connector_name})
+            self._workspace_billing().record_usage(workspace_id, "connectors", 1, metadata=usage_metadata)
             return _json_ok(
                 {
                     "connector": connector,
@@ -4209,7 +4690,7 @@ class ElyanGatewayServer:
                 "capabilities": list(connector.get("capabilities") or []),
             },
         )
-        self._workspace_billing().record_usage(workspace_id, "connectors", 1, metadata={"connector": connector_name})
+        self._workspace_billing().record_usage(workspace_id, "connectors", 1, metadata=usage_metadata)
         result_payload = connector_result.model_dump() if hasattr(connector_result, "model_dump") else (dict(connector_result) if isinstance(connector_result, dict) else {})
         return _json_ok(
             {
@@ -4261,8 +4742,43 @@ class ElyanGatewayServer:
 
         result: dict[str, Any]
         blocking_issue = ""
+        quick_action_success = True
+        quick_action_status = "success"
         try:
-            if connector_name == "apple_notes":
+            if connector_name in self._turkey_connector_names():
+                settings = self._get_turkey_connector_settings(connector_name)
+                if not settings:
+                    return _json_error(
+                        "turkey connector not configured",
+                        status=400,
+                        payload={"blocking_issue": "manual_setup_required", "connector": connector_name},
+                    )
+                turkey_connector = self._build_turkey_connector(connector_name, settings)
+                if action == "health_check":
+                    health = turkey_connector.health_check()
+                    blocking_issue = "" if health.is_healthy else "health_check_failed"
+                    quick_action_success = bool(health.is_healthy)
+                    quick_action_status = "healthy" if health.is_healthy else "degraded"
+                    result = {
+                        "status": quick_action_status,
+                        "healthy": bool(health.is_healthy),
+                        "latency_ms": health.latency_ms,
+                        "error": health.last_error or "",
+                    }
+                elif action == "test_credentials":
+                    ok = turkey_connector.test_credentials()
+                    consent_granted = bool(settings.get("consent_granted"))
+                    blocking_issue = "" if ok else ("consent_required" if not consent_granted else "credential_check_failed")
+                    quick_action_success = bool(ok)
+                    quick_action_status = "ready" if ok else "needs_attention"
+                    result = {
+                        "status": quick_action_status,
+                        "ok": bool(ok),
+                        "consent_granted": consent_granted,
+                    }
+                else:
+                    return _json_error("quick action unsupported", status=400)
+            elif connector_name == "apple_notes":
                 if query:
                     from tools.note_tools.note_search import search_notes
 
@@ -4351,8 +4867,8 @@ class ElyanGatewayServer:
             provider=str(connector.get("provider") or connector_name),
             connector_name=connector_name,
             integration_type=str(connector.get("integration_type") or ""),
-            status="success",
-            success=True,
+            status=quick_action_status,
+            success=quick_action_success,
             auth_state="ready",
             auth_strategy="none",
             account_alias="default",
@@ -4562,14 +5078,7 @@ class ElyanGatewayServer:
             content_type="text/html",
         )
         if _is_loopback_request(request):
-            response.set_cookie(
-                "elyan_admin_session",
-                _ensure_admin_access_token(),
-                httponly=True,
-                samesite="Strict",
-                secure=False,
-                path="/",
-            )
+            _set_session_cookie(response, "elyan_admin_session", _ensure_admin_access_token(), httponly=True)
         return response
 
     async def handle_ops_console_page(self, request):
@@ -4581,14 +5090,7 @@ class ElyanGatewayServer:
         if not p.exists():
             return web.Response(text="Ops console file not found", status=404)
         response = web.FileResponse(p)
-        response.set_cookie(
-            "elyan_admin_session",
-            _ensure_admin_access_token(),
-            httponly=True,
-            samesite="Strict",
-            secure=False,
-            path="/",
-        )
+        _set_session_cookie(response, "elyan_admin_session", _ensure_admin_access_token(), httponly=True)
         return response
 
     async def handle_canvas_page(self, request):
@@ -5732,7 +6234,9 @@ class ElyanGatewayServer:
             )
         return catalog
 
-    async def _build_product_home_payload(self) -> dict[str, Any]:
+    async def _build_product_home_payload(self, request=None) -> dict[str, Any]:
+        from core.llm_setup import get_llm_setup
+
         status_req = SimpleNamespace(rel_url=SimpleNamespace(query={}))
         tasks_req = SimpleNamespace(rel_url=SimpleNamespace(query={}))
         runs_req = SimpleNamespace(rel_url=SimpleNamespace(query={"limit": "6"}))
@@ -5741,6 +6245,8 @@ class ElyanGatewayServer:
         runs_payload = json.loads((await self.handle_recent_runs(runs_req)).text)
         adapter_status = dict(status_payload.get("adapters") or {}) if isinstance(status_payload.get("adapters"), dict) else {}
         model_info = _get_runtime_model_info()
+        llm_setup = get_llm_setup()
+        ollama_status = await llm_setup.ollama_status()
         benchmark = load_latest_benchmark_summary()
         recent_reports = list_emre_workflow_reports(limit=5)
         permissions = _check_macos_permissions()
@@ -5769,7 +6275,11 @@ class ElyanGatewayServer:
         )
         provider = str(model_info.get("active_provider") or "—").strip()
         model = str(model_info.get("active_model") or "—").strip()
+        local_lane_ready = bool(ollama_status.get("lane_ready"))
         provider_ready = provider not in {"", "—"} and model not in {"", "—"}
+        if provider == "ollama":
+            provider_ready = provider_ready and local_lane_ready
+        model_lane_ready = local_lane_ready
         benchmark_green = int(benchmark.get("pass_count") or 0) == int(benchmark.get("total") or 0) and int(benchmark.get("total") or 0) > 0
         runtime_health_status = str(((status_payload.get("runtime_health") if isinstance(status_payload.get("runtime_health"), dict) else {}) or {}).get("status") or "").strip().lower()
         setup_complete = bool(is_setup_complete())
@@ -5793,21 +6303,43 @@ class ElyanGatewayServer:
                 learning_counts["total"] = int(learning_counts["preferences"]) + int(learning_counts["skills"]) + int(learning_counts["routines"])
         except Exception:
             learning_counts = {"preferences": 0, "skills": 0, "routines": 0, "total": 0}
-        core_ready = bool(
-            status_payload.get("status") == "online"
-            and provider_ready
-            and browser_ready
-            and setup_complete
-            and runtime_health_status != "degraded"
-        )
+        workspace_id = self._workspace_id(request) if request is not None else "local-workspace"
+        billing_summary = None
+        try:
+            billing_summary = self._workspace_billing().get_workspace_summary(workspace_id)
+        except Exception:
+            billing_summary = None
         first_demo = str((EMRE_WORKFLOW_PRESETS[0] if EMRE_WORKFLOW_PRESETS else {}).get("name") or "").strip()
         cli_mod = f"{Path(os.sys.executable)} -m cli.main"
+        runtime_ready = bool(
+            status_payload.get("status") == "online"
+            and runtime_health_status != "degraded"
+            and provider_ready
+            and model_lane_ready
+            and desktop_ready
+            and channel_connected
+            and browser_ready
+            and setup_complete
+        )
+        launch_ready = bool(
+            runtime_ready
+            and has_routine
+            and has_daily_summary_run
+            and int(learning_counts["total"]) == 0
+        )
+        core_ready = launch_ready
         setup = [
             {
                 "key": "provider_model",
                 "label": "Provider / model",
                 "ready": provider_ready,
                 "detail": f"{provider}/{model}",
+            },
+            {
+                "key": "model_lane",
+                "label": "Local model lane",
+                "ready": model_lane_ready,
+                "detail": str(ollama_status.get("probe_model") or model or "ollama"),
             },
             {
                 "key": "desktop_permissions",
@@ -5868,7 +6400,30 @@ class ElyanGatewayServer:
                 "ready": int(learning_counts["total"]) == 0,
                 "detail": f"preferences={learning_counts['preferences']} skills={learning_counts['skills']} routines={learning_counts['routines']}",
             },
+            {
+                "key": "setup_complete",
+                "label": "Owner bootstrap completed",
+                "ready": setup_complete,
+                "detail": "owner bootstrap complete" if setup_complete else "run bootstrap-owner/login first",
+            },
         ]
+        launch_gate_keys = {
+            "provider_model",
+            "model_lane",
+            "desktop_permissions",
+            "channel_connection",
+            "browser",
+            "first_routine",
+            "first_daily_summary",
+            "learning_queue",
+            "setup_complete",
+        }
+        launch_blockers = [
+            str(item.get("label") or "").strip()
+            for item in setup
+            if str(item.get("key") or "").strip() in launch_gate_keys and not bool(item.get("ready"))
+        ]
+        launch_ready = not launch_blockers
         return {
             "ok": True,
             "readiness": {
@@ -5886,12 +6441,16 @@ class ElyanGatewayServer:
                 "productivity_apps_ready": productivity_apps_ready,
                 "connected_provider": provider,
                 "connected_model": model,
+                "runtime_ready": runtime_ready,
+                "model_lane_ready": model_lane_ready,
                 "runtime_health": runtime_health_status,
                 "desktop_state_available": desktop_state_path.exists(),
                 "setup_complete": setup_complete,
                 "learning_queue": learning_counts,
                 "has_routine": has_routine,
                 "has_daily_summary_run": has_daily_summary_run,
+                "launch_ready": launch_ready,
+                "launch_blockers": launch_blockers,
             },
             "recent_tasks": {
                 "active": list(tasks_payload.get("active") or [])[:5],
@@ -5902,6 +6461,7 @@ class ElyanGatewayServer:
             "recent_workflow_reports": recent_reports,
             "benchmark": benchmark,
             "setup": setup,
+            "billing": billing_summary,
             "onboarding": {
                 "first_demo_workflow": first_demo,
                 "recommended_steps": [
@@ -5922,6 +6482,8 @@ class ElyanGatewayServer:
                 "health_endpoint": "/healthz",
                 "health_status": str(status_payload.get("health_status") or ""),
                 "benchmark_green": benchmark_green,
+                "launch_ready": launch_ready,
+                "launch_blockers": launch_blockers,
                 "last_sync": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "quickstart_checks": [
                     {"label": "Gateway status", "value": str(status_payload.get("status") or "unknown")},
@@ -5942,10 +6504,10 @@ class ElyanGatewayServer:
         }
 
     async def handle_product_home(self, request):
-        return web.json_response(await self._build_product_home_payload())
+        return web.json_response(await self._build_product_home_payload(request))
 
     async def handle_product_health(self, request):
-        home = await self._build_product_home_payload()
+        home = await self._build_product_home_payload(request)
         readiness = dict(home.get("readiness") or {})
         benchmark = dict(home.get("benchmark") or {})
         release = dict(home.get("release") or {})
@@ -5955,9 +6517,10 @@ class ElyanGatewayServer:
             system_dependencies = get_system_dependency_runtime().snapshot()
         except Exception:
             system_dependencies = {"enabled": False, "status_counts": {}}
+        launch_ready = bool(readiness.get("launch_ready"))
         payload: dict = {
-                "ok": bool(readiness.get("elyan_ready")),
-                "status": "ready" if readiness.get("elyan_ready") else "degraded",
+                "ok": launch_ready,
+                "status": "ready" if launch_ready else "degraded",
                 "version": str(release.get("version") or ""),
                 "protocol_version": RUNTIME_PROTOCOL_VERSION,
                 "health_status": str(release.get("health_status") or ""),
@@ -6753,6 +7316,74 @@ class ElyanGatewayServer:
                 "user_id": str(session.get("user_id") or ""),
             }
         )
+
+    async def handle_v1_decision_fabric(self, request):
+        allowed, error, session = self._require_user_session(request)
+        if not allowed:
+            return web.json_response({"ok": False, "error": error}, status=401)
+
+        workspace_id = str(session.get("workspace_id") or "local-workspace").strip() or "local-workspace"
+        actor_id = str(session.get("user_id") or "local-user").strip() or "local-user"
+        fabric = get_decision_fabric()
+        method = str(getattr(request, "method", "GET") or "GET").upper()
+
+        if method == "GET":
+            query = str(request.rel_url.query.get("query") or request.rel_url.query.get("q") or "").strip()
+            try:
+                limit = max(1, min(50, int(request.rel_url.query.get("limit", 20) or 20)))
+            except Exception:
+                limit = 20
+
+            results = fabric.search(query, workspace_id=workspace_id, limit=limit)
+            payload = [
+                item.to_dict() if hasattr(item, "to_dict") else dict(item)
+                for item in results
+            ]
+            return web.json_response(
+                {
+                    "ok": True,
+                    "query": query,
+                    "count": len(payload),
+                    "workspace_id": workspace_id,
+                    "actor_id": actor_id,
+                    "results": payload,
+                }
+            )
+
+        if method == "POST":
+            try:
+                body = await request.json()
+            except Exception:
+                body = {}
+            if not isinstance(body, dict):
+                body = {}
+
+            decision = Decision(
+                id=str(body.get("id") or "").strip(),
+                summary=str(body.get("summary") or "").strip(),
+                context=str(body.get("context") or "").strip(),
+                actor_id=actor_id,
+                workspace_id=workspace_id,
+                timestamp=str(body.get("timestamp") or "").strip(),
+                related_event_ids=[str(item).strip() for item in list(body.get("related_event_ids") or []) if str(item).strip()],
+                tags=[str(item).strip() for item in list(body.get("tags") or []) if str(item).strip()],
+                metadata=dict(body.get("metadata") or {}),
+            )
+            if not decision.summary:
+                return web.json_response({"ok": False, "error": "summary required"}, status=400)
+
+            decision_id = fabric.record(decision)
+            return web.json_response(
+                {
+                    "ok": True,
+                    "decision_id": decision_id,
+                    "workspace_id": workspace_id,
+                    "actor_id": actor_id,
+                    "decision": decision.normalized().to_dict(),
+                }
+            )
+
+        return web.json_response({"ok": False, "error": "method not allowed"}, status=405)
 
     async def handle_learning_drafts(self, request):
         allowed, error, session = self._require_user_session(request)
@@ -9200,6 +9831,8 @@ class ElyanGatewayServer:
 
     # ── WebSocket: Node connection (new for v2) ───────────────────────────────
     async def handle_node_ws(self, request):
+        if not _is_loopback_request(request):
+            return web.json_response({"ok": False, "error": "node websocket is restricted to localhost"}, status=403)
         ws = web.WebSocketResponse(heartbeat=30)
         await ws.prepare(request)
         
@@ -9350,7 +9983,9 @@ class ElyanGatewayServer:
         ).strip()
         if not user_id:
             return web.json_response({"success": False, "error": "user_id required"}, status=400)
-        workspace_id = self._workspace_id(request, {"user_id": user_id})
+        workspace_allowed, workspace_id = self._require_privacy_workspace(session)
+        if not workspace_allowed:
+            return web.json_response({"success": False, "error": workspace_id}, status=403)
         try:
             summary = get_learning_control_plane().get_privacy_summary(user_id, workspace_id=workspace_id)
             return web.json_response({"success": True, "summary": summary})
@@ -9369,7 +10004,9 @@ class ElyanGatewayServer:
         ).strip()
         if not user_id:
             return web.json_response({"ok": False, "error": "user_id required"}, status=400)
-        workspace_id = self._workspace_id(request, {"user_id": user_id})
+        workspace_allowed, workspace_id = self._require_privacy_workspace(session)
+        if not workspace_allowed:
+            return web.json_response({"ok": False, "error": workspace_id}, status=403)
         try:
             export = {
                 "audit": audit_trail.export_for_user(user_id),
@@ -9396,7 +10033,9 @@ class ElyanGatewayServer:
         ).strip()
         if not user_id:
             return web.json_response({"ok": False, "error": "user_id required"}, status=400)
-        workspace_id = self._workspace_id(request, payload)
+        workspace_allowed, workspace_id = self._require_privacy_workspace(session)
+        if not workspace_allowed:
+            return web.json_response({"ok": False, "error": workspace_id}, status=403)
         try:
             result = {
                 "audit": audit_trail.delete_user_data(user_id),
@@ -9420,27 +10059,38 @@ class ElyanGatewayServer:
             return False, "user_mismatch", session
         return True, subject or session_user, session
 
+    @staticmethod
+    def _require_privacy_workspace(session: dict[str, Any]) -> tuple[bool, str]:
+        workspace_id = str(session.get("workspace_id") or "").strip()
+        if workspace_id:
+            return True, workspace_id
+        return False, "workspace_context_required"
+
     async def handle_privacy_consent_get(self, request):
         from core.privacy import get_privacy_engine
 
-        allowed, subject, _session = self._privacy_subject(request, str(request.match_info.get("user_id") or ""))
+        allowed, subject, session = self._privacy_subject(request, str(request.match_info.get("user_id") or ""))
         if not allowed:
             return web.json_response({"error": subject, "code": subject}, status=403)
-        workspace_id = self._workspace_id(request, {"user_id": subject})
+        workspace_allowed, workspace_id = self._require_privacy_workspace(session)
+        if not workspace_allowed:
+            return web.json_response({"error": workspace_id, "code": workspace_id}, status=403)
         scope = str(request.rel_url.query.get("scope", "") or "learning").strip()
         return web.json_response({"ok": True, "consent": get_privacy_engine().get_consent(subject, workspace_id=workspace_id, scope=scope)})
 
     async def handle_privacy_consent_set(self, request):
         from core.privacy import get_privacy_engine
 
-        allowed, subject, _session = self._privacy_subject(request, str(request.match_info.get("user_id") or ""))
+        allowed, subject, session = self._privacy_subject(request, str(request.match_info.get("user_id") or ""))
         if not allowed:
             return web.json_response({"error": subject, "code": subject}, status=403)
         try:
             payload = await request.json()
         except Exception:
             payload = {}
-        workspace_id = self._workspace_id(request, dict(payload, user_id=subject))
+        workspace_allowed, workspace_id = self._require_privacy_workspace(session)
+        if not workspace_allowed:
+            return web.json_response({"error": workspace_id, "code": workspace_id}, status=403)
         metadata = dict(payload.get("metadata") or {})
         for key in (
             "allow_personal_data_learning",
@@ -9469,10 +10119,12 @@ class ElyanGatewayServer:
         from core.learning import get_tiered_hub
         from core.privacy import get_privacy_engine
 
-        allowed, subject, _session = self._privacy_subject(request, str(request.match_info.get("user_id") or ""))
+        allowed, subject, session = self._privacy_subject(request, str(request.match_info.get("user_id") or ""))
         if not allowed:
             return web.json_response({"error": subject, "code": subject}, status=403)
-        workspace_id = self._workspace_id(request, {"user_id": subject})
+        workspace_allowed, workspace_id = self._require_privacy_workspace(session)
+        if not workspace_allowed:
+            return web.json_response({"error": workspace_id, "code": workspace_id}, status=403)
         result = {
             "privacy": get_privacy_engine().delete_user_data(subject, workspace_id=workspace_id),
             "learning": get_learning_control_plane().delete_user_data(subject),
@@ -9484,10 +10136,12 @@ class ElyanGatewayServer:
         from core.learning import get_tiered_hub
         from core.privacy import get_privacy_engine
 
-        allowed, subject, _session = self._privacy_subject(request, str(request.match_info.get("user_id") or ""))
+        allowed, subject, session = self._privacy_subject(request, str(request.match_info.get("user_id") or ""))
         if not allowed:
             return web.json_response({"error": subject, "code": subject}, status=403)
-        workspace_id = self._workspace_id(request, {"user_id": subject})
+        workspace_allowed, workspace_id = self._require_privacy_workspace(session)
+        if not workspace_allowed:
+            return web.json_response({"error": workspace_id, "code": workspace_id}, status=403)
         export = {
             "privacy": get_privacy_engine().export_user_data(subject, workspace_id=workspace_id),
             "learning": get_learning_control_plane().export_privacy_bundle(subject, workspace_id=workspace_id),
@@ -10391,6 +11045,10 @@ class ElyanGatewayServer:
 
     # ── WebChat WS ────────────────────────────────────────────────────────────
     async def handle_webchat_ws(self, request):
+        allowed, error, session = self._require_user_session(request, allow_cookie=True)
+        if not allowed:
+            return web.json_response({"ok": False, "error": error}, status=403)
+        request["elyan_auth"] = session
         if self.webchat_adapter:
             return await self.webchat_adapter.handle_ws(request)
         return web.Response(status=404, text="WebChat not enabled")

@@ -1,17 +1,27 @@
 from __future__ import annotations
 
 import hashlib
+import calendar
+import math
 import os
 import time
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
+try:
+    from zoneinfo import ZoneInfo
+except Exception:  # pragma: no cover - Python builds without zoneinfo support
+    ZoneInfo = None  # type: ignore[assignment]
+
 from core.billing.commercial_types import PLAN_CATALOG, TOKEN_PACK_CATALOG, get_plan, get_token_pack
 from core.billing.iyzico_provider import IyzicoProvider
 from core.billing.payment_provider import BillingProfile, CheckoutRequest, ProviderCompletion
 from core.persistence import get_runtime_database
+from core.observability.trace_context import get_trace_context
 from core.storage_paths import resolve_elyan_data_dir
 
 
@@ -29,34 +39,133 @@ def _period_key(ts: float | None = None) -> str:
     return time.strftime("%Y-%m", time.gmtime(float(ts or _now())))
 
 
+def _timezone(name: str | None = None) -> timezone:
+    tz_name = str(name or "UTC").strip() or "UTC"
+    if ZoneInfo is not None:
+        try:
+            return ZoneInfo(tz_name)
+        except Exception:
+            pass
+    if tz_name.upper() == "UTC":
+        return timezone.utc
+    return timezone.utc
+
+
+def _month_window(dt: datetime, anchor_day: int, tz_name: str) -> tuple[str, datetime, datetime]:
+    anchor = max(1, min(int(anchor_day or 1), 28))
+    current_anchor = dt.replace(day=min(anchor, calendar.monthrange(dt.year, dt.month)[1]), hour=0, minute=0, second=0, microsecond=0)
+    if dt.day < anchor:
+        month = dt.month - 1 or 12
+        year = dt.year - 1 if dt.month == 1 else dt.year
+        current_anchor = dt.replace(
+            year=year,
+            month=month,
+            day=min(anchor, calendar.monthrange(year, month)[1]),
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+    next_month = current_anchor.month + 1
+    next_year = current_anchor.year
+    if next_month > 12:
+        next_month = 1
+        next_year += 1
+    next_anchor = current_anchor.replace(
+        year=next_year,
+        month=next_month,
+        day=min(anchor, calendar.monthrange(next_year, next_month)[1]),
+    )
+    period_key = f"monthly:{current_anchor.date().isoformat()}:{tz_name}"
+    return period_key, current_anchor, next_anchor
+
+
+def _week_window(dt: datetime, anchor_weekday: int, tz_name: str) -> tuple[str, datetime, datetime]:
+    anchor = max(0, min(int(anchor_weekday or 0), 6))
+    days_since_anchor = (dt.weekday() - anchor) % 7
+    current_anchor = (dt - timedelta(days=days_since_anchor)).replace(hour=0, minute=0, second=0, microsecond=0)
+    next_anchor = current_anchor + timedelta(days=7)
+    period_key = f"weekly:{current_anchor.date().isoformat()}:{tz_name}"
+    return period_key, current_anchor, next_anchor
+
+
+def _billing_period_info(plan_id: str, *, ts: float | None = None) -> dict[str, Any]:
+    plan = get_plan(plan_id)
+    metadata = dict(plan.metadata or {})
+    reset_policy = dict(metadata.get("reset_policy") or {})
+    cycle = str(metadata.get("billing_cycle") or reset_policy.get("type") or ("weekly" if plan.plan_id == "free" else "monthly")).strip().lower()
+    tz_name = str(reset_policy.get("timezone") or metadata.get("reset_timezone") or "Europe/Istanbul").strip() or "Europe/Istanbul"
+    anchor_weekday = int(reset_policy.get("anchor_weekday") or metadata.get("reset_anchor_weekday") or 0)
+    anchor_day = int(reset_policy.get("anchor_day") or metadata.get("reset_anchor_day") or 1)
+    tz = _timezone(tz_name)
+    now_dt = datetime.fromtimestamp(float(ts or _now()), tz=tz)
+    if cycle == "weekly":
+        period_key, period_start, next_boundary = _week_window(now_dt, anchor_weekday, tz_name)
+    else:
+        period_key, period_start, next_boundary = _month_window(now_dt, anchor_day, tz_name)
+    return {
+        "cycle": cycle,
+        "period": period_key,
+        "period_start": period_start.timestamp(),
+        "reset_at": next_boundary.timestamp(),
+        "timezone": tz_name,
+        "anchor_weekday": anchor_weekday,
+        "anchor_day": anchor_day,
+    }
+
+
 def _plan_entitlements(plan_id: str) -> dict[str, Any]:
     plan = get_plan(plan_id)
-    legacy_threads = {
-        "free": 12,
-        "pro": 120,
-        "team": 600,
-        "enterprise": 5000,
-    }
-    monthly_usage_budget = {
-        "free": 10_000,
-        "pro": 150_000,
-        "team": 750_000,
-        "enterprise": 5_000_000,
-    }
+    metadata = dict(plan.metadata or {})
+    tool_access = dict(metadata.get("tool_access") or {})
+    reset_policy = dict(metadata.get("reset_policy") or {})
+    weekly_credit_limit = int(metadata.get("weekly_credit_limit") or (plan.included_credits if str(metadata.get("billing_cycle") or "") == "weekly" else 0))
+    monthly_soft_limit = int(metadata.get("monthly_soft_limit") or plan.included_credits)
+    max_context_size = int(metadata.get("max_context_size") or 8192)
+    memory_retention_days = int(metadata.get("memory_retention_days") or 30)
+    requests_per_minute = int(metadata.get("requests_per_minute") or 30)
+    credit_spend_cap_per_hour = int(metadata.get("credit_spend_cap_per_hour") or max(1000, plan.included_credits // 8))
+    weekly_hard_cap = int(metadata.get("weekly_hard_cap") or weekly_credit_limit or 0)
+    priority_level = str(metadata.get("priority_level") or "standard")
+    rollover_policy = str(metadata.get("rollover_policy") or ("none" if plan.plan_id == "free" else "carry"))
+    monthly_usage_budget = int(metadata.get("monthly_usage_budget") or plan.included_credits or 10_000)
     return {
         "plan_id": plan.plan_id,
         "included_credits": int(plan.included_credits),
+        "weekly_credit_limit": weekly_credit_limit,
+        "monthly_soft_limit": monthly_soft_limit,
         "seat_limit": int(plan.seat_limit),
         "connector_limit": int(plan.connector_limit),
         "artifact_limit": int(plan.artifact_limit),
         "premium_models": bool(plan.premium_models),
         "support_tier": str(plan.support_tier),
-        "monthly_usage_budget": int(monthly_usage_budget.get(plan.plan_id, 10_000)),
-        "max_threads": int(legacy_threads.get(plan.plan_id, 12)),
+        "monthly_usage_budget": monthly_usage_budget,
+        "max_threads": int(metadata.get("max_threads") or {"free": 12, "pro": 120, "team": 600, "enterprise": 5000}.get(plan.plan_id, 12)),
         "max_connectors": int(plan.connector_limit),
         "artifact_exports": int(plan.artifact_limit),
         "team_seats": int(plan.seat_limit),
-        "workspace_policy": dict(plan.metadata or {}),
+        "max_context_size": max_context_size,
+        "memory_retention_days": memory_retention_days,
+        "tool_access": {
+            "web_tools": bool(tool_access.get("web_tools", True)),
+            "file_analysis": bool(tool_access.get("file_analysis", True)),
+            "voice_features": bool(tool_access.get("voice_features", False)),
+            "screen_features": bool(tool_access.get("screen_features", False)),
+            "multi_agent": bool(tool_access.get("multi_agent", False)),
+            "premium_memory": bool(tool_access.get("premium_memory", False)),
+            "priority_queue": bool(tool_access.get("priority_queue", False)),
+            "deep_mode": bool(tool_access.get("deep_mode", False)),
+        },
+        "deep_mode": bool(metadata.get("deep_mode", False)),
+        "multi_agent": bool(metadata.get("multi_agent", False)),
+        "priority_queue": bool(metadata.get("priority_queue", False)),
+        "priority_level": priority_level,
+        "rollover_policy": rollover_policy,
+        "reset_policy": reset_policy,
+        "requests_per_minute": requests_per_minute,
+        "credit_spend_cap_per_hour": credit_spend_cap_per_hour,
+        "weekly_hard_cap": weekly_hard_cap,
+        "workspace_policy": metadata,
     }
 
 
@@ -251,6 +360,500 @@ class WorkspaceBillingStore:
             "missing_fields": missing,
             "updated_at": float((stored or {}).get("updated_at") or 0.0) if isinstance(stored, dict) else 0.0,
         }
+
+    @staticmethod
+    def _actor_scope_key(workspace_id: str, actor_id: str) -> str:
+        workspace_key = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        actor_key = str(actor_id or "").strip() or workspace_key
+        return actor_key
+
+    @staticmethod
+    def _bucket_window_key(bucket_type: str, *, ts: float, period_key: str = "") -> str:
+        normalized = str(bucket_type or "").strip().lower()
+        if normalized == "request_minute":
+            return f"minute:{int(float(ts) // 60)}"
+        if normalized == "credit_hour":
+            return f"hour:{int(float(ts) // 3600)}"
+        if normalized == "period_spend":
+            return f"period:{str(period_key or '').strip()}"
+        return f"window:{int(float(ts))}"
+
+    @staticmethod
+    def _limit_hint_for_plan(plan_id: str, *, metric: str, remaining: int, reset_at: float) -> dict[str, Any]:
+        plan = get_plan(plan_id)
+        label = str(plan.label or plan.plan_id or "Plan")
+        upgrade_plan = "pro" if plan.plan_id == "free" else "team"
+        if metric in {"requests_per_minute", "credit_spend_cap_per_hour"}:
+            action = "Bekle ve yeniden dene"
+        else:
+            action = "Plan yükselt"
+        return {
+            "plan_id": plan.plan_id,
+            "plan_label": label,
+            "upgrade_plan_id": upgrade_plan,
+            "message": f"{label} plan limiti yaklaştı.",
+            "cta": action,
+            "remaining": max(0, int(remaining or 0)),
+            "reset_at": float(reset_at or 0.0),
+        }
+
+    def _usage_context(self, workspace_id: str, metric: str, amount: int, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+        details = dict(metadata or {})
+        trace_context = get_trace_context()
+        workspace_key = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        metric_key = str(metric or "unknown").strip().lower() or "unknown"
+        if trace_context is not None:
+            trace_workspace_id = str(getattr(trace_context, "workspace_id", "") or "").strip()
+            trace_session_id = str(getattr(trace_context, "session_id", "") or "").strip()
+            trace_request_id = str(getattr(trace_context, "request_id", "") or "").strip()
+            trace_id = str(getattr(trace_context, "trace_id", "") or "").strip()
+            trace_source = str(getattr(trace_context, "source", "") or "").strip()
+            if trace_workspace_id and not str(details.get("workspace_id") or "").strip():
+                details["workspace_id"] = trace_workspace_id
+            if trace_session_id and not str(details.get("session_id") or "").strip():
+                details["session_id"] = trace_session_id
+            if trace_request_id and not str(details.get("request_id") or "").strip():
+                details["request_id"] = trace_request_id
+            if trace_id and not str(details.get("trace_id") or "").strip():
+                details["trace_id"] = trace_id
+            if trace_source and not str(details.get("trace_source") or "").strip():
+                details["trace_source"] = trace_source
+        priority = str(details.get("priority") or details.get("priority_level") or "normal").strip().lower() or "normal"
+        prompt_length = max(
+            0,
+            int(details.get("prompt_length") or details.get("chars") or details.get("content_length") or 0),
+        )
+        input_tokens = max(0, int(details.get("input_tokens") or details.get("prompt_tokens") or 0))
+        output_tokens = max(0, int(details.get("output_tokens") or details.get("completion_tokens") or 0))
+        reasoning_tokens = max(0, int(details.get("reasoning_tokens") or details.get("thinking_tokens") or 0))
+        tool_calls = max(0, int(details.get("tool_calls") or details.get("tools_used") or 0))
+        memory_ops = max(0, int(details.get("memory_ops") or details.get("memory_writes") or 0))
+        model_name = str(details.get("model_name") or details.get("model") or "").strip()
+        provider = str(details.get("provider") or "").strip().lower()
+        model_tier = str(details.get("model_tier") or details.get("model_class") or "").strip().lower()
+        actor_id = self._actor_scope_key(workspace_key, str(details.get("actor_id") or details.get("user_id") or ""))
+        session_id = str(details.get("session_id") or "").strip()
+        run_id = str(details.get("run_id") or "").strip()
+        mission_id = str(details.get("mission_id") or "").strip()
+        reference_id = str(details.get("reference_id") or details.get("billing_reference_id") or run_id or mission_id or "").strip()
+        routing_profile = str(details.get("routing_profile") or "balanced").strip().lower() or "balanced"
+        review_strictness = str(details.get("review_strictness") or "balanced").strip().lower() or "balanced"
+        mode = str(details.get("mode") or details.get("task_type") or "cowork").strip().lower() or "cowork"
+        deep_mode = bool(details.get("deep_mode") or details.get("reasoning_mode") or details.get("multi_agent_recommended"))
+        queue_priority = bool(details.get("priority_queue") or details.get("queue_priority"))
+        estimated_override = details.get("estimated_credits")
+        if estimated_override is None:
+            estimated_override = details.get("credits")
+        period_info = _billing_period_info(self._effective_plan_id(self._workspace(workspace_key)))
+        bucket_base = details.get("bucket") or metric_key
+        token_estimate = 0
+        weighted_tokens = input_tokens + output_tokens + (reasoning_tokens * 2)
+        if weighted_tokens > 0:
+            token_estimate = int((weighted_tokens + 1199) // 1200)
+        return {
+            "workspace_id": workspace_key,
+            "actor_id": actor_id,
+            "session_id": session_id,
+            "trace_id": str(details.get("trace_id") or "").strip(),
+            "request_id": str(details.get("request_id") or "").strip(),
+            "trace_source": str(details.get("trace_source") or "").strip(),
+            "run_id": run_id,
+            "mission_id": mission_id,
+            "reference_id": reference_id,
+            "metric": metric_key,
+            "amount": max(1, int(amount or 1)),
+            "provider": provider,
+            "model_name": model_name,
+            "model_tier": model_tier,
+            "priority": priority,
+            "routing_profile": routing_profile,
+            "review_strictness": review_strictness,
+            "mode": mode,
+            "deep_mode": deep_mode,
+            "queue_priority": queue_priority,
+            "prompt_length": prompt_length,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "reasoning_tokens": reasoning_tokens,
+            "tool_calls": tool_calls,
+            "memory_ops": memory_ops,
+            "estimated_override": estimated_override,
+            "token_estimate": token_estimate,
+            "bucket_base": str(bucket_base or metric_key).strip().lower() or metric_key,
+            "period": str(period_info.get("period") or ""),
+            "reset_at": float(period_info.get("reset_at") or 0.0),
+            "cycle": str(period_info.get("cycle") or ""),
+            "timezone": str(period_info.get("timezone") or "UTC"),
+            "metadata": details,
+        }
+
+    def _feature_allowed(self, workspace_id: str, feature: str) -> dict[str, Any]:
+        record = self._workspace(workspace_id)
+        entitlements = _plan_entitlements(self._effective_plan_id(record))
+        feature_key = str(feature or "").strip().lower()
+        tool_access = dict((entitlements.get("tool_access") or {}))
+        if feature_key in {"web_tools", "file_analysis", "voice_features", "screen_features", "multi_agent", "premium_memory", "priority_queue", "deep_mode"}:
+            allowed = bool(tool_access.get(feature_key, False))
+        elif feature_key == "long_context":
+            allowed = int(entitlements.get("max_context_size") or 0) >= 32768
+        elif feature_key == "high_priority":
+            allowed = bool(tool_access.get("priority_queue", False))
+        else:
+            allowed = True
+        return {
+            "allowed": allowed,
+            "feature": feature_key,
+            "plan_id": self._effective_plan_id(record),
+            "reset_at": float(self.get_credit_balance(workspace_id).get("reset_at") or 0.0),
+            "entitlements": entitlements,
+            "upgrade_hint": self._limit_hint_for_plan(
+                self._effective_plan_id(record),
+                metric=feature_key,
+                remaining=0 if not allowed else 1,
+                reset_at=float(self.get_credit_balance(workspace_id).get("reset_at") or 0.0),
+            )
+            if not allowed
+            else None,
+            "reason": "feature_not_included" if not allowed else "allowed",
+        }
+
+    def _rate_limit_bucket_state(self, workspace_id: str, *, bucket_type: str, bucket_key: str) -> dict[str, Any]:
+        normalized_workspace = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        normalized_bucket = str(bucket_type or "").strip().lower()
+        normalized_key = str(bucket_key or "").strip()
+        buckets = self._repository.list_rate_limit_buckets(normalized_workspace, limit=100, bucket_type=normalized_bucket)
+        for bucket in buckets:
+            if str(bucket.get("bucket_key") or "").strip() == normalized_key:
+                return bucket
+        return {
+            "bucket_id": _stable_id("rl", normalized_workspace, normalized_bucket, normalized_key),
+            "workspace_id": normalized_workspace,
+            "actor_id": normalized_workspace,
+            "metric": normalized_bucket,
+            "bucket_type": normalized_bucket,
+            "bucket_key": normalized_key,
+            "request_count": 0,
+            "credit_spend": 0,
+            "hard_cap": 0,
+            "soft_cap": 0,
+            "status": "open",
+            "last_allowed_at": 0.0,
+            "last_blocked_at": 0.0,
+            "last_reason": "",
+            "metadata": {},
+            "created_at": 0.0,
+            "updated_at": 0.0,
+        }
+
+    def _record_rate_limit_bucket(
+        self,
+        workspace_id: str,
+        *,
+        actor_id: str,
+        metric: str,
+        bucket_type: str,
+        bucket_key: str,
+        request_count: int = 0,
+        credit_spend: int = 0,
+        hard_cap: int = 0,
+        soft_cap: int = 0,
+        status: str = "open",
+        reason: str = "",
+        metadata: dict[str, Any] | None = None,
+        allowed_at: float = 0.0,
+        blocked_at: float = 0.0,
+        created_at: float | None = None,
+    ) -> dict[str, Any]:
+        normalized_workspace = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        normalized_actor = self._actor_scope_key(normalized_workspace, actor_id)
+        normalized_metric = str(metric or "").strip().lower()
+        normalized_bucket = str(bucket_type or "").strip().lower()
+        normalized_key = str(bucket_key or "").strip()
+        bucket_id = _stable_id("rl", normalized_workspace, normalized_actor, normalized_metric, normalized_bucket, normalized_key)
+        existing = self._repository.get_rate_limit_bucket(bucket_id)
+        payload = {
+            "bucket_id": bucket_id,
+            "workspace_id": normalized_workspace,
+            "actor_id": normalized_actor,
+            "metric": normalized_metric,
+            "bucket_type": normalized_bucket,
+            "bucket_key": normalized_key,
+            "request_count": max(0, int(request_count or 0)),
+            "credit_spend": max(0, int(credit_spend or 0)),
+            "hard_cap": max(0, int(hard_cap or 0)),
+            "soft_cap": max(0, int(soft_cap or 0)),
+            "status": str(status or "open").strip().lower() or "open",
+            "last_allowed_at": float(allowed_at or 0.0),
+            "last_blocked_at": float(blocked_at or 0.0),
+            "last_reason": str(reason or "").strip(),
+            "metadata": dict(metadata or {}),
+            "created_at": float((existing or {}).get("created_at") or created_at or _now()),
+            "updated_at": _now(),
+        }
+        return self._repository.upsert_rate_limit_bucket(payload)
+
+    def _collect_usage_summary(self, workspace_id: str, *, limit: int = 100) -> dict[str, Any]:
+        record = self._workspace(workspace_id)
+        workspace_key = record.workspace_id
+        entitlements = _plan_entitlements(self._effective_plan_id(record))
+        balance = self._repository.get_credit_balance(workspace_key)
+        period_info = _billing_period_info(self._effective_plan_id(record))
+        usage_entries = sorted(record.usage, key=lambda item: item.created_at, reverse=True)
+        recent_entries = usage_entries[: max(1, int(limit or 100))]
+        recent_events = self._repository.list_usage_events(workspace_key, limit=max(50, min(250, int(limit or 100) * 5)))
+        by_metric: Counter[str] = Counter()
+        by_actor: Counter[str] = Counter()
+        top_sources: Counter[str] = Counter()
+        for entry in record.usage:
+            entry_metadata = dict(entry.metadata or {})
+            estimated = int(entry_metadata.get("estimated_credits") or entry_metadata.get("credits") or 0)
+            by_metric[str(entry.metric or "unknown")] += max(0, estimated)
+        for event in recent_events:
+            actor = str(event.get("actor_id") or workspace_key).strip() or workspace_key
+            estimated = int(event.get("estimated_credits") or event.get("actual_credits") or 0)
+            by_actor[actor] += max(0, estimated)
+            metric_key = str(event.get("metric") or "unknown").strip().lower() or "unknown"
+            source_label = str(event.get("model_name") or event.get("provider") or metric_key).strip() or metric_key
+            top_sources[source_label] += max(0, estimated)
+        triggered_limits: list[dict[str, Any]] = []
+        for bucket_type in ("request_minute", "credit_hour", "period_spend"):
+            buckets = self._repository.list_rate_limit_buckets(workspace_key, limit=100, bucket_type=bucket_type)
+            for bucket in buckets:
+                status = str(bucket.get("status") or "open").strip().lower()
+                hard_cap = int(bucket.get("hard_cap") or 0)
+                soft_cap = int(bucket.get("soft_cap") or 0)
+                current = int(bucket.get("request_count") or bucket.get("credit_spend") or 0)
+                cap = hard_cap or soft_cap
+                if status in {"blocked", "warn"} or (cap > 0 and current >= cap):
+                    triggered_limits.append(
+                        {
+                            "bucket_type": bucket_type,
+                            "bucket_key": str(bucket.get("bucket_key") or ""),
+                            "metric": str(bucket.get("metric") or ""),
+                            "status": status,
+                            "current": current,
+                            "limit": cap,
+                            "reason": str(bucket.get("last_reason") or ""),
+                        }
+                    )
+        period_spend = 0
+        for bucket in self._repository.list_rate_limit_buckets(workspace_key, limit=100, bucket_type="period_spend"):
+            if str(bucket.get("bucket_key") or "") == str(period_info.get("period") or ""):
+                period_spend = max(period_spend, int(bucket.get("credit_spend") or 0))
+        request_spend = 0
+        for bucket in self._repository.list_rate_limit_buckets(workspace_key, limit=100, bucket_type="request_minute"):
+            if str(bucket.get("bucket_key") or ""):
+                request_spend = max(request_spend, int(bucket.get("request_count") or 0))
+        hour_spend = 0
+        for bucket in self._repository.list_rate_limit_buckets(workspace_key, limit=100, bucket_type="credit_hour"):
+            if str(bucket.get("bucket_key") or ""):
+                hour_spend = max(hour_spend, int(bucket.get("credit_spend") or 0))
+        limit_remaining = max(0, int(balance.get("total") or 0))
+        upgrade_hint = None
+        if self._effective_plan_id(record) == "free" and (triggered_limits or limit_remaining <= max(50, int(entitlements.get("weekly_credit_limit") or 0) // 5)):
+            upgrade_hint = self._limit_hint_for_plan("free", metric="weekly_credit_limit", remaining=limit_remaining, reset_at=float(period_info.get("reset_at") or 0.0))
+        elif limit_remaining <= max(100, int(entitlements.get("monthly_soft_limit") or 0) // 10):
+            upgrade_hint = self._limit_hint_for_plan(self._effective_plan_id(record), metric="monthly_soft_limit", remaining=limit_remaining, reset_at=float(period_info.get("reset_at") or 0.0))
+        return {
+            "workspace_id": workspace_key,
+            "plan_id": self._effective_plan_id(record),
+            "period": period_info,
+            "credit_balance": balance,
+            "remaining_credits": limit_remaining,
+            "totals": {
+                "requests": int(sum(int(item.amount or 0) for item in record.usage)),
+                "estimated_credits": int(sum(int((item.metadata or {}).get("estimated_credits") or (item.metadata or {}).get("credits") or 0) for item in record.usage)),
+            },
+            "recent_usage": [item.to_dict() for item in recent_entries],
+            "usage_events": recent_events[: max(1, int(limit or 100))],
+            "by_metric": [
+                {"metric": metric, "credits": credits}
+                for metric, credits in by_metric.most_common()
+            ],
+            "by_actor": [
+                {"actor_id": actor, "credits": credits}
+                for actor, credits in by_actor.most_common()
+            ],
+            "top_cost_sources": [
+                {"source": source, "credits": credits}
+                for source, credits in top_sources.most_common()
+            ],
+            "triggered_limits": triggered_limits,
+            "request_spend": int(request_spend),
+            "hour_spend": int(hour_spend),
+            "period_spend": int(period_spend),
+            "upgrade_hint": upgrade_hint,
+            "entitlements": entitlements,
+        }
+
+    def _enrich_credit_balance(
+        self,
+        workspace_id: str,
+        balance: dict[str, Any],
+        *,
+        period_info: dict[str, Any] | None = None,
+        entitlements: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        record = self._workspace(workspace_id)
+        effective_plan_id = self._effective_plan_id(record)
+        plan = get_plan(effective_plan_id)
+        period_state = period_info or _billing_period_info(effective_plan_id)
+        entitlement_state = entitlements or _plan_entitlements(effective_plan_id)
+        payload = dict(balance or {})
+        payload.update(
+            {
+                "plan_id": effective_plan_id,
+                "plan_label": plan.label,
+                "period": str(period_state.get("period") or ""),
+                "cycle": str(period_state.get("cycle") or ""),
+                "reset_at": float(period_state.get("reset_at") or 0.0),
+                "timezone": str(period_state.get("timezone") or "UTC"),
+                "rollover_policy": str(entitlement_state.get("rollover_policy") or "carry"),
+                "weekly_credit_limit": int(entitlement_state.get("weekly_credit_limit") or 0),
+                "monthly_soft_limit": int(entitlement_state.get("monthly_soft_limit") or 0),
+                "requests_per_minute": int(entitlement_state.get("requests_per_minute") or 0),
+                "credit_spend_cap_per_hour": int(entitlement_state.get("credit_spend_cap_per_hour") or 0),
+                "weekly_hard_cap": int(entitlement_state.get("weekly_hard_cap") or 0),
+            }
+        )
+        return payload
+
+    def _rate_limit_snapshot(self, context: dict[str, Any], entitlements: dict[str, Any]) -> dict[str, Any]:
+        workspace_id = str(context.get("workspace_id") or "local-workspace").strip() or "local-workspace"
+        actor_id = str(context.get("actor_id") or workspace_id).strip() or workspace_id
+        metric = str(context.get("metric") or "unknown").strip().lower() or "unknown"
+        period = str(context.get("period") or "").strip()
+        now = _now()
+        request_key = self._bucket_window_key("request_minute", ts=now)
+        credit_key = self._bucket_window_key("credit_hour", ts=now)
+        period_key = self._bucket_window_key("period_spend", ts=now, period_key=period)
+        request_bucket = self._rate_limit_bucket_state(workspace_id, bucket_type="request_minute", bucket_key=request_key)
+        credit_bucket = self._rate_limit_bucket_state(workspace_id, bucket_type="credit_hour", bucket_key=credit_key)
+        period_bucket = self._rate_limit_bucket_state(workspace_id, bucket_type="period_spend", bucket_key=period_key)
+        request_limit = max(0, int(entitlements.get("requests_per_minute") or 0))
+        credit_limit = max(0, int(entitlements.get("credit_spend_cap_per_hour") or 0))
+        period_limit = max(0, int(entitlements.get("weekly_hard_cap") or entitlements.get("monthly_soft_limit") or 0))
+        request_count = int(request_bucket.get("request_count") or 0)
+        hour_spend = int(credit_bucket.get("credit_spend") or 0)
+        period_spend = int(period_bucket.get("credit_spend") or 0)
+        return {
+            "workspace_id": workspace_id,
+            "actor_id": actor_id,
+            "metric": metric,
+            "period": period,
+            "request_key": request_key,
+            "credit_key": credit_key,
+            "period_key": period_key,
+            "request_bucket": request_bucket,
+            "credit_bucket": credit_bucket,
+            "period_bucket": period_bucket,
+            "request_limit": request_limit,
+            "credit_limit": credit_limit,
+            "period_limit": period_limit,
+            "soft_period_limit": max(0, int(entitlements.get("monthly_soft_limit") or 0)),
+            "request_count": request_count,
+            "hour_spend": hour_spend,
+            "period_spend": period_spend,
+            "request_remaining": max(0, request_limit - request_count) if request_limit > 0 else 0,
+            "credit_remaining": max(0, credit_limit - hour_spend) if credit_limit > 0 else 0,
+            "period_remaining": max(0, period_limit - period_spend) if period_limit > 0 else 0,
+        }
+
+    @staticmethod
+    def _bucket_status(current: int, limit: int) -> str:
+        if limit <= 0:
+            return "open"
+        if current >= limit:
+            return "blocked"
+        if current >= max(1, int(limit * 0.8)):
+            return "warn"
+        return "open"
+
+    def _estimate_credit_cost(self, context: dict[str, Any]) -> int:
+        base_estimate = max(0, int(context.get("estimated_override") or 0))
+        metric_estimate = self.estimate_usage_credits(
+            str(context.get("metric") or "unknown"),
+            int(context.get("amount") or 1),
+            metadata=dict(context.get("metadata") or {}),
+        )
+        token_estimate = max(0, int(context.get("token_estimate") or 0))
+        raw_estimate = max(base_estimate, metric_estimate, token_estimate)
+        tool_cost = max(0, int(context.get("tool_calls") or 0))
+        memory_cost = max(0, int(context.get("memory_ops") or 0))
+        multiplier = 1.0
+        if bool(context.get("deep_mode")):
+            multiplier += 0.35
+        if bool(context.get("queue_priority")) or str(context.get("priority") or "").strip().lower() in {"high", "urgent", "critical"}:
+            multiplier += 0.15
+        if str(context.get("model_tier") or "").strip().lower() in {"premium", "pro", "frontier"}:
+            multiplier += 0.2
+        if str(context.get("routing_profile") or "").strip().lower() == "quality_first":
+            multiplier += 0.15
+        if str(context.get("review_strictness") or "").strip().lower() == "strict":
+            multiplier += 0.1
+        multiplier = min(multiplier, 2.5)
+        composite = max(0, int(math.ceil((raw_estimate + tool_cost + memory_cost) * multiplier)))
+        return composite
+
+    def _usage_event_payload(
+        self,
+        context: dict[str, Any],
+        *,
+        usage_id: str,
+        status: str,
+        event_type: str = "usage",
+        estimated_credits: int = 0,
+        actual_credits: int = 0,
+    ) -> dict[str, Any]:
+        metadata = dict(context.get("metadata") or {})
+        return {
+            "event_id": usage_id,
+            "workspace_id": str(context.get("workspace_id") or "local-workspace"),
+            "actor_id": str(context.get("actor_id") or ""),
+            "session_id": str(context.get("session_id") or ""),
+            "run_id": str(context.get("run_id") or ""),
+            "usage_id": usage_id,
+            "metric": str(context.get("metric") or "unknown"),
+            "event_type": event_type,
+            "status": status,
+            "reference_id": str(context.get("reference_id") or usage_id),
+            "provider": str(context.get("provider") or ""),
+            "model_name": str(context.get("model_name") or ""),
+            "priority": str(context.get("priority") or "normal"),
+            "input_tokens": max(0, int(context.get("input_tokens") or 0)),
+            "output_tokens": max(0, int(context.get("output_tokens") or 0)),
+            "reasoning_tokens": max(0, int(context.get("reasoning_tokens") or 0)),
+            "tool_calls": max(0, int(context.get("tool_calls") or 0)),
+            "memory_ops": max(0, int(context.get("memory_ops") or 0)),
+            "prompt_length": max(0, int(context.get("prompt_length") or 0)),
+            "estimated_credits": max(0, int(estimated_credits or 0)),
+            "actual_credits": max(0, int(actual_credits or 0)),
+            "bucket": str(context.get("bucket_base") or context.get("metric") or "usage"),
+            "metadata": metadata,
+            "created_at": _now(),
+        }
+
+    def record_usage_event(self, context: dict[str, Any]) -> dict[str, Any]:
+        usage_id = str(context.get("usage_id") or context.get("reference_id") or _stable_id("usageevt", str(context.get("workspace_id") or "local-workspace"), str(context.get("metric") or "unknown"), str(_now()))).strip()
+        estimated_credits = max(0, int(context.get("estimated_credits") or 0))
+        actual_credits = max(0, int(context.get("actual_credits") or estimated_credits))
+        status = str(context.get("status") or "recorded").strip().lower() or "recorded"
+        event_type = str(context.get("event_type") or "usage").strip().lower() or "usage"
+        payload = self._usage_event_payload(
+            context,
+            usage_id=usage_id,
+            status=status,
+            event_type=event_type,
+            estimated_credits=estimated_credits,
+            actual_credits=actual_credits,
+        )
+        return self._repository.record_usage_event(payload)
+
+    def check_feature_access(self, workspace_id: str, feature: str) -> dict[str, Any]:
+        return self._feature_allowed(workspace_id, feature)
+
+    def get_usage_summary(self, workspace_id: str, *, limit: int = 100) -> dict[str, Any]:
+        return self._collect_usage_summary(workspace_id, limit=limit)
 
     def _callback_url(self, workspace_id: str, *, mode: str, reference_id: str) -> str:
         base_url = str(os.getenv("IYZICO_PUBLIC_CALLBACK_BASE_URL", "") or "").strip().rstrip("/")
@@ -486,53 +1089,115 @@ class WorkspaceBillingStore:
     def _ensure_included_credits(self, record: WorkspaceBillingRecord) -> dict[str, Any]:
         effective_plan_id = self._effective_plan_id(record)
         plan = get_plan(effective_plan_id)
+        entitlements = _plan_entitlements(effective_plan_id)
+        period_info = _billing_period_info(effective_plan_id)
+        period = str(period_info.get("period") or _period_key())
+        period_reset_at = float(period_info.get("reset_at") or 0.0)
+        rollover_policy = str(entitlements.get("rollover_policy") or "carry").strip().lower() or "carry"
         balance = self._repository.get_credit_balance(record.workspace_id)
-        period = _period_key()
-        if str(record.metadata.get("included_credit_period") or "") == period:
-            return balance
-        if int(plan.included_credits) <= 0:
-            record.metadata["included_credit_period"] = period
-            record.updated_at = _now()
-            self._save()
-            return balance
-        entry_id = _stable_id("included", record.workspace_id, effective_plan_id, period)
-        self._repository.record_credit_entry(
-            {
-                "entry_id": entry_id,
-                "workspace_id": record.workspace_id,
-                "bucket": "included",
-                "entry_type": "grant",
-                "delta_credits": int(plan.included_credits),
-                "reference_id": f"{effective_plan_id}:{period}",
-                "metadata": {
-                    "grant_type": "monthly_included",
-                    "period": period,
-                    "plan_id": effective_plan_id,
-                },
-            }
+        included_period = str(record.metadata.get("included_credit_period") or "").strip()
+        included_reference = f"{effective_plan_id}:{period}"
+        existing_current_grant = self._repository.list_credit_entries_for_reference(
+            record.workspace_id,
+            reference_id=included_reference,
+            entry_type="grant",
+            limit=5,
         )
-        self._repository.record_billing_event(
-            {
-                "event_id": _stable_id("billevt", record.workspace_id, "included", effective_plan_id, period),
-                "workspace_id": record.workspace_id,
-                "provider": "internal",
-                "event_type": "billing.included_credits.granted",
-                "status": "applied",
-                "reference_id": f"{effective_plan_id}:{period}",
-                "payload": {
+        current_grant_present = any(
+            str((entry.get("metadata") or {}).get("period") or "").strip() == period
+            or str(entry.get("reference_id") or "").strip() == included_reference
+            for entry in existing_current_grant
+        )
+        if included_period == period and current_grant_present:
+            return self._enrich_credit_balance(record.workspace_id, balance, period_info=period_info, entitlements=entitlements)
+
+        if rollover_policy == "none" and included_period != period:
+            included_balance = int(balance.get("included") or 0)
+            if included_balance > 0:
+                expire_reference = f"{effective_plan_id}:{included_period or 'legacy'}:expire"
+                expire_entry_id = _stable_id("expire", record.workspace_id, effective_plan_id, included_period or "legacy")
+                self._repository.record_credit_entry(
+                    {
+                        "entry_id": expire_entry_id,
+                        "workspace_id": record.workspace_id,
+                        "bucket": "included",
+                        "entry_type": "expire",
+                        "delta_credits": -included_balance,
+                        "reference_id": expire_reference,
+                        "metadata": {
+                            "grant_type": "period_expire",
+                            "expired_period": included_period or "legacy",
+                            "next_period": period,
+                            "plan_id": effective_plan_id,
+                        },
+                    }
+                )
+                self._repository.record_billing_event(
+                    {
+                        "event_id": _stable_id("billevt", record.workspace_id, "included", "expire", effective_plan_id, included_period or "legacy"),
+                        "workspace_id": record.workspace_id,
+                        "provider": "internal",
+                        "event_type": "billing.included_credits.expired",
+                        "status": "applied",
+                        "reference_id": expire_reference,
+                        "payload": {
+                            "workspace_id": record.workspace_id,
+                            "plan_id": effective_plan_id,
+                            "credits": included_balance,
+                            "expired_period": included_period or "legacy",
+                            "next_period": period,
+                        },
+                    }
+                )
+                balance = self._repository.get_credit_balance(record.workspace_id)
+
+        if int(plan.included_credits) > 0 and not current_grant_present:
+            entry_id = _stable_id("included", record.workspace_id, effective_plan_id, period)
+            self._repository.record_credit_entry(
+                {
+                    "entry_id": entry_id,
                     "workspace_id": record.workspace_id,
-                    "plan_id": effective_plan_id,
-                    "credits": int(plan.included_credits),
-                    "period": period,
-                },
-            }
-        )
+                    "bucket": "included",
+                    "entry_type": "grant",
+                    "delta_credits": int(plan.included_credits),
+                    "reference_id": included_reference,
+                    "metadata": {
+                        "grant_type": "weekly_reset" if int(entitlements.get("weekly_credit_limit") or 0) > 0 else "monthly_included",
+                        "period": period,
+                        "reset_at": period_reset_at,
+                        "plan_id": effective_plan_id,
+                        "rollover_policy": rollover_policy,
+                    },
+                }
+            )
+            self._repository.record_billing_event(
+                {
+                    "event_id": _stable_id("billevt", record.workspace_id, "included", effective_plan_id, period),
+                    "workspace_id": record.workspace_id,
+                    "provider": "internal",
+                    "event_type": "billing.included_credits.granted",
+                    "status": "applied",
+                    "reference_id": included_reference,
+                    "payload": {
+                        "workspace_id": record.workspace_id,
+                        "plan_id": effective_plan_id,
+                        "credits": int(plan.included_credits),
+                        "period": period,
+                        "reset_at": period_reset_at,
+                        "rollover_policy": rollover_policy,
+                    },
+                }
+            )
+            balance = self._repository.get_credit_balance(record.workspace_id)
+
         record.metadata["included_credit_period"] = period
+        record.metadata["included_credit_reset_at"] = period_reset_at
         record.metadata["effective_plan_id"] = effective_plan_id
+        record.metadata["rollover_policy"] = rollover_policy
         record.updated_at = _now()
         self._save()
         self._snapshot_entitlements(record.workspace_id, scope="monthly_refresh")
-        return self._repository.get_credit_balance(record.workspace_id)
+        return self._enrich_credit_balance(record.workspace_id, balance, period_info=period_info, entitlements=entitlements)
 
     def _snapshot_entitlements(self, workspace_id: str, *, scope: str) -> dict[str, Any]:
         record = self._workspace(workspace_id)
@@ -562,6 +1227,29 @@ class WorkspaceBillingStore:
 
     def get_billing_profile(self, workspace_id: str) -> dict[str, Any]:
         return self._billing_profile_state(workspace_id)
+
+    def list_known_workspaces(self) -> list[str]:
+        return self._repository.list_known_workspace_ids()
+
+    def backfill_workspace(self, workspace_id: str, *, scope: str = "backfill") -> dict[str, Any]:
+        workspace_key = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        summary = self.get_workspace_summary(workspace_key)
+        return {
+            "workspace_id": workspace_key,
+            "scope": str(scope or "backfill").strip() or "backfill",
+            "summary": summary,
+        }
+
+    def backfill_workspaces(self, workspace_ids: list[str] | None = None, *, scope: str = "backfill") -> dict[str, Any]:
+        candidates = list(workspace_ids) if workspace_ids is not None else self.list_known_workspaces()
+        normalized = sorted({str(workspace_id or "").strip() for workspace_id in candidates if str(workspace_id or "").strip()})
+        results = [self.backfill_workspace(workspace_id, scope=scope) for workspace_id in normalized]
+        return {
+            "scope": str(scope or "backfill").strip() or "backfill",
+            "count": len(results),
+            "workspace_ids": normalized,
+            "workspaces": results,
+        }
 
     def update_billing_profile(self, workspace_id: str, profile_payload: dict[str, Any]) -> dict[str, Any]:
         record = self._workspace(workspace_id)
@@ -662,7 +1350,10 @@ class WorkspaceBillingStore:
 
     def get_credit_balance(self, workspace_id: str) -> dict[str, Any]:
         record = self._workspace(workspace_id)
-        return self._ensure_included_credits(record)
+        balance = self._ensure_included_credits(record)
+        period_info = _billing_period_info(self._effective_plan_id(record))
+        entitlements = _plan_entitlements(self._effective_plan_id(record))
+        return self._enrich_credit_balance(record.workspace_id, balance, period_info=period_info, entitlements=entitlements)
 
     def get_credit_ledger(self, workspace_id: str, *, limit: int = 100) -> dict[str, Any]:
         self.get_credit_balance(workspace_id)
@@ -683,6 +1374,8 @@ class WorkspaceBillingStore:
         effective_plan_id = self._effective_plan_id(record)
         entitlements = _plan_entitlements(effective_plan_id)
         degraded_reason = self._degraded_reason(record)
+        period_info = _billing_period_info(effective_plan_id)
+        usage_summary = self._collect_usage_summary(record.workspace_id, limit=25)
         return {
             "workspace_id": record.workspace_id,
             "plan_id": effective_plan_id,
@@ -690,15 +1383,19 @@ class WorkspaceBillingStore:
             "status": self._normalize_status(record.status),
             "provider": str(record.metadata.get("provider") or self._provider.provider_name),
             "entitlements": entitlements,
-            "credits": balance,
+            "credits": self._enrich_credit_balance(record.workspace_id, balance, period_info=period_info, entitlements=entitlements),
             "workspace_owned": True,
             "hybrid_billing": True,
             "degraded": bool(degraded_reason),
             "degraded_reason": degraded_reason,
+            "reset_at": float(period_info.get("reset_at") or 0.0),
+            "usage_summary": usage_summary,
+            "feature_access": entitlements.get("tool_access") or {},
         }
 
     def get_usage(self, workspace_id: str, *, limit: int = 100) -> dict[str, Any]:
         record = self._workspace(workspace_id)
+        summary = self._collect_usage_summary(record.workspace_id, limit=limit)
         recent = sorted(record.usage, key=lambda item: item.created_at, reverse=True)[: max(1, int(limit or 100))]
         totals: dict[str, int] = {}
         for item in record.usage:
@@ -708,6 +1405,8 @@ class WorkspaceBillingStore:
             "items": [item.to_dict() for item in recent],
             "totals": totals,
             "budget": _plan_entitlements(self._effective_plan_id(record)).get("monthly_usage_budget", 0),
+            "summary": summary,
+            "reset_at": float(summary.get("period", {}).get("reset_at") or 0.0),
         }
 
     def get_usage_entry(self, workspace_id: str, usage_id: str) -> dict[str, Any] | None:
@@ -746,24 +1445,62 @@ class WorkspaceBillingStore:
         self._repository.upsert_workspace(record.to_dict())
         return updated_payload
 
+    def _resolve_usage_event_identity(self, context: dict[str, Any]) -> tuple[str, str]:
+        usage_id = str(context.get("usage_id") or context.get("reference_id") or "").strip()
+        if not usage_id:
+            usage_id = _stable_id(
+                "usage",
+                str(context.get("workspace_id") or "local-workspace"),
+                str(context.get("actor_id") or ""),
+                str(context.get("metric") or "unknown"),
+                str(context.get("session_id") or ""),
+                str(context.get("run_id") or ""),
+                str(_now()),
+            )
+        reference_id = str(context.get("reference_id") or usage_id).strip() or usage_id
+        return usage_id, reference_id
+
     def estimate_usage_credits(self, metric: str, amount: int = 1, *, metadata: dict[str, Any] | None = None) -> int:
+        details = dict(metadata or {})
         metric_key = str(metric or "unknown").strip().lower()
         count = max(1, int(amount or 1))
-        details = dict(metadata or {})
         mode = str(details.get("mode") or details.get("task_type") or "cowork").strip().lower() or "cowork"
         prompt_length = max(
             0,
             int(details.get("prompt_length") or details.get("chars") or details.get("content_length") or 0),
         )
-        routing_profile = str(details.get("routing_profile") or "balanced").strip().lower()
-        review_strictness = str(details.get("review_strictness") or "balanced").strip().lower()
+        routing_profile = str(details.get("routing_profile") or "balanced").strip().lower() or "balanced"
+        review_strictness = str(details.get("review_strictness") or "balanced").strip().lower() or "balanced"
+        input_tokens = max(0, int(details.get("input_tokens") or details.get("prompt_tokens") or 0))
+        output_tokens = max(0, int(details.get("output_tokens") or details.get("completion_tokens") or 0))
+        reasoning_tokens = max(0, int(details.get("reasoning_tokens") or details.get("thinking_tokens") or 0))
+        tool_calls = max(0, int(details.get("tool_calls") or details.get("tools_used") or 0))
+        memory_ops = max(0, int(details.get("memory_ops") or details.get("memory_writes") or 0))
+        deep_mode = bool(details.get("deep_mode") or details.get("reasoning_mode") or details.get("multi_agent_recommended"))
+        priority = str(details.get("priority") or details.get("priority_level") or "").strip().lower()
+        model_tier = str(details.get("model_tier") or details.get("model_class") or "").strip().lower()
         prompt_surcharge = min(4, prompt_length // 900) if prompt_length > 0 else 0
         quality_surcharge = 1 if routing_profile == "quality_first" or review_strictness == "strict" else 0
+        weighted_tokens = input_tokens + output_tokens + (reasoning_tokens * 2)
+        token_estimate = int(math.ceil(weighted_tokens / 1200.0)) if weighted_tokens > 0 else 0
+        feature_surcharge = tool_calls + memory_ops
+        factor = 1.0
+        if deep_mode:
+            factor += 0.35
+        if priority in {"high", "urgent", "critical"}:
+            factor += 0.15
+        if model_tier in {"premium", "pro", "frontier"}:
+            factor += 0.2
+        if routing_profile == "quality_first":
+            factor += 0.15
+        if review_strictness == "strict":
+            factor += 0.1
+        factor = min(factor, 2.5)
 
         if metric_key == "inbox_events":
             return 0
         if metric_key == "task_extractions":
-            return count
+            return max(1, count)
         if metric_key == "cowork_threads":
             base = {
                 "cowork": 3,
@@ -771,7 +1508,8 @@ class WorkspaceBillingStore:
                 "presentation": 5,
                 "website": 6,
             }.get(mode, 3)
-            return count * (base + prompt_surcharge + quality_surcharge)
+            raw = max(base + prompt_surcharge + quality_surcharge, token_estimate + feature_surcharge)
+            return max(1, int(math.ceil(raw * factor))) * count
         if metric_key == "cowork_turns":
             base = {
                 "cowork": 2,
@@ -779,28 +1517,118 @@ class WorkspaceBillingStore:
                 "presentation": 4,
                 "website": 5,
             }.get(mode, 2)
-            return count * (base + prompt_surcharge + quality_surcharge)
+            raw = max(base + prompt_surcharge + quality_surcharge, token_estimate + feature_surcharge)
+            return max(1, int(math.ceil(raw * factor))) * count
         if metric_key == "workflow_runs":
             base = {
                 "document": 8,
                 "presentation": 10,
                 "website": 12,
             }.get(mode, 8)
-            return count * (base + prompt_surcharge + quality_surcharge)
-        return 0
+            raw = max(base + prompt_surcharge + quality_surcharge, token_estimate + feature_surcharge + 2)
+            return max(1, int(math.ceil(raw * factor))) * count
+        return max(0, int(math.ceil((token_estimate + feature_surcharge) * factor)))
 
     def authorize_usage(self, workspace_id: str, metric: str, amount: int = 1, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+        context = self._usage_context(workspace_id, metric, amount, metadata)
+        effective_plan_id = self._effective_plan_id(self._workspace(context["workspace_id"]))
+        entitlements = _plan_entitlements(effective_plan_id)
+        estimated_override = context.get("estimated_override")
+        if estimated_override is not None:
+            estimated_override = max(0, int(estimated_override or 0))
         estimated_credits = max(
             0,
-            int((metadata or {}).get("estimated_credits") or self.estimate_usage_credits(metric, amount, metadata=metadata)),
+            int(
+                estimated_override
+                if estimated_override is not None
+                else self._estimate_credit_cost(context)
+            ),
         )
-        decision = self.authorize_credits(workspace_id, required_credits=estimated_credits)
+        balance = self.get_credit_balance(context["workspace_id"])
+        rate_snapshot = self._rate_limit_snapshot(context, entitlements)
+        credit_balance = int(balance.get("total") or 0)
+        request_limit = int(rate_snapshot.get("request_limit") or 0)
+        credit_limit = int(rate_snapshot.get("credit_limit") or 0)
+        hard_period_limit = int(rate_snapshot.get("period_limit") or 0)
+        soft_period_limit = int(rate_snapshot.get("soft_period_limit") or 0)
+        request_count = int(rate_snapshot.get("request_count") or 0)
+        hour_spend = int(rate_snapshot.get("hour_spend") or 0)
+        period_spend = int(rate_snapshot.get("period_spend") or 0)
+        remaining_balance = max(0, credit_balance - estimated_credits)
+        allowed = True
+        reason = "within_limits"
+        status_code = 200
+        retry_after = 0
+        degraded = False
+        if request_limit > 0 and request_count >= request_limit:
+            allowed = False
+            reason = "requests_per_minute_limit_reached"
+            status_code = 429
+            retry_after = 60
+        elif credit_limit > 0 and hour_spend + estimated_credits > credit_limit:
+            allowed = False
+            reason = "credit_spend_cap_per_hour_reached"
+            status_code = 429
+            retry_after = 3600
+        elif hard_period_limit > 0 and period_spend + estimated_credits > hard_period_limit:
+            allowed = False
+            reason = "weekly_hard_cap_reached" if str(rate_snapshot.get("period") or "").startswith("weekly:") else "monthly_hard_cap_reached"
+            status_code = 402
+            retry_after = max(0, int(float(context.get("reset_at") or 0.0) - _now()))
+        elif credit_balance < estimated_credits:
+            allowed = False
+            reason = "insufficient_credits"
+            status_code = 402
+        elif soft_period_limit > 0 and period_spend + estimated_credits >= max(1, int(soft_period_limit * 0.8)):
+            degraded = True
+        elif credit_balance <= max(50, int(entitlements.get("weekly_credit_limit") or entitlements.get("monthly_soft_limit") or 0) // 10):
+            degraded = True
+
+        if allowed and not degraded and soft_period_limit > 0 and period_spend + estimated_credits >= soft_period_limit:
+            degraded = True
+
+        upgrade_hint = self._limit_hint_for_plan(
+            effective_plan_id,
+            metric=str(metric or "unknown"),
+            remaining=remaining_balance,
+            reset_at=float(context.get("reset_at") or 0.0),
+        ) if (degraded or not allowed) else None
+        if not allowed:
+            decision = {
+                "allowed": False,
+                "reason": reason,
+                "status_code": status_code,
+                "retry_after": retry_after,
+                "required_credits": estimated_credits,
+                "available_credits": credit_balance,
+                "source_order": ["included", "purchased"],
+            }
+        else:
+            decision = {
+                "allowed": True,
+                "reason": reason,
+                "status_code": status_code,
+                "retry_after": retry_after,
+                "required_credits": estimated_credits,
+                "available_credits": credit_balance,
+                "source_order": ["included", "purchased"],
+                "degraded": degraded,
+            }
         return {
             **decision,
-            "workspace_id": str(workspace_id or "local-workspace").strip() or "local-workspace",
-            "metric": str(metric or "unknown").strip() or "unknown",
-            "amount": max(0, int(amount or 0)),
+            "workspace_id": context["workspace_id"],
+            "actor_id": context["actor_id"],
+            "session_id": context["session_id"],
+            "run_id": context["run_id"],
+            "mission_id": context["mission_id"],
+            "metric": context["metric"],
+            "amount": context["amount"],
             "estimated_credits": estimated_credits,
+            "credit_balance": balance,
+            "rate_limits": rate_snapshot,
+            "upgrade_hint": upgrade_hint,
+            "reset_at": float(context.get("reset_at") or 0.0),
+            "feature_access": entitlements.get("tool_access") or {},
         }
 
     def authorize_credits(self, workspace_id: str, *, required_credits: int) -> dict[str, Any]:
@@ -883,12 +1711,31 @@ class WorkspaceBillingStore:
     def record_usage(self, workspace_id: str, metric: str, amount: int = 1, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         record = self._workspace(workspace_id)
         usage_metadata = dict(metadata or {})
+        context = self._usage_context(record.workspace_id, metric, amount, usage_metadata)
+        for key in ("trace_id", "request_id", "trace_source"):
+            value = str(context.get(key) or "").strip()
+            if value and not str(usage_metadata.get(key) or "").strip():
+                usage_metadata[key] = value
+        if context.get("session_id") and not str(usage_metadata.get("session_id") or "").strip():
+            usage_metadata["session_id"] = str(context.get("session_id") or "").strip()
+        if context.get("workspace_id") and not str(usage_metadata.get("workspace_id") or "").strip():
+            usage_metadata["workspace_id"] = str(context.get("workspace_id") or "").strip()
         if "estimated_credits" not in usage_metadata and "credits" not in usage_metadata:
-            estimated_credits = self.estimate_usage_credits(metric, amount, metadata=usage_metadata)
+            estimated_credits = self._estimate_credit_cost(context)
             if estimated_credits > 0:
                 usage_metadata["estimated_credits"] = estimated_credits
+        else:
+            estimated_credits = max(0, int(usage_metadata.get("estimated_credits") or usage_metadata.get("credits") or 0))
+        usage_id, reference_id = self._resolve_usage_event_identity({**context, "metadata": usage_metadata})
+        if estimated_credits > 0:
+            self.debit_credits(
+                record.workspace_id,
+                required_credits=estimated_credits,
+                reference_id=reference_id,
+                metadata={"metric": str(metric or "unknown").strip() or "unknown", **usage_metadata},
+            )
         entry = UsageLedgerEntry(
-            usage_id=f"usage_{int(_now() * 1000)}_{len(record.usage) + 1}",
+            usage_id=usage_id,
             workspace_id=record.workspace_id,
             metric=str(metric or "unknown").strip() or "unknown",
             amount=max(0, int(amount or 0)),
@@ -898,14 +1745,80 @@ class WorkspaceBillingStore:
         record.updated_at = _now()
         self._repository.record_usage(entry.to_dict())
         self._repository.upsert_workspace(record.to_dict())
-        estimated_credits = max(0, int(entry.metadata.get("estimated_credits") or entry.metadata.get("credits") or 0))
-        if estimated_credits > 0:
-            self.debit_credits(
-                record.workspace_id,
-                required_credits=estimated_credits,
-                reference_id=entry.usage_id,
-                metadata={"metric": entry.metric, **entry.metadata},
-            )
+        rate_snapshot = self._rate_limit_snapshot({**context, "usage_id": usage_id, "reference_id": reference_id}, _plan_entitlements(self._effective_plan_id(record)))
+        now = _now()
+        request_key = str(rate_snapshot.get("request_key") or "")
+        credit_key = str(rate_snapshot.get("credit_key") or "")
+        period_key = str(rate_snapshot.get("period_key") or "")
+        request_bucket = self._rate_limit_bucket_state(record.workspace_id, bucket_type="request_minute", bucket_key=request_key)
+        credit_bucket = self._rate_limit_bucket_state(record.workspace_id, bucket_type="credit_hour", bucket_key=credit_key)
+        period_bucket = self._rate_limit_bucket_state(record.workspace_id, bucket_type="period_spend", bucket_key=period_key)
+        request_count = int(request_bucket.get("request_count") or 0) + 1
+        credit_spend = int(credit_bucket.get("credit_spend") or 0) + max(0, estimated_credits)
+        period_spend = int(period_bucket.get("credit_spend") or 0) + max(0, estimated_credits)
+        minute_status = self._bucket_status(request_count, int(rate_snapshot.get("request_limit") or 0))
+        hour_status = self._bucket_status(credit_spend, int(rate_snapshot.get("credit_limit") or 0))
+        period_status = self._bucket_status(period_spend, int(rate_snapshot.get("period_limit") or 0))
+        self._record_rate_limit_bucket(
+            record.workspace_id,
+            actor_id=str(context.get("actor_id") or record.workspace_id),
+            metric=str(metric or "unknown"),
+            bucket_type="request_minute",
+            bucket_key=request_key,
+            request_count=request_count,
+            credit_spend=max(0, estimated_credits),
+            hard_cap=int(rate_snapshot.get("request_limit") or 0),
+            soft_cap=max(0, int(rate_snapshot.get("request_limit") or 0)),
+            status=minute_status,
+            reason="request_recorded",
+            metadata={"usage_id": usage_id, "session_id": context.get("session_id"), "run_id": context.get("run_id")},
+            allowed_at=now,
+            created_at=now,
+        )
+        self._record_rate_limit_bucket(
+            record.workspace_id,
+            actor_id=str(context.get("actor_id") or record.workspace_id),
+            metric=str(metric or "unknown"),
+            bucket_type="credit_hour",
+            bucket_key=credit_key,
+            request_count=request_count,
+            credit_spend=credit_spend,
+            hard_cap=int(rate_snapshot.get("credit_limit") or 0),
+            soft_cap=max(0, int(rate_snapshot.get("credit_limit") or 0) - max(1, int(rate_snapshot.get("credit_limit") or 0) // 5)),
+            status=hour_status,
+            reason="credit_spend_recorded",
+            metadata={"usage_id": usage_id, "session_id": context.get("session_id"), "run_id": context.get("run_id")},
+            allowed_at=now,
+            created_at=now,
+        )
+        self._record_rate_limit_bucket(
+            record.workspace_id,
+            actor_id=str(context.get("actor_id") or record.workspace_id),
+            metric=str(metric or "unknown"),
+            bucket_type="period_spend",
+            bucket_key=period_key,
+            request_count=request_count,
+            credit_spend=period_spend,
+            hard_cap=int(rate_snapshot.get("period_limit") or 0),
+            soft_cap=max(0, int(rate_snapshot.get("period_limit") or 0) - max(1, int(rate_snapshot.get("period_limit") or 0) // 10)),
+            status=period_status,
+            reason="period_spend_recorded",
+            metadata={"usage_id": usage_id, "session_id": context.get("session_id"), "run_id": context.get("run_id")},
+            allowed_at=now,
+            created_at=now,
+        )
+        self.record_usage_event(
+            {
+                **context,
+                "usage_id": usage_id,
+                "reference_id": reference_id,
+                "status": "recorded",
+                "event_type": "usage",
+                "estimated_credits": estimated_credits,
+                "actual_credits": estimated_credits,
+                "metadata": {**usage_metadata, "source": "record_usage"},
+            }
+        )
         return entry.to_dict()
 
     def record_credit_grant(
@@ -932,12 +1845,22 @@ class WorkspaceBillingStore:
         record = self._workspace(workspace_key)
         if normalized_bucket == "included":
             period = str(grant_metadata.get("period") or _period_key()).strip() or _period_key()
-            entry_scope = period
+            plan_id = str(
+                grant_metadata.get("plan_id")
+                or grant_metadata.get("effective_plan_id")
+                or record.metadata.get("effective_plan_id")
+                or record.plan_id
+                or "free"
+            ).strip().lower() or "free"
+            entry_scope = f"{plan_id}:{period}"
             grant_metadata.setdefault("period", period)
+            grant_metadata.setdefault("plan_id", plan_id)
             grant_metadata.setdefault("grant_type", "plan_included")
+            grant_metadata.setdefault("source_reference_id", str(reference_id or "").strip())
         else:
             entry_scope = str(reference_id or grant_metadata.get("pack_id") or grant_metadata.get("token_pack_id") or grant_credits).strip()
             grant_metadata.setdefault("grant_type", "token_pack")
+        reference_value = entry_scope if normalized_bucket == "included" else str(reference_id or "").strip()
         entry = self._repository.record_credit_entry(
             {
                 "entry_id": _stable_id("creditgrant", workspace_key, normalized_bucket, entry_scope),
@@ -945,7 +1868,7 @@ class WorkspaceBillingStore:
                 "bucket": normalized_bucket,
                 "entry_type": "grant",
                 "delta_credits": grant_credits,
-                "reference_id": str(reference_id or "").strip(),
+                "reference_id": reference_value,
                 "metadata": grant_metadata,
             }
         )
@@ -956,12 +1879,13 @@ class WorkspaceBillingStore:
                 "provider": str(grant_metadata.get("source") or "internal"),
                 "event_type": "credit.granted",
                 "status": "applied",
-                "reference_id": str(reference_id or "").strip(),
+                "reference_id": reference_value,
                 "payload": {
                     "workspace_id": workspace_key,
                     "bucket": normalized_bucket,
                     "credits": grant_credits,
-                    "reference_id": str(reference_id or "").strip(),
+                    "reference_id": reference_value,
+                    "source_reference_id": str(reference_id or "").strip(),
                     "metadata": grant_metadata,
                 },
             }
@@ -973,14 +1897,15 @@ class WorkspaceBillingStore:
         record.updated_at = _now()
         self._save()
         snapshot = self._snapshot_entitlements(workspace_key, scope="credit_grant")
+        balance = self._repository.get_credit_balance(workspace_key)
         return {
             "workspace_id": workspace_key,
             "bucket": normalized_bucket,
             "credits": grant_credits,
-            "reference_id": str(reference_id or "").strip(),
+            "reference_id": reference_value,
             "entry": entry,
             "event": event,
-            "balance": snapshot.get("credits") if isinstance(snapshot, dict) else self._repository.get_credit_balance(workspace_key),
+            "balance": balance,
         }
 
     def reconcile_usage(
@@ -1032,6 +1957,22 @@ class WorkspaceBillingStore:
                 }
                 usage_metadata["reconciliation"] = reconciliation_payload
                 self._sync_usage_metadata(workspace_key, str(usage.get("usage_id") or usage_id), usage_metadata)
+                self.record_usage_event(
+                    {
+                        "workspace_id": workspace_key,
+                        "actor_id": str(usage_metadata.get("actor_id") or (metadata or {}).get("actor_id") or ""),
+                        "session_id": str(usage_metadata.get("session_id") or (metadata or {}).get("session_id") or ""),
+                        "run_id": str(usage_metadata.get("run_id") or (metadata or {}).get("run_id") or ""),
+                        "usage_id": str(usage.get("usage_id") or usage_id),
+                        "reference_id": reconciliation_reference,
+                        "metric": str(usage.get("metric") or "unknown"),
+                        "status": status,
+                        "event_type": "reconciled",
+                        "estimated_credits": estimated_credits,
+                        "actual_credits": actual,
+                        "metadata": dict(metadata or {}),
+                    }
+                )
                 self._repository.record_billing_event(
                     {
                         "event_id": _stable_id("billevt", workspace_key, "usage_reconcile", str(usage.get("usage_id") or usage_id)),
@@ -1128,6 +2069,22 @@ class WorkspaceBillingStore:
         }
         usage_metadata["reconciliation"] = reconciliation_payload
         updated_usage = self._sync_usage_metadata(workspace_key, str(usage.get("usage_id") or usage_id), usage_metadata)
+        self.record_usage_event(
+            {
+                "workspace_id": workspace_key,
+                "actor_id": str(usage_metadata.get("actor_id") or (metadata or {}).get("actor_id") or ""),
+                "session_id": str(usage_metadata.get("session_id") or (metadata or {}).get("session_id") or ""),
+                "run_id": str(usage_metadata.get("run_id") or (metadata or {}).get("run_id") or ""),
+                "usage_id": str(usage.get("usage_id") or usage_id),
+                "reference_id": reconciliation_reference,
+                "metric": str(usage.get("metric") or "unknown"),
+                "status": status,
+                "event_type": "reconciled",
+                "estimated_credits": estimated_credits,
+                "actual_credits": actual,
+                "metadata": dict(metadata or {}),
+            }
+        )
         self._repository.record_billing_event(
             {
                 "event_id": _stable_id("billevt", workspace_key, "usage_reconcile", str(usage.get("usage_id") or usage_id)),
@@ -1169,6 +2126,7 @@ class WorkspaceBillingStore:
         usage = self.get_usage(workspace_id, limit=20)
         current_plan = get_plan(entitlements["plan_id"])
         billing_profile = self.get_billing_profile(workspace_id)
+        usage_summary = self.get_usage_summary(workspace_id, limit=50)
         active_checkout = None
         pending_reference_id = str(record.metadata.get("pending_reference_id") or "").strip()
         if pending_reference_id:
@@ -1194,7 +2152,17 @@ class WorkspaceBillingStore:
             "seats": max(int(record.seats or 1), int(current_plan.seat_limit)),
             "credit_balance": entitlements["credits"],
             "entitlements": entitlements["entitlements"],
+            "feature_access": entitlements.get("feature_access") or entitlements["entitlements"].get("tool_access") or {},
             "usage": usage,
+            "usage_summary": usage_summary,
+            "reset_at": float(usage_summary.get("period", {}).get("reset_at") or 0.0),
+            "top_cost_sources": list(usage_summary.get("top_cost_sources") or []),
+            "triggered_limits": list(usage_summary.get("triggered_limits") or []),
+            "upgrade_hint": usage_summary.get("upgrade_hint"),
+            "recent_usage_summary": {
+                "requests": int((usage_summary.get("totals") or {}).get("requests") or 0),
+                "estimated_credits": int((usage_summary.get("totals") or {}).get("estimated_credits") or 0),
+            },
             "plans": self.list_plans(),
             "token_packs": self.list_token_packs(),
             "billing_profile": billing_profile,

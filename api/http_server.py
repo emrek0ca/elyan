@@ -226,11 +226,11 @@ class DashboardHTTPServer:
             return response
         token = self._get_session_token()
         if token and self._session_manager().validate_token(token):
-            response.set_cookie(self._session_cookie_name, token, httponly=False, samesite="Lax", secure=False)
+            response.set_cookie(self._session_cookie_name, token, httponly=True, samesite="Lax", secure=False)
             response.headers[self._session_header_name] = token
             return response
         token = self._issue_session_token()
-        response.set_cookie(self._session_cookie_name, token, httponly=False, samesite="Lax", secure=False)
+        response.set_cookie(self._session_cookie_name, token, httponly=True, samesite="Lax", secure=False)
         response.headers[self._session_header_name] = token
         return response
 

@@ -47,8 +47,10 @@ def test_main_without_args_prints_cli_home(monkeypatch, capsys):
     assert code == 0
     assert "Elyan" in captured.out
     assert "Local operator runtime" in captured.out
+    assert "Kurulumdan UI'ya" in captured.out
     assert "elyan launch" in captured.out
-    assert "elyan gateway start --daemon" in captured.out
+    assert "elyan start --daemon" in captured.out
+    assert "bootstrap-owner -> login -> auth/me -> logout" in captured.out
     assert "Router model: ollama / llama3.1:8b" in captured.out
     assert "elyan desktop" in captured.out
 
@@ -129,7 +131,7 @@ def test_main_routes_launch_command(monkeypatch):
     assert captured["ops"] is True
 
 
-def test_main_routes_desktop_command(monkeypatch):
+def test_main_routes_desktop_command(monkeypatch, capsys):
     monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)
     calls = {}
 
@@ -140,9 +142,11 @@ def test_main_routes_desktop_command(monkeypatch):
     )
 
     code = cli_main.main(["desktop", "--detached"])
+    captured = capsys.readouterr()
 
     assert code == 0
     assert calls["detached"] is True
+    assert "Kurulumdan UI'ya" in captured.out
 
 
 def test_main_routes_integrations_command(monkeypatch):

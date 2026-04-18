@@ -15,7 +15,7 @@ _elyan_completion() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    local commands="chat doctor health logs status routines config gateway channels skills security models cron memory webhooks agents browser voice digest message service desktop launch lean packs quivr cloudflare-agents opengauss onboard setup update version completion subscription quota"
+    local commands="chat doctor health logs status routines config gateway channels skills security models cron memory webhooks agents browser voice digest message service desktop launch lean packs quivr cloudflare-agents opengauss onboard setup update version completion billing subscription quota"
 
     case "$prev" in
         elyan)
@@ -88,6 +88,12 @@ _elyan_completion() {
         subscription)
             COMPREPLY=($(compgen -W "status set list-tiers" -- "$cur"))
             return ;;
+        billing)
+            COMPREPLY=($(compgen -W "status plans inspect grant reset-weekly backfill seats" -- "$cur"))
+            return ;;
+        seats)
+            COMPREPLY=($(compgen -W "list assign release" -- "$cur"))
+            return ;;
         quota)
             COMPREPLY=($(compgen -W "status check" -- "$cur"))
             return ;;
@@ -142,6 +148,7 @@ _elyan() {
     'update:Güncelle'
     'version:Sürüm bilgisi'
     'completion:Shell completion kur'
+    'billing:Kredi, plan ve kullanım yönetimi'
     'subscription:Abonelik yönetimi'
     'quota:Kota ve kullanım'
   )
@@ -177,6 +184,8 @@ _elyan() {
         opengauss) _values 'eylem' status project scaffold query workflow bundle --include-samples --no-include-samples ;;
         voice) _values 'eylem' start stop status test transcribe speak set-wake-word set-tts set-stt listen ;;
         subscription) _values 'eylem' status set list-tiers ;;
+        billing) _values 'eylem' status plans inspect grant reset-weekly backfill seats ;;
+        billing\ seats) _values 'eylem' list assign release ;;
         quota) _values 'eylem' status check ;;
         logs) _arguments '*:log filtreleri: ' ;;
       esac
@@ -192,7 +201,7 @@ fi
 _FISH_SCRIPT = '''# Elyan CLI — Fish completion
 # Kopyala: ~/.config/fish/completions/elyan.fish
 
-set -l elyan_commands chat doctor health logs status routines config gateway channels skills security models cron memory webhooks agents browser voice digest message service desktop launch lean packs quivr cloudflare-agents opengauss onboard setup update version completion subscription quota
+set -l elyan_commands chat doctor health logs status routines config gateway channels skills security models cron memory webhooks agents browser voice digest message service desktop launch lean packs quivr cloudflare-agents opengauss onboard setup update version completion billing subscription quota
 
 complete -c elyan -f -n __fish_use_subcommand -a "$elyan_commands"
 complete -c elyan -n "__fish_seen_subcommand_from gateway" -a "start stop status restart logs reload health"
@@ -210,6 +219,8 @@ complete -c elyan -n "__fish_seen_subcommand_from packs" -a "list status project
 complete -c elyan -n "__fish_seen_subcommand_from quivr" -a "status project scaffold ask bundle workflow --include-samples --no-include-samples"
 complete -c elyan -n "__fish_seen_subcommand_from cloudflare-agents" -a "status project scaffold workflow bundle --include-chat --no-include-chat --include-workflows --no-include-workflows --include-mcp --no-include-mcp"
 complete -c elyan -n "__fish_seen_subcommand_from opengauss" -a "status project scaffold query workflow bundle --include-samples --no-include-samples"
+complete -c elyan -n "__fish_seen_subcommand_from billing" -a "status plans inspect grant reset-weekly backfill seats"
+complete -c elyan -n "__fish_seen_subcommand_from billing; and __fish_seen_subcommand_from seats" -a "list assign release"
 ''' 
 
 

@@ -1,9 +1,7 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Clock3, RefreshCw, Sparkles } from "@/vendor/lucide-react";
 import { useNavigate } from "react-router-dom";
-import { ElyanPanel } from "@/features/elyan/ElyanPanel";
-import { TaskTreePanel } from "@/features/elyan/TaskTreePanel";
 import { ChatView } from "@/features/elyan/ChatView";
 
 import { ErrorState } from "@/components/feedback/ErrorState";
@@ -15,7 +13,6 @@ import { Surface } from "@/components/primitives/Surface";
 import {
   useHomeSnapshot,
   useOperatorPreview,
-  useProviderDescriptors,
   useSystemReadiness,
 } from "@/hooks/use-desktop-data";
 import { createCoworkThread, createRoutineFromText, promoteRoutineDraft, promoteSkillDraft, triggerAutopilotTick } from "@/services/api/elyan-service";
@@ -30,6 +27,18 @@ import {
   resolveProjectTemplate,
 } from "@/utils/workflow-preferences";
 
+function formatBillingResetLabel(timestamp?: number) {
+  if (!timestamp || timestamp <= 0) {
+    return "Yok";
+  }
+  return new Date(timestamp * 1000).toLocaleString("tr-TR", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export function HomeScreen() {
   const { data, isLoading, error, refetch } = useHomeSnapshot();
   const navigate = useNavigate();
@@ -39,11 +48,9 @@ export function HomeScreen() {
   const [launchError, setLaunchError] = useState("");
   const [draftActionId, setDraftActionId] = useState<string | null>(null);
   const [draftActionError, setDraftActionError] = useState("");
-  const [checkInBusy, setCheckInBusy] = useState(false);
   const [automationBusy, setAutomationBusy] = useState(false);
   const [automationMessage, setAutomationMessage] = useState("");
   const [automationMessageTone, setAutomationMessageTone] = useState<"success" | "warning">("warning");
-  const { data: providers } = useProviderDescriptors();
   const { data: readiness } = useSystemReadiness();
   const connectionState = useRuntimeStore((s) => s.connectionState);
   const sidecarHealth = useRuntimeStore((s) => s.sidecarHealth);
@@ -64,12 +71,10 @@ export function HomeScreen() {
   const activeProjectTemplate = resolveProjectTemplate(projectTemplates, activeProjectTemplateId);
   const effectivePreferences = mergeWorkflowPreferences(workflowPreferences, activeProjectTemplate.preferences);
   const resumeCandidate = data.lastThread || data.recentThreads?.[0];
+  const billing = data.billing;
   const runtimeReady = hasRuntimeWriteAccess(connectionState, sidecarHealth);
   const runtimeGateReason = getRuntimeGateReason(connectionState, sidecarHealth);
-  const autopilot = data.autopilot;
   const backgroundTasks = (data.backgroundTasks || []).filter((t) => !["completed", "failed", "cancelled"].includes(t.state)).slice(0, 3);
-  const suggestions = (autopilot?.suggestions || []).slice(0, 3);
-  const providerCount = (providers || []).filter((p) => p.enabled && p.healthState === "available").length;
   const learningQueue = data.learningQueue;
   const resumePreviewText = resumeCandidate?.lastUserTurn?.content || resumeCandidate?.title || "";
   const { data: resumePreview } = useOperatorPreview(
@@ -89,27 +94,42 @@ export function HomeScreen() {
       return a - b;
     })
     .slice(0, 5);
-  const readinessTone: "success" | "warning" | "neutral" = readiness
-    ? readiness.status === "ready"
-      ? "success"
-      : readiness.status === "needs_attention"
-        ? "warning"
-        : "neutral"
-    : "neutral";
-  const readinessLabel = readiness
-    ? readiness.status === "ready"
-      ? "Hazır"
-      : readiness.status === "needs_attention"
-        ? "Dikkat gerekiyor"
-        : "Başlatılıyor"
-    : "Bilinmiyor";
-  const connectedChannelSummary = readiness?.platforms?.connectedLabels?.length
-    ? readiness.platforms.connectedLabels.join(", ")
-    : readiness?.channelConnected
-      ? "Connected"
-      : readiness?.whatsappMode === "bridge"
-        ? "Bridge mode"
-        : "Pending";
+  const readinessTone: "success" | "warning" | "neutral" =
+    readiness?.status === "ready" ? "success" : readiness?.status === "needs_attention" ? "warning" : "neutral";
+  const readinessLabel =
+    readiness?.status === "ready" ? "Hazır" : readiness?.status === "needs_attention" ? "Dikkat gerekiyor" : "Başlatılıyor";
+  const connectedChannelSummary = useMemo(() => {
+    if (readiness?.platforms?.connectedLabels?.length) {
+      return readiness.platforms.connectedLabels.join(", ");
+    }
+    if (readiness?.channelConnected) {
+      return "Bağlı";
+    }
+    return "Bekliyor";
+  }, [readiness]);
+  const visibleDrafts = (learningQueue?.items || []).slice(0, 2);
+  const keyStats: Array<{ label: string; value: string; tone: "success" | "warning" | "info" | "neutral" }> = [
+    { label: "Runtime", value: runtimeReady ? "Canlı" : "Bekliyor", tone: runtimeReady ? "success" : "warning" as const },
+    {
+      label: "Model",
+      value: readiness?.connectedModel || readiness?.connectedProvider || "Yok",
+      tone: readiness?.modelLaneReady ? "success" : "warning" as const,
+    },
+    {
+      label: "Kanallar",
+      value: connectedChannelSummary,
+      tone: readiness?.channelConnected ? "success" : "neutral" as const,
+    },
+  ];
+  const topCostSource = billing?.topCostSources?.[0];
+  const triggeredLimit = billing?.triggeredLimits?.[0];
+  const upgradeHint = billing?.upgradeHint || billing?.usageSummary?.upgradeHint;
+  const resetLabel = formatBillingResetLabel(billing?.resetAt || billing?.creditBalance?.resetAt || billing?.usageSummary?.period?.resetAt);
+  const quickPrompts = [
+    "bugünkü işleri özetle",
+    "telegram bağlantısını kontrol et",
+    "şu an sistemde ne çalışıyor",
+  ];
 
   function inferTaskType(value: string): "document" | "presentation" | "website" {
     const t = value.toLowerCase();
@@ -151,13 +171,8 @@ export function HomeScreen() {
   }
 
   async function checkIn() {
-    setCheckInBusy(true);
-    try {
-      await triggerAutopilotTick("desktop_checkin");
-      void queryClient.invalidateQueries({ queryKey: ["home-snapshot"] });
-    } finally {
-      setCheckInBusy(false);
-    }
+    await triggerAutopilotTick("desktop_checkin");
+    void queryClient.invalidateQueries({ queryKey: ["home-snapshot"] });
   }
 
   async function handlePromoteDraft(draft: NonNullable<HomeSnapshotLike["learningQueue"]>["items"][number]) {
@@ -222,12 +237,25 @@ export function HomeScreen() {
   }
 
   return (
-    <div className="space-y-5">
-      {/* ─── Command ─── */}
-      <Surface tone="hero" className="px-8 py-8 lg:px-10 lg:py-10">
-        <div className="flex items-center gap-3">
-          <Sparkles className="h-5 w-5 text-[var(--accent-primary)]" />
-          <h1 className="font-display text-[28px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">Elyan</h1>
+    <div className="space-y-4">
+      <Surface tone="hero" className="px-6 py-6 lg:px-7 lg:py-7">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-[720px]">
+            <div className="flex items-center gap-2.5">
+              <Sparkles className="h-4 w-4 text-[var(--accent-primary)]" />
+              <span className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Operator runtime</span>
+            </div>
+            <h1 className="mt-3 font-display text-[28px] font-semibold tracking-[-0.05em] text-[var(--text-primary)]">
+              Tek komutla başla, gerisini Elyan toparlasın.
+            </h1>
+            <p className="mt-3 max-w-[620px] text-[13px] leading-6 text-[var(--text-secondary)]">
+              Sade akış: komutu ver, workstream aç, gerekiyorsa Telegram rutinine dönüştür.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <StatusBadge tone={readinessTone}>{readinessLabel}</StatusBadge>
+            {resumeCandidate ? <StatusBadge tone="info">aktif thread var</StatusBadge> : null}
+          </div>
         </div>
 
         <div className="mt-5">
@@ -259,265 +287,227 @@ export function HomeScreen() {
           ) : null}
         </div>
 
+        {readiness?.status === "needs_attention" && readiness?.blockingIssue ? (
+          <p className="mt-3 text-[12px] leading-5 text-[var(--state-warning)]">{readiness.blockingIssue}</p>
+        ) : null}
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {quickPrompts.map((prompt) => (
+            <button
+              key={prompt}
+              type="button"
+              onClick={() => setCommand(prompt)}
+              className="rounded-full border border-[var(--glass-border)] bg-[var(--glass-elevated)] px-3 py-1.5 text-[12px] text-[var(--text-secondary)] transition hover:border-[var(--glass-border-strong)] hover:text-[var(--text-primary)]"
+            >
+              {prompt}
+            </button>
+          ))}
+        </div>
+
+        {billing ? (
+          <div className="mt-4 rounded-[20px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Billing</div>
+                <h2 className="mt-2 text-[17px] font-medium text-[var(--text-primary)]">Plan ve kullanım</h2>
+              </div>
+              <StatusBadge tone={billing.plan.status === "active" ? "success" : "neutral"}>{billing.plan.label}</StatusBadge>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <ReadinessItem
+                label="Credits"
+                value={(billing.creditBalance?.total || 0).toLocaleString("tr-TR")}
+                meta={`included ${(billing.creditBalance?.included || 0).toLocaleString("tr-TR")} · purchased ${(billing.creditBalance?.purchased || 0).toLocaleString("tr-TR")}`}
+              />
+              <ReadinessItem
+                label="Reset"
+                value={resetLabel}
+                meta={billing.creditBalance?.rolloverPolicy === "none" ? "No rollover" : "Carry policy"}
+              />
+              <ReadinessItem
+                label="Top source"
+                value={topCostSource?.source || "Yok"}
+                meta={topCostSource ? `${topCostSource.credits.toLocaleString("tr-TR")} kredi` : "Henüz harcama yok"}
+              />
+              <ReadinessItem
+                label="Limits"
+                value={triggeredLimit ? triggeredLimit.status : "clear"}
+                meta={triggeredLimit ? triggeredLimit.reason || "limit triggered" : "Hard cap yok"}
+              />
+            </div>
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-[12px] text-[var(--text-secondary)]">
+              <span>
+                Recent usage: {(billing.recentUsageSummary?.requests || billing.usageSummary?.requests || 0).toLocaleString("tr-TR")} request · {(billing.recentUsageSummary?.estimatedCredits || billing.usageSummary?.estimatedCredits || 0).toLocaleString("tr-TR")} credit
+              </span>
+              {upgradeHint ? <span>{upgradeHint.message}</span> : null}
+            </div>
+          </div>
+        ) : null}
+
         {launchError ? <p className="mt-3 text-[12px] text-[var(--state-warning)]">{launchError}</p> : null}
         {!launchError && !runtimeReady ? <p className="mt-3 text-[12px] text-[var(--text-tertiary)]">{runtimeGateReason}</p> : null}
       </Surface>
 
-      {/* ─── Status Tiles ─── */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatusTile label="Runtime" value={runtimeReady ? "Hazır" : "Bekleniyor"} tone={runtimeReady ? "success" : "warning"} />
-        <StatusTile label="Modeller" value={providerCount ? `${providerCount} aktif` : "Yok"} tone={providerCount ? "success" : "warning"} />
-        <StatusTile label="Autopilot" value={autopilot?.running ? "Aktif" : "Pasif"} tone={autopilot?.running ? "success" : "neutral"} />
-        <StatusTile label="Arka plan" value={backgroundTasks.length ? `${backgroundTasks.length} iş` : "Boş"} tone={backgroundTasks.length ? "info" : "neutral"} />
-      </div>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+            {keyStats.map((item) => (
+              <StatusTile key={item.label} label={item.label} value={item.value} tone={item.tone} />
+            ))}
+          </div>
 
-      {readiness ? (
-        <Surface tone="card" className="p-5">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Operator readiness</div>
-              <h2 className="mt-2 text-[18px] font-medium text-[var(--text-primary)]">
-                {readiness.connectedProvider || "local"}{readiness.connectedModel ? ` / ${readiness.connectedModel}` : ""}
-              </h2>
-              <p className="mt-2 text-[12px] text-[var(--text-secondary)]">
-                {readiness.blockingIssue || "Runtime, provider ve automations hizalanmış görünüyor."}
-              </p>
+          <Surface tone="card" className="p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Hızlı durum</div>
+                <h2 className="mt-2 text-[17px] font-medium text-[var(--text-primary)]">Bağlantılar ve kritik adımlar</h2>
+              </div>
+              <Button variant="ghost" className="h-8 px-3 text-[11px]" onClick={() => void checkIn()}>
+                Yenile
+              </Button>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <StatusBadge tone={readinessTone}>{readinessLabel}</StatusBadge>
-              <StatusBadge tone={readiness.runtimeReady ? "success" : "warning"}>
-                {readiness.runtimeReady ? "runtime live" : "runtime waiting"}
-              </StatusBadge>
-              <StatusBadge tone={readiness.channelConnected ? "success" : "neutral"}>
-                {readiness.channelConnected ? "channel connected" : "channel pending"}
-              </StatusBadge>
-              <StatusBadge tone={readiness.hasRoutine ? "success" : "neutral"}>
-                {readiness.hasRoutine ? "automation ready" : "no routine yet"}
-              </StatusBadge>
+            <div className="mt-4 space-y-3">
+              <ReadinessItem
+                label="Provider"
+                value={readiness?.connectedProvider || "Local"}
+                meta={readiness?.connectedModel || "Model seçilmedi"}
+              />
+              <ReadinessItem
+                label="Channel"
+                value={connectedChannelSummary}
+                meta={readiness?.whatsappMode === "unavailable" ? "Bridge kapalı" : `WhatsApp ${readiness?.whatsappMode || "bekliyor"}`}
+              />
+              <ReadinessItem
+                label="Automation"
+                value={readiness?.hasRoutine ? "Hazır" : "Henüz yok"}
+                meta={readiness?.skills?.issues ? `${readiness.skills.issues} dikkat istiyor` : "Runtime stabil"}
+              />
             </div>
-          </div>
-          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <ReadinessItem
-              label="Providers"
-              value={`${readiness.providerSummary.available} ready`}
-              meta={
-                readiness.providerSummary.authRequired
-                  ? `${readiness.providerSummary.authRequired} auth gerekiyor`
-                  : readiness.providerSummary.degraded
-                    ? `${readiness.providerSummary.degraded} degraded`
-                    : "Tüm lane'ler temiz"
-              }
-            />
-            <ReadinessItem
-              label="Channels"
-              value={`${readiness.platforms?.connectedChannels || 0} live / ${readiness.platforms?.configuredChannels || 0} configured`}
-              meta={
-                readiness.whatsappMode === "unavailable"
-                  ? `Channels: ${connectedChannelSummary}`
-                  : `${connectedChannelSummary} · WhatsApp: ${readiness.whatsappMode}`
-              }
-            />
-            <ReadinessItem
-              label="Permissions"
-              value={readiness.applePermissions.automation ? "Automation ok" : "Permission needed"}
-              meta={readiness.applePermissions.screenCapture ? "Screen capture ready" : "Screen capture pending"}
-            />
-            <ReadinessItem
-              label="Skills"
-              value={`${readiness.skills?.enabled || 0} enabled / ${readiness.skills?.installed || 0} installed`}
-              meta={
-                readiness.skills?.issues
-                  ? `${readiness.skills.issues} skill attention istiyor`
-                  : `${readiness.skills?.runtimeReady || 0} runtime ready · ${readiness.skills?.workflowsEnabled || 0} workflow active`
-              }
-            />
-          </div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {!readiness.runtimeReady || readiness.blockingIssue ? (
-              <Button variant="secondary" onClick={() => navigate("/settings")}>
-                Fix readiness
-              </Button>
-            ) : null}
-            {!readiness.channelConnected ? (
-              <Button variant="ghost" onClick={() => navigate("/integrations")}>
-                Connect channels
-              </Button>
-            ) : null}
-            {readiness.providerSummary.authRequired || readiness.providerSummary.degraded ? (
-              <Button variant="ghost" onClick={() => navigate("/providers")}>
-                Review providers
-              </Button>
-            ) : null}
-            {Boolean(readiness.skills?.issues) ? (
-              <Button variant="ghost" onClick={() => navigate("/settings")}>
-                Review skills
-              </Button>
-            ) : null}
-          </div>
-        </Surface>
-      ) : null}
-
-      {resumeCandidate && automationCandidate ? (
-        <Surface tone="card" className="p-5">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Suggested automation</div>
-              <h2 className="mt-2 text-[18px] font-medium text-[var(--text-primary)]">
-                {automationCandidate.task || "Scheduled routine"}
-              </h2>
-              <p className="mt-2 text-[12px] text-[var(--text-secondary)]">
-                {automationCandidate.cron || resumePreview?.goalGraph?.constraints.scheduleExpression || "schedule not detected"}
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {resumePreview?.goalGraph?.primaryDeliveryDomain ? (
-                <StatusBadge tone="info">{resumePreview.goalGraph.primaryDeliveryDomain}</StatusBadge>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {!readiness?.channelConnected ? (
+                <Button variant="secondary" onClick={() => navigate("/integrations")}>
+                  Kanalları bağla
+                </Button>
               ) : null}
-              {resumePreview?.goalGraph?.stageCount ? (
-                <StatusBadge tone="neutral">{resumePreview.goalGraph.stageCount} stage</StatusBadge>
+              {readiness?.providerSummary.authRequired || readiness?.providerSummary.degraded ? (
+                <Button variant="ghost" onClick={() => navigate("/providers")}>
+                  Modelleri gözden geçir
+                </Button>
+              ) : null}
+              {setupChecklist.length ? (
+                <Button variant="ghost" onClick={() => navigate("/settings")}>
+                  Kurulumu tamamla
+                </Button>
               ) : null}
             </div>
-          </div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={() => void handleCreateAutomation()} disabled={automationBusy || !runtimeReady}>
-              {automationBusy ? "Scheduling…" : "Create routine"}
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                setSelectedThreadId(resumeCandidate.threadId);
-                if (resumeCandidate.activeRunId) {
-                  setSelectedRunId(resumeCandidate.activeRunId);
-                }
-                navigate("/command-center");
-              }}
-            >
-              Open thread
-            </Button>
-          </div>
-          {automationMessage ? (
-            <p className={`mt-3 text-[12px] ${automationMessageTone === "success" ? "text-[var(--state-success)]" : "text-[var(--state-warning)]"}`}>
-              {automationMessage}
-            </p>
-          ) : null}
-        </Surface>
-      ) : null}
+          </Surface>
 
-      {learningQueue && learningQueue.total > 0 ? (
-        <Surface tone="card" className="p-5">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <h2 className="text-[13px] font-medium text-[var(--text-primary)]">Learned drafts</h2>
-              <p className="mt-1 text-[12px] text-[var(--text-secondary)]">
-                {learningQueue.skills} skill, {learningQueue.routines} routine, {learningQueue.preferences} preference draft review bekliyor.
-              </p>
-            </div>
-            <StatusBadge tone="warning">{`${learningQueue.total} pending`}</StatusBadge>
-          </div>
-          <div className="mt-4 grid gap-3 xl:grid-cols-2">
-            {learningQueue.items.map((draft) => (
-              <div key={draft.id} className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] px-4 py-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-[13px] font-medium text-[var(--text-primary)]">{draft.title}</div>
-                    <div className="mt-1 text-[12px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">{draft.type}</div>
-                  </div>
-                  <StatusBadge tone="warning">{draft.status}</StatusBadge>
-                </div>
-                <p className="mt-3 text-[12px] leading-6 text-[var(--text-secondary)]">{draft.detail || "Açıklama yok."}</p>
-                {draft.type === "routine" && draft.scheduleExpression ? (
-                  <p className="mt-2 text-[11px] text-[var(--text-tertiary)]">
-                    {draft.scheduleExpression}{draft.deliveryChannel ? ` · ${draft.deliveryChannel}` : ""}
+          {resumeCandidate ? (
+            <Surface tone="card" className="p-5">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Son workstream</div>
+                  <h2 className="mt-2 text-[16px] font-medium text-[var(--text-primary)]">{resumeCandidate.title || "Son thread"}</h2>
+                  <p className="mt-2 line-clamp-3 text-[12px] leading-6 text-[var(--text-secondary)]">
+                    {resumeCandidate.lastUserTurn?.content || "Bu thread içinden devam edebilirsin."}
                   </p>
+                </div>
+                <StatusBadge tone="info">{resumeCandidate.currentMode || "cowork"}</StatusBadge>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setSelectedThreadId(resumeCandidate.threadId);
+                    if (resumeCandidate.activeRunId) setSelectedRunId(resumeCandidate.activeRunId);
+                    navigate("/command-center");
+                  }}
+                >
+                  Devam et
+                </Button>
+                <Button variant="ghost" onClick={() => navigate("/stack")}>
+                  Stack aç
+                </Button>
+              </div>
+            </Surface>
+          ) : null}
+
+          {resumeCandidate && automationCandidate ? (
+            <Surface tone="card" className="p-5">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Önerilen rutin</div>
+                  <h2 className="mt-2 text-[16px] font-medium text-[var(--text-primary)]">{automationCandidate.task || "Scheduled routine"}</h2>
+                  <p className="mt-2 text-[12px] leading-6 text-[var(--text-secondary)]">
+                    {automationCandidate.cron || resumePreview?.goalGraph?.constraints.scheduleExpression || "schedule not detected"}
+                  </p>
+                </div>
+                {resumePreview?.goalGraph?.primaryDeliveryDomain ? (
+                  <StatusBadge tone="info">{resumePreview.goalGraph.primaryDeliveryDomain}</StatusBadge>
                 ) : null}
-                <div className="mt-4 flex items-center gap-2">
-                  <Button variant="secondary" onClick={() => void handlePromoteDraft(draft)} disabled={draftActionId === draft.id}>
-                    {draftActionId === draft.id ? "Promoting…" : draft.type === "skill" ? "Promote skill" : "Promote routine"}
-                  </Button>
-                </div>
               </div>
-            ))}
-          </div>
-          {draftActionError ? <p className="mt-3 text-[12px] text-[var(--state-warning)]">{draftActionError}</p> : null}
-        </Surface>
-      ) : null}
-
-      {setupChecklist.length ? (
-        <Surface tone="card" className="p-5">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <h2 className="text-[13px] font-medium text-[var(--text-primary)]">Release path</h2>
-              <p className="mt-1 text-[12px] text-[var(--text-secondary)]">Kalan kritik setup adımları.</p>
-            </div>
-          </div>
-          <div className="mt-4 space-y-2">
-            {setupChecklist.map((item) => (
-              <div key={item.key} className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] px-4 py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-[13px] text-[var(--text-primary)]">{item.label}</span>
-                  <StatusBadge tone="warning">pending</StatusBadge>
-                </div>
-                {item.detail ? <p className="mt-1 text-[12px] text-[var(--text-secondary)]">{item.detail}</p> : null}
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button variant="secondary" onClick={() => void handleCreateAutomation()} disabled={automationBusy || !runtimeReady}>
+                  {automationBusy ? "Hazırlanıyor…" : "Routine oluştur"}
+                </Button>
+                <Button variant="ghost" onClick={() => navigate("/integrations")}>
+                  Telegram aç
+                </Button>
               </div>
-            ))}
-          </div>
-        </Surface>
-      ) : null}
+              {automationMessage ? (
+                <p className={`mt-3 text-[12px] ${automationMessageTone === "success" ? "text-[var(--state-success)]" : "text-[var(--state-warning)]"}`}>
+                  {automationMessage}
+                </p>
+              ) : null}
+            </Surface>
+          ) : null}
 
-      {/* ─── Elyan Chat ─── */}
-      <ChatView className="min-h-[460px]" />
-
-      {/* ─── Elyan Panel ─── */}
-      <ElyanPanel />
-
-      {/* ─── Task Tree ─── */}
-      <TaskTreePanel />
-
-      {/* ─── Suggestions + Tasks ─── */}
-      <div className="grid gap-5 xl:grid-cols-2">
-        {/* Suggestions */}
-        <Surface tone="card" className="p-5">
-          <div className="flex items-center justify-between">
-            <h2 className="text-[13px] font-medium text-[var(--text-primary)]">Öneriler</h2>
-            <Button variant="ghost" className="h-8 px-3 text-[11px]" onClick={() => void checkIn()} disabled={checkInBusy}>
-              {checkInBusy ? "…" : "Check-in"}
-            </Button>
-          </div>
-          <div className="mt-3 space-y-2">
-            {suggestions.length ? suggestions.map((s, i) => (
-              <button
-                key={`${s.task}-${i}`}
-                type="button"
-                onClick={() => setCommand(s.description || s.task)}
-                className="w-full rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] px-4 py-3 text-left transition hover:bg-[var(--bg-surface)]"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-[13px] text-[var(--text-primary)]">{s.task}</span>
-                  <StatusBadge tone={s.priority === "high" ? "warning" : "neutral"}>{s.priority}</StatusBadge>
+          {visibleDrafts.length ? (
+            <Surface tone="card" className="p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Bekleyen öneriler</div>
+                  <h2 className="mt-2 text-[16px] font-medium text-[var(--text-primary)]">{learningQueue?.total || 0} draft</h2>
                 </div>
-              </button>
-            )) : (
-              <p className="py-4 text-center text-[12px] text-[var(--text-tertiary)]">Henüz öneri yok</p>
-            )}
-          </div>
-        </Surface>
-
-        {/* Active tasks */}
-        <Surface tone="card" className="p-5">
-          <h2 className="text-[13px] font-medium text-[var(--text-primary)]">Aktif işler</h2>
-          <div className="mt-3 space-y-2">
-            {backgroundTasks.length ? backgroundTasks.map((task) => (
-              <div key={task.taskId} className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] px-4 py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="truncate text-[13px] text-[var(--text-primary)]">{task.objective || "Görev"}</span>
-                  <StatusBadge tone={task.state === "running" ? "success" : "info"}>{task.state}</StatusBadge>
-                </div>
+                <StatusBadge tone="warning">review</StatusBadge>
               </div>
-            )) : (
-              <p className="py-4 text-center text-[12px] text-[var(--text-tertiary)]">Arka planda iş yok</p>
-            )}
-          </div>
-        </Surface>
+              <div className="mt-4 space-y-3">
+                {visibleDrafts.map((draft) => (
+                  <div key={draft.id} className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] px-4 py-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-[13px] font-medium text-[var(--text-primary)]">{draft.title}</div>
+                        <div className="mt-1 text-[11px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">{draft.type}</div>
+                      </div>
+                      <Button variant="ghost" onClick={() => void handlePromoteDraft(draft)} disabled={draftActionId === draft.id}>
+                        {draftActionId === draft.id ? "…" : "Uygula"}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {draftActionError ? <p className="mt-3 text-[12px] text-[var(--state-warning)]">{draftActionError}</p> : null}
+            </Surface>
+          ) : null}
+
+          {backgroundTasks.length ? (
+            <Surface tone="card" className="p-5">
+              <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Arka plan</div>
+              <div className="mt-4 space-y-2">
+                {backgroundTasks.map((task) => (
+                  <div key={task.taskId} className="flex items-center justify-between gap-3 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--bg-surface-alt)] px-4 py-3">
+                    <span className="truncate text-[13px] text-[var(--text-primary)]">{task.objective || "Görev"}</span>
+                    <StatusBadge tone={task.state === "running" ? "success" : "info"}>{task.state}</StatusBadge>
+                  </div>
+                ))}
+              </div>
+            </Surface>
+          ) : null}
+        </div>
+
+        <div className="min-w-0">
+          <ChatView className="min-h-[720px]" />
+        </div>
       </div>
     </div>
   );

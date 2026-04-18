@@ -3,7 +3,7 @@
 > Bu dosyayı her çalışmaya başlamadan önce oku.
 > Nereden kaldığını anla, öncelik sırasına göre devam et.
 
-**Son Güncelleme**: 2026-04-12
+**Son Güncelleme**: 2026-04-13
 **Aktif Branch**: `main` (ya da `codex/cowork-desktop-platform`)
 **Strateji**: Faza A (Türkiye KOBİ) → Faza B (Ambient Global)
 
@@ -176,16 +176,20 @@ def _check_login_rate_limit(ip: str) -> bool:
 
 **Dosya**: `apps/desktop/src/screens/onboarding/OnboardingScreen.tsx`
 
-Mevcut 3 adıma 4. adım ekle:
-```
-Adım 4: "Model ayarla (opsiyonel)"
-- GET /api/llm/setup/ollama → çalışıyorsa "Ollama hazır" göster
-- Ollama yoksa "API key gir" formu (OPENAI / ANTHROPIC / GROQ)
-- POST /api/llm/setup/save-key ile kaydet
-- "Atla" butonu olsun
-```
+**Durum**: Uygulandı.
 
-`/api/llm/setup/*` endpoint'leri server.py'de mevcut.
+Mevcut onboarding akışında ayrı bir `model` adımı var:
+- Ollama hazırsa local model durumu gösteriliyor
+- Ollama görünmüyorsa `openai` / `anthropic` / `groq` için API key formu açılıyor
+- `saveProviderKey()` ile `/api/llm/setup/save-key` çağrılıyor
+- "Atla" ve "Tekrar kontrol et" aksiyonları mevcut
+
+İlgili yüzeyler:
+- `apps/desktop/src/screens/onboarding/OnboardingScreen.tsx`
+- `apps/desktop/src/services/api/elyan-service.ts`
+- `core/gateway/server.py` (`/api/llm/setup/*`)
+
+Not: UX daha ileri taşınacaksa bir sonraki adım, onboarding içinden önerilen Ollama modelini pull etme akışını da doğrudan sunmak olabilir.
 
 ---
 

@@ -41,9 +41,17 @@ function withSuspense(node: ReactNode) {
   return <Suspense fallback={<RouteFallback />}>{node}</Suspense>;
 }
 
+function BootFallback() {
+  return <RouteFallback />;
+}
+
 function IndexRedirect() {
   const onboardingComplete = useUiStore((state) => state.onboardingComplete);
   const isAuthenticated = useUiStore((state) => state.isAuthenticated);
+  const authHydrated = useUiStore((state) => state.authHydrated);
+  if (!authHydrated) {
+    return <BootFallback />;
+  }
   if (!onboardingComplete) {
     return <Navigate to="/onboarding" replace />;
   }
@@ -53,6 +61,10 @@ function IndexRedirect() {
 function LoginRoute() {
   const onboardingComplete = useUiStore((state) => state.onboardingComplete);
   const isAuthenticated = useUiStore((state) => state.isAuthenticated);
+  const authHydrated = useUiStore((state) => state.authHydrated);
+  if (!authHydrated) {
+    return <BootFallback />;
+  }
   if (!isAuthenticated) {
     return withSuspense(<LoginScreen />);
   }
@@ -61,12 +73,20 @@ function LoginRoute() {
 
 function ProtectedShell() {
   const isAuthenticated = useUiStore((state) => state.isAuthenticated);
+  const authHydrated = useUiStore((state) => state.authHydrated);
+  if (!authHydrated) {
+    return <BootFallback />;
+  }
   return isAuthenticated ? <AppShell /> : <Navigate to="/login" replace />;
 }
 
 function OnboardingRoute() {
   const onboardingComplete = useUiStore((state) => state.onboardingComplete);
   const isAuthenticated = useUiStore((state) => state.isAuthenticated);
+  const authHydrated = useUiStore((state) => state.authHydrated);
+  if (!authHydrated && onboardingComplete) {
+    return <BootFallback />;
+  }
   if (onboardingComplete) {
     return <Navigate to={isAuthenticated ? "/home" : "/login"} replace />;
   }

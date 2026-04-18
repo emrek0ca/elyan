@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 
 from elyan.bootstrap.manager import get_bootstrap_manager
+from cli.commands.guide import render_install_to_ui_guide
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -50,6 +51,11 @@ def handle_bootstrap(args) -> int:
             print(f"  onboarded:       {status.get('onboarded')}")
             print(f"  restored:        {status.get('restored')}")
             print(f"  vault:           {status.get('runtime', {}).get('config', {}).get('provider', '-')}")
+            render_install_to_ui_guide(
+                setup_ready=bool(status.get("setup_complete")),
+                gateway_running=None,
+                prefix="  ",
+            )
         return 0
     if action == "install":
         result = manager.install(headless=bool(getattr(args, "headless", False)), force=bool(getattr(args, "force", False)))
@@ -58,6 +64,12 @@ def handle_bootstrap(args) -> int:
             from cli.commands import desktop as desktop_command
 
             desktop_command.open_desktop(detached=True)
+        if result.get("ok"):
+            render_install_to_ui_guide(
+                setup_ready=bool(result.get("state", {}).get("setup_complete")),
+                gateway_running=None,
+                prefix="  ",
+            )
         return 0 if result.get("ok") else 1
     if action == "onboard":
         result = manager.onboard(
@@ -71,6 +83,12 @@ def handle_bootstrap(args) -> int:
             from cli.commands import desktop as desktop_command
 
             desktop_command.open_desktop(detached=True)
+        if result.get("ok"):
+            render_install_to_ui_guide(
+                setup_ready=bool(result.get("state", {}).get("setup_complete")),
+                gateway_running=None,
+                prefix="  ",
+            )
         return 0 if result.get("ok") else 1
     if action == "repair":
         result = manager.repair(force=bool(getattr(args, "force", False)))

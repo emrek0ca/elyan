@@ -10,6 +10,7 @@ import {
 } from "@/vendor/lucide-react";
 import { Surface } from "@/components/primitives/Surface";
 import { StatusBadge } from "@/components/primitives/StatusBadge";
+import { apiClient } from "@/services/api/client";
 import { useRuntimeStore } from "@/stores/runtime-store";
 import type { ElyanAgentActivity } from "@/stores/runtime-store";
 import { cn } from "@/utils/cn";
@@ -28,7 +29,8 @@ function VoiceButton({ className }: { className?: string }) {
       setListening(next);
       // Fire trigger to backend voice pipeline
       if (next) {
-        await fetch("/api/elyan/voice/trigger", { method: "POST" }).catch(() => null);
+        const baseUrl = apiClient.getBaseUrl().trim().replace(/\/+$/, "");
+        await fetch(`${baseUrl}/api/elyan/voice/trigger`, { method: "POST", credentials: "include" }).catch(() => null);
       }
     } finally {
       setBusy(false);

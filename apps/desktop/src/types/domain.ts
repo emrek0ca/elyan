@@ -60,6 +60,15 @@ export interface WorkspaceSeatSummary {
   seatLimit: number;
   seatsUsed: number;
   seatsAvailable: number;
+  assignments?: Array<{
+    assignmentId: string;
+    workspaceId: string;
+    actorId: string;
+    assignedBy: string;
+    status: string;
+    createdAt?: number;
+    updatedAt?: number;
+  }>;
 }
 
 export interface WorkspacePermissionSummary {
@@ -121,6 +130,19 @@ export interface BillingPlanSummary {
   monthlyCredits: number;
   seats: number;
   maxConnectors: number;
+  weeklyCreditLimit?: number;
+  monthlySoftLimit?: number;
+  maxContextSize?: number;
+  memoryRetentionDays?: number;
+  priorityLevel?: string;
+  requestsPerMinute?: number;
+  creditSpendCapPerHour?: number;
+  weeklyHardCap?: number;
+  rolloverPolicy?: string;
+  toolAccess?: Record<string, boolean>;
+  deepMode?: boolean;
+  multiAgent?: boolean;
+  priorityQueue?: boolean;
 }
 
 export interface TokenPackSummary {
@@ -258,6 +280,9 @@ export interface SystemReadiness {
   runtimeReady: boolean;
   setupComplete: boolean;
   ollamaReady: boolean;
+  modelLaneReady: boolean;
+  launchReady: boolean;
+  launchBlockers: string[];
   channelConnected: boolean;
   hasRoutine: boolean;
   hasDailySummaryRun: boolean;
@@ -588,15 +613,84 @@ export interface WorkspaceBillingSummary {
     currentPeriodEnd?: number;
   };
   entitlements: EntitlementSnapshot;
+  featureAccess?: Record<string, boolean>;
   usage: {
     totals: Record<string, number>;
     budget: number;
     items: UsageLedgerEntry[];
   };
+  usageSummary?: {
+    period?: {
+      period?: string;
+      cycle?: string;
+      resetAt?: number;
+      timezone?: string;
+    };
+    remainingCredits?: number;
+    requests?: number;
+    estimatedCredits?: number;
+    byActor?: Array<{ actorId: string; credits: number }>;
+    byMetric?: Array<{ metric: string; credits: number }>;
+    topCostSources?: Array<{ source: string; credits: number }>;
+    triggeredLimits?: Array<{
+      bucketType: string;
+      bucketKey: string;
+      metric: string;
+      status: string;
+      current: number;
+      limit: number;
+      reason: string;
+    }>;
+    upgradeHint?: {
+      planId: string;
+      planLabel: string;
+      upgradePlanId: string;
+      message: string;
+      cta: string;
+      remaining: number;
+      resetAt: number;
+    };
+  };
   creditBalance?: {
     included: number;
     purchased: number;
     total: number;
+    planId?: string;
+    planLabel?: string;
+    period?: string;
+    cycle?: string;
+    resetAt?: number;
+    timezone?: string;
+    rolloverPolicy?: string;
+    weeklyCreditLimit?: number;
+    monthlySoftLimit?: number;
+    requestsPerMinute?: number;
+    creditSpendCapPerHour?: number;
+    weeklyHardCap?: number;
+  };
+  resetAt?: number;
+  topCostSources?: Array<{ source: string; credits: number }>;
+  triggeredLimits?: Array<{
+    bucketType: string;
+    bucketKey: string;
+    metric: string;
+    status: string;
+    current: number;
+    limit: number;
+    reason: string;
+  }>;
+  upgradeHint?: {
+    planId: string;
+    planLabel: string;
+    upgradePlanId: string;
+    message: string;
+    cta: string;
+    remaining: number;
+    resetAt: number;
+  };
+  recentUsageSummary?: {
+    requests: number;
+    estimatedCredits: number;
   };
   billingProfile?: BillingProfileSummary;
   activeCheckout?: BillingCheckoutSessionSummary;
@@ -660,6 +754,19 @@ export interface EntitlementSnapshot {
   premiumModels: boolean;
   teamSeats: number;
   monthlyUsageBudget: number;
+  weeklyCreditLimit?: number;
+  monthlySoftLimit?: number;
+  maxContextSize?: number;
+  memoryRetentionDays?: number;
+  priorityLevel?: string;
+  requestsPerMinute?: number;
+  creditSpendCapPerHour?: number;
+  weeklyHardCap?: number;
+  rolloverPolicy?: string;
+  toolAccess?: Record<string, boolean>;
+  deepMode?: boolean;
+  multiAgent?: boolean;
+  priorityQueue?: boolean;
 }
 
 export interface UsageLedgerEntry {
@@ -955,6 +1062,11 @@ export interface SidecarHealth {
   runtimeProtocolVersion?: string | null;
   compatible?: boolean;
   compatibilityReason?: string | null;
+  runtimeReady?: boolean | null;
+  modelLaneReady?: boolean | null;
+  launchReady?: boolean | null;
+  launchBlockers?: string[];
+  healthStatus?: string | null;
   lastLogsExportPath?: string | null;
 }
 

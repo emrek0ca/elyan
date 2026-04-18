@@ -52,10 +52,19 @@ async function probeRuntimeHealth(): Promise<SidecarHealth> {
       const protocolVersion = String(payload.protocol_version || payload.protocolVersion || "elyan-cowork-v1");
       const runtimeVersion = String(payload.version || payload.app_version || payload.appVersion || "");
       const adminToken = String(payload.admin_token || payload.adminToken || "") || null;
+      const readiness = (payload.readiness as Record<string, unknown> | undefined) || {};
+      const launchBlockers = Array.isArray(readiness.launch_blockers)
+        ? readiness.launch_blockers.map((item) => String(item || "").trim()).filter(Boolean)
+        : [];
+      const launchReady = Boolean(readiness.launch_ready ?? payload.ok);
+      const runtimeReady = Boolean(readiness.elyan_ready ?? launchReady);
+      const modelLaneReady = Boolean(readiness.model_lane_ready ?? false);
       const runtimeUrl = baseUrl.trim().replace(/\/+$/, "");
       const port = Number(runtimeUrl.split(":").pop() || DEFAULT_PORT) || DEFAULT_PORT;
+      const compatible = protocolVersion === "elyan-cowork-v1";
+      const healthy = Boolean(launchReady && compatible);
       return {
-        status: "healthy",
+        status: healthy ? "healthy" : "degraded",
         managed: false,
         port,
         runtimeUrl,
@@ -63,10 +72,18 @@ async function probeRuntimeHealth(): Promise<SidecarHealth> {
         runtimeVersion,
         runtimeProtocolVersion: protocolVersion,
         expectedProtocolVersion: "elyan-cowork-v1",
-        compatible: protocolVersion === "elyan-cowork-v1",
-        compatibilityReason: protocolVersion === "elyan-cowork-v1" ? null : "protocol_mismatch",
-        lastReadyAt: new Date().toISOString(),
+        compatible,
+        compatibilityReason: compatible
+          ? (launchReady ? null : "launch_blocked")
+          : "protocol_mismatch",
+        runtimeReady,
+        modelLaneReady,
+        launchReady,
+        launchBlockers,
+        healthStatus: String(payload.health_status || payload.healthStatus || ""),
+        lastReadyAt: healthy ? new Date().toISOString() : null,
         adminToken,
+        lastError: healthy ? null : (launchBlockers.length > 0 ? launchBlockers.join("; ") : "Local runtime not ready"),
       };
     } catch {
       continue;
@@ -77,6 +94,10 @@ async function probeRuntimeHealth(): Promise<SidecarHealth> {
     lastError: "Local runtime unavailable",
     compatible: false,
     compatibilityReason: "runtime_offline",
+    runtimeReady: false,
+    modelLaneReady: false,
+    launchReady: false,
+    launchBlockers: ["Local runtime unavailable"],
   });
 }
 

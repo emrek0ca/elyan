@@ -192,6 +192,11 @@ async function safePost<T>(path: string, body: Record<string, unknown>): Promise
   }
 }
 
+function isAnonymousSessionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /user session required|invalid or expired session|session required|unauthorized|forbidden/i.test(message);
+}
+
 const memoryCache = new Map<string, { expiresAt: number; value: unknown }>();
 const inflightRequests = new Map<string, Promise<unknown>>();
 
@@ -222,9 +227,40 @@ async function withMemoryCache<T>(key: string, ttlMs: number, loader: () => Prom
     .catch((error) => {
       inflightRequests.delete(key);
       throw error;
-    });
+  });
   inflightRequests.set(key, request);
   return (await request) as T;
+}
+
+function extractLaunchBlockers(readiness: Record<string, unknown>): string[] {
+  const launchBlockers = readiness.launch_blockers;
+  if (!Array.isArray(launchBlockers)) {
+    return [];
+  }
+  return launchBlockers.map((item) => String(item || "").trim()).filter(Boolean);
+}
+
+function summarizeLaunchBlockers(blockers: string[]): string {
+  if (blockers.length === 0) {
+    return "";
+  }
+  if (blockers.length === 1) {
+    return blockers[0];
+  }
+  return `${blockers[0]} (+${blockers.length - 1} more)`;
+}
+
+function summarizeModelLaneIssue(ollamaReady: boolean, providerSummary: { authRequired: number; degraded: number }): string {
+  if (providerSummary.authRequired > 0) {
+    return "Some cloud providers need API keys.";
+  }
+  if (providerSummary.degraded > 0) {
+    return "Some providers are degraded right now.";
+  }
+  if (!ollamaReady) {
+    return "Ollama is unavailable. Local model lanes are limited.";
+  }
+  return "";
 }
 
 const DEFAULT_SECURITY_SUMMARY: SecuritySummary = {
@@ -836,6 +872,7 @@ function mapThreadDetail(item: Record<string, unknown>): CoworkThreadDetail {
 }
 
 function mapEntitlements(payload: Record<string, unknown> | undefined) {
+  const toolAccess = (payload?.tool_access as Record<string, unknown> | undefined) || {};
   return {
     maxThreads: Number(payload?.max_threads || 0),
     maxConnectors: Number(payload?.max_connectors || 0),
@@ -843,6 +880,21 @@ function mapEntitlements(payload: Record<string, unknown> | undefined) {
     premiumModels: Boolean(payload?.premium_models || false),
     teamSeats: Number(payload?.team_seats || 0),
     monthlyUsageBudget: Number(payload?.monthly_usage_budget || 0),
+    weeklyCreditLimit: Number(payload?.weekly_credit_limit || 0),
+    monthlySoftLimit: Number(payload?.monthly_soft_limit || 0),
+    maxContextSize: Number(payload?.max_context_size || 0),
+    memoryRetentionDays: Number(payload?.memory_retention_days || 0),
+    priorityLevel: String(payload?.priority_level || ""),
+    requestsPerMinute: Number(payload?.requests_per_minute || 0),
+    creditSpendCapPerHour: Number(payload?.credit_spend_cap_per_hour || 0),
+    weeklyHardCap: Number(payload?.weekly_hard_cap || 0),
+    rolloverPolicy: String(payload?.rollover_policy || ""),
+    toolAccess: Object.fromEntries(
+      Object.entries(toolAccess).map(([key, value]) => [key, Boolean(value)]),
+    ),
+    deepMode: Boolean(payload?.deep_mode || false),
+    multiAgent: Boolean(payload?.multi_agent || false),
+    priorityQueue: Boolean(payload?.priority_queue || false),
   };
 }
 
@@ -864,6 +916,17 @@ function mapSeatSummary(payload: Record<string, unknown>): WorkspaceAdminSummary
     seatLimit: Number(payload.seat_limit || 0),
     seatsUsed: Number(payload.seats_used || 0),
     seatsAvailable: Number(payload.seats_available || 0),
+    assignments: Array.isArray(payload.assignments)
+      ? payload.assignments.map((item) => ({
+          assignmentId: String((item as Record<string, unknown>).assignment_id || ""),
+          workspaceId: String((item as Record<string, unknown>).workspace_id || "local-workspace"),
+          actorId: String((item as Record<string, unknown>).actor_id || ""),
+          assignedBy: String((item as Record<string, unknown>).assigned_by || ""),
+          status: String((item as Record<string, unknown>).status || "active"),
+          createdAt: Number((item as Record<string, unknown>).created_at || 0) || undefined,
+          updatedAt: Number((item as Record<string, unknown>).updated_at || 0) || undefined,
+        }))
+      : undefined,
   };
 }
 
@@ -922,6 +985,26 @@ function mapBilling(payload: Record<string, unknown>): WorkspaceBillingSummary {
   const subscriptionState = (payload.subscription_state as Record<string, unknown> | undefined) || {};
   const usage = (payload.usage as Record<string, unknown> | undefined) || {};
   const balance = (payload.credit_balance as Record<string, unknown> | undefined) || {};
+  const usageSummary = (payload.usage_summary as Record<string, unknown> | undefined) || {};
+  const period = (usageSummary.period as Record<string, unknown> | undefined) || {};
+  const topCostSources = Array.isArray(payload.top_cost_sources)
+    ? payload.top_cost_sources.map((item) => ({
+        source: String((item as Record<string, unknown>).source || ""),
+        credits: Number((item as Record<string, unknown>).credits || 0),
+      }))
+    : [];
+  const triggeredLimits = Array.isArray(payload.triggered_limits)
+    ? payload.triggered_limits.map((item) => ({
+        bucketType: String((item as Record<string, unknown>).bucket_type || ""),
+        bucketKey: String((item as Record<string, unknown>).bucket_key || ""),
+        metric: String((item as Record<string, unknown>).metric || ""),
+        status: String((item as Record<string, unknown>).status || ""),
+        current: Number((item as Record<string, unknown>).current || 0),
+        limit: Number((item as Record<string, unknown>).limit || 0),
+        reason: String((item as Record<string, unknown>).reason || ""),
+      }))
+    : [];
+  const upgradeHint = (usageSummary.upgrade_hint as Record<string, unknown> | undefined) || (payload.upgrade_hint as Record<string, unknown> | undefined) || undefined;
   return {
     workspaceId: String(payload.workspace_id || "local-workspace"),
     billingCustomer: String(payload.billing_customer || ""),
@@ -938,15 +1021,82 @@ function mapBilling(payload: Record<string, unknown>): WorkspaceBillingSummary {
       currentPeriodEnd: Number(subscriptionState.current_period_end || 0) || undefined,
     },
     entitlements: mapEntitlements((payload.entitlements as Record<string, unknown> | undefined) || {}),
+    featureAccess: ((payload.feature_access as Record<string, unknown> | undefined) || {}) as Record<string, boolean>,
     usage: {
       totals: ((usage.totals as Record<string, number> | undefined) || {}) as Record<string, number>,
       budget: Number(usage.budget || 0),
       items: Array.isArray(usage.items) ? usage.items.map((item) => mapUsageEntry(item as Record<string, unknown>)) : [],
     },
+    usageSummary: {
+      period: {
+        period: String(period.period || ""),
+        cycle: String(period.cycle || ""),
+        resetAt: Number(period.reset_at || 0) || undefined,
+        timezone: String(period.timezone || ""),
+      },
+      remainingCredits: Number(usageSummary.remaining_credits || 0),
+      requests: Number((usageSummary.totals as Record<string, unknown> | undefined)?.requests || 0),
+      estimatedCredits: Number((usageSummary.totals as Record<string, unknown> | undefined)?.estimated_credits || 0),
+      byActor: Array.isArray(usageSummary.by_actor)
+        ? usageSummary.by_actor.map((item) => ({
+            actorId: String((item as Record<string, unknown>).actor_id || ""),
+            credits: Number((item as Record<string, unknown>).credits || 0),
+          }))
+        : [],
+      byMetric: Array.isArray(usageSummary.by_metric)
+        ? usageSummary.by_metric.map((item) => ({
+            metric: String((item as Record<string, unknown>).metric || ""),
+            credits: Number((item as Record<string, unknown>).credits || 0),
+          }))
+        : [],
+      topCostSources,
+      triggeredLimits,
+      upgradeHint: upgradeHint
+        ? {
+            planId: String(upgradeHint.plan_id || ""),
+            planLabel: String(upgradeHint.plan_label || ""),
+            upgradePlanId: String(upgradeHint.upgrade_plan_id || ""),
+            message: String(upgradeHint.message || ""),
+            cta: String(upgradeHint.cta || ""),
+            remaining: Number(upgradeHint.remaining || 0),
+            resetAt: Number(upgradeHint.reset_at || 0) || 0,
+          }
+        : undefined,
+    },
     creditBalance: {
       included: Number(balance.included || 0),
       purchased: Number(balance.purchased || 0),
       total: Number(balance.total || 0),
+      planId: String(balance.plan_id || ""),
+      planLabel: String(balance.plan_label || ""),
+      period: String(balance.period || ""),
+      cycle: String(balance.cycle || ""),
+      resetAt: Number(balance.reset_at || 0) || undefined,
+      timezone: String(balance.timezone || ""),
+      rolloverPolicy: String(balance.rollover_policy || ""),
+      weeklyCreditLimit: Number(balance.weekly_credit_limit || 0),
+      monthlySoftLimit: Number(balance.monthly_soft_limit || 0),
+      requestsPerMinute: Number(balance.requests_per_minute || 0),
+      creditSpendCapPerHour: Number(balance.credit_spend_cap_per_hour || 0),
+      weeklyHardCap: Number(balance.weekly_hard_cap || 0),
+    },
+    resetAt: Number(payload.reset_at || balance.reset_at || 0) || undefined,
+    topCostSources,
+    triggeredLimits,
+    upgradeHint: upgradeHint
+      ? {
+          planId: String(upgradeHint.plan_id || ""),
+          planLabel: String(upgradeHint.plan_label || ""),
+          upgradePlanId: String(upgradeHint.upgrade_plan_id || ""),
+          message: String(upgradeHint.message || ""),
+          cta: String(upgradeHint.cta || ""),
+          remaining: Number(upgradeHint.remaining || 0),
+          resetAt: Number(upgradeHint.reset_at || 0) || 0,
+        }
+      : undefined,
+    recentUsageSummary: {
+      requests: Number((payload.recent_usage_summary as Record<string, unknown> | undefined)?.requests || 0),
+      estimatedCredits: Number((payload.recent_usage_summary as Record<string, unknown> | undefined)?.estimated_credits || 0),
     },
     billingProfile:
       payload.billing_profile && typeof payload.billing_profile === "object"
@@ -1032,6 +1182,7 @@ function mapWorkspaceInvite(item: Record<string, unknown>): WorkspaceInviteSumma
 }
 
 function mapBillingPlan(item: Record<string, unknown>): BillingPlanSummary {
+  const metadata = (item.metadata as Record<string, unknown> | undefined) || {};
   return {
     id: String(item.plan_id || item.id || "free"),
     label: String(item.label || item.id || "Plan"),
@@ -1039,6 +1190,19 @@ function mapBillingPlan(item: Record<string, unknown>): BillingPlanSummary {
     monthlyCredits: Number(item.included_credits || item.monthly_credits || 0),
     seats: Number(item.seat_limit || item.seats || 0),
     maxConnectors: Number(item.connector_limit || item.max_connectors || 0),
+    weeklyCreditLimit: Number(metadata.weekly_credit_limit || item.weekly_credit_limit || 0),
+    monthlySoftLimit: Number(metadata.monthly_soft_limit || item.monthly_soft_limit || 0),
+    maxContextSize: Number(metadata.max_context_size || item.max_context_size || 0),
+    memoryRetentionDays: Number(metadata.memory_retention_days || item.memory_retention_days || 0),
+    priorityLevel: String(metadata.priority_level || item.priority_level || ""),
+    requestsPerMinute: Number(metadata.requests_per_minute || item.requests_per_minute || 0),
+    creditSpendCapPerHour: Number(metadata.credit_spend_cap_per_hour || item.credit_spend_cap_per_hour || 0),
+    weeklyHardCap: Number(metadata.weekly_hard_cap || item.weekly_hard_cap || 0),
+    rolloverPolicy: String(metadata.rollover_policy || item.rollover_policy || ""),
+    toolAccess: ((metadata.tool_access as Record<string, unknown> | undefined) || {}) as Record<string, boolean>,
+    deepMode: Boolean(metadata.deep_mode ?? item.deep_mode ?? false),
+    multiAgent: Boolean(metadata.multi_agent ?? item.multi_agent ?? false),
+    priorityQueue: Boolean(metadata.priority_queue ?? item.priority_queue ?? false),
   };
 }
 
@@ -2088,18 +2252,25 @@ export async function bootstrapOwner(payload: {
 }
 
 export async function getCurrentLocalUser(): Promise<{ email: string; displayName: string } | null> {
-  const raw = await safeRequest<LocalAuthSessionResponse>("/api/v1/auth/me");
-  if (!raw?.success || !raw.user) {
-    return null;
+  try {
+    const raw = await apiClient.request<LocalAuthSessionResponse>("/api/v1/auth/me");
+    if (!raw?.success || !raw.user) {
+      return null;
+    }
+    const email = String(raw.user.email || "").trim().toLowerCase();
+    if (!email) {
+      return null;
+    }
+    return {
+      email,
+      displayName: String(raw.user.display_name || "").trim(),
+    };
+  } catch (error) {
+    if (isAnonymousSessionError(error)) {
+      return null;
+    }
+    throw error;
   }
-  const email = String(raw.user.email || "").trim().toLowerCase();
-  if (!email) {
-    return null;
-  }
-  return {
-    email,
-    displayName: String(raw.user.display_name || "").trim(),
-  };
 }
 
 export async function logoutLocalUser(): Promise<void> {
@@ -2470,10 +2641,13 @@ export async function getConnectorAccounts(provider = ""): Promise<ConnectorAcco
   return Array.isArray(raw.accounts) ? raw.accounts.map((item) => mapConnectorAccount(item)) : [];
 }
 
-export async function connectConnector(connector: string): Promise<{ launchUrl: string; account?: ConnectorAccount }> {
-  const raw = await apiClient.request<SuccessEnvelope<{ launch_url?: string; account?: Record<string, unknown> }>>(`/api/v1/connectors/${connector}/connect`, {
+export async function connectConnector(
+  connector: string,
+  payload: Record<string, unknown> = {},
+): Promise<{ launchUrl: string; account?: ConnectorAccount; connectResult?: Record<string, unknown> }> {
+  const raw = await apiClient.request<SuccessEnvelope<{ launch_url?: string; account?: Record<string, unknown>; connect_result?: Record<string, unknown> }>>(`/api/v1/connectors/${connector}/connect`, {
     method: "POST",
-    body: {},
+    body: payload,
   });
   if (raw.success) {
     invalidateMemoryCache(["connectors", "integrations-summary"]);
@@ -2481,6 +2655,7 @@ export async function connectConnector(connector: string): Promise<{ launchUrl: 
   return {
     launchUrl: String(raw.launch_url || ""),
     account: raw.account ? mapConnectorAccount(raw.account) : undefined,
+    connectResult: ((raw.connect_result as Record<string, unknown> | undefined) || {}) as Record<string, unknown>,
   };
 }
 
@@ -2671,6 +2846,10 @@ type LlmSetupStatusEnvelope = {
 type OllamaStatusEnvelope = {
   ok?: boolean;
   running?: boolean;
+  lane_ready?: boolean;
+  probe_model?: string;
+  probe_error?: string;
+  probe_latency_ms?: number;
   models?: Array<Record<string, unknown>>;
   recommended?: Array<Record<string, unknown>>;
 };
@@ -2763,6 +2942,7 @@ function buildProviderDescriptors(
 
   const ollamaModels = Array.isArray(ollamaRaw?.models) ? ollamaRaw.models : [];
   const ollamaRecommended = Array.isArray(ollamaRaw?.recommended) ? ollamaRaw.recommended : [];
+  const ollamaLaneReady = Boolean(ollamaRaw?.lane_ready ?? ollamaRaw?.running);
 
   return Array.from(providerIds)
     .filter(Boolean)
@@ -2795,15 +2975,19 @@ function buildProviderDescriptors(
       const isLocal = providerId === "ollama";
       const setupStatus = String(setupInfo.status || "").trim().toLowerCase();
       const healthState: ProviderDescriptor["healthState"] =
-        !configured && !isLocal
-          ? "unreachable"
-          : setupStatus === "degraded" || String(healthInfo.status || "").includes("degraded")
-            ? "degraded"
-            : setupStatus === "rate_limited"
-              ? "rate_limited"
-              : setupStatus === "connected" || setupStatus === "available" || providerId === "ollama"
-                ? "available"
-                : "unreachable";
+        isLocal
+          ? ollamaLaneReady
+            ? "available"
+            : "degraded"
+          : !configured
+            ? "unreachable"
+            : setupStatus === "degraded" || String(healthInfo.status || "").includes("degraded")
+              ? "degraded"
+              : setupStatus === "rate_limited"
+                ? "rate_limited"
+                : setupStatus === "connected" || setupStatus === "available"
+                  ? "available"
+                  : "unreachable";
 
       const authState: ProviderDescriptor["authState"] = isLocal ? "not_required" : configured ? "ready" : "auth_required";
 
@@ -2853,9 +3037,9 @@ function buildProviderDescriptors(
         lanes,
         endpoint: String((setupInfo.base_url || setupInfo.endpoint || "")).trim(),
         detail: isLocal
-          ? ollamaRaw?.running
+          ? ollamaLaneReady
             ? `${ollamaModels.length} local models`
-            : "Ollama not running"
+            : String(ollamaRaw?.probe_error || "Ollama lane not ready")
           : configured
             ? `${supportedRoles.length || 1} active lanes`
             : "API key required",
@@ -2880,33 +3064,46 @@ export async function getSystemReadiness(): Promise<SystemReadiness> {
       const platformSummary = overviewRaw.platforms?.summary || {};
       const skillSummary = overviewRaw.skills || {};
       const providerSummary = overviewRaw.providers?.summary || {};
+      const ollamaReady = Boolean(overviewRaw.ollama?.ready);
+      const modelLaneReady = Boolean(readiness.model_lane_ready ?? (ollamaReady || Number(providerSummary.available || 0) > 0));
+      const launchBlockers = extractLaunchBlockers(readiness);
+      const launchReady = Boolean(readiness.launch_ready ?? (launchBlockers.length === 0));
+      const runtimeReady = Boolean(readiness.runtime_ready ?? readiness.elyan_ready ?? true);
 
       let bootStage: SystemReadiness["bootStage"] = "ready";
       let status: SystemReadiness["status"] = "ready";
       let blockingIssue = "";
 
-      if (!Boolean(readiness.elyan_ready ?? true)) {
+      if (!runtimeReady) {
         bootStage = "starting_services";
         status = "booting";
         blockingIssue = "Local services are still starting.";
-      } else if (!Boolean(overviewRaw.ollama?.ready)) {
-        bootStage = "loading_local_models";
+      } else if (!modelLaneReady) {
+        bootStage = Number(providerSummary.auth_required || 0) > 0 || Number(providerSummary.degraded || 0) > 0
+          ? "checking_providers"
+          : "loading_local_models";
         status = "needs_attention";
-        blockingIssue = "Ollama is unavailable. Local model lanes are limited.";
-      } else if (Number(providerSummary.auth_required || 0) > 0 || Number(providerSummary.degraded || 0) > 0) {
-        bootStage = "checking_providers";
+        blockingIssue = summarizeModelLaneIssue(ollamaReady, {
+          authRequired: Number(providerSummary.auth_required || 0),
+          degraded: Number(providerSummary.degraded || 0),
+        });
+      }
+
+      if (status === "ready" && !launchReady && launchBlockers.length > 0) {
+        bootStage = "needs_attention";
         status = "needs_attention";
-        blockingIssue = Number(providerSummary.auth_required || 0) > 0
-          ? "Some cloud providers need API keys."
-          : "Some providers are degraded right now.";
+        blockingIssue = summarizeLaunchBlockers(launchBlockers);
       }
 
       return {
         status,
         bootStage,
-        runtimeReady: Boolean(readiness.elyan_ready ?? true),
-        setupComplete: Boolean(readiness.setup_complete ?? readiness.elyan_ready),
-        ollamaReady: Boolean(overviewRaw.ollama?.ready),
+        runtimeReady,
+        setupComplete: Boolean(readiness.setup_complete ?? runtimeReady),
+        ollamaReady,
+        modelLaneReady,
+        launchReady,
+        launchBlockers,
         channelConnected: Boolean(readiness.channel_connected),
         hasRoutine: Boolean(readiness.has_routine),
         hasDailySummaryRun: Boolean(readiness.has_daily_summary_run),
@@ -2951,8 +3148,8 @@ export async function getSystemReadiness(): Promise<SystemReadiness> {
       safeRequest<{ summary?: Record<string, unknown> }>("/api/skills").catch(() => null),
     ]);
 
-    const runtimeReady = Boolean(healthRaw?.ok);
-    const ollamaReady = Boolean(ollamaRaw?.running);
+    const healthReady = Boolean(healthRaw?.ok);
+    const ollamaReady = Boolean(ollamaRaw?.lane_ready ?? ollamaRaw?.running);
     const readiness = (healthRaw?.readiness as Record<string, unknown> | undefined) || {};
     const providers = Array.isArray(setupRaw?.providers) ? setupRaw.providers : [];
     const providerSummary = {
@@ -2960,6 +3157,10 @@ export async function getSystemReadiness(): Promise<SystemReadiness> {
       authRequired: providers.filter((provider) => String(provider.status || "").toLowerCase().includes("key") || String(provider.status || "").toLowerCase().includes("auth")).length,
       degraded: providers.filter((provider) => ["degraded", "error", "unreachable"].includes(String(provider.status || "").toLowerCase())).length,
     };
+    const modelLaneReady = Boolean(readiness.model_lane_ready ?? (ollamaReady || providerSummary.available > 0));
+    const launchBlockers = extractLaunchBlockers(readiness);
+    const launchReady = Boolean(readiness.launch_ready ?? (launchBlockers.length === 0));
+    const runtimeReady = Boolean(readiness.runtime_ready ?? readiness.elyan_ready ?? healthReady);
 
     let bootStage: SystemReadiness["bootStage"] = "ready";
     let status: SystemReadiness["status"] = "ready";
@@ -2969,16 +3170,21 @@ export async function getSystemReadiness(): Promise<SystemReadiness> {
       bootStage = "starting_services";
       status = "booting";
       blockingIssue = "Local services are still starting.";
-    } else if (!ollamaReady) {
-      bootStage = "loading_local_models";
+    } else if (!modelLaneReady) {
+      bootStage = providerSummary.authRequired > 0 || providerSummary.degraded > 0
+        ? "checking_providers"
+        : "loading_local_models";
       status = "needs_attention";
-      blockingIssue = "Ollama is unavailable. Local model lanes are limited.";
-    } else if (providerSummary.authRequired || providerSummary.degraded) {
-      bootStage = "checking_providers";
+      blockingIssue = summarizeModelLaneIssue(ollamaReady, {
+        authRequired: providerSummary.authRequired,
+        degraded: providerSummary.degraded,
+      });
+    }
+
+    if (status === "ready" && !launchReady && launchBlockers.length > 0) {
+      bootStage = "needs_attention";
       status = "needs_attention";
-      blockingIssue = providerSummary.authRequired
-        ? "Some cloud providers need API keys."
-        : "Some providers are degraded right now.";
+      blockingIssue = summarizeLaunchBlockers(launchBlockers);
     }
 
     return {
@@ -2987,6 +3193,9 @@ export async function getSystemReadiness(): Promise<SystemReadiness> {
       runtimeReady,
       setupComplete: Boolean(readiness.setup_complete ?? runtimeReady),
       ollamaReady,
+      modelLaneReady,
+      launchReady,
+      launchBlockers,
       channelConnected: Boolean(readiness.channel_connected),
       hasRoutine: Boolean(readiness.has_routine),
       hasDailySummaryRun: Boolean(readiness.has_daily_summary_run),

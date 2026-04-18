@@ -11,6 +11,12 @@ def test_runtime_version_constants_are_consistent():
     assert AppConfig().version == APP_VERSION
 
 
+def test_main_imports_version_from_core_version():
+    content = Path("main.py").read_text(encoding="utf-8")
+    assert "from core.version import APP_VERSION as VERSION" in content
+    assert 'VERSION = "20.1.0"' not in content
+
+
 def test_pyproject_uses_single_entrypoint_and_dynamic_version():
     data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     assert data["project"]["name"] == "elyan"
@@ -23,4 +29,3 @@ def test_setup_entrypoint_and_version_source_match():
     content = Path("setup.py").read_text(encoding="utf-8")
     assert "version=APP_VERSION" in content
     assert "\"elyan=elyan_entrypoint:main\"" in content
-

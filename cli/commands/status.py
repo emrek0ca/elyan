@@ -5,6 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from cli.commands.guide import build_install_to_ui_guide, render_install_to_ui_guide
+
 
 def _read_config() -> dict[str, Any]:
     config_file = Path.home() / ".elyan" / "elyan.json"
@@ -55,6 +57,16 @@ def _gateway_snapshot() -> dict[str, Any]:
     return {"running": running, "pid": pid}
 
 
+def _format_time(timestamp: Any) -> str:
+    try:
+        numeric = float(timestamp or 0.0)
+    except Exception:
+        numeric = 0.0
+    if numeric <= 0:
+        return "-"
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(numeric))
+
+
 def _autopilot_snapshot() -> dict[str, Any]:
     try:
         from core.autopilot import get_autopilot
@@ -73,16 +85,24 @@ def _autopilot_snapshot() -> dict[str, Any]:
 
 def _subscription_snapshot() -> dict[str, Any]:
     try:
-        from core.subscription import subscription_manager
-        from core.quota import quota_manager
+        from core.billing.workspace_billing import get_workspace_billing_store
 
-        tier = str(subscription_manager.get_user_tier("local") or "").strip()
-        stats = quota_manager.get_user_stats("local")
+        summary = get_workspace_billing_store().get_workspace_summary("local-workspace")
+        plan = summary.get("plan") or {}
+        balance = summary.get("credit_balance") or {}
+        usage_summary = summary.get("usage_summary") or {}
         return {
             "available": True,
-            "tier": tier.upper() if tier else "-",
-            "daily_messages": stats.get("daily_messages"),
-            "daily_limit": stats.get("daily_limit"),
+            "tier": str(plan.get("label") or "").upper() or "-",
+            "plan_id": str(plan.get("id") or ""),
+            "daily_messages": int((usage_summary.get("totals") or {}).get("requests") or 0),
+            "daily_limit": int(balance.get("weekly_credit_limit") or balance.get("monthly_soft_limit") or 0),
+            "credits_total": int(balance.get("total") or 0),
+            "credits_included": int(balance.get("included") or 0),
+            "credits_purchased": int(balance.get("purchased") or 0),
+            "reset_at": float(summary.get("reset_at") or balance.get("reset_at") or 0.0),
+            "top_cost_source": (summary.get("top_cost_sources") or usage_summary.get("top_cost_sources") or [{}])[0],
+            "upgrade_hint": summary.get("upgrade_hint") or usage_summary.get("upgrade_hint"),
         }
     except Exception:
         return {
@@ -90,6 +110,10 @@ def _subscription_snapshot() -> dict[str, Any]:
             "tier": "-",
             "daily_messages": None,
             "daily_limit": None,
+            "credits_total": None,
+            "credits_included": None,
+            "credits_purchased": None,
+            "reset_at": None,
         }
 
 
@@ -203,12 +227,18 @@ def _build_status_payload(deep: bool = False) -> dict[str, Any]:
     else:
         next_action = "elyan chat"
 
+    guide = build_install_to_ui_guide(
+        setup_ready=launch_ready,
+        gateway_running=bool(gateway["running"]),
+    )
+
     payload: dict[str, Any] = {
         "launch": {
             "ready": launch_ready,
             "missing": missing,
             "next_action": next_action,
         },
+        "guide": guide,
         "gateway": gateway,
         "model": {
             "provider": provider,
@@ -263,6 +293,11 @@ def run(args):
     if payload["launch"]["missing"]:
         print(f"    Eksik:     {', '.join(payload['launch']['missing'])}")
     print(f"    Sonraki:   {payload['launch']['next_action']}")
+    render_install_to_ui_guide(
+        setup_ready=bool(payload["launch"]["ready"]),
+        gateway_running=bool(payload["gateway"]["running"]),
+        prefix="  ",
+    )
 
     print(f"  Gateway:     {'ACTIVE (PID: ' + str(gateway_pid) + ')' if gateway_running else 'INACTIVE'}")
     print(f"  AI Provider: {provider}")
@@ -280,6 +315,14 @@ def run(args):
         limit_text = "∞" if daily_limit == -1 else (daily_limit if daily_limit is not None else "?")
         print(f"  Abonelik:    {subscription.get('tier', '-')}")
         print(f"  Mesaj Kota:  {subscription.get('daily_messages')}/{limit_text}")
+        print(f"  Credits:     {subscription.get('credits_total', 0)} (included {subscription.get('credits_included', 0)} / purchased {subscription.get('credits_purchased', 0)})")
+        print(f"  Reset:       {subscription.get('reset_at') and _format_time(subscription.get('reset_at')) or '-'}")
+        top_source = subscription.get("top_cost_source") or {}
+        if isinstance(top_source, dict) and top_source.get("source"):
+            print(f"  Top source:  {top_source.get('source')} ({top_source.get('credits', 0)})")
+        upgrade_hint = subscription.get("upgrade_hint") or {}
+        if isinstance(upgrade_hint, dict) and upgrade_hint.get("message"):
+            print(f"  Hint:        {upgrade_hint.get('message')}")
 
     if getattr(args, "deep", False):
         deep = payload.get("deep", {})

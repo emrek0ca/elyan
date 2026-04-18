@@ -100,13 +100,13 @@ export function OperatorStackScreen() {
               {readiness?.status || "unknown"}
             </StatusBadge>
             <StatusBadge tone={data.summary.skillsIssues ? "warning" : "success"}>
-              {data.summary.skillsEnabled} skills live
+              {`${data.summary.skillsEnabled} skills live`}
             </StatusBadge>
             <StatusBadge tone={data.summary.workflowsEnabled ? "success" : "neutral"}>
-              {data.summary.workflowsEnabled} workflows enabled
+              {`${data.summary.workflowsEnabled} workflows enabled`}
             </StatusBadge>
             <StatusBadge tone={data.summary.routinesEnabled ? "success" : "neutral"}>
-              {data.summary.routinesEnabled}/{data.summary.routinesTotal} routines active
+              {`${data.summary.routinesEnabled}/${data.summary.routinesTotal} routines active`}
             </StatusBadge>
           </div>
         </div>
@@ -197,9 +197,9 @@ export function OperatorStackScreen() {
                   <StatusBadge tone={routine.enabled ? "success" : "neutral"}>{routine.enabled ? "active" : "paused"}</StatusBadge>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {routine.nextRun ? <StatusBadge tone="info">next {formatCompactTime(routine.nextRun)}</StatusBadge> : null}
+                  {routine.nextRun ? <StatusBadge tone="info">{`next ${formatCompactTime(routine.nextRun)}`}</StatusBadge> : null}
                   {routine.reportChannel ? <StatusBadge tone="neutral">{routine.reportChannel}</StatusBadge> : null}
-                  <StatusBadge tone={routine.runCount > 0 ? "success" : "neutral"}>{routine.runCount} runs</StatusBadge>
+                  <StatusBadge tone={routine.runCount > 0 ? "success" : "neutral"}>{`${routine.runCount} runs`}</StatusBadge>
                 </div>
                 <div className="mt-4 flex justify-end gap-2">
                   <Button

@@ -196,6 +196,62 @@ usage_ledger_table = Table(
 )
 Index("ix_usage_ledger_workspace_created", usage_ledger_table.c.workspace_id, usage_ledger_table.c.created_at)
 
+usage_events_table = Table(
+    "usage_events",
+    LOCAL_METADATA,
+    Column("event_id", String(96), primary_key=True),
+    Column("workspace_id", String(128), ForeignKey("billing_workspaces.workspace_id", ondelete="CASCADE"), nullable=False),
+    Column("actor_id", String(128), nullable=False, default=""),
+    Column("session_id", String(128), nullable=False, default=""),
+    Column("run_id", String(128), nullable=False, default=""),
+    Column("usage_id", String(96), nullable=False, default=""),
+    Column("metric", String(64), nullable=False),
+    Column("event_type", String(64), nullable=False, default="usage"),
+    Column("status", String(64), nullable=False, default="recorded"),
+    Column("reference_id", String(128), nullable=False, default=""),
+    Column("provider", String(64), nullable=False, default=""),
+    Column("model_name", String(128), nullable=False, default=""),
+    Column("priority", String(32), nullable=False, default="normal"),
+    Column("input_tokens", Integer, nullable=False, default=0),
+    Column("output_tokens", Integer, nullable=False, default=0),
+    Column("reasoning_tokens", Integer, nullable=False, default=0),
+    Column("tool_calls", Integer, nullable=False, default=0),
+    Column("memory_ops", Integer, nullable=False, default=0),
+    Column("prompt_length", Integer, nullable=False, default=0),
+    Column("estimated_credits", Integer, nullable=False, default=0),
+    Column("actual_credits", Integer, nullable=False, default=0),
+    Column("bucket", String(32), nullable=False, default=""),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+)
+Index("ix_usage_events_workspace_created", usage_events_table.c.workspace_id, usage_events_table.c.created_at)
+Index("ix_usage_events_workspace_actor_created", usage_events_table.c.workspace_id, usage_events_table.c.actor_id, usage_events_table.c.created_at)
+Index("ix_usage_events_workspace_metric_created", usage_events_table.c.workspace_id, usage_events_table.c.metric, usage_events_table.c.created_at)
+
+rate_limit_buckets_table = Table(
+    "rate_limit_buckets",
+    LOCAL_METADATA,
+    Column("bucket_id", String(96), primary_key=True),
+    Column("workspace_id", String(128), ForeignKey("billing_workspaces.workspace_id", ondelete="CASCADE"), nullable=False),
+    Column("actor_id", String(128), nullable=False, default=""),
+    Column("metric", String(64), nullable=False, default=""),
+    Column("bucket_type", String(64), nullable=False),
+    Column("bucket_key", String(96), nullable=False),
+    Column("request_count", Integer, nullable=False, default=0),
+    Column("credit_spend", Integer, nullable=False, default=0),
+    Column("hard_cap", Integer, nullable=False, default=0),
+    Column("soft_cap", Integer, nullable=False, default=0),
+    Column("status", String(64), nullable=False, default="open"),
+    Column("last_allowed_at", Float, nullable=False, default=0.0),
+    Column("last_blocked_at", Float, nullable=False, default=0.0),
+    Column("last_reason", String(128), nullable=False, default=""),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+    Column("updated_at", Float, nullable=False, default=_now),
+)
+Index("ix_rate_limit_buckets_workspace_bucket", rate_limit_buckets_table.c.workspace_id, rate_limit_buckets_table.c.bucket_type, rate_limit_buckets_table.c.bucket_key)
+Index("ix_rate_limit_buckets_workspace_actor", rate_limit_buckets_table.c.workspace_id, rate_limit_buckets_table.c.actor_id, rate_limit_buckets_table.c.updated_at)
+
 billing_events_table = Table(
     "billing_events",
     LOCAL_METADATA,
@@ -1812,6 +1868,17 @@ class BillingRepository:
             out[item["workspace_id"]] = item
         return out
 
+    def list_known_workspace_ids(self) -> list[str]:
+        with self._db.local_engine.begin() as conn:
+            billing_rows = conn.execute(select(billing_workspaces_table.c.workspace_id)).all()
+            workspace_rows = conn.execute(select(workspaces_table.c.workspace_id)).all()
+        workspace_ids = {
+            str(row[0] or "").strip()
+            for row in (*billing_rows, *workspace_rows)
+            if str(row[0] or "").strip()
+        }
+        return sorted(workspace_ids)
+
     def upsert_workspace(self, workspace_payload: dict[str, Any]) -> None:
         with self._db.local_engine.begin() as conn:
             self._upsert_workspace(conn, workspace_payload, enqueue=True)
@@ -1827,6 +1894,162 @@ class BillingRepository:
                 event_type="billing.usage.recorded",
                 payload={"workspace_id": str(usage_payload.get("workspace_id") or "local-workspace"), "metric": str(usage_payload.get("metric") or "unknown"), "amount": int(usage_payload.get("amount") or 0)},
             )
+
+    def record_usage_event(self, event_payload: dict[str, Any]) -> dict[str, Any]:
+        event_id = str(event_payload.get("event_id") or f"usgevt_{uuid.uuid4().hex[:12]}")
+        workspace_id = str(event_payload.get("workspace_id") or "local-workspace")
+        row = {
+            "event_id": event_id,
+            "workspace_id": workspace_id,
+            "actor_id": str(event_payload.get("actor_id") or ""),
+            "session_id": str(event_payload.get("session_id") or ""),
+            "run_id": str(event_payload.get("run_id") or ""),
+            "usage_id": str(event_payload.get("usage_id") or ""),
+            "metric": str(event_payload.get("metric") or "unknown"),
+            "event_type": str(event_payload.get("event_type") or "usage"),
+            "status": str(event_payload.get("status") or "recorded"),
+            "reference_id": str(event_payload.get("reference_id") or ""),
+            "provider": str(event_payload.get("provider") or ""),
+            "model_name": str(event_payload.get("model_name") or event_payload.get("model") or ""),
+            "priority": str(event_payload.get("priority") or "normal"),
+            "input_tokens": max(0, int(event_payload.get("input_tokens") or 0)),
+            "output_tokens": max(0, int(event_payload.get("output_tokens") or 0)),
+            "reasoning_tokens": max(0, int(event_payload.get("reasoning_tokens") or 0)),
+            "tool_calls": max(0, int(event_payload.get("tool_calls") or 0)),
+            "memory_ops": max(0, int(event_payload.get("memory_ops") or 0)),
+            "prompt_length": max(0, int(event_payload.get("prompt_length") or 0)),
+            "estimated_credits": max(0, int(event_payload.get("estimated_credits") or 0)),
+            "actual_credits": max(0, int(event_payload.get("actual_credits") or 0)),
+            "bucket": str(event_payload.get("bucket") or ""),
+            "metadata_json": _json_dumps(dict(event_payload.get("metadata") or {})),
+            "created_at": float(event_payload.get("created_at") or _now()),
+        }
+        with self._db.local_engine.begin() as conn:
+            existing = conn.execute(
+                select(usage_events_table.c.event_id).where(usage_events_table.c.event_id == event_id)
+            ).first()
+            if existing:
+                conn.execute(
+                    usage_events_table.update()
+                    .where(usage_events_table.c.event_id == event_id)
+                    .values(**row)
+                )
+            else:
+                conn.execute(usage_events_table.insert().values(**row))
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=workspace_id,
+                aggregate_type="usage_event",
+                aggregate_id=event_id,
+                event_type=f"billing.usage.{row['event_type']}",
+                payload={
+                    "workspace_id": workspace_id,
+                    "actor_id": row["actor_id"],
+                    "metric": row["metric"],
+                    "status": row["status"],
+                    "estimated_credits": row["estimated_credits"],
+                    "actual_credits": row["actual_credits"],
+                },
+            )
+        return self._db._decode_usage_event_row(row)
+
+    def list_usage_events(
+        self,
+        workspace_id: str,
+        *,
+        limit: int = 100,
+        actor_id: str = "",
+        metric: str = "",
+    ) -> list[dict[str, Any]]:
+        normalized_workspace = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        with self._db.local_engine.begin() as conn:
+            stmt = select(usage_events_table).where(usage_events_table.c.workspace_id == normalized_workspace)
+            if actor_id:
+                stmt = stmt.where(usage_events_table.c.actor_id == str(actor_id or "").strip())
+            if metric:
+                stmt = stmt.where(usage_events_table.c.metric == str(metric or "").strip())
+            rows = conn.execute(
+                stmt.order_by(usage_events_table.c.created_at.desc()).limit(max(1, int(limit or 100)))
+            ).mappings().all()
+        return [self._db._decode_usage_event_row(row) for row in rows]
+
+    def get_usage_event(self, event_id: str) -> dict[str, Any] | None:
+        normalized = str(event_id or "").strip()
+        if not normalized:
+            return None
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(usage_events_table).where(usage_events_table.c.event_id == normalized)
+            ).mappings().first()
+        return self._db._decode_usage_event_row(row) if row else None
+
+    def upsert_rate_limit_bucket(self, bucket_payload: dict[str, Any]) -> dict[str, Any]:
+        bucket_id = str(bucket_payload.get("bucket_id") or f"rl_{uuid.uuid4().hex[:12]}")
+        workspace_id = str(bucket_payload.get("workspace_id") or "local-workspace")
+        row = {
+            "bucket_id": bucket_id,
+            "workspace_id": workspace_id,
+            "actor_id": str(bucket_payload.get("actor_id") or ""),
+            "metric": str(bucket_payload.get("metric") or ""),
+            "bucket_type": str(bucket_payload.get("bucket_type") or "request_minute"),
+            "bucket_key": str(bucket_payload.get("bucket_key") or ""),
+            "request_count": max(0, int(bucket_payload.get("request_count") or 0)),
+            "credit_spend": max(0, int(bucket_payload.get("credit_spend") or 0)),
+            "hard_cap": max(0, int(bucket_payload.get("hard_cap") or 0)),
+            "soft_cap": max(0, int(bucket_payload.get("soft_cap") or 0)),
+            "status": str(bucket_payload.get("status") or "open"),
+            "last_allowed_at": float(bucket_payload.get("last_allowed_at") or 0.0),
+            "last_blocked_at": float(bucket_payload.get("last_blocked_at") or 0.0),
+            "last_reason": str(bucket_payload.get("last_reason") or ""),
+            "metadata_json": _json_dumps(dict(bucket_payload.get("metadata") or {})),
+            "created_at": float(bucket_payload.get("created_at") or _now()),
+            "updated_at": float(bucket_payload.get("updated_at") or _now()),
+        }
+        with self._db.local_engine.begin() as conn:
+            existing = conn.execute(
+                select(rate_limit_buckets_table.c.bucket_id).where(rate_limit_buckets_table.c.bucket_id == bucket_id)
+            ).first()
+            if existing:
+                current = conn.execute(
+                    select(rate_limit_buckets_table).where(rate_limit_buckets_table.c.bucket_id == bucket_id)
+                ).mappings().first()
+                if current:
+                    row["created_at"] = float(current.get("created_at") or row["created_at"])
+                conn.execute(
+                    rate_limit_buckets_table.update()
+                    .where(rate_limit_buckets_table.c.bucket_id == bucket_id)
+                    .values(**row)
+                )
+            else:
+                conn.execute(rate_limit_buckets_table.insert().values(**row))
+        return self._db._decode_rate_limit_bucket_row(row)
+
+    def get_rate_limit_bucket(self, bucket_id: str) -> dict[str, Any] | None:
+        normalized = str(bucket_id or "").strip()
+        if not normalized:
+            return None
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(rate_limit_buckets_table).where(rate_limit_buckets_table.c.bucket_id == normalized)
+            ).mappings().first()
+        return self._db._decode_rate_limit_bucket_row(row) if row else None
+
+    def list_rate_limit_buckets(
+        self,
+        workspace_id: str,
+        *,
+        limit: int = 50,
+        bucket_type: str = "",
+    ) -> list[dict[str, Any]]:
+        normalized_workspace = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        with self._db.local_engine.begin() as conn:
+            stmt = select(rate_limit_buckets_table).where(rate_limit_buckets_table.c.workspace_id == normalized_workspace)
+            if bucket_type:
+                stmt = stmt.where(rate_limit_buckets_table.c.bucket_type == str(bucket_type or "").strip())
+            rows = conn.execute(
+                stmt.order_by(rate_limit_buckets_table.c.updated_at.desc()).limit(max(1, int(limit or 50)))
+            ).mappings().all()
+        return [self._db._decode_rate_limit_bucket_row(row) for row in rows]
 
     def get_usage(self, usage_id: str) -> dict[str, Any] | None:
         normalized = str(usage_id or "").strip()
@@ -1931,9 +2154,11 @@ class BillingRepository:
         reference_id = str(session_payload.get("reference_id") or "").strip()
         if not reference_id:
             raise RuntimeError("billing_checkout_reference_required")
+        workspace_id = str(session_payload.get("workspace_id") or "local-workspace").strip() or "local-workspace"
+        self.upsert_workspace({"workspace_id": workspace_id})
         values = {
             "reference_id": reference_id,
-            "workspace_id": str(session_payload.get("workspace_id") or "local-workspace").strip() or "local-workspace",
+            "workspace_id": workspace_id,
             "mode": str(session_payload.get("mode") or "subscription").strip() or "subscription",
             "catalog_id": str(session_payload.get("catalog_id") or "").strip(),
             "provider": str(session_payload.get("provider") or "iyzico").strip() or "iyzico",
@@ -6265,6 +6490,61 @@ class RuntimeDatabase:
             "reference_id": str(row.get("reference_id") or ""),
             "metadata": _json_loads(row.get("metadata_json"), {}),
             "created_at": float(row.get("created_at") or 0.0),
+        }
+
+    @staticmethod
+    def _decode_usage_event_row(row: dict[str, Any] | None) -> dict[str, Any]:
+        if not row:
+            return {}
+        return {
+            "event_id": str(row.get("event_id") or ""),
+            "workspace_id": str(row.get("workspace_id") or "local-workspace"),
+            "actor_id": str(row.get("actor_id") or ""),
+            "session_id": str(row.get("session_id") or ""),
+            "run_id": str(row.get("run_id") or ""),
+            "usage_id": str(row.get("usage_id") or ""),
+            "metric": str(row.get("metric") or "unknown"),
+            "event_type": str(row.get("event_type") or "usage"),
+            "status": str(row.get("status") or "recorded"),
+            "reference_id": str(row.get("reference_id") or ""),
+            "provider": str(row.get("provider") or ""),
+            "model_name": str(row.get("model_name") or ""),
+            "priority": str(row.get("priority") or "normal"),
+            "input_tokens": int(row.get("input_tokens") or 0),
+            "output_tokens": int(row.get("output_tokens") or 0),
+            "reasoning_tokens": int(row.get("reasoning_tokens") or 0),
+            "tool_calls": int(row.get("tool_calls") or 0),
+            "memory_ops": int(row.get("memory_ops") or 0),
+            "prompt_length": int(row.get("prompt_length") or 0),
+            "estimated_credits": int(row.get("estimated_credits") or 0),
+            "actual_credits": int(row.get("actual_credits") or 0),
+            "bucket": str(row.get("bucket") or ""),
+            "metadata": _json_loads(row.get("metadata_json"), {}),
+            "created_at": float(row.get("created_at") or 0.0),
+        }
+
+    @staticmethod
+    def _decode_rate_limit_bucket_row(row: dict[str, Any] | None) -> dict[str, Any]:
+        if not row:
+            return {}
+        return {
+            "bucket_id": str(row.get("bucket_id") or ""),
+            "workspace_id": str(row.get("workspace_id") or "local-workspace"),
+            "actor_id": str(row.get("actor_id") or ""),
+            "metric": str(row.get("metric") or ""),
+            "bucket_type": str(row.get("bucket_type") or "request_minute"),
+            "bucket_key": str(row.get("bucket_key") or ""),
+            "request_count": int(row.get("request_count") or 0),
+            "credit_spend": int(row.get("credit_spend") or 0),
+            "hard_cap": int(row.get("hard_cap") or 0),
+            "soft_cap": int(row.get("soft_cap") or 0),
+            "status": str(row.get("status") or "open"),
+            "last_allowed_at": float(row.get("last_allowed_at") or 0.0),
+            "last_blocked_at": float(row.get("last_blocked_at") or 0.0),
+            "last_reason": str(row.get("last_reason") or ""),
+            "metadata": _json_loads(row.get("metadata_json"), {}),
+            "created_at": float(row.get("created_at") or 0.0),
+            "updated_at": float(row.get("updated_at") or 0.0),
         }
 
     def _decode_workspace_inbox_event_row(self, row: dict[str, Any]) -> dict[str, Any]:

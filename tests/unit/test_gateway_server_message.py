@@ -45,6 +45,30 @@ class _StatusRouter:
         return {"telegram": {"ok": True}, "slack": {"ok": False}}
 
 
+def _install_fake_llm_setup(monkeypatch, *, lane_ready: bool = True, probe_model: str = "llama3.2:3b"):
+    fake_llm_setup = types.ModuleType("core.llm_setup")
+
+    class _FakeSetup:
+        async def get_all_provider_status(self):
+            return [
+                {"provider": "ollama", "status": "ready" if lane_ready else "degraded"},
+                {"provider": "openai", "status": "auth_required"},
+            ]
+
+        async def ollama_status(self):
+            return {
+                "running": True,
+                "lane_ready": lane_ready,
+                "probe_model": probe_model,
+                "probe_error": "" if lane_ready else "Ollama lane probe failed",
+                "models": [],
+                "recommended": [],
+            }
+
+    fake_llm_setup.get_llm_setup = lambda: _FakeSetup()
+    monkeypatch.setitem(sys.modules, "core.llm_setup", fake_llm_setup)
+
+
 class _StatusCron:
     class _Sched:
         @staticmethod
@@ -453,7 +477,9 @@ async def test_handle_v1_system_platforms_returns_connected_channel_summary(monk
 
 @pytest.mark.asyncio
 async def test_handle_v1_system_overview_aggregates_readiness_platforms_and_skills(monkeypatch):
-    async def _fake_home():
+    _install_fake_llm_setup(monkeypatch, lane_ready=True)
+
+    async def _fake_home(request=None):
         return {
             "readiness": {
                 "elyan_ready": True,
@@ -467,20 +493,13 @@ async def test_handle_v1_system_overview_aggregates_readiness_platforms_and_skil
                 "bluebubbles_ready": False,
                 "whatsapp_mode": "bridge",
                 "apple_permissions": {"automation": True, "screen_capture": True},
-            }
+            },
+            "billing": {
+                "plan": {"id": "free", "label": "Free", "status": "active"},
+                "reset_at": 1713000000.0,
+                "top_cost_sources": [{"source": "gpt-4o", "credits": 9}],
+            },
         }
-
-    fake_llm_setup = types.ModuleType("core.llm_setup")
-
-    class _FakeSetup:
-        async def get_all_provider_status(self):
-            return [{"provider": "ollama", "status": "ready"}, {"provider": "openai", "status": "auth_required"}]
-
-        async def ollama_status(self):
-            return {"running": True}
-
-    fake_llm_setup.get_llm_setup = lambda: _FakeSetup()
-    monkeypatch.setitem(sys.modules, "core.llm_setup", fake_llm_setup)
     monkeypatch.setattr(
         gateway_server.elyan_config,
         "get",
@@ -502,6 +521,7 @@ async def test_handle_v1_system_overview_aggregates_readiness_platforms_and_skil
     assert payload["providers"]["summary"]["available"] == 1
     assert payload["providers"]["summary"]["auth_required"] == 1
     assert payload["ollama"]["ready"] is True
+    assert payload["billing"]["plan"]["label"] == "Free"
 
 
 @pytest.mark.asyncio
@@ -796,6 +816,94 @@ async def test_handle_status_treats_webchat_online_and_optional_whatsapp_as_non_
 
 
 @pytest.mark.asyncio
+async def test_handle_status_treats_whatsapp_bridge_not_ready_as_optional(monkeypatch):
+    monkeypatch.setattr(
+        gateway_server,
+        "_get_runtime_model_info",
+        lambda: {"active_model": "gpt-4o", "active_provider": "openai"},
+    )
+
+    class _Health:
+        status = "ok"
+        issues = []
+        cpu_percent = 5
+        ram_percent = 12
+        disk_percent = 20
+        battery_percent = 100
+        is_on_ac = True
+
+    class _Mon:
+        @staticmethod
+        def get_health_snapshot():
+            return _Health()
+
+    import core.monitoring as monitoring
+    monkeypatch.setattr(monitoring, "get_resource_monitor", lambda: _Mon())
+    monkeypatch.setattr(
+        gateway_server,
+        "get_personalization_manager",
+        lambda: SimpleNamespace(get_status=lambda: {"enabled": True}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_model_runtime",
+        lambda: SimpleNamespace(snapshot=lambda: {"enabled": True}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_outcome_store",
+        lambda: SimpleNamespace(stats=lambda: {"outcomes": 0}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_regression_evaluator",
+        lambda: SimpleNamespace(summary=lambda: {"verification_pass_rate": 1.0}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_learning_control_plane",
+        lambda: SimpleNamespace(get_status=lambda: {"personalization": {"enabled": True}}),
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_runtime_control_plane",
+        lambda: SimpleNamespace(get_status=lambda: {"enabled": True, "sync": {"sessions": 1}}),
+    )
+
+    class _Router:
+        @staticmethod
+        def get_adapter_status():
+            return {
+                "webchat": "online (0 clients)",
+                "telegram": "connected",
+                "whatsapp": "disconnected",
+            }
+
+        @staticmethod
+        def get_adapter_health():
+            return {
+                "webchat": {"status": "error", "last_error": "status=online (0 clients)"},
+                "telegram": {"status": "connected"},
+                "whatsapp": {
+                    "status": "error",
+                    "last_error": "WhatsApp bridge hazır değil. QR eşleşmesi için: `elyan channels login whatsapp`",
+                },
+            }
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    srv.router = _Router()
+    srv.cron = _StatusCron()
+
+    resp = await gateway_server.ElyanGatewayServer.handle_status(srv, SimpleNamespace())
+    payload = json.loads(resp.text)
+
+    assert payload["runtime_health"]["status"] == "healthy"
+    assert payload["runtime_health"]["channels"]["healthy"] == 2
+    assert payload["runtime_health"]["channels"]["optional"] == 1
+    assert payload["runtime_health"]["channels"]["degraded"] == 0
+
+
+@pytest.mark.asyncio
 async def test_handle_status_treats_telegram_conflict_as_optional_for_core_runtime(monkeypatch):
     monkeypatch.setattr(
         gateway_server,
@@ -959,9 +1067,8 @@ async def test_handle_privacy_summary_and_export(monkeypatch):
     monkeypatch.setattr(
         gateway_server.ElyanGatewayServer,
         "_require_user_session",
-        lambda self, request, allow_cookie=True: (True, "", {"user_id": "user-42"}),
+        lambda self, request, allow_cookie=True: (True, "", {"user_id": "user-42", "workspace_id": "workspace-a"}),
     )
-    monkeypatch.setattr(gateway_server.ElyanGatewayServer, "_workspace_id", lambda self, request, payload=None: "workspace-a")
     monkeypatch.setattr(
         gateway_server,
         "get_learning_control_plane",
@@ -972,8 +1079,12 @@ async def test_handle_privacy_summary_and_export(monkeypatch):
     )
 
     srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
-    summary_resp = await gateway_server.ElyanGatewayServer.handle_privacy_summary(srv, _Req({}))
-    export_resp = await gateway_server.ElyanGatewayServer.handle_privacy_export(srv, _Req({}))
+    summary_req = _Req({})
+    summary_req.rel_url = SimpleNamespace(query={"user_id": "user-42", "workspace_id": "workspace-evil"})
+    export_req = _Req({})
+    export_req.rel_url = SimpleNamespace(query={"user_id": "user-42", "workspace_id": "workspace-evil"})
+    summary_resp = await gateway_server.ElyanGatewayServer.handle_privacy_summary(srv, summary_req)
+    export_resp = await gateway_server.ElyanGatewayServer.handle_privacy_export(srv, export_req)
 
     summary_payload = json.loads(summary_resp.text)
     export_payload = json.loads(export_resp.text)
@@ -985,7 +1096,28 @@ async def test_handle_privacy_summary_and_export(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_handle_privacy_summary_requires_workspace_context(monkeypatch):
+    monkeypatch.setattr(
+        gateway_server.ElyanGatewayServer,
+        "_require_user_session",
+        lambda self, request, allow_cookie=True: (True, "", {"user_id": "user-42"}),
+    )
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    req = _Req({})
+    req.rel_url = SimpleNamespace(query={"user_id": "user-42"})
+    resp = await gateway_server.ElyanGatewayServer.handle_privacy_summary(srv, req)
+    payload = json.loads(resp.text)
+
+    assert resp.status == 403
+    assert payload["success"] is False
+    assert payload["error"] == "workspace_context_required"
+
+
+@pytest.mark.asyncio
 async def test_handle_product_home_aggregates_readiness_and_reports(monkeypatch):
+    _install_fake_llm_setup(monkeypatch, lane_ready=True)
+
     monkeypatch.setattr(
         gateway_server,
         "_get_runtime_model_info",
@@ -1080,17 +1212,20 @@ async def test_handle_product_home_aggregates_readiness_and_reports(monkeypatch)
     srv.handle_tasks = _tasks
     srv.handle_recent_runs = _runs
 
-    resp = await gateway_server.ElyanGatewayServer.handle_product_home(srv, SimpleNamespace())
+    resp = await gateway_server.ElyanGatewayServer.handle_product_home(srv, _Req({}))
     payload = json.loads(resp.text)
     assert payload["ok"] is True
-    assert payload["readiness"]["elyan_ready"] is True
+    assert payload["readiness"]["elyan_ready"] is False
     assert payload["readiness"]["bluebubbles_ready"] is True
     assert payload["readiness"]["whatsapp_mode"] == "cloud"
     assert payload["readiness"]["productivity_apps_ready"] is True
     assert payload["readiness"]["learning_queue"]["total"] == 3
+    assert payload["readiness"]["model_lane_ready"] is True
     assert payload["readiness"]["channel_connected"] is True
     assert payload["readiness"]["has_routine"] is True
     assert payload["readiness"]["has_daily_summary_run"] is True
+    assert payload["readiness"]["launch_ready"] is False
+    assert "Learned draft review" in payload["readiness"]["launch_blockers"]
     assert payload["benchmark"]["pass_count"] == 20
     assert payload["preset_workflows"]
     assert payload["recent_workflow_reports"][0]["workflow_name"] == "Telegram-triggered desktop task completion"
@@ -1127,6 +1262,8 @@ def test_sync_all_routines_to_cron_skips_bad_routine_and_cleans_stale_jobs(monke
 
 @pytest.mark.asyncio
 async def test_handle_product_health_stays_ready_without_benchmark_when_core_runtime_is_healthy(monkeypatch):
+    _install_fake_llm_setup(monkeypatch, lane_ready=True)
+
     monkeypatch.setattr(
         gateway_server,
         "_get_runtime_model_info",
@@ -1153,6 +1290,31 @@ async def test_handle_product_health_stays_ready_without_benchmark_when_core_run
     )
     monkeypatch.setattr(gateway_server, "is_setup_complete", lambda: True)
     monkeypatch.setattr(gateway_server.importlib.util, "find_spec", lambda name: object() if name == "playwright" else None)
+    monkeypatch.setattr(
+        gateway_server.routine_engine,
+        "list_routines",
+        lambda: [
+            {
+                "id": "routine-1",
+                "name": "personal-daily-summary",
+                "template_id": "personal-daily-summary",
+                "run_count": 1,
+                "history": [{"status": "completed"}],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_runtime_database",
+        lambda: SimpleNamespace(
+            auth_sessions=SimpleNamespace(get_latest_session=lambda: {"workspace_id": "workspace-a", "user_id": "user-1"}),
+            learning=SimpleNamespace(
+                list_preference_updates=lambda **kwargs: [],
+                list_skill_drafts=lambda **kwargs: [],
+                list_routine_drafts=lambda **kwargs: [],
+            ),
+        ),
+    )
 
     async def _status(_request):
         return gateway_server.web.json_response(
@@ -1161,7 +1323,7 @@ async def test_handle_product_health_stays_ready_without_benchmark_when_core_run
                 "runtime_health": {"status": "healthy"},
                 "health_status": "ok",
                 "version": "18.0.0",
-                "adapters": {"telegram": "unavailable", "webchat": "online (0 clients)"},
+                "adapters": {"telegram": "unavailable", "webchat": "online"},
             }
         )
 
@@ -1176,15 +1338,108 @@ async def test_handle_product_health_stays_ready_without_benchmark_when_core_run
     srv.handle_tasks = _tasks
     srv.handle_recent_runs = _runs
 
-    resp = await gateway_server.ElyanGatewayServer.handle_product_health(srv, SimpleNamespace())
+    resp = await gateway_server.ElyanGatewayServer.handle_product_health(srv, _Req({}))
     payload = json.loads(resp.text)
 
     assert payload["ok"] is True
     assert payload["status"] == "ready"
     assert payload["readiness"]["elyan_ready"] is True
     assert payload["readiness"]["telegram_ready"] is False
+    assert payload["readiness"]["model_lane_ready"] is True
+    assert payload["readiness"]["launch_ready"] is True
+    assert payload["readiness"]["launch_blockers"] == []
     assert payload["protocol_version"] == "elyan-cowork-v1"
     assert payload["runtime"]["protocol_version"] == "elyan-cowork-v1"
+
+
+@pytest.mark.asyncio
+async def test_handle_product_health_reports_launch_blockers_when_channel_is_missing(monkeypatch):
+    _install_fake_llm_setup(monkeypatch, lane_ready=True)
+
+    monkeypatch.setattr(
+        gateway_server,
+        "_get_runtime_model_info",
+        lambda: {"active_model": "gpt-4o", "active_provider": "openai"},
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "load_latest_benchmark_summary",
+        lambda: {
+            "pass_count": 0,
+            "total": 0,
+            "average_retries": 0.0,
+            "average_replans": 0.0,
+            "remaining_failure_codes": [],
+            "last_benchmark_timestamp": "",
+            "report_root": "",
+        },
+    )
+    monkeypatch.setattr(gateway_server, "list_emre_workflow_reports", lambda limit=8: [])
+    monkeypatch.setattr(
+        gateway_server,
+        "_check_macos_permissions",
+        lambda: {"is_macos": True, "osascript_available": True, "screencapture_available": True},
+    )
+    monkeypatch.setattr(gateway_server, "is_setup_complete", lambda: True)
+    monkeypatch.setattr(gateway_server.importlib.util, "find_spec", lambda name: object() if name == "playwright" else None)
+    monkeypatch.setattr(
+        gateway_server.routine_engine,
+        "list_routines",
+        lambda: [
+            {
+                "id": "routine-1",
+                "name": "personal-daily-summary",
+                "template_id": "personal-daily-summary",
+                "run_count": 1,
+                "history": [{"status": "completed"}],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_runtime_database",
+        lambda: SimpleNamespace(
+            auth_sessions=SimpleNamespace(get_latest_session=lambda: {"workspace_id": "workspace-a", "user_id": "user-1"}),
+            learning=SimpleNamespace(
+                list_preference_updates=lambda **kwargs: [],
+                list_skill_drafts=lambda **kwargs: [],
+                list_routine_drafts=lambda **kwargs: [],
+            ),
+        ),
+    )
+
+    async def _status(_request):
+        return gateway_server.web.json_response(
+            {
+                "status": "online",
+                "runtime_health": {"status": "healthy"},
+                "health_status": "ok",
+                "version": "18.0.0",
+                "adapters": {"telegram": "unavailable", "webchat": "offline"},
+            }
+        )
+
+    async def _tasks(_request):
+        return gateway_server.web.json_response({"active": [], "history": []})
+
+    async def _runs(_request):
+        return gateway_server.web.json_response({"runs": [], "count": 0})
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    srv.handle_status = _status
+    srv.handle_tasks = _tasks
+    srv.handle_recent_runs = _runs
+
+    resp = await gateway_server.ElyanGatewayServer.handle_product_health(srv, _Req({}))
+    payload = json.loads(resp.text)
+
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload["readiness"]["elyan_ready"] is False
+    assert payload["readiness"]["model_lane_ready"] is True
+    assert payload["readiness"]["launch_ready"] is False
+    assert payload["readiness"]["launch_blockers"] == ["Channel connection readiness"]
+    assert payload["protocol_version"] == "elyan-cowork-v1"
 
 
 @pytest.mark.asyncio
@@ -1375,6 +1630,55 @@ def test_require_user_session_rejects_query_param_token(monkeypatch, tmp_path):
     assert session == {}
 
 
+def test_require_user_session_rate_limits_invalid_session_attempts(monkeypatch):
+    gateway_server._clear_auth_failures("127.0.0.1")
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+
+    try:
+        for _ in range(20):
+            req = _Req({})
+            req.path = "/api/v1/auth/me"
+            req.headers["X-Elyan-Session-Token"] = "expired-token"
+            allowed, error, session = gateway_server.ElyanGatewayServer._require_user_session(srv, req, allow_cookie=False)
+            assert allowed is False
+            assert error == "invalid or expired session"
+            assert session == {}
+
+        req = _Req({})
+        req.path = "/api/v1/auth/me"
+        req.headers["X-Elyan-Session-Token"] = "expired-token"
+        allowed, error, session = gateway_server.ElyanGatewayServer._require_user_session(srv, req, allow_cookie=False)
+    finally:
+        gateway_server._clear_auth_failures("127.0.0.1")
+
+    assert allowed is False
+    assert error == "too many invalid session attempts, try again later"
+    assert session == {}
+
+
+def test_cookie_policy_respects_production_overrides(monkeypatch):
+    monkeypatch.setenv("ELYAN_ENV", "production")
+    monkeypatch.delenv("ELYAN_COOKIE_SECURE", raising=False)
+    monkeypatch.delenv("ELYAN_COOKIE_SAMESITE", raising=False)
+    monkeypatch.delenv("ELYAN_COOKIE_DOMAIN", raising=False)
+
+    policy = gateway_server._cookie_policy()
+
+    assert policy["secure"] is True
+    assert policy["samesite"] == "Strict"
+    assert policy["domain"] is None
+
+    monkeypatch.setenv("ELYAN_COOKIE_SECURE", "0")
+    monkeypatch.setenv("ELYAN_COOKIE_SAMESITE", "lax")
+    monkeypatch.setenv("ELYAN_COOKIE_DOMAIN", "localhost")
+
+    overridden = gateway_server._cookie_policy()
+
+    assert overridden["secure"] is False
+    assert overridden["samesite"] == "Lax"
+    assert overridden["domain"] == "localhost"
+
+
 @pytest.mark.asyncio
 async def test_handle_v1_auth_me_uses_cookie_session_without_echoing_token(monkeypatch):
     session = {
@@ -1445,6 +1749,73 @@ async def test_handle_v1_auth_logout_clears_cookie_without_echoing_token(monkeyp
     assert "X-Elyan-Session-Token" not in resp.headers
     assert "elyan_user_session" in resp.cookies
     assert resp.cookies["elyan_user_session"].value == ""
+
+
+@pytest.mark.asyncio
+async def test_handle_v1_auth_bootstrap_login_me_and_logout_round_trip(monkeypatch, tmp_path):
+    monkeypatch.setenv("ELYAN_DATA_DIR", str(tmp_path / "elyan"))
+    monkeypatch.setenv("ELYAN_RUNTIME_DB_PATH", str(tmp_path / "elyan" / "db" / "runtime.sqlite3"))
+    reset_runtime_database()
+    runtime_db = get_runtime_database()
+    monkeypatch.setattr(gateway_server, "get_runtime_database", lambda: runtime_db)
+    monkeypatch.setattr(gateway_server, "mark_setup_complete", lambda *args, **kwargs: None)
+
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    bootstrap_req = _Req(
+        {
+            "email": "owner@example.com",
+            "password": "TopSecret123",
+            "display_name": "Owner",
+            "workspace_id": "workspace-local",
+        }
+    )
+    bootstrap_req.path = "/api/v1/auth/bootstrap-owner"
+    login_req = _Req(
+        {
+            "email": "owner@example.com",
+            "password": "TopSecret123",
+            "workspace_id": "workspace-local",
+        }
+    )
+    login_req.path = "/api/v1/auth/login"
+
+    try:
+        bootstrap_resp = await gateway_server.ElyanGatewayServer.handle_v1_auth_bootstrap_owner(srv, bootstrap_req)
+        bootstrap_payload = json.loads(bootstrap_resp.text)
+        login_resp = await gateway_server.ElyanGatewayServer.handle_v1_auth_login(srv, login_req)
+        login_payload = json.loads(login_resp.text)
+        session_token = login_payload["session_token"]
+
+        me_req = _Req({})
+        me_req.path = "/api/v1/auth/me"
+        me_req.cookies["elyan_user_session"] = session_token
+        me_resp = await gateway_server.ElyanGatewayServer.handle_v1_auth_me(srv, me_req)
+        me_payload = json.loads(me_resp.text)
+
+        logout_req = _Req({})
+        logout_req.path = "/api/v1/auth/logout"
+        logout_req.cookies["elyan_user_session"] = session_token
+        logout_resp = await gateway_server.ElyanGatewayServer.handle_v1_auth_logout(srv, logout_req)
+        logout_payload = json.loads(logout_resp.text)
+
+        me_after_logout_req = _Req({})
+        me_after_logout_req.path = "/api/v1/auth/me"
+        me_after_logout_req.cookies["elyan_user_session"] = session_token
+        me_after_logout_resp = await gateway_server.ElyanGatewayServer.handle_v1_auth_me(srv, me_after_logout_req)
+        me_after_logout_payload = json.loads(me_after_logout_resp.text)
+    finally:
+        reset_runtime_database()
+
+    assert bootstrap_resp.status == 200
+    assert login_resp.status == 200
+    assert me_resp.status == 200
+    assert logout_resp.status == 200
+    assert me_after_logout_resp.status == 403
+    assert bootstrap_payload["user"]["email"] == "owner@example.com"
+    assert login_payload["user"]["email"] == "owner@example.com"
+    assert me_payload["user"]["email"] == "owner@example.com"
+    assert logout_payload["ok"] is True
+    assert me_after_logout_payload["error"] in {"invalid or expired session", "user session required"}
 
 
 @pytest.mark.asyncio
@@ -1601,11 +1972,13 @@ async def test_handle_product_workflow_run_returns_report(monkeypatch):
 @pytest.mark.asyncio
 async def test_handle_product_health_exposes_release_ready_summary(monkeypatch):
     srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+    captured = {}
 
-    async def _build():
+    async def _build(request=None):
+        captured["request"] = request
         return {
             "ok": True,
-            "readiness": {"elyan_ready": True, "desktop_operator_ready": True},
+            "readiness": {"elyan_ready": True, "desktop_operator_ready": True, "launch_ready": True, "launch_blockers": [], "model_lane_ready": True},
             "benchmark": {
                 "pass_count": 20,
                 "total": 20,
@@ -1617,10 +1990,46 @@ async def test_handle_product_health_exposes_release_ready_summary(monkeypatch):
         }
 
     srv._build_product_home_payload = _build
-    resp = await gateway_server.ElyanGatewayServer.handle_product_health(srv, SimpleNamespace())
+    resp = await gateway_server.ElyanGatewayServer.handle_product_health(srv, _Req({}))
     payload = json.loads(resp.text)
     assert payload["ok"] is True
     assert payload["status"] == "ready"
+    assert captured["request"] is not None
+
+
+@pytest.mark.asyncio
+async def test_handle_elyan_voice_trigger_rejects_locked_feature(monkeypatch):
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+
+    class _FakeStore:
+        def check_feature_access(self, workspace_id: str, feature: str):
+            return {
+                "allowed": False,
+                "feature": feature,
+                "plan_id": "free",
+                "upgrade_hint": {"message": "Upgrade for voice", "cta": "Upgrade"},
+            }
+
+    srv._workspace_id = lambda request, payload=None: "workspace-a"
+    srv._require_workspace_access = lambda request, workspace_id: (True, "")
+    srv._workspace_billing = lambda: _FakeStore()
+
+    req = SimpleNamespace(
+        match_info={},
+        rel_url=SimpleNamespace(query={}),
+        headers={},
+        cookies={},
+        remote="127.0.0.1",
+        transport=None,
+    )
+
+    resp = await gateway_server.ElyanGatewayServer.handle_elyan_voice_trigger(srv, req)
+    payload = json.loads(resp.text)
+
+    assert resp.status == 402
+    assert payload["success"] is False
+    assert payload["feature_access"]["allowed"] is False
+    assert payload["upgrade_hint"]["message"] == "Upgrade for voice"
 
 
 @pytest.mark.asyncio

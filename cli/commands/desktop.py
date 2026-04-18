@@ -42,7 +42,7 @@ def _ensure_gateway_ready(project_root: Path) -> None:
     from cli.commands import gateway
 
     port = int(os.environ.get("ELYAN_PORT", "18789") or "18789")
-    status = gateway._fetch_gateway_status(port)
+    status = gateway._fetch_gateway_launch_health(port)
     if status.get("ok"):
         return
 
@@ -51,7 +51,7 @@ def _ensure_gateway_ready(project_root: Path) -> None:
 
     deadline = time.time() + 20.0
     while time.time() < deadline:
-        probe = gateway._fetch_gateway_status(port)
+        probe = gateway._fetch_gateway_launch_health(port)
         if probe.get("ok"):
             print(f"✅ Runtime hazır · http://127.0.0.1:{port}")
             return

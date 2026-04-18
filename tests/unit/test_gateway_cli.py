@@ -16,11 +16,13 @@ def test_gateway_status_json_contains_runtime_data(monkeypatch, tmp_path: Path, 
     )
     monkeypatch.setattr(
         gateway,
-        "_fetch_gateway_status",
+        "_fetch_gateway_launch_health",
         lambda port: {
             "ok": True,
             "data": {
-                "status": "online",
+                "ok": True,
+                "status": "ready",
+                "readiness": {"launch_ready": True, "launch_blockers": [], "elyan_ready": True},
                 "adapters": {"telegram": "connected"},
                 "adapter_health": {"telegram": {"retries": 0, "failures": 0}},
             },
@@ -48,7 +50,7 @@ def test_gateway_status_json_contains_runtime_data(monkeypatch, tmp_path: Path, 
 def test_gateway_health_unreachable_json(monkeypatch, capsys):
     monkeypatch.setattr(
         gateway,
-        "_fetch_gateway_status",
+        "_fetch_gateway_launch_health",
         lambda port: {"ok": False, "error": "connection refused"},
     )
     monkeypatch.setattr(gateway, "_running_gateway_pid", lambda port: None)
@@ -64,7 +66,7 @@ def test_gateway_health_unreachable_json(monkeypatch, capsys):
 def test_gateway_health_reports_starting_when_process_exists(monkeypatch, capsys):
     monkeypatch.setattr(
         gateway,
-        "_fetch_gateway_status",
+        "_fetch_gateway_launch_health",
         lambda port: {"ok": False, "error": "connection refused"},
     )
     monkeypatch.setattr(gateway, "_running_gateway_pid", lambda port: 45678)

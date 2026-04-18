@@ -68,6 +68,7 @@ class BillingUsageScope:
             "workspace_id": str(self.workspace_id or "").strip(),
             "usage_id": str(self.usage_id or "").strip(),
             "metric": str(self.metric or "").strip().lower(),
+            "actor_id": str((self.metadata or {}).get("actor_id") or "").strip(),
             "run_id": str(self.run_id or "").strip(),
             "mission_id": str(self.mission_id or "").strip(),
             "session_id": str(self.session_id or "").strip(),
@@ -158,6 +159,10 @@ def _finalize_scope(scope: BillingUsageScope) -> None:
 
     reconciliation_metadata = {
         "source": "pricing_tracker_scope",
+        "actor_id": summary["actor_id"],
+        "session_id": summary["session_id"],
+        "run_id": summary["run_id"],
+        "mission_id": summary["mission_id"],
         "prompt_tokens": summary["prompt_tokens"],
         "completion_tokens": summary["completion_tokens"],
         "total_tokens": summary["total_tokens"],
@@ -165,8 +170,6 @@ def _finalize_scope(scope: BillingUsageScope) -> None:
         "providers": list(summary["providers"]),
         "models": list(summary["models"]),
         "usage_samples": summary["usage_samples"],
-        "run_id": summary["run_id"],
-        "mission_id": summary["mission_id"],
     }
     try:
         result = _workspace_billing_store().reconcile_usage(

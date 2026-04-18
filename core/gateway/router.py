@@ -747,6 +747,9 @@ class GatewayRouter:
             workspace_id = self._workspace_id_for_message(message)
             source_type = normalize_intake_source(str(getattr(message, "channel_type", "") or "manual"))
             text = str(getattr(message, "text", "") or "").strip()
+            message_metadata = dict(getattr(message, "metadata", {}) or {})
+            trace_id = str(message_metadata.get("trace_id") or "").strip()
+            request_id = str(message_metadata.get("request_id") or "").strip()
             summary = extract_task_summary(
                 text,
                 source_type=source_type,
@@ -762,11 +765,17 @@ class GatewayRouter:
                 status="triaged",
                 metadata={
                     "captured_via": "channel_router",
+                    "message_id": str(getattr(message, "id", "") or "").strip(),
+                    "channel_type": str(getattr(message, "channel_type", "") or "").strip(),
                     "channel_id": str(getattr(message, "channel_id", "") or ""),
                     "user_id": str(getattr(message, "user_id", "") or ""),
                     "user_name": str(getattr(message, "user_name", "") or ""),
+                    "reply_to": str(getattr(message, "reply_to", "") or "").strip(),
                     "attachments": len(list(getattr(message, "attachments", []) or [])),
                     "message_timestamp": float(getattr(message, "timestamp", 0.0) or 0.0),
+                    "text_length": len(text),
+                    "trace_id": trace_id,
+                    "request_id": request_id,
                 },
             )
             billing = get_workspace_billing_store()
@@ -774,7 +783,18 @@ class GatewayRouter:
                 workspace_id,
                 "inbox_events",
                 1,
-                metadata={"event_id": event.get("event_id"), "source_type": source_type},
+                metadata={
+                    "event_id": event.get("event_id"),
+                    "source_type": source_type,
+                    "message_id": str(getattr(message, "id", "") or "").strip(),
+                    "channel_type": str(getattr(message, "channel_type", "") or "").strip(),
+                    "channel_id": str(getattr(message, "channel_id", "") or "").strip(),
+                    "user_id": str(getattr(message, "user_id", "") or "").strip(),
+                    "reply_to": str(getattr(message, "reply_to", "") or "").strip(),
+                    "trace_id": trace_id,
+                    "request_id": request_id,
+                    "text_length": len(text),
+                },
             )
             try:
                 billing.record_usage(
@@ -784,8 +804,11 @@ class GatewayRouter:
                     metadata={
                         "event_id": event.get("event_id"),
                         "source_type": source_type,
+                        "message_id": str(getattr(message, "id", "") or "").strip(),
                         "task_type": str(summary.get("task_type") or "cowork"),
                         "estimated_credits": 1,
+                        "trace_id": trace_id,
+                        "request_id": request_id,
                     },
                 )
             except RuntimeError as exc:
@@ -1322,10 +1345,38 @@ class GatewayRouter:
                 connected=False,
             )
 
+    @staticmethod
+    def _retry_schedule_from_config(cfg: dict[str, Any]) -> list[float] | None:
+        raw_schedule = cfg.get("reconnect_backoff_schedule_sec")
+        if isinstance(raw_schedule, (list, tuple)):
+            schedule: list[float] = []
+            for value in raw_schedule:
+                try:
+                    delay = max(0.5, float(value))
+                except Exception:
+                    continue
+                schedule.append(delay)
+            if schedule:
+                return schedule
+        return None
+
+    def _retry_delay_for_attempt(self, retry_count: int, cfg: dict[str, Any]) -> float:
+        schedule = self._retry_schedule_from_config(cfg)
+        if schedule:
+            index = min(max(0, int(retry_count) - 1), len(schedule) - 1)
+            return float(schedule[index])
+
+        if "reconnect_base_sec" in cfg or "reconnect_max_sec" in cfg:
+            base_retry = max(0.5, float(cfg.get("reconnect_base_sec", 2.0)))
+            max_retry = max(base_retry, float(cfg.get("reconnect_max_sec", 60.0)))
+            return min(max_retry, base_retry * (2 ** max(0, int(retry_count) - 1)))
+
+        default_schedule = [5.0, 10.0, 30.0, 60.0, 120.0, 300.0]
+        index = min(max(0, int(retry_count) - 1), len(default_schedule) - 1)
+        return float(default_schedule[index])
+
     async def _adapter_supervisor(self, channel_type: str, adapter: BaseChannelAdapter):
         cfg = getattr(adapter, "config", {}) or {}
-        base_retry = max(0.5, float(cfg.get("reconnect_base_sec", 2.0)))
-        max_retry = max(base_retry, float(cfg.get("reconnect_max_sec", 60.0)))
         health_interval = max(1.0, float(cfg.get("health_interval_sec", 10.0)))
         connect_grace = max(0.2, float(cfg.get("connect_grace_sec", 2.0)))
         retry_count = int(self._adapter_health.get(channel_type, {}).get("retries", 0))
@@ -1345,17 +1396,18 @@ class GatewayRouter:
 
             if status == "unavailable":
                 # Missing dependency etc. No aggressive reconnect loop.
+                retry_delay = max(300.0, self._retry_delay_for_attempt(max(1, retry_count + 1), cfg))
                 self._update_health(
                     channel_type,
                     status="unavailable",
                     connected=False,
-                    next_retry_in_s=max_retry,
+                    next_retry_in_s=round(retry_delay, 2),
                 )
-                await asyncio.sleep(max_retry)
+                await asyncio.sleep(retry_delay)
                 continue
 
             retry_count += 1
-            retry_delay = min(max_retry, base_retry * (2 ** max(0, retry_count - 1)))
+            retry_delay = self._retry_delay_for_attempt(retry_count, cfg)
             self._update_health(
                 channel_type,
                 status="reconnecting" if retry_count > 1 else "connecting",

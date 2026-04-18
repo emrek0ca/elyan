@@ -10,6 +10,8 @@ import tempfile
 import os
 import time
 from pathlib import Path
+import core.evidence.run_store as legacy_run_store
+import core.run_store as canonical_run_store
 from core.run_store import RunStore, RunRecord
 
 
@@ -70,6 +72,11 @@ class TestRunStore:
 
         assert Path(store.store_path) == (tmp_path / "runs").resolve()
         assert Path(store.telemetry_store.trace_path).parent == (tmp_path / "runs").resolve()
+
+    def test_legacy_run_store_module_redirects_to_canonical_module(self):
+        assert legacy_run_store is canonical_run_store
+        assert legacy_run_store.RunStore is canonical_run_store.RunStore
+        assert legacy_run_store.get_run_store is canonical_run_store.get_run_store
 
     @pytest.fixture
     def temp_store(self):

@@ -64,6 +64,13 @@ class DaemonManager:
     </array>
     <key>WorkingDirectory</key>
     <string>{self.project_root}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>ELYAN_PROJECT_DIR</key>
+        <string>{self.project_root}</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>

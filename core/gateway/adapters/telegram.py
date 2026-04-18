@@ -52,6 +52,8 @@ class TelegramAdapter(BaseChannelAdapter):
         self._is_connected = False
         if isinstance(error, Conflict) or "terminated by other getupdates request" in message.lower():
             self._polling_conflict = True
+            if not any(key in self.config for key in ("reconnect_backoff_schedule_sec", "reconnect_base_sec", "reconnect_max_sec")):
+                self.config["reconnect_backoff_schedule_sec"] = [30.0, 60.0, 120.0, 300.0]
             logger.warning("Telegram polling conflict algılandı; adapter pasif moda alındı.")
             try:
                 loop = asyncio.get_running_loop()

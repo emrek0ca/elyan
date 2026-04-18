@@ -21,8 +21,13 @@ const EXPECTED_PROTOCOL_VERSION: &str = "elyan-cowork-v1";
 #[derive(Default)]
 struct RuntimeProbeResult {
     reachable: bool,
+    launch_ready: Option<bool>,
+    runtime_ready: Option<bool>,
+    model_lane_ready: Option<bool>,
     runtime_version: Option<String>,
     runtime_protocol_version: Option<String>,
+    health_status: Option<String>,
+    launch_blockers: Vec<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -45,6 +50,11 @@ struct SidecarHealth {
     runtime_protocol_version: Option<String>,
     compatible: bool,
     compatibility_reason: Option<String>,
+    runtime_ready: Option<bool>,
+    model_lane_ready: Option<bool>,
+    launch_ready: Option<bool>,
+    launch_blockers: Vec<String>,
+    health_status: Option<String>,
     last_logs_export_path: Option<String>,
 }
 
@@ -68,6 +78,11 @@ impl Default for SidecarHealth {
             runtime_protocol_version: None,
             compatible: false,
             compatibility_reason: Some("runtime_offline".to_string()),
+            runtime_ready: None,
+            model_lane_ready: None,
+            launch_ready: None,
+            launch_blockers: Vec::new(),
+            health_status: None,
             last_logs_export_path: None,
         }
     }
@@ -246,12 +261,18 @@ impl SidecarSupervisor {
         let probe = self.probe_runtime(DEFAULT_PORT);
         self.set_health(|health| {
             let compatible = probe.runtime_protocol_version.as_deref() == Some(EXPECTED_PROTOCOL_VERSION);
+            let launch_ready = probe.launch_ready.unwrap_or(probe.reachable);
+            let runtime_ready = probe.runtime_ready.unwrap_or(launch_ready);
             health.runtime_url = runtime_url(DEFAULT_PORT);
             health.runtime_version = probe.runtime_version.clone();
             health.runtime_protocol_version = probe.runtime_protocol_version.clone();
             health.compatible = compatible;
             health.compatibility_reason = if compatible {
-                None
+                if launch_ready {
+                    None
+                } else {
+                    Some("launch_blocked".to_string())
+                }
             } else if probe.runtime_protocol_version.is_none() {
                 Some("runtime_protocol_missing".to_string())
             } else {
@@ -260,8 +281,22 @@ impl SidecarSupervisor {
             if health.pid.is_none() {
                 health.managed = false;
             }
-            health.status = if compatible { "healthy".to_string() } else { "degraded".to_string() };
-            health.last_ready_at = Some(now_stamp());
+            health.runtime_ready = Some(runtime_ready);
+            health.model_lane_ready = probe.model_lane_ready;
+            health.launch_ready = Some(launch_ready);
+            health.launch_blockers = probe.launch_blockers.clone();
+            health.health_status = probe.health_status.clone();
+            health.status = if compatible && launch_ready { "healthy".to_string() } else { "degraded".to_string() };
+            health.last_error = if compatible && launch_ready {
+                None
+            } else if !probe.launch_blockers.is_empty() {
+                Some(probe.launch_blockers.join("; "))
+            } else {
+                Some("Runtime launch gate not satisfied".to_string())
+            };
+            if compatible && launch_ready {
+                health.last_ready_at = Some(now_stamp());
+            }
             health.clone()
         })
     }
@@ -294,6 +329,22 @@ impl SidecarSupervisor {
                 };
                 if let Some((_, body)) = response.split_once("\r\n\r\n") {
                     if let Ok(json) = serde_json::from_str::<Value>(body) {
+                        result.launch_ready = json
+                            .get("ok")
+                            .and_then(Value::as_bool)
+                            .or_else(|| {
+                                json.get("readiness")
+                                    .and_then(|readiness| readiness.get("launch_ready"))
+                                    .and_then(Value::as_bool)
+                            });
+                        result.runtime_ready = json
+                            .get("readiness")
+                            .and_then(|readiness| readiness.get("elyan_ready"))
+                            .and_then(Value::as_bool);
+                        result.model_lane_ready = json
+                            .get("readiness")
+                            .and_then(|readiness| readiness.get("model_lane_ready"))
+                            .and_then(Value::as_bool);
                         result.runtime_version = json
                             .get("version")
                             .and_then(Value::as_str)
@@ -308,6 +359,29 @@ impl SidecarSupervisor {
                                     .and_then(Value::as_str)
                                     .map(|item| item.to_string())
                             });
+                        result.health_status = json
+                            .get("health_status")
+                            .and_then(Value::as_str)
+                            .map(|item| item.to_string())
+                            .or_else(|| {
+                                json.get("runtime")
+                                    .and_then(|runtime| runtime.get("health_status"))
+                                    .and_then(Value::as_str)
+                                    .map(|item| item.to_string())
+                            });
+                        result.launch_blockers = json
+                            .get("readiness")
+                            .and_then(|readiness| readiness.get("launch_blockers"))
+                            .and_then(Value::as_array)
+                            .map(|items| {
+                                items
+                                    .iter()
+                                    .filter_map(Value::as_str)
+                                    .map(|item| item.trim().to_string())
+                                    .filter(|item| !item.is_empty())
+                                    .collect::<Vec<String>>()
+                            })
+                            .unwrap_or_default();
                     }
                 }
                 result

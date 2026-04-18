@@ -195,4 +195,17 @@ class DecisionFabric:
         )
 
 
-__all__ = ["Decision", "DecisionFabric"]
+_decision_fabric_singleton: DecisionFabric | None = None
+
+
+def get_decision_fabric(storage_path: str | Path | None = None) -> DecisionFabric:
+    """Get or create the shared decision fabric instance."""
+    global _decision_fabric_singleton
+    if storage_path is not None:
+        return DecisionFabric(storage_path=storage_path)
+    if _decision_fabric_singleton is None:
+        _decision_fabric_singleton = DecisionFabric()
+    return _decision_fabric_singleton
+
+
+__all__ = ["Decision", "DecisionFabric", "get_decision_fabric"]

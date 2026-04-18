@@ -47,10 +47,10 @@ export function SwarmScreen() {
           </div>
           <div className="flex flex-wrap gap-2">
             <StatusBadge tone={data.activeContractCount > 0 ? "info" : "neutral"}>
-              {data.activeContractCount} active contracts
+              {`${data.activeContractCount} active contracts`}
             </StatusBadge>
             <StatusBadge tone={data.registeredAgents.length ? "success" : "neutral"}>
-              {data.registeredAgents.length} registered agents
+              {`${data.registeredAgents.length} registered agents`}
             </StatusBadge>
             <StatusBadge tone={handoffPending > 0 ? "warning" : "success"}>
               {handoffPending > 0 ? `${handoffPending} pending handoffs` : "handoffs clear"}
@@ -89,7 +89,7 @@ export function SwarmScreen() {
                     </div>
                   </div>
                   <StatusBadge tone={agent.currentLoad > 0 ? "info" : "neutral"}>
-                    {agent.currentLoad}/{agent.maxConcurrent}
+                    {`${agent.currentLoad}/${agent.maxConcurrent}`}
                   </StatusBadge>
                 </div>
                 <div className="mt-3 h-2 rounded-full bg-[var(--bg-surface)]">

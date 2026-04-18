@@ -18,6 +18,7 @@ from core.dependencies.autoinstall_hook import activate as _activate_autoinstall
 _activate_autoinstall_hook()
 
 from core.version import APP_VERSION
+from cli.commands.guide import render_install_to_ui_guide
 
 
 TOP_LEVEL_COMMANDS = [
@@ -65,6 +66,7 @@ TOP_LEVEL_COMMANDS = [
     "update",
     "version",
     "completion",
+    "billing",
     "subscription",
     "quota",
     "research",
@@ -98,6 +100,7 @@ SETUP_OPTIONAL_COMMANDS = {
     "packs",
     "cloudflare-agents",
     "opengauss",
+    "billing",
 }
 
 
@@ -184,11 +187,19 @@ def _print_cli_home() -> None:
         print(f"Active channels: {', '.join(active_channels)}")
 
     print("")
-    print("Quick start")
-    print("  elyan desktop")
+    render_install_to_ui_guide(
+        setup_ready=bool(default_model.get("provider")) and bool(default_model.get("model")),
+        gateway_running=gateway_running,
+        prefix="  ",
+    )
+    print("")
+    print("Commands")
+    print("  elyan setup")
     print("  elyan launch")
+    print("  elyan desktop")
     if not gateway_running:
-        print("  elyan gateway start --daemon")
+        print("  elyan start --daemon")
+        print("  elyan service install")
     print("  elyan status")
     print("  elyan bootstrap status")
     print("  elyan chat")
@@ -196,7 +207,6 @@ def _print_cli_home() -> None:
     print("")
     print("Core surfaces")
     print("  elyan agents")
-    print("  elyan desktop")
     print("  elyan research \"topic\"")
     print("  elyan files ls")
     print("  elyan settings")
@@ -776,6 +786,20 @@ def main(argv: list[str] | None = None):
     p.add_argument("--tier", choices=["free", "pro", "enterprise"])
     p.add_argument("--days", type=int, help="Geçerlilik süresi (gün)")
 
+    # ── billing ───────────────────────────────────────────────────────────
+    p = sub.add_parser("billing", help="Workspace credit, plan ve usage yönetimi")
+    p.add_argument("subcommand", nargs="?", choices=["status", "plans", "inspect", "grant", "reset-weekly", "backfill", "seats"], default="status")
+    p.add_argument("action", nargs="?", choices=["list", "assign", "release"], default="list")
+    p.add_argument("--workspace-id", dest="workspace_id", metavar="WORKSPACE_ID")
+    p.add_argument("--workspace", metavar="WORKSPACE_ID")
+    p.add_argument("--credits", type=int, help="Grant edilecek kredi miktarı")
+    p.add_argument("--reference-id", dest="reference_id", metavar="REFERENCE_ID")
+    p.add_argument("--actor-id", dest="actor_id", metavar="ACTOR_ID")
+    p.add_argument("--assigned-by", dest="assigned_by", metavar="ASSIGNED_BY")
+    p.add_argument("--bucket", metavar="BUCKET")
+    p.add_argument("--note", metavar="NOTE")
+    p.add_argument("--limit", type=int, default=10, help="Inspect sırasında gösterilecek kayıt sayısı")
+
     # ── quota ────────────────────────────────────────────────────────────
     p = sub.add_parser("quota", help="Kota ve kullanım takibi")
     p.add_argument("subcommand", nargs="?", choices=["status", "check"], default="status")
@@ -941,6 +965,10 @@ def main(argv: list[str] | None = None):
     elif args.command == "subscription":
         from cli.commands import subscription
         subscription.run(args)
+
+    elif args.command == "billing":
+        from cli.commands import billing
+        billing.run(args)
 
     elif args.command == "quota":
         from cli.commands import quota
@@ -1225,7 +1253,12 @@ def main(argv: list[str] | None = None):
 
     elif args.command == "desktop":
         from cli.commands import desktop
-        return int(desktop.open_desktop(detached=bool(getattr(args, "detached", False))))
+        result = int(desktop.open_desktop(detached=bool(getattr(args, "detached", False))))
+        if result == 0:
+            from cli.commands.guide import render_install_to_ui_guide
+
+            render_install_to_ui_guide(setup_ready=True, gateway_running=True, prefix="  ")
+        return result
 
     elif args.command == "dashboard":
         from cli.commands import dashboard

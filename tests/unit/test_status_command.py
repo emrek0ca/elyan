@@ -29,6 +29,8 @@ def test_status_prints_autopilot(monkeypatch, capsys, tmp_path):
     out = capsys.readouterr().out
     assert "Lansman:" in out
     assert "elyan setup --force" in out
+    assert "Kurulumdan UI'ya" in out
+    assert "bootstrap-owner -> login -> auth/me -> logout" in out
     assert "Autopilot:" in out
     assert "ACTIVE" in out
 
