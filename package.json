@@ -105,7 +105,7 @@
     "@types/pg": "^8.11.10",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "eslint": "^9",
+    "eslint": "^10",
     "eslint-config-next": "15.5.15",
     "tsx": "^4.21.0",
     "typescript": "^5",
