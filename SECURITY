@@ -1,0 +1,34 @@
+Security Policy
+
+Elyan is published as an open-source local-first agent with a narrow hosted control plane. Security issues are handled privately first.
+
+Supported versions
+
+- The current v1.x line is supported.
+- Security fixes are applied to the active release branch and backported when practical.
+
+How to report a vulnerability
+
+Use a private GitHub Security Advisory if available, or email support@elyan.dev.
+
+Include:
+
+- the affected surface
+- the version or commit you tested
+- reproduction steps
+- relevant logs or request/response details
+- whether the issue affects local runtime, hosted control plane, or release artifacts
+
+What we treat as security-sensitive
+
+- authentication or session bypass
+- token, key, or secret leakage
+- billing or entitlement bypass
+- SSRF, RCE, or arbitrary file access
+- unauthorized device linking or sync
+- webhook signature bypass
+- cross-origin or cache exposure of private control-plane data
+
+Disclosure expectation
+
+Please do not publish the report publicly until a fix or coordinated disclosure window is agreed.

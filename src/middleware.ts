@@ -1,22 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
+import {
+  applyCorsHeaders,
+  applyHeaderEntries,
+  getAllowedApiOrigins,
+  getBaseSecurityHeaders,
+  isAllowedApiOrigin,
+} from '@/lib/security';
 
-const ALLOWED_ORIGIN = 'https://elyan.dev';
-
-function applyCorsHeaders(response: NextResponse) {
-  response.headers.set('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
-  response.headers.set('Access-Control-Allow-Credentials', 'true');
-  response.headers.set(
-    'Access-Control-Allow-Methods',
-    'GET,POST,PUT,PATCH,DELETE,OPTIONS'
-  );
-  response.headers.set(
-    'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, X-Requested-With, X-CSRF-Token, X-IYZ-SIGNATURE-V3, x-elyan-device-token, x-elyan-device-id, next-auth.csrf-token, next-auth.callback-url'
-  );
-  response.headers.set('Access-Control-Max-Age', '86400');
-  response.headers.set('Vary', 'Origin');
-  return response;
-}
+const allowedApiOrigins = getAllowedApiOrigins();
 
 export function middleware(request: NextRequest) {
   if (!request.nextUrl.pathname.startsWith('/api/')) {
@@ -26,17 +17,27 @@ export function middleware(request: NextRequest) {
   const origin = request.headers.get('origin');
 
   if (request.method === 'OPTIONS') {
-    if (origin && origin !== ALLOWED_ORIGIN) {
-      return new NextResponse(null, { status: 403 });
+    if (origin && !isAllowedApiOrigin(origin, allowedApiOrigins)) {
+      const forbidden = new NextResponse(null, { status: 403 });
+      applyHeaderEntries(forbidden.headers, getBaseSecurityHeaders());
+      return forbidden;
     }
 
-    return applyCorsHeaders(new NextResponse(null, { status: 204 }));
+    const preflight = new NextResponse(null, { status: 204 });
+    applyHeaderEntries(preflight.headers, getBaseSecurityHeaders());
+
+    if (origin && isAllowedApiOrigin(origin, allowedApiOrigins)) {
+      applyCorsHeaders(preflight.headers, origin.trim());
+    }
+
+    return preflight;
   }
 
   const response = NextResponse.next();
+  applyHeaderEntries(response.headers, getBaseSecurityHeaders());
 
-  if (origin === ALLOWED_ORIGIN) {
-    applyCorsHeaders(response);
+  if (origin && isAllowedApiOrigin(origin, allowedApiOrigins)) {
+    applyCorsHeaders(response.headers, origin.trim());
   }
 
   return response;

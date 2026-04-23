@@ -3,24 +3,22 @@
   "version": "1.0.0",
   "description": "Elyan v1. Local-first personal agent runtime with dashboard and CLI management, shared control plane, hosted surface, and app-connected operator.",
   "private": false,
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "homepage": "https://elyan.dev",
   "repository": {
     "type": "git",
-    "url": "https://github.com/elyan-dev/elyan.git"
+    "url": "https://github.com/emrek0ca/elyan.git"
   },
   "bugs": {
-    "url": "https://github.com/elyan-dev/elyan/issues"
+    "url": "https://github.com/emrek0ca/elyan/issues"
   },
   "bin": {
     "elyan": "bin/elyan.js"
   },
   "files": [
     "README.md",
-    "DEPLOYMENT.md",
-    "PRODUCT_MODEL.md",
-    "PRICING.md",
-    "MCP_DEPLOYMENT.md",
+    "LICENSE",
+    "SECURITY",
     ".env.example",
     "Dockerfile",
     "bin",
@@ -32,6 +30,9 @@
   ],
   "engines": {
     "node": ">=20"
+  },
+  "overrides": {
+    "file-type": "^22.0.1"
   },
   "keywords": [
     "ai",
@@ -54,7 +55,8 @@
     "test:control-plane": "vitest run tests/control-plane.test.ts",
     "test:capabilities": "vitest run tests/capabilities*.test.ts",
     "test:smoke": "vitest run tests/capabilities.smoke.test.ts",
-    "mcp:validate": "vitest run tests/mcp.production.test.ts"
+    "mcp:validate": "vitest run tests/mcp.production.test.ts",
+    "audit:prod": "npm audit --omit=dev --audit-level=high"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.71",

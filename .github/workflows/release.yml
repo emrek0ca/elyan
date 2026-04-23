@@ -26,6 +26,9 @@ jobs:
       - name: Test
         run: npm run test
 
+      - name: Audit production dependencies
+        run: npm run audit:prod
+
       - name: Build
         run: npm run build
 

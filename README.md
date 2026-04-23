@@ -167,6 +167,18 @@ npm run test
 npm run build
 ```
 
+## License
+
+Elyan is licensed under `AGPL-3.0-or-later`.
+
+If you modify and deploy it as a network service, you must make the corresponding source available under the same terms.
+
+## Security
+
+- Public-facing hosted and control-plane routes use hardened HTTP headers and no-store defaults on private surfaces.
+- Do not commit secrets, tokens, or private credentials to the repository.
+- Report vulnerabilities privately through GitHub Security Advisories or `SECURITY` before public disclosure.
+
 ## Product Boundary
 
 Elyan v1 is not:

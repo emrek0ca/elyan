@@ -38,7 +38,7 @@ function getRepositorySlug() {
     return `${owner}/${repo}`;
   }
 
-  return process.env.GITHUB_REPOSITORY ?? 'elyan-dev/elyan';
+  return process.env.GITHUB_REPOSITORY ?? 'emrek0ca/elyan';
 }
 
 function hasRequiredAssets(assets: Array<{ name: string }>) {

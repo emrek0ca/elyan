@@ -13,7 +13,7 @@ export async function GET() {
       {
         ok: false,
         error: message,
-        repository: process.env.GITHUB_REPOSITORY ?? 'elyan-dev/elyan',
+        repository: process.env.GITHUB_REPOSITORY ?? 'emrek0ca/elyan',
       },
       { status: 503 }
     );

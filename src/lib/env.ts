@@ -9,6 +9,7 @@ const envSchema = z.object({
   ELYAN_MCP_SERVERS: z.string().optional(),
   ELYAN_DISABLED_MCP_SERVERS: z.string().optional(),
   ELYAN_DISABLED_MCP_TOOLS: z.string().optional(),
+  ELYAN_ALLOWED_ORIGINS: z.string().optional(),
   DATABASE_URL: z.string().optional(),
   PORT: z.string().optional(),
   NEXTAUTH_URL: z.string().url().optional(),
