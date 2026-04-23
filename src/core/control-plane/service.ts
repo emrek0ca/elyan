@@ -10,12 +10,20 @@ import {
   ControlPlaneInsufficientCreditsError,
   ControlPlaneNotFoundError,
   ControlPlaneProviderError,
+  ControlPlaneUsageLimitError,
   ControlPlaneValidationError,
 } from './errors';
 import { getIyzicoBillingClient, buildIyzicoPlanBinding, type IyzicoSubscriptionWebhook } from './iyzico';
 import { buildControlPlaneConnectionSnapshot, buildControlPlaneRuntimeSnapshot } from './runtime';
 import { FileControlPlaneStateStore, type ControlPlaneStateStore } from './store';
 import { PostgresControlPlaneStateStore } from './postgres-store';
+import {
+  advanceUsageSnapshot,
+  createUsageSnapshot,
+  describeUsageLimitDenial,
+  evaluateUsageConsumption,
+  normalizeUsageSnapshot,
+} from './usage';
 import type {
   ControlPlaneAccount,
   ControlPlaneAccountUpsertInput,
@@ -74,6 +82,18 @@ function createUsageTotals() {
     integrations: '0.00',
     evaluation: '0.00',
   };
+}
+
+function createAccountUsageSnapshot(
+  plan: ReturnType<typeof getControlPlanePlan>,
+  balanceCredits: Decimal.Value,
+  now = new Date(),
+  counters?: {
+    dailyRequests?: number;
+    dailyHostedToolActionCalls?: number;
+  }
+) {
+  return createUsageSnapshot(plan, balanceCredits, now, counters);
 }
 
 function splitDisplayName(displayName: string) {
@@ -149,6 +169,10 @@ function createEmptyAccount(
     entitlements: resolveEntitlements(plan, subscription),
     balanceCredits: '0.00',
     usageTotals: createUsageTotals(),
+    usageSnapshot: createAccountUsageSnapshot(plan, '0.00', new Date(createdAt), {
+      dailyRequests: 0,
+      dailyHostedToolActionCalls: 0,
+    }),
     createdAt,
     updatedAt: createdAt,
   };
@@ -262,9 +286,12 @@ function buildAccountView(state: ControlPlaneState, account: ControlPlaneAccount
     (signal) => signal.accountId === account.accountId
   );
   const recentEvaluationSignals = accountEvaluationSignals.slice(-10).reverse();
+  const plan = getControlPlanePlan(account.subscription.planId);
+  const usageSnapshot = normalizeUsageSnapshot(account.usageSnapshot, plan, account.balanceCredits);
 
   return {
     ...account,
+    usageSnapshot,
     plan: getControlPlanePlan(account.subscription.planId),
     processedWebhookEventCount: account.subscription.processedWebhookEventRefs.length,
     recentLedgerEntries: state.ledger
@@ -550,6 +577,9 @@ export class ControlPlaneService {
 
     const prepared = prepareUsageCharges(account, [input]);
     const charge = prepared.charges[0];
+    const plan = getControlPlanePlan(account.subscription.planId);
+    const usageSnapshot = normalizeUsageSnapshot(account.usageSnapshot, plan, account.balanceCredits);
+    const denial = evaluateUsageConsumption(usageSnapshot, 1, 1, prepared.balanceBefore, prepared.balanceAfter);
 
     if (!charge) {
       throw new ControlPlaneValidationError('Usage quote requires at least one charge');
@@ -563,8 +593,12 @@ export class ControlPlaneService {
       creditsDelta: formatCredits(charge.creditsDelta),
       balanceBefore: formatCredits(prepared.balanceBefore),
       balanceAfter: formatCredits(prepared.allowed ? prepared.balanceAfter : prepared.balanceBefore),
-      allowed: prepared.allowed,
-      denialReason: prepared.allowed ? undefined : 'insufficient credits',
+      allowed: prepared.allowed && denial.allowed,
+      denialReason: denial.denialReason ?? (prepared.allowed ? undefined : 'monthly_credits_exhausted'),
+      resetAt: denial.resetAt,
+      remainingRequests: denial.remainingRequests,
+      remainingHostedToolActionCalls: denial.remainingHostedToolActionCalls,
+      monthlyCreditsRemaining: denial.monthlyCreditsRemaining,
     };
   }
 
@@ -592,10 +626,20 @@ export class ControlPlaneService {
 
       this.assertHostedUsageAllowed(account);
 
+      const plan = getControlPlanePlan(account.subscription.planId);
+      const normalizedSnapshot = normalizeUsageSnapshot(account.usageSnapshot, plan, account.balanceCredits);
       const prepared = prepareUsageCharges(account, inputs);
       const now = new Date().toISOString();
+      const allowance = evaluateUsageConsumption(
+        normalizedSnapshot,
+        1,
+        inputs.length,
+        prepared.balanceBefore,
+        prepared.balanceAfter
+      );
 
-      if (!prepared.allowed) {
+      if (!allowance.allowed) {
+        const denial = describeUsageLimitDenial(allowance, plan);
         const denialEntries = prepared.charges.map((charge) =>
           createLedgerEntry({
             accountId,
@@ -606,16 +650,45 @@ export class ControlPlaneService {
             balanceAfter: formatCredits(prepared.balanceBefore),
             source: charge.input.source,
             requestId: charge.input.requestId,
-            note: charge.input.note ?? 'insufficient credits',
+            note: charge.input.note ?? denial?.message ?? 'hosted usage denied',
             createdAt: now,
           })
         );
 
         state.ledger.push(...denialEntries);
+        state.accounts[accountId] = {
+          ...account,
+          usageSnapshot: normalizedSnapshot,
+          updatedAt: now,
+        };
         await this.store.write(state);
 
-        throw new ControlPlaneInsufficientCreditsError(
-          `Insufficient credits for ${account.subscription.planId} on hosted usage bundle`
+        if (allowance.denialReason === 'monthly_credits_exhausted') {
+          throw new ControlPlaneInsufficientCreditsError(
+            denial?.message ?? `Insufficient credits for ${account.subscription.planId} on hosted usage bundle`,
+            {
+              monthlyCreditsRemaining: allowance.monthlyCreditsRemaining,
+              balanceBefore: formatCredits(prepared.balanceBefore),
+              balanceAfter: formatCredits(prepared.balanceAfter),
+              planId: account.subscription.planId,
+              requiredCredits: formatCredits(prepared.totalCreditsDelta),
+            }
+          );
+        }
+
+        throw new ControlPlaneUsageLimitError(
+          denial?.message ?? `Hosted usage limit reached for ${account.subscription.planId}`,
+          {
+            limitType:
+              allowance.denialReason === 'daily_tool_action_calls_limit'
+                ? 'daily_tool_action_calls_limit'
+                : 'daily_requests_limit',
+            resetAt: allowance.resetAt,
+            remainingRequests: allowance.remainingRequests,
+            remainingHostedToolActionCalls: allowance.remainingHostedToolActionCalls,
+            monthlyCreditsRemaining: allowance.monthlyCreditsRemaining,
+            planId: account.subscription.planId,
+          }
         );
       }
 
@@ -644,6 +717,7 @@ export class ControlPlaneService {
         ...account,
         balanceCredits: formatCredits(nextBalance),
         usageTotals: nextUsageTotals,
+        usageSnapshot: advanceUsageSnapshot(normalizedSnapshot, plan, nextBalance, 1, inputs.length, new Date(now)),
         updatedAt: now,
       };
 
@@ -714,6 +788,14 @@ export class ControlPlaneService {
   async listNotifications(accountId: string, limit = 25) {
     const state = await this.readState();
     return state.notifications.filter((entry) => entry.accountId === accountId).slice(-limit).reverse();
+  }
+
+  async listDevices(accountId: string, limit = 25) {
+    const state = await this.readState();
+    return Object.values(state.devices)
+      .filter((device) => device.accountId === accountId)
+      .slice(-limit)
+      .reverse();
   }
 
   async markNotificationSeen(accountId: string, notificationId: string) {
@@ -1207,26 +1289,32 @@ export class ControlPlaneService {
     updatedAt: string
   ): ControlPlaneAccount {
     const nextPlan = getControlPlanePlan(input.planId);
+    const nextBalance = nextPlan.entitlements.hostedAccess ? new Decimal(account.balanceCredits) : new Decimal('0.00');
     const nextSubscription = reconcileSubscription(
       account,
       input.planId,
       updatedAt,
       input.billingCustomerRef ?? account.billingCustomerRef
     );
-    const hosted = nextPlan.entitlements.hostedAccess;
-
-    const nextBalance = hosted ? new Decimal(account.balanceCredits) : new Decimal('0.00');
+    const planChanged = account.subscription.planId !== nextPlan.id;
+    const nextUsageSnapshot = planChanged
+      ? createAccountUsageSnapshot(nextPlan, nextBalance, new Date(updatedAt), {
+          dailyRequests: 0,
+          dailyHostedToolActionCalls: 0,
+        })
+      : normalizeUsageSnapshot(account.usageSnapshot, nextPlan, nextBalance, new Date(updatedAt));
 
     return {
       ...account,
       displayName: input.displayName,
       ownerType: input.ownerType,
       ownerUserId: input.ownerUserId ?? account.ownerUserId,
-      billingCustomerRef: hosted ? input.billingCustomerRef ?? account.billingCustomerRef : undefined,
+      billingCustomerRef: nextPlan.entitlements.hostedAccess ? input.billingCustomerRef ?? account.billingCustomerRef : undefined,
       status: nextSubscription.status,
       subscription: nextSubscription,
       entitlements: resolveEntitlements(nextPlan, nextSubscription),
       balanceCredits: formatCredits(nextBalance),
+      usageSnapshot: nextUsageSnapshot,
       updatedAt,
     };
   }

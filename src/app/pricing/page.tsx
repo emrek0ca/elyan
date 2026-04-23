@@ -48,6 +48,14 @@ export default function PricingPage() {
               </div>
 
               <div>
+                <h3>Daily guardrails</h3>
+                <ul className="site-list">
+                  <li>{plan.dailyLimits.hostedRequestsPerDay} hosted requests/day</li>
+                  <li>{plan.dailyLimits.hostedToolActionCallsPerDay} hosted tool/action calls/day</li>
+                </ul>
+              </div>
+
+              <div>
                 <h3>Upgrade triggers</h3>
                 <ul className="site-list">
                   {plan.upgradeTriggers.map((trigger) => (

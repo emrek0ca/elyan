@@ -1,4 +1,4 @@
-# Elyan v1
+# Elyan v1.1
 
 Elyan is a local-first personal agent runtime.
 
@@ -181,11 +181,11 @@ If you modify and deploy it as a network service, you must make the correspondin
 
 ## Product Boundary
 
-Elyan v1 is not:
+Elyan v1.1 is not:
 
 - a Docker-first product
 - a platform
 - a feature pile
 - a fake hosted everything-app
 
-Elyan v1 is a directly runnable local-first runtime that degrades cleanly when optional systems are absent.
+Elyan v1.1 is a directly runnable local-first runtime that degrades cleanly when optional systems are absent.

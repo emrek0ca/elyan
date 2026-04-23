@@ -16,7 +16,7 @@ const publicNavigation = [
 ];
 
 function isRuntimeRoute(pathname: string) {
-  return pathname.startsWith('/chat') || pathname.startsWith('/manage');
+  return pathname.startsWith('/chat') || pathname.startsWith('/preview/chat') || pathname.startsWith('/manage');
 }
 
 export function MainLayoutClient({ children }: { children: React.ReactNode }) {

@@ -20,19 +20,31 @@ type SessionState =
         role?: string;
         planId?: string;
       };
-      account: {
-        displayName: string;
-        balanceCredits: string;
-        subscription: {
-          planId: string;
-          status: string;
-        };
-        entitlements: {
-          hostedAccess: boolean;
-          hostedUsageAccounting: boolean;
+        account: {
+          displayName: string;
+          balanceCredits: string;
+          subscription: {
+            planId: string;
+            status: string;
+          };
+          entitlements: {
+            hostedAccess: boolean;
+            hostedUsageAccounting: boolean;
+          };
+          usageSnapshot: {
+            dailyRequests: number;
+            dailyRequestsLimit: number;
+            remainingRequests: number;
+            dailyHostedToolActionCalls: number;
+            dailyHostedToolActionCallsLimit: number;
+            remainingHostedToolActionCalls: number;
+            monthlyCreditsRemaining: string;
+            monthlyCreditsBurned: string;
+            resetAt: string;
+            state: string;
+          };
         };
       };
-    };
 
 type SessionResponse = {
   ok: boolean;
@@ -45,19 +57,31 @@ type SessionResponse = {
     role?: string;
     planId?: string;
   };
-  account: {
-    displayName: string;
-    balanceCredits: string;
-    subscription: {
-      planId: string;
-      status: string;
-    };
-    entitlements: {
-      hostedAccess: boolean;
-      hostedUsageAccounting: boolean;
+    account: {
+      displayName: string;
+      balanceCredits: string;
+      subscription: {
+        planId: string;
+        status: string;
+      };
+      entitlements: {
+        hostedAccess: boolean;
+        hostedUsageAccounting: boolean;
+      };
+      usageSnapshot: {
+        dailyRequests: number;
+        dailyRequestsLimit: number;
+        remainingRequests: number;
+        dailyHostedToolActionCalls: number;
+        dailyHostedToolActionCallsLimit: number;
+        remainingHostedToolActionCalls: number;
+        monthlyCreditsRemaining: string;
+        monthlyCreditsBurned: string;
+        resetAt: string;
+        state: string;
+      };
     };
   };
-};
 
 const initialSessionState: SessionState = {
   authenticated: false,
@@ -261,6 +285,22 @@ export default function AuthPage() {
             <div className="auth-page__detail">
               <span>Credits</span>
               <strong>{sessionState.account.balanceCredits}</strong>
+            </div>
+            <div className="auth-page__detail">
+              <span>Daily requests</span>
+              <strong>
+                {sessionState.account.usageSnapshot.dailyRequests}/{sessionState.account.usageSnapshot.dailyRequestsLimit}
+              </strong>
+            </div>
+            <div className="auth-page__detail">
+              <span>Tool calls</span>
+              <strong>
+                {sessionState.account.usageSnapshot.dailyHostedToolActionCalls}/{sessionState.account.usageSnapshot.dailyHostedToolActionCallsLimit}
+              </strong>
+            </div>
+            <div className="auth-page__detail">
+              <span>Resets</span>
+              <strong>{new Date(sessionState.account.usageSnapshot.resetAt).toLocaleString()}</strong>
             </div>
           </div>
         ) : null}

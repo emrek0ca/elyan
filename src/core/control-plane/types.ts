@@ -151,6 +151,13 @@ export const controlPlaneRateLimitSchema = z.object({
 
 export type ControlPlaneRateLimit = z.infer<typeof controlPlaneRateLimitSchema>;
 
+export const controlPlaneDailyLimitSchema = z.object({
+  hostedRequestsPerDay: z.number().int().nonnegative(),
+  hostedToolActionCallsPerDay: z.number().int().nonnegative(),
+});
+
+export type ControlPlaneDailyLimit = z.infer<typeof controlPlaneDailyLimitSchema>;
+
 export const controlPlanePlanSchema = z.object({
   id: controlPlanePlanIdSchema,
   title: z.string(),
@@ -161,6 +168,7 @@ export const controlPlanePlanSchema = z.object({
   entitlements: controlPlaneEntitlementsSchema,
   rateCard: controlPlaneRateCardSchema,
   rateLimits: controlPlaneRateLimitSchema,
+  dailyLimits: controlPlaneDailyLimitSchema,
   upgradeTriggers: z.array(z.string()),
 });
 
@@ -223,6 +231,30 @@ export const controlPlaneBillingStateSchema = z.object({
 
 export type ControlPlaneBillingState = z.infer<typeof controlPlaneBillingStateSchema>;
 
+export const controlPlaneUsageSnapshotStateSchema = z.enum([
+  'ok',
+  'daily_limit_reached',
+  'monthly_credits_exhausted',
+]);
+
+export type ControlPlaneUsageSnapshotState = z.infer<typeof controlPlaneUsageSnapshotStateSchema>;
+
+export const controlPlaneUsageSnapshotSchema = z.object({
+  dayKey: z.string().min(1),
+  resetAt: z.string(),
+  dailyRequests: z.number().int().nonnegative(),
+  dailyRequestsLimit: z.number().int().nonnegative(),
+  remainingRequests: z.number().int().nonnegative(),
+  dailyHostedToolActionCalls: z.number().int().nonnegative(),
+  dailyHostedToolActionCallsLimit: z.number().int().nonnegative(),
+  remainingHostedToolActionCalls: z.number().int().nonnegative(),
+  monthlyCreditsRemaining: z.string(),
+  monthlyCreditsBurned: z.string(),
+  state: controlPlaneUsageSnapshotStateSchema,
+});
+
+export type ControlPlaneUsageSnapshot = z.infer<typeof controlPlaneUsageSnapshotSchema>;
+
 export const controlPlaneAccountSchema = z.object({
   accountId: z.string().min(1),
   ownerUserId: z.string().min(1).optional(),
@@ -234,11 +266,18 @@ export const controlPlaneAccountSchema = z.object({
   entitlements: controlPlaneEntitlementsSchema,
   balanceCredits: z.string(),
   usageTotals: z.record(z.string(), z.string()),
+  usageSnapshot: controlPlaneUsageSnapshotSchema,
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 
 export type ControlPlaneAccount = z.infer<typeof controlPlaneAccountSchema>;
+
+export const controlPlaneLegacyAccountSchema = controlPlaneAccountSchema.omit({
+  usageSnapshot: true,
+});
+
+export type ControlPlaneLegacyAccount = z.infer<typeof controlPlaneLegacyAccountSchema>;
 
 export const controlPlaneUserStatusSchema = z.enum(['active', 'disabled']);
 
@@ -373,7 +412,7 @@ export type ControlPlaneDevice = z.infer<typeof controlPlaneDeviceSchema>;
 
 export const controlPlaneStateV1Schema = z.object({
   version: z.literal(1),
-  accounts: z.record(z.string(), controlPlaneAccountSchema),
+  accounts: z.record(z.string(), controlPlaneLegacyAccountSchema),
   ledger: z.array(controlPlaneLedgerEntrySchema),
 });
 
@@ -381,13 +420,25 @@ export const controlPlaneStateV2Schema = z.object({
   version: z.literal(2),
   billing: controlPlaneBillingStateSchema,
   users: z.record(z.string(), controlPlaneUserSchema),
-  accounts: z.record(z.string(), controlPlaneAccountSchema),
+  accounts: z.record(z.string(), controlPlaneLegacyAccountSchema),
   ledger: z.array(controlPlaneLedgerEntrySchema),
   notifications: z.array(controlPlaneNotificationSchema).default([]),
 });
 
 export const controlPlaneStateV3Schema = z.object({
   version: z.literal(3),
+  billing: controlPlaneBillingStateSchema,
+  users: z.record(z.string(), controlPlaneUserSchema),
+  accounts: z.record(z.string(), controlPlaneLegacyAccountSchema),
+  ledger: z.array(controlPlaneLedgerEntrySchema),
+  notifications: z.array(controlPlaneNotificationSchema).default([]),
+  devices: z.record(z.string(), controlPlaneDeviceSchema).default({}),
+  deviceLinks: z.record(z.string(), controlPlaneDeviceLinkSchema).default({}),
+  evaluationSignals: z.array(controlPlaneEvaluationSignalSchema).default([]),
+});
+
+export const controlPlaneStateV4Schema = z.object({
+  version: z.literal(4),
   billing: controlPlaneBillingStateSchema,
   users: z.record(z.string(), controlPlaneUserSchema),
   accounts: z.record(z.string(), controlPlaneAccountSchema),
@@ -402,10 +453,11 @@ export const controlPlaneStateSchema = z.union([
   controlPlaneStateV1Schema,
   controlPlaneStateV2Schema,
   controlPlaneStateV3Schema,
+  controlPlaneStateV4Schema,
 ]);
 
 export type ControlPlaneState = {
-  version: 3;
+  version: 4;
   billing: ControlPlaneBillingState;
   users: Record<string, ControlPlaneUser>;
   accounts: Record<string, ControlPlaneAccount>;
@@ -456,6 +508,10 @@ export const controlPlaneUsageQuoteSchema = z.object({
   balanceAfter: z.string(),
   allowed: z.boolean(),
   denialReason: z.string().optional(),
+  resetAt: z.string().optional(),
+  remainingRequests: z.number().int().nonnegative().optional(),
+  remainingHostedToolActionCalls: z.number().int().nonnegative().optional(),
+  monthlyCreditsRemaining: z.string().optional(),
 });
 
 export type ControlPlaneUsageQuote = z.infer<typeof controlPlaneUsageQuoteSchema>;

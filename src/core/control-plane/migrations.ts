@@ -214,6 +214,14 @@ export const controlPlaneMigrations: ControlPlaneMigration[] = [
         ADD COLUMN IF NOT EXISTS processed_webhook_event_refs JSONB NOT NULL DEFAULT '[]'::jsonb;
     `,
   },
+  {
+    version: 4,
+    name: 'account_usage_snapshot',
+    sql: `
+      ALTER TABLE elyan_accounts
+        ADD COLUMN IF NOT EXISTS usage_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
+    `,
+  },
 ];
 
 function toVersionSet(rows: Array<{ version: number }>) {

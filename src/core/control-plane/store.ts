@@ -25,12 +25,12 @@ export class FileControlPlaneStateStore implements ControlPlaneStateStore {
       const raw = await readFile(this.statePath, 'utf8');
       const parsed = migrateControlPlaneState(JSON.parse(raw));
 
-      if (parsed.version !== 3) {
+      if (parsed.version !== 4) {
         throw new ControlPlaneStoreError('Control-plane migration failed');
       }
 
       const rawParsed = JSON.parse(raw) as { version?: number };
-      if (rawParsed.version === 1) {
+      if (rawParsed.version !== 4) {
         await this.write(parsed);
       }
 

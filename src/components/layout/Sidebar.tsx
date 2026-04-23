@@ -8,7 +8,7 @@ import { usePathname } from 'next/navigation';
 
 export function Sidebar() {
   const pathname = usePathname();
-  const isSearchActive = pathname === '/' || pathname.startsWith('/chat');
+  const isSearchActive = pathname === '/' || pathname.startsWith('/chat') || pathname.startsWith('/preview/chat');
   const isManageActive = pathname.startsWith('/manage');
 
   return (

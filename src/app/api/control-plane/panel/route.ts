@@ -9,10 +9,11 @@ export async function GET(request: NextRequest) {
   try {
     const session = await requireControlPlaneSession(request);
     const service = getControlPlaneService();
-    const [account, ledger, notifications, health] = await Promise.all([
+    const [account, ledger, notifications, devices, health] = await Promise.all([
       service.getAccount(session.accountId!),
       service.listLedger(session.accountId!, 20),
       service.listNotifications(session.accountId!, 20),
+      service.listDevices(session.accountId!, 20),
       readControlPlaneHealthSnapshot(service),
     ]);
 
@@ -29,6 +30,7 @@ export async function GET(request: NextRequest) {
       },
       account,
       ledger,
+      devices,
       notifications,
       health,
     });

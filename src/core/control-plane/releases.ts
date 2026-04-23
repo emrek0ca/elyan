@@ -50,6 +50,62 @@ function normalizeVersionTag(tagName: string) {
   return tagName.trim().replace(/^v/i, '');
 }
 
+function parseVersionParts(value: string) {
+  const [major = '0', minor = '0', patch = '0'] = normalizeVersionTag(value).split('.');
+
+  return {
+    major: Number.parseInt(major, 10) || 0,
+    minor: Number.parseInt(minor, 10) || 0,
+    patch: Number.parseInt(patch, 10) || 0,
+  };
+}
+
+function compareVersionTags(left: string, right: string) {
+  const leftParts = parseVersionParts(left);
+  const rightParts = parseVersionParts(right);
+
+  if (leftParts.major !== rightParts.major) {
+    return leftParts.major - rightParts.major;
+  }
+
+  if (leftParts.minor !== rightParts.minor) {
+    return leftParts.minor - rightParts.minor;
+  }
+
+  return leftParts.patch - rightParts.patch;
+}
+
+function comparePublishedAt(left: string | null | undefined, right: string | null | undefined) {
+  const leftTime = left ? Date.parse(left) : 0;
+  const rightTime = right ? Date.parse(right) : 0;
+  return leftTime - rightTime;
+}
+
+function selectLatestPublishableRelease(
+  releases: Array<z.infer<typeof githubReleaseSchema>>
+): z.infer<typeof githubReleaseSchema> | null {
+  const publishable = releases.filter(
+    (release) => !release.draft && !release.prerelease && release.published_at && hasRequiredAssets(release.assets)
+  );
+
+  return publishable.reduce<z.infer<typeof githubReleaseSchema> | null>((latest, candidate) => {
+    if (!latest) {
+      return candidate;
+    }
+
+    const versionCompare = compareVersionTags(candidate.tag_name, latest.tag_name);
+    if (versionCompare > 0) {
+      return candidate;
+    }
+
+    if (versionCompare < 0) {
+      return latest;
+    }
+
+    return comparePublishedAt(candidate.published_at, latest.published_at) > 0 ? candidate : latest;
+  }, null);
+}
+
 export async function getLatestElyanReleaseSnapshot(): Promise<ControlPlaneReleaseSnapshot | null> {
   const repository = getRepositorySlug();
   const headers: Record<string, string> = {
@@ -70,9 +126,7 @@ export async function getLatestElyanReleaseSnapshot(): Promise<ControlPlaneRelea
   }
 
   const json = githubReleaseSchema.array().parse(await response.json());
-  const publishable = json.find(
-    (release) => !release.draft && !release.prerelease && release.published_at && hasRequiredAssets(release.assets)
-  );
+  const publishable = selectLatestPublishableRelease(json);
 
   if (!publishable) {
     return null;
@@ -104,7 +158,9 @@ export async function getLatestElyanReleaseResponse() {
   const currentVersion = packageJson.version;
   const currentTagName = `v${currentVersion}`;
   const latestVersion = release ? normalizeVersionTag(release.tagName) : null;
-  const updateAvailable = Boolean(release && latestVersion && latestVersion !== currentVersion);
+  const versionCompare = release ? compareVersionTags(latestVersion ?? '', currentVersion) : 0;
+  const updateAvailable = Boolean(release && versionCompare > 0);
+  const runtimeIsNewer = Boolean(release && versionCompare < 0);
 
   return {
     ok: true,
@@ -119,7 +175,9 @@ export async function getLatestElyanReleaseResponse() {
     updateMessage: release
       ? updateAvailable
         ? `Latest publishable release ${release.tagName} is newer than ${currentTagName}.`
-        : `Current runtime ${currentTagName} matches the latest publishable release.`
+        : runtimeIsNewer
+          ? `Current runtime ${currentTagName} is newer than the latest publishable release ${release.tagName}.`
+          : `Current runtime ${currentTagName} matches the latest publishable release.`
       : 'No publishable release is currently available.',
   };
 }

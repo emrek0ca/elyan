@@ -12,7 +12,7 @@ export default function Home() {
 
   const handleSearch = (query: string, mode: SearchMode) => {
     const params = new URLSearchParams({ q: query, mode });
-    router.push(`/chat/new?${params.toString()}`);
+    router.push(`/preview/chat/new?${params.toString()}`);
   };
 
   return (
@@ -50,7 +50,7 @@ export default function Home() {
           <div className="site-hero__panel">
             <div className="site-card">
               <h2>Ask Elyan right now</h2>
-              <p>Try the local runtime directly. If search is offline, Elyan degrades cleanly instead of failing the product path.</p>
+              <p>Try the public preview directly. If search is offline, Elyan degrades cleanly instead of failing the product path.</p>
               <div className="site-search">
                 <SearchBar onSearch={handleSearch} />
               </div>

@@ -11,6 +11,7 @@ export * from './migrations';
 export * from './releases';
 export * from './pricing';
 export * from './evaluation';
+export * from './usage';
 export * from './service';
 export * from './store';
 export * from './types';

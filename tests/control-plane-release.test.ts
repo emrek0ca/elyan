@@ -85,9 +85,9 @@ describe('release resolver', () => {
         ok: true,
         json: async () => [
           {
-            tag_name: 'v1.1.0',
-            name: 'v1.1.0',
-            html_url: 'https://github.com/elyan-dev/elyan/releases/tag/v1.1.0',
+            tag_name: 'v1.2.0',
+            name: 'v1.2.0',
+            html_url: 'https://github.com/elyan-dev/elyan/releases/tag/v1.2.0',
             url: 'https://api.github.com/repos/elyan-dev/elyan/releases/1',
             draft: false,
             prerelease: false,
@@ -121,12 +121,63 @@ describe('release resolver', () => {
 
     const response = await getLatestElyanReleaseResponse();
 
-    expect(response.currentVersion).toBe('1.0.0');
-    expect(response.currentTagName).toBe('v1.0.0');
+    expect(response.currentVersion).toBe('1.1.0');
+    expect(response.currentTagName).toBe('v1.1.0');
     expect(response.updateAvailable).toBe(true);
     expect(response.updateStatus).toBe('update_available');
-    expect(response.latest?.tagName).toBe('v1.1.0');
-    expect(response.updateMessage).toContain('v1.1.0');
+    expect(response.latest?.tagName).toBe('v1.2.0');
+    expect(response.updateMessage).toContain('v1.2.0');
+  });
+
+  it('treats the installed runtime as current when the latest publishable release is older', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [
+          {
+            tag_name: 'v1.0.0',
+            name: 'v1.0.0',
+            html_url: 'https://github.com/elyan-dev/elyan/releases/tag/v1.0.0',
+            url: 'https://api.github.com/repos/elyan-dev/elyan/releases/1',
+            draft: false,
+            prerelease: false,
+            published_at: '2026-04-18T10:00:00Z',
+            assets: [
+              {
+                name: 'elyan-macos-arm64.zip',
+                size: 10,
+                browser_download_url: 'https://example.com/macos-arm64.zip',
+              },
+              {
+                name: 'elyan-macos-x64.zip',
+                size: 10,
+                browser_download_url: 'https://example.com/macos-x64.zip',
+              },
+              {
+                name: 'elyan-linux-x64.tar.gz',
+                size: 10,
+                browser_download_url: 'https://example.com/linux.tar.gz',
+              },
+              {
+                name: 'elyan-windows-x64.zip',
+                size: 10,
+                browser_download_url: 'https://example.com/windows.zip',
+              },
+            ],
+          },
+        ],
+      })
+    );
+
+    const response = await getLatestElyanReleaseResponse();
+
+    expect(response.currentVersion).toBe('1.1.0');
+    expect(response.currentTagName).toBe('v1.1.0');
+    expect(response.updateAvailable).toBe(false);
+    expect(response.updateStatus).toBe('current');
+    expect(response.latest?.tagName).toBe('v1.0.0');
+    expect(response.updateMessage).toContain('newer than the latest publishable release');
   });
 
   it('fails closed when no publishable release is available', async () => {

@@ -14,6 +14,7 @@ type ChatInterfaceProps = {
   initialQuery?: string;
   initialMode?: SearchMode;
   availableModels: ModelInfo[];
+  apiPath?: string;
 };
 
 const starterPrompts = [
@@ -69,6 +70,22 @@ function presentChatError(error: Error | null | undefined) {
     };
   }
 
+  if (normalized.includes('control-plane session is required')) {
+    return {
+      title: 'Login required',
+      detail: message,
+      hint: 'Sign in to the hosted control plane or use the public preview surface.',
+    };
+  }
+
+  if (normalized.includes('hosted usage limit reached')) {
+    return {
+      title: 'Hosted limit reached',
+      detail: message,
+      hint: 'Wait for the daily reset or upgrade to a plan with higher guardrails.',
+    };
+  }
+
   if (normalized.includes('hosted credits are exhausted')) {
     return {
       title: 'Hosted credits exhausted',
@@ -97,6 +114,7 @@ export default function ChatInterface({
   initialQuery = '',
   initialMode = 'speed',
   availableModels,
+  apiPath = '/api/chat',
 }: ChatInterfaceProps) {
   const hasAvailableModels = availableModels.length > 0;
   const initialModelId = availableModels[0]?.id ?? '';
@@ -106,7 +124,7 @@ export default function ChatInterface({
   const transport = React.useMemo(
     () =>
       new DefaultChatTransport({
-        api: '/api/chat',
+        api: apiPath,
         prepareSendMessagesRequest: ({ body, messages }) => ({
           body: {
             ...body,
@@ -114,7 +132,7 @@ export default function ChatInterface({
           },
         }),
       }),
-    []
+    [apiPath]
   );
   const {
     messages,

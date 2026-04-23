@@ -1,3 +1,4 @@
+import { readFile, writeFile } from 'fs/promises';
 import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -20,6 +21,15 @@ describe('ControlPlaneService', () => {
     const dir = await mkdtemp(join(tmpdir(), 'elyan-control-plane-'));
     tempDirs.push(dir);
     return ControlPlaneService.create(join(dir, 'state.json'));
+  }
+
+  function getLatestStatePath() {
+    const dir = tempDirs[tempDirs.length - 1];
+    if (!dir) {
+      throw new Error('No active control-plane test directory');
+    }
+
+    return join(dir, 'state.json');
   }
 
   it('exposes a narrow plan catalog with clean boundaries', async () => {
@@ -46,6 +56,9 @@ describe('ControlPlaneService', () => {
     expect(result.account.subscription.status).toBe('trialing');
     expect(result.account.balanceCredits).toBe('0.00');
     expect(result.account.entitlements.hostedAccess).toBe(false);
+    expect(result.account.usageSnapshot.dailyRequests).toBe(0);
+    expect(result.account.usageSnapshot.remainingRequests).toBe(result.account.plan.dailyLimits.hostedRequestsPerDay);
+    expect(result.account.usageSnapshot.state).toBe('monthly_credits_exhausted');
   });
 
   it('activates hosted billing through iyzico webhook and then records usage', async () => {
@@ -428,9 +441,120 @@ describe('ControlPlaneService', () => {
         units: 1,
         source: 'hosted_api',
       })
-    ).rejects.toMatchObject({
+      ).rejects.toMatchObject({
       statusCode: 403,
     });
+  });
+
+  it('rejects hosted usage when the daily request limit is exhausted', async () => {
+    const service = await createService();
+    const created = await service.registerIdentity({
+      email: 'limit@example.com',
+      password: 'very-strong-password',
+      displayName: 'Limit Owner',
+      ownerType: 'individual',
+      planId: 'cloud_assisted',
+    });
+
+    await service.upsertAccount(created.account.accountId, {
+      displayName: created.account.displayName,
+      ownerType: created.account.ownerType,
+      planId: 'cloud_assisted',
+      ownerUserId: created.user.userId,
+      billingCustomerRef: 'cust_limit',
+    });
+
+    await service.applyIyzicoWebhook(
+      {
+        customerReferenceCode: 'cust_limit',
+        subscriptionReferenceCode: 'sub_limit',
+        orderReferenceCode: 'ord_limit',
+        iyziReferenceCode: 'ref_limit',
+        iyziEventType: 'subscription.order.success',
+        iyziEventTime: Date.now(),
+      },
+      undefined,
+      { bypassSignatureValidation: true }
+    );
+
+    const statePath = getLatestStatePath();
+    const rawState = JSON.parse(await readFile(statePath, 'utf8'));
+    const account = rawState.accounts[created.account.accountId];
+
+    account.usageSnapshot = {
+      ...account.usageSnapshot,
+      dailyRequests: account.usageSnapshot.dailyRequestsLimit,
+      remainingRequests: 0,
+      dailyHostedToolActionCalls: 0,
+      remainingHostedToolActionCalls: account.usageSnapshot.dailyHostedToolActionCallsLimit,
+      monthlyCreditsRemaining: account.balanceCredits,
+      monthlyCreditsBurned: '0.00',
+      state: 'daily_limit_reached',
+    };
+
+    await writeFile(statePath, `${JSON.stringify(rawState, null, 2)}\n`, 'utf8');
+
+    await expect(
+      service.recordUsage(created.account.accountId, {
+        domain: 'inference',
+        units: 1,
+        source: 'hosted_api',
+      })
+    ).rejects.toMatchObject({
+      statusCode: 429,
+    });
+  });
+
+  it('resets the usage snapshot when the day key rolls over', async () => {
+    const service = await createService();
+    const created = await service.registerIdentity({
+      email: 'reset@example.com',
+      password: 'very-strong-password',
+      displayName: 'Reset Owner',
+      ownerType: 'individual',
+      planId: 'cloud_assisted',
+    });
+
+    await service.upsertAccount(created.account.accountId, {
+      displayName: created.account.displayName,
+      ownerType: created.account.ownerType,
+      planId: 'cloud_assisted',
+      ownerUserId: created.user.userId,
+      billingCustomerRef: 'cust_reset',
+    });
+
+    await service.applyIyzicoWebhook(
+      {
+        customerReferenceCode: 'cust_reset',
+        subscriptionReferenceCode: 'sub_reset',
+        orderReferenceCode: 'ord_reset',
+        iyziReferenceCode: 'ref_reset',
+        iyziEventType: 'subscription.order.success',
+        iyziEventTime: Date.now(),
+      },
+      undefined,
+      { bypassSignatureValidation: true }
+    );
+
+    const statePath = getLatestStatePath();
+    const rawState = JSON.parse(await readFile(statePath, 'utf8'));
+    const account = rawState.accounts[created.account.accountId];
+    account.usageSnapshot = {
+      ...account.usageSnapshot,
+      dayKey: '2001-01-01',
+      dailyRequests: account.usageSnapshot.dailyRequestsLimit,
+      remainingRequests: 0,
+      dailyHostedToolActionCalls: account.usageSnapshot.dailyHostedToolActionCallsLimit,
+      remainingHostedToolActionCalls: 0,
+      state: 'daily_limit_reached',
+      resetAt: new Date().toISOString(),
+    };
+    await writeFile(statePath, `${JSON.stringify(rawState, null, 2)}\n`, 'utf8');
+
+    const accountView = await service.getAccount(created.account.accountId);
+    expect(accountView.usageSnapshot.dailyRequests).toBe(0);
+    expect(accountView.usageSnapshot.remainingRequests).toBe(accountView.plan.dailyLimits.hostedRequestsPerDay);
+    expect(accountView.usageSnapshot.state).toBe('ok');
   });
 
   it('persists state to disk for the shared control plane', async () => {

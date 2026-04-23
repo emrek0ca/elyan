@@ -4,6 +4,7 @@ const { program } = require('commander');
 const chalk = require('chalk');
 const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { getGlobalEnvPath, resolveGlobalConfigDir } = require(path.join(__dirname, '..', 'src', 'lib', 'runtime-paths.js'));
 const packageJson = require(path.join(__dirname, '..', 'package.json'));
@@ -17,6 +18,7 @@ program
 // Paths defaults
 const GLOBAL_DIR = resolveGlobalConfigDir();
 const GLOBAL_ENV = getGlobalEnvPath();
+const CLI_SESSION_PATH = path.join(GLOBAL_DIR, 'control-plane-session.json');
 
 /**
  * Ensures global config directory exists
@@ -102,6 +104,194 @@ function readRuntimeSettingsFile() {
 function writeRuntimeSettingsFile(settings) {
   ensureParentDir(LOCAL_RUNTIME_SETTINGS);
   fs.writeFileSync(LOCAL_RUNTIME_SETTINGS, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+}
+
+function readCliSession() {
+  if (!fs.existsSync(CLI_SESSION_PATH)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(CLI_SESSION_PATH, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function writeCliSession(session) {
+  ensureParentDir(CLI_SESSION_PATH);
+  fs.writeFileSync(CLI_SESSION_PATH, `${JSON.stringify(session, null, 2)}\n`, 'utf8');
+}
+
+function clearCliSession() {
+  if (fs.existsSync(CLI_SESSION_PATH)) {
+    fs.unlinkSync(CLI_SESSION_PATH);
+  }
+}
+
+function collectSetCookieHeaders(headers) {
+  if (typeof headers.getSetCookie === 'function') {
+    return headers.getSetCookie();
+  }
+
+  const raw = headers.get('set-cookie');
+  if (!raw) {
+    return [];
+  }
+
+  return [raw];
+}
+
+function cookiesFromSetCookieHeaders(setCookieHeaders) {
+  return setCookieHeaders
+    .map((entry) => entry.split(';')[0]?.trim())
+    .filter(Boolean)
+    .join('; ');
+}
+
+function mergeCookieHeader(existing, next) {
+  const merged = new Map();
+
+  for (const cookie of [existing, next].filter(Boolean)) {
+    for (const part of cookie.split(/;\s*/)) {
+      const [name, ...rest] = part.split('=');
+      if (!name || rest.length === 0) continue;
+      merged.set(name.trim(), rest.join('=').trim());
+    }
+  }
+
+  return Array.from(merged.entries())
+    .map(([name, value]) => `${name}=${value}`)
+    .join('; ');
+}
+
+function getCliBaseUrl(optionsBaseUrl) {
+  return String(optionsBaseUrl || 'http://localhost:3000').replace(/\/$/, '');
+}
+
+function getCliSessionCookieHeader() {
+  const session = readCliSession();
+  return session?.cookieHeader || '';
+}
+
+async function fetchAuthedJson(url, timeoutMs = 5000, init = {}) {
+  const session = readCliSession();
+  const headers = {
+    ...(init.headers || {}),
+  };
+
+  if (session?.cookieHeader) {
+    headers.Cookie = mergeCookieHeader(headers.Cookie || '', session.cookieHeader);
+  }
+
+  return fetchJson(url, timeoutMs, {
+    ...init,
+    headers,
+  });
+}
+
+async function loginToHostedControlPlane(baseUrl, email, password) {
+  const csrfResponse = await fetch(`${baseUrl}/api/auth/csrf`, {
+    method: 'GET',
+  });
+  if (!csrfResponse.ok) {
+    throw new Error(`Failed to fetch CSRF token (${csrfResponse.status})`);
+  }
+
+  const csrfBody = await csrfResponse.json();
+  const csrfCookie = cookiesFromSetCookieHeaders(collectSetCookieHeaders(csrfResponse.headers));
+  const response = await fetch(`${baseUrl}/api/auth/callback/credentials?json=true`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Cookie: csrfCookie,
+    },
+    body: new URLSearchParams({
+      csrfToken: String(csrfBody.csrfToken || ''),
+      email,
+      password,
+      callbackUrl: baseUrl,
+      json: 'true',
+    }),
+  });
+
+  const body = await response.json().catch(() => ({}));
+  const cookieHeader = cookiesFromSetCookieHeaders(collectSetCookieHeaders(response.headers));
+
+  if (!response.ok || body?.error) {
+    throw new Error(body?.error || `Login failed (${response.status})`);
+  }
+
+  const mergedCookieHeader = mergeCookieHeader(csrfCookie, cookieHeader);
+  writeCliSession({
+    cookieHeader: mergedCookieHeader,
+    baseUrl,
+    updatedAt: new Date().toISOString(),
+  });
+
+  return {
+    cookieHeader: mergedCookieHeader,
+    body,
+  };
+}
+
+async function linkCliDevice(baseUrl, cookieHeader, deviceLabel) {
+  const startResponse = await fetch(`${baseUrl}/api/control-plane/devices/link/start`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: cookieHeader,
+    },
+    body: JSON.stringify({ deviceLabel }),
+  });
+
+  const startBody = await startResponse.json().catch(() => ({}));
+  if (!startResponse.ok || !startBody.ok) {
+    throw new Error(startBody.error || `Device link start failed (${startResponse.status})`);
+  }
+
+  const completeResponse = await fetch(`${baseUrl}/api/control-plane/devices/link/complete`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      linkCode: startBody.link.linkCode,
+      deviceLabel,
+      metadata: {
+        client: 'elyan-cli',
+        platform: process.platform,
+        hostname: os.hostname(),
+      },
+    }),
+  });
+
+  const completeBody = await completeResponse.json().catch(() => ({}));
+  if (!completeResponse.ok || !completeBody.ok) {
+    throw new Error(completeBody.error || `Device link completion failed (${completeResponse.status})`);
+  }
+
+  const session = readCliSession() || {};
+  session.deviceToken = completeBody.device.deviceToken;
+  session.deviceId = completeBody.device.deviceId;
+  session.deviceLabel = completeBody.device.deviceLabel;
+  session.updatedAt = new Date().toISOString();
+  writeCliSession(session);
+
+  return completeBody.device;
+}
+
+function printAccountSnapshot(data) {
+  console.log(chalk.bold.blue('\n👤 Hosted account\n'));
+  console.log(`Email: ${chalk.green(data.session.email || 'unknown')}`);
+  console.log(`Name: ${chalk.green(data.session.name || data.account.displayName)}`);
+  console.log(`Account: ${chalk.green(data.account.accountId)}`);
+  console.log(`Plan: ${chalk.green(`${data.account.plan.title} (${data.account.subscription.status})`)}`);
+  console.log(`Hosted access: ${data.account.entitlements.hostedAccess ? chalk.green('active') : chalk.yellow('inactive')}`);
+  console.log(`Monthly credits remaining: ${chalk.green(data.account.usageSnapshot.monthlyCreditsRemaining)}`);
+  console.log(`Daily requests remaining: ${chalk.green(String(data.account.usageSnapshot.remainingRequests))}`);
+  console.log(`Daily tool calls remaining: ${chalk.green(String(data.account.usageSnapshot.remainingHostedToolActionCalls))}`);
+  console.log(`Reset at: ${chalk.green(new Date(data.account.usageSnapshot.resetAt).toLocaleString())}`);
 }
 
 function deepClone(value) {
@@ -207,12 +397,18 @@ async function probeService(label, url, timeoutMs = 3000) {
   }
 }
 
-async function fetchJson(url, timeoutMs = 5000) {
+async function fetchJson(url, timeoutMs = 5000, init = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await fetch(url, {
+      ...init,
+      signal: controller.signal,
+      headers: {
+        ...(init.headers || {}),
+      },
+    });
     const body = await response.text();
     let data;
 
@@ -393,6 +589,223 @@ program
 
     console.log(chalk.bold.blue('\n💳 Control-plane plans\n'));
     console.log(JSON.stringify(result.data, null, 2));
+  });
+
+// ----------------------------------------------------------------------------
+// COMMAND: login
+// ----------------------------------------------------------------------------
+program
+  .command('login')
+  .option('--base-url <url>', 'Base URL for the running Elyan app', 'http://localhost:3000')
+  .requiredOption('--email <email>', 'Hosted account email')
+  .requiredOption('--password <password>', 'Hosted account password')
+  .option('--device-label <label>', 'Device label to register for this CLI', `Elyan CLI on ${os.hostname()}`)
+  .description('Signs in to the hosted control plane and links this CLI as a device.')
+  .action(async (options) => {
+    const baseUrl = getCliBaseUrl(options.baseUrl);
+
+    try {
+      const session = await loginToHostedControlPlane(baseUrl, options.email, options.password);
+      const device = await linkCliDevice(baseUrl, session.cookieHeader, options.deviceLabel);
+      console.log(chalk.green('✅ Logged in to the hosted control plane.'));
+      console.log(`Device linked: ${chalk.green(device.deviceLabel)} (${device.deviceId})`);
+    } catch (error) {
+      console.log(chalk.red(error instanceof Error ? error.message : 'Login failed'));
+      process.exit(1);
+    }
+  });
+
+// ----------------------------------------------------------------------------
+// COMMAND: whoami
+// ----------------------------------------------------------------------------
+program
+  .command('whoami')
+  .option('--base-url <url>', 'Base URL for the running Elyan app', 'http://localhost:3000')
+  .description('Shows the current hosted account bound to the local CLI session.')
+  .action(async (options) => {
+    const baseUrl = getCliBaseUrl(options.baseUrl);
+    const result = await fetchAuthedJson(`${baseUrl}/api/control-plane/auth/me`);
+
+    if (!result.ok) {
+      console.log(chalk.red(`Not logged in or session is invalid (${result.status}).`));
+      process.exit(1);
+      return;
+    }
+
+    printAccountSnapshot(result.data);
+    const session = readCliSession();
+    if (session?.deviceLabel) {
+      console.log(`Device: ${chalk.green(session.deviceLabel)}${session.deviceId ? ` (${session.deviceId})` : ''}`);
+    }
+  });
+
+// ----------------------------------------------------------------------------
+// COMMAND: plan
+// ----------------------------------------------------------------------------
+program
+  .command('plan')
+  .option('--base-url <url>', 'Base URL for the running Elyan app', 'http://localhost:3000')
+  .description('Shows the current hosted plan and the available upgrade catalog.')
+  .action(async (options) => {
+    const baseUrl = getCliBaseUrl(options.baseUrl);
+    const [sessionResult, plansResult] = await Promise.all([
+      fetchAuthedJson(`${baseUrl}/api/control-plane/panel`),
+      fetchJson(`${baseUrl}/api/control-plane/plans`),
+    ]);
+
+    if (!sessionResult.ok) {
+      console.log(chalk.red(`Not logged in or session is invalid (${sessionResult.status}).`));
+      process.exit(1);
+      return;
+    }
+
+    console.log(chalk.bold.blue('\n📦 Current plan\n'));
+    console.log(`Plan: ${chalk.green(sessionResult.data.account.plan.title)}`);
+    console.log(`Status: ${chalk.green(sessionResult.data.account.subscription.status)}`);
+    console.log(`Hosted access: ${sessionResult.data.account.entitlements.hostedAccess ? chalk.green('active') : chalk.yellow('inactive')}`);
+    console.log(`Billing state: ${chalk.green(sessionResult.data.account.subscription.syncState)}`);
+
+    if (plansResult.ok && plansResult.data?.plans) {
+      console.log(chalk.bold.blue('\n💳 Upgrade catalog\n'));
+      for (const plan of plansResult.data.plans) {
+        console.log(`- ${chalk.bold(plan.title)} (${plan.id})`);
+        console.log(`  ${plan.pricing.monthlyPriceTRY} TRY, ${plan.pricing.monthlyIncludedCredits} credits`);
+        console.log(`  Daily: ${plan.dailyLimits.hostedRequestsPerDay} requests / ${plan.dailyLimits.hostedToolActionCallsPerDay} tool calls`);
+      }
+    }
+  });
+
+// ----------------------------------------------------------------------------
+// COMMAND: usage
+// ----------------------------------------------------------------------------
+program
+  .command('usage')
+  .option('--base-url <url>', 'Base URL for the running Elyan app', 'http://localhost:3000')
+  .description('Shows daily hosted usage, remaining credits, and recent usage ledger entries.')
+  .action(async (options) => {
+    const baseUrl = getCliBaseUrl(options.baseUrl);
+    const result = await fetchAuthedJson(`${baseUrl}/api/control-plane/panel`);
+
+    if (!result.ok) {
+      console.log(chalk.red(`Not logged in or session is invalid (${result.status}).`));
+      process.exit(1);
+      return;
+    }
+
+    const { account, ledger } = result.data;
+    console.log(chalk.bold.blue('\n📈 Hosted usage\n'));
+    console.log(`Monthly credits remaining: ${chalk.green(account.usageSnapshot.monthlyCreditsRemaining)}`);
+    console.log(`Monthly credits burned: ${chalk.green(account.usageSnapshot.monthlyCreditsBurned)}`);
+    console.log(`Daily requests: ${chalk.green(`${account.usageSnapshot.dailyRequests}/${account.usageSnapshot.dailyRequestsLimit}`)}`);
+    console.log(`Daily tool calls: ${chalk.green(`${account.usageSnapshot.dailyHostedToolActionCalls}/${account.usageSnapshot.dailyHostedToolActionCallsLimit}`)}`);
+    console.log(`Reset at: ${chalk.green(new Date(account.usageSnapshot.resetAt).toLocaleString())}`);
+    console.log(`Limit state: ${chalk.green(account.usageSnapshot.state)}`);
+
+    if (Array.isArray(ledger) && ledger.length > 0) {
+      console.log(chalk.bold.blue('\nRecent ledger\n'));
+      for (const entry of ledger.slice(0, 5)) {
+        console.log(`- ${chalk.bold(entry.kind)} ${entry.creditsDelta} ${entry.domain ?? ''}`.trim());
+        console.log(`  ${entry.note ?? entry.balanceAfter}`);
+      }
+    }
+  });
+
+// ----------------------------------------------------------------------------
+// COMMAND: limits
+// ----------------------------------------------------------------------------
+program
+  .command('limits')
+  .option('--base-url <url>', 'Base URL for the running Elyan app', 'http://localhost:3000')
+  .description('Shows the hosted daily guardrails and the current remaining headroom.')
+  .action(async (options) => {
+    const baseUrl = getCliBaseUrl(options.baseUrl);
+    const result = await fetchAuthedJson(`${baseUrl}/api/control-plane/panel`);
+
+    if (!result.ok) {
+      console.log(chalk.red(`Not logged in or session is invalid (${result.status}).`));
+      process.exit(1);
+      return;
+    }
+
+    const { account } = result.data;
+    console.log(chalk.bold.blue('\n🛡️ Hosted limits\n'));
+    console.log(`Daily requests: ${chalk.green(`${account.usageSnapshot.remainingRequests}/${account.usageSnapshot.dailyRequestsLimit}`)} remaining`);
+    console.log(`Daily tool calls: ${chalk.green(`${account.usageSnapshot.remainingHostedToolActionCalls}/${account.usageSnapshot.dailyHostedToolActionCallsLimit}`)} remaining`);
+    console.log(`Resets at: ${chalk.green(new Date(account.usageSnapshot.resetAt).toLocaleString())}`);
+    console.log(`Plan state: ${chalk.green(account.usageSnapshot.state)}`);
+  });
+
+// ----------------------------------------------------------------------------
+// COMMAND: logout
+// ----------------------------------------------------------------------------
+program
+  .command('logout')
+  .option('--base-url <url>', 'Base URL for the running Elyan app', 'http://localhost:3000')
+  .description('Clears the local CLI session and unlinks the registered device.')
+  .action(async (options) => {
+    const baseUrl = getCliBaseUrl(options.baseUrl);
+    const session = readCliSession();
+
+    try {
+      if (session?.deviceToken) {
+        const response = await fetch(`${baseUrl}/api/control-plane/devices/unlink`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-elyan-device-token': session.deviceToken,
+          },
+        });
+
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          console.log(chalk.yellow(body.error || `Device unlink failed (${response.status})`));
+        }
+      }
+    } finally {
+      clearCliSession();
+    }
+
+    console.log(chalk.green('✅ Local CLI session cleared.'));
+  });
+
+// ----------------------------------------------------------------------------
+// COMMAND: upgrade
+// ----------------------------------------------------------------------------
+program
+  .command('upgrade')
+  .option('--base-url <url>', 'Base URL for the running Elyan app', 'http://localhost:3000')
+  .description('Shows the current upgrade path and the hosted plan catalog.')
+  .action(async (options) => {
+    const baseUrl = getCliBaseUrl(options.baseUrl);
+    const [panelResult, plansResult] = await Promise.all([
+      fetchAuthedJson(`${baseUrl}/api/control-plane/panel`),
+      fetchJson(`${baseUrl}/api/control-plane/plans`),
+    ]);
+
+    console.log(chalk.bold.blue('\n⬆️ Upgrade path\n'));
+
+    if (panelResult.ok) {
+      const account = panelResult.data.account;
+      if (!account.entitlements.hostedAccess) {
+        console.log(`Current plan: ${chalk.green(account.plan.title)}`);
+        console.log(`Suggested next step: open ${chalk.green(`${baseUrl}/pricing`)}`);
+      } else if (account.subscription.syncState !== 'synced') {
+        console.log(`Hosted billing is ${chalk.yellow(account.subscription.syncState)}.`);
+        console.log(`Finish checkout at ${chalk.green(`${baseUrl}/auth`)}`);
+      } else {
+        console.log(`Plan: ${chalk.green(account.plan.title)}`);
+        console.log(`Hosted usage is already active. Use ${chalk.green('limits')} or ${chalk.green('usage')} to watch headroom.`);
+      }
+    } else {
+      console.log(chalk.yellow('No hosted session is available. Visit /pricing to compare plans.'));
+    }
+
+    if (plansResult.ok && plansResult.data?.plans) {
+      console.log(chalk.bold.blue('\nAvailable hosted plans\n'));
+      for (const plan of plansResult.data.plans.filter((entry) => entry.entitlements.hostedAccess)) {
+        console.log(`- ${chalk.bold(plan.title)}: ${plan.monthlyPriceTRY} TRY, ${plan.monthlyIncludedCredits} credits`);
+      }
+    }
   });
 
 // ----------------------------------------------------------------------------

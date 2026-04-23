@@ -1,9 +1,9 @@
 class Elyan < Formula
-  desc "Elyan v1: self-hosted privacy-first AI answering engine"
+  desc "Elyan v1.1: self-hosted privacy-first AI answering engine"
   homepage "https://elyan.dev"
-  url "https://registry.npmjs.org/elyan/-/elyan-1.0.0.tgz"
-  sha256 "1eb9937e55960105158ad889f5c63e984b3660013e7c458418326a2a762d70ba"
-  version "1.0.0"
+  url "https://registry.npmjs.org/elyan/-/elyan-1.1.0.tgz"
+  sha256 "222febdf330edacc3a0ddba0c3e8a7c37772b8155f6e48fab5297ae834fff0a8"
+  version "1.1.0"
 
   depends_on "node"
 

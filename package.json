@@ -1,7 +1,7 @@
 {
   "name": "elyan",
-  "version": "1.0.0",
-  "description": "Elyan v1. Local-first personal agent runtime with dashboard and CLI management, shared control plane, hosted surface, and app-connected operator.",
+  "version": "1.1.0",
+  "description": "Elyan v1.1. Local-first personal agent runtime with dashboard and CLI management, shared control plane, hosted surface, and app-connected operator.",
   "private": false,
   "license": "AGPL-3.0-or-later",
   "homepage": "https://elyan.dev",

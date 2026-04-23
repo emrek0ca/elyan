@@ -4,6 +4,7 @@ import { createDefaultControlPlaneState, migrateControlPlaneState } from './defa
 import { getControlPlanePlan } from './catalog';
 import { assertControlPlaneMigrationsApplied } from './migrations';
 import { getControlPlanePool } from './database';
+import { createUsageSnapshot } from './usage';
 import type {
   ControlPlaneAccount,
   ControlPlaneBillingPlanBinding,
@@ -16,7 +17,7 @@ import type {
   ControlPlaneSubscription,
   ControlPlaneUser,
 } from './types';
-import { controlPlaneEvaluationSignalSchema } from './types';
+import { controlPlaneEvaluationSignalSchema, controlPlaneUsageSnapshotSchema } from './types';
 import { ControlPlaneStoreError } from './errors';
 
 const LEGACY_STATE_TABLE = 'elyan_control_plane_state';
@@ -243,6 +244,7 @@ export class PostgresControlPlaneStateStore {
           status,
           balance_credits::text AS balance_credits,
           usage_totals,
+          usage_snapshot,
           created_at,
           updated_at
         FROM ${ACCOUNTS_TABLE}
@@ -407,6 +409,12 @@ export class PostgresControlPlaneStateStore {
       if (!subscription) {
         continue;
       }
+      const plan = getControlPlanePlan(subscription.planId);
+      const usageSnapshotResult =
+        row.usage_snapshot && typeof row.usage_snapshot === 'object' && !Array.isArray(row.usage_snapshot)
+          ? controlPlaneUsageSnapshotSchema.safeParse(row.usage_snapshot)
+          : null;
+      const usageSnapshot = usageSnapshotResult?.success ? usageSnapshotResult.data : undefined;
 
       accounts[accountId] = {
         accountId,
@@ -419,6 +427,12 @@ export class PostgresControlPlaneStateStore {
         entitlements: resolveStoredEntitlements(subscription),
         balanceCredits: String(row.balance_credits ?? '0.00'),
         usageTotals: parseUsageTotals(row.usage_totals),
+        usageSnapshot:
+          usageSnapshot ??
+          createUsageSnapshot(plan, String(row.balance_credits ?? '0.00'), new Date(), {
+            dailyRequests: 0,
+            dailyHostedToolActionCalls: 0,
+          }),
         createdAt: new Date(String(row.created_at)).toISOString(),
         updatedAt: new Date(String(row.updated_at)).toISOString(),
       };
@@ -550,7 +564,7 @@ export class PostgresControlPlaneStateStore {
     );
 
     return migrateControlPlaneState({
-      version: 3,
+      version: 4,
       accounts,
       users,
       ledger,
@@ -581,10 +595,11 @@ export class PostgresControlPlaneStateStore {
             status,
             balance_credits,
             usage_totals,
+            usage_snapshot,
             created_at,
             updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7::numeric, $8::jsonb, $9::timestamptz, $10::timestamptz)
+          VALUES ($1, $2, $3, $4, $5, $6, $7::numeric, $8::jsonb, $9::jsonb, $10::timestamptz, $11::timestamptz)
           ON CONFLICT (account_id) DO UPDATE SET
             owner_user_id = EXCLUDED.owner_user_id,
             display_name = EXCLUDED.display_name,
@@ -593,6 +608,7 @@ export class PostgresControlPlaneStateStore {
             status = EXCLUDED.status,
             balance_credits = EXCLUDED.balance_credits,
             usage_totals = EXCLUDED.usage_totals,
+            usage_snapshot = EXCLUDED.usage_snapshot,
             created_at = EXCLUDED.created_at,
             updated_at = EXCLUDED.updated_at
         `,
@@ -605,6 +621,7 @@ export class PostgresControlPlaneStateStore {
           account.status,
           account.balanceCredits,
           stringify(account.usageTotals),
+          stringify(account.usageSnapshot),
           account.createdAt,
           account.updatedAt,
         ]

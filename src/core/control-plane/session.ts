@@ -21,6 +21,10 @@ function requireSessionConfiguration() {
   }
 }
 
+export function isControlPlaneSessionConfigured() {
+  return Boolean(env.NEXTAUTH_SECRET && env.DATABASE_URL);
+}
+
 export async function getControlPlaneSessionToken(request: NextRequest) {
   requireSessionConfiguration();
   const token = await getToken({ req: request, secret: env.NEXTAUTH_SECRET });

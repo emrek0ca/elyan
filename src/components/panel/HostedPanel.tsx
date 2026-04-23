@@ -40,6 +40,10 @@ type PanelPayload = {
       summary: string;
       monthlyPriceTRY: string;
       monthlyIncludedCredits: string;
+      dailyLimits: {
+        hostedRequestsPerDay: number;
+        hostedToolActionCallsPerDay: number;
+      };
     };
     processedWebhookEventCount: number;
     entitlements: {
@@ -52,6 +56,19 @@ type PanelPayload = {
       hostedImprovementSignals: boolean;
     };
     usageTotals: Record<string, string>;
+    usageSnapshot: {
+      dayKey: string;
+      resetAt: string;
+      dailyRequests: number;
+      dailyRequestsLimit: number;
+      remainingRequests: number;
+      dailyHostedToolActionCalls: number;
+      dailyHostedToolActionCallsLimit: number;
+      remainingHostedToolActionCalls: number;
+      monthlyCreditsRemaining: string;
+      monthlyCreditsBurned: string;
+      state: 'ok' | 'daily_limit_reached' | 'monthly_credits_exhausted';
+    };
     evaluationSignalCount: number;
     recentEvaluationSignals: ControlPlaneEvaluationSignal[];
   };
@@ -73,6 +90,15 @@ type PanelPayload = {
     level: 'info' | 'warning' | 'error';
     seenAt?: string;
     createdAt: string;
+  }>;
+  devices: Array<{
+    deviceId: string;
+    deviceLabel: string;
+    status: string;
+    linkedAt: string;
+    lastSeenAt?: string;
+    lastSeenReleaseTag?: string;
+    revokedAt?: string;
   }>;
   health: {
     storage: string;
@@ -254,12 +280,50 @@ export function HostedPanel({ section }: { section: PanelSection }) {
           </article>
 
           <article className="site-card">
+            <h2>Usage window</h2>
+            <div className="panel-list">
+              <PanelRow label="Daily requests" value={`${payload.account.usageSnapshot.dailyRequests}/${payload.account.usageSnapshot.dailyRequestsLimit}`} />
+              <PanelRow label="Requests remaining" value={String(payload.account.usageSnapshot.remainingRequests)} />
+              <PanelRow label="Tool calls" value={`${payload.account.usageSnapshot.dailyHostedToolActionCalls}/${payload.account.usageSnapshot.dailyHostedToolActionCallsLimit}`} />
+              <PanelRow label="Tool calls remaining" value={String(payload.account.usageSnapshot.remainingHostedToolActionCalls)} />
+              <PanelRow label="Monthly credits remaining" value={payload.account.usageSnapshot.monthlyCreditsRemaining} />
+              <PanelRow label="Monthly credits burned" value={payload.account.usageSnapshot.monthlyCreditsBurned} />
+              <PanelRow label="Reset at" value={new Date(payload.account.usageSnapshot.resetAt).toLocaleString()} />
+              <PanelRow label="Limit state" value={payload.account.usageSnapshot.state} />
+            </div>
+          </article>
+
+          <article className="site-card">
             <h2>Install and runtime</h2>
             <div className="panel-actions">
               <Link href="/download" className="site-cta">Install locally</Link>
               <Link href="/docs" className="site-secondary-cta">Read docs</Link>
             </div>
             <p className="panel-copy">Hosted account controls billing, credits, and web access. The primary runtime still runs locally.</p>
+          </article>
+
+          <article className="site-card">
+            <h2>Devices</h2>
+            <div className="panel-list">
+              <PanelRow label="Linked devices" value={String(payload.devices.length)} />
+              <PanelRow label="Latest device" value={payload.devices[0]?.deviceLabel ?? 'none'} />
+              <PanelRow label="Latest status" value={payload.devices[0]?.status ?? 'none'} />
+            </div>
+            <div className="panel-history">
+              {payload.devices.length > 0 ? payload.devices.map((device) => (
+                <div key={device.deviceId} className="panel-history__item">
+                  <div>
+                    <strong>{device.deviceLabel}</strong>
+                    <p>{device.status}</p>
+                    {device.lastSeenReleaseTag ? <span className="panel-history__kind">{device.lastSeenReleaseTag}</span> : null}
+                  </div>
+                  <div className="panel-history__meta">
+                    <span>{new Date(device.linkedAt).toLocaleString()}</span>
+                    <span>{device.lastSeenAt ? new Date(device.lastSeenAt).toLocaleString() : 'never'}</span>
+                  </div>
+                </div>
+              )) : <p className="panel-copy">No devices linked yet.</p>}
+            </div>
           </article>
 
           <article className="site-card">
@@ -325,12 +389,14 @@ export function HostedPanel({ section }: { section: PanelSection }) {
             <h2>Hosted billing</h2>
             <p className="panel-copy">
               iyzico-backed hosted billing controls managed credits and hosted entitlements. If billing is not configured,
-              hosted usage stays inactive.
+              hosted usage stays inactive and the panel stays honest about the gap.
             </p>
             <div className="panel-list">
               <PanelRow label="Billing mode" value={payload.health.connection?.billingMode ?? 'unconfigured'} />
+              <PanelRow label="Billing availability" value={payload.health.iyzicoConfigured ? 'configured' : 'unavailable'} />
               <PanelRow label="API base" value={payload.health.connection?.apiBaseUrl ?? 'not resolved'} />
               <PanelRow label="Callback" value={payload.health.connection?.callbackUrl ?? 'not resolved'} />
+              <PanelRow label="Hosted state" value={payload.account.entitlements.hostedAccess ? 'active' : payload.account.subscription.syncState} />
             </div>
             <p className="panel-copy">
               {!hostedPlan
@@ -366,6 +432,11 @@ export function HostedPanel({ section }: { section: PanelSection }) {
                     : 'Billing not configured'
                   : 'Local plan'}
               </button>
+              {!payload.account.entitlements.hostedAccess ? (
+                <Link href="/pricing" className="site-secondary-cta">
+                  Compare plans
+                </Link>
+              ) : null}
             </div>
           </article>
         </section>
@@ -373,6 +444,20 @@ export function HostedPanel({ section }: { section: PanelSection }) {
 
       {section === 'usage' ? (
         <div className="site-grid site-grid--two">
+          <article className="site-card">
+            <h2>Usage snapshot</h2>
+            <div className="panel-list">
+              <PanelRow label="Daily requests" value={`${payload.account.usageSnapshot.dailyRequests}/${payload.account.usageSnapshot.dailyRequestsLimit}`} />
+              <PanelRow label="Requests remaining" value={String(payload.account.usageSnapshot.remainingRequests)} />
+              <PanelRow label="Tool calls" value={`${payload.account.usageSnapshot.dailyHostedToolActionCalls}/${payload.account.usageSnapshot.dailyHostedToolActionCallsLimit}`} />
+              <PanelRow label="Tool calls remaining" value={String(payload.account.usageSnapshot.remainingHostedToolActionCalls)} />
+              <PanelRow label="Monthly credits remaining" value={payload.account.usageSnapshot.monthlyCreditsRemaining} />
+              <PanelRow label="Monthly credits burned" value={payload.account.usageSnapshot.monthlyCreditsBurned} />
+              <PanelRow label="Reset at" value={new Date(payload.account.usageSnapshot.resetAt).toLocaleString()} />
+              <PanelRow label="Limit state" value={payload.account.usageSnapshot.state} />
+            </div>
+          </article>
+
           <article className="site-card">
             <h2>Usage totals</h2>
             <div className="panel-list">

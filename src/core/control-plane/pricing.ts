@@ -12,6 +12,7 @@ export type ControlPlanePlanPricingView = {
   monthlyIncludedCredits: string;
   usageBuckets: ControlPlanePlan['rateCard'];
   rateLimits: ControlPlanePlan['rateLimits'];
+  dailyLimits: ControlPlanePlan['dailyLimits'];
   upgradeTriggers: ControlPlanePlan['upgradeTriggers'];
   pricingNarrative: string;
 };
@@ -31,11 +32,12 @@ export function buildPlanPricingView(plan: ControlPlanePlan): ControlPlanePlanPr
     monthlyIncludedCredits: plan.monthlyIncludedCredits,
     usageBuckets: plan.rateCard,
     rateLimits: plan.rateLimits,
+    dailyLimits: plan.dailyLimits,
     upgradeTriggers: plan.upgradeTriggers,
     pricingNarrative:
       billingSurface === 'local'
         ? 'Local runtime stays free of hosted credit accounting. Bring your own keys or use local models.'
-        : 'Hosted usage is metered against included credits with explicit per-domain buckets.',
+        : 'Hosted usage is metered against included credits with explicit per-domain buckets and daily guardrails.',
   };
 }
 

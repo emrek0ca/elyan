@@ -31,6 +31,10 @@ export const controlPlanePlanCatalog: ControlPlanePlan[] = [
       hostedRequestsPerMinute: 0,
       hostedToolCallsPerMinute: 0,
     },
+    dailyLimits: {
+      hostedRequestsPerDay: 0,
+      hostedToolActionCallsPerDay: 0,
+    },
     upgradeTriggers: [
       'User wants hosted access',
       'User wants managed credits',
@@ -62,6 +66,10 @@ export const controlPlanePlanCatalog: ControlPlanePlan[] = [
     rateLimits: {
       hostedRequestsPerMinute: 30,
       hostedToolCallsPerMinute: 10,
+    },
+    dailyLimits: {
+      hostedRequestsPerDay: 250,
+      hostedToolActionCallsPerDay: 600,
     },
     upgradeTriggers: [
       'Hosted credit balance is consistently consumed',
@@ -95,6 +103,10 @@ export const controlPlanePlanCatalog: ControlPlanePlan[] = [
       hostedRequestsPerMinute: 120,
       hostedToolCallsPerMinute: 30,
     },
+    dailyLimits: {
+      hostedRequestsPerDay: 1000,
+      hostedToolActionCallsPerDay: 2400,
+    },
     upgradeTriggers: [
       'Hosted request rate is growing',
       'User needs more credits or lower effective cost',
@@ -126,6 +138,10 @@ export const controlPlanePlanCatalog: ControlPlanePlan[] = [
     rateLimits: {
       hostedRequestsPerMinute: 300,
       hostedToolCallsPerMinute: 80,
+    },
+    dailyLimits: {
+      hostedRequestsPerDay: 3000,
+      hostedToolActionCallsPerDay: 8000,
     },
     upgradeTriggers: [
       'Multiple users need shared billing',

@@ -58,9 +58,35 @@ export class ControlPlaneProviderError extends ControlPlaneError {
 }
 
 export class ControlPlaneInsufficientCreditsError extends ControlPlaneError {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    public readonly details?: {
+      monthlyCreditsRemaining?: string;
+      requiredCredits?: string;
+      balanceBefore?: string;
+      balanceAfter?: string;
+      planId?: string;
+    }
+  ) {
     super(message, 402);
     this.name = 'ControlPlaneInsufficientCreditsError';
+  }
+}
+
+export class ControlPlaneUsageLimitError extends ControlPlaneError {
+  constructor(
+    message: string,
+    public readonly details?: {
+      limitType?: 'daily_requests_limit' | 'daily_tool_action_calls_limit';
+      resetAt?: string;
+      remainingRequests?: number;
+      remainingHostedToolActionCalls?: number;
+      monthlyCreditsRemaining?: string;
+      planId?: string;
+    }
+  ) {
+    super(message, 429);
+    this.name = 'ControlPlaneUsageLimitError';
   }
 }
 
