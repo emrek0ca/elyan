@@ -5,6 +5,7 @@ import {
   LiveMcpClient,
   McpAuditTrail,
   McpCancelledError,
+  McpBlockedError,
   McpDisabledError,
   McpMalformedResponseError,
   McpTimeoutError,
@@ -322,6 +323,34 @@ describe('Live MCP support', () => {
 
     await expect(registry.invokeTool('mock-server::skip', {})).rejects.toBeInstanceOf(McpDisabledError);
     await registry.close();
+  });
+
+  it('blocks tools through server policy and keeps the hidden surface visible', async () => {
+    const transport = new MockMcpTransport({
+      tools: [{ name: 'echo', title: 'Echo', description: 'Returns input' }],
+    });
+    const client = new LiveMcpClient(
+      createServerConfig({
+        policy: {
+          block: {
+            tools: ['echo'],
+            resources: [],
+            resourceTemplates: [],
+            prompts: [],
+          },
+        },
+      }),
+      {
+        transportFactory: () => transport,
+      }
+    );
+
+    const tools = await client.listTools();
+
+    expect(tools.some((tool) => tool.toolName === 'echo' && tool.enabled === false)).toBe(true);
+    await expect(client.invokeTool('echo', { value: 'blocked' })).rejects.toBeInstanceOf(McpBlockedError);
+
+    await client.close();
   });
 
   it('deduplicates repeated resource and prompt manifests across merged servers', async () => {

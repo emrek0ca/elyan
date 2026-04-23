@@ -39,3 +39,10 @@ export class McpDisabledError extends McpError {
     this.name = 'McpDisabledError';
   }
 }
+
+export class McpBlockedError extends McpError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'McpBlockedError';
+  }
+}

@@ -1,6 +1,23 @@
 import { z } from 'zod';
 
 export const mcpTransportKindSchema = z.enum(['stdio', 'streamable-http']);
+export const mcpServerStateSchema = z.enum(['unconfigured', 'configured', 'reachable', 'degraded', 'blocked', 'disabled']);
+
+const mcpSurfacePolicyScopeSchema = z.object({
+  tools: z.array(z.string().min(1)).default([]),
+  resources: z.array(z.string().min(1)).default([]),
+  resourceTemplates: z.array(z.string().min(1)).default([]),
+  prompts: z.array(z.string().min(1)).default([]),
+});
+
+export const mcpServerPolicySchema = z.object({
+  allow: mcpSurfacePolicyScopeSchema.optional(),
+  block: mcpSurfacePolicyScopeSchema.optional(),
+  maxRequestBytes: z.number().int().min(128).max(1_048_576).default(64_000),
+  maxResponseBytes: z.number().int().min(128).max(1_048_576).default(128_000),
+  redactionKeys: z.array(z.string().min(1)).default(['token', 'secret', 'password', 'authorization']),
+  redactionPatterns: z.array(z.string().min(1)).default([]),
+});
 
 const mcpCommonServerConfigSchema = z.object({
   id: z.string().min(1),
@@ -9,6 +26,7 @@ const mcpCommonServerConfigSchema = z.object({
   requestTimeoutMs: z.number().int().min(100).max(60_000).default(10_000),
   shutdownTimeoutMs: z.number().int().min(100).max(10_000).default(2_000),
   disabledToolNames: z.array(z.string().min(1)).default([]),
+  policy: mcpServerPolicySchema.optional(),
 });
 
 export const mcpStdioServerConfigSchema = mcpCommonServerConfigSchema.extend({
@@ -79,6 +97,11 @@ export const mcpServerManifestSchema = z.object({
   requestTimeoutMs: z.number().int().positive(),
   shutdownTimeoutMs: z.number().int().positive(),
   disabledToolNames: z.array(z.string()),
+  state: mcpServerStateSchema.optional(),
+  stateReason: z.string().optional(),
+  lastCheckedAt: z.string().optional(),
+  lastError: z.string().optional(),
+  policy: mcpServerPolicySchema.optional(),
 });
 
 export const mcpToolManifestSchema = toolManifestSchema.extend({
@@ -124,6 +147,8 @@ export const mcpPromptManifestSchema = z.object({
 
 export type McpServerConfig = z.output<typeof mcpServerConfigSchema>;
 export type McpServerManifest = z.output<typeof mcpServerManifestSchema>;
+export type McpServerPolicy = z.output<typeof mcpServerPolicySchema>;
+export type McpServerState = z.output<typeof mcpServerStateSchema>;
 export type McpToolManifest = z.output<typeof mcpToolManifestSchema>;
 export type McpResourceManifest = z.output<typeof mcpResourceManifestSchema>;
 export type McpResourceTemplateManifest = z.output<typeof mcpResourceTemplateManifestSchema>;

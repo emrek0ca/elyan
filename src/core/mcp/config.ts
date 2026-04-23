@@ -7,6 +7,7 @@ import {
   type McpServerConfig,
   type McpServerManifest,
 } from './types';
+import { normalizeMcpServerPolicy } from './policy';
 
 const mcpConfigEnvelopeSchema = z.object({
   servers: mcpServerConfigListSchema.default([]),
@@ -25,7 +26,10 @@ export function parseMcpConfig(value: string | undefined): McpServerConfig[] {
   return normalized.servers.map((server) => mcpServerConfigSchema.parse(server));
 }
 
-export function normalizeMcpServerManifest(server: McpServerConfig): McpServerManifest {
+export function normalizeMcpServerManifest(
+  server: McpServerConfig,
+  overrides?: Partial<Pick<McpServerManifest, 'state' | 'stateReason' | 'lastCheckedAt' | 'lastError' | 'policy'>>
+): McpServerManifest {
   return mcpServerManifestSchema.parse({
     id: server.id,
     transport: server.transport,
@@ -35,6 +39,13 @@ export function normalizeMcpServerManifest(server: McpServerConfig): McpServerMa
     requestTimeoutMs: server.requestTimeoutMs,
     shutdownTimeoutMs: server.shutdownTimeoutMs,
     disabledToolNames: server.disabledToolNames,
+    state: overrides?.state ?? (server.enabled ? 'configured' : 'disabled'),
+    stateReason:
+      overrides?.stateReason ??
+      (server.enabled ? 'Server configured and awaiting discovery.' : 'Server disabled by configuration.'),
+    lastCheckedAt: overrides?.lastCheckedAt,
+    lastError: overrides?.lastError,
+    policy: overrides?.policy ?? normalizeMcpServerPolicy(server.policy),
   });
 }
 

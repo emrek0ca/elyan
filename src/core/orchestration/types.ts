@@ -81,6 +81,43 @@ export type ExecutionTarget = {
   requiresConfirmation: boolean;
 };
 
+export type SkillExecutionStageKind = 'analysis' | 'privacy' | 'capability' | 'mcp' | 'synthesis' | 'evaluation';
+
+export type SkillExecutionStage = {
+  id: string;
+  title: string;
+  summary: string;
+  kind: SkillExecutionStageKind;
+  requiresConfirmation: boolean;
+  capabilityId?: string;
+};
+
+export type SkillExecutionCandidate = {
+  skillId: string;
+  title: string;
+  version: string;
+  score: number;
+  reason: string;
+  enabled: boolean;
+  localOnly: boolean;
+  sharedAllowed: boolean;
+};
+
+export type SkillExecutionDecision = {
+  selectedSkillId: string;
+  selectedSkillTitle: string;
+  selectedSkillVersion: string;
+  resultShape: 'answer' | 'report' | 'artifact';
+  policyBoundary: 'local' | 'workspace' | 'hosted';
+  preferredCapabilityIds: string[];
+  requiresConfirmation: boolean;
+  decisionSummary: string;
+  fallbackReason?: string;
+  notes: string[];
+  candidates: SkillExecutionCandidate[];
+  stages: SkillExecutionStage[];
+};
+
 export type ExecutionPolicy = {
   preferredOrder: ExecutionObjectKind[];
   primary: ExecutionTarget;
@@ -112,4 +149,5 @@ export type OrchestrationPlan = {
   surface: 'local' | 'shared-vps' | 'hosted';
   mode: SearchMode;
   executionPolicy: ExecutionPolicy;
+  skillPolicy: SkillExecutionDecision;
 };

@@ -1,4 +1,4 @@
-export type McpAuditStatus = 'success' | 'error' | 'disabled' | 'timeout' | 'unavailable' | 'closed';
+export type McpAuditStatus = 'success' | 'error' | 'disabled' | 'blocked' | 'timeout' | 'unavailable' | 'closed';
 
 export type McpAuditEntry = {
   serverId: string;
@@ -9,6 +9,8 @@ export type McpAuditEntry = {
   finishedAt: string;
   durationMs: number;
   errorMessage?: string;
+  inputPreview?: string;
+  outputPreview?: string;
 };
 
 export class McpAuditTrail {

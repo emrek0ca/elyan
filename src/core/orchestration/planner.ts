@@ -1,4 +1,5 @@
 import type { SearchMode } from '@/types/search';
+import { buildSkillExecutionDecision } from '@/core/skills';
 import type {
   CapabilityPolicyEntry,
   EvaluationPolicy,
@@ -6,6 +7,7 @@ import type {
   ModelRoutingMode,
   OrchestrationPlan,
   ReasoningDepth,
+  SkillExecutionDecision,
   TaskIntent,
   UncertaintyLevel,
   UsageBudget,
@@ -211,33 +213,44 @@ function resolveCapabilityPolicy(
   taskIntent: TaskIntent,
   mode: SearchMode,
   routingMode: ModelRoutingMode,
-  executionPolicy: ReturnType<typeof buildExecutionPolicy>
+  executionPolicy: ReturnType<typeof buildExecutionPolicy>,
+  skillPolicy: SkillExecutionDecision
 ): CapabilityPolicyEntry[] {
+  const skillCapabilityIds = new Set(skillPolicy.preferredCapabilityIds);
   const shouldEnableTooling =
     taskIntent === 'procedural' ||
     taskIntent === 'personal_workflow' ||
-    executionPolicy.preferredOrder.includes('local_bridge_tool');
+    executionPolicy.preferredOrder.includes('local_bridge_tool') ||
+    skillCapabilityIds.has('tool_bridge') ||
+    skillCapabilityIds.has('math_exact') ||
+    skillCapabilityIds.has('math_decimal');
   const shouldEnableBrowserAutomation =
     (taskIntent === 'personal_workflow' || taskIntent === 'procedural') &&
-    executionPolicy.preferredOrder.includes('browser_automation');
+    (executionPolicy.preferredOrder.includes('browser_automation') || skillCapabilityIds.has('browser_automation'));
   const shouldEnableMcp =
     taskIntent === 'personal_workflow' ||
     executionPolicy.shouldDiscoverMcp ||
+    skillCapabilityIds.has('mcp_bridge') ||
     executionPolicy.preferredOrder.some((kind) =>
       ['mcp_tool', 'mcp_prompt', 'mcp_resource', 'mcp_resource_template'].includes(kind)
     );
   const shouldEnableDocx =
     taskIntent === 'procedural' ||
     taskIntent === 'comparison' ||
+    skillCapabilityIds.has('docx_read') ||
     executionPolicy.candidates.some((candidate) => candidate.id === 'docx_read');
   const shouldEnablePdf =
     taskIntent === 'procedural' ||
     taskIntent === 'comparison' ||
+    skillCapabilityIds.has('pdf_extract') ||
     executionPolicy.candidates.some((candidate) => candidate.id === 'pdf_extract');
   const shouldEnableCharting =
-    taskIntent === 'comparison' || executionPolicy.candidates.some((candidate) => candidate.id === 'chart_generate');
+    taskIntent === 'comparison' ||
+    skillCapabilityIds.has('chart_generate') ||
+    executionPolicy.candidates.some((candidate) => candidate.id === 'chart_generate');
   const shouldEnableRetrievalAssist =
-    executionPolicy.shouldRetrieve && (mode === 'research' || taskIntent === 'comparison');
+    executionPolicy.shouldRetrieve &&
+    (mode === 'research' || taskIntent === 'comparison' || skillPolicy.selectedSkillId === 'research_companion');
   const shouldEnableWebRead = executionPolicy.preferredOrder.includes('browser_read');
   const shouldEnableCrawler = executionPolicy.preferredOrder.includes('crawl') || shouldEnableRetrievalAssist;
   const shouldEnableLocalBridge = executionPolicy.preferredOrder.includes('local_bridge_tool') || shouldEnableTooling;
@@ -347,6 +360,11 @@ export function buildOrchestrationPlan(
   const reasoningDepth = resolveReasoningDepth(mode, taskIntent, query);
   const routingMode = resolveRoutingMode(taskIntent, mode);
   const uncertainty = resolveUncertainty(taskIntent, intentConfidence, reasoningDepth, mode);
+  const skillPolicy = buildSkillExecutionDecision({
+    query,
+    mode,
+    taskIntent,
+  });
   const executionSurface: ExecutionSurfaceSnapshot =
     surface ?? {
       local: {
@@ -372,9 +390,9 @@ export function buildOrchestrationPlan(
     routingMode,
     uncertainty,
     intentConfidence,
-  });
+  }, skillPolicy);
   const retrieval = resolveRetrievalPolicy(mode, taskIntent, reasoningDepth, uncertainty, executionPolicy);
-  const capabilityPolicy = resolveCapabilityPolicy(taskIntent, mode, routingMode, executionPolicy);
+  const capabilityPolicy = resolveCapabilityPolicy(taskIntent, mode, routingMode, executionPolicy, skillPolicy);
   const usageBudget = resolveUsageBudget(reasoningDepth, retrieval, capabilityPolicy, evaluation);
   const temperature = uncertainty === 'high' ? 0.15 : reasoningDepth === 'deep' ? 0.25 : 0.2;
 
@@ -396,5 +414,6 @@ export function buildOrchestrationPlan(
     surface: taskIntent === 'personal_workflow' ? 'local' : 'hosted',
     mode,
     executionPolicy,
+    skillPolicy,
   };
 }

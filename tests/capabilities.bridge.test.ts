@@ -40,6 +40,8 @@ describe('Bridge capabilities', () => {
       expect(snapshot.discovery.mcp.status).toBe('unavailable');
       expect(snapshot.discovery.mcp.error).toMatch(/Invalid ELYAN_MCP_SERVERS/i);
       expect(snapshot.local.bridgeTools.some((tool) => tool.id === 'math_exact')).toBe(true);
+      expect(snapshot.skills.summary.builtInSkillCount).toBeGreaterThan(0);
+      expect(snapshot.skills.summary.installedSkillCount).toBeGreaterThan(0);
     } finally {
       process.env.ELYAN_MCP_SERVERS = previous;
     }

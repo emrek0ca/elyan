@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { motion } from 'framer-motion';
+import type { CapabilityDirectorySnapshot } from '@/core/capabilities';
 import type { RuntimeSettings } from '@/core/runtime-settings';
 
 type DashboardStatus = {
@@ -20,16 +21,7 @@ type DashboardStatus = {
     voiceConfigured: boolean;
   };
   models: Array<{ id: string; name: string; provider: string; type: string }>;
-  capabilities: {
-    summary?: {
-      localCapabilityCount?: number;
-      bridgeToolCount?: number;
-      mcpToolCount?: number;
-      mcpResourceCount?: number;
-      browserEnabled?: boolean;
-      crawlEnabled?: boolean;
-    };
-  };
+  capabilities: CapabilityDirectorySnapshot;
   channels: {
     telegram: { configured: boolean; enabled: boolean; mode: string; webhookPath: string };
     whatsappCloud: { configured: boolean; enabled: boolean; webhookPath: string };
@@ -420,8 +412,8 @@ export function ManagementConsole() {
             <div className="manage-metrics">
               <Metric label="Local" value={String(status.capabilities.summary?.localCapabilityCount ?? 0)} />
               <Metric label="Bridge" value={String(status.capabilities.summary?.bridgeToolCount ?? 0)} />
-              <Metric label="MCP tools" value={String(status.capabilities.summary?.mcpToolCount ?? 0)} />
-              <Metric label="MCP resources" value={String(status.capabilities.summary?.mcpResourceCount ?? 0)} />
+              <Metric label="Skills" value={String(status.capabilities.summary?.skillCount ?? 0)} />
+              <Metric label="Installed" value={String(status.capabilities.summary?.installedSkillCount ?? 0)} />
             </div>
             <div className="manage-page__help">
               Browser {status.capabilities.summary?.browserEnabled ? 'available' : 'unavailable'}.
@@ -538,8 +530,29 @@ export function ManagementConsole() {
 
           <article className="manage-card">
             <div className="manage-card__title">MCP</div>
+            <div className="manage-metrics">
+              <Metric label="Configured" value={String(status.capabilities.summary?.mcpConfiguredServerCount ?? 0)} />
+              <Metric label="Reachable" value={String(status.capabilities.summary?.mcpReachableServerCount ?? 0)} />
+              <Metric label="Blocked" value={String(status.capabilities.summary?.mcpBlockedServerCount ?? 0)} />
+              <Metric label="Disabled" value={String(status.capabilities.summary?.mcpDisabledServerCount ?? 0)} />
+            </div>
             <div className="manage-list">
-              <ChannelLine label="Configured servers" value={String(status.mcp.servers.length)} hint={status.mcp.configured ? 'Live MCP surfaces are available.' : 'Optional. Add stdio or streamable-http servers.'} />
+              {status.capabilities.mcp.mcpServers.length > 0 ? (
+                status.capabilities.mcp.mcpServers.slice(0, 4).map((server) => (
+                  <ChannelLine
+                    key={server.id}
+                    label={server.id}
+                    value={(server.state ?? (server.enabled ? 'configured' : 'disabled')).replace('_', ' ')}
+                    hint={server.stateReason ?? server.endpoint ?? 'No live state recorded yet.'}
+                  />
+                ))
+              ) : (
+                <div className="manage-page__help">
+                  {status.mcp.configured
+                    ? 'Live MCP surfaces are unavailable right now.'
+                    : 'Optional. Add stdio or streamable-http servers.'}
+                </div>
+              )}
             </div>
           </article>
         </section>

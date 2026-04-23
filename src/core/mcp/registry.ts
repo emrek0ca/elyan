@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   McpCancelledError,
+  McpBlockedError,
   McpDisabledError,
   McpError,
   McpTimeoutError,
@@ -8,6 +9,7 @@ import {
 } from './errors';
 import { LiveMcpClient, type LiveMcpClientOptions } from './client';
 import { normalizeMcpServerManifest } from './config';
+import { normalizeMcpServerPolicy, serializeMcpPreview } from './policy';
 import { buildLiveMcpToolCatalog } from './catalog';
 import {
   type McpPromptManifest,
@@ -15,6 +17,7 @@ import {
   type McpResourceTemplateManifest,
   type McpServerConfig,
   type McpServerManifest,
+  type McpServerState,
   type McpToolManifest,
 } from './types';
 import { McpAuditTrail, type McpAuditEntry } from './audit';
@@ -44,6 +47,12 @@ type ServerListOptions = {
 };
 
 type ServerManifestCache<T> = Map<string, T[]>;
+type ServerRuntimeState = {
+  state: McpServerState;
+  stateReason?: string;
+  lastCheckedAt?: string;
+  lastError?: string;
+};
 
 const resolvedToolIdSchema = z
   .string()
@@ -90,6 +99,10 @@ function dedupeByKey<T>(items: T[], keySelector: (item: T) => string): T[] {
 }
 
 function mapAuditStatus(error: unknown): McpAuditEntry['status'] {
+  if (error instanceof McpBlockedError) {
+    return 'blocked';
+  }
+
   if (error instanceof McpDisabledError) {
     return 'disabled';
   }
@@ -110,6 +123,10 @@ function shouldSoftFailDiscovery(error: unknown, softFail = true) {
     return true;
   }
 
+  if (error instanceof McpBlockedError) {
+    return true;
+  }
+
   if (error instanceof McpCancelledError || error instanceof McpTimeoutError) {
     return false;
   }
@@ -123,6 +140,7 @@ export class McpToolRegistry {
   private readonly resourceCache: ServerManifestCache<McpResourceManifest> = new Map();
   private readonly resourceTemplateCache: ServerManifestCache<McpResourceTemplateManifest> = new Map();
   private readonly promptCache: ServerManifestCache<McpPromptManifest> = new Map();
+  private readonly serverStates = new Map<string, ServerRuntimeState>();
 
   constructor(
     private readonly servers: McpServerConfig[],
@@ -131,7 +149,11 @@ export class McpToolRegistry {
   ) {}
 
   listServers(): McpServerManifest[] {
-    return this.servers.map((server) => normalizeMcpServerManifest(server));
+    return this.servers.map((server) => {
+      const state = this.serverStates.get(server.id);
+
+      return normalizeMcpServerManifest(server, state);
+    });
   }
 
   getAuditTrail(): McpAuditEntry[] {
@@ -140,6 +162,58 @@ export class McpToolRegistry {
 
   getEnabledServers(): McpServerConfig[] {
     return this.servers.filter((server) => server.enabled);
+  }
+
+  private setServerState(serverId: string, state: ServerRuntimeState) {
+    this.serverStates.set(serverId, state);
+  }
+
+  private resolveStateFromError(error: unknown, fallback: McpServerState = 'degraded'): ServerRuntimeState {
+    if (error instanceof McpBlockedError) {
+      return {
+        state: 'blocked',
+        stateReason: error.message,
+        lastError: error.message,
+      };
+    }
+
+    if (error instanceof McpDisabledError) {
+      return {
+        state: 'disabled',
+        stateReason: error.message,
+        lastError: error.message,
+      };
+    }
+
+    if (error instanceof McpTimeoutError) {
+      return {
+        state: fallback,
+        stateReason: error.message,
+        lastError: error.message,
+      };
+    }
+
+    if (error instanceof McpCancelledError) {
+      return {
+        state: fallback,
+        stateReason: error.message,
+        lastError: error.message,
+      };
+    }
+
+    if (error instanceof McpUnavailableError) {
+      return {
+        state: fallback,
+        stateReason: error.message,
+        lastError: error.message,
+      };
+    }
+
+    return {
+      state: fallback,
+      stateReason: describeError(error),
+      lastError: describeError(error),
+    };
   }
 
   private getClient(serverId: string) {
@@ -188,6 +262,11 @@ export class McpToolRegistry {
       });
 
       const cachedEntries = this.writeCache(cache, server.id, entries);
+      this.setServerState(server.id, {
+        state: 'reachable',
+        stateReason: `Discovery succeeded for ${server.id}.`,
+        lastCheckedAt: new Date().toISOString(),
+      });
       this.auditTrail.record({
         serverId: server.id,
         status: 'success',
@@ -199,6 +278,10 @@ export class McpToolRegistry {
       return cachedEntries;
     } catch (error) {
       const finishedAt = new Date();
+      this.setServerState(server.id, {
+        ...this.resolveStateFromError(error),
+        lastCheckedAt: finishedAt.toISOString(),
+      });
       this.auditTrail.record({
         serverId: server.id,
         status: mapAuditStatus(error),
@@ -309,6 +392,7 @@ export class McpToolRegistry {
       throw new McpUnavailableError(`MCP resource not found: ${resourceUri}`);
     }
 
+    const serverPolicy = normalizeMcpServerPolicy(server.policy);
     const startedAt = new Date();
 
     try {
@@ -326,11 +410,21 @@ export class McpToolRegistry {
         startedAt: startedAt.toISOString(),
         finishedAt: new Date().toISOString(),
         durationMs: new Date().getTime() - startedAt.getTime(),
+        outputPreview: serializeMcpPreview(result, serverPolicy),
+      });
+      this.setServerState(server.id, {
+        state: 'reachable',
+        stateReason: `Resource read succeeded for ${resourceUri}.`,
+        lastCheckedAt: new Date().toISOString(),
       });
 
       return result;
     } catch (error) {
       const finishedAt = new Date();
+      this.setServerState(server.id, {
+        ...this.resolveStateFromError(error),
+        lastCheckedAt: finishedAt.toISOString(),
+      });
       this.auditTrail.record({
         serverId: server.id,
         toolId: resourceUri,
@@ -360,6 +454,7 @@ export class McpToolRegistry {
       throw new McpUnavailableError(`MCP prompt not found: ${promptName}`);
     }
 
+    const serverPolicy = normalizeMcpServerPolicy(server.policy);
     const startedAt = new Date();
 
     try {
@@ -377,11 +472,21 @@ export class McpToolRegistry {
         startedAt: startedAt.toISOString(),
         finishedAt: new Date().toISOString(),
         durationMs: new Date().getTime() - startedAt.getTime(),
+        outputPreview: serializeMcpPreview(result, serverPolicy),
+      });
+      this.setServerState(server.id, {
+        state: 'reachable',
+        stateReason: `Prompt fetch succeeded for ${promptName}.`,
+        lastCheckedAt: new Date().toISOString(),
       });
 
       return result;
     } catch (error) {
       const finishedAt = new Date();
+      this.setServerState(server.id, {
+        ...this.resolveStateFromError(error),
+        lastCheckedAt: finishedAt.toISOString(),
+      });
       this.auditTrail.record({
         serverId: server.id,
         toolId: promptName,
@@ -488,6 +593,12 @@ export class McpToolRegistry {
     if (!server.enabled) {
       const startedAt = new Date();
       const finishedAt = new Date();
+      this.setServerState(serverId, {
+        state: 'disabled',
+        stateReason: 'disabled by registry configuration',
+        lastCheckedAt: finishedAt.toISOString(),
+        lastError: 'disabled by registry configuration',
+      });
       this.auditTrail.record({
         serverId,
         toolId,
@@ -504,6 +615,12 @@ export class McpToolRegistry {
     if (server.disabledToolNames.includes(toolName)) {
       const startedAt = new Date();
       const finishedAt = new Date();
+      this.setServerState(serverId, {
+        state: 'blocked',
+        stateReason: 'disabled by server configuration',
+        lastCheckedAt: finishedAt.toISOString(),
+        lastError: 'disabled by server configuration',
+      });
       this.auditTrail.record({
         serverId,
         toolId,
@@ -517,6 +634,8 @@ export class McpToolRegistry {
       throw new McpDisabledError(`MCP tool disabled: ${toolId}`);
     }
 
+    const serverPolicy = normalizeMcpServerPolicy(server.policy);
+    const requestPreview = serializeMcpPreview(input, serverPolicy);
     const startedAt = new Date();
 
     try {
@@ -527,6 +646,11 @@ export class McpToolRegistry {
       });
 
       const finishedAt = new Date();
+      this.setServerState(serverId, {
+        state: 'reachable',
+        stateReason: `Tool invocation succeeded for ${toolId}.`,
+        lastCheckedAt: finishedAt.toISOString(),
+      });
       this.auditTrail.record({
         serverId,
         toolId,
@@ -535,11 +659,17 @@ export class McpToolRegistry {
         startedAt: startedAt.toISOString(),
         finishedAt: finishedAt.toISOString(),
         durationMs: finishedAt.getTime() - startedAt.getTime(),
+        inputPreview: requestPreview,
+        outputPreview: serializeMcpPreview(result, serverPolicy),
       });
 
       return result;
     } catch (error) {
       const finishedAt = new Date();
+      this.setServerState(serverId, {
+        ...this.resolveStateFromError(error),
+        lastCheckedAt: finishedAt.toISOString(),
+      });
       this.auditTrail.record({
         serverId,
         toolId,
@@ -549,6 +679,7 @@ export class McpToolRegistry {
         finishedAt: finishedAt.toISOString(),
         durationMs: finishedAt.getTime() - startedAt.getTime(),
         errorMessage: describeError(error),
+        inputPreview: requestPreview,
       });
 
       if (error instanceof Error) {

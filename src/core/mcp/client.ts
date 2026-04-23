@@ -1,12 +1,18 @@
 import { z } from 'zod';
 import {
   McpCancelledError,
+  McpBlockedError,
   McpError,
   McpMalformedResponseError,
   McpTimeoutError,
   McpUnavailableError,
 } from './errors';
 import { normalizeMcpServerManifest } from './config';
+import {
+  estimatePayloadSize,
+  isMcpItemAllowed,
+  normalizeMcpServerPolicy,
+} from './policy';
 import {
   type McpPromptManifest,
   type McpResourceManifest,
@@ -158,6 +164,21 @@ function normalizeEndpoint(config: McpServerConfig) {
   return config.transport === 'streamable-http' ? config.url : undefined;
 }
 
+function getPolicy(config: McpServerConfig) {
+  return normalizeMcpServerPolicy(config.policy);
+}
+
+function createBlockedError(subject: string, reason: string) {
+  return new McpBlockedError(`MCP operation blocked: ${subject} (${reason})`);
+}
+
+function ensurePayloadWithinLimit(subject: string, payload: unknown, maxBytes: number) {
+  const size = estimatePayloadSize(payload);
+  if (size > maxBytes) {
+    throw createBlockedError(subject, `payload exceeds ${maxBytes} bytes`);
+  }
+}
+
 async function createDefaultTransport(config: McpServerConfig): Promise<MCPTransport> {
   if (config.transport === 'stdio') {
     const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
@@ -263,6 +284,7 @@ export class LiveMcpClient {
       throw new McpMalformedResponseError(`Malformed MCP tool list from ${this.config.id}`);
     }
 
+    const policy = getPolicy(this.config);
     return parsed.data.tools
       .filter((tool) => !this.config.disabledToolNames.includes(tool.name))
       .map((tool) => ({
@@ -272,7 +294,9 @@ export class LiveMcpClient {
         description: tool.description ?? `MCP tool from ${this.config.id}`,
         library: 'mcp',
         timeoutMs: this.config.requestTimeoutMs,
-        enabled: true,
+        enabled:
+          !this.config.disabledToolNames.includes(tool.name) &&
+          isMcpItemAllowed('tool', tool.name, policy),
         source: {
           kind: 'mcp',
           serverId: this.config.id,
@@ -309,6 +333,7 @@ export class LiveMcpClient {
       throw new McpMalformedResponseError(`Malformed MCP resource list from ${this.config.id}`);
     }
 
+    const policy = getPolicy(this.config);
     return parsed.data.resources.map((resource) => ({
       uri: resource.uri,
       name: resource.name,
@@ -316,7 +341,7 @@ export class LiveMcpClient {
       description: resource.description,
       mimeType: resource.mimeType,
       size: resource.size,
-      enabled: true,
+      enabled: isMcpItemAllowed('resource', resource.uri, policy),
       source: {
         kind: 'mcp',
         serverId: this.config.id,
@@ -355,13 +380,14 @@ export class LiveMcpClient {
       throw new McpMalformedResponseError(`Malformed MCP resource template list from ${this.config.id}`);
     }
 
+    const policy = getPolicy(this.config);
     return parsed.data.resourceTemplates.map((resourceTemplate) => ({
       uriTemplate: resourceTemplate.uriTemplate,
       name: resourceTemplate.name,
       title: resourceTemplate.title ?? resourceTemplate.name,
       description: resourceTemplate.description,
       mimeType: resourceTemplate.mimeType,
-      enabled: true,
+      enabled: isMcpItemAllowed('resourceTemplate', resourceTemplate.uriTemplate, policy),
       source: {
         kind: 'mcp',
         serverId: this.config.id,
@@ -398,12 +424,13 @@ export class LiveMcpClient {
       throw new McpMalformedResponseError(`Malformed MCP prompt list from ${this.config.id}`);
     }
 
+    const policy = getPolicy(this.config);
     return parsed.data.prompts.map((prompt) => ({
       name: prompt.name,
       title: prompt.title,
       description: prompt.description,
       arguments: prompt.arguments ?? [],
-      enabled: true,
+      enabled: isMcpItemAllowed('prompt', prompt.name, policy),
       source: {
         kind: 'mcp',
         serverId: this.config.id,
@@ -418,6 +445,11 @@ export class LiveMcpClient {
 
     if (!this.client) {
       throw new McpUnavailableError(`MCP client unavailable: ${this.config.id}`);
+    }
+
+    const policy = getPolicy(this.config);
+    if (!isMcpItemAllowed('resource', uri, policy)) {
+      throw createBlockedError(`resource ${this.config.id}::${uri}`, 'blocked by server policy');
     }
 
     const result = await withTimeout(
@@ -435,6 +467,8 @@ export class LiveMcpClient {
       throw error instanceof Error ? error : new McpUnavailableError(`Unable to read MCP resource: ${this.config.id}::${uri}`);
     });
 
+    ensurePayloadWithinLimit(`resource result ${this.config.id}::${uri}`, result, policy.maxResponseBytes);
+
     return result;
   }
 
@@ -443,6 +477,11 @@ export class LiveMcpClient {
 
     if (!this.client) {
       throw new McpUnavailableError(`MCP client unavailable: ${this.config.id}`);
+    }
+
+    const policy = getPolicy(this.config);
+    if (!isMcpItemAllowed('prompt', name, policy)) {
+      throw createBlockedError(`prompt ${this.config.id}::${name}`, 'blocked by server policy');
     }
 
     const result = await withTimeout(
@@ -460,6 +499,8 @@ export class LiveMcpClient {
       throw error instanceof Error ? error : new McpUnavailableError(`Unable to get MCP prompt: ${this.config.id}::${name}`);
     });
 
+    ensurePayloadWithinLimit(`prompt result ${this.config.id}::${name}`, result, policy.maxResponseBytes);
+
     return result;
   }
 
@@ -469,6 +510,13 @@ export class LiveMcpClient {
     if (!this.client) {
       throw new McpUnavailableError(`MCP client unavailable: ${this.config.id}`);
     }
+
+    const policy = getPolicy(this.config);
+    if (!isMcpItemAllowed('tool', toolName, policy)) {
+      throw createBlockedError(`tool ${this.config.id}::${toolName}`, 'blocked by server policy');
+    }
+
+    ensurePayloadWithinLimit(`tool ${this.config.id}::${toolName}`, input, policy.maxRequestBytes);
 
     try {
       const result = await withTimeout(
@@ -491,6 +539,8 @@ export class LiveMcpClient {
       if (!parsed.success) {
         throw new McpMalformedResponseError(`Malformed MCP tool result from ${this.config.id}::${toolName}`);
       }
+
+      ensurePayloadWithinLimit(`tool result ${this.config.id}::${toolName}`, parsed.data, policy.maxResponseBytes);
 
       return parsed.data;
     } catch (error) {

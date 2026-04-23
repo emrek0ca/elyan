@@ -110,6 +110,7 @@ export function buildEvaluationSignalDraft(input: BuildEvaluationSignalInput): C
     promotionCandidate,
     notes: [
       input.plan.executionPolicy.decisionSummary,
+      `Skill path: ${input.plan.skillPolicy.selectedSkillTitle} (${input.plan.skillPolicy.policyBoundary}).`,
       ...input.operatorNotes.slice(0, 2),
       input.operatorTarget
         ? `Primary execution target: ${input.operatorTarget.kind}${input.operatorTarget.id ? ` (${input.operatorTarget.id})` : ''}.`

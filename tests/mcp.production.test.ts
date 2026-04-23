@@ -266,9 +266,11 @@ describe('Production MCP validation', () => {
       expect(snapshot.local.capabilities.some((capability) => capability.id === 'tool_bridge')).toBe(true);
       expect(snapshot.local.bridgeTools.some((tool) => tool.id === 'math_exact')).toBe(true);
       expect(snapshot.mcp.mcpServers.some((server) => server.id === 'remote-mcp-directory')).toBe(true);
+      expect(snapshot.mcp.mcpServers.some((server) => server.state === 'reachable')).toBe(true);
       expect(snapshot.mcp.mcpTools.some((tool) => tool.toolName === 'echo')).toBe(true);
       expect(snapshot.mcp.mcpResources.some((resource) => resource.uri === 'elyan://knowledge/base')).toBe(true);
       expect(snapshot.mcp.mcpPrompts.some((prompt) => prompt.name === 'summary-template')).toBe(true);
+      expect(snapshot.summary.mcpReachableServerCount).toBeGreaterThan(0);
       expect(snapshot.summary.mcpToolCount).toBeGreaterThan(0);
       expect(snapshot.summary.mcpPromptCount).toBeGreaterThan(0);
     } finally {

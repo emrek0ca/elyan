@@ -5,6 +5,7 @@ import type {
   ExecutionTarget,
   IntentConfidence,
   ModelRoutingMode,
+  SkillExecutionDecision,
   TaskIntent,
   UncertaintyLevel,
 } from './types';
@@ -117,8 +118,13 @@ function localKindFromManifestId(manifestId: string): ExecutionObjectKind {
   return 'local_capability';
 }
 
-function selectBestLocalTarget(query: string, surface: ExecutionSurfaceSnapshot): ExecutionTarget | undefined {
+function selectBestLocalTarget(
+  query: string,
+  surface: ExecutionSurfaceSnapshot,
+  skillPolicy?: SkillExecutionDecision
+): ExecutionTarget | undefined {
   const localCandidates = listEnabledLocalCandidates(surface);
+  const preferredCapabilityIds = new Set(skillPolicy?.preferredCapabilityIds ?? []);
   let best: { score: number; target: ExecutionTarget } | undefined;
 
   for (const manifest of localCandidates) {
@@ -126,7 +132,7 @@ function selectBestLocalTarget(query: string, surface: ExecutionSurfaceSnapshot)
       continue;
     }
 
-    const score = scoreManifest(query, manifest);
+    const score = scoreManifest(query, manifest) + (preferredCapabilityIds.has(manifest.id) ? 6 : 0);
     if (score === 0) {
       continue;
     }
@@ -266,11 +272,16 @@ function shouldUseMcp(query: string, surface: ExecutionSurfaceSnapshot, context:
   );
 }
 
-function selectBestMcpTarget(query: string, surface: ExecutionSurfaceSnapshot): ExecutionTarget | undefined {
+function selectBestMcpTarget(
+  query: string,
+  surface: ExecutionSurfaceSnapshot,
+  skillPolicy?: SkillExecutionDecision
+): ExecutionTarget | undefined {
   const wantsPrompt = hasKeyword(query, [/\b(prompt|workflow|instruction)\b/i]);
   const wantsResource = hasKeyword(query, [/\b(resource|dataset|context|file|knowledge|reference)\b/i]);
   const wantsTemplate = hasKeyword(query, [/\b(template|uri template|parameterized)\b/i]);
   const wantsTool = hasKeyword(query, [/\b(tool|action|execute|run|call|trigger)\b/i]);
+  const preferredCapabilityIds = new Set(skillPolicy?.preferredCapabilityIds ?? []);
 
   const candidates: McpCandidate[] = [
     ...surface.mcp.prompts.map((entry) => ({
@@ -314,7 +325,10 @@ function selectBestMcpTarget(query: string, surface: ExecutionSurfaceSnapshot): 
   let best: { score: number; target: ExecutionTarget } | undefined;
 
   for (const manifest of candidates) {
-    const score = manifest.explicitBoost + scoreManifest(query, manifest);
+    const score =
+      manifest.explicitBoost +
+      scoreManifest(query, manifest) +
+      (preferredCapabilityIds.has('mcp_bridge') ? 2 : 0);
     if (score === 0) {
       continue;
     }
@@ -367,13 +381,14 @@ export function buildExecutionPolicy(
   query: string,
   mode: SearchMode,
   surface: ExecutionSurfaceSnapshot,
-  context: ExecutionPolicyContext
+  context: ExecutionPolicyContext,
+  skillPolicy?: SkillExecutionDecision
 ): ExecutionPolicy {
   const urls = extractUrls(query);
   const useMcp = shouldUseMcp(query, surface, context);
   const explicitLocalTarget = buildExplicitLocalTarget(query, surface, urls);
-  const localTarget = explicitLocalTarget ?? selectBestLocalTarget(query, surface);
-  const mcpTarget = useMcp ? selectBestMcpTarget(query, surface) : undefined;
+  const localTarget = explicitLocalTarget ?? selectBestLocalTarget(query, surface, skillPolicy);
+  const mcpTarget = useMcp ? selectBestMcpTarget(query, surface, skillPolicy) : undefined;
   const useBrowserRead = shouldReadBrowser(query, urls);
   const useBrowserAutomation = shouldAutomateBrowser(query, urls);
   const useCrawl = shouldCrawl(query, urls);
@@ -479,6 +494,9 @@ export function buildExecutionPolicy(
           : useMcp && mcpDiscoveryAttempted
             ? `MCP discovery ${surface.mcp.discovery?.status ?? 'completed'}, but no concrete target matched.`
             : 'MCP discovery is not required.',
+      skillPolicy
+        ? `Skill path: ${skillPolicy.selectedSkillTitle} (${skillPolicy.policyBoundary}).`
+        : 'Skill path not resolved.',
       fallbackReason ?? 'A concrete execution path was selected.',
     ],
   };

@@ -11,6 +11,7 @@ import {
   buildLocalBridgeCatalog,
   McpToolRegistry,
   readMcpServerConfigs,
+  mcpServerManifestSchema,
 } from '@/core/mcp';
 import {
   mcpPromptManifestSchema,
@@ -57,18 +58,7 @@ const mcpBridgeOutputSchema = z.object({
       }),
     })
   ),
-  mcpServers: z.array(
-    z.object({
-      id: z.string(),
-      transport: z.enum(['stdio', 'streamable-http']),
-      endpoint: z.string().optional(),
-      enabled: z.boolean(),
-      connectTimeoutMs: z.number().int().positive(),
-      requestTimeoutMs: z.number().int().positive(),
-      shutdownTimeoutMs: z.number().int().positive(),
-      disabledToolNames: z.array(z.string()),
-    })
-  ),
+  mcpServers: z.array(mcpServerManifestSchema),
   mcpTools: z.array(mcpToolManifestSchema),
   mcpResources: z.array(mcpResourceManifestSchema),
   mcpResourceTemplates: z.array(mcpResourceTemplateManifestSchema),
@@ -162,8 +152,10 @@ export const mcpBridgeCapability: CapabilityDefinition<
             }))
           )
         : []) as z.output<typeof mcpBridgeOutputSchema>['tools'];
-      const mcpServers = input.includeManifest
-        ? buildConfiguredMcpServerCatalog(serverConfigs)
+      let mcpServers = input.includeManifest
+        ? liveRegistry
+          ? liveRegistry.listServers()
+          : buildConfiguredMcpServerCatalog(serverConfigs)
         : [];
       let mcpTools: z.output<typeof mcpBridgeOutputSchema>['mcpTools'] = [];
       let mcpResources: z.output<typeof mcpBridgeOutputSchema>['mcpResources'] = [];
@@ -181,6 +173,7 @@ export const mcpBridgeCapability: CapabilityDefinition<
             liveRegistry.listResourceTemplates(),
             liveRegistry.listPrompts(),
           ]);
+          mcpServers = liveRegistry.listServers();
         } catch (error) {
           discoveryStatus = 'degraded';
           discoveryError = describeError(error);

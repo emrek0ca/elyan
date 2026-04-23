@@ -1,5 +1,6 @@
 import { buildLocalCapabilityCatalog, buildLocalBridgeCatalog } from '@/core/mcp';
 import { getBridgeToolManifest } from '@/core/capabilities/bridge-tools';
+import { buildSkillDirectorySnapshot, type SkillDirectorySnapshot } from '@/core/skills';
 import { capabilityRegistry } from './registry';
 import type { McpBridgeOutput } from './bridge';
 
@@ -8,12 +9,14 @@ export type CapabilityDirectorySnapshot = {
     capabilities: ReturnType<typeof buildLocalCapabilityCatalog>;
     bridgeTools: ReturnType<typeof buildLocalBridgeCatalog>;
   };
+  skills: SkillDirectorySnapshot;
   mcp: McpBridgeOutput;
   mcpStatus: 'ready' | 'unavailable';
   mcpError?: string;
   discovery: {
     includeLiveMcp: boolean;
     mcp: McpBridgeOutput['discovery'];
+    skills: SkillDirectorySnapshot['discovery'];
   };
   selectionGuide: Array<{
     kind: 'local_module' | 'local_bridge_tool' | 'mcp_resource' | 'mcp_prompt' | 'mcp_tool' | 'browser' | 'crawl' | 'direct_answer';
@@ -26,12 +29,50 @@ export type CapabilityDirectorySnapshot = {
     enabledLocalCapabilityCount: number;
     bridgeToolCount: number;
     enabledBridgeToolCount: number;
+    browserEnabled: boolean;
+    crawlEnabled: boolean;
+    skillCount: number;
+    enabledSkillCount: number;
+    installedSkillCount: number;
     mcpServerCount: number;
+    mcpConfiguredServerCount: number;
+    mcpReachableServerCount: number;
+    mcpDegradedServerCount: number;
+    mcpBlockedServerCount: number;
+    mcpDisabledServerCount: number;
     mcpToolCount: number;
     mcpResourceCount: number;
     mcpPromptCount: number;
   };
 };
+
+function countMcpServerStates(mcp: McpBridgeOutput) {
+  const counts = {
+    configured: 0,
+    reachable: 0,
+    degraded: 0,
+    blocked: 0,
+    disabled: 0,
+  };
+
+  for (const server of mcp.mcpServers) {
+    const state = server.state ?? (server.enabled ? 'configured' : 'disabled');
+
+    if (state === 'configured') {
+      counts.configured += 1;
+    } else if (state === 'reachable') {
+      counts.reachable += 1;
+    } else if (state === 'degraded') {
+      counts.degraded += 1;
+    } else if (state === 'blocked') {
+      counts.blocked += 1;
+    } else {
+      counts.disabled += 1;
+    }
+  }
+
+  return counts;
+}
 
 export async function buildCapabilityDirectorySnapshot(includeLiveMcp = true): Promise<CapabilityDirectorySnapshot> {
   const localCapabilityList = capabilityRegistry.list({ includeDisabled: true });
@@ -39,6 +80,7 @@ export async function buildCapabilityDirectorySnapshot(includeLiveMcp = true): P
   const bridgeEnabled = localCapabilityList.some(
     (capability) => capability.id === 'tool_bridge' && capability.enabled
   );
+  const skills = await buildSkillDirectorySnapshot(true);
   const localBridgeTools = buildLocalBridgeCatalog(
     getBridgeToolManifest().map((tool) => ({
       ...tool,
@@ -74,18 +116,21 @@ export async function buildCapabilityDirectorySnapshot(includeLiveMcp = true): P
       },
     };
   }
+  const mcpStateCounts = countMcpServerStates(mcp);
 
   return {
     local: {
       capabilities: localCapabilities,
       bridgeTools: localBridgeTools,
     },
+    skills,
     mcp,
     mcpStatus,
     mcpError,
     discovery: {
       includeLiveMcp,
       mcp: mcp.discovery,
+      skills: skills.discovery,
     },
     selectionGuide: [
       {
@@ -142,7 +187,17 @@ export async function buildCapabilityDirectorySnapshot(includeLiveMcp = true): P
       enabledLocalCapabilityCount: localCapabilities.filter((capability) => capability.enabled).length,
       bridgeToolCount: localBridgeTools.length,
       enabledBridgeToolCount: localBridgeTools.filter((tool) => tool.enabled).length,
+      browserEnabled: localCapabilities.some((capability) => capability.id === 'web_read_dynamic' && capability.enabled),
+      crawlEnabled: localCapabilities.some((capability) => capability.id === 'web_crawl' && capability.enabled),
+      skillCount: skills.summary.builtInSkillCount,
+      enabledSkillCount: skills.summary.enabledBuiltInSkillCount,
+      installedSkillCount: skills.summary.installedSkillCount,
       mcpServerCount: mcp.mcpServers.length,
+      mcpConfiguredServerCount: mcpStateCounts.configured,
+      mcpReachableServerCount: mcpStateCounts.reachable,
+      mcpDegradedServerCount: mcpStateCounts.degraded,
+      mcpBlockedServerCount: mcpStateCounts.blocked,
+      mcpDisabledServerCount: mcpStateCounts.disabled,
       mcpToolCount: mcp.mcpTools.length,
       mcpResourceCount: mcp.mcpResources.length + mcp.mcpResourceTemplates.length,
       mcpPromptCount: mcp.mcpPrompts.length,

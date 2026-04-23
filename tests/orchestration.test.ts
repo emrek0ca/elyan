@@ -28,6 +28,8 @@ describe('Orchestration planning', () => {
     expect(plan.uncertainty).toBe('high');
     expect(plan.reasoningDepth).toBe('deep');
     expect(plan.routingMode).toBe('cloud_preferred');
+    expect(plan.skillPolicy.selectedSkillId).toBe('research_companion');
+    expect(plan.skillPolicy.resultShape).toBe('report');
     expect(plan.stages).toEqual([
       'intent',
       'routing',
@@ -50,6 +52,7 @@ describe('Orchestration planning', () => {
     expect(plan.taskIntent).toBe('personal_workflow');
     expect(plan.routingMode).toBe('local_only');
     expect(plan.surface).toBe('local');
+    expect(plan.skillPolicy.selectedSkillId).toBe('workspace_operator');
     expect(plan.capabilityPolicy.find((entry) => entry.capabilityId === 'mcp_bridge')?.enabled).toBe(true);
   });
 
@@ -76,6 +79,7 @@ describe('Orchestration planning', () => {
 
     expect(plan.executionPolicy.primary.kind).toBe('browser_read');
     expect(plan.executionPolicy.preferredOrder[0]).toBe('browser_read');
+    expect(plan.skillPolicy.selectedSkillId).toBe('browser_operator');
     expect(plan.capabilityPolicy.find((entry) => entry.capabilityId === 'web_read_dynamic')?.enabled).toBe(true);
   });
 
@@ -102,6 +106,7 @@ describe('Orchestration planning', () => {
 
     expect(plan.executionPolicy.primary.kind).toBe('crawl');
     expect(plan.executionPolicy.preferredOrder[0]).toBe('crawl');
+    expect(plan.skillPolicy.selectedSkillId).toBe('research_companion');
     expect(plan.capabilityPolicy.find((entry) => entry.capabilityId === 'web_crawl')?.enabled).toBe(true);
   });
 
@@ -159,6 +164,7 @@ describe('Orchestration planning', () => {
     expect(plan.executionPolicy.primary.kind).toBe('mcp_prompt');
     expect(plan.executionPolicy.preferredOrder).toContain('mcp_prompt');
     expect(plan.executionPolicy.shouldDiscoverMcp).toBe(false);
+    expect(plan.skillPolicy.selectedSkillId).toBe('mcp_connector');
     expect(plan.capabilityPolicy.find((entry) => entry.capabilityId === 'mcp_bridge')?.enabled).toBe(true);
   });
 
@@ -186,6 +192,7 @@ describe('Orchestration planning', () => {
     expect(plan.executionPolicy.primary.kind).toBe('local_bridge_tool');
     expect(plan.executionPolicy.primary.id).toBe('math_decimal');
     expect(plan.executionPolicy.shouldRetrieve).toBe(false);
+    expect(plan.skillPolicy.selectedSkillId).toBe('deterministic_math');
     expect(plan.retrieval.rounds).toBe(0);
     expect(plan.capabilityPolicy.find((entry) => entry.capabilityId === 'tool_bridge')?.enabled).toBe(true);
   });
