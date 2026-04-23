@@ -29,6 +29,15 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+.playwright-mcp/
+elyan-*.tgz
+.previous_elyan_commit
+storage/control-plane/state.json
+storage/control-plane/*.tmp
+storage/key_value_stores/
+storage/request_queues/
+storage/channels/
+storage/runtime/settings.json
 
 # env files (can opt-in for committing if needed)
 .env*

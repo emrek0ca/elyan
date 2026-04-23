@@ -1,36 +1,179 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Elyan v1
 
-## Getting Started
+Elyan is a local-first personal agent runtime.
 
-First, run the development server:
+The real v1 product surface is small:
+
+- local chat runtime
+- local health and readiness
+- capability discovery
+- dashboard
+- CLI
+- optional search
+- optional MCP
+- optional channels
+- optional narrow hosted control-plane integration
+
+Everything else is secondary.
+
+## Canonical Local Path
+
+1. Copy the environment file:
+
+```bash
+cp .env.example .env
+```
+
+2. Install dependencies:
+
+```bash
+npm install
+```
+
+3. Start Ollama and make sure at least one model is available, or set one cloud API key in `.env`:
+
+- `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `GROQ_API_KEY`
+
+4. Run Elyan:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Or production-like:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run build
+npm run start
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+5. Check health:
 
-## Learn More
+- `http://localhost:3000/api/healthz`
 
-To learn more about Next.js, take a look at the following resources:
+6. Inspect capabilities:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `http://localhost:3000/api/capabilities`
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+7. Use Elyan:
 
-## Deploy on Vercel
+- `http://localhost:3000`
+- `http://localhost:3000/manage`
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## What Is Required
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+You need one usable model source:
+
+- local Ollama at `OLLAMA_URL`, or
+- one cloud provider key
+
+Without a model source, Elyan is not ready.
+
+## What Is Optional
+
+### Search
+
+SearXNG is optional.
+
+If it is reachable, Elyan uses live retrieval and citations.
+If it is missing, Elyan stays usable in local-only mode.
+
+### MCP
+
+MCP is optional.
+
+Only configure it if you actively use MCP servers.
+
+### Channels
+
+Telegram, WhatsApp Cloud, WhatsApp Baileys, and iMessage/BlueBubbles are optional.
+
+Only enable them if you have their real runtime credentials or bridge setup.
+
+### Hosted control plane
+
+The shared VPS control plane is optional.
+
+It is only for shared business/product state such as:
+
+- accounts
+- plans
+- subscriptions
+- entitlements
+- hosted usage accounting
+
+Private local runtime state stays local by default.
+
+## Dashboard And CLI
+
+These are the real control surfaces.
+
+Dashboard:
+
+- `http://localhost:3000/manage`
+
+CLI:
+
+```bash
+npm install -g .
+elyan doctor
+elyan health
+elyan status
+elyan capabilities
+elyan settings view
+```
+
+## First-Run Checks
+
+- `/api/healthz`: tells you if Elyan is actually ready
+- `/api/capabilities`: shows the runtime capability surface
+- `/manage`: shows runtime state, optional integrations, and optional hosted state
+
+## Environment
+
+Base local runtime:
+
+- `OLLAMA_URL=http://127.0.0.1:11434`
+- `SEARXNG_URL=http://localhost:8080`
+
+Optional cloud providers:
+
+- `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `GROQ_API_KEY`
+
+Optional hosted control plane:
+
+- `DATABASE_URL`
+- `NEXTAUTH_URL`
+- `NEXTAUTH_SECRET`
+- `IYZICO_API_KEY`
+- `IYZICO_SECRET_KEY`
+- `IYZICO_MERCHANT_ID`
+
+Optional MCP:
+
+- `ELYAN_MCP_SERVERS`
+- `ELYAN_DISABLED_MCP_SERVERS`
+- `ELYAN_DISABLED_MCP_TOOLS`
+
+## Commands
+
+```bash
+npm run lint
+npm run test
+npm run build
+```
+
+## Product Boundary
+
+Elyan v1 is not:
+
+- a Docker-first product
+- a platform
+- a feature pile
+- a fake hosted everything-app
+
+Elyan v1 is a directly runnable local-first runtime that degrades cleanly when optional systems are absent.

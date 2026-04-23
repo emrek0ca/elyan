@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+      - name: Package release artifacts
+        run: |
+          STAGING_DIR="release-staging"
+          ASSET_DIR="release-assets"
+
+          rm -rf "${STAGING_DIR}" "${ASSET_DIR}"
+          mkdir -p "${STAGING_DIR}" "${ASSET_DIR}"
+
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='node_modules' \
+            --exclude='.next' \
+            --exclude='storage' \
+            --exclude='release-staging' \
+            --exclude='release-assets' \
+            ./ "${STAGING_DIR}/"
+
+          tar -czf "${ASSET_DIR}/elyan-linux-x64.tar.gz" -C "${STAGING_DIR}" .
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+
+          staging_dir = Path("release-staging")
+          asset_dir = Path("release-assets")
+          zip_names = [
+              "elyan-macos-arm64.zip",
+              "elyan-macos-x64.zip",
+              "elyan-windows-x64.zip",
+          ]
+
+          for name in zip_names:
+              archive_path = asset_dir / name
+              with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                  for path in staging_dir.rglob("*"):
+                      if path.is_file():
+                          archive.write(path, path.relative_to(staging_dir))
+          PY
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/elyan-macos-arm64.zip
+            release-assets/elyan-macos-x64.zip
+            release-assets/elyan-linux-x64.tar.gz
+            release-assets/elyan-windows-x64.zip
+
+      - name: Publish
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Copy artifact to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.ELYAN_VPS_HOST }}
+          username: ${{ secrets.ELYAN_VPS_USER }}
+          key: ${{ secrets.ELYAN_VPS_SSH_KEY }}
+          source: release-assets/elyan-linux-x64.tar.gz
+          target: /tmp
+
+      - name: Deploy release on VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.ELYAN_VPS_HOST }}
+          username: ${{ secrets.ELYAN_VPS_USER }}
+          key: ${{ secrets.ELYAN_VPS_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            VERSION="${{ github.ref_name }}"
+            DEPLOY_ROOT="${ELYAN_DEPLOY_ROOT:-/srv/elyan}"
+            RELEASE_DIR="${DEPLOY_ROOT}/releases/${VERSION}"
+            mkdir -p "${DEPLOY_ROOT}/releases"
+            rm -rf "${RELEASE_DIR}"
+            mkdir -p "${RELEASE_DIR}"
+            tar -xzf "/tmp/elyan-linux-x64.tar.gz" -C "${RELEASE_DIR}"
+            "${RELEASE_DIR}/ops/deploy-release.sh" "${VERSION}"

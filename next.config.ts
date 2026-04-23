@@ -1,7 +1,8 @@
-import type { NextConfig } from "next";
+import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Produces .next/standalone for the direct local Node runtime and optional packaging.
+  output: 'standalone',
 };
 
 export default nextConfig;
