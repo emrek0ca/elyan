@@ -25,35 +25,13 @@ export async function GET() {
   const searchProbe = snapshot.search.probe;
   const hasModels = snapshot.models.length > 0;
   const controlPlaneHealth = snapshot.controlPlane.health;
+  const workspace = snapshot.workspace;
   const hostedAuthConfigured =
     controlPlaneHealth.runtime?.authConfigured ?? controlPlaneHealth.authConfigured ?? false;
   const hostedBillingConfigured =
     controlPlaneHealth.runtime?.billingConfigured ?? controlPlaneHealth.billingConfigured ?? false;
   const mcpConfigured =
     runtimeSettings.mcp.servers.length > 0 || Boolean(readRuntimeEnvValue('ELYAN_MCP_SERVERS')?.trim());
-  const channelStatus = {
-    telegram: {
-      enabled: runtimeSettings.channels.telegram.enabled,
-      configured: Boolean(readRuntimeEnvValue('TELEGRAM_BOT_TOKEN')),
-      mode: runtimeSettings.channels.telegram.mode,
-    },
-    whatsappCloud: {
-      enabled: runtimeSettings.channels.whatsappCloud.enabled,
-      configured:
-        Boolean(readRuntimeEnvValue('WHATSAPP_CLOUD_ACCESS_TOKEN')) &&
-        Boolean(readRuntimeEnvValue('WHATSAPP_CLOUD_PHONE_NUMBER_ID')) &&
-        Boolean(readRuntimeEnvValue('WHATSAPP_CLOUD_VERIFY_TOKEN')),
-    },
-    whatsappBaileys: {
-      enabled: runtimeSettings.channels.whatsappBaileys.enabled,
-      configured: runtimeSettings.channels.whatsappBaileys.enabled,
-    },
-    imessage: {
-      enabled: runtimeSettings.channels.imessage.enabled,
-      configured: Boolean(readRuntimeEnvValue('BLUEBUBBLES_SERVER_URL')) && Boolean(readRuntimeEnvValue('BLUEBUBBLES_SERVER_GUID')),
-      mode: runtimeSettings.channels.imessage.mode,
-    },
-  };
   const voiceConfigured = Boolean(runtimeSettings.voice.accessKey || readRuntimeEnvValue('PICOVOICE_ACCESS_KEY'));
   const ready = hasModels;
 
@@ -90,7 +68,11 @@ export async function GET() {
         hint: mcpConfigured ? undefined : 'Optional. Set ELYAN_MCP_SERVERS only if you want live MCP integration.',
       },
       channels: {
-        ...channelStatus,
+        ...snapshot.channels,
+      },
+      localAgent: {
+        ...snapshot.localAgent,
+        ready: snapshot.localAgent.enabled && snapshot.localAgent.allowedRoots.length > 0,
       },
       voice: {
         configured: voiceConfigured,
@@ -99,6 +81,15 @@ export async function GET() {
         hint: voiceConfigured
           ? undefined
           : 'Optional. Set PICOVOICE_ACCESS_KEY to enable the local wake-word voice path.',
+      },
+      workspace: {
+        configured: workspace.summary.configuredSourceCount > 0,
+        connectedSources: workspace.summary.connectedSourceCount,
+        briefItems: workspace.summary.briefItemCount,
+        hint:
+          workspace.summary.configuredSourceCount > 0
+            ? undefined
+            : 'Optional. Connect GitHub, Obsidian, or MCP surfaces for Gmail, Calendar, and Notion to build a daily brief.',
       },
       hosted: {
         authConfigured: hostedAuthConfigured,
@@ -111,5 +102,6 @@ export async function GET() {
     },
     nextSteps: snapshot.nextSteps,
     surfaces: snapshot.surfaces,
+    workspace,
   });
 }

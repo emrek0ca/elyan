@@ -8,6 +8,11 @@ declare module 'next-auth' {
       ownerType?: string;
       role?: string;
       planId?: string;
+      accountStatus?: string;
+      subscriptionStatus?: string;
+      subscriptionSyncState?: string;
+      hostedAccess?: boolean;
+      hostedUsageAccounting?: boolean;
     };
   }
 
@@ -17,6 +22,11 @@ declare module 'next-auth' {
     ownerType?: string;
     role?: string;
     planId?: string;
+    accountStatus?: string;
+    subscriptionStatus?: string;
+    subscriptionSyncState?: string;
+    hostedAccess?: boolean;
+    hostedUsageAccounting?: boolean;
   }
 }
 
@@ -26,5 +36,10 @@ declare module 'next-auth/jwt' {
     ownerType?: string;
     role?: string;
     planId?: string;
+    accountStatus?: string;
+    subscriptionStatus?: string;
+    subscriptionSyncState?: string;
+    hostedAccess?: boolean;
+    hostedUsageAccounting?: boolean;
   }
 }

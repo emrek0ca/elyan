@@ -5,7 +5,7 @@ import {
   getControlPlanePlan,
   getControlPlaneService,
 } from '@/core/control-plane';
-import { assertHostedAuthConfigured } from '@/core/control-plane/auth';
+import { isHostedAuthConfigured } from '@/core/control-plane/auth';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -33,7 +33,16 @@ function mapControlPlaneError(error: unknown) {
 
 export async function POST(request: NextRequest) {
   try {
-    assertHostedAuthConfigured();
+    if (!isHostedAuthConfigured()) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: 'Hosted identity is disabled in local mode',
+          code: 'hosted_identity_unavailable',
+        },
+        { status: 503 }
+      );
+    }
 
     const body = await request.json();
     const input = controlPlaneIdentityRegisterSchema.safeParse(body);

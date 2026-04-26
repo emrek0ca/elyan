@@ -13,11 +13,16 @@ import type {
   ControlPlaneDeviceLink,
   ControlPlaneLedgerEntry,
   ControlPlaneNotification,
+  ControlPlaneIntegration,
   ControlPlaneState,
   ControlPlaneSubscription,
   ControlPlaneUser,
 } from './types';
-import { controlPlaneEvaluationSignalSchema, controlPlaneUsageSnapshotSchema } from './types';
+import {
+  controlPlaneEvaluationSignalSchema,
+  controlPlaneInteractionStateSchema,
+  controlPlaneUsageSnapshotSchema,
+} from './types';
 import { ControlPlaneStoreError } from './errors';
 
 const LEGACY_STATE_TABLE = 'elyan_control_plane_state';
@@ -33,6 +38,10 @@ const EVALUATION_SIGNALS_TABLE = 'elyan_evaluation_signals';
 const NOTIFICATIONS_TABLE = 'elyan_notifications';
 const DEVICE_LINKS_TABLE = 'elyan_device_links';
 const DEVICES_TABLE = 'elyan_devices';
+const INTEGRATIONS_TABLE = 'elyan_integrations';
+const CONTROL_PLANE_ADVISORY_LOCK_KEY = 'elyan_control_plane_state';
+const CONTROL_PLANE_STATEMENT_TIMEOUT = '30s';
+const CONTROL_PLANE_LOCK_TIMEOUT = '5s';
 
 function isHostedBillingReady(subscription: ControlPlaneSubscription) {
   return (
@@ -100,6 +109,15 @@ function normalizeTimestamp(value: unknown) {
   return new Date(String(value)).toISOString();
 }
 
+async function applyTransactionGuards(client: PoolClient) {
+  await client.query(`SET LOCAL statement_timeout = '${CONTROL_PLANE_STATEMENT_TIMEOUT}'`);
+  await client.query(`SET LOCAL lock_timeout = '${CONTROL_PLANE_LOCK_TIMEOUT}'`);
+}
+
+async function acquireControlPlaneLock(client: PoolClient) {
+  await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [CONTROL_PLANE_ADVISORY_LOCK_KEY]);
+}
+
 export class PostgresControlPlaneStateStore {
   readonly kind = 'postgres' as const;
   private bootstrapPromise: Promise<void> | null = null;
@@ -130,6 +148,8 @@ export class PostgresControlPlaneStateStore {
     const client = await getControlPlanePool(this.config.databaseUrl).connect();
     try {
       await client.query('BEGIN');
+      await applyTransactionGuards(client);
+      await acquireControlPlaneLock(client);
       await this.persistState(client, state, { recordStatusEvents: true });
       await client.query('COMMIT');
     } catch (error) {
@@ -160,6 +180,8 @@ export class PostgresControlPlaneStateStore {
 
     try {
       await client.query('BEGIN');
+      await applyTransactionGuards(client);
+      await acquireControlPlaneLock(client);
 
       const empty = await this.isNormalizedStoreEmpty(client);
       if (empty) {
@@ -233,6 +255,7 @@ export class PostgresControlPlaneStateStore {
       notificationsResult,
       devicesResult,
       deviceLinksResult,
+      integrationsResult,
     ] = await Promise.all([
       client.query(`
         SELECT
@@ -245,6 +268,7 @@ export class PostgresControlPlaneStateStore {
           balance_credits::text AS balance_credits,
           usage_totals,
           usage_snapshot,
+          interaction_state,
           created_at,
           updated_at
         FROM ${ACCOUNTS_TABLE}
@@ -374,6 +398,28 @@ export class PostgresControlPlaneStateStore {
           device_token
         FROM ${DEVICE_LINKS_TABLE}
       `),
+      client.query(`
+        SELECT
+          integration_id,
+          account_id,
+          provider,
+          display_name,
+          status,
+          scopes,
+          surfaces,
+          external_account_id,
+          external_account_label,
+          access_token_ciphertext,
+          refresh_token_ciphertext,
+          id_token_ciphertext,
+          expires_at,
+          last_synced_at,
+          last_error,
+          metadata,
+          created_at,
+          updated_at
+        FROM ${INTEGRATIONS_TABLE}
+      `),
     ]);
 
     const subscriptions = new Map<string, ControlPlaneSubscription>();
@@ -415,6 +461,18 @@ export class PostgresControlPlaneStateStore {
           ? controlPlaneUsageSnapshotSchema.safeParse(row.usage_snapshot)
           : null;
       const usageSnapshot = usageSnapshotResult?.success ? usageSnapshotResult.data : undefined;
+      const interactionStateResult =
+        row.interaction_state && typeof row.interaction_state === 'object' && !Array.isArray(row.interaction_state)
+          ? controlPlaneInteractionStateSchema.safeParse(row.interaction_state)
+          : null;
+      const interactionState = interactionStateResult?.success
+        ? interactionStateResult.data
+        : {
+            threads: [],
+            messages: [],
+            memoryItems: [],
+            learningDrafts: [],
+          };
 
       accounts[accountId] = {
         accountId,
@@ -433,6 +491,8 @@ export class PostgresControlPlaneStateStore {
             dailyRequests: 0,
             dailyHostedToolActionCalls: 0,
           }),
+        integrations: {},
+        interactionState,
         createdAt: new Date(String(row.created_at)).toISOString(),
         updatedAt: new Date(String(row.updated_at)).toISOString(),
       };
@@ -563,8 +623,45 @@ export class PostgresControlPlaneStateStore {
       ])
     );
 
+    const integrations = Object.fromEntries(
+      integrationsResult.rows.map((row) => [
+        String(row.integration_id),
+        {
+          integrationId: String(row.integration_id),
+          accountId: String(row.account_id),
+          provider: String(row.provider) as ControlPlaneIntegration['provider'],
+          displayName: String(row.display_name),
+          status: String(row.status) as ControlPlaneIntegration['status'],
+          scopes: parseStringArray(row.scopes),
+          surfaces: parseStringArray(row.surfaces) as ControlPlaneIntegration['surfaces'],
+          externalAccountId: formatNullableText(row.external_account_id),
+          externalAccountLabel: formatNullableText(row.external_account_label),
+          accessTokenCiphertext: formatNullableText(row.access_token_ciphertext),
+          refreshTokenCiphertext: formatNullableText(row.refresh_token_ciphertext),
+          idTokenCiphertext: formatNullableText(row.id_token_ciphertext),
+          expiresAt: normalizeTimestamp(row.expires_at),
+          lastSyncedAt: normalizeTimestamp(row.last_synced_at),
+          lastError: formatNullableText(row.last_error),
+          metadata:
+            row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+              ? (row.metadata as Record<string, unknown>)
+              : {},
+          createdAt: new Date(String(row.created_at)).toISOString(),
+          updatedAt: new Date(String(row.updated_at)).toISOString(),
+        } satisfies ControlPlaneIntegration,
+      ])
+    );
+
+    for (const account of Object.values(accounts)) {
+      account.integrations = Object.fromEntries(
+        Object.values(integrations)
+          .filter((integration) => integration.accountId === account.accountId)
+          .map((integration) => [integration.integrationId, integration])
+      );
+    }
+
     return migrateControlPlaneState({
-      version: 4,
+      version: 6,
       accounts,
       users,
       ledger,
@@ -596,10 +693,11 @@ export class PostgresControlPlaneStateStore {
             balance_credits,
             usage_totals,
             usage_snapshot,
+            interaction_state,
             created_at,
             updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7::numeric, $8::jsonb, $9::jsonb, $10::timestamptz, $11::timestamptz)
+          VALUES ($1, $2, $3, $4, $5, $6, $7::numeric, $8::jsonb, $9::jsonb, $10::jsonb, $11::timestamptz, $12::timestamptz)
           ON CONFLICT (account_id) DO UPDATE SET
             owner_user_id = EXCLUDED.owner_user_id,
             display_name = EXCLUDED.display_name,
@@ -609,6 +707,7 @@ export class PostgresControlPlaneStateStore {
             balance_credits = EXCLUDED.balance_credits,
             usage_totals = EXCLUDED.usage_totals,
             usage_snapshot = EXCLUDED.usage_snapshot,
+            interaction_state = EXCLUDED.interaction_state,
             created_at = EXCLUDED.created_at,
             updated_at = EXCLUDED.updated_at
         `,
@@ -622,6 +721,7 @@ export class PostgresControlPlaneStateStore {
           account.balanceCredits,
           stringify(account.usageTotals),
           stringify(account.usageSnapshot),
+          stringify(account.interactionState),
           account.createdAt,
           account.updatedAt,
         ]
@@ -936,6 +1036,73 @@ export class PostgresControlPlaneStateStore {
       );
     }
 
+    await client.query(`DELETE FROM ${INTEGRATIONS_TABLE}`);
+    for (const integration of Object.values(state.accounts).flatMap((account) => Object.values(account.integrations ?? {}))) {
+      await client.query(
+        `
+          INSERT INTO ${INTEGRATIONS_TABLE} (
+            integration_id,
+            account_id,
+            provider,
+            display_name,
+            status,
+            scopes,
+            surfaces,
+            external_account_id,
+            external_account_label,
+            access_token_ciphertext,
+            refresh_token_ciphertext,
+            id_token_ciphertext,
+            expires_at,
+            last_synced_at,
+            last_error,
+            metadata,
+            created_at,
+            updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13::timestamptz, $14::timestamptz, $15, $16::jsonb, $17::timestamptz, $18::timestamptz)
+          ON CONFLICT (integration_id) DO UPDATE SET
+            account_id = EXCLUDED.account_id,
+            provider = EXCLUDED.provider,
+            display_name = EXCLUDED.display_name,
+            status = EXCLUDED.status,
+            scopes = EXCLUDED.scopes,
+            surfaces = EXCLUDED.surfaces,
+            external_account_id = EXCLUDED.external_account_id,
+            external_account_label = EXCLUDED.external_account_label,
+            access_token_ciphertext = EXCLUDED.access_token_ciphertext,
+            refresh_token_ciphertext = EXCLUDED.refresh_token_ciphertext,
+            id_token_ciphertext = EXCLUDED.id_token_ciphertext,
+            expires_at = EXCLUDED.expires_at,
+            last_synced_at = EXCLUDED.last_synced_at,
+            last_error = EXCLUDED.last_error,
+            metadata = EXCLUDED.metadata,
+            created_at = EXCLUDED.created_at,
+            updated_at = EXCLUDED.updated_at
+        `,
+        [
+          integration.integrationId,
+          integration.accountId,
+          integration.provider,
+          integration.displayName,
+          integration.status,
+          stringify(integration.scopes ?? []),
+          stringify(integration.surfaces ?? []),
+          integration.externalAccountId ?? null,
+          integration.externalAccountLabel ?? null,
+          integration.accessTokenCiphertext ?? null,
+          integration.refreshTokenCiphertext ?? null,
+          integration.idTokenCiphertext ?? null,
+          integration.expiresAt ?? null,
+          integration.lastSyncedAt ?? null,
+          integration.lastError ?? null,
+          stringify(integration.metadata ?? {}),
+          integration.createdAt,
+          integration.updatedAt,
+        ]
+      );
+    }
+
     await client.query(`DELETE FROM ${DEVICE_LINKS_TABLE}`);
     for (const link of Object.values(state.deviceLinks)) {
       await client.query(
@@ -983,6 +1150,7 @@ export class PostgresControlPlaneStateStore {
     await this.deleteMissingRows(client, SUBSCRIPTIONS_TABLE, 'account_id', Object.keys(state.accounts));
     await this.deleteMissingRows(client, ACCOUNTS_TABLE, 'account_id', Object.keys(state.accounts));
     await this.deleteMissingRows(client, DEVICES_TABLE, 'device_id', Object.keys(state.devices));
+    await this.deleteMissingRows(client, INTEGRATIONS_TABLE, 'integration_id', Object.values(state.accounts).flatMap((account) => Object.keys(account.integrations ?? {})));
     await this.deleteMissingRows(client, DEVICE_LINKS_TABLE, 'link_code', Object.keys(state.deviceLinks));
 
     if (options.recordStatusEvents) {

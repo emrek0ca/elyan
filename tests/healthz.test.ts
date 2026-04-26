@@ -15,5 +15,6 @@ describe('Health endpoint', () => {
     expect(typeof body.ready).toBe('boolean');
     expect(body.checks).toBeDefined();
     expect(Array.isArray(body.nextSteps)).toBe(true);
+    expect(body.workspace).toBeDefined();
   });
 });

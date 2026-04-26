@@ -43,6 +43,7 @@ type AnswerExecutionOptions = {
   plan?: OrchestrationPlan;
   surface?: ExecutionSurfaceSnapshot;
   searchEnabled?: boolean;
+  contextAugments?: string[];
   onFinish?: (event: OnFinishEvent, context: AnswerFinishContext) => PromiseLike<void> | void;
   onError?: (error: unknown, context: AnswerFinishContext) => PromiseLike<void> | void;
   onAbort?: (context: AnswerFinishContext) => PromiseLike<void> | void;
@@ -100,9 +101,10 @@ export class AnswerEngine {
       operatorTarget: prepared.operatorTarget,
     };
     try {
+      const augmentedContext = options?.contextAugments?.filter(Boolean).join('\n\n') ?? '';
       const result = await streamText({
         model: prepared.model,
-        system: prepared.systemPrompt,
+        system: augmentedContext ? `${augmentedContext}\n\n${prepared.systemPrompt}` : prepared.systemPrompt,
         prompt: query,
         temperature: prepared.sources.length > 0 ? prepared.plan.temperature : 0,
         onFinish: options?.onFinish
@@ -171,9 +173,10 @@ export class AnswerEngine {
       operatorTarget: prepared.operatorTarget,
     };
     try {
+      const augmentedContext = options?.contextAugments?.filter(Boolean).join('\n\n') ?? '';
       const result = await generateText({
         model: prepared.model,
-        system: prepared.systemPrompt,
+        system: augmentedContext ? `${augmentedContext}\n\n${prepared.systemPrompt}` : prepared.systemPrompt,
         prompt: query,
         temperature: prepared.sources.length > 0 ? prepared.plan.temperature : 0,
         onFinish: options?.onFinish
@@ -264,7 +267,10 @@ export class AnswerEngine {
     const context = hasSources
       ? citationEngine.buildContext(sources)
       : 'No reliable sources were retrieved.';
-    const systemPrompt = resolveAnswerPrompt(mode, [operatorContext, context].filter(Boolean).join('\n\n'), hasSources);
+    const systemPrompt = resolveAnswerPrompt(mode, [operatorContext, context].filter(Boolean).join('\n\n'), hasSources, {
+      plan,
+      operatorNotes: operatorOutcome.notes,
+    });
 
     return {
       model,

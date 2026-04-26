@@ -1,5 +1,6 @@
 import mammoth from 'mammoth';
 import { Document, Packer, Paragraph } from 'docx';
+import JSZip from 'jszip';
 import { z } from 'zod';
 import type { CapabilityDefinition, CapabilityExecutionContext } from './types';
 
@@ -15,6 +16,7 @@ class DocumentCapabilityError extends Error {
 }
 
 const DOCX_CORE_TIMESTAMP = '2000-01-01T00:00:00.000Z';
+const DOCX_ZIP_TIMESTAMP = new Date(DOCX_CORE_TIMESTAMP);
 const DOCX_CORE_PROPERTIES_OVERRIDE = [
   {
     path: 'docProps/core.xml',
@@ -22,6 +24,30 @@ const DOCX_CORE_PROPERTIES_OVERRIDE = [
 <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>Un-named</dc:creator><cp:lastModifiedBy>Un-named</cp:lastModifiedBy><cp:revision>1</cp:revision><dcterms:created xsi:type="dcterms:W3CDTF">${DOCX_CORE_TIMESTAMP}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${DOCX_CORE_TIMESTAMP}</dcterms:modified></cp:coreProperties>`,
   },
 ] as const;
+
+async function normalizeDocxZipBuffer(buffer: Buffer) {
+  const source = await JSZip.loadAsync(buffer);
+  const normalized = new JSZip();
+  const entries = Object.values(source.files).sort((left, right) => left.name.localeCompare(right.name));
+
+  for (const entry of entries) {
+    if (entry.dir) {
+      continue;
+    }
+
+    normalized.file(entry.name, await entry.async('nodebuffer'), {
+      date: DOCX_ZIP_TIMESTAMP,
+      compression: 'DEFLATE',
+      createFolders: false,
+    });
+  }
+
+  return normalized.generateAsync({
+    type: 'nodebuffer',
+    compression: 'DEFLATE',
+    platform: 'DOS',
+  });
+}
 
 const docxReadInputSchema = z.object({
   base64: z.string().min(1),
@@ -93,7 +119,7 @@ export const docxWriteCapability: CapabilityDefinition<
         ],
       });
 
-      const buffer = await Packer.toBuffer(document, false, DOCX_CORE_PROPERTIES_OVERRIDE);
+      const buffer = await normalizeDocxZipBuffer(await Packer.toBuffer(document, false, DOCX_CORE_PROPERTIES_OVERRIDE));
       return {
         base64: buffer.toString('base64'),
         byteLength: buffer.byteLength,

@@ -1,6 +1,6 @@
 import NextAuth from 'next-auth';
 import { NextResponse } from 'next/server';
-import { assertHostedAuthConfigured, getControlPlaneAuthOptions } from '@/core/control-plane/auth';
+import { getControlPlaneAuthOptions, isHostedAuthConfigured } from '@/core/control-plane/auth';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -18,7 +18,17 @@ function getAuthHandler() {
 
 async function guardedAuthHandler(...args: Parameters<AuthHandler>) {
   try {
-    assertHostedAuthConfigured();
+    if (!isHostedAuthConfigured()) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: 'Hosted identity is disabled in local mode',
+          code: 'hosted_identity_unavailable',
+        },
+        { status: 503 }
+      );
+    }
+
     return getAuthHandler()(...args);
   } catch (error) {
     const status = error && typeof error === 'object' && 'statusCode' in error ? Number((error as { statusCode: number }).statusCode) || 500 : 500;

@@ -128,6 +128,102 @@ export const controlPlaneEvaluationSignalSchema = controlPlaneEvaluationSignalDr
 
 export type ControlPlaneEvaluationSignal = z.infer<typeof controlPlaneEvaluationSignalSchema>;
 
+export const controlPlaneConversationRoleSchema = z.enum(['user', 'assistant', 'system']);
+
+export type ControlPlaneConversationRole = z.infer<typeof controlPlaneConversationRoleSchema>;
+
+export const controlPlaneInteractionIntentSchema = z.enum([
+  'direct_answer',
+  'research',
+  'tool_action',
+  'follow_up_question',
+]);
+
+export type ControlPlaneInteractionIntent = z.infer<typeof controlPlaneInteractionIntentSchema>;
+
+export const controlPlaneMemoryKindSchema = z.enum(['preference', 'project', 'routine', 'recent']);
+
+export type ControlPlaneMemoryKind = z.infer<typeof controlPlaneMemoryKindSchema>;
+
+export const controlPlaneMemoryItemSchema = z.object({
+  memoryId: z.string().min(1),
+  accountId: z.string().min(1),
+  kind: controlPlaneMemoryKindSchema,
+  title: z.string().min(1),
+  summary: z.string().min(1),
+  source: z.enum(['user', 'assistant', 'system', 'learning']).default('system'),
+  threadId: z.string().min(1).optional(),
+  projectKey: z.string().min(1).optional(),
+  routineKey: z.string().min(1).optional(),
+  confidence: z.number().min(0).max(1),
+  pinned: z.boolean().default(false),
+  promoted: z.boolean().default(false),
+  promotedFromDraftId: z.string().min(1).optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  lastUsedAt: z.string().optional(),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+});
+
+export type ControlPlaneMemoryItem = z.infer<typeof controlPlaneMemoryItemSchema>;
+
+export const controlPlaneConversationMessageSchema = z.object({
+  messageId: z.string().min(1),
+  threadId: z.string().min(1),
+  accountId: z.string().min(1),
+  role: controlPlaneConversationRoleSchema,
+  content: z.string().min(1),
+  source: z.string().min(1),
+  createdAt: z.string(),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+});
+
+export type ControlPlaneConversationMessage = z.infer<typeof controlPlaneConversationMessageSchema>;
+
+export const controlPlaneConversationThreadSchema = z.object({
+  threadId: z.string().min(1),
+  accountId: z.string().min(1),
+  source: z.string().min(1),
+  title: z.string().min(1),
+  summary: z.string().min(1),
+  intent: controlPlaneInteractionIntentSchema,
+  status: z.enum(['active', 'closed', 'archived']).default('active'),
+  messageCount: z.number().int().nonnegative(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  lastMessageAt: z.string().optional(),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+});
+
+export type ControlPlaneConversationThread = z.infer<typeof controlPlaneConversationThreadSchema>;
+
+export const controlPlaneLearningDraftSchema = z.object({
+  draftId: z.string().min(1),
+  accountId: z.string().min(1),
+  threadId: z.string().min(1).optional(),
+  kind: z.enum(['preference', 'project', 'routine', 'research']),
+  title: z.string().min(1),
+  summary: z.string().min(1),
+  body: z.string().min(1),
+  status: z.enum(['draft', 'promoted', 'discarded']).default('draft'),
+  promotedMemoryId: z.string().min(1).optional(),
+  source: z.string().min(1),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+});
+
+export type ControlPlaneLearningDraft = z.infer<typeof controlPlaneLearningDraftSchema>;
+
+export const controlPlaneInteractionStateSchema = z.object({
+  threads: z.array(controlPlaneConversationThreadSchema).default([]),
+  messages: z.array(controlPlaneConversationMessageSchema).default([]),
+  memoryItems: z.array(controlPlaneMemoryItemSchema).default([]),
+  learningDrafts: z.array(controlPlaneLearningDraftSchema).default([]),
+});
+
+export type ControlPlaneInteractionState = z.infer<typeof controlPlaneInteractionStateSchema>;
+
 export const controlPlaneEntitlementsSchema = z.object({
   hostedAccess: z.boolean(),
   hostedUsageAccounting: z.boolean(),
@@ -267,6 +363,13 @@ export const controlPlaneAccountSchema = z.object({
   balanceCredits: z.string(),
   usageTotals: z.record(z.string(), z.string()),
   usageSnapshot: controlPlaneUsageSnapshotSchema,
+  integrations: z.record(z.string(), z.lazy(() => controlPlaneIntegrationSchema)).default({}),
+  interactionState: controlPlaneInteractionStateSchema.default({
+    threads: [],
+    messages: [],
+    memoryItems: [],
+    learningDrafts: [],
+  }),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -278,6 +381,24 @@ export const controlPlaneLegacyAccountSchema = controlPlaneAccountSchema.omit({
 });
 
 export type ControlPlaneLegacyAccount = z.infer<typeof controlPlaneLegacyAccountSchema>;
+
+export const controlPlaneIntegrationSummarySchema = z.object({
+  total: z.number().int().nonnegative(),
+  connected: z.number().int().nonnegative(),
+  needsAttention: z.number().int().nonnegative(),
+});
+
+export type ControlPlaneIntegrationSummary = z.infer<typeof controlPlaneIntegrationSummarySchema>;
+
+export const controlPlaneAccountPublicSchema = controlPlaneAccountSchema.omit({
+  interactionState: true,
+  integrations: true,
+}).extend({
+  integrations: z.record(z.string(), z.lazy(() => controlPlaneIntegrationPublicSchema)).default({}),
+  integrationSummary: z.lazy(() => controlPlaneIntegrationSummarySchema),
+});
+
+export type ControlPlaneAccountPublic = z.infer<typeof controlPlaneAccountPublicSchema>;
 
 export const controlPlaneUserStatusSchema = z.enum(['active', 'disabled']);
 
@@ -369,6 +490,56 @@ export const controlPlaneNotificationSchema = z.object({
 
 export type ControlPlaneNotification = z.infer<typeof controlPlaneNotificationSchema>;
 
+export const controlPlaneIntegrationProviderSchema = z.enum(['google', 'github', 'notion']);
+
+export type ControlPlaneIntegrationProvider = z.infer<typeof controlPlaneIntegrationProviderSchema>;
+
+export const controlPlaneIntegrationStatusSchema = z.enum([
+  'disconnected',
+  'connecting',
+  'connected',
+  'expired',
+  'error',
+  'revoked',
+]);
+
+export type ControlPlaneIntegrationStatus = z.infer<typeof controlPlaneIntegrationStatusSchema>;
+
+export const controlPlaneIntegrationSurfaceSchema = z.enum(['gmail', 'calendar', 'github', 'notion']);
+
+export type ControlPlaneIntegrationSurface = z.infer<typeof controlPlaneIntegrationSurfaceSchema>;
+
+export const controlPlaneIntegrationSchema = z.object({
+  integrationId: z.string().min(1),
+  accountId: z.string().min(1),
+  provider: controlPlaneIntegrationProviderSchema,
+  displayName: z.string().min(1),
+  status: controlPlaneIntegrationStatusSchema,
+  scopes: z.array(z.string().min(1)).default([]),
+  surfaces: z.array(controlPlaneIntegrationSurfaceSchema).default([]),
+  externalAccountId: z.string().min(1).optional(),
+  externalAccountLabel: z.string().min(1).optional(),
+  accessTokenCiphertext: z.string().min(1).optional(),
+  refreshTokenCiphertext: z.string().min(1).optional(),
+  idTokenCiphertext: z.string().min(1).optional(),
+  expiresAt: z.string().optional(),
+  lastSyncedAt: z.string().optional(),
+  lastError: z.string().optional(),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export type ControlPlaneIntegration = z.infer<typeof controlPlaneIntegrationSchema>;
+
+export const controlPlaneIntegrationPublicSchema = controlPlaneIntegrationSchema.omit({
+  accessTokenCiphertext: true,
+  refreshTokenCiphertext: true,
+  idTokenCiphertext: true,
+});
+
+export type ControlPlaneIntegrationPublic = z.infer<typeof controlPlaneIntegrationPublicSchema>;
+
 export const controlPlaneDeviceStatusSchema = z.enum(['pending', 'active', 'revoked', 'expired']);
 
 export type ControlPlaneDeviceStatus = z.infer<typeof controlPlaneDeviceStatusSchema>;
@@ -449,15 +620,41 @@ export const controlPlaneStateV4Schema = z.object({
   evaluationSignals: z.array(controlPlaneEvaluationSignalSchema).default([]),
 });
 
+export const controlPlaneStateV5Schema = z.object({
+  version: z.literal(5),
+  billing: controlPlaneBillingStateSchema,
+  users: z.record(z.string(), controlPlaneUserSchema),
+  accounts: z.record(z.string(), controlPlaneAccountSchema),
+  ledger: z.array(controlPlaneLedgerEntrySchema),
+  notifications: z.array(controlPlaneNotificationSchema).default([]),
+  devices: z.record(z.string(), controlPlaneDeviceSchema).default({}),
+  deviceLinks: z.record(z.string(), controlPlaneDeviceLinkSchema).default({}),
+  evaluationSignals: z.array(controlPlaneEvaluationSignalSchema).default([]),
+});
+
+export const controlPlaneStateV6Schema = z.object({
+  version: z.literal(6),
+  billing: controlPlaneBillingStateSchema,
+  users: z.record(z.string(), controlPlaneUserSchema),
+  accounts: z.record(z.string(), controlPlaneAccountSchema),
+  ledger: z.array(controlPlaneLedgerEntrySchema),
+  notifications: z.array(controlPlaneNotificationSchema).default([]),
+  devices: z.record(z.string(), controlPlaneDeviceSchema).default({}),
+  deviceLinks: z.record(z.string(), controlPlaneDeviceLinkSchema).default({}),
+  evaluationSignals: z.array(controlPlaneEvaluationSignalSchema).default([]),
+});
+
 export const controlPlaneStateSchema = z.union([
   controlPlaneStateV1Schema,
   controlPlaneStateV2Schema,
   controlPlaneStateV3Schema,
   controlPlaneStateV4Schema,
+  controlPlaneStateV5Schema,
+  controlPlaneStateV6Schema,
 ]);
 
 export type ControlPlaneState = {
-  version: 4;
+  version: 6;
   billing: ControlPlaneBillingState;
   users: Record<string, ControlPlaneUser>;
   accounts: Record<string, ControlPlaneAccount>;
@@ -524,9 +721,73 @@ export const controlPlaneHostedSessionSchema = z.object({
   ownerType: controlPlaneOwnerTypeSchema,
   role: controlPlaneUserRoleSchema,
   planId: controlPlanePlanIdSchema,
+  accountStatus: controlPlaneAccountStatusSchema,
+  subscriptionStatus: controlPlaneAccountStatusSchema,
+  subscriptionSyncState: controlPlaneBillingBindingStatusSchema,
+  hostedAccess: z.boolean(),
+  hostedUsageAccounting: z.boolean(),
+  balanceCredits: z.string(),
+  deviceCount: z.number().int().nonnegative(),
+  activeDeviceCount: z.number().int().nonnegative(),
 });
 
 export type ControlPlaneHostedSession = z.infer<typeof controlPlaneHostedSessionSchema>;
+
+export const controlPlaneDeviceSummarySchema = z.object({
+  total: z.number().int().nonnegative(),
+  pending: z.number().int().nonnegative(),
+  active: z.number().int().nonnegative(),
+  revoked: z.number().int().nonnegative(),
+  expired: z.number().int().nonnegative(),
+});
+
+export type ControlPlaneDeviceSummary = z.infer<typeof controlPlaneDeviceSummarySchema>;
+
+export const controlPlaneHostedDeviceSchema = z.object({
+  deviceId: z.string().min(1),
+  deviceLabel: z.string().min(1),
+  status: controlPlaneDeviceStatusSchema,
+  linkedAt: z.string(),
+  lastSeenAt: z.string().optional(),
+  lastSeenReleaseTag: z.string().min(1).optional(),
+  revokedAt: z.string().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export type ControlPlaneHostedDevice = z.infer<typeof controlPlaneHostedDeviceSchema>;
+
+export const controlPlaneHostedAccountSchema = controlPlaneAccountPublicSchema.extend({
+  plan: controlPlanePlanSchema,
+  processedWebhookEventCount: z.number().int().nonnegative(),
+  deviceSummary: controlPlaneDeviceSummarySchema,
+});
+
+export type ControlPlaneHostedAccount = z.infer<typeof controlPlaneHostedAccountSchema>;
+
+export const controlPlaneHostedProfileSchema = z.object({
+  session: controlPlaneHostedSessionSchema,
+  user: controlPlaneUserSchema.pick({
+    userId: true,
+    email: true,
+    displayName: true,
+    ownerType: true,
+    role: true,
+    status: true,
+  }).optional(),
+  account: controlPlaneHostedAccountSchema,
+});
+
+export type ControlPlaneHostedProfile = z.infer<typeof controlPlaneHostedProfileSchema>;
+
+export const controlPlaneHostedPanelSchema = z.object({
+  session: controlPlaneHostedSessionSchema,
+  profile: controlPlaneHostedProfileSchema,
+  account: controlPlaneHostedAccountSchema,
+  devices: z.array(controlPlaneHostedDeviceSchema),
+});
+
+export type ControlPlaneHostedPanel = z.infer<typeof controlPlaneHostedPanelSchema>;
 
 export const controlPlaneDeviceLinkStartSchema = z.object({
   deviceLabel: z.string().trim().min(1),
@@ -542,6 +803,35 @@ export const controlPlaneDeviceLinkCompleteSchema = z.object({
 
 export type ControlPlaneDeviceLinkCompleteInput = z.infer<typeof controlPlaneDeviceLinkCompleteSchema>;
 
+export const controlPlaneIntegrationConnectStartSchema = z.object({
+  provider: controlPlaneIntegrationProviderSchema,
+  returnTo: z.string().trim().min(1).optional(),
+});
+
+export type ControlPlaneIntegrationConnectStartInput = z.infer<typeof controlPlaneIntegrationConnectStartSchema>;
+
+export const controlPlaneIntegrationCallbackSchema = z.object({
+  code: z.string().trim().min(1),
+  state: z.string().trim().min(1),
+});
+
+export type ControlPlaneIntegrationCallbackInput = z.infer<typeof controlPlaneIntegrationCallbackSchema>;
+
+export const controlPlaneIntegrationDisconnectSchema = z.object({
+  integrationId: z.string().trim().min(1),
+});
+
+export type ControlPlaneIntegrationDisconnectInput = z.infer<typeof controlPlaneIntegrationDisconnectSchema>;
+
+export const controlPlaneIntegrationActionSchema = z.object({
+  provider: controlPlaneIntegrationProviderSchema,
+  integrationId: z.string().trim().min(1).optional(),
+  action: z.string().trim().min(1),
+  parameters: z.record(z.string(), z.unknown()).default({}),
+});
+
+export type ControlPlaneIntegrationActionInput = z.infer<typeof controlPlaneIntegrationActionSchema>;
+
 export const controlPlaneDeviceBootstrapSchema = z.object({
   deviceToken: z.string().min(1),
 });
@@ -556,6 +846,18 @@ export const controlPlaneDevicePushSchema = z.object({
 
 export type ControlPlaneDevicePushInput = z.infer<typeof controlPlaneDevicePushSchema>;
 
+export const controlPlaneReleasePlatformSchema = z.enum(['macos', 'linux', 'windows']);
+
+export type ControlPlaneReleasePlatform = z.infer<typeof controlPlaneReleasePlatformSchema>;
+
+export const controlPlaneReleaseArchitectureSchema = z.enum(['arm64', 'x64']);
+
+export type ControlPlaneReleaseArchitecture = z.infer<typeof controlPlaneReleaseArchitectureSchema>;
+
+export const controlPlaneReleaseFormatSchema = z.enum(['zip', 'tar.gz']);
+
+export type ControlPlaneReleaseFormat = z.infer<typeof controlPlaneReleaseFormatSchema>;
+
 export const controlPlaneReleaseAssetSchema = z.object({
   name: z.string().min(1),
   size: z.number().nonnegative(),
@@ -563,6 +865,18 @@ export const controlPlaneReleaseAssetSchema = z.object({
 });
 
 export type ControlPlaneReleaseAsset = z.infer<typeof controlPlaneReleaseAssetSchema>;
+
+export const controlPlaneReleaseTargetSchema = z.object({
+  platform: controlPlaneReleasePlatformSchema,
+  architecture: controlPlaneReleaseArchitectureSchema,
+  format: controlPlaneReleaseFormatSchema,
+  name: z.string().min(1),
+  browserDownloadUrl: z.string().url(),
+  size: z.number().nonnegative(),
+  label: z.string().min(1),
+});
+
+export type ControlPlaneReleaseTarget = z.infer<typeof controlPlaneReleaseTargetSchema>;
 
 export const controlPlaneReleaseSnapshotSchema = z.object({
   repository: z.string().min(1),
@@ -572,6 +886,7 @@ export const controlPlaneReleaseSnapshotSchema = z.object({
   url: z.string().url(),
   htmlUrl: z.string().url(),
   assets: z.array(controlPlaneReleaseAssetSchema),
+  targets: z.array(controlPlaneReleaseTargetSchema).default([]),
   requiredAssets: z.array(z.string().min(1)),
   complete: z.boolean(),
 });

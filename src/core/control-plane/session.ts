@@ -11,6 +11,11 @@ export type ControlPlaneSessionToken = {
   ownerType?: string;
   role?: string;
   planId?: string;
+  accountStatus?: string;
+  subscriptionStatus?: string;
+  subscriptionSyncState?: string;
+  hostedAccess?: boolean;
+  hostedUsageAccounting?: boolean;
 };
 
 function requireSessionConfiguration() {
@@ -40,6 +45,14 @@ export async function getControlPlaneSessionToken(request: NextRequest) {
     ownerType: typeof token.ownerType === 'string' ? token.ownerType : undefined,
     role: typeof token.role === 'string' ? token.role : undefined,
     planId: typeof token.planId === 'string' ? token.planId : undefined,
+    accountStatus: typeof token.accountStatus === 'string' ? token.accountStatus : undefined,
+    subscriptionStatus:
+      typeof token.subscriptionStatus === 'string' ? token.subscriptionStatus : undefined,
+    subscriptionSyncState:
+      typeof token.subscriptionSyncState === 'string' ? token.subscriptionSyncState : undefined,
+    hostedAccess: typeof token.hostedAccess === 'boolean' ? token.hostedAccess : undefined,
+    hostedUsageAccounting:
+      typeof token.hostedUsageAccounting === 'boolean' ? token.hostedUsageAccounting : undefined,
   } satisfies ControlPlaneSessionToken;
 }
 

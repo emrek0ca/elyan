@@ -8,6 +8,7 @@ import type {
   OrchestrationPlan,
   ReasoningDepth,
   SkillExecutionDecision,
+  TeamPolicy,
   TaskIntent,
   UncertaintyLevel,
   UsageBudget,
@@ -31,6 +32,9 @@ type IntentSignals = {
   personalWorkflow: boolean;
   research: boolean;
   documents: boolean;
+  authoring: boolean;
+  code: boolean;
+  design: boolean;
   urls: boolean;
 };
 
@@ -39,7 +43,7 @@ function readIntentSignals(query: string): IntentSignals {
 
   return {
     comparison: /(compare|versus|difference|tradeoff|benchmark)/i.test(normalized),
-    procedural: /(how to|steps|guide|setup|configure|install|run|fix|read|inspect|summarize|extract)/i.test(
+    procedural: /(how to|steps|guide|setup|configure|install|run|fix|read|inspect|summarize|extract|write|draft|generate|compose)/i.test(
       normalized
     ),
     personalWorkflow: /(my files|local|on my machine|computer|device|workspace|folder|offline|private)/i.test(
@@ -48,7 +52,16 @@ function readIntentSignals(query: string): IntentSignals {
     research: /(latest|news|today|current|recent|research|why is|what changed|this week|trend)/i.test(
       normalized
     ),
-    documents: /\b(pdf|docx|document|file|csv|spreadsheet)\b/i.test(normalized),
+    documents: /\b(pdf|docx|document|file|csv|spreadsheet|xlsx|xls|ods|zip|archive|ocr|yaml|xml|frontmatter|markdown)\b/i.test(
+      normalized
+    ),
+    authoring: /\b(write|draft|generate|compose|author|prepare|produce|rewrite)\b/i.test(normalized),
+    code: /\b(code|repo|repository|branch|commit|diff|patch|refactor|review|debug|test|build|lint|deploy)\b/i.test(
+      normalized
+    ),
+    design: /\b(design|layout|wireframe|mockup|ui|ux|figma|component|typography|spacing|palette|style guide)\b/i.test(
+      normalized
+    ),
     urls: /https?:\/\//i.test(query),
   };
 }
@@ -88,6 +101,19 @@ function classifyTaskIntent(query: string): {
     scores.personal_workflow += 1;
   }
 
+  if (signals.authoring) {
+    scores.procedural += 2;
+  }
+
+  if (signals.code) {
+    scores.procedural += 2;
+    scores.personal_workflow += 1;
+  }
+
+  if (signals.design) {
+    scores.procedural += 2;
+  }
+
   if (signals.urls) {
     scores.procedural += 1;
   }
@@ -124,21 +150,25 @@ function classifyTaskIntent(query: string): {
   };
 }
 
-function resolveReasoningDepth(mode: SearchMode, intent: TaskIntent, query: string): ReasoningDepth {
+function resolveReasoningDepth(mode: SearchMode, intent: TaskIntent, query: string, signals: IntentSignals): ReasoningDepth {
   if (mode === 'research' || intent === 'comparison' || query.length > 160) {
     return 'deep';
   }
 
-  if (intent === 'procedural' || intent === 'research' || intent === 'personal_workflow') {
+  if (intent === 'procedural' || intent === 'research' || intent === 'personal_workflow' || signals.code || signals.authoring || signals.design) {
     return 'standard';
   }
 
   return 'shallow';
 }
 
-function resolveRoutingMode(intent: TaskIntent, mode: SearchMode): ModelRoutingMode {
+function resolveRoutingMode(intent: TaskIntent, mode: SearchMode, signals: IntentSignals): ModelRoutingMode {
   if (intent === 'personal_workflow') {
     return 'local_only';
+  }
+
+  if (signals.code || signals.authoring || signals.design) {
+    return 'local_first';
   }
 
   if (mode === 'research' || intent === 'research' || intent === 'comparison') {
@@ -156,13 +186,14 @@ function resolveUncertainty(
   taskIntent: TaskIntent,
   confidence: IntentConfidence,
   reasoningDepth: ReasoningDepth,
-  mode: SearchMode
+  mode: SearchMode,
+  signals: IntentSignals
 ): UncertaintyLevel {
   if (mode === 'research' || taskIntent === 'comparison' || reasoningDepth === 'deep') {
     return 'high';
   }
 
-  if (confidence === 'low' || taskIntent === 'procedural') {
+  if (confidence === 'low' || taskIntent === 'procedural' || signals.code || signals.authoring || signals.design) {
     return 'medium';
   }
 
@@ -214,9 +245,14 @@ function resolveCapabilityPolicy(
   mode: SearchMode,
   routingMode: ModelRoutingMode,
   executionPolicy: ReturnType<typeof buildExecutionPolicy>,
-  skillPolicy: SkillExecutionDecision
+  skillPolicy: SkillExecutionDecision,
+  query: string
 ): CapabilityPolicyEntry[] {
   const skillCapabilityIds = new Set(skillPolicy.preferredCapabilityIds);
+  const authoringSignals =
+    /\b(write|draft|generate|compose|author|prepare|produce|rewrite)\b/i.test(query) &&
+    /\b(markdown|md|docx|document|doc|spec|brief|proposal|rfc|prd|readme|outline|design doc)\b/i.test(query);
+  const designSignals = /\b(design|layout|wireframe|mockup|ui|ux|figma|component|typography|spacing|palette|style guide)\b/i.test(query);
   const shouldEnableTooling =
     taskIntent === 'procedural' ||
     taskIntent === 'personal_workflow' ||
@@ -237,8 +273,22 @@ function resolveCapabilityPolicy(
   const shouldEnableDocx =
     taskIntent === 'procedural' ||
     taskIntent === 'comparison' ||
+    authoringSignals ||
     skillCapabilityIds.has('docx_read') ||
     executionPolicy.candidates.some((candidate) => candidate.id === 'docx_read');
+  const shouldEnableDocxWrite =
+    taskIntent === 'procedural' ||
+    taskIntent === 'personal_workflow' ||
+    authoringSignals ||
+    skillCapabilityIds.has('docx_write') ||
+    executionPolicy.candidates.some((candidate) => candidate.id === 'docx_write');
+  const shouldEnableMarkdownRender =
+    taskIntent === 'procedural' ||
+    taskIntent === 'personal_workflow' ||
+    authoringSignals ||
+    designSignals ||
+    skillCapabilityIds.has('markdown_render') ||
+    executionPolicy.candidates.some((candidate) => candidate.id === 'markdown_render');
   const shouldEnablePdf =
     taskIntent === 'procedural' ||
     taskIntent === 'comparison' ||
@@ -246,6 +296,7 @@ function resolveCapabilityPolicy(
     executionPolicy.candidates.some((candidate) => candidate.id === 'pdf_extract');
   const shouldEnableCharting =
     taskIntent === 'comparison' ||
+    designSignals ||
     skillCapabilityIds.has('chart_generate') ||
     executionPolicy.candidates.some((candidate) => candidate.id === 'chart_generate');
   const shouldEnableRetrievalAssist =
@@ -308,6 +359,22 @@ function resolveCapabilityPolicy(
         : 'DOCX inspection is unnecessary for this query.',
     },
     {
+      capabilityId: 'docx_write',
+      family: 'documents',
+      enabled: shouldEnableDocxWrite,
+      reason: shouldEnableDocxWrite
+        ? 'DOCX authoring is relevant for this procedural or artifact request.'
+        : 'DOCX authoring is unnecessary for this query.',
+    },
+    {
+      capabilityId: 'markdown_render',
+      family: 'documents',
+      enabled: shouldEnableMarkdownRender,
+      reason: shouldEnableMarkdownRender
+        ? 'Markdown rendering is relevant for document, design, or artifact delivery.'
+        : 'Markdown rendering is unnecessary for this query.',
+    },
+    {
       capabilityId: 'pdf_extract',
       family: 'documents',
       enabled: shouldEnablePdf,
@@ -351,20 +418,83 @@ function resolveUsageBudget(
   };
 }
 
+function uniqueValues<T>(values: T[]): T[] {
+  return [...new Set(values)];
+}
+
+function resolveTeamPolicy(
+  query: string,
+  mode: SearchMode,
+  taskIntent: TaskIntent,
+  uncertainty: UncertaintyLevel,
+  reasoningDepth: ReasoningDepth,
+  routingMode: ModelRoutingMode,
+  executionPolicy: ReturnType<typeof buildExecutionPolicy>,
+  signals: IntentSignals
+): TeamPolicy {
+  const normalized = query.toLowerCase();
+  const explicitTeam = /\b(team|multi[-\s]?agent|sub[-\s]?agent|delegate|parallel|crew|cowork|takım|alt[-\s]?ajan|ajanlara böl)\b/i.test(
+    normalized
+  );
+  const multiStep = /\b(plan|implement|verify|review|test|build|ship|research|compare|audit|refactor|migrate|rollout|coordinate|uygula|doğrula|planla|araştır)\b/i.test(
+    normalized
+  ) && query.length > 90;
+  const complexLocalWorkflow =
+    taskIntent === 'personal_workflow' &&
+    (signals.code || signals.documents || executionPolicy.primary.kind !== 'direct_answer');
+  const needsTeam =
+    explicitTeam ||
+    complexLocalWorkflow ||
+    mode === 'research' ||
+    taskIntent === 'comparison' ||
+    reasoningDepth === 'deep' ||
+    (uncertainty === 'high' && taskIntent !== 'direct_answer') ||
+    multiStep;
+
+  const reasons = [
+    explicitTeam ? 'The user explicitly asked for team or sub-agent style execution.' : undefined,
+    complexLocalWorkflow ? 'The request combines local workflow context with tool-capable work.' : undefined,
+    mode === 'research' || taskIntent === 'comparison' ? 'The request benefits from separated research and verification.' : undefined,
+    reasoningDepth === 'deep' ? 'The planner classified this as deep reasoning work.' : undefined,
+    multiStep ? 'The request has multiple plan, execution, review, or verification stages.' : undefined,
+    uncertainty === 'high' && taskIntent !== 'direct_answer' ? 'The request has high uncertainty and needs an explicit verifier.' : undefined,
+  ].filter((reason): reason is string => Boolean(reason));
+
+  const requiredRoles = uniqueValues([
+    'planner' as const,
+    ...(signals.research || taskIntent === 'research' || taskIntent === 'comparison' || mode === 'research'
+      ? (['researcher'] as const)
+      : []),
+    ...(signals.code || signals.documents || signals.authoring || taskIntent === 'procedural' || taskIntent === 'personal_workflow'
+      ? (['executor'] as const)
+      : []),
+    ...(signals.code || taskIntent === 'comparison' || multiStep ? (['reviewer'] as const) : []),
+    'verifier' as const,
+    ...(taskIntent === 'personal_workflow' || mode === 'research' ? (['memory_curator'] as const) : []),
+  ]);
+
+  return {
+    enabledByDefault: needsTeam,
+    reasons: reasons.length > 0 ? reasons : ['The request is narrow enough for single-agent execution.'],
+    maxConcurrentAgents: 2,
+    maxTasksPerRun: 6,
+    allowCloudEscalation: false,
+    modelRoutingMode: taskIntent === 'personal_workflow' ? 'local_only' : routingMode === 'local_only' ? 'local_only' : 'local_first',
+    riskBoundary: executionPolicy.requiresConfirmation ? 'confirmation_required' : 'read_only',
+    requiredRoles,
+  };
+}
+
 export function buildOrchestrationPlan(
   query: string,
   mode: SearchMode,
   surface?: ExecutionSurfaceSnapshot
 ): OrchestrationPlan {
   const { intent: taskIntent, confidence: intentConfidence } = classifyTaskIntent(query);
-  const reasoningDepth = resolveReasoningDepth(mode, taskIntent, query);
-  const routingMode = resolveRoutingMode(taskIntent, mode);
-  const uncertainty = resolveUncertainty(taskIntent, intentConfidence, reasoningDepth, mode);
-  const skillPolicy = buildSkillExecutionDecision({
-    query,
-    mode,
-    taskIntent,
-  });
+  const signals = readIntentSignals(query);
+  const reasoningDepth = resolveReasoningDepth(mode, taskIntent, query, signals);
+  const routingMode = resolveRoutingMode(taskIntent, mode, signals);
+  const uncertainty = resolveUncertainty(taskIntent, intentConfidence, reasoningDepth, mode, signals);
   const executionSurface: ExecutionSurfaceSnapshot =
     surface ?? {
       local: {
@@ -379,6 +509,21 @@ export function buildOrchestrationPlan(
         prompts: [],
       },
     };
+  const skillPolicy = buildSkillExecutionDecision({
+    query,
+    mode,
+    taskIntent,
+    surface: {
+      mcp: {
+        servers: executionSurface.mcp.servers.length,
+        tools: executionSurface.mcp.tools.length,
+        resources: executionSurface.mcp.resources.length,
+        resourceTemplates: executionSurface.mcp.resourceTemplates.length,
+        prompts: executionSurface.mcp.prompts.length,
+        discovery: executionSurface.mcp.discovery,
+      },
+    },
+  });
   const evaluation: EvaluationPolicy = {
     collectRetrievalSignals: true,
     collectToolSignals: true,
@@ -392,9 +537,19 @@ export function buildOrchestrationPlan(
     intentConfidence,
   }, skillPolicy);
   const retrieval = resolveRetrievalPolicy(mode, taskIntent, reasoningDepth, uncertainty, executionPolicy);
-  const capabilityPolicy = resolveCapabilityPolicy(taskIntent, mode, routingMode, executionPolicy, skillPolicy);
+  const capabilityPolicy = resolveCapabilityPolicy(taskIntent, mode, routingMode, executionPolicy, skillPolicy, query);
   const usageBudget = resolveUsageBudget(reasoningDepth, retrieval, capabilityPolicy, evaluation);
   const temperature = uncertainty === 'high' ? 0.15 : reasoningDepth === 'deep' ? 0.25 : 0.2;
+  const teamPolicy = resolveTeamPolicy(
+    query,
+    mode,
+    taskIntent,
+    uncertainty,
+    reasoningDepth,
+    routingMode,
+    executionPolicy,
+    signals
+  );
 
   return {
     stages: ORCHESTRATION_STAGES,
@@ -411,6 +566,8 @@ export function buildOrchestrationPlan(
     capabilityPolicy,
     evaluation,
     usageBudget,
+    executionMode: teamPolicy.enabledByDefault ? 'team' : 'single',
+    teamPolicy,
     surface: taskIntent === 'personal_workflow' ? 'local' : 'hosted',
     mode,
     executionPolicy,

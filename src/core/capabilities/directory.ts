@@ -3,48 +3,119 @@ import { getBridgeToolManifest } from '@/core/capabilities/bridge-tools';
 import { buildSkillDirectorySnapshot, type SkillDirectorySnapshot } from '@/core/skills';
 import { capabilityRegistry } from './registry';
 import type { McpBridgeOutput } from './bridge';
+import {
+  buildCapabilityDirectoryEntry,
+  buildCapabilityProfileGuide,
+  listCapabilityProfileGuides,
+} from './profiles';
+import type {
+  CapabilityApprovalLevel,
+  CapabilityCategory,
+  CapabilityDirectoryEntry,
+  CapabilityDomainSnapshot,
+  CapabilitySource,
+} from './types';
 
-export type CapabilityDirectorySnapshot = {
-  local: {
-    capabilities: ReturnType<typeof buildLocalCapabilityCatalog>;
-    bridgeTools: ReturnType<typeof buildLocalBridgeCatalog>;
-  };
-  skills: SkillDirectorySnapshot;
-  mcp: McpBridgeOutput;
-  mcpStatus: 'ready' | 'unavailable';
-  mcpError?: string;
-  discovery: {
-    includeLiveMcp: boolean;
-    mcp: McpBridgeOutput['discovery'];
-    skills: SkillDirectorySnapshot['discovery'];
-  };
-  selectionGuide: Array<{
-    kind: 'local_module' | 'local_bridge_tool' | 'mcp_resource' | 'mcp_prompt' | 'mcp_tool' | 'browser' | 'crawl' | 'direct_answer';
-    title: string;
-    when: string;
-    why: string;
-  }>;
-  summary: {
-    localCapabilityCount: number;
-    enabledLocalCapabilityCount: number;
-    bridgeToolCount: number;
-    enabledBridgeToolCount: number;
-    browserEnabled: boolean;
-    crawlEnabled: boolean;
-    skillCount: number;
-    enabledSkillCount: number;
-    installedSkillCount: number;
-    mcpServerCount: number;
-    mcpConfiguredServerCount: number;
-    mcpReachableServerCount: number;
-    mcpDegradedServerCount: number;
-    mcpBlockedServerCount: number;
-    mcpDisabledServerCount: number;
-    mcpToolCount: number;
-    mcpResourceCount: number;
-    mcpPromptCount: number;
-  };
-};
+const capabilityCategoryOrder: CapabilityCategory[] = [
+  'documents',
+  'research',
+  'browser',
+  'desktop',
+  'ops',
+  'memory',
+  'calculation',
+  'dev',
+  'comms',
+  'general',
+];
+
+function countBy<T extends string>(items: T[]) {
+  return items.reduce<Record<T, number>>((accumulator, item) => {
+    accumulator[item] = (accumulator[item] ?? 0) + 1;
+    return accumulator;
+  }, {} as Record<T, number>);
+}
+
+function buildDomainSnapshot(entries: CapabilityDirectoryEntry[]): CapabilityDomainSnapshot[] {
+  return capabilityCategoryOrder
+    .map((category) => {
+      const domainEntries = entries.filter((entry) => entry.profile.category === category);
+      if (domainEntries.length === 0) {
+        return null;
+      }
+
+      const guide = buildCapabilityProfileGuide(category);
+      const riskCounts = countBy(domainEntries.map((entry) => entry.profile.riskLevel));
+      const approvalCounts = countBy(domainEntries.map((entry) => entry.profile.approvalLevel));
+      const sourceCounts = countBy(domainEntries.map((entry) => entry.source));
+      const libraries = [...new Set(domainEntries.map((entry) => entry.library))].sort();
+
+      return {
+        category,
+        title: guide.title,
+        summary: guide.summary,
+        capabilityIds: domainEntries.map((entry) => entry.id),
+        libraries,
+        capabilityCount: domainEntries.length,
+        enabledCapabilityCount: domainEntries.filter((entry) => entry.enabled).length,
+        riskLevelCounts: {
+          low: riskCounts.low ?? 0,
+          medium: riskCounts.medium ?? 0,
+          high: riskCounts.high ?? 0,
+          critical: riskCounts.critical ?? 0,
+        },
+        approvalLevelCounts: {
+          AUTO: approvalCounts.AUTO ?? 0,
+          CONFIRM: approvalCounts.CONFIRM ?? 0,
+          SCREEN: approvalCounts.SCREEN ?? 0,
+          TWO_FA: approvalCounts.TWO_FA ?? 0,
+        },
+        sourceCounts: {
+          local_module: sourceCounts.local_module ?? 0,
+          local_bridge_tool: sourceCounts.local_bridge_tool ?? 0,
+          mcp_surface: sourceCounts.mcp_surface ?? 0,
+          browser_surface: sourceCounts.browser_surface ?? 0,
+          direct: sourceCounts.direct ?? 0,
+        },
+      } satisfies CapabilityDomainSnapshot;
+    })
+    .filter((entry): entry is CapabilityDomainSnapshot => entry !== null);
+}
+
+function buildApprovalMatrix(entries: CapabilityDirectoryEntry[]) {
+  const grouped = countBy(entries.map((entry) => entry.profile.approvalLevel));
+
+  return [
+    {
+      level: 'AUTO' as CapabilityApprovalLevel,
+      title: 'Auto',
+      summary: 'Safe, deterministic work that should execute without a prompt.',
+      capabilityCount: grouped.AUTO ?? 0,
+      enabledCapabilityCount: entries.filter((entry) => entry.enabled && entry.profile.approvalLevel === 'AUTO').length,
+    },
+    {
+      level: 'CONFIRM' as CapabilityApprovalLevel,
+      title: 'Confirm',
+      summary: 'Bounded actions that should be acknowledged before execution.',
+      capabilityCount: grouped.CONFIRM ?? 0,
+      enabledCapabilityCount: entries.filter((entry) => entry.enabled && entry.profile.approvalLevel === 'CONFIRM').length,
+    },
+    {
+      level: 'SCREEN' as CapabilityApprovalLevel,
+      title: 'Screen',
+      summary: 'Visible or stateful actions that need preview and human review.',
+      capabilityCount: grouped.SCREEN ?? 0,
+      enabledCapabilityCount: entries.filter((entry) => entry.enabled && entry.profile.approvalLevel === 'SCREEN').length,
+    },
+    {
+      level: 'TWO_FA' as CapabilityApprovalLevel,
+      title: '2FA',
+      summary: 'High-risk operations that must pass elevated approval gates.',
+      capabilityCount: grouped.TWO_FA ?? 0,
+      enabledCapabilityCount: entries.filter((entry) => entry.enabled && entry.profile.approvalLevel === 'TWO_FA').length,
+    },
+  ];
+}
 
 function countMcpServerStates(mcp: McpBridgeOutput) {
   const counts = {
@@ -74,6 +145,96 @@ function countMcpServerStates(mcp: McpBridgeOutput) {
   return counts;
 }
 
+function buildCapabilityEntries() {
+  return capabilityRegistry.list({ includeDisabled: true }).map((capability) =>
+    buildCapabilityDirectoryEntry(capability)
+  );
+}
+
+function buildDirectoryFilters(entries: CapabilityDirectoryEntry[]) {
+  const sources = [...new Set(entries.map((entry) => entry.source))].sort() as CapabilitySource[];
+  const domains = [...new Set(entries.map((entry) => entry.profile.category))].sort();
+  const approvals = [...new Set(entries.map((entry) => entry.profile.approvalLevel))].sort() as CapabilityApprovalLevel[];
+  const riskLevels = [...new Set(entries.map((entry) => entry.profile.riskLevel))].sort();
+  const libraries = [...new Set(entries.map((entry) => entry.library))].sort();
+
+  return {
+    domains,
+    approvals,
+    riskLevels,
+    sources,
+    libraries,
+  };
+}
+
+export type CapabilityDirectorySnapshot = {
+  local: {
+    capabilities: ReturnType<typeof buildLocalCapabilityCatalog>;
+    bridgeTools: ReturnType<typeof buildLocalBridgeCatalog>;
+  };
+  capabilities: CapabilityDirectoryEntry[];
+  domains: CapabilityDomainSnapshot[];
+  approvalMatrix: Array<{
+    level: CapabilityApprovalLevel;
+    title: string;
+    summary: string;
+    capabilityCount: number;
+    enabledCapabilityCount: number;
+  }>;
+  skills: SkillDirectorySnapshot;
+  mcp: McpBridgeOutput;
+  mcpStatus: 'ready' | 'unavailable';
+  mcpError?: string;
+  discovery: {
+    includeLiveMcp: boolean;
+    mcp: McpBridgeOutput['discovery'];
+    skills: SkillDirectorySnapshot['discovery'];
+  };
+  selectionGuide: Array<{
+    kind: 'local_module' | 'local_bridge_tool' | 'mcp_resource' | 'mcp_prompt' | 'mcp_tool' | 'browser' | 'crawl' | 'direct_answer';
+    title: string;
+    when: string;
+    why: string;
+  }>;
+  capabilityGuides: ReturnType<typeof listCapabilityProfileGuides>;
+  filters: {
+    domains: CapabilityCategory[];
+    approvals: CapabilityApprovalLevel[];
+    riskLevels: Array<'low' | 'medium' | 'high' | 'critical'>;
+    sources: CapabilitySource[];
+    libraries: string[];
+  };
+  recentAudits: ReturnType<typeof capabilityRegistry.getAuditTrail>;
+  summary: {
+    localCapabilityCount: number;
+    enabledLocalCapabilityCount: number;
+    bridgeToolCount: number;
+    enabledBridgeToolCount: number;
+    browserEnabled: boolean;
+    crawlEnabled: boolean;
+    skillCount: number;
+    enabledSkillCount: number;
+    installedSkillCount: number;
+    mcpServerCount: number;
+    mcpConfiguredServerCount: number;
+    mcpReachableServerCount: number;
+    mcpDegradedServerCount: number;
+    mcpBlockedServerCount: number;
+    mcpDisabledServerCount: number;
+    mcpToolCount: number;
+    mcpResourceCount: number;
+    mcpPromptCount: number;
+    categoryCount: number;
+    libraryCount: number;
+    autoApprovalCapabilityCount: number;
+    confirmApprovalCapabilityCount: number;
+    screenApprovalCapabilityCount: number;
+    twoFaApprovalCapabilityCount: number;
+    highRiskCapabilityCount: number;
+    safeByDefaultCapabilityCount: number;
+  };
+};
+
 export async function buildCapabilityDirectorySnapshot(includeLiveMcp = true): Promise<CapabilityDirectorySnapshot> {
   const localCapabilityList = capabilityRegistry.list({ includeDisabled: true });
   const localCapabilities = buildLocalCapabilityCatalog(localCapabilityList);
@@ -87,6 +248,11 @@ export async function buildCapabilityDirectorySnapshot(includeLiveMcp = true): P
       enabled: bridgeEnabled,
     }))
   );
+  const capabilities = buildCapabilityEntries();
+  const domains = buildDomainSnapshot(capabilities);
+  const approvalMatrix = buildApprovalMatrix(capabilities);
+  const filters = buildDirectoryFilters(capabilities);
+  const recentAudits = capabilityRegistry.getAuditTrail().slice(-12).reverse();
 
   let mcp: McpBridgeOutput;
   let mcpStatus: CapabilityDirectorySnapshot['mcpStatus'] = 'ready';
@@ -101,7 +267,7 @@ export async function buildCapabilityDirectorySnapshot(includeLiveMcp = true): P
   } catch (error) {
     mcpStatus = 'unavailable';
     mcpError = error instanceof Error ? error.message : 'MCP discovery failed';
-    mcp = {
+      mcp = {
       tools: localBridgeTools as McpBridgeOutput['tools'],
       mcpServers: [],
       mcpTools: [],
@@ -113,6 +279,7 @@ export async function buildCapabilityDirectorySnapshot(includeLiveMcp = true): P
         attempted: false,
         status: 'unavailable',
         error: mcpError,
+        cached: false,
       },
     };
   }
@@ -123,6 +290,9 @@ export async function buildCapabilityDirectorySnapshot(includeLiveMcp = true): P
       capabilities: localCapabilities,
       bridgeTools: localBridgeTools,
     },
+    capabilities,
+    domains,
+    approvalMatrix,
     skills,
     mcp,
     mcpStatus,
@@ -182,6 +352,9 @@ export async function buildCapabilityDirectorySnapshot(includeLiveMcp = true): P
         why: 'Avoid unnecessary tool use when the model can respond directly and clearly.',
       },
     ],
+    capabilityGuides: listCapabilityProfileGuides(),
+    filters,
+    recentAudits,
     summary: {
       localCapabilityCount: localCapabilities.length,
       enabledLocalCapabilityCount: localCapabilities.filter((capability) => capability.enabled).length,
@@ -201,6 +374,14 @@ export async function buildCapabilityDirectorySnapshot(includeLiveMcp = true): P
       mcpToolCount: mcp.mcpTools.length,
       mcpResourceCount: mcp.mcpResources.length + mcp.mcpResourceTemplates.length,
       mcpPromptCount: mcp.mcpPrompts.length,
+      categoryCount: domains.length,
+      autoApprovalCapabilityCount: approvalMatrix.find((entry) => entry.level === 'AUTO')?.capabilityCount ?? 0,
+      confirmApprovalCapabilityCount: approvalMatrix.find((entry) => entry.level === 'CONFIRM')?.capabilityCount ?? 0,
+      screenApprovalCapabilityCount: approvalMatrix.find((entry) => entry.level === 'SCREEN')?.capabilityCount ?? 0,
+      twoFaApprovalCapabilityCount: approvalMatrix.find((entry) => entry.level === 'TWO_FA')?.capabilityCount ?? 0,
+      highRiskCapabilityCount: capabilities.filter((entry) => ['high', 'critical'].includes(entry.profile.riskLevel)).length,
+      safeByDefaultCapabilityCount: capabilities.filter((entry) => entry.profile.safeByDefault).length,
+      libraryCount: filters.libraries.length,
     },
   };
 }

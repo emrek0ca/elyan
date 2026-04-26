@@ -42,6 +42,11 @@ describe('Bridge capabilities', () => {
       expect(snapshot.local.bridgeTools.some((tool) => tool.id === 'math_exact')).toBe(true);
       expect(snapshot.skills.summary.builtInSkillCount).toBeGreaterThan(0);
       expect(snapshot.skills.summary.installedSkillCount).toBeGreaterThan(0);
+      expect(snapshot.summary.libraryCount).toBeGreaterThan(0);
+      expect(snapshot.capabilities.some((capability) => capability.id === 'browser_automation' && capability.library === 'playwright')).toBe(true);
+      expect(snapshot.domains.find((domain) => domain.category === 'documents')?.libraries).toEqual(
+        expect.arrayContaining(['docx', 'mammoth', 'pdfjs-dist', 'tesseract.js', 'exceljs'])
+      );
     } finally {
       process.env.ELYAN_MCP_SERVERS = previous;
     }

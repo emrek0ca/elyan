@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { createHmac, timingSafeEqual } from 'crypto';
 import { dispatchOperatorRequest } from '@/core/operator';
 import { readRuntimeEnvValue } from '@/core/runtime-config';
 import { readRuntimeSettingsSync } from '@/core/runtime-settings';
@@ -23,6 +24,49 @@ export function getWhatsappCloudStatus() {
     configured: Boolean(config.accessToken && config.phoneNumberId && config.verifyToken),
     enabled: config.enabled,
     webhookPath: config.webhookPath,
+    securityChecks: {
+      appSecret: Boolean(config.appSecret),
+      signatureVerification: Boolean(config.appSecret),
+    },
+    costProfile: 'official_api_may_bill_templates',
+  };
+}
+
+export function verifyWhatsappCloudSignature(rawBody: string, signatureHeader: string | null, appSecret?: string) {
+  if (!appSecret) {
+    return true;
+  }
+
+  if (!signatureHeader?.startsWith('sha256=')) {
+    return false;
+  }
+
+  const expected = createHmac('sha256', appSecret).update(rawBody).digest('hex');
+  const actual = signatureHeader.slice('sha256='.length);
+  const expectedBuffer = Buffer.from(expected, 'hex');
+  const actualBuffer = Buffer.from(actual, 'hex');
+  return expectedBuffer.length === actualBuffer.length && timingSafeEqual(expectedBuffer, actualBuffer);
+}
+
+export async function probeWhatsappCloudConfig() {
+  const config = getWhatsappConfig();
+  if (!config.accessToken || !config.phoneNumberId) {
+    return {
+      ok: false,
+      configured: false,
+      status: 'missing_access_token_or_phone_number_id',
+    };
+  }
+
+  const response = await fetch(`https://graph.facebook.com/${config.apiVersion}/${config.phoneNumberId}`, {
+    headers: {
+      Authorization: `Bearer ${config.accessToken}`,
+    },
+  });
+  return {
+    ok: response.ok,
+    configured: true,
+    status: response.ok ? response.status : `http_${response.status}`,
   };
 }
 
@@ -88,7 +132,17 @@ export async function handleWhatsappCloudWebhook(request: NextRequest) {
     return new Response('WhatsApp Cloud integration is disabled.', { status: 403 });
   }
 
-  const payload = await request.json().catch(() => null);
+  const rawBody = await request.text();
+  if (!verifyWhatsappCloudSignature(rawBody, request.headers.get('x-hub-signature-256'), config.appSecret)) {
+    return new Response('Invalid WhatsApp webhook signature.', { status: 403 });
+  }
+
+  let payload: unknown = null;
+  try {
+    payload = rawBody ? JSON.parse(rawBody) : null;
+  } catch {
+    return new Response('Invalid WhatsApp webhook payload.', { status: 400 });
+  }
   const messages = extractIncomingTextMessages(payload);
 
   for (const message of messages) {

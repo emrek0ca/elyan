@@ -2,8 +2,8 @@ import './globals.css';
 import { MainLayout } from '@/components/layout/MainLayout';
 
 export const metadata = {
-  title: 'Elyan - Local-First Personal Agent Runtime',
-  description: 'Local-first personal agent runtime with hosted access, citations, control-plane billing, and app-connected operator routing.',
+  title: 'Elyan - Operator Runtime',
+  description: 'Local-first operator runtime for capabilities, approvals, routing, and optional hosted control surfaces.',
 };
 
 export default function RootLayout({

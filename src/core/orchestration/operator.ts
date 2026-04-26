@@ -11,6 +11,8 @@ type OperatorOutcome = {
   target?: ExecutionTarget;
 };
 
+type PromptArguments = Record<string, string>;
+
 function stringifyValue(value: unknown): string {
   if (typeof value === 'string') {
     return value;
@@ -118,6 +120,92 @@ function resolveTargetUrl(query: string, target?: ExecutionTarget) {
 
 function isBrowserAutomationConfirmed(target: ExecutionTarget) {
   return target.kind !== 'browser_automation' || !target.requiresConfirmation;
+}
+
+function extractJsonObject(query: string) {
+  const start = query.indexOf('{');
+  if (start < 0) {
+    return undefined;
+  }
+
+  let depth = 0;
+
+  for (let index = start; index < query.length; index += 1) {
+    const char = query[index];
+    if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+
+      if (depth === 0) {
+        const candidate = query.slice(start, index + 1);
+
+        try {
+          const parsed = JSON.parse(candidate);
+          return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? (parsed as Record<string, unknown>)
+            : undefined;
+        } catch {
+          return undefined;
+        }
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function extractNamedArguments(query: string): PromptArguments {
+  const matches = query.matchAll(/\b([a-zA-Z][a-zA-Z0-9_-]{1,32})\s*[:=]\s*("[^"]+"|'[^']+'|[^\s,;]+)/g);
+  const args: PromptArguments = {};
+
+  for (const match of matches) {
+    const key = match[1]?.trim();
+    const rawValue = match[2]?.trim();
+
+    if (!key || !rawValue) {
+      continue;
+    }
+
+    args[key] = rawValue.replace(/^['"]|['"]$/g, '');
+  }
+
+  return args;
+}
+
+function extractPromptArguments(query: string) {
+  const args = extractNamedArguments(query);
+  return Object.keys(args).length > 0 ? args : undefined;
+}
+
+function expandResourceTemplate(template: string, query: string) {
+  const placeholders = [...template.matchAll(/\{([a-zA-Z][a-zA-Z0-9_-]*)\}/g)].map((match) => match[1]).filter(Boolean) as string[];
+  if (placeholders.length === 0) {
+    return {
+      ok: true as const,
+      uri: template,
+    };
+  }
+
+  const args = extractNamedArguments(query);
+  const missing = placeholders.filter((name) => !args[name]);
+
+  if (missing.length > 0) {
+    return {
+      ok: false as const,
+      reason: `Missing template arguments: ${missing.join(', ')}.`,
+    };
+  }
+
+  let uri = template;
+  for (const placeholder of placeholders) {
+    uri = uri.replaceAll(`{${placeholder}}`, encodeURIComponent(args[placeholder]));
+  }
+
+  return {
+    ok: true as const,
+    uri,
+  };
 }
 
 export async function runOperatorPreflight(
@@ -272,7 +360,7 @@ export async function runOperatorPreflight(
         return outcome;
       }
 
-      const prompt = await registry.getPrompt(policy.primary.id ?? '');
+      const prompt = await registry.getPrompt(policy.primary.id ?? '', extractPromptArguments(query));
       const content = stringifyValue(prompt);
       outcome.sources.push(
         toScrapedContent(`mcp://prompt/${policy.primary.id}`, policy.primary.title ?? 'MCP prompt', content)
@@ -285,15 +373,67 @@ export async function runOperatorPreflight(
   }
 
   if (policy.primary.kind === 'mcp_tool') {
-    outcome.notes.push('MCP tool path was selected, but the current operator preflight only auto-runs read/prompt flows.');
-    return outcome;
+    if (policy.primary.requiresConfirmation) {
+      outcome.notes.push('MCP tool execution requires explicit confirmation before the tool can run.');
+      return outcome;
+    }
+
+    const toolId = policy.primary.id;
+    if (!toolId) {
+      outcome.notes.push('MCP tool path was selected, but no tool id was available.');
+      return outcome;
+    }
+
+    const serverConfigs = readMcpServerConfigs();
+    const registry = new McpToolRegistry(serverConfigs);
+
+    try {
+      const input = extractJsonObject(query) ?? {};
+      const result = await registry.invokeTool(toolId, input);
+      const content = stringifyValue(result);
+      outcome.sources.push(
+        toScrapedContent(`mcp://tool/${toolId}`, policy.primary.title ?? toolId, content)
+      );
+      outcome.contextBlocks.push(`MCP tool result from ${policy.primary.title ?? toolId}`);
+      return outcome;
+    } finally {
+      await registry.close();
+    }
   }
 
   if (policy.primary.kind === 'mcp_resource_template') {
-    outcome.notes.push(
-      'MCP resource template path was selected, but the current operator preflight does not auto-expand template arguments.'
-    );
-    return outcome;
+    const template = policy.primary.id;
+    if (!template) {
+      outcome.notes.push('MCP resource template path was selected, but no template id was available.');
+      return outcome;
+    }
+
+    const resolved = expandResourceTemplate(template, query);
+    if (!resolved.ok) {
+      outcome.notes.push(
+        `MCP resource template could not be resolved. ${resolved.reason} Provide arguments like key=value in the request.`
+      );
+      return outcome;
+    }
+
+    const serverConfigs = readMcpServerConfigs();
+    const registry = new McpToolRegistry(serverConfigs);
+
+    try {
+      const resource = await registry.readResource(resolved.uri);
+      const content = stringifyValue(resource);
+      outcome.sources.push(
+        toScrapedContent(
+          `mcp://resource-template/${resolved.uri}`,
+          policy.primary.title ?? 'MCP resource template',
+          content
+        )
+      );
+      outcome.contextBlocks.push(`MCP resource template result from ${policy.primary.title ?? resolved.uri}`);
+      return outcome;
+    } finally {
+      await registry.close();
+    }
   }
 
   if (policy.primary.kind === 'browser_automation') {

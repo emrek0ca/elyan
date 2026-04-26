@@ -28,6 +28,12 @@ function createTelegramBot() {
 
   bot.on('message:text', async (ctx) => {
     const settings = readRuntimeSettingsSync();
+    const allowedChatIds = settings.channels.telegram.allowedChatIds;
+    if (allowedChatIds.length > 0 && !allowedChatIds.includes(String(ctx.chat.id))) {
+      await ctx.reply('This Telegram chat is not allowed for this Elyan runtime.');
+      return;
+    }
+
     const response = await dispatchOperatorRequest({
       source: 'telegram',
       text: ctx.message.text,
@@ -41,9 +47,11 @@ function createTelegramBot() {
       },
     });
 
-    await ctx.reply(response.text, {
-      link_preview_options: { is_disabled: true },
-    });
+    for (const chunk of response.text.match(/[\s\S]{1,3900}/g) ?? ['']) {
+      await ctx.reply(chunk, {
+        link_preview_options: { is_disabled: true },
+      });
+    }
   });
 
   bot.catch(async (error) => {
@@ -64,6 +72,33 @@ export function getTelegramStatus() {
     enabled: settings.channels.telegram.enabled,
     mode: settings.channels.telegram.mode,
     webhookPath: settings.channels.telegram.webhookPath,
+    securityChecks: {
+      webhookSecret: Boolean(settings.channels.telegram.webhookSecret || readRuntimeEnvValue('TELEGRAM_WEBHOOK_SECRET')),
+      allowedChatIds: settings.channels.telegram.allowedChatIds.length,
+    },
+    costProfile: 'free_api',
+  };
+}
+
+export async function probeTelegramBot() {
+  const token = readRuntimeEnvValue('TELEGRAM_BOT_TOKEN');
+  const settings = readRuntimeSettingsSync();
+  if (!token) {
+    return {
+      ok: false,
+      configured: false,
+      status: 'missing_token',
+      botUsername: settings.channels.telegram.botUsername,
+    };
+  }
+
+  const response = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+  const body = await response.json().catch(() => null);
+  return {
+    ok: response.ok && body?.ok === true,
+    configured: true,
+    status: response.ok ? response.status : `http_${response.status}`,
+    botUsername: body?.result?.username ?? settings.channels.telegram.botUsername,
   };
 }
 
@@ -77,6 +112,12 @@ export async function startTelegramPolling() {
 }
 
 export async function handleTelegramWebhook(request: Request) {
+  const settings = readRuntimeSettingsSync();
+  const secret = settings.channels.telegram.webhookSecret || readRuntimeEnvValue('TELEGRAM_WEBHOOK_SECRET');
+  if (secret && request.headers.get('x-telegram-bot-api-secret-token') !== secret) {
+    return new Response('Invalid Telegram webhook secret.', { status: 403 });
+  }
+
   const bot = createTelegramBot();
   if (!bot) {
     return new Response('Telegram bot is not configured.', { status: 503 });

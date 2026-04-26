@@ -20,7 +20,9 @@ const envSchema = z.object({
   ELYAN_RUNTIME_SETTINGS_PATH: z
     .string()
     .default('storage/runtime/settings.json'),
+  ELYAN_STORAGE_DIR: z.string().default('storage'),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
+  TELEGRAM_WEBHOOK_SECRET: z.string().optional(),
   WHATSAPP_CLOUD_ACCESS_TOKEN: z.string().optional(),
   WHATSAPP_CLOUD_PHONE_NUMBER_ID: z.string().optional(),
   WHATSAPP_CLOUD_VERIFY_TOKEN: z.string().optional(),
@@ -34,6 +36,12 @@ const envSchema = z.object({
   GITHUB_OWNER: z.string().optional(),
   GITHUB_REPO: z.string().optional(),
   GITHUB_TOKEN: z.string().optional(),
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  GITHUB_CLIENT_ID: z.string().optional(),
+  GITHUB_CLIENT_SECRET: z.string().optional(),
+  NOTION_CLIENT_ID: z.string().optional(),
+  NOTION_CLIENT_SECRET: z.string().optional(),
   IYZICO_ENV: z.enum(['sandbox', 'production']).default('sandbox'),
   IYZICO_API_KEY: z.string().optional(),
   IYZICO_SECRET_KEY: z.string().optional(),

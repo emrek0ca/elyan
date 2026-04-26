@@ -200,7 +200,7 @@ async function createDefaultTransport(config: McpServerConfig): Promise<MCPTrans
 
 async function createDefaultClient(): Promise<MCPClient> {
   const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
-  return new Client({ name: 'Elyan MCP Bridge', version: '1.1.0' });
+  return new Client({ name: 'Elyan MCP Bridge', version: '1.2.0' });
 }
 
 export class LiveMcpClient {

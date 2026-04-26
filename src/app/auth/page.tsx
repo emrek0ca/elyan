@@ -5,83 +5,77 @@ import { signIn, signOut } from 'next-auth/react';
 
 type Mode = 'login' | 'register';
 
+type SessionSnapshot = {
+  userId?: string;
+  email?: string;
+  name?: string;
+  accountId?: string;
+  ownerType?: string;
+  role?: string;
+  planId?: string;
+  accountStatus?: string;
+  subscriptionStatus?: string;
+  subscriptionSyncState?: string;
+  hostedAccess?: boolean;
+  hostedUsageAccounting?: boolean;
+};
+
+type AccountSnapshot = {
+  displayName: string;
+  balanceCredits: string;
+  subscription: {
+    planId: string;
+    status: string;
+    syncState: string;
+  };
+  entitlements: {
+    hostedAccess: boolean;
+    hostedUsageAccounting: boolean;
+  };
+  deviceSummary?: {
+    total: number;
+    pending: number;
+    active: number;
+    revoked: number;
+    expired: number;
+  };
+  usageSnapshot: {
+    dailyRequests: number;
+    dailyRequestsLimit: number;
+    remainingRequests: number;
+    dailyHostedToolActionCalls: number;
+    dailyHostedToolActionCallsLimit: number;
+    remainingHostedToolActionCalls: number;
+    monthlyCreditsRemaining: string;
+    monthlyCreditsBurned: string;
+    resetAt: string;
+    state: string;
+  };
+};
+
 type SessionState =
   | {
       authenticated: false;
     }
   | {
       authenticated: true;
-      session: {
-        userId?: string;
-        email?: string;
-        name?: string;
-        accountId?: string;
-        ownerType?: string;
-        role?: string;
-        planId?: string;
+      session: SessionSnapshot;
+      account: AccountSnapshot;
+      profile?: {
+        session: SessionSnapshot;
       };
-        account: {
-          displayName: string;
-          balanceCredits: string;
-          subscription: {
-            planId: string;
-            status: string;
-          };
-          entitlements: {
-            hostedAccess: boolean;
-            hostedUsageAccounting: boolean;
-          };
-          usageSnapshot: {
-            dailyRequests: number;
-            dailyRequestsLimit: number;
-            remainingRequests: number;
-            dailyHostedToolActionCalls: number;
-            dailyHostedToolActionCallsLimit: number;
-            remainingHostedToolActionCalls: number;
-            monthlyCreditsRemaining: string;
-            monthlyCreditsBurned: string;
-            resetAt: string;
-            state: string;
-          };
-        };
-      };
+    };
 
 type SessionResponse = {
   ok: boolean;
-  session: {
-    userId?: string;
-    email?: string;
-    name?: string;
-    accountId?: string;
-    ownerType?: string;
-    role?: string;
-    planId?: string;
+  session: SessionSnapshot;
+  account: AccountSnapshot;
+  profile?: {
+    session: SessionSnapshot;
   };
-    account: {
-      displayName: string;
-      balanceCredits: string;
-      subscription: {
-        planId: string;
-        status: string;
-      };
-      entitlements: {
-        hostedAccess: boolean;
-        hostedUsageAccounting: boolean;
-      };
-      usageSnapshot: {
-        dailyRequests: number;
-        dailyRequestsLimit: number;
-        remainingRequests: number;
-        dailyHostedToolActionCalls: number;
-        dailyHostedToolActionCallsLimit: number;
-        remainingHostedToolActionCalls: number;
-        monthlyCreditsRemaining: string;
-        monthlyCreditsBurned: string;
-        resetAt: string;
-        state: string;
-      };
-    };
-  };
+};
+
+const HOSTED_UNAVAILABLE_CODE = 'hosted_identity_unavailable';
 
 const initialSessionState: SessionState = {
   authenticated: false,
@@ -95,6 +89,7 @@ export default function AuthPage() {
   const [planId, setPlanId] = useState('local_byok');
   const [feedback, setFeedback] = useState<string | null>(null);
   const [sessionState, setSessionState] = useState<SessionState>(initialSessionState);
+  const [hostedAuthAvailable, setHostedAuthAvailable] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
@@ -108,6 +103,18 @@ export default function AuthPage() {
     });
 
     if (!response.ok) {
+      if (response.status === 503) {
+        const body = (await response.json().catch(() => null)) as { code?: string; error?: string } | null;
+        if (body?.code === HOSTED_UNAVAILABLE_CODE) {
+          setHostedAuthAvailable(false);
+          setSessionState(initialSessionState);
+          setFeedback(
+            'Hosted identity is not configured on this machine. Elyan is running in local mode only.'
+          );
+          return;
+        }
+      }
+
       setSessionState(initialSessionState);
       return;
     }
@@ -123,7 +130,9 @@ export default function AuthPage() {
       authenticated: true,
       session: body.session,
       account: body.account,
+      profile: body.profile,
     });
+    setHostedAuthAvailable(true);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -133,6 +142,11 @@ export default function AuthPage() {
 
     try {
       if (mode === 'register') {
+        if (!hostedAuthAvailable) {
+          setFeedback('Hosted identity is disabled in local mode.');
+          return;
+        }
+
         const response = await fetch('/api/control-plane/auth/register', {
           method: 'POST',
           headers: {
@@ -152,6 +166,11 @@ export default function AuthPage() {
           setFeedback(body.error ?? 'Registration failed');
           return;
         }
+      }
+
+      if (!hostedAuthAvailable) {
+        setFeedback('Hosted identity is disabled in local mode.');
+        return;
       }
 
       const result = await signIn('credentials', {
@@ -187,9 +206,17 @@ export default function AuthPage() {
           <div className="auth-page__eyebrow">Hosted identity</div>
           <h1 className="auth-page__title">Account, session, and hosted entitlements</h1>
           <p className="auth-page__lead">
-            Elyan keeps the local runtime private. This surface only binds hosted access, billing, and shared control-plane state.
+            Elyan keeps the local runtime private. When hosted auth is configured, this surface binds hosted access,
+            billing, and device sync on elyan.dev. Otherwise Elyan stays in local mode.
           </p>
         </div>
+
+        {!hostedAuthAvailable ? (
+          <div className="auth-page__feedback auth-page__feedback--neutral">
+            Local mode is active. Set `DATABASE_URL` and `NEXTAUTH_SECRET` only if you want hosted account and billing
+            features.
+          </div>
+        ) : null}
 
         <div className="auth-page__mode-switch" role="tablist" aria-label="Auth mode">
           <button
@@ -238,7 +265,7 @@ export default function AuthPage() {
             <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={12} required />
           </label>
 
-          <button className="auth-form__submit" type="submit" disabled={isSubmitting}>
+          <button className="auth-form__submit" type="submit" disabled={isSubmitting || !hostedAuthAvailable}>
             {mode === 'register' ? 'Create account' : 'Login'}
           </button>
         </form>
@@ -249,7 +276,11 @@ export default function AuthPage() {
           <div>
             <div className="auth-page__session-label">Current session</div>
             <div className="auth-page__session-value">
-              {sessionState.authenticated ? sessionState.session.email : 'No active hosted session'}
+              {sessionState.authenticated
+                ? sessionState.session.email
+                : hostedAuthAvailable
+                  ? 'No active hosted session'
+                  : 'Local mode only'}
             </div>
           </div>
 
@@ -272,7 +303,7 @@ export default function AuthPage() {
             </div>
             <div className="auth-page__detail">
               <span>Subscription</span>
-              <strong>{sessionState.account.subscription.status}</strong>
+              <strong>{sessionState.session.subscriptionStatus ?? sessionState.account.subscription.status}</strong>
             </div>
             <div className="auth-page__detail">
               <span>Role</span>
@@ -280,7 +311,15 @@ export default function AuthPage() {
             </div>
             <div className="auth-page__detail">
               <span>Hosted access</span>
-              <strong>{sessionState.account.entitlements.hostedAccess ? 'enabled' : 'disabled'}</strong>
+              <strong>
+                {sessionState.session.hostedAccess ?? sessionState.account.entitlements.hostedAccess
+                  ? 'enabled'
+                  : 'disabled'}
+              </strong>
+            </div>
+            <div className="auth-page__detail">
+              <span>Sync state</span>
+              <strong>{sessionState.session.subscriptionSyncState ?? sessionState.account.subscription.syncState}</strong>
             </div>
             <div className="auth-page__detail">
               <span>Credits</span>
@@ -297,6 +336,10 @@ export default function AuthPage() {
               <strong>
                 {sessionState.account.usageSnapshot.dailyHostedToolActionCalls}/{sessionState.account.usageSnapshot.dailyHostedToolActionCallsLimit}
               </strong>
+            </div>
+            <div className="auth-page__detail">
+              <span>Devices</span>
+              <strong>{sessionState.account.deviceSummary?.total ?? 0}</strong>
             </div>
             <div className="auth-page__detail">
               <span>Resets</span>
