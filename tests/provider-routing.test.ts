@@ -31,4 +31,24 @@ describe('Provider routing', () => {
       })
     ).toBe('openai:gpt-4o');
   });
+
+  it('keeps team routing on local models unless cloud escalation is explicit', () => {
+    expect(
+      resolvePreferredModelIdFromAvailableModels(models, {
+        routingMode: 'local_first',
+        taskIntent: 'research',
+        reasoningDepth: 'deep',
+      })
+    ).toBe('ollama:llama3.2');
+  });
+
+  it('enforces local-only routing for personal team workflow work', () => {
+    expect(
+      resolvePreferredModelIdFromAvailableModels(models, {
+        routingMode: 'local_only',
+        taskIntent: 'personal_workflow',
+        reasoningDepth: 'standard',
+      })
+    ).toBe('ollama:llama3.2');
+  });
 });

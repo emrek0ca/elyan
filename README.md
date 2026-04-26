@@ -1,8 +1,8 @@
-# Elyan v1.1
+# Elyan v1.2
 
-Elyan is a local-first personal agent runtime.
+Elyan is a local-first personal agent runtime with a separate hosted control plane on elyan.dev.
 
-The real v1 product surface is small:
+The real v1 product surface is intentionally small:
 
 - local chat runtime
 - local health and readiness
@@ -12,25 +12,40 @@ The real v1 product surface is small:
 - optional search
 - optional MCP
 - optional channels
-- optional narrow hosted control-plane integration
+- optional hosted control-plane integration
 
 Everything else is secondary.
 
 ## Canonical Local Path
 
-1. Copy the environment file:
-
-```bash
-cp .env.example .env
-```
-
-2. Install dependencies:
+1. Install dependencies:
 
 ```bash
 npm install
 ```
 
-3. Start Ollama and make sure at least one model is available, or set one cloud API key in `.env`:
+2. Prepare local storage, safe environment defaults, and zero-cost model routing:
+
+```bash
+npm install -g .
+elyan setup --zero-cost
+```
+
+If the CLI is not linked globally yet:
+
+```bash
+node bin/elyan.js setup --zero-cost
+```
+
+`elyan setup` runs the safe bootstrap path, checks local model/search reachability, and prints the next local-first step without requiring hosted account linking.
+
+3. Start Ollama and pull the recommended local model if setup reports that Ollama is not reachable:
+
+```bash
+elyan models setup
+```
+
+Cloud keys are optional and should only be set when you intentionally want cloud inference:
 
 - `OPENAI_API_KEY`
 - `ANTHROPIC_API_KEY`
@@ -42,24 +57,16 @@ npm install
 npm run dev
 ```
 
-Or production-like:
+Production-like:
 
 ```bash
 npm run build
 npm run start
 ```
 
-5. Check health:
+5. Check health and open the command center:
 
 - `http://localhost:3000/api/healthz`
-
-6. Inspect capabilities:
-
-- `http://localhost:3000/api/capabilities`
-
-7. Use Elyan:
-
-- `http://localhost:3000`
 - `http://localhost:3000/manage`
 
 ## What Is Required
@@ -69,72 +76,107 @@ You need one usable model source:
 - local Ollama at `OLLAMA_URL`, or
 - one cloud provider key
 
-Without a model source, Elyan is not ready.
+Zero-cost mode uses local Ollama and local storage. Without a model source, Elyan is not ready.
 
-## What Is Optional
+## CLI
+
+```bash
+elyan setup --zero-cost
+elyan doctor
+elyan doctor --fix --zero-cost
+elyan health
+elyan status
+elyan status --json
+elyan capabilities
+elyan settings view
+elyan open
+```
+
+Local operator permissions:
+
+```bash
+elyan desktop status
+elyan desktop grant .
+elyan desktop enable
+```
+
+Service mode:
+
+```bash
+elyan service install
+elyan service start
+elyan service status
+```
+
+Channel diagnostics:
+
+```bash
+elyan channels list
+elyan channels doctor
+elyan channels setup telegram
+elyan channels test telegram
+```
+
+MCP diagnostics:
+
+```bash
+elyan mcp list
+elyan mcp doctor
+elyan mcp enable <server>
+elyan mcp disable <server>
+elyan mcp disable-tool <server> <tool>
+```
+
+## Optional Surfaces
 
 ### Search
 
-SearXNG is optional.
-
-If it is reachable, Elyan uses live retrieval and citations.
-If it is missing, Elyan stays usable in local-only mode.
+SearXNG is optional. If it is reachable, Elyan uses live retrieval and citations. If it is missing, Elyan stays usable in local-only mode.
 
 ### MCP
 
-MCP is optional.
-
-Only configure it if you actively use MCP servers.
+MCP is optional. Only configure it if you actively use MCP servers.
 
 ### Channels
 
 Telegram, WhatsApp Cloud, WhatsApp Baileys, and iMessage/BlueBubbles are optional.
 
-Only enable them if you have their real runtime credentials or bridge setup.
+- Telegram uses the official Bot API and supports polling or webhook mode.
+- WhatsApp Cloud is the official Meta surface and can incur template-message costs.
+- WhatsApp Baileys is local best-effort and unofficial; it is not a guaranteed business channel.
+- iMessage requires a local BlueBubbles server on a Mac with iMessage available.
 
-### Hosted control plane
+### Hosted Control Plane
 
-The shared VPS control plane is optional.
-
-It is only for shared business/product state such as:
+The shared VPS control plane is optional and only for shared business/device state:
 
 - accounts
+- sessions
 - plans
 - subscriptions
 - entitlements
 - hosted usage accounting
+- device linking and token rotation
+- notifications and ledger entries
 
 Private local runtime state stays local by default.
 
-## Dashboard And CLI
+## Local Operator Safety
 
-These are the real control surfaces.
+The local operator is permissioned computer control, not unrestricted system takeover.
 
-Dashboard:
-
-- `http://localhost:3000/manage`
-
-CLI:
-
-```bash
-npm install -g .
-elyan doctor
-elyan health
-elyan status
-elyan capabilities
-elyan settings view
-```
-
-## First-Run Checks
-
-- `/api/healthz`: tells you if Elyan is actually ready
-- `/api/capabilities`: shows the runtime capability surface
-- `/manage`: shows runtime state, optional integrations, and optional hosted state
+- It is disabled until enabled in runtime settings or through `elyan desktop enable`.
+- It can only operate inside configured `allowedRoots`.
+- Sensitive paths such as `.env`, SSH keys, cloud credentials, wallets, shell profiles, and system directories are protected by default.
+- Write, destructive, and system-critical actions require explicit approval policy levels.
+- Evidence is written under `ELYAN_STORAGE_DIR/evidence`.
 
 ## Environment
 
 Base local runtime:
 
+- `ELYAN_STORAGE_DIR=storage`
+- `ELYAN_RUNTIME_SETTINGS_PATH=storage/runtime/settings.json`
 - `OLLAMA_URL=http://127.0.0.1:11434`
 - `SEARXNG_URL=http://localhost:8080`
 
@@ -165,27 +207,29 @@ Optional MCP:
 npm run lint
 npm run test
 npm run build
+npm run release:check
 ```
+
+## Security
+
+- Public-facing hosted and control-plane routes use hardened HTTP headers and no-store defaults on private surfaces.
+- Do not commit secrets, tokens, or private credentials to the repository.
+- Do not grant broad local operator roots unless you are comfortable with that machine scope.
+- Report vulnerabilities privately through GitHub Security Advisories or `SECURITY` before public disclosure.
+
+## Product Boundary
+
+Elyan v1.2 is not:
+
+- a Docker-first product
+- a fake hosted everything-app
+- an unrestricted computer-control bot
+- a replacement for explicit channel credentials and platform rules
+
+Elyan v1.2 is a directly runnable local-first runtime with guided setup and safer release/install surfaces. The hosted surface is separate and only adds shared account and billing features when configured.
 
 ## License
 
 Elyan is licensed under `AGPL-3.0-or-later`.
 
 If you modify and deploy it as a network service, you must make the corresponding source available under the same terms.
-
-## Security
-
-- Public-facing hosted and control-plane routes use hardened HTTP headers and no-store defaults on private surfaces.
-- Do not commit secrets, tokens, or private credentials to the repository.
-- Report vulnerabilities privately through GitHub Security Advisories or `SECURITY` before public disclosure.
-
-## Product Boundary
-
-Elyan v1.1 is not:
-
-- a Docker-first product
-- a platform
-- a feature pile
-- a fake hosted everything-app
-
-Elyan v1.1 is a directly runnable local-first runtime that degrades cleanly when optional systems are absent.

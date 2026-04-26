@@ -7,7 +7,10 @@ import { AlertCircle, Sparkles } from 'lucide-react';
 import { SearchBar } from '@/components/search/SearchBar';
 import { ModelInfo } from '@/types/provider';
 import { SearchMode } from '@/types/search';
-import { ChatMessage } from '@/components/chat/ChatMessage';
+import { ChatMessage, type ChatMessageSurface } from '@/components/chat/ChatMessage';
+import type { CapabilityDirectorySnapshot } from '@/core/capabilities';
+import { formatCapabilityApproval } from '@/core/capabilities/profiles';
+import { classifyInteractionIntent } from '@/core/interaction/intent';
 
 type ChatInterfaceProps = {
   chatId?: string;
@@ -23,6 +26,8 @@ const starterPrompts = [
   'Summarize the latest AI search trends',
 ];
 
+type CapabilitySurfaceChip = ChatMessageSurface['chips'][number];
+
 function toChatMessageContent(message: UIMessage) {
   const text = message.parts
     .filter((part): part is Extract<UIMessage['parts'][number], { type: 'text' }> => part.type === 'text')
@@ -31,6 +36,137 @@ function toChatMessageContent(message: UIMessage) {
     .join('\n');
 
   return text.trim();
+}
+
+function countOccurrences(text: string, pattern: RegExp) {
+  return (text.match(pattern) ?? []).length;
+}
+
+function toneForRisk(risk: string): CapabilitySurfaceChip['tone'] {
+  if (risk === 'high' || risk === 'critical') {
+    return 'warning';
+  }
+
+  if (risk === 'medium') {
+    return 'accent';
+  }
+
+  return 'neutral';
+}
+
+function buildSurfaceChips(
+  query: string,
+  capabilitySnapshot: CapabilityDirectorySnapshot | null,
+  mode: SearchMode
+): ChatMessageSurface {
+  const classification = classifyInteractionIntent(query, mode);
+  const chips: CapabilitySurfaceChip[] = [];
+  const normalized = query.toLowerCase();
+  const codeSignals = /\b(code|repo|repository|branch|commit|diff|patch|refactor|review|debug|test|build|lint|deploy)\b/i.test(
+    normalized
+  );
+  const authoringSignals =
+    /\b(write|draft|generate|compose|author|prepare|produce|rewrite)\b/i.test(normalized) &&
+    /\b(markdown|md|docx|document|doc|spec|brief|proposal|rfc|prd|readme|outline|design doc)\b/i.test(normalized);
+  const designSignals = /\b(design|layout|wireframe|mockup|ui|ux|figma|component|typography|spacing|palette|style guide)\b/i.test(
+    normalized
+  );
+  const categoryPriority: CapabilityDirectorySnapshot['domains'][number]['category'][] = [];
+
+  if (classification.intent === 'research' || /\b(latest|recent|compare|trend|research|source|citation)\b/i.test(normalized)) {
+    categoryPriority.push('research');
+  }
+
+  if (/\b(pdf|docx|csv|spreadsheet|document|file|archive|ocr|markdown|yaml|xml)\b/i.test(normalized)) {
+    categoryPriority.push('documents');
+  }
+
+  if (authoringSignals || designSignals) {
+    categoryPriority.push('documents');
+  }
+
+  if (/\b(click|type|submit|fill|open|navigate|install|configure|run|save|delete)\b/i.test(normalized)) {
+    categoryPriority.push('ops', 'browser');
+  }
+
+  if (codeSignals) {
+    categoryPriority.push('ops');
+  }
+
+  if (/\b(workspace|memory|remember|preference|routine)\b/i.test(normalized)) {
+    categoryPriority.push('memory');
+  }
+
+  if (/\b(chart|plot|graph|calculate|math|decimal|precision)\b/i.test(normalized)) {
+    categoryPriority.push('calculation');
+  }
+
+  const fallbackCategory: CapabilityDirectorySnapshot['domains'][number]['category'] = classification.intent === 'tool_action'
+    ? 'ops'
+    : classification.intent === 'follow_up_question'
+      ? 'memory'
+      : 'general';
+
+  categoryPriority.push(fallbackCategory);
+
+  const seen = new Set<string>();
+  for (const category of categoryPriority) {
+    if (seen.has(category)) {
+      continue;
+    }
+
+    seen.add(category);
+    const domain = capabilitySnapshot?.domains.find((entry) => entry.category === category);
+    if (!domain) {
+      continue;
+    }
+
+    const approvalLevel =
+      Object.entries(domain.approvalLevelCounts).find(([, count]) => count > 0)?.[0] ?? 'AUTO';
+    const riskLevel =
+      Object.entries(domain.riskLevelCounts).find(([, count]) => count > 0)?.[0] ?? 'low';
+
+    chips.push({
+      label: `${domain.title} · ${formatCapabilityApproval(approvalLevel as Parameters<typeof formatCapabilityApproval>[0])}`,
+      tone: toneForRisk(riskLevel),
+    });
+  }
+
+  if (classification.intent === 'research') {
+    chips.push({ label: 'Retrieval', tone: 'accent' });
+  }
+
+  if (classification.intent === 'tool_action') {
+    chips.push({
+      label: codeSignals ? 'Code' : authoringSignals ? 'Artifact' : designSignals ? 'Design' : 'Operational',
+      tone: 'warning',
+    });
+  }
+
+  const sourceSummary = countOccurrences(query, /\[(\d+)\]/g) > 0
+    ? `${countOccurrences(query, /\[(\d+)\]/g)} citations`
+    : countOccurrences(query, /https?:\/\/\S+/g) > 0
+      ? `${countOccurrences(query, /https?:\/\/\S+/g)} links`
+      : undefined;
+
+  return {
+    chips,
+    sourceSummary,
+    statusSummary:
+      classification.intent === 'research'
+        ? 'Retrieval path selected'
+        : codeSignals
+          ? 'Code path selected'
+          : authoringSignals
+            ? 'Artifact path selected'
+            : designSignals
+              ? 'Design path selected'
+              : classification.intent === 'tool_action'
+                ? 'Operational path selected'
+                : classification.intent === 'follow_up_question'
+                  ? 'Follow-up context'
+                  : 'Direct answer path',
+  };
 }
 
 function normalizeTransportMessages(messages: UIMessage[]) {
@@ -120,6 +256,7 @@ export default function ChatInterface({
   const initialModelId = availableModels[0]?.id ?? '';
   const [selectedModelId, setSelectedModelId] = React.useState(initialModelId);
   const [lastSubmittedMode, setLastSubmittedMode] = React.useState<SearchMode>(initialMode);
+  const [capabilitySnapshot, setCapabilitySnapshot] = React.useState<CapabilityDirectorySnapshot | null>(null);
   const didSubmitInitialQueryRef = React.useRef(false);
   const transport = React.useMemo(
     () =>
@@ -128,11 +265,12 @@ export default function ChatInterface({
         prepareSendMessagesRequest: ({ body, messages }) => ({
           body: {
             ...body,
+            conversationId: chatId,
             messages: normalizeTransportMessages(messages),
           },
         }),
       }),
-    [apiPath]
+    [apiPath, chatId]
   );
   const {
     messages,
@@ -145,6 +283,34 @@ export default function ChatInterface({
     transport,
     id: chatId,
   });
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    async function loadCapabilities() {
+      try {
+        const response = await fetch('/api/capabilities', { cache: 'no-store' });
+        if (!response.ok) {
+          return;
+        }
+
+        const snapshot = (await response.json()) as CapabilityDirectorySnapshot;
+        if (!cancelled) {
+          setCapabilitySnapshot(snapshot);
+        }
+      } catch {
+        if (!cancelled) {
+          setCapabilitySnapshot(null);
+        }
+      }
+    }
+
+    void loadCapabilities();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const isLoading = status === 'submitted' || status === 'streaming';
   const hasMessages = messages.length > 0;
@@ -166,8 +332,8 @@ export default function ChatInterface({
 
     didSubmitInitialQueryRef.current = true;
     setLastSubmittedMode(initialMode);
-    void sendMessage({ text: initialQuery }, { body: { mode: initialMode, modelId: selectedModelId } });
-  }, [canSubmit, initialMode, initialQuery, messages.length, selectedModelId, sendMessage]);
+    void sendMessage({ text: initialQuery }, { body: { mode: initialMode, modelId: selectedModelId, conversationId: chatId } });
+  }, [canSubmit, chatId, initialMode, initialQuery, messages.length, selectedModelId, sendMessage]);
 
   useEffect(() => {
     if (!initialQuery || messages.length > 0) {
@@ -196,7 +362,7 @@ export default function ChatInterface({
 
     setLastSubmittedMode(mode);
     clearError();
-    void sendMessage({ text: query }, { body: { mode, modelId: selectedModelId } });
+    void sendMessage({ text: query }, { body: { mode, modelId: selectedModelId, conversationId: chatId } });
   };
 
   const handleRetry = () => {
@@ -207,19 +373,46 @@ export default function ChatInterface({
     clearError();
 
     if (messages.length > 0) {
-      void regenerate({ body: { mode: lastSubmittedMode, modelId: selectedModelId } });
+      void regenerate({ body: { mode: lastSubmittedMode, modelId: selectedModelId, conversationId: chatId } });
       return;
     }
 
     if (initialQuery && canSubmit) {
       setLastSubmittedMode(initialMode);
-      sendMessage({ text: initialQuery }, { body: { mode: initialMode, modelId: selectedModelId } });
+      sendMessage({ text: initialQuery }, { body: { mode: initialMode, modelId: selectedModelId, conversationId: chatId } });
     }
   };
 
   const showNoModelState = !error && !hasMessages && !hasAvailableModels;
   const showEmptyState = !error && !hasMessages && !initialQuery && hasAvailableModels;
   const presentedError = presentChatError(error);
+  const messageSurfaces = React.useMemo(() => {
+    let lastUserText = '';
+
+    return messages.map((message) => {
+      if (message.role === 'user') {
+        lastUserText = toChatMessageContent(message);
+        return buildSurfaceChips(lastUserText, capabilitySnapshot, lastSubmittedMode);
+      }
+
+      const assistantText = toChatMessageContent(message);
+      const query = lastUserText || assistantText;
+      const surface = buildSurfaceChips(query, capabilitySnapshot, lastSubmittedMode);
+      const citationCount = countOccurrences(assistantText, /\[(\d+)\]/g);
+      const linkCount = countOccurrences(assistantText, /https?:\/\/\S+/g);
+
+      return {
+        ...surface,
+        sourceSummary:
+          citationCount > 0
+            ? `${citationCount} citation${citationCount === 1 ? '' : 's'}`
+            : linkCount > 0
+              ? `${linkCount} link${linkCount === 1 ? '' : 's'}`
+              : surface.sourceSummary,
+        statusSummary: assistantText.length > 0 ? `${assistantText.length} chars` : surface.statusSummary,
+      } satisfies ChatMessageSurface;
+    });
+  }, [capabilitySnapshot, lastSubmittedMode, messages]);
 
   return (
     <div className="chat-page">
@@ -319,8 +512,8 @@ export default function ChatInterface({
             </div>
           )}
 
-          {hasMessages && messages.map((message) => (
-            <ChatMessage key={message.id} message={message} />
+          {hasMessages && messages.map((message, index) => (
+            <ChatMessage key={message.id} message={message} surface={messageSurfaces[index]} />
           ))}
 
           {isLoading && hasMessages && (

@@ -3,7 +3,9 @@ import packageJson from '../../../package.json';
 import {
   controlPlaneReleaseAssetSchema,
   controlPlaneReleaseSnapshotSchema,
+  controlPlaneReleaseTargetSchema,
   type ControlPlaneReleaseSnapshot,
+  type ControlPlaneReleaseTarget,
 } from './types';
 
 const requiredAssets = [
@@ -12,6 +14,45 @@ const requiredAssets = [
   'elyan-linux-x64.tar.gz',
   'elyan-windows-x64.zip',
 ] as const;
+
+type ReleaseTargetDefinition = {
+  name: (typeof requiredAssets)[number];
+  platform: ControlPlaneReleaseTarget['platform'];
+  architecture: ControlPlaneReleaseTarget['architecture'];
+  format: ControlPlaneReleaseTarget['format'];
+  label: string;
+};
+
+const releaseTargetDefinitions: ReleaseTargetDefinition[] = [
+  {
+    name: 'elyan-macos-arm64.zip',
+    platform: 'macos',
+    architecture: 'arm64',
+    format: 'zip',
+    label: 'macOS arm64',
+  },
+  {
+    name: 'elyan-macos-x64.zip',
+    platform: 'macos',
+    architecture: 'x64',
+    format: 'zip',
+    label: 'macOS x64',
+  },
+  {
+    name: 'elyan-linux-x64.tar.gz',
+    platform: 'linux',
+    architecture: 'x64',
+    format: 'tar.gz',
+    label: 'Linux x64',
+  },
+  {
+    name: 'elyan-windows-x64.zip',
+    platform: 'windows',
+    architecture: 'x64',
+    format: 'zip',
+    label: 'Windows x64',
+  },
+];
 
 const githubReleaseSchema = z.object({
   tag_name: z.string(),
@@ -44,6 +85,23 @@ function getRepositorySlug() {
 function hasRequiredAssets(assets: Array<{ name: string }>) {
   const assetNames = new Set(assets.map((asset) => asset.name));
   return requiredAssets.every((name) => assetNames.has(name));
+}
+
+function buildReleaseTarget(asset: { name: string; size: number; browser_download_url: string }) {
+  const definition = releaseTargetDefinitions.find((entry) => entry.name === asset.name);
+  if (!definition) {
+    return null;
+  }
+
+  return controlPlaneReleaseTargetSchema.parse({
+    platform: definition.platform,
+    architecture: definition.architecture,
+    format: definition.format,
+    name: asset.name,
+    browserDownloadUrl: asset.browser_download_url,
+    size: asset.size,
+    label: definition.label,
+  });
 }
 
 function normalizeVersionTag(tagName: string) {
@@ -139,6 +197,9 @@ export async function getLatestElyanReleaseSnapshot(): Promise<ControlPlaneRelea
       size: asset.size,
       browserDownloadUrl: asset.browser_download_url,
     }));
+  const targets = publishable.assets
+    .map((asset) => buildReleaseTarget(asset))
+    .filter((asset): asset is ControlPlaneReleaseTarget => Boolean(asset));
 
   return controlPlaneReleaseSnapshotSchema.parse({
     repository,
@@ -148,6 +209,7 @@ export async function getLatestElyanReleaseSnapshot(): Promise<ControlPlaneRelea
     url: publishable.url,
     htmlUrl: publishable.html_url,
     assets,
+    targets,
     requiredAssets: [...requiredAssets],
     complete: true,
   });
@@ -161,6 +223,7 @@ export async function getLatestElyanReleaseResponse() {
   const versionCompare = release ? compareVersionTags(latestVersion ?? '', currentVersion) : 0;
   const updateAvailable = Boolean(release && versionCompare > 0);
   const runtimeIsNewer = Boolean(release && versionCompare < 0);
+  const targets = release?.targets ?? [];
 
   return {
     ok: true,
@@ -177,7 +240,8 @@ export async function getLatestElyanReleaseResponse() {
         ? `Latest publishable release ${release.tagName} is newer than ${currentTagName}.`
         : runtimeIsNewer
           ? `Current runtime ${currentTagName} is newer than the latest publishable release ${release.tagName}.`
-          : `Current runtime ${currentTagName} matches the latest publishable release.`
+        : `Current runtime ${currentTagName} matches the latest publishable release.`
       : 'No publishable release is currently available.',
+    targets,
   };
 }

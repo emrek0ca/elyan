@@ -210,6 +210,14 @@ function shouldUseLocalBridge(query: string) {
   ]);
 }
 
+function shouldAuthorDocument(query: string) {
+  return hasKeyword(query, [
+    /\b(write|draft|generate|compose|author|create|prepare|produce|rewrite)\b/i,
+    /\b(markdown|md|docx|document|doc|spec|brief|proposal|rfc|prd|readme|outline|briefing)\b/i,
+    /\b(design|layout|wireframe|mockup|style guide|ui|ux|visual hierarchy|typography|spacing)\b/i,
+  ]);
+}
+
 function buildExplicitLocalTarget(
   query: string,
   surface: ExecutionSurfaceSnapshot,
@@ -229,6 +237,16 @@ function buildExplicitLocalTarget(
 
   if (hasKeyword(query, [/\b(pdf|portable document format)\b/i])) {
     return findLocalTargetById(surface, 'pdf_extract', 'local_capability');
+  }
+
+  if (shouldAuthorDocument(query)) {
+    if (hasKeyword(query, [/\b(docx|word document|word file)\b/i])) {
+      return findLocalTargetById(surface, 'docx_write', 'local_capability');
+    }
+
+    if (hasKeyword(query, [/\b(markdown|md|readme|spec|brief|proposal|rfc|prd|outline|design doc)\b/i])) {
+      return findLocalTargetById(surface, 'markdown_render', 'local_capability');
+    }
   }
 
   if (hasKeyword(query, [/\b(docx|word document|word file)\b/i])) {
@@ -333,7 +351,14 @@ function selectBestMcpTarget(
       continue;
     }
 
-    const target = toTarget(manifest.kind, manifest.id, manifest.title, 'mcp', manifest.reason);
+    const target = toTarget(
+      manifest.kind,
+      manifest.id,
+      manifest.title,
+      'mcp',
+      manifest.reason,
+      manifest.kind === 'mcp_tool'
+    );
 
     if (!best || score > best.score) {
       best = { score, target };

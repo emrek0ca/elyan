@@ -287,6 +287,9 @@ describe('ControlPlaneService', () => {
     expect(summary.windowCount).toBe(1);
     expect(summary.qualityCounts.good).toBe(1);
     expect(summary.promotionCandidates).toBe(0);
+    expect(summary.averageLatencyMs).toBe(1234);
+    expect(summary.retrievalCoverageRate).toBe(1);
+    expect(summary.toolCompletionRate).toBe(1);
 
     const reopened = ControlPlaneService.create(join(tempDirs[tempDirs.length - 1] ?? '', 'state.json'));
     const reopenedAccount = await reopened.getAccount(created.account.accountId);
@@ -294,7 +297,7 @@ describe('ControlPlaneService', () => {
     expect(reopenedAccount.recentEvaluationSignals[0]?.requestId).toBe('req_eval_1');
   });
 
-  it('tracks device link, bootstrap, push, and unlink transitions without private context leakage', async () => {
+  it('tracks device link, bootstrap, push, rotate, and unlink transitions without private context leakage', async () => {
     const service = await createService();
     const registration = await service.registerIdentity({
       email: 'device@example.com',
@@ -340,7 +343,15 @@ describe('ControlPlaneService', () => {
       version: '1.0.1',
     });
 
-    const unlinked = await service.unlinkDevice(completed.device.deviceToken);
+    const rotated = await service.rotateDeviceToken(completed.device.deviceToken);
+    expect(rotated.device.deviceToken).not.toBe(completed.device.deviceToken);
+    expect(rotated.previousDeviceToken).toBe(completed.device.deviceToken);
+    expect(rotated.device.metadata).toMatchObject({
+      rotationStatus: 'rotated',
+      previousTokenFingerprint: completed.device.deviceToken.slice(-8),
+    });
+
+    const unlinked = await service.unlinkDevice(rotated.device.deviceToken);
     expect(unlinked.device.status).toBe('revoked');
   });
 
@@ -602,6 +613,41 @@ describe('ControlPlaneService', () => {
       devices: 0,
       deviceLinks: 0,
       ledgerEntries: 0,
+    });
+    expect(health.database).toBeUndefined();
+    expect(health.syncSummary).toMatchObject({
+      subscriptions: {
+        total: 0,
+        trialing: 0,
+        active: 0,
+        past_due: 0,
+        suspended: 0,
+        canceled: 0,
+        unbound: 0,
+        pending: 0,
+        synced: 0,
+        failed: 0,
+        ready: 0,
+        billingPending: 0,
+        syncFailed: 0,
+      },
+      devices: {
+        total: 0,
+        pending: 0,
+        active: 0,
+        revoked: 0,
+        expired: 0,
+      },
+    });
+    expect(health.evaluationSummary).toMatchObject({
+      windowCount: 0,
+      promotionCandidates: 0,
+      qualityCounts: {
+        good: 0,
+        mixed: 0,
+        poor: 0,
+        skipped: 0,
+      },
     });
   });
 });

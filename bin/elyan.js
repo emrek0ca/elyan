@@ -7,6 +7,25 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { getGlobalEnvPath, resolveGlobalConfigDir } = require(path.join(__dirname, '..', 'src', 'lib', 'runtime-paths.js'));
+const {
+  collectSetCookieHeaders,
+  cookiesFromSetCookieHeaders,
+  createCliSessionStore,
+  getCliBaseUrl,
+  mergeCookieHeader,
+} = require('./lib/cli-session');
+const {
+  commandExists,
+  isHomebrewInstall,
+  isSourceCheckout,
+  runCommand,
+} = require('./lib/system');
+const {
+  buildMcpDoctor,
+  disableMcpTool,
+  setMcpServerEnabled,
+  setMcpServers,
+} = require('./lib/mcp-settings');
 const packageJson = require(path.join(__dirname, '..', 'package.json'));
 
 program
@@ -19,6 +38,11 @@ program
 const GLOBAL_DIR = resolveGlobalConfigDir();
 const GLOBAL_ENV = getGlobalEnvPath();
 const CLI_SESSION_PATH = path.join(GLOBAL_DIR, 'control-plane-session.json');
+const {
+  readCliSession,
+  writeCliSession,
+  clearCliSession,
+} = createCliSessionStore(CLI_SESSION_PATH);
 
 /**
  * Ensures global config directory exists
@@ -40,6 +64,9 @@ function loadEnvSafe() {
 }
 
 const LOCAL_RUNTIME_SETTINGS = path.join(process.cwd(), 'storage', 'runtime', 'settings.json');
+const DEFAULT_STORAGE_DIR = 'storage';
+const RECOMMENDED_LOCAL_MODEL = 'llama3.2';
+const LAUNCHD_LABEL = 'dev.elyan.local-runtime';
 
 function createDefaultRuntimeSettings() {
   return {
@@ -54,6 +81,7 @@ function createDefaultRuntimeSettings() {
         enabled: false,
         mode: 'polling',
         webhookPath: '/api/channels/telegram/webhook',
+        allowedChatIds: [],
       },
       whatsappCloud: {
         enabled: false,
@@ -75,6 +103,40 @@ function createDefaultRuntimeSettings() {
       language: 'en',
       sampleRate: 16000,
     },
+    team: {
+      enabled: true,
+      defaultMode: 'auto',
+      maxConcurrentAgents: 2,
+      maxTasksPerRun: 6,
+      allowCloudEscalation: false,
+    },
+    localAgent: {
+      enabled: false,
+      allowedRoots: ['.'],
+      protectedPaths: [
+        '.env',
+        '.ssh',
+        '.gnupg',
+        '.aws',
+        '.config/gcloud',
+        '.kube',
+        'id_rsa',
+        'id_ed25519',
+        'wallet',
+        'Library/Keychains',
+        '/etc',
+        '/System',
+        '/private/etc',
+      ],
+      approvalPolicy: {
+        readOnly: 'AUTO',
+        writeSafe: 'CONFIRM',
+        writeSensitive: 'SCREEN',
+        destructive: 'TWO_FA',
+        systemCritical: 'TWO_FA',
+      },
+      evidenceDir: 'storage/evidence',
+    },
     mcp: {
       servers: [],
     },
@@ -86,87 +148,97 @@ function ensureParentDir(filePath) {
 }
 
 function readRuntimeSettingsFile() {
+  const defaults = createDefaultRuntimeSettings();
   if (!fs.existsSync(LOCAL_RUNTIME_SETTINGS)) {
-    const defaults = createDefaultRuntimeSettings();
     ensureParentDir(LOCAL_RUNTIME_SETTINGS);
-    fs.writeFileSync(LOCAL_RUNTIME_SETTINGS, `${JSON.stringify(defaults, null, 2)}\n`, 'utf8');
+    atomicWriteFileSync(LOCAL_RUNTIME_SETTINGS, `${JSON.stringify(defaults, null, 2)}\n`);
     return defaults;
   }
 
   try {
     const raw = fs.readFileSync(LOCAL_RUNTIME_SETTINGS, 'utf8');
-    return raw.trim() ? JSON.parse(raw) : createDefaultRuntimeSettings();
+    return raw.trim() ? deepMerge(defaults, JSON.parse(raw)) : defaults;
   } catch {
-    return createDefaultRuntimeSettings();
+    return defaults;
   }
 }
 
 function writeRuntimeSettingsFile(settings) {
   ensureParentDir(LOCAL_RUNTIME_SETTINGS);
-  fs.writeFileSync(LOCAL_RUNTIME_SETTINGS, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+  atomicWriteFileSync(LOCAL_RUNTIME_SETTINGS, `${JSON.stringify(settings, null, 2)}\n`);
 }
 
-function readCliSession() {
-  if (!fs.existsSync(CLI_SESSION_PATH)) {
+function atomicWriteFileSync(filePath, content) {
+  ensureParentDir(filePath);
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tempPath, content, 'utf8');
+  fs.renameSync(tempPath, filePath);
+}
+
+function backupFileIfExists(filePath) {
+  if (!fs.existsSync(filePath)) {
     return null;
   }
 
-  try {
-    return JSON.parse(fs.readFileSync(CLI_SESSION_PATH, 'utf8'));
-  } catch {
-    return null;
-  }
+  const backupPath = `${filePath}.bak.${new Date().toISOString().replace(/[:.]/g, '-')}`;
+  fs.copyFileSync(filePath, backupPath);
+  return backupPath;
 }
 
-function writeCliSession(session) {
-  ensureParentDir(CLI_SESSION_PATH);
-  fs.writeFileSync(CLI_SESSION_PATH, `${JSON.stringify(session, null, 2)}\n`, 'utf8');
-}
-
-function clearCliSession() {
-  if (fs.existsSync(CLI_SESSION_PATH)) {
-    fs.unlinkSync(CLI_SESSION_PATH);
-  }
-}
-
-function collectSetCookieHeaders(headers) {
-  if (typeof headers.getSetCookie === 'function') {
-    return headers.getSetCookie();
+function readKeyValueFile(filePath) {
+  const result = {};
+  if (!fs.existsSync(filePath)) {
+    return result;
   }
 
-  const raw = headers.get('set-cookie');
-  if (!raw) {
-    return [];
+  for (const line of fs.readFileSync(filePath, 'utf8').split(/\r?\n/)) {
+    if (!line || line.trim().startsWith('#') || !line.includes('=')) continue;
+    const [key, ...rest] = line.split('=');
+    result[key.trim()] = rest.join('=').trim();
   }
 
-  return [raw];
+  return result;
 }
 
-function cookiesFromSetCookieHeaders(setCookieHeaders) {
-  return setCookieHeaders
-    .map((entry) => entry.split(';')[0]?.trim())
-    .filter(Boolean)
-    .join('; ');
+function writeKeyValueFile(filePath, values) {
+  const lines = Object.entries(values)
+    .filter(([key]) => key)
+    .map(([key, value]) => `${key}=${value ?? ''}`);
+  atomicWriteFileSync(filePath, `${lines.join('\n')}\n`);
 }
 
-function mergeCookieHeader(existing, next) {
-  const merged = new Map();
+function ensureGlobalEnvDefaults(defaults, { backup = false } = {}) {
+  ensureGlobalConfigDir();
+  const current = readKeyValueFile(GLOBAL_ENV);
+  const next = { ...current };
+  let changed = false;
 
-  for (const cookie of [existing, next].filter(Boolean)) {
-    for (const part of cookie.split(/;\s*/)) {
-      const [name, ...rest] = part.split('=');
-      if (!name || rest.length === 0) continue;
-      merged.set(name.trim(), rest.join('=').trim());
+  for (const [key, value] of Object.entries(defaults)) {
+    if (!next[key]) {
+      next[key] = value;
+      changed = true;
     }
   }
 
-  return Array.from(merged.entries())
-    .map(([name, value]) => `${name}=${value}`)
-    .join('; ');
+  if (changed) {
+    if (backup) backupFileIfExists(GLOBAL_ENV);
+    writeKeyValueFile(GLOBAL_ENV, next);
+  }
+
+  return { changed, path: GLOBAL_ENV };
 }
 
-function getCliBaseUrl(optionsBaseUrl) {
-  return String(optionsBaseUrl || 'http://localhost:3000').replace(/\/$/, '');
+function ensureRuntimeStorageDirs(storageDir = DEFAULT_STORAGE_DIR) {
+  for (const entry of [
+    storageDir,
+    path.join(storageDir, 'runtime'),
+    path.join(storageDir, 'channels'),
+    path.join(storageDir, 'evidence'),
+    path.join(storageDir, 'team-runs'),
+    path.join(storageDir, 'trash'),
+  ]) {
+    fs.mkdirSync(path.resolve(process.cwd(), entry), { recursive: true });
+  }
 }
 
 function getCliSessionCookieHeader() {
@@ -262,6 +334,7 @@ async function linkCliDevice(baseUrl, cookieHeader, deviceLabel) {
         client: 'elyan-cli',
         platform: process.platform,
         hostname: os.hostname(),
+        releaseTag: `v${packageJson.version}`,
       },
     }),
   });
@@ -275,10 +348,69 @@ async function linkCliDevice(baseUrl, cookieHeader, deviceLabel) {
   session.deviceToken = completeBody.device.deviceToken;
   session.deviceId = completeBody.device.deviceId;
   session.deviceLabel = completeBody.device.deviceLabel;
+  session.lastSeenReleaseTag = completeBody.device.lastSeenReleaseTag || `v${packageJson.version}`;
   session.updatedAt = new Date().toISOString();
   writeCliSession(session);
 
   return completeBody.device;
+}
+
+async function syncCliDevice(baseUrl, deviceToken, metadata = {}) {
+  if (!deviceToken) {
+    return null;
+  }
+
+  const response = await fetch(`${baseUrl}/api/control-plane/devices/sync/push`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-elyan-device-token': deviceToken,
+    },
+    body: JSON.stringify({
+      lastSeenReleaseTag: `v${packageJson.version}`,
+      metadata: {
+        client: 'elyan-cli',
+        platform: process.platform,
+        hostname: os.hostname(),
+        ...metadata,
+      },
+    }),
+  });
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || !body?.ok) {
+    throw new Error(body?.error || `Device sync failed (${response.status})`);
+  }
+
+  const session = readCliSession() || {};
+  session.deviceId = body.device.deviceId ?? session.deviceId;
+  session.deviceLabel = body.device.deviceLabel ?? session.deviceLabel;
+  session.lastSeenAt = body.device.lastSeenAt ?? new Date().toISOString();
+  session.lastSeenReleaseTag = body.device.lastSeenReleaseTag ?? `v${packageJson.version}`;
+  session.updatedAt = new Date().toISOString();
+  writeCliSession(session);
+
+  return body.device;
+}
+
+function maskDeviceToken(deviceToken) {
+  if (!deviceToken) {
+    return 'not stored';
+  }
+
+  return `...${String(deviceToken).slice(-8)}`;
+}
+
+function printLinkedDeviceSnapshot(session = readCliSession()) {
+  if (!session?.deviceId && !session?.deviceLabel) {
+    console.log(`Linked device: ${chalk.gray('none')}`);
+    return;
+  }
+
+  console.log(`Linked device: ${chalk.green(session.deviceLabel || 'Elyan CLI')}${session.deviceId ? ` (${session.deviceId})` : ''}`);
+  console.log(`Device release: ${chalk.green(session.lastSeenReleaseTag || `v${packageJson.version}`)}`);
+  console.log(`Device token: ${chalk.gray(maskDeviceToken(session.deviceToken))}`);
+  console.log(`Token rotation: ${session.deviceToken ? chalk.green('ready') : chalk.yellow('not linked')}`);
 }
 
 function printAccountSnapshot(data) {
@@ -434,57 +566,235 @@ async function fetchJson(url, timeoutMs = 5000, init = {}) {
   }
 }
 
-function commandExists(command) {
-  const result = spawnSync(command, ['--version'], {
-    stdio: 'ignore',
-    shell: /^win/.test(process.platform),
-  });
-
-  return !result.error && result.status === 0;
+function applyZeroCostRuntimeSettings(settings, model = RECOMMENDED_LOCAL_MODEL) {
+  const next = deepClone(settings);
+  next.routing.routingMode = 'local_only';
+  next.routing.preferredModelId = `ollama:${model}`;
+  next.routing.searchEnabled = false;
+  next.team = next.team || createDefaultRuntimeSettings().team;
+  next.team.allowCloudEscalation = false;
+  return next;
 }
 
-function runCommand(command, args, cwd) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      stdio: 'inherit',
-      cwd,
-      shell: /^win/.test(process.platform),
+function runBootstrap({ zeroCost = false, fix = false, model = RECOMMENDED_LOCAL_MODEL } = {}) {
+  ensureRuntimeStorageDirs();
+  const envResult = ensureGlobalEnvDefaults(
+    {
+      ELYAN_STORAGE_DIR: DEFAULT_STORAGE_DIR,
+      ELYAN_RUNTIME_SETTINGS_PATH: LOCAL_RUNTIME_SETTINGS,
+      OLLAMA_URL: 'http://127.0.0.1:11434',
+      SEARXNG_URL: 'http://localhost:8080',
+    },
+    { backup: fix }
+  );
+
+  const settings = readRuntimeSettingsFile();
+  const nextSettings = zeroCost ? applyZeroCostRuntimeSettings(settings, model) : settings;
+  writeRuntimeSettingsFile(nextSettings);
+
+  return {
+    envChanged: envResult.changed,
+    envPath: envResult.path,
+    settingsPath: LOCAL_RUNTIME_SETTINGS,
+    zeroCost,
+    model,
+  };
+}
+
+function getLaunchdPlistPath() {
+  return path.join(os.homedir(), 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`);
+}
+
+function getSystemdUnitPath() {
+  return path.join(os.homedir(), '.config', 'systemd', 'user', 'elyan.service');
+}
+
+function buildLaunchdPlist() {
+  const nodePath = process.execPath;
+  const cliPath = path.join(__dirname, 'elyan.js');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${LAUNCHD_LABEL}</string>
+  <key>WorkingDirectory</key><string>${process.cwd()}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${nodePath}</string>
+    <string>${cliPath}</string>
+    <string>start</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>${path.join(GLOBAL_DIR, 'elyan.out.log')}</string>
+  <key>StandardErrorPath</key><string>${path.join(GLOBAL_DIR, 'elyan.err.log')}</string>
+</dict>
+</plist>
+`;
+}
+
+function buildSystemdUnit() {
+  return `[Unit]
+Description=Elyan local runtime
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=${process.cwd()}
+ExecStart=${process.execPath} ${path.join(__dirname, 'elyan.js')} start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+`;
+}
+
+function installUserService() {
+  ensureGlobalConfigDir();
+  if (process.platform === 'darwin') {
+    const plistPath = getLaunchdPlistPath();
+    atomicWriteFileSync(plistPath, buildLaunchdPlist());
+    return { platform: 'launchd', path: plistPath };
+  }
+
+  if (process.platform === 'linux') {
+    const unitPath = getSystemdUnitPath();
+    atomicWriteFileSync(unitPath, buildSystemdUnit());
+    return { platform: 'systemd-user', path: unitPath };
+  }
+
+  throw new Error(`Service install is not implemented for ${process.platform}.`);
+}
+
+function controlUserService(action) {
+  if (process.platform === 'darwin') {
+    const plistPath = getLaunchdPlistPath();
+    const argsByAction = {
+      start: ['bootstrap', 'gui', `${process.getuid()}`, plistPath],
+      stop: ['bootout', 'gui', `${process.getuid()}`, plistPath],
+      status: ['print', `gui/${process.getuid()}/${LAUNCHD_LABEL}`],
+    };
+    return spawnSync('launchctl', argsByAction[action], { stdio: 'inherit' });
+  }
+
+  if (process.platform === 'linux') {
+    const argsByAction = {
+      start: ['--user', 'start', 'elyan.service'],
+      stop: ['--user', 'stop', 'elyan.service'],
+      status: ['--user', 'status', 'elyan.service'],
+    };
+    return spawnSync('systemctl', argsByAction[action], { stdio: 'inherit' });
+  }
+
+  throw new Error(`Service control is not implemented for ${process.platform}.`);
+}
+
+function printChannelStatusLine(name, status) {
+  const enabled = status.enabled ? chalk.green('enabled') : chalk.gray('disabled');
+  const configured = status.configured ? chalk.green('configured') : chalk.yellow('missing config');
+  console.log(`- ${chalk.bold(name)}: ${enabled}, ${configured}`);
+  if (status.costProfile) {
+    console.log(`  Cost: ${status.costProfile}`);
+  }
+  if (status.webhookPath) {
+    console.log(`  Webhook: ${status.webhookPath}`);
+  }
+}
+
+// ----------------------------------------------------------------------------
+// COMMAND: bootstrap
+// ----------------------------------------------------------------------------
+program
+  .command('bootstrap')
+  .option('--zero-cost', 'Configure local-only routing and keep paid/cloud surfaces disabled')
+  .option('--model <model>', 'Recommended Ollama model to prefer', RECOMMENDED_LOCAL_MODEL)
+  .description('Prepares local Elyan storage, runtime settings, and safe environment defaults.')
+  .action((options) => {
+    const result = runBootstrap({
+      zeroCost: Boolean(options.zeroCost),
+      fix: true,
+      model: options.model || RECOMMENDED_LOCAL_MODEL,
     });
 
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-
-      reject(new Error(`${command} ${args.join(' ')} exited with code ${code ?? 1}`));
-    });
+    console.log(chalk.bold.blue('\n🧰 Elyan bootstrap\n'));
+    console.log(`Storage: ${chalk.green(path.resolve(process.cwd(), DEFAULT_STORAGE_DIR))}`);
+    console.log(`Settings: ${chalk.green(result.settingsPath)}`);
+    console.log(`Global env: ${chalk.green(result.envPath)}${result.envChanged ? ' updated' : ' ready'}`);
+    if (result.zeroCost) {
+      console.log(`Routing: ${chalk.green(`local_only via ollama:${result.model}`)}`);
+    }
+    console.log(chalk.gray('Next: run `elyan models setup` and then `elyan doctor`.'));
   });
-}
 
-function isSourceCheckout() {
-  return fs.existsSync(path.join(__dirname, '..', '.git'));
-}
+// ----------------------------------------------------------------------------
+// COMMAND: setup
+// ----------------------------------------------------------------------------
+program
+  .command('setup')
+  .option('--zero-cost', 'Configure local-only routing and keep paid/cloud surfaces disabled')
+  .option('--model <model>', 'Recommended Ollama model to prefer', RECOMMENDED_LOCAL_MODEL)
+  .option('--probe-timeout-ms <ms>', 'Timeout for local service probes', '3000')
+  .description('Guides a first local Elyan setup without requiring hosted account linking.')
+  .action(async (options) => {
+    const model = options.model || RECOMMENDED_LOCAL_MODEL;
+    const probeTimeoutMs = Number.parseInt(options.probeTimeoutMs, 10) || 3000;
 
-function isHomebrewInstall() {
-  return Boolean(process.env.HOMEBREW_PREFIX) || /[\\/]Cellar[\\/]/.test(process.execPath);
-}
+    console.log(chalk.bold.blue('\nElyan setup\n'));
+    loadEnvSafe();
+
+    const bootstrap = runBootstrap({
+      zeroCost: Boolean(options.zeroCost),
+      fix: true,
+      model,
+    });
+
+    const ollamaUrl = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
+    const searxngUrl = process.env.SEARXNG_URL || 'http://localhost:8080';
+    const [ollamaProbe, searxngProbe] = await Promise.all([
+      probeService('Ollama', `${ollamaUrl.replace(/\/$/, '')}/api/version`, probeTimeoutMs),
+      probeService('SearXNG', `${searxngUrl.replace(/\/$/, '')}/healthz`, probeTimeoutMs),
+    ]);
+
+    console.log(`Storage: ${chalk.green(path.resolve(process.cwd(), DEFAULT_STORAGE_DIR))}`);
+    console.log(`Settings: ${chalk.green(bootstrap.settingsPath)}`);
+    console.log(`Global env: ${chalk.green(bootstrap.envPath)}${bootstrap.envChanged ? ' updated' : ' ready'}`);
+    console.log(`Routing: ${bootstrap.zeroCost ? chalk.green(`local_only via ollama:${bootstrap.model}`) : chalk.green('local_first')}`);
+    console.log(`Ollama: ${ollamaProbe.ok ? chalk.green('reachable') : chalk.yellow(`not reachable (${ollamaProbe.status})`)}`);
+    console.log(`Search: ${searxngProbe.ok ? chalk.green('reachable') : chalk.gray(`optional / offline (${searxngProbe.status})`)}`);
+
+    if (bootstrap.zeroCost && !ollamaProbe.ok) {
+      console.log(chalk.yellow(`\nNext: start Ollama and run ${chalk.gray(`elyan models setup --model ${model}`)}.`));
+    } else {
+      console.log(chalk.green('\nLocal setup files are ready.'));
+    }
+
+    console.log(chalk.gray('Then run `npm run dev`, open `/manage`, and use `elyan login` only when hosted account linking is needed.'));
+  });
 
 // ----------------------------------------------------------------------------
 // COMMAND: doctor
 // ----------------------------------------------------------------------------
 program
   .command('doctor')
+  .option('--fix', 'Create missing local config, storage directories, and safe defaults')
+  .option('--zero-cost', 'Prefer local-only routing and disable optional cloud/search dependencies')
   .description('Checks the local runtime, optional search backend, and configured provider keys.')
-  .action(async () => {
+  .action(async (options) => {
     console.log(chalk.bold.blue('\n🏥 Elyan Doctor - Checking system dependencies\n'));
     let errors = 0;
 
     // Check Env
     loadEnvSafe();
+    if (options.fix) {
+      const bootstrap = runBootstrap({ zeroCost: options.zeroCost, fix: true });
+      console.log(`✅ ${chalk.green('Bootstrap files:')} ${bootstrap.settingsPath}`);
+      console.log(`✅ ${chalk.green('Global env:')} ${bootstrap.envPath}${bootstrap.envChanged ? ' updated' : ' already ready'}`);
+    }
+
     const ollamaUrl = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
     const searxngUrl = process.env.SEARXNG_URL || 'http://localhost:8080';
+    const settings = readRuntimeSettingsFile();
 
     const [searxngProbe, ollamaProbe] = await Promise.all([
       probeService('SearxNG', `${searxngUrl.replace(/\/$/, '')}/healthz`),
@@ -507,8 +817,11 @@ program
       Boolean(process.env.OPENAI_API_KEY) || Boolean(process.env.ANTHROPIC_API_KEY) || Boolean(process.env.GROQ_API_KEY);
     const hasUsableModelSource = ollamaProbe.ok || hasAnyCloudProvider;
 
-    if (!hasUsableModelSource) {
+    if (!hasUsableModelSource && settings.routing.routingMode !== 'local_only') {
       console.log(`❌ ${chalk.red('Model source:')} No Ollama connection or cloud API key found.`);
+      errors++;
+    } else if (!hasUsableModelSource) {
+      console.log(`⚠️  ${chalk.yellow('Model source:')} Local-only mode is selected, but Ollama is not reachable yet.`);
       errors++;
     } else if (ollamaProbe.ok) {
       console.log(`✅ ${chalk.green('Model source:')} Ollama is reachable.`);
@@ -523,6 +836,9 @@ program
         `⚠️  ${chalk.yellow('Control-plane DB:')} Not configured. Fine for local-only Elyan.`
       );
     }
+
+    console.log(`Local operator: ${settings.localAgent.enabled ? chalk.green('enabled') : chalk.gray('disabled')} (${settings.localAgent.allowedRoots.length} allowed root)`);
+    console.log(`Zero-cost routing: ${settings.routing.routingMode === 'local_only' ? chalk.green('on') : chalk.gray('off')}`);
 
     console.log(`\n🩺 ${chalk.bold('Resolution:')} ${errors > 0 ? chalk.red('Issues found.') : chalk.green('Local runtime ready.')}`);
     if (errors === 0) {
@@ -607,8 +923,11 @@ program
     try {
       const session = await loginToHostedControlPlane(baseUrl, options.email, options.password);
       const device = await linkCliDevice(baseUrl, session.cookieHeader, options.deviceLabel);
+      const syncedDevice = await syncCliDevice(baseUrl, device.deviceToken).catch(() => null);
       console.log(chalk.green('✅ Logged in to the hosted control plane.'));
       console.log(`Device linked: ${chalk.green(device.deviceLabel)} (${device.deviceId})`);
+      console.log(`Device release: ${chalk.green(syncedDevice?.lastSeenReleaseTag || `v${packageJson.version}`)}`);
+      console.log(`Token rotation: ${chalk.green('ready')} (${maskDeviceToken(device.deviceToken)})`);
     } catch (error) {
       console.log(chalk.red(error instanceof Error ? error.message : 'Login failed'));
       process.exit(1);
@@ -633,10 +952,7 @@ program
     }
 
     printAccountSnapshot(result.data);
-    const session = readCliSession();
-    if (session?.deviceLabel) {
-      console.log(`Device: ${chalk.green(session.deviceLabel)}${session.deviceId ? ` (${session.deviceId})` : ''}`);
-    }
+    printLinkedDeviceSnapshot();
   });
 
 // ----------------------------------------------------------------------------
@@ -817,7 +1133,7 @@ program
   .action(async () => {
     console.log(chalk.bold.blue('\n⬆️ Elyan update\n'));
 
-    if (isSourceCheckout()) {
+    if (isSourceCheckout(__dirname)) {
       console.log(chalk.yellow('This is a source checkout, so automatic self-update is not used here.'));
       console.log(`Run: ${chalk.gray('git pull --ff-only && npm install && npm run build')}`);
       return;
@@ -919,11 +1235,37 @@ program
 // COMMAND: models
 // ----------------------------------------------------------------------------
 program
-  .command('models')
-  .description('Shows configured cloud providers and the local model host.')
-  .action(async () => {
+  .command('models [action]')
+  .option('--model <model>', 'Ollama model for local setup', RECOMMENDED_LOCAL_MODEL)
+  .option('--no-pull', 'Only update Elyan settings; do not run ollama pull')
+  .description('Shows configured providers or prepares the recommended local model.')
+  .action(async (action, options) => {
     console.log(chalk.bold.blue('\n🧠 Checking models availability...\n'));
     loadEnvSafe();
+    const model = options.model || RECOMMENDED_LOCAL_MODEL;
+
+    if (action === 'setup') {
+      const settings = applyZeroCostRuntimeSettings(readRuntimeSettingsFile(), model);
+      writeRuntimeSettingsFile(settings);
+
+      if (options.pull) {
+        if (!commandExists('ollama')) {
+          console.log(chalk.yellow('Ollama CLI is not available. Install Ollama, then run this command again.'));
+          console.log(chalk.gray('Linux: curl -fsSL https://ollama.com/install.sh | sh'));
+          return;
+        }
+
+        console.log(chalk.gray(`Pulling ${model} through Ollama...`));
+        const result = spawnSync('ollama', ['pull', model], { stdio: 'inherit' });
+        if (result.status !== 0) {
+          process.exit(result.status ?? 1);
+          return;
+        }
+      }
+
+      console.log(chalk.green(`✔️ Local model routing set to ollama:${model}`));
+      return;
+    }
 
     const configuredProviders = [];
     if (process.env.OPENAI_API_KEY) configuredProviders.push('OpenAI');
@@ -949,6 +1291,7 @@ program
 program
   .command('status')
   .option('--base-url <url>', 'Base URL for the running Elyan app', 'http://localhost:3000')
+  .option('--json', 'Print raw machine-readable dashboard status')
   .description('Shows the local runtime, optional integrations, and optional hosted-control-plane status.')
   .action(async (options) => {
     const baseUrl = options.baseUrl.replace(/\/$/, '');
@@ -964,6 +1307,11 @@ program
     }
 
     const data = result.data;
+    if (options.json) {
+      console.log(JSON.stringify(data, null, 2));
+      return;
+    }
+
     console.log(chalk.bold.blue('\n📟 Elyan status\n'));
     console.log(`Runtime: ${chalk.green(data.runtime ?? 'local-first')}`);
     console.log(`Models: ${chalk.green(String(data.models?.length ?? 0))}`);
@@ -975,12 +1323,14 @@ program
     console.log(`Search: ${searchState}`);
     console.log(`MCP: ${data.mcp?.configured ? chalk.green('configured') : chalk.gray('optional / not configured')}`);
     console.log(`Voice: ${data.readiness?.voiceConfigured ? chalk.green('configured') : chalk.gray('optional')}`);
+    console.log(`Local operator: ${data.localAgent?.enabled ? chalk.green('enabled') : chalk.gray('disabled')}`);
     console.log(`Telegram: ${data.channels?.telegram?.enabled ? chalk.green('enabled') : chalk.gray('disabled')}`);
     console.log(`WhatsApp Cloud: ${data.channels?.whatsappCloud?.enabled ? chalk.green('enabled') : chalk.gray('disabled')}`);
     console.log(`iMessage: ${data.channels?.imessage?.enabled ? chalk.green('enabled') : chalk.gray('disabled')}`);
     if (data.controlPlane?.health?.storage) {
       console.log(`Hosted control plane DB: ${chalk.green(String(data.controlPlane.health.storage))}`);
     }
+    printLinkedDeviceSnapshot();
 
     const releaseData = releaseResult.ok ? releaseResult.data : null;
     const currentVersion = packageJson.version;
@@ -1028,6 +1378,108 @@ program
   });
 
 // ----------------------------------------------------------------------------
+// COMMAND: open
+// ----------------------------------------------------------------------------
+program
+  .command('open')
+  .option('--base-url <url>', 'Base URL for the running Elyan app', 'http://localhost:3000')
+  .description('Opens the local Manage UI.')
+  .action((options) => {
+    const target = `${options.baseUrl.replace(/\/$/, '')}/manage`;
+    const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+    const result = spawnSync(opener, [target], {
+      stdio: 'ignore',
+      shell: process.platform === 'win32',
+    });
+    if (result.status !== 0) {
+      console.log(target);
+      return;
+    }
+    console.log(chalk.green(`Opened ${target}`));
+  });
+
+// ----------------------------------------------------------------------------
+// COMMAND: service
+// ----------------------------------------------------------------------------
+program
+  .command('service <action>')
+  .description('Install or control the local user-level Elyan service.')
+  .action((action) => {
+    try {
+      if (action === 'install') {
+        const result = installUserService();
+        console.log(chalk.green(`✔️ Installed ${result.platform} service at ${result.path}`));
+        console.log(chalk.gray('Run `elyan service start` to start it.'));
+        return;
+      }
+
+      if (['start', 'stop', 'status'].includes(action)) {
+        const result = controlUserService(action);
+        if (result.status !== 0) {
+          process.exit(result.status ?? 1);
+        }
+        return;
+      }
+
+      console.log(chalk.red('Usage: elyan service install | start | stop | status'));
+    } catch (error) {
+      console.log(chalk.red(error instanceof Error ? error.message : 'Service command failed'));
+      process.exit(1);
+    }
+  });
+
+// ----------------------------------------------------------------------------
+// COMMAND: desktop
+// ----------------------------------------------------------------------------
+program
+  .command('desktop [action] [target]')
+  .description('Manage local operator filesystem and terminal permissions.')
+  .action((action, target) => {
+    const settings = readRuntimeSettingsFile();
+
+    if (!action || action === 'status') {
+      console.log(chalk.bold.blue('\n🖥️ Local operator\n'));
+      console.log(`Enabled: ${settings.localAgent.enabled ? chalk.green('yes') : chalk.gray('no')}`);
+      console.log(`Evidence: ${chalk.green(settings.localAgent.evidenceDir)}`);
+      console.log('Allowed roots:');
+      for (const root of settings.localAgent.allowedRoots) {
+        console.log(`- ${path.resolve(process.cwd(), root)}`);
+      }
+      console.log(`Protected paths: ${chalk.green(String(settings.localAgent.protectedPaths.length))}`);
+      return;
+    }
+
+    if (action === 'enable' || action === 'disable') {
+      const next = deepClone(settings);
+      next.localAgent.enabled = action === 'enable';
+      writeRuntimeSettingsFile(next);
+      console.log(chalk.green(`✔️ Local operator ${action}d`));
+      return;
+    }
+
+    if (action === 'grant' && target) {
+      const next = deepClone(settings);
+      const resolved = path.resolve(process.cwd(), target);
+      next.localAgent.enabled = true;
+      next.localAgent.allowedRoots = Array.from(new Set([...(next.localAgent.allowedRoots || []), resolved]));
+      writeRuntimeSettingsFile(next);
+      console.log(chalk.green(`✔️ Granted local operator root: ${resolved}`));
+      return;
+    }
+
+    if (action === 'revoke' && target) {
+      const resolved = path.resolve(process.cwd(), target);
+      const next = deepClone(settings);
+      next.localAgent.allowedRoots = next.localAgent.allowedRoots.filter((root) => path.resolve(process.cwd(), root) !== resolved);
+      writeRuntimeSettingsFile(next);
+      console.log(chalk.green(`✔️ Revoked local operator root: ${resolved}`));
+      return;
+    }
+
+    console.log(chalk.red('Usage: elyan desktop status | enable | disable | grant <path> | revoke <path>'));
+  });
+
+// ----------------------------------------------------------------------------
 // COMMAND: settings
 // ----------------------------------------------------------------------------
 program
@@ -1070,23 +1522,55 @@ program
 program
   .command('channels [action] [channel] [field] [value]')
   .description('Inspect or change the channel adapter runtime settings.')
-  .action((action, channel, field, value) => {
+  .action(async (action, channel, field, value) => {
+    loadEnvSafe();
     const settings = readRuntimeSettingsFile();
 
     if (!action || action === 'list') {
       console.log(chalk.bold.blue('\n📡 Channels\n'));
-      for (const [name, config] of Object.entries(settings.channels)) {
-        const enabled = config.enabled ? chalk.green('enabled') : chalk.gray('disabled');
-        console.log(`- ${chalk.bold(name)}: ${enabled}`);
-        if (config.webhookPath) {
-          console.log(`  Webhook: ${config.webhookPath}`);
-        }
+      printChannelStatusLine('telegram', {
+        ...settings.channels.telegram,
+        configured: Boolean(process.env.TELEGRAM_BOT_TOKEN),
+        costProfile: 'free_api',
+      });
+      printChannelStatusLine('whatsappCloud', {
+        ...settings.channels.whatsappCloud,
+        configured: Boolean(process.env.WHATSAPP_CLOUD_ACCESS_TOKEN && process.env.WHATSAPP_CLOUD_PHONE_NUMBER_ID && process.env.WHATSAPP_CLOUD_VERIFY_TOKEN),
+        costProfile: 'official_api_may_bill_templates',
+      });
+      printChannelStatusLine('whatsappBaileys', {
+        ...settings.channels.whatsappBaileys,
+        configured: settings.channels.whatsappBaileys.enabled && fs.existsSync(path.resolve(process.cwd(), settings.channels.whatsappBaileys.sessionPath)),
+        costProfile: 'local_unofficial_best_effort',
+      });
+      printChannelStatusLine('imessage', {
+        ...settings.channels.imessage,
+        configured: Boolean(process.env.BLUEBUBBLES_SERVER_URL && process.env.BLUEBUBBLES_SERVER_GUID),
+        costProfile: 'self_hosted_macos_imessage',
+      });
+      return;
+    }
+
+    if (action === 'doctor') {
+      loadEnvSafe();
+      console.log(chalk.bold.blue('\n📡 Channel doctor\n'));
+      const checks = [
+        ['Telegram token', Boolean(process.env.TELEGRAM_BOT_TOKEN)],
+        ['WhatsApp Cloud credentials', Boolean(process.env.WHATSAPP_CLOUD_ACCESS_TOKEN && process.env.WHATSAPP_CLOUD_PHONE_NUMBER_ID && process.env.WHATSAPP_CLOUD_VERIFY_TOKEN)],
+        ['WhatsApp Cloud app secret', Boolean(process.env.WHATSAPP_CLOUD_APP_SECRET)],
+        ['BlueBubbles server', Boolean(process.env.BLUEBUBBLES_SERVER_URL && process.env.BLUEBUBBLES_SERVER_GUID)],
+        ['BlueBubbles webhook secret', Boolean(process.env.BLUEBUBBLES_WEBHOOK_SECRET)],
+        ['Baileys local session file', fs.existsSync(path.resolve(process.cwd(), settings.channels.whatsappBaileys.sessionPath))],
+      ];
+      for (const [label, ok] of checks) {
+        console.log(`${ok ? chalk.green('ok') : chalk.yellow('missing')} ${label}`);
       }
+      console.log(chalk.gray('WhatsApp Cloud can incur Meta template-message costs; Baileys is local best-effort and unofficial.'));
       return;
     }
 
     if (!channel) {
-      console.log(chalk.red('Usage: elyan channels list | enable <channel> | disable <channel> | set <channel> <path> <value>'));
+      console.log(chalk.red('Usage: elyan channels list | doctor | setup <channel> | test <channel> | enable <channel> | disable <channel> | set <channel> <path> <value>'));
       return;
     }
 
@@ -1102,6 +1586,83 @@ program
       writeRuntimeSettingsFile(nextSettings);
       console.log(chalk.green(`✔️ Enabled ${channel}`));
       return;
+    }
+
+    if (action === 'setup') {
+      if (!nextSettings.channels[channel]) {
+        console.log(chalk.red(`Unknown channel: ${channel}`));
+        process.exit(1);
+        return;
+      }
+      nextSettings.channels[channel].enabled = true;
+      if (channel === 'whatsappBaileys') {
+        const sessionPath = path.resolve(process.cwd(), nextSettings.channels.whatsappBaileys.sessionPath);
+        ensureParentDir(sessionPath);
+        if (!fs.existsSync(sessionPath)) {
+          atomicWriteFileSync(sessionPath, `${JSON.stringify({
+            status: 'pending_pairing',
+            updatedAt: new Date().toISOString(),
+            note: 'Pairing requires a Baileys runtime worker. This file keeps the local session state explicit.',
+          }, null, 2)}\n`);
+        }
+        console.log(chalk.yellow('WhatsApp Baileys is local and unofficial. Use WhatsApp Cloud for official business-critical delivery.'));
+      }
+      writeRuntimeSettingsFile(nextSettings);
+      console.log(chalk.green(`✔️ Prepared ${channel}`));
+      return;
+    }
+
+    if (action === 'test') {
+      loadEnvSafe();
+      if (channel === 'telegram') {
+        if (!process.env.TELEGRAM_BOT_TOKEN) {
+          console.log(chalk.red('TELEGRAM_BOT_TOKEN is missing.'));
+          process.exit(1);
+          return;
+        }
+        const result = await fetchJson(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/getMe`);
+        console.log(result.ok && result.data?.ok ? chalk.green(`Telegram ok: @${result.data.result.username}`) : chalk.red(`Telegram failed: ${result.status}`));
+        if (!result.ok || !result.data?.ok) process.exit(1);
+        return;
+      }
+
+      if (channel === 'whatsappCloud') {
+        if (!process.env.WHATSAPP_CLOUD_ACCESS_TOKEN || !process.env.WHATSAPP_CLOUD_PHONE_NUMBER_ID) {
+          console.log(chalk.red('WhatsApp Cloud token or phone number id is missing.'));
+          process.exit(1);
+          return;
+        }
+        const apiVersion = process.env.WHATSAPP_CLOUD_API_VERSION || 'v21.0';
+        const result = await fetchJson(`https://graph.facebook.com/${apiVersion}/${process.env.WHATSAPP_CLOUD_PHONE_NUMBER_ID}`, 5000, {
+          headers: { Authorization: `Bearer ${process.env.WHATSAPP_CLOUD_ACCESS_TOKEN}` },
+        });
+        console.log(result.ok ? chalk.green('WhatsApp Cloud credentials are reachable.') : chalk.red(`WhatsApp Cloud failed: ${result.status}`));
+        if (!result.ok) process.exit(1);
+        return;
+      }
+
+      if (channel === 'imessage') {
+        if (!process.env.BLUEBUBBLES_SERVER_URL) {
+          console.log(chalk.red('BLUEBUBBLES_SERVER_URL is missing.'));
+          process.exit(1);
+          return;
+        }
+        const result = await fetchJson(process.env.BLUEBUBBLES_SERVER_URL, 5000, {
+          headers: process.env.BLUEBUBBLES_SERVER_GUID ? { Authorization: `Bearer ${process.env.BLUEBUBBLES_SERVER_GUID}` } : {},
+        });
+        console.log(result.ok ? chalk.green('BlueBubbles server is reachable.') : chalk.red(`BlueBubbles failed: ${result.status}`));
+        if (!result.ok) process.exit(1);
+        return;
+      }
+
+      if (channel === 'whatsappBaileys') {
+        const sessionPath = path.resolve(process.cwd(), settings.channels.whatsappBaileys.sessionPath);
+        const exists = fs.existsSync(sessionPath);
+        console.log(exists ? chalk.yellow(`Baileys session exists: ${sessionPath}`) : chalk.red(`Baileys session missing: ${sessionPath}`));
+        console.log(chalk.gray('Baileys is local best-effort and unofficial; pairing state is kept on disk.'));
+        if (!exists) process.exit(1);
+        return;
+      }
     }
 
     if (action === 'disable') {
@@ -1128,16 +1689,17 @@ program
       return;
     }
 
-    console.log(chalk.red('Usage: elyan channels list | enable <channel> | disable <channel> | set <channel> <field> <value>'));
+    console.log(chalk.red('Usage: elyan channels list | doctor | setup <channel> | test <channel> | enable <channel> | disable <channel> | set <channel> <field> <value>'));
   });
 
 // ----------------------------------------------------------------------------
 // COMMAND: mcp
 // ----------------------------------------------------------------------------
 program
-  .command('mcp [action] [value]')
+  .command('mcp [action] [server] [tool]')
   .description('Inspect or update MCP server connections in the runtime settings.')
-  .action((action, value) => {
+  .action((action, server, tool) => {
+    loadEnvSafe();
     const settings = readRuntimeSettingsFile();
 
     if (!action || action === 'list') {
@@ -1158,10 +1720,31 @@ program
       return;
     }
 
-    if (action === 'set' && value) {
+    if (action === 'doctor') {
+      const doctor = buildMcpDoctor(settings, process.env);
+      console.log(chalk.bold.blue('\n🔎 MCP doctor\n'));
+      console.log(`Configured servers: ${doctor.configured ? chalk.green(String(doctor.serverCount)) : chalk.gray('0')}`);
+      console.log(`Disabled by env: ${doctor.disabledServerIds.size > 0 ? chalk.yellow(Array.from(doctor.disabledServerIds).join(', ')) : chalk.gray('none')}`);
+      console.log(`Disabled tools by env: ${doctor.disabledToolNames.size > 0 ? chalk.yellow(Array.from(doctor.disabledToolNames).join(', ')) : chalk.gray('none')}`);
+
+      if (doctor.servers.length === 0) {
+        console.log(chalk.gray('No MCP servers configured. Set ELYAN_MCP_SERVERS or use elyan mcp set <json>.'));
+        return;
+      }
+
+      for (const item of doctor.servers) {
+        const badge = item.enabled ? chalk.green(item.state) : chalk.gray(item.state);
+        console.log(`- ${chalk.bold(item.id)} (${item.transport}) ${badge}`);
+        console.log(`  ${item.stateReason}`);
+        console.log(`  Endpoint: ${chalk.gray(item.endpoint || 'n/a')}`);
+        console.log(`  Disabled tools: ${item.disabledToolNames.length > 0 ? chalk.yellow(item.disabledToolNames.join(', ')) : chalk.gray('none')}`);
+      }
+      return;
+    }
+
+    if (action === 'set' && server) {
       try {
-        const nextSettings = deepClone(settings);
-        nextSettings.mcp.servers = JSON.parse(value);
+        const nextSettings = setMcpServers(settings, server);
         writeRuntimeSettingsFile(nextSettings);
         console.log(chalk.green(`✔️ Updated MCP servers in ${LOCAL_RUNTIME_SETTINGS}`));
       } catch (error) {
@@ -1171,7 +1754,31 @@ program
       return;
     }
 
-    console.log(chalk.red('Usage: elyan mcp list | elyan mcp set <json>'));
+    if ((action === 'enable' || action === 'disable') && server) {
+      try {
+        const nextSettings = setMcpServerEnabled(settings, server, action === 'enable');
+        writeRuntimeSettingsFile(nextSettings);
+        console.log(chalk.green(`✔️ ${action === 'enable' ? 'Enabled' : 'Disabled'} MCP server ${server}`));
+      } catch (error) {
+        console.log(chalk.red(error instanceof Error ? error.message : 'Failed to update MCP server.'));
+        process.exit(1);
+      }
+      return;
+    }
+
+    if (action === 'disable-tool' && server && tool) {
+      try {
+        const nextSettings = disableMcpTool(settings, server, tool);
+        writeRuntimeSettingsFile(nextSettings);
+        console.log(chalk.green(`✔️ Disabled MCP tool ${server}:${tool}`));
+      } catch (error) {
+        console.log(chalk.red(error instanceof Error ? error.message : 'Failed to disable MCP tool.'));
+        process.exit(1);
+      }
+      return;
+    }
+
+    console.log(chalk.red('Usage: elyan mcp list | doctor | set <json> | enable <server> | disable <server> | disable-tool <server> <tool>'));
   });
 
 // ----------------------------------------------------------------------------

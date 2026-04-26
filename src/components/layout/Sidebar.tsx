@@ -8,8 +8,8 @@ import { usePathname } from 'next/navigation';
 
 export function Sidebar() {
   const pathname = usePathname();
-  const isSearchActive = pathname === '/' || pathname.startsWith('/chat') || pathname.startsWith('/preview/chat');
   const isManageActive = pathname.startsWith('/manage');
+  const isChatActive = pathname.startsWith('/chat') || pathname.startsWith('/preview/chat');
 
   return (
     <motion.aside
@@ -27,12 +27,12 @@ export function Sidebar() {
       </div>
 
       <nav className="sidebar__nav" aria-label="Primary">
-        <NavItem href="/" icon={<Search size={20} />} label="Search" active={isSearchActive} />
         <NavItem href="/manage" icon={<SlidersHorizontal size={20} />} label="Manage" active={isManageActive} />
+        <NavItem href="/chat/new" icon={<Search size={20} />} label="Chat" active={isChatActive} />
       </nav>
 
       <div className="sidebar__footer">
-        Local-first runtime. Optional search, MCP, channels, and hosted control-plane stay outside private local context.
+        Local-first runtime. Review capabilities, approvals, MCP, and evidence here.
       </div>
     </motion.aside>
   );

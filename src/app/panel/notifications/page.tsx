@@ -1,5 +1,5 @@
-import { HostedPanel } from '@/components/panel/HostedPanel';
+import { redirect } from 'next/navigation';
 
 export default function PanelNotificationsPage() {
-  return <HostedPanel section="notifications" />;
+  redirect('/panel');
 }

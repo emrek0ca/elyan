@@ -68,10 +68,39 @@ const mcpBridgeOutputSchema = z.object({
     attempted: z.boolean(),
     status: z.enum(['skipped', 'ready', 'degraded', 'unavailable']),
     error: z.string().optional(),
+    cached: z.boolean().default(false),
+    lastHealthyAt: z.string().optional(),
   }),
 });
 
 export type McpBridgeOutput = z.output<typeof mcpBridgeOutputSchema>;
+
+type CachedMcpBridgeSnapshot = Omit<McpBridgeOutput, 'discovery'> & {
+  discovery: {
+    attempted: boolean;
+    status: z.output<typeof mcpBridgeOutputSchema>['discovery']['status'];
+    error?: string;
+    cached: boolean;
+    lastHealthyAt?: string;
+  };
+  capturedAt: string;
+};
+
+const mcpBridgeCache = new Map<string, CachedMcpBridgeSnapshot>();
+
+function buildMcpBridgeCacheKey(serverConfigs: ReturnType<typeof readMcpServerConfigs>) {
+  return JSON.stringify(
+    serverConfigs.map((server) => ({
+      id: server.id,
+      transport: server.transport,
+      enabled: server.enabled,
+      endpoint: server.transport === 'streamable-http' ? server.url : undefined,
+      command: server.transport === 'stdio' ? server.command : undefined,
+      args: server.transport === 'stdio' ? server.args : undefined,
+      disabledToolNames: server.disabledToolNames,
+    }))
+  );
+}
 
 export function getBridgeToolNames(): BridgeToolId[] {
   return getBridgeToolManifest().map((tool) => tool.id);
@@ -142,6 +171,8 @@ export const mcpBridgeCapability: CapabilityDefinition<
 
     const shouldDiscoverLiveSurface = input.includeManifest && configError === undefined && serverConfigs.length > 0;
     const liveRegistry = shouldDiscoverLiveSurface ? new McpToolRegistry(serverConfigs) : undefined;
+    const cacheKey = buildMcpBridgeCacheKey(serverConfigs);
+    const cachedSnapshot = mcpBridgeCache.get(cacheKey);
 
     try {
       const tools = (input.includeManifest
@@ -164,6 +195,8 @@ export const mcpBridgeCapability: CapabilityDefinition<
       let discoveryStatus: z.output<typeof mcpBridgeOutputSchema>['discovery']['status'] =
         input.includeManifest && serverConfigs.length > 0 ? 'ready' : 'skipped';
       let discoveryError = configError;
+      let discoveryCached = false;
+      let discoveryLastHealthyAt: string | undefined;
 
       if (input.includeManifest && liveRegistry) {
         try {
@@ -174,7 +207,42 @@ export const mcpBridgeCapability: CapabilityDefinition<
             liveRegistry.listPrompts(),
           ]);
           mcpServers = liveRegistry.listServers();
+          const capturedAt = new Date().toISOString();
+          mcpBridgeCache.set(cacheKey, {
+            tools,
+            mcpServers,
+            mcpTools,
+            mcpResources,
+            mcpResourceTemplates,
+            mcpPrompts,
+            aiSdkToolNames: getAiSdkBridgeToolNames(),
+            discovery: {
+              attempted: true,
+              status: discoveryStatus,
+              cached: false,
+              lastHealthyAt: capturedAt,
+            },
+            capturedAt,
+          });
         } catch (error) {
+          if (cachedSnapshot) {
+            discoveryStatus = 'degraded';
+            discoveryError = `${describeError(error)}. Using last known good MCP snapshot.`;
+            discoveryCached = true;
+            discoveryLastHealthyAt = cachedSnapshot.capturedAt;
+
+            return {
+              ...cachedSnapshot,
+              discovery: {
+                attempted: true,
+                status: discoveryStatus,
+                error: discoveryError,
+                cached: discoveryCached,
+                lastHealthyAt: discoveryLastHealthyAt,
+              },
+            };
+          }
+
           discoveryStatus = 'degraded';
           discoveryError = describeError(error);
         }
@@ -194,6 +262,8 @@ export const mcpBridgeCapability: CapabilityDefinition<
           attempted: input.includeManifest && serverConfigs.length > 0,
           status: discoveryStatus,
           error: discoveryError,
+          cached: discoveryCached,
+          lastHealthyAt: discoveryLastHealthyAt,
         },
       };
     } finally {

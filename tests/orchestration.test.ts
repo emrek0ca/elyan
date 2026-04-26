@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildEvaluationSignalDraft, buildOrchestrationPlan } from '@/core/orchestration';
 import type { ExecutionSurfaceSnapshot } from '@/core/orchestration';
 
-function createSurface(overrides: Partial<ExecutionSurfaceSnapshot>): ExecutionSurfaceSnapshot {
+function createSurface(overrides: Record<string, unknown>): ExecutionSurfaceSnapshot {
   return {
     local: {
       capabilities: [],
@@ -16,7 +16,7 @@ function createSurface(overrides: Partial<ExecutionSurfaceSnapshot>): ExecutionS
       prompts: [],
     },
     ...overrides,
-  };
+  } as ExecutionSurfaceSnapshot;
 }
 
 describe('Orchestration planning', () => {
@@ -28,6 +28,10 @@ describe('Orchestration planning', () => {
     expect(plan.uncertainty).toBe('high');
     expect(plan.reasoningDepth).toBe('deep');
     expect(plan.routingMode).toBe('cloud_preferred');
+    expect(plan.executionMode).toBe('team');
+    expect(plan.teamPolicy.modelRoutingMode).toBe('local_first');
+    expect(plan.teamPolicy.requiredRoles).toContain('researcher');
+    expect(plan.teamPolicy.requiredRoles).toContain('verifier');
     expect(plan.skillPolicy.selectedSkillId).toBe('research_companion');
     expect(plan.skillPolicy.resultShape).toBe('report');
     expect(plan.stages).toEqual([
@@ -54,6 +58,15 @@ describe('Orchestration planning', () => {
     expect(plan.surface).toBe('local');
     expect(plan.skillPolicy.selectedSkillId).toBe('workspace_operator');
     expect(plan.capabilityPolicy.find((entry) => entry.capabilityId === 'mcp_bridge')?.enabled).toBe(true);
+    expect(plan.teamPolicy.modelRoutingMode).toBe('local_only');
+  });
+
+  it('keeps narrow direct answers on the single-agent path', () => {
+    const plan = buildOrchestrationPlan('What is Elyan?', 'speed');
+
+    expect(plan.taskIntent).toBe('direct_answer');
+    expect(plan.executionMode).toBe('single');
+    expect(plan.teamPolicy.enabledByDefault).toBe(false);
   });
 
   it('prefers browser read when a URL needs rendered inspection', () => {
@@ -224,6 +237,41 @@ describe('Orchestration planning', () => {
     expect(plan.capabilityPolicy.find((entry) => entry.capabilityId === 'pdf_extract')?.enabled).toBe(true);
   });
 
+  it('treats document and design authoring as a local-first artifact path', () => {
+    const plan = buildOrchestrationPlan(
+      'Write a design brief in markdown for the product UI',
+      'speed',
+      createSurface({
+        local: {
+          capabilities: [
+            {
+              id: 'markdown_render',
+              title: 'Markdown Render',
+              description: 'Renders Markdown to sanitized HTML with unified.',
+              library: 'unified',
+              timeoutMs: 500,
+              enabled: true,
+            },
+            {
+              id: 'docx_write',
+              title: 'DOCX Write',
+              description: 'Creates simple DOCX documents with docx.',
+              library: 'docx',
+              timeoutMs: 750,
+              enabled: true,
+            },
+          ],
+          bridgeTools: [],
+        },
+      })
+    );
+
+    expect(plan.routingMode).toBe('local_first');
+    expect(plan.executionPolicy.primary.id).toBe('markdown_render');
+    expect(plan.capabilityPolicy.find((entry) => entry.capabilityId === 'markdown_render')?.enabled).toBe(true);
+    expect(plan.capabilityPolicy.find((entry) => entry.capabilityId === 'docx_write')?.enabled).toBe(true);
+  });
+
   it('builds a structured evaluation draft for a retrieved hosted answer', () => {
     const plan = buildOrchestrationPlan('What changed in AI search this week?', 'research', createSurface({}));
     const draft = buildEvaluationSignalDraft({
@@ -240,7 +288,16 @@ describe('Orchestration planning', () => {
       latencyMs: 1250,
       totalUsage: {
         inputTokens: 128,
+        inputTokenDetails: {
+          noCacheTokens: undefined,
+          cacheReadTokens: undefined,
+          cacheWriteTokens: undefined,
+        },
         outputTokens: 82,
+        outputTokenDetails: {
+          textTokens: undefined,
+          reasoningTokens: undefined,
+        },
         totalTokens: 210,
       },
       toolCallCount: 1,

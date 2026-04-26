@@ -1,6 +1,33 @@
 import type { z, ZodTypeAny } from 'zod';
 
 export type CapabilityStatus = 'success' | 'error' | 'disabled' | 'timeout';
+export type CapabilityCategory =
+  | 'documents'
+  | 'research'
+  | 'comms'
+  | 'dev'
+  | 'ops'
+  | 'desktop'
+  | 'memory'
+  | 'browser'
+  | 'calculation'
+  | 'general';
+export type CapabilityRiskLevel = 'low' | 'medium' | 'high' | 'critical';
+export type CapabilityApprovalLevel = 'AUTO' | 'CONFIRM' | 'SCREEN' | 'TWO_FA';
+export type CapabilityVerificationMode = 'schema' | 'snapshot' | 'roundtrip' | 'manual' | 'audit';
+export type CapabilityRollbackMode = 'none' | 'restore' | 'rebuild' | 'reversible' | 'manual';
+export type CapabilitySource = 'local_module' | 'local_bridge_tool' | 'mcp_surface' | 'browser_surface' | 'direct';
+
+export type CapabilityOperationalProfile = {
+  category: CapabilityCategory;
+  riskLevel: CapabilityRiskLevel;
+  approvalLevel: CapabilityApprovalLevel;
+  verificationMode: CapabilityVerificationMode;
+  rollbackMode: CapabilityRollbackMode;
+  safeByDefault: boolean;
+  useCases: string[];
+  recommendedSkillId?: string;
+};
 
 export type CapabilityAuditEntry = {
   capabilityId: string;
@@ -38,3 +65,26 @@ export type CapabilityRegistration = {
   disabledCapabilityIds?: string[];
 };
 
+export type CapabilityDirectoryEntry = {
+  id: string;
+  title: string;
+  description: string;
+  library: string;
+  timeoutMs: number;
+  enabled: boolean;
+  source: CapabilitySource;
+  profile: CapabilityOperationalProfile;
+};
+
+export type CapabilityDomainSnapshot = {
+  category: CapabilityCategory;
+  title: string;
+  summary: string;
+  capabilityIds: string[];
+  libraries: string[];
+  capabilityCount: number;
+  enabledCapabilityCount: number;
+  riskLevelCounts: Record<CapabilityRiskLevel, number>;
+  approvalLevelCounts: Record<CapabilityApprovalLevel, number>;
+  sourceCounts: Record<CapabilitySource, number>;
+};

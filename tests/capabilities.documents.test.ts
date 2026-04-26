@@ -57,6 +57,38 @@ describe('Document and media capabilities', () => {
     expect(extracted.totalPages).toBe(1);
   });
 
+  it('creates, splits, and merges PDFs with pdf-lib', async () => {
+    const registry = new CapabilityRegistry(new CapabilityAuditTrail());
+
+    const created = await registry.execute('pdf_workflow', {
+      operation: 'create',
+      title: 'Operator Notes',
+      paragraphs: ['First page paragraph', 'Second page paragraph'],
+    });
+
+    const extracted = await registry.execute('pdf_extract', {
+      base64: created.base64,
+    });
+
+    expect(extracted.text).toContain('Operator Notes');
+    expect(extracted.text).toContain('First page paragraph');
+    expect(created.pageCount).toBeGreaterThan(0);
+
+    const split = await registry.execute('pdf_workflow', {
+      operation: 'split',
+      base64: created.base64,
+    });
+
+    expect(split.pages).toHaveLength(created.pageCount);
+
+    const merged = await registry.execute('pdf_workflow', {
+      operation: 'merge',
+      pdfs: [created.base64, created.base64],
+    });
+
+    expect(merged.pageCount).toBe(created.pageCount * 2);
+  });
+
   it('reads image metadata and resizes images', async () => {
     const registry = new CapabilityRegistry(new CapabilityAuditTrail());
     const input = await sharp({

@@ -37,9 +37,9 @@ describe('release resolver', () => {
             ],
           },
           {
-            tag_name: 'v1.1.0',
-            name: 'v1.1.0',
-            html_url: 'https://github.com/elyan-dev/elyan/releases/tag/v1.1.0',
+            tag_name: 'v1.2.0',
+            name: 'v1.2.0',
+            html_url: 'https://github.com/elyan-dev/elyan/releases/tag/v1.2.0',
             url: 'https://api.github.com/repos/elyan-dev/elyan/releases/2',
             draft: false,
             prerelease: false,
@@ -73,9 +73,11 @@ describe('release resolver', () => {
 
     const release = await getLatestElyanReleaseSnapshot();
 
-    expect(release?.tagName).toBe('v1.1.0');
+    expect(release?.tagName).toBe('v1.2.0');
     expect(release?.complete).toBe(true);
     expect(release?.assets).toHaveLength(4);
+    expect(release?.targets).toHaveLength(4);
+    expect(release?.targets.map((target) => target.platform)).toEqual(['macos', 'macos', 'linux', 'windows']);
   });
 
   it('reports update availability for the installed CLI and hosted panel', async () => {
@@ -85,9 +87,9 @@ describe('release resolver', () => {
         ok: true,
         json: async () => [
           {
-            tag_name: 'v1.2.0',
-            name: 'v1.2.0',
-            html_url: 'https://github.com/elyan-dev/elyan/releases/tag/v1.2.0',
+            tag_name: 'v1.3.0',
+            name: 'v1.3.0',
+            html_url: 'https://github.com/elyan-dev/elyan/releases/tag/v1.3.0',
             url: 'https://api.github.com/repos/elyan-dev/elyan/releases/1',
             draft: false,
             prerelease: false,
@@ -121,12 +123,13 @@ describe('release resolver', () => {
 
     const response = await getLatestElyanReleaseResponse();
 
-    expect(response.currentVersion).toBe('1.1.0');
-    expect(response.currentTagName).toBe('v1.1.0');
+    expect(response.currentVersion).toBe('1.2.0');
+    expect(response.currentTagName).toBe('v1.2.0');
     expect(response.updateAvailable).toBe(true);
     expect(response.updateStatus).toBe('update_available');
-    expect(response.latest?.tagName).toBe('v1.2.0');
-    expect(response.updateMessage).toContain('v1.2.0');
+    expect(response.latest?.tagName).toBe('v1.3.0');
+    expect(response.updateMessage).toContain('v1.3.0');
+    expect(response.targets).toHaveLength(4);
   });
 
   it('treats the installed runtime as current when the latest publishable release is older', async () => {
@@ -172,8 +175,8 @@ describe('release resolver', () => {
 
     const response = await getLatestElyanReleaseResponse();
 
-    expect(response.currentVersion).toBe('1.1.0');
-    expect(response.currentTagName).toBe('v1.1.0');
+    expect(response.currentVersion).toBe('1.2.0');
+    expect(response.currentTagName).toBe('v1.2.0');
     expect(response.updateAvailable).toBe(false);
     expect(response.updateStatus).toBe('current');
     expect(response.latest?.tagName).toBe('v1.0.0');

@@ -12,6 +12,14 @@ export type IntentConfidence = 'low' | 'medium' | 'high';
 export type UncertaintyLevel = 'low' | 'medium' | 'high';
 
 export type ModelRoutingMode = 'local_only' | 'local_first' | 'balanced' | 'cloud_preferred';
+export type ExecutionMode = 'single' | 'team';
+export type TeamRole =
+  | 'planner'
+  | 'researcher'
+  | 'executor'
+  | 'reviewer'
+  | 'verifier'
+  | 'memory_curator';
 
 export type OrchestrationStage =
   | 'intent'
@@ -60,6 +68,17 @@ export type UsageBudget = {
   evaluation: number;
 };
 
+export type TeamPolicy = {
+  enabledByDefault: boolean;
+  reasons: string[];
+  maxConcurrentAgents: number;
+  maxTasksPerRun: number;
+  allowCloudEscalation: boolean;
+  modelRoutingMode: ModelRoutingMode;
+  riskBoundary: 'read_only' | 'confirmation_required';
+  requiredRoles: TeamRole[];
+};
+
 export type ExecutionObjectKind =
   | 'direct_answer'
   | 'local_capability'
@@ -96,6 +115,10 @@ export type SkillExecutionCandidate = {
   skillId: string;
   title: string;
   version: string;
+  domain: string;
+  policyBoundary: 'local' | 'workspace' | 'hosted';
+  outputShape: 'answer' | 'report' | 'artifact';
+  preferredCapabilityIds: string[];
   score: number;
   reason: string;
   enabled: boolean;
@@ -146,6 +169,8 @@ export type OrchestrationPlan = {
   capabilityPolicy: CapabilityPolicyEntry[];
   evaluation: EvaluationPolicy;
   usageBudget: UsageBudget;
+  executionMode: ExecutionMode;
+  teamPolicy: TeamPolicy;
   surface: 'local' | 'shared-vps' | 'hosted';
   mode: SearchMode;
   executionPolicy: ExecutionPolicy;

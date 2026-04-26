@@ -2,123 +2,21 @@
 
 import Link from 'next/link';
 import React from 'react';
-import { buildControlPlaneEvaluationSummary } from '@/core/control-plane/evaluation';
-import type { ControlPlaneEvaluationSignal } from '@/core/control-plane/types';
+import { buildControlPlaneAnchorId } from '@/core/control-plane/display';
+import type { ControlPlaneHostedPanel } from '@/core/control-plane/types';
+import { ControlPlaneStateBadge } from '@/components/control-plane/ControlPlaneStateBadge';
 
-type PanelSection = 'overview' | 'account' | 'billing' | 'usage' | 'notifications';
+type PanelSection = 'overview' | 'account' | 'billing' | 'devices';
 
 type PanelPayload = {
   ok: boolean;
-  session: {
-    email?: string;
-    role?: string;
-    accountId?: string;
-  };
-  account: {
-    accountId: string;
-    displayName: string;
-    ownerType: string;
-    balanceCredits: string;
-    billingCustomerRef?: string;
-    status: string;
-    subscription: {
-      planId: string;
-      status: string;
-      provider: string;
-      syncState: string;
-      providerStatus?: string;
-      retryCount: number;
-      lastSyncedAt?: string;
-      nextRetryAt?: string;
-      currentPeriodStartedAt: string;
-      currentPeriodEndsAt: string;
-      creditsGrantedThisPeriod: string;
-      lastSyncError?: string;
-    };
-    plan: {
-      title: string;
-      summary: string;
-      monthlyPriceTRY: string;
-      monthlyIncludedCredits: string;
-      dailyLimits: {
-        hostedRequestsPerDay: number;
-        hostedToolActionCallsPerDay: number;
-      };
-    };
-    processedWebhookEventCount: number;
-    entitlements: {
-      hostedAccess: boolean;
-      hostedUsageAccounting: boolean;
-      managedCredits: boolean;
-      cloudRouting: boolean;
-      advancedRouting: boolean;
-      teamGovernance: boolean;
-      hostedImprovementSignals: boolean;
-    };
-    usageTotals: Record<string, string>;
-    usageSnapshot: {
-      dayKey: string;
-      resetAt: string;
-      dailyRequests: number;
-      dailyRequestsLimit: number;
-      remainingRequests: number;
-      dailyHostedToolActionCalls: number;
-      dailyHostedToolActionCallsLimit: number;
-      remainingHostedToolActionCalls: number;
-      monthlyCreditsRemaining: string;
-      monthlyCreditsBurned: string;
-      state: 'ok' | 'daily_limit_reached' | 'monthly_credits_exhausted';
-    };
-    evaluationSignalCount: number;
-    recentEvaluationSignals: ControlPlaneEvaluationSignal[];
-  };
-  ledger: Array<{
-    entryId: string;
-    kind: string;
-    status: string;
-    domain?: string;
-    creditsDelta: string;
-    balanceAfter: string;
-    note?: string;
-    createdAt: string;
-  }>;
-  notifications: Array<{
-    notificationId: string;
-    title: string;
-    body: string;
-    kind: string;
-    level: 'info' | 'warning' | 'error';
-    seenAt?: string;
-    createdAt: string;
-  }>;
-  devices: Array<{
-    deviceId: string;
-    deviceLabel: string;
-    status: string;
-    linkedAt: string;
-    lastSeenAt?: string;
-    lastSeenReleaseTag?: string;
-    revokedAt?: string;
-  }>;
-  health: {
-    storage: string;
-    iyzicoConfigured: boolean;
-    connection?: {
-      storage?: string;
-      hostedReady?: boolean;
-      callbackUrl?: string;
-      apiBaseUrl?: string;
-      billingMode?: 'sandbox' | 'production';
-    };
-  };
-};
+} & ControlPlaneHostedPanel;
 
 const sections: Array<{ id: PanelSection; label: string; href: string }> = [
   { id: 'overview', label: 'Overview', href: '/panel' },
   { id: 'account', label: 'Account', href: '/panel/account' },
   { id: 'billing', label: 'Billing', href: '/panel/billing' },
-  { id: 'usage', label: 'Usage', href: '/panel/usage' },
-  { id: 'notifications', label: 'Notifications', href: '/panel/notifications' },
+  { id: 'devices', label: 'Devices', href: '/panel/devices' },
 ];
 
 async function fetchPanel(): Promise<PanelPayload> {
@@ -187,24 +85,6 @@ export function HostedPanel({ section }: { section: PanelSection }) {
     }
   }
 
-  async function markSeen(notificationId: string) {
-    try {
-      const response = await fetch(`/api/control-plane/notifications/${notificationId}`, {
-        method: 'PATCH',
-        credentials: 'include',
-      });
-
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(body?.error ?? 'Notification update failed');
-      }
-
-      await load();
-    } catch (notificationError) {
-      setError(notificationError instanceof Error ? notificationError.message : 'Notification update failed');
-    }
-  }
-
   if (loading) {
     return <div className="panel-page panel-page__empty">Loading hosted panel…</div>;
   }
@@ -221,9 +101,10 @@ export function HostedPanel({ section }: { section: PanelSection }) {
     );
   }
 
-  const unseenCount = payload.notifications.filter((entry) => !entry.seenAt).length;
-  const evaluationSummary = buildControlPlaneEvaluationSummary(payload.account.recentEvaluationSignals);
-  const hostedPlan = payload.account.subscription.planId !== 'local_byok';
+  const hostedPlan = payload.account.entitlements.hostedAccess;
+  const deviceSummary = payload.account.deviceSummary;
+  const hostedAccess = payload.session.hostedAccess ?? payload.account.entitlements.hostedAccess;
+  const integrations = Object.values(payload.account.integrations ?? {});
 
   return (
     <div className="panel-page">
@@ -232,7 +113,7 @@ export function HostedPanel({ section }: { section: PanelSection }) {
           <div className="site-kicker">Hosted panel</div>
           <h1 className="site-title">{payload.account.displayName}</h1>
           <p className="site-lead">
-            Hosted account, credits, subscription state, and announcements. Local runtime state still stays on the user machine.
+            Hosted account, billing, sync, and linked devices. The local Elyan runtime stays on the user machine.
           </p>
         </div>
 
@@ -247,7 +128,7 @@ export function HostedPanel({ section }: { section: PanelSection }) {
           </div>
           <div className="site-card">
             <span className="panel-stat__label">Subscription</span>
-            <strong className="panel-stat__value">{payload.account.subscription.status}</strong>
+            <ControlPlaneStateBadge variant="subscription" state={payload.account.subscription.status} compact />
           </div>
         </div>
       </section>
@@ -260,7 +141,6 @@ export function HostedPanel({ section }: { section: PanelSection }) {
             className={entry.id === section ? 'panel-tabs__link panel-tabs__link--active' : 'panel-tabs__link'}
           >
             {entry.label}
-            {entry.id === 'notifications' && unseenCount > 0 ? <span className="panel-tabs__badge">{unseenCount}</span> : null}
           </Link>
         ))}
       </nav>
@@ -269,13 +149,17 @@ export function HostedPanel({ section }: { section: PanelSection }) {
 
       {section === 'overview' ? (
         <div className="site-grid site-grid--three">
-          <article className="site-card">
+          <article className="site-card" id={buildControlPlaneAnchorId('panel', 'account-state')} tabIndex={-1}>
             <h2>Account state</h2>
             <div className="panel-list">
               <PanelRow label="Email" value={payload.session.email ?? 'unknown'} />
               <PanelRow label="Role" value={payload.session.role ?? 'owner'} />
-              <PanelRow label="Storage" value={payload.health.storage} />
-              <PanelRow label="Hosted access" value={payload.account.entitlements.hostedAccess ? 'active' : 'inactive'} />
+              <PanelRow label="Plan" value={payload.session.planId ?? payload.account.subscription.planId} />
+              <PanelRow label="Subscription" value={payload.session.subscriptionStatus ?? payload.account.subscription.status} />
+              <PanelRow label="Sync state" value={payload.session.subscriptionSyncState ?? payload.account.subscription.syncState} />
+              <PanelRow label="Hosted access" value={hostedAccess ? 'active' : 'inactive'} />
+              <PanelRow label="Credits" value={payload.account.balanceCredits} />
+              <PanelRow label="Devices" value={String(deviceSummary.total)} />
             </div>
           </article>
 
@@ -294,62 +178,117 @@ export function HostedPanel({ section }: { section: PanelSection }) {
           </article>
 
           <article className="site-card">
-            <h2>Install and runtime</h2>
+            <h2>Hosted boundary</h2>
             <div className="panel-actions">
-              <Link href="/download" className="site-cta">Install locally</Link>
-              <Link href="/docs" className="site-secondary-cta">Read docs</Link>
+              <Link href="/download" className="site-cta">
+                Install locally
+              </Link>
+              <Link href="/docs" className="site-secondary-cta">
+                Read docs
+              </Link>
             </div>
-            <p className="panel-copy">Hosted account controls billing, credits, and web access. The primary runtime still runs locally.</p>
+            <p className="panel-copy">Hosted account data covers billing, credits, sync, and device linking. Local execution stays on the machine.</p>
           </article>
 
-          <article className="site-card">
-            <h2>Devices</h2>
+          <article className="site-card" id={buildControlPlaneAnchorId('panel', 'integrations')} tabIndex={-1}>
+            <h2>Connected apps</h2>
             <div className="panel-list">
-              <PanelRow label="Linked devices" value={String(payload.devices.length)} />
-              <PanelRow label="Latest device" value={payload.devices[0]?.deviceLabel ?? 'none'} />
-              <PanelRow label="Latest status" value={payload.devices[0]?.status ?? 'none'} />
+              <PanelRow label="Linked apps" value={String(integrations.length)} />
+              <PanelRow
+                label="Active app links"
+                value={String(integrations.filter((integration) => integration.status === 'connected').length)}
+              />
+              <PanelRow
+                label="Attention needed"
+                value={String(integrations.filter((integration) => integration.status === 'expired' || integration.status === 'error').length)}
+              />
+              <PanelRow
+                label="Latest app state"
+                value={
+                  integrations[0] ? (
+                    <ControlPlaneStateBadge variant="integration" state={integrations[0].status} compact />
+                  ) : (
+                    'none'
+                  )
+                }
+              />
             </div>
             <div className="panel-history">
-              {payload.devices.length > 0 ? payload.devices.map((device) => (
-                <div key={device.deviceId} className="panel-history__item">
-                  <div>
-                    <strong>{device.deviceLabel}</strong>
-                    <p>{device.status}</p>
-                    {device.lastSeenReleaseTag ? <span className="panel-history__kind">{device.lastSeenReleaseTag}</span> : null}
+              {integrations.length > 0 ? (
+                integrations.map((integration) => (
+                  <div key={integration.integrationId} className="panel-history__item">
+                    <div>
+                      <strong>{integration.displayName}</strong>
+                      <p>
+                        {integration.externalAccountLabel ?? 'Unlinked account'}
+                        {integration.surfaces.length ? ` · ${integration.surfaces.join(', ')}` : ''}
+                      </p>
+                      <ControlPlaneStateBadge variant="integration" state={integration.status} compact />
+                    </div>
+                    <div className="panel-history__meta">
+                      <span>{integration.lastSyncedAt ? new Date(integration.lastSyncedAt).toLocaleString() : 'never'}</span>
+                      <span>{integration.lastError ?? 'No errors reported'}</span>
+                    </div>
                   </div>
-                  <div className="panel-history__meta">
-                    <span>{new Date(device.linkedAt).toLocaleString()}</span>
-                    <span>{device.lastSeenAt ? new Date(device.lastSeenAt).toLocaleString() : 'never'}</span>
-                  </div>
-                </div>
-              )) : <p className="panel-copy">No devices linked yet.</p>}
+                ))
+              ) : (
+                <p className="panel-copy">No OAuth-linked apps yet.</p>
+              )}
             </div>
           </article>
 
-          <article className="site-card">
-            <h2>Learning loop</h2>
+          <article className="site-card" id={buildControlPlaneAnchorId('panel', 'devices')} tabIndex={-1}>
+            <h2>Devices</h2>
+            <p className="panel-copy">Link the local CLI when you want this hosted account to track device state and release readiness.</p>
             <div className="panel-list">
-              <PanelRow label="Signals captured" value={String(payload.account.evaluationSignalCount)} />
-              <PanelRow label="Recent window" value={String(evaluationSummary.windowCount)} />
-              <PanelRow label="Latest quality" value={evaluationSummary.latestSignal?.quality ?? 'none'} />
-              <PanelRow label="Promotion candidates" value={String(evaluationSummary.promotionCandidates)} />
+              <PanelRow label="Linked devices" value={String(payload.devices.length)} />
+              <PanelRow label="Active devices" value={String(deviceSummary.active)} />
+              <PanelRow label="Pending devices" value={String(deviceSummary.pending)} />
+              <PanelRow
+                label="Latest status"
+                value={
+                  payload.devices[0] ? (
+                    <ControlPlaneStateBadge variant="device" state={payload.devices[0].status} compact />
+                  ) : (
+                    'none'
+                  )
+                }
+              />
             </div>
-            {evaluationSummary.latestSignal ? (
-              <p className="panel-copy">
-                Latest routing: {evaluationSummary.latestSignal.routingMode}. {evaluationSummary.latestSignal.modelProvider}/{evaluationSummary.latestSignal.modelId}.
-                {' '}Sources {evaluationSummary.latestSignal.sourceCount}, citations {evaluationSummary.latestSignal.citationCount}, latency {evaluationSummary.latestSignal.latencyMs}ms.
-              </p>
-            ) : (
-              <p className="panel-copy">
-                Hosted improvement signals are structural only. No private prompt or file content is stored in this control plane.
-              </p>
-            )}
+            <div className="panel-history">
+              {payload.devices.length > 0 ? (
+                payload.devices.map((device) => (
+                  <div key={device.deviceId} className="panel-history__item">
+                    <div>
+                      <strong>{device.deviceLabel}</strong>
+                      <p>{device.lastSeenReleaseTag ?? 'No release tag recorded yet.'}</p>
+                      <ControlPlaneStateBadge variant="device" state={device.status} compact />
+                      {device.lastSeenReleaseTag ? <span className="panel-history__kind">{device.lastSeenReleaseTag}</span> : null}
+                    </div>
+                    <div className="panel-history__meta">
+                      <span>{new Date(device.linkedAt).toLocaleString()}</span>
+                      <span>{device.lastSeenAt ? new Date(device.lastSeenAt).toLocaleString() : 'never'}</span>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <p className="panel-copy">No devices linked yet. Install Elyan locally, then run the CLI login command from that machine.</p>
+              )}
+            </div>
+            <div className="panel-actions">
+              <Link href="/download" className="site-cta">
+                Install locally
+              </Link>
+              <Link href="/docs/install" className="site-secondary-cta">
+                Link from CLI
+              </Link>
+            </div>
           </article>
         </div>
       ) : null}
 
       {section === 'account' ? (
-        <section className="site-card">
+        <section className="site-card" id={buildControlPlaneAnchorId('panel', 'account')} tabIndex={-1}>
           <h2>Account</h2>
           <div className="panel-list">
             <PanelRow label="Display name" value={payload.account.displayName} />
@@ -363,7 +302,7 @@ export function HostedPanel({ section }: { section: PanelSection }) {
 
       {section === 'billing' ? (
         <section className="site-grid site-grid--two">
-          <article className="site-card">
+          <article className="site-card" id={buildControlPlaneAnchorId('panel', 'billing-subscription')} tabIndex={-1}>
             <h2>Subscription</h2>
             <div className="panel-list">
               <PanelRow label="Plan" value={payload.account.plan.title} />
@@ -373,9 +312,19 @@ export function HostedPanel({ section }: { section: PanelSection }) {
               <PanelRow label="Current period" value={new Date(payload.account.subscription.currentPeriodStartedAt).toLocaleDateString()} />
               <PanelRow label="Renews / ends" value={new Date(payload.account.subscription.currentPeriodEndsAt).toLocaleString()} />
               <PanelRow label="Provider" value={payload.account.subscription.provider} />
-              <PanelRow label="Sync state" value={payload.account.subscription.syncState} />
+              <PanelRow
+                label="Subscription state"
+                value={<ControlPlaneStateBadge variant="subscription" state={payload.account.subscription.status} compact />}
+              />
+              <PanelRow
+                label="Sync state"
+                value={<ControlPlaneStateBadge variant="sync" state={payload.account.subscription.syncState} compact />}
+              />
               <PanelRow label="Provider status" value={payload.account.subscription.providerStatus ?? 'unreported'} />
-              <PanelRow label="Last synced" value={payload.account.subscription.lastSyncedAt ? new Date(payload.account.subscription.lastSyncedAt).toLocaleString() : 'never'} />
+              <PanelRow
+                label="Last synced"
+                value={payload.account.subscription.lastSyncedAt ? new Date(payload.account.subscription.lastSyncedAt).toLocaleString() : 'never'}
+              />
               <PanelRow label="Retry count" value={String(payload.account.subscription.retryCount)} />
               <PanelRow label="Next retry" value={payload.account.subscription.nextRetryAt ? new Date(payload.account.subscription.nextRetryAt).toLocaleString() : 'none'} />
               <PanelRow label="Webhook refs" value={String(payload.account.processedWebhookEventCount)} />
@@ -385,18 +334,21 @@ export function HostedPanel({ section }: { section: PanelSection }) {
             ) : null}
           </article>
 
-          <article className="site-card">
+          <article className="site-card" id={buildControlPlaneAnchorId('panel', 'billing-hosted')} tabIndex={-1}>
             <h2>Hosted billing</h2>
             <p className="panel-copy">
               iyzico-backed hosted billing controls managed credits and hosted entitlements. If billing is not configured,
               hosted usage stays inactive and the panel stays honest about the gap.
             </p>
             <div className="panel-list">
-              <PanelRow label="Billing mode" value={payload.health.connection?.billingMode ?? 'unconfigured'} />
-              <PanelRow label="Billing availability" value={payload.health.iyzicoConfigured ? 'configured' : 'unavailable'} />
-              <PanelRow label="API base" value={payload.health.connection?.apiBaseUrl ?? 'not resolved'} />
-              <PanelRow label="Callback" value={payload.health.connection?.callbackUrl ?? 'not resolved'} />
-              <PanelRow label="Hosted state" value={payload.account.entitlements.hostedAccess ? 'active' : payload.account.subscription.syncState} />
+              <PanelRow label="Billing state" value={payload.account.subscription.provider} />
+              <PanelRow label="Hosted access" value={hostedPlan ? 'enabled' : 'disabled'} />
+              <PanelRow label="Credits remaining" value={payload.account.usageSnapshot.monthlyCreditsRemaining} />
+              <PanelRow label="Subscription sync" value={payload.account.subscription.syncState} />
+              <PanelRow
+                label="Hosted state"
+                value={<ControlPlaneStateBadge variant="operational" state={hostedPlan ? 'active' : payload.account.subscription.status} compact />}
+              />
             </div>
             <p className="panel-copy">
               {!hostedPlan
@@ -416,23 +368,19 @@ export function HostedPanel({ section }: { section: PanelSection }) {
                 onClick={() => void startBilling()}
                 disabled={
                   busyBilling ||
-                  !payload.health.iyzicoConfigured ||
                   !hostedPlan ||
-                  (payload.account.subscription.provider === 'iyzico' &&
-                    payload.account.subscription.syncState !== 'failed')
+                  (payload.account.subscription.provider === 'iyzico' && payload.account.subscription.syncState !== 'failed')
                 }
               >
                 {hostedPlan
-                  ? payload.health.iyzicoConfigured
-                    ? payload.account.subscription.syncState === 'failed'
-                      ? 'Restart billing'
-                      : payload.account.subscription.provider === 'iyzico'
-                        ? 'Billing already started'
-                        : 'Start billing'
-                    : 'Billing not configured'
+                  ? payload.account.subscription.syncState === 'failed'
+                    ? 'Restart billing'
+                    : payload.account.subscription.provider === 'iyzico'
+                      ? 'Billing already started'
+                      : 'Start billing'
                   : 'Local plan'}
               </button>
-              {!payload.account.entitlements.hostedAccess ? (
+              {!hostedPlan ? (
                 <Link href="/pricing" className="site-secondary-cta">
                   Compare plans
                 </Link>
@@ -442,86 +390,62 @@ export function HostedPanel({ section }: { section: PanelSection }) {
         </section>
       ) : null}
 
-      {section === 'usage' ? (
-        <div className="site-grid site-grid--two">
-          <article className="site-card">
-            <h2>Usage snapshot</h2>
-            <div className="panel-list">
-              <PanelRow label="Daily requests" value={`${payload.account.usageSnapshot.dailyRequests}/${payload.account.usageSnapshot.dailyRequestsLimit}`} />
-              <PanelRow label="Requests remaining" value={String(payload.account.usageSnapshot.remainingRequests)} />
-              <PanelRow label="Tool calls" value={`${payload.account.usageSnapshot.dailyHostedToolActionCalls}/${payload.account.usageSnapshot.dailyHostedToolActionCallsLimit}`} />
-              <PanelRow label="Tool calls remaining" value={String(payload.account.usageSnapshot.remainingHostedToolActionCalls)} />
-              <PanelRow label="Monthly credits remaining" value={payload.account.usageSnapshot.monthlyCreditsRemaining} />
-              <PanelRow label="Monthly credits burned" value={payload.account.usageSnapshot.monthlyCreditsBurned} />
-              <PanelRow label="Reset at" value={new Date(payload.account.usageSnapshot.resetAt).toLocaleString()} />
-              <PanelRow label="Limit state" value={payload.account.usageSnapshot.state} />
-            </div>
-          </article>
-
-          <article className="site-card">
-            <h2>Usage totals</h2>
-            <div className="panel-list">
-              {Object.entries(payload.account.usageTotals).map(([key, value]) => (
-                <PanelRow key={key} label={key} value={value} />
-              ))}
-            </div>
-          </article>
-
-          <article className="site-card">
-            <h2>Ledger</h2>
+      {section === 'devices' ? (
+        <section className="site-grid site-grid--two">
+          <article className="site-card" id={buildControlPlaneAnchorId('panel', 'devices-list')} tabIndex={-1}>
+            <h2>Linked devices</h2>
             <div className="panel-history">
-              {payload.ledger.length > 0 ? payload.ledger.map((entry) => (
-                <div key={entry.entryId} className="panel-history__item">
-                  <div>
-                    <strong>{entry.kind}</strong>
-                    <p>{entry.note ?? entry.domain ?? 'hosted usage event'}</p>
+              {payload.devices.length > 0 ? (
+                payload.devices.map((device) => (
+                  <div key={device.deviceId} className="panel-history__item">
+                    <div>
+                      <strong>{device.deviceLabel}</strong>
+                      <p>{device.lastSeenReleaseTag ?? 'No release tag recorded yet.'}</p>
+                      <ControlPlaneStateBadge variant="device" state={device.status} compact />
+                    </div>
+                    <div className="panel-history__meta">
+                      <span>Linked {new Date(device.linkedAt).toLocaleString()}</span>
+                      <span>Last seen {device.lastSeenAt ? new Date(device.lastSeenAt).toLocaleString() : 'never'}</span>
+                    </div>
                   </div>
-                  <div className="panel-history__meta">
-                    <span>{entry.creditsDelta}</span>
-                    <span>{new Date(entry.createdAt).toLocaleString()}</span>
-                  </div>
-                </div>
-              )) : <p className="panel-copy">No hosted usage yet.</p>}
+                ))
+              ) : (
+                <p className="panel-copy">No devices linked yet.</p>
+              )}
             </div>
           </article>
-        </div>
-      ) : null}
 
-      {section === 'notifications' ? (
-        <section className="site-card">
-          <h2>Notifications</h2>
-          <div className="panel-history">
-            {payload.notifications.length > 0 ? payload.notifications.map((entry) => (
-              <div key={entry.notificationId} className={`panel-history__item panel-history__item--${entry.level}`}>
-                <div>
-                  <strong>{entry.title}</strong>
-                  <p>{entry.body}</p>
-                  <span className="panel-history__kind">{entry.kind}</span>
-                </div>
-                <div className="panel-history__meta">
-                  <span>{new Date(entry.createdAt).toLocaleString()}</span>
-                  {!entry.seenAt ? (
-                    <button type="button" className="site-secondary-cta panel-button" onClick={() => void markSeen(entry.notificationId)}>
-                      Mark seen
-                    </button>
-                  ) : (
-                    <span>Seen</span>
-                  )}
-                </div>
-              </div>
-            )) : <p className="panel-copy">No announcements yet.</p>}
-          </div>
+          <article className="site-card">
+            <h2>Link this machine</h2>
+            <p className="panel-copy">Install Elyan locally, run guided setup, then login from the CLI to register this machine.</p>
+            <div className="panel-list">
+              <PanelRow label="Install" value={<code>/download</code>} />
+              <PanelRow label="Setup" value={<code>elyan setup --zero-cost</code>} />
+              <PanelRow label="Link" value={<code>elyan login --base-url https://api.elyan.dev</code>} />
+              <PanelRow label="Verify" value={<code>elyan whoami</code>} />
+            </div>
+            <div className="panel-actions">
+              <Link href="/download" className="site-cta">
+                Install locally
+              </Link>
+              <Link href="/docs/install" className="site-secondary-cta">
+                Read install docs
+              </Link>
+            </div>
+          </article>
         </section>
       ) : null}
     </div>
   );
 }
 
-function PanelRow({ label, value }: { label: string; value: string }) {
+function PanelRow({ label, value }: { label: string; value: React.ReactNode }) {
+  const isBadge = React.isValidElement(value);
+
   return (
     <div className="panel-row">
       <span>{label}</span>
-      <strong>{value}</strong>
+      {isBadge ? value : <strong>{value}</strong>}
     </div>
   );
 }

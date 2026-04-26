@@ -42,7 +42,7 @@ describe('api middleware hardening', () => {
       },
     });
 
-    const response = middleware(request);
+    const response = await middleware(request);
 
     expect(response.status).toBe(204);
     expect(response.headers.get('access-control-allow-origin')).toBe('http://localhost:3000');
@@ -57,7 +57,7 @@ describe('api middleware hardening', () => {
       },
     });
 
-    const response = middleware(request);
+    const response = await middleware(request);
 
     expect(response.status).toBe(403);
     expect(response.headers.get('access-control-allow-origin')).toBeNull();

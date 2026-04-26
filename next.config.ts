@@ -7,6 +7,9 @@ const privateSecurityHeaders = [...baseSecurityHeaders, ...getPrivateSurfaceHead
 const nextConfig: NextConfig = {
   // Produces .next/standalone for the direct local Node runtime and optional packaging.
   output: 'standalone',
+  outputFileTracingExcludes: {
+    '/**': ['storage/**/*'],
+  },
   poweredByHeader: false,
   async headers() {
     return [

@@ -27,6 +27,10 @@ function requireAuthConfiguration() {
   }
 }
 
+export function isHostedAuthConfigured() {
+  return Boolean(env.NEXTAUTH_SECRET && env.DATABASE_URL);
+}
+
 export function getControlPlaneAuthOptions(): NextAuthOptions {
   requireAuthConfiguration();
   const secureCookies = Boolean(env.NEXTAUTH_URL?.startsWith('https://'));
@@ -98,6 +102,7 @@ export function getControlPlaneAuthOptions(): NextAuthOptions {
       async jwt({ token, user }) {
         if (user?.email) {
           const identity = await getControlPlaneService().getIdentityByEmail(user.email);
+          const account = await getControlPlaneService().getAccount(identity.accountId);
           token.sub = identity.userId;
           token.email = identity.email;
           token.name = identity.name;
@@ -105,6 +110,11 @@ export function getControlPlaneAuthOptions(): NextAuthOptions {
           token.ownerType = identity.ownerType;
           token.role = identity.role;
           token.planId = identity.planId;
+          token.accountStatus = account.status;
+          token.subscriptionStatus = account.subscription.status;
+          token.subscriptionSyncState = account.subscription.syncState;
+          token.hostedAccess = account.entitlements.hostedAccess;
+          token.hostedUsageAccounting = account.entitlements.hostedUsageAccounting;
         }
 
         return token;
@@ -121,6 +131,16 @@ export function getControlPlaneAuthOptions(): NextAuthOptions {
         session.user.ownerType = typeof token.ownerType === 'string' ? token.ownerType : undefined;
         session.user.role = typeof token.role === 'string' ? token.role : undefined;
         session.user.planId = typeof token.planId === 'string' ? token.planId : undefined;
+        session.user.accountStatus =
+          typeof token.accountStatus === 'string' ? token.accountStatus : undefined;
+        session.user.subscriptionStatus =
+          typeof token.subscriptionStatus === 'string' ? token.subscriptionStatus : undefined;
+        session.user.subscriptionSyncState =
+          typeof token.subscriptionSyncState === 'string' ? token.subscriptionSyncState : undefined;
+        session.user.hostedAccess =
+          typeof token.hostedAccess === 'boolean' ? token.hostedAccess : undefined;
+        session.user.hostedUsageAccounting =
+          typeof token.hostedUsageAccounting === 'boolean' ? token.hostedUsageAccounting : undefined;
         return session;
       },
     },

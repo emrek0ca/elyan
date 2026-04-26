@@ -25,6 +25,8 @@ const runtimeSettingsPatchSchema = z.object({
           mode: z.enum(['polling', 'webhook']).optional(),
           webhookPath: z.string().trim().min(1).optional(),
           botUsername: z.string().trim().min(1).optional().nullable(),
+          webhookSecret: z.string().trim().min(1).optional().nullable(),
+          allowedChatIds: z.array(z.string().trim().min(1)).optional(),
         })
         .optional(),
       whatsappCloud: z
@@ -60,6 +62,32 @@ const runtimeSettingsPatchSchema = z.object({
       sampleRate: z.number().int().positive().optional(),
     })
     .optional(),
+  team: z
+    .object({
+      enabled: z.boolean().optional(),
+      defaultMode: z.enum(['auto', 'single', 'team']).optional(),
+      maxConcurrentAgents: z.number().int().min(1).max(4).optional(),
+      maxTasksPerRun: z.number().int().min(2).max(12).optional(),
+      allowCloudEscalation: z.boolean().optional(),
+    })
+    .optional(),
+  localAgent: z
+    .object({
+      enabled: z.boolean().optional(),
+      allowedRoots: z.array(z.string().trim().min(1)).optional(),
+      protectedPaths: z.array(z.string().trim().min(1)).optional(),
+      evidenceDir: z.string().trim().min(1).optional(),
+      approvalPolicy: z
+        .object({
+          readOnly: z.enum(['AUTO', 'CONFIRM', 'SCREEN', 'TWO_FA']).optional(),
+          writeSafe: z.enum(['AUTO', 'CONFIRM', 'SCREEN', 'TWO_FA']).optional(),
+          writeSensitive: z.enum(['AUTO', 'CONFIRM', 'SCREEN', 'TWO_FA']).optional(),
+          destructive: z.enum(['AUTO', 'CONFIRM', 'SCREEN', 'TWO_FA']).optional(),
+          systemCritical: z.enum(['AUTO', 'CONFIRM', 'SCREEN', 'TWO_FA']).optional(),
+        })
+        .optional(),
+    })
+    .optional(),
   mcp: z
     .object({
       servers: z.array(z.unknown()).optional(),
@@ -75,6 +103,7 @@ const runtimeConfigPatchSchema = z.object({
 function summarizeSecrets() {
   const secretKeys = [
     'TELEGRAM_BOT_TOKEN',
+    'TELEGRAM_WEBHOOK_SECRET',
     'WHATSAPP_CLOUD_ACCESS_TOKEN',
     'WHATSAPP_CLOUD_PHONE_NUMBER_ID',
     'WHATSAPP_CLOUD_VERIFY_TOKEN',
@@ -141,6 +170,14 @@ export async function PATCH(request: NextRequest) {
 
     if (settings.voice) {
       patch.voice = settings.voice as RuntimeSettingsPatch['voice'];
+    }
+
+    if (settings.team) {
+      patch.team = settings.team as RuntimeSettingsPatch['team'];
+    }
+
+    if (settings.localAgent) {
+      patch.localAgent = settings.localAgent as RuntimeSettingsPatch['localAgent'];
     }
 
     if (settings.mcp?.servers) {

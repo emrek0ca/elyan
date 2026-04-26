@@ -1,6 +1,4 @@
-import { registry } from '@/core/providers';
-import { buildExecutionSurfaceSnapshot, buildOrchestrationPlan } from '@/core/orchestration';
-import { answerEngine } from '@/core/agents/answer-engine';
+import { executeInteractionText } from '@/core/interaction/orchestrator';
 import { readRuntimeSettings, type RuntimeSettings } from '@/core/runtime-settings';
 import type { OperatorRequest, OperatorResponse } from './types';
 import type { SearchMode } from '@/types/search';
@@ -15,22 +13,17 @@ function normalizeMode(mode: SearchMode | undefined, settings: RuntimeSettings):
 
 export async function dispatchOperatorRequest(request: OperatorRequest): Promise<OperatorResponse> {
   const settings = await readRuntimeSettings();
-  const surface = buildExecutionSurfaceSnapshot();
   const mode = normalizeMode(request.mode, settings);
-  const plan = buildOrchestrationPlan(request.text, mode, surface);
-  const routingMode = settings.routing.routingMode ?? plan.routingMode;
-  const selectedModelId =
-    request.modelId?.trim() ||
-    settings.routing.preferredModelId?.trim() ||
-    (await registry.resolvePreferredModelId({
-      routingMode,
-      taskIntent: plan.taskIntent,
-      reasoningDepth: plan.reasoningDepth,
-    }));
-  const answer = await answerEngine.executeText(request.text, selectedModelId, mode, {
-    plan,
-    surface,
-    searchEnabled: settings.routing.searchEnabled,
+  const answer = await executeInteractionText({
+    source: request.source,
+    text: request.text,
+    mode,
+    modelId: request.modelId,
+    conversationId: request.conversationId,
+    messageId: request.messageId,
+    userId: request.userId,
+    displayName: request.displayName,
+    metadata: request.metadata,
   });
 
   return {
@@ -40,8 +33,8 @@ export async function dispatchOperatorRequest(request: OperatorRequest): Promise
       title: source.title,
     })),
     plan: answer.plan,
-    surface,
+    surface: answer.surface,
     settings,
-    modelId: selectedModelId,
+    modelId: answer.modelId,
   };
 }

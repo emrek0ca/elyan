@@ -5,7 +5,7 @@ import {
   controlPlaneBillingStateSchema,
   controlPlanePlanIdSchema,
   controlPlaneStateSchema,
-  controlPlaneStateV4Schema,
+  controlPlaneStateV6Schema,
   type ControlPlaneState,
 } from './types';
 
@@ -35,7 +35,7 @@ export function createDefaultControlPlaneState(): ControlPlaneState {
   });
 
   return {
-    version: 4,
+    version: 6,
     billing,
     users: {},
     accounts: {},
@@ -50,12 +50,12 @@ export function createDefaultControlPlaneState(): ControlPlaneState {
 export function migrateControlPlaneState(rawState: unknown): ControlPlaneState {
   const parsed = controlPlaneStateSchema.parse(rawState);
 
-  if (parsed.version === 4) {
+  if (parsed.version === 6) {
     return parsed;
   }
 
-  return controlPlaneStateV4Schema.parse({
-    version: 4,
+  return controlPlaneStateV6Schema.parse({
+    version: 6,
     billing: createDefaultControlPlaneState().billing,
     users: 'users' in parsed ? parsed.users : {},
     accounts: Object.fromEntries(
@@ -73,11 +73,24 @@ export function migrateControlPlaneState(rawState: unknown): ControlPlaneState {
           {
             ...legacyAccount,
             usageSnapshot:
-              legacyAccount.usageSnapshot ??
-              createUsageSnapshot(plan, legacyAccount.balanceCredits, new Date(), {
-                dailyRequests: 0,
-                dailyHostedToolActionCalls: 0,
-              }),
+            legacyAccount.usageSnapshot ??
+            createUsageSnapshot(plan, legacyAccount.balanceCredits, new Date(), {
+              dailyRequests: 0,
+              dailyHostedToolActionCalls: 0,
+            }),
+          integrations:
+            'integrations' in legacyAccount && legacyAccount.integrations
+              ? legacyAccount.integrations
+              : {},
+          interactionState:
+            'interactionState' in legacyAccount && legacyAccount.interactionState
+              ? legacyAccount.interactionState
+              : {
+                  threads: [],
+                    messages: [],
+                    memoryItems: [],
+                    learningDrafts: [],
+                  },
           },
         ];
       })

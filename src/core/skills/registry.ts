@@ -1,4 +1,5 @@
 import { buildBuiltinSkillCatalog } from './catalog';
+import { readMcpConfigurationSnapshot } from '@/core/mcp';
 import type { SkillManifest, SkillSelectionInput } from './types';
 import type {
   SkillExecutionCandidate,
@@ -54,7 +55,12 @@ function materializeStages(skill: SkillManifest, requiresConfirmation: boolean):
   }));
 }
 
-function buildCandidateReason(skill: SkillManifest, query: string, signals: ReturnType<typeof extractSignals>) {
+function buildCandidateReason(
+  skill: SkillManifest,
+  query: string,
+  signals: ReturnType<typeof extractSignals>,
+  mcpConfiguration = readMcpConfigurationSnapshot()
+) {
   const hits = skill.triggers.keywords.filter((keyword) => normalizeText(query).includes(normalizeText(keyword))).slice(0, 3);
   const reasons: string[] = [];
 
@@ -78,6 +84,19 @@ function buildCandidateReason(skill: SkillManifest, query: string, signals: Retu
     reasons.push('mcp-sensitive path');
   }
 
+  if (skill.domain === 'mcp') {
+    if (signals.hasMcpToken && mcpConfiguration.configured) {
+      reasons.push(`live MCP surface available: ${mcpConfiguration.serverCount} configured`);
+    }
+    if (mcpConfiguration.configured) {
+      reasons.push(`configured MCP servers: ${mcpConfiguration.serverCount}`);
+    } else if (mcpConfiguration.status === 'unavailable') {
+      reasons.push('MCP config unavailable');
+    } else {
+      reasons.push('no MCP servers configured');
+    }
+  }
+
   if (signals.hasActionToken && skill.triggers.actionSensitive) {
     reasons.push('action-sensitive path');
   }
@@ -89,8 +108,14 @@ function buildCandidateReason(skill: SkillManifest, query: string, signals: Retu
   return reasons.join('; ');
 }
 
-function scoreSkill(skill: SkillManifest, input: SkillSelectionInput, signals: ReturnType<typeof extractSignals>) {
+function scoreSkill(
+  skill: SkillManifest,
+  input: SkillSelectionInput,
+  signals: ReturnType<typeof extractSignals>,
+  mcpConfiguration = readMcpConfigurationSnapshot()
+) {
   let score = skill.selectionWeight;
+  const mcpSurface = input.surface?.mcp;
 
   score += countKeywordHits(input.query, skill.triggers.keywords) * 8;
 
@@ -138,6 +163,30 @@ function scoreSkill(skill: SkillManifest, input: SkillSelectionInput, signals: R
     score += 10;
   }
 
+  if (skill.domain === 'mcp') {
+    const hasLiveMcpSurface =
+      mcpSurface &&
+      (mcpSurface.servers > 0 ||
+        mcpSurface.tools > 0 ||
+        mcpSurface.resources > 0 ||
+        mcpSurface.resourceTemplates > 0 ||
+        mcpSurface.prompts > 0);
+
+    if (hasLiveMcpSurface && mcpSurface.discovery?.status === 'degraded') {
+      score += 10;
+    } else if (hasLiveMcpSurface) {
+      score += 18;
+    }
+
+    if (mcpConfiguration.configured) {
+      score += 12;
+    } else if (mcpConfiguration.status === 'unavailable') {
+      score -= 10;
+    } else {
+      score -= 14;
+    }
+  }
+
   return score;
 }
 
@@ -181,11 +230,12 @@ export class SkillRegistry {
 
   select(input: SkillSelectionInput): SkillExecutionDecision {
     const signals = extractSignals(input.query);
+    const mcpConfiguration = readMcpConfigurationSnapshot();
     const candidates = this.list({ includeDisabled: true })
       .map((skill) => ({
         skill,
-        score: scoreSkill(skill, input, signals),
-        reason: buildCandidateReason(skill, input.query, signals),
+        score: scoreSkill(skill, input, signals, mcpConfiguration),
+        reason: buildCandidateReason(skill, input.query, signals, mcpConfiguration),
       }))
       .filter(({ skill }) => skill.enabled)
       .sort((left, right) => right.score - left.score || right.skill.selectionWeight - left.skill.selectionWeight);
@@ -203,10 +253,23 @@ export class SkillRegistry {
         ? 'General answer path selected.'
         : `${selected.title} selected for ${selected.policyBoundary} execution.`;
 
+    const mcpNotes =
+      selected.id === 'mcp_connector' && !mcpConfiguration.configured && !(input.surface?.mcp?.servers ?? 0)
+        ? [
+            mcpConfiguration.status === 'unavailable'
+              ? 'MCP connector selected, but MCP configuration could not be loaded.'
+              : 'MCP connector selected, but no MCP servers are configured yet.',
+          ]
+        : [];
+
     const candidatePayload: SkillExecutionCandidate[] = candidates.map(({ skill, score, reason }) => ({
       skillId: skill.id,
       title: skill.title,
       version: skill.version,
+      domain: skill.domain,
+      policyBoundary: skill.policyBoundary,
+      outputShape: skill.outputShape,
+      preferredCapabilityIds: [...skill.preferredCapabilityIds],
       score,
       reason,
       enabled: skill.enabled,
@@ -229,6 +292,7 @@ export class SkillRegistry {
         selected.externalActionsAllowed
           ? 'External actions stay explicit and bounded.'
           : 'The selected skill stays local and deterministic.',
+        ...mcpNotes,
         selected.preferredCapabilityIds.length > 0
           ? `Preferred capabilities: ${selected.preferredCapabilityIds.join(', ')}.`
           : 'No downstream capability preference was needed.',

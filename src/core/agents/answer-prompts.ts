@@ -1,8 +1,14 @@
 import type { SearchMode } from '@/types/search';
+import type { OrchestrationPlan } from '@/core/orchestration';
 
 type ModeConfig = {
   systemPrompt: string;
   noSourcesPrompt: string;
+};
+
+type AnswerPromptContext = {
+  plan?: Pick<OrchestrationPlan, 'taskIntent' | 'routingMode' | 'skillPolicy'>;
+  operatorNotes?: string[];
 };
 
 const MODE_CONFIG: Record<SearchMode, ModeConfig> = {
@@ -36,7 +42,77 @@ Mention that sources could not be verified, then continue with the best useful a
   },
 };
 
-export function resolveAnswerPrompt(mode: SearchMode, context: string, hasSources: boolean) {
+function buildLaneInstruction(plan?: AnswerPromptContext['plan']) {
+  if (!plan) {
+    return '';
+  }
+
+  const instructions: string[] = [];
+
+  if (plan.skillPolicy.resultShape === 'report') {
+    instructions.push('Structure the answer as a concise report with clear sections, a short conclusion, and grounded findings.');
+  } else if (plan.skillPolicy.resultShape === 'artifact') {
+    instructions.push('Prefer copy-ready artifact output over commentary and keep the formatting clean, stable, and reusable.');
+  } else {
+    instructions.push('Keep the answer direct, useful, and easy to act on.');
+  }
+
+  switch (plan.skillPolicy.selectedSkillId) {
+    case 'research_companion':
+      instructions.push('Separate evidence from inference, call out disagreements, and avoid unsupported claims.');
+      break;
+    case 'workspace_operator':
+      instructions.push('When the task is code, workspace, or design related, give implementation steps, affected areas, and verification notes.');
+      break;
+    case 'document_inspector':
+      instructions.push('When the task is document or design related, use clean Markdown, preserve hierarchy, and make the result ready to reuse.');
+      break;
+    case 'browser_operator':
+    case 'mcp_connector':
+      instructions.push('Keep actions explicit, bounded, and auditable.');
+      break;
+    case 'general_answer':
+      instructions.push('Use the smallest trustworthy answer path and say explicitly when no specialized lane was needed.');
+      break;
+    default:
+      break;
+  }
+
+  if (plan.routingMode === 'local_first') {
+    instructions.push('Prefer the smallest local path before broader reasoning.');
+  }
+
+  return instructions.length > 0 ? `\n${instructions.map((instruction) => `- ${instruction}`).join('\n')}` : '';
+}
+
+function buildFallbackInstruction(hasSources: boolean, plan?: AnswerPromptContext['plan']) {
+  if (!plan || plan.skillPolicy.selectedSkillId !== 'general_answer') {
+    return '';
+  }
+
+  if (hasSources) {
+    return '\n- Use the provided sources without pretending a specialized runtime lane was selected.';
+  }
+
+  return '\n- State clearly that no specialized lane or verified sources were available, then answer as directly as possible.';
+}
+
+function buildOperatorNotes(operatorNotes?: string[]) {
+  const notes = operatorNotes?.map((note) => note.trim()).filter(Boolean) ?? [];
+
+  if (notes.length === 0) {
+    return '';
+  }
+
+  return `\n\nOPERATOR NOTES:\n${notes.map((note) => `- ${note}`).join('\n')}`;
+}
+
+export function resolveAnswerPrompt(mode: SearchMode, context: string, hasSources: boolean, options?: AnswerPromptContext) {
   const config = MODE_CONFIG[mode];
-  return hasSources ? config.systemPrompt.replace('{context}', context) : config.noSourcesPrompt;
+  const laneInstruction = buildLaneInstruction(options?.plan);
+  const fallbackInstruction = buildFallbackInstruction(hasSources, options?.plan);
+  const operatorNotes = buildOperatorNotes(options?.operatorNotes);
+  const basePrompt = hasSources ? config.systemPrompt.replace('{context}', context) : config.noSourcesPrompt;
+
+  return `${basePrompt}${laneInstruction}${fallbackInstruction}${operatorNotes}`;
 }

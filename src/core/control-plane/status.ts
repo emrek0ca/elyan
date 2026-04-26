@@ -5,6 +5,8 @@ import {
   getControlPlaneService,
   resolveConfiguredControlPlaneStorage,
 } from './runtime';
+import { buildControlPlaneEvaluationSummary } from './evaluation';
+import { getControlPlanePoolStats } from './database';
 
 function describeError(error: unknown): string {
   if (error instanceof Error) {
@@ -20,6 +22,7 @@ export async function readControlPlaneHealthSnapshot(service?: ControlPlaneServi
     return await activeService.health();
   } catch (error) {
     const runtime = buildControlPlaneRuntimeSnapshot(resolveConfiguredControlPlaneStorage());
+    const database = runtime.storage === 'postgres' ? getControlPlanePoolStats() : undefined;
 
     return {
       ok: false,
@@ -33,6 +36,8 @@ export async function readControlPlaneHealthSnapshot(service?: ControlPlaneServi
       hostedReady: runtime.hostedReady,
       iyzicoConfigured: runtime.billingConfigured,
       readiness: runtime.readiness,
+      database,
+      evaluationSummary: buildControlPlaneEvaluationSummary([]),
       runtime,
       connection: buildControlPlaneConnectionSnapshot(runtime),
       error: describeError(error),

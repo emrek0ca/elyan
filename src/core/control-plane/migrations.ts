@@ -63,6 +63,7 @@ export const controlPlaneMigrations: ControlPlaneMigration[] = [
         status TEXT NOT NULL,
         balance_credits NUMERIC(18, 2) NOT NULL,
         usage_totals JSONB NOT NULL DEFAULT '{}'::jsonb,
+        interaction_state JSONB NOT NULL DEFAULT '{}'::jsonb,
         created_at TIMESTAMPTZ NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL
       );
@@ -185,6 +186,33 @@ export const controlPlaneMigrations: ControlPlaneMigration[] = [
 
       CREATE UNIQUE INDEX IF NOT EXISTS elyan_devices_device_token_idx
         ON elyan_devices (device_token);
+
+      CREATE TABLE IF NOT EXISTS elyan_integrations (
+        integration_id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES elyan_accounts(account_id) ON DELETE CASCADE,
+        provider TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        scopes JSONB NOT NULL DEFAULT '[]'::jsonb,
+        surfaces JSONB NOT NULL DEFAULT '[]'::jsonb,
+        external_account_id TEXT,
+        external_account_label TEXT,
+        access_token_ciphertext TEXT,
+        refresh_token_ciphertext TEXT,
+        id_token_ciphertext TEXT,
+        expires_at TIMESTAMPTZ,
+        last_synced_at TIMESTAMPTZ,
+        last_error TEXT,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS elyan_integrations_account_provider_idx
+        ON elyan_integrations (account_id, provider);
+
+      CREATE INDEX IF NOT EXISTS elyan_integrations_account_status_idx
+        ON elyan_integrations (account_id, status);
     `,
   },
   {
@@ -220,6 +248,46 @@ export const controlPlaneMigrations: ControlPlaneMigration[] = [
     sql: `
       ALTER TABLE elyan_accounts
         ADD COLUMN IF NOT EXISTS usage_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
+    `,
+  },
+  {
+    version: 5,
+    name: 'interaction_state',
+    sql: `
+      ALTER TABLE elyan_accounts
+        ADD COLUMN IF NOT EXISTS interaction_state JSONB NOT NULL DEFAULT '{}'::jsonb;
+    `,
+  },
+  {
+    version: 6,
+    name: 'integrations',
+    sql: `
+      CREATE TABLE IF NOT EXISTS elyan_integrations (
+        integration_id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES elyan_accounts(account_id) ON DELETE CASCADE,
+        provider TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        scopes JSONB NOT NULL DEFAULT '[]'::jsonb,
+        surfaces JSONB NOT NULL DEFAULT '[]'::jsonb,
+        external_account_id TEXT,
+        external_account_label TEXT,
+        access_token_ciphertext TEXT,
+        refresh_token_ciphertext TEXT,
+        id_token_ciphertext TEXT,
+        expires_at TIMESTAMPTZ,
+        last_synced_at TIMESTAMPTZ,
+        last_error TEXT,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS elyan_integrations_account_provider_idx
+        ON elyan_integrations (account_id, provider);
+
+      CREATE INDEX IF NOT EXISTS elyan_integrations_account_status_idx
+        ON elyan_integrations (account_id, status);
     `,
   },
 ];

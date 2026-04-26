@@ -22,6 +22,33 @@ export function getBlueBubblesStatus() {
     configured: Boolean(config.serverUrl && config.guid),
     enabled: config.enabled,
     webhookPath: config.webhookPath,
+    securityChecks: {
+      webhookSecret: Boolean(config.webhookSecret),
+      replyUrl: Boolean(config.replyUrl),
+    },
+    costProfile: 'self_hosted_macos_imessage',
+  };
+}
+
+export async function probeBlueBubblesServer() {
+  const config = getBlueBubblesConfig();
+  if (!config.serverUrl || !config.guid) {
+    return {
+      ok: false,
+      configured: false,
+      status: 'missing_server_url_or_guid',
+    };
+  }
+
+  const response = await fetch(config.serverUrl, {
+    headers: {
+      Authorization: `Bearer ${config.guid}`,
+    },
+  });
+  return {
+    ok: response.ok,
+    configured: true,
+    status: response.ok ? response.status : `http_${response.status}`,
   };
 }
 
@@ -47,6 +74,10 @@ export async function handleBlueBubblesWebhook(request: NextRequest) {
 
   if (!config.enabled) {
     return new Response('BlueBubbles bridge is disabled.', { status: 403 });
+  }
+
+  if (config.webhookSecret && request.headers.get('x-elyan-webhook-secret') !== config.webhookSecret) {
+    return new Response('Invalid BlueBubbles webhook secret.', { status: 403 });
   }
 
   const payload = await request.json().catch(() => null);
