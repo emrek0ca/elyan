@@ -95,7 +95,22 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Resolve VPS deploy readiness
+        id: vps_deploy
+        run: |
+          if [ -n "${ELYAN_VPS_HOST:-}" ] && [ -n "${ELYAN_VPS_USER:-}" ] && [ -n "${ELYAN_VPS_SSH_KEY:-}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "VPS deploy secrets are not configured; skipping VPS deploy."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          ELYAN_VPS_HOST: ${{ secrets.ELYAN_VPS_HOST }}
+          ELYAN_VPS_USER: ${{ secrets.ELYAN_VPS_USER }}
+          ELYAN_VPS_SSH_KEY: ${{ secrets.ELYAN_VPS_SSH_KEY }}
+
       - name: Copy artifact to VPS
+        if: steps.vps_deploy.outputs.enabled == 'true'
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.ELYAN_VPS_HOST }}
@@ -105,6 +120,7 @@ jobs:
           target: /tmp
 
       - name: Deploy release on VPS
+        if: steps.vps_deploy.outputs.enabled == 'true'
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.ELYAN_VPS_HOST }}
