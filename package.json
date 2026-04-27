@@ -125,7 +125,7 @@
     "eslint": "^9",
     "eslint-config-next": "15.5.15",
     "tsx": "^4.21.0",
-    "typescript": "^5",
+    "typescript": "^6",
     "vitest": "^4.1.4"
   }
 }
