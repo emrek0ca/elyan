@@ -37,7 +37,8 @@ export type CapabilityFamily =
   | 'mcp'
   | 'documents'
   | 'charts'
-  | 'calculation';
+  | 'calculation'
+  | 'optimization';
 
 export type CapabilityPolicyEntry = {
   capabilityId: string;
@@ -111,6 +112,15 @@ export type SkillExecutionStage = {
   capabilityId?: string;
 };
 
+export type SkillExecutionTechnique = {
+  id: string;
+  title: string;
+  category: string;
+  reason: string;
+  instruction: string;
+  outputHint: string;
+};
+
 export type SkillExecutionCandidate = {
   skillId: string;
   title: string;
@@ -139,6 +149,7 @@ export type SkillExecutionDecision = {
   notes: string[];
   candidates: SkillExecutionCandidate[];
   stages: SkillExecutionStage[];
+  selectedTechniques: SkillExecutionTechnique[];
 };
 
 export type ExecutionPolicy = {

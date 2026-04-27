@@ -1,7 +1,7 @@
 {
   "name": "elyan",
-  "version": "1.2.0",
-  "description": "Elyan v1.2. Local-first personal agent runtime with guided setup, dashboard and CLI management, shared control plane, hosted surface, and app-connected operator.",
+  "version": "1.3.0",
+  "description": "Elyan v1.3. Local-first personal agent runtime with guided setup, dashboard and CLI management, shared control plane, hosted surface, and app-connected operator.",
   "private": false,
   "license": "AGPL-3.0-or-later",
   "homepage": "https://elyan.dev",
@@ -58,6 +58,7 @@
     "test:smoke": "vitest run tests/capabilities.smoke.test.ts",
     "mcp:validate": "vitest run tests/mcp.production.test.ts",
     "audit:prod": "npm audit --omit=dev --audit-level=high",
+    "security:check": "node scripts/security-check.js",
     "release:check": "node scripts/release-check.js"
   },
   "dependencies": {

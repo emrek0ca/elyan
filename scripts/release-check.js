@@ -46,6 +46,7 @@ function main() {
   console.log(`Repository: ${packageJson.repository?.url ?? 'unknown'}`);
   console.log(`Required assets: ${REQUIRED_RELEASE_ASSETS.join(', ')}`);
 
+  run('npm', ['run', 'security:check']);
   run('npm', ['run', 'lint']);
   run('npm', ['run', 'test']);
   run('npm', ['run', 'build']);

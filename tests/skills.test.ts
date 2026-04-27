@@ -58,12 +58,100 @@ describe('Skill runtime', () => {
     expect(decision.resultShape).toBe('report');
   });
 
+  it('selects SCQA as a document technique without changing the policy boundary', () => {
+    const decision = buildSkillExecutionDecision({
+      query: 'Write this using SCQA with situation, complication, question, and answer sections',
+      mode: 'speed',
+      taskIntent: 'procedural',
+    });
+
+    expect(decision.selectedSkillId).toBe('document_inspector');
+    expect(decision.policyBoundary).toBe('local');
+    expect(decision.selectedTechniques.map((technique) => technique.id)).toContain('scqa-writing-framework');
+  });
+
+  it('routes prototype and UI direction work to the design producer skill', () => {
+    const decision = buildSkillExecutionDecision({
+      query: 'Create a premium UI prototype and redesign direction for the command center',
+      mode: 'speed',
+      taskIntent: 'procedural',
+    });
+
+    expect(decision.selectedSkillId).toBe('design_producer');
+    expect(decision.resultShape).toBe('artifact');
+    expect(decision.requiresConfirmation).toBe(true);
+    expect(decision.preferredCapabilityIds).toEqual(expect.arrayContaining(['web_read_dynamic', 'markdown_render']));
+  });
+
+  it('keeps visual diagram requests on design producer techniques', () => {
+    const decision = buildSkillExecutionDecision({
+      query: 'Create a flowchart decision tree for this onboarding process',
+      mode: 'speed',
+      taskIntent: 'procedural',
+    });
+
+    expect(decision.selectedSkillId).toBe('design_producer');
+    expect(decision.selectedTechniques.map((technique) => technique.id)).toContain('flowchart-decision-builder');
+  });
+
+  it('routes source validation to the research companion technique pack', () => {
+    const decision = buildSkillExecutionDecision({
+      query: 'Validate these sources for credibility, reliability, and bias',
+      mode: 'research',
+      taskIntent: 'research',
+    });
+
+    expect(decision.selectedSkillId).toBe('research_companion');
+    expect(decision.selectedTechniques.map((technique) => technique.id)).toContain('source-validation-skill');
+  });
+
+  it('routes code review requests to the workspace operator technique pack', () => {
+    const decision = buildSkillExecutionDecision({
+      query: 'Review this code for bugs, regressions, and missing tests',
+      mode: 'speed',
+      taskIntent: 'procedural',
+    });
+
+    expect(decision.selectedSkillId).toBe('workspace_operator');
+    expect(decision.selectedTechniques.map((technique) => technique.id)).toContain('code-review-skill');
+  });
+
+  it('routes optimization requests to the optimization decision technique pack', () => {
+    const decision = buildSkillExecutionDecision({
+      query: 'Find the best distribution of tasks and resources and compare the solver results',
+      mode: 'speed',
+      taskIntent: 'procedural',
+    });
+
+    expect(decision.selectedSkillId).toBe('optimization_decision');
+    expect(decision.selectedTechniques.map((technique) => technique.id)).toEqual(
+      expect.arrayContaining([
+        'optimization-modeling-playbook',
+        'optimization-solver-comparator',
+        'optimization-decision-reporter',
+      ])
+    );
+  });
+
+  it('keeps video script requests on the general answer technique path', () => {
+    const decision = buildSkillExecutionDecision({
+      query: 'Make a video script with a strong hook and tight pacing',
+      mode: 'speed',
+      taskIntent: 'direct_answer',
+    });
+
+    expect(decision.selectedSkillId).toBe('general_answer');
+    expect(decision.selectedTechniques.map((technique) => technique.id)).toContain('video-script-generator');
+  });
+
   it('reads installed skill lock records when building the skill directory', async () => {
     const directory = await buildSkillDirectorySnapshot(true);
 
     expect(directory.builtIn.length).toBeGreaterThan(0);
     expect(directory.summary.enabledBuiltInSkillCount).toBeGreaterThan(0);
     expect(directory.summary.installedSkillCount).toBeGreaterThan(0);
+    expect(directory.summary.agenticTechniqueCount).toBe(25);
+    expect(directory.summary.agenticTechniqueCategoryCounts.writing_content).toBe(7);
     expect(directory.discovery.status).toBe('ready');
   });
 
@@ -104,7 +192,7 @@ describe('Skill runtime', () => {
       id: 'legacy_builtin',
       title: 'Legacy Builtin',
       version: '1.0.0',
-      description: 'A legacy built-in skill without v1.2 operational metadata.',
+      description: 'A legacy built-in skill without v1.3 operational metadata.',
       domain: 'general',
       enabled: true,
       source: {
@@ -133,6 +221,7 @@ describe('Skill runtime', () => {
     expect(manifest.inputContract.summary).toContain('Natural-language');
     expect(manifest.outputContract.summary).toContain('Auditable');
     expect(manifest.verificationMode).toBe('summary');
+    expect(manifest.techniques).toEqual([]);
   });
 
   it('summarizes MCP disabled surfaces and skill approval/risk metadata', async () => {

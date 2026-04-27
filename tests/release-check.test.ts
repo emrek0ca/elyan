@@ -13,7 +13,7 @@ const {
 } = require('../scripts/release-check.js');
 
 describe('release readiness check', () => {
-  it('keeps the v1.2 release asset matrix exact', () => {
+  it('keeps the v1.3 release asset matrix exact', () => {
     expect(REQUIRED_RELEASE_ASSETS).toEqual([
       'elyan-macos-arm64.zip',
       'elyan-macos-x64.zip',

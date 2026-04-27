@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getControlPlaneService } from '@/core/control-plane';
+import { buildControlPlaneProfileResponse, getControlPlaneService } from '@/core/control-plane';
 import { isHostedAuthConfigured } from '@/core/control-plane/auth';
 import { requireControlPlaneSession } from '@/core/control-plane/session';
 
@@ -21,11 +21,10 @@ export async function GET(request: NextRequest) {
   try {
     const session = await requireControlPlaneSession(request);
     const profile = await getControlPlaneService().getHostedProfile(session.accountId!);
+    const response = buildControlPlaneProfileResponse(profile);
     return NextResponse.json({
       ok: true,
-      session: profile.session,
-      profile,
-      account: profile.account,
+      ...response,
     });
   } catch (error: unknown) {
     const status = error && typeof error === 'object' && 'statusCode' in error ? Number((error as { statusCode: number }).statusCode) || 500 : 500;

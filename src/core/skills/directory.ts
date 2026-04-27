@@ -1,10 +1,17 @@
 import { buildBuiltinSkillCatalog } from './catalog';
 import { readSkillInstallations } from './lock';
-import type { SkillApprovalLevel, SkillDirectorySnapshot, SkillRiskLevel } from './types';
+import type { SkillApprovalLevel, SkillDirectorySnapshot, SkillRiskLevel, SkillTechniqueCategory } from './types';
 import { readMcpConfigurationSnapshot } from '@/core/mcp';
 
 const skillApprovalLevels: SkillApprovalLevel[] = ['AUTO', 'CONFIRM', 'SCREEN', 'TWO_FA'];
 const skillRiskLevels: SkillRiskLevel[] = ['read_only', 'write_safe', 'write_sensitive', 'destructive', 'system_critical'];
+const skillTechniqueCategories: SkillTechniqueCategory[] = [
+  'writing_content',
+  'visual_infographic',
+  'research_analysis',
+  'video_content',
+  'coding_automation',
+];
 
 function countSkillApprovals(skills: ReturnType<typeof buildBuiltinSkillCatalog>): Record<SkillApprovalLevel, number> {
   return Object.fromEntries(
@@ -16,6 +23,18 @@ function countSkillRiskLevels(skills: ReturnType<typeof buildBuiltinSkillCatalog
   return Object.fromEntries(
     skillRiskLevels.map((level) => [level, skills.filter((skill) => skill.riskLevel === level).length])
   ) as Record<SkillRiskLevel, number>;
+}
+
+function countSkillTechniques(skills: ReturnType<typeof buildBuiltinSkillCatalog>): Record<SkillTechniqueCategory, number> {
+  return Object.fromEntries(
+    skillTechniqueCategories.map((category) => [
+      category,
+      skills.reduce(
+        (total, skill) => total + skill.techniques.filter((technique) => technique.category === category).length,
+        0
+      ),
+    ])
+  ) as Record<SkillTechniqueCategory, number>;
 }
 
 export async function buildSkillDirectorySnapshot(includeInstalled = true): Promise<SkillDirectorySnapshot> {
@@ -42,6 +61,8 @@ export async function buildSkillDirectorySnapshot(includeInstalled = true): Prom
       mcpConfigurationError: mcpConfiguration.error,
       approvalLevelCounts: countSkillApprovals(builtIn),
       riskLevelCounts: countSkillRiskLevels(builtIn),
+      agenticTechniqueCount: builtIn.reduce((total, skill) => total + skill.techniques.length, 0),
+      agenticTechniqueCategoryCounts: countSkillTechniques(builtIn),
     },
     selectionGuide: [
       {
@@ -84,6 +105,12 @@ export async function buildSkillDirectorySnapshot(includeInstalled = true): Prom
         title: 'Deterministic math',
         when: 'The request is numeric, formulaic, or otherwise deterministic.',
         why: 'Use the smallest local arithmetic path before broader reasoning.',
+      },
+      {
+        kind: 'optimization',
+        title: 'Optimization decision',
+        when: 'The request involves assignment, routing, scheduling, load balancing, resource allocation, QUBO, Ising, or minimum-cost decisions.',
+        why: 'Convert the problem into an explicit model, compare solvers, and return an auditable decision report.',
       },
       {
         kind: 'general',

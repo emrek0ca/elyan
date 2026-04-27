@@ -1,6 +1,7 @@
 import { buildBuiltinSkillCatalog } from './catalog';
 import { readMcpConfigurationSnapshot } from '@/core/mcp';
-import type { SkillManifest, SkillSelectionInput } from './types';
+import { isOptimizationQuery } from '@/core/optimization/signals';
+import type { SkillManifest, SkillSelectionInput, SkillTechnique } from './types';
 import type {
   SkillExecutionCandidate,
   SkillExecutionDecision,
@@ -24,6 +25,7 @@ function extractSignals(query: string) {
     hasMathToken: /\b(calculate|math|sum|subtract|multiply|divide|percentage|ratio|decimal|precision)\b/i.test(
       normalized
     ),
+    hasOptimizationToken: isOptimizationQuery(normalized),
   };
 }
 
@@ -38,6 +40,40 @@ function countKeywordHits(query: string, keywords: string[]) {
   }
 
   return score;
+}
+
+function getTechniqueKeywordHits(query: string, technique: SkillTechnique) {
+  const normalized = normalizeText(query);
+
+  return technique.keywords.filter((keyword) => normalized.includes(normalizeText(keyword)));
+}
+
+function countTechniqueHits(query: string, skill: SkillManifest) {
+  return skill.techniques.reduce((total, technique) => total + getTechniqueKeywordHits(query, technique).length, 0);
+}
+
+function selectTechniques(skill: SkillManifest, query: string) {
+  return skill.techniques
+    .map((technique) => {
+      const hits = getTechniqueKeywordHits(query, technique);
+
+      return {
+        technique,
+        hits,
+        score: hits.length,
+      };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score || left.technique.title.localeCompare(right.technique.title))
+    .slice(0, 3)
+    .map(({ technique, hits }) => ({
+      id: technique.id,
+      title: technique.title,
+      category: technique.category,
+      reason: `keyword match: ${hits.slice(0, 3).join(', ')}`,
+      instruction: technique.instruction,
+      outputHint: technique.outputHint,
+    }));
 }
 
 function determineBoundary(skill: SkillManifest): SkillExecutionDecision['policyBoundary'] {
@@ -118,6 +154,7 @@ function scoreSkill(
   const mcpSurface = input.surface?.mcp;
 
   score += countKeywordHits(input.query, skill.triggers.keywords) * 8;
+  score += countTechniqueHits(input.query, skill) * 18;
 
   if (skill.triggers.intents.includes(input.taskIntent)) {
     score += 16;
@@ -147,8 +184,19 @@ function scoreSkill(
     score += 18;
   }
 
+  if (signals.hasOptimizationToken && skill.domain === 'optimization') {
+    score += 30;
+  }
+
   if (input.taskIntent === 'personal_workflow' && skill.domain === 'operator') {
     score += 10;
+  }
+
+  if (
+    skill.domain === 'design' &&
+    /\b(design|ui|ux|prototype|mockup|layout|redesign|visual|brand|story|slide|animation|landing|website|app screen|interface)\b/i.test(input.query)
+  ) {
+    score += 22;
   }
 
   if (input.taskIntent === 'comparison' && skill.domain === 'research') {
@@ -241,6 +289,7 @@ export class SkillRegistry {
       .sort((left, right) => right.score - left.score || right.skill.selectionWeight - left.skill.selectionWeight);
 
     const selected = candidates[0]?.skill ?? this.get('general_answer');
+    const selectedTechniques = selectTechniques(selected, input.query);
     const requiresConfirmation =
       selected.externalActionsAllowed && signals.hasActionToken;
     const fallbackReason =
@@ -289,6 +338,9 @@ export class SkillRegistry {
       fallbackReason,
       notes: [
         `Selected skill: ${selected.title}.`,
+        selectedTechniques.length > 0
+          ? `Selected techniques: ${selectedTechniques.map((technique) => technique.title).join(', ')}.`
+          : 'No agentic technique override was needed.',
         selected.externalActionsAllowed
           ? 'External actions stay explicit and bounded.'
           : 'The selected skill stays local and deterministic.',
@@ -299,6 +351,7 @@ export class SkillRegistry {
       ],
       candidates: candidatePayload,
       stages: materializeStages(selected, requiresConfirmation),
+      selectedTechniques,
     };
   }
 }

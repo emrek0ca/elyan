@@ -10,6 +10,7 @@ import { markdownRenderCapability } from './markdown';
 import { metadataCapability } from './metadata';
 import { ocrCapability } from './ocr';
 import { mathExactCapability, decimalMathCapability } from './math';
+import { optimizationSolveCapability } from './optimization';
 import { pdfExtractCapability } from './pdf';
 import { pdfWorkflowCapability } from './pdf-lib';
 import { searchIndexCapability } from './search-index';
@@ -21,6 +22,7 @@ export const defaultCapabilityCatalog: CapabilityDefinition[] = [
   fuzzyFindCapability,
   mathExactCapability,
   decimalMathCapability,
+  optimizationSolveCapability,
   csvParseCapability,
   csvExportCapability,
   docxReadCapability,

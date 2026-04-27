@@ -272,6 +272,63 @@ describe('Orchestration planning', () => {
     expect(plan.capabilityPolicy.find((entry) => entry.capabilityId === 'docx_write')?.enabled).toBe(true);
   });
 
+  it('routes minimum-cost assignment work to the optimization capability', () => {
+    const plan = buildOrchestrationPlan(
+      'Solve a minimum cost assignment with QUBO for task allocation',
+      'speed',
+      createSurface({
+        local: {
+          capabilities: [],
+          bridgeTools: [
+            {
+              id: 'optimization_solve',
+              title: 'Optimization Solve',
+              description: 'Models assignment and resource allocation problems with QUBO.',
+              library: 'elyan-optimization',
+              timeoutMs: 3_000,
+              enabled: true,
+            },
+          ],
+        },
+      })
+    );
+
+    expect(plan.taskIntent).toBe('procedural');
+    expect(plan.routingMode).toBe('local_first');
+    expect(plan.reasoningDepth).toBe('standard');
+    expect(plan.executionPolicy.primary.kind).toBe('local_bridge_tool');
+    expect(plan.executionPolicy.primary.id).toBe('optimization_solve');
+    expect(plan.executionPolicy.shouldRetrieve).toBe(false);
+    expect(plan.skillPolicy.selectedSkillId).toBe('optimization_decision');
+    expect(plan.capabilityPolicy.find((entry) => entry.capabilityId === 'optimization_solve')?.enabled).toBe(true);
+  });
+
+  it('routes best distribution requests to the optimization capability', () => {
+    const plan = buildOrchestrationPlan(
+      'Find the best distribution of tasks and resources for this project',
+      'speed',
+      createSurface({
+        local: {
+          capabilities: [],
+          bridgeTools: [
+            {
+              id: 'optimization_solve',
+              title: 'Optimization Solve',
+              description: 'Models assignment and resource allocation problems with QUBO.',
+              library: 'elyan-optimization',
+              timeoutMs: 3_000,
+              enabled: true,
+            },
+          ],
+        },
+      })
+    );
+
+    expect(plan.taskIntent).toBe('procedural');
+    expect(plan.executionPolicy.primary.id).toBe('optimization_solve');
+    expect(plan.skillPolicy.selectedSkillId).toBe('optimization_decision');
+  });
+
   it('builds a structured evaluation draft for a retrieved hosted answer', () => {
     const plan = buildOrchestrationPlan('What changed in AI search this week?', 'research', createSurface({}));
     const draft = buildEvaluationSignalDraft({

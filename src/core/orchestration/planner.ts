@@ -15,6 +15,7 @@ import type {
 } from './types';
 import type { ExecutionSurfaceSnapshot } from './surface';
 import { buildExecutionPolicy } from './execution-policy';
+import { isOptimizationQuery } from '@/core/optimization/signals';
 
 const ORCHESTRATION_STAGES: OrchestrationPlan['stages'] = [
   'intent',
@@ -35,6 +36,7 @@ type IntentSignals = {
   authoring: boolean;
   code: boolean;
   design: boolean;
+  optimization: boolean;
   urls: boolean;
 };
 
@@ -62,6 +64,7 @@ function readIntentSignals(query: string): IntentSignals {
     design: /\b(design|layout|wireframe|mockup|ui|ux|figma|component|typography|spacing|palette|style guide)\b/i.test(
       normalized
     ),
+    optimization: isOptimizationQuery(normalized),
     urls: /https?:\/\//i.test(query),
   };
 }
@@ -114,6 +117,11 @@ function classifyTaskIntent(query: string): {
     scores.procedural += 2;
   }
 
+  if (signals.optimization) {
+    scores.procedural += 3;
+    scores.comparison += 2;
+  }
+
   if (signals.urls) {
     scores.procedural += 1;
   }
@@ -151,6 +159,10 @@ function classifyTaskIntent(query: string): {
 }
 
 function resolveReasoningDepth(mode: SearchMode, intent: TaskIntent, query: string, signals: IntentSignals): ReasoningDepth {
+  if (signals.optimization) {
+    return query.length > 140 || intent === 'comparison' ? 'deep' : 'standard';
+  }
+
   if (mode === 'research' || intent === 'comparison' || query.length > 160) {
     return 'deep';
   }
@@ -163,6 +175,10 @@ function resolveReasoningDepth(mode: SearchMode, intent: TaskIntent, query: stri
 }
 
 function resolveRoutingMode(intent: TaskIntent, mode: SearchMode, signals: IntentSignals): ModelRoutingMode {
+  if (signals.optimization) {
+    return 'local_first';
+  }
+
   if (intent === 'personal_workflow') {
     return 'local_only';
   }
@@ -189,6 +205,10 @@ function resolveUncertainty(
   mode: SearchMode,
   signals: IntentSignals
 ): UncertaintyLevel {
+  if (signals.optimization) {
+    return reasoningDepth === 'deep' ? 'high' : 'medium';
+  }
+
   if (mode === 'research' || taskIntent === 'comparison' || reasoningDepth === 'deep') {
     return 'high';
   }
@@ -205,9 +225,10 @@ function resolveRetrievalPolicy(
   taskIntent: TaskIntent,
   reasoningDepth: ReasoningDepth,
   uncertainty: UncertaintyLevel,
-  executionPolicy: ReturnType<typeof buildExecutionPolicy>
+  executionPolicy: ReturnType<typeof buildExecutionPolicy>,
+  signals: IntentSignals
 ): OrchestrationPlan['retrieval'] {
-  if (!executionPolicy.shouldRetrieve) {
+  if (!executionPolicy.shouldRetrieve || signals.optimization) {
     return {
       rounds: 0,
       maxUrls: 0,
@@ -253,13 +274,16 @@ function resolveCapabilityPolicy(
     /\b(write|draft|generate|compose|author|prepare|produce|rewrite)\b/i.test(query) &&
     /\b(markdown|md|docx|document|doc|spec|brief|proposal|rfc|prd|readme|outline|design doc)\b/i.test(query);
   const designSignals = /\b(design|layout|wireframe|mockup|ui|ux|figma|component|typography|spacing|palette|style guide)\b/i.test(query);
+  const optimizationSignals = isOptimizationQuery(query);
   const shouldEnableTooling =
     taskIntent === 'procedural' ||
     taskIntent === 'personal_workflow' ||
     executionPolicy.preferredOrder.includes('local_bridge_tool') ||
     skillCapabilityIds.has('tool_bridge') ||
     skillCapabilityIds.has('math_exact') ||
-    skillCapabilityIds.has('math_decimal');
+    skillCapabilityIds.has('math_decimal') ||
+    skillCapabilityIds.has('optimization_solve') ||
+    optimizationSignals;
   const shouldEnableBrowserAutomation =
     (taskIntent === 'personal_workflow' || taskIntent === 'procedural') &&
     (executionPolicy.preferredOrder.includes('browser_automation') || skillCapabilityIds.has('browser_automation'));
@@ -305,6 +329,10 @@ function resolveCapabilityPolicy(
   const shouldEnableWebRead = executionPolicy.preferredOrder.includes('browser_read');
   const shouldEnableCrawler = executionPolicy.preferredOrder.includes('crawl') || shouldEnableRetrievalAssist;
   const shouldEnableLocalBridge = executionPolicy.preferredOrder.includes('local_bridge_tool') || shouldEnableTooling;
+  const shouldEnableOptimization =
+    optimizationSignals ||
+    skillCapabilityIds.has('optimization_solve') ||
+    executionPolicy.candidates.some((candidate) => candidate.id === 'optimization_solve');
 
   return [
     {
@@ -389,6 +417,14 @@ function resolveCapabilityPolicy(
       reason: shouldEnableCharting
         ? 'Comparison and tabular requests can benefit from compact chart summaries.'
         : 'Chart generation is not needed for this query.',
+    },
+    {
+      capabilityId: 'optimization_solve',
+      family: 'optimization',
+      enabled: shouldEnableOptimization,
+      reason: shouldEnableOptimization
+        ? 'Optimization requests should use the local model, QUBO builder, solver comparison, and decision report path.'
+        : 'No assignment, allocation, routing, scheduling, QUBO, or minimum-cost signal was detected.',
     },
   ];
 }
@@ -536,7 +572,7 @@ export function buildOrchestrationPlan(
     uncertainty,
     intentConfidence,
   }, skillPolicy);
-  const retrieval = resolveRetrievalPolicy(mode, taskIntent, reasoningDepth, uncertainty, executionPolicy);
+  const retrieval = resolveRetrievalPolicy(mode, taskIntent, reasoningDepth, uncertainty, executionPolicy, signals);
   const capabilityPolicy = resolveCapabilityPolicy(taskIntent, mode, routingMode, executionPolicy, skillPolicy, query);
   const usageBudget = resolveUsageBudget(reasoningDepth, retrieval, capabilityPolicy, evaluation);
   const temperature = uncertainty === 'high' ? 0.15 : reasoningDepth === 'deep' ? 0.25 : 0.2;

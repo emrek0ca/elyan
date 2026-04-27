@@ -10,6 +10,7 @@ import type {
   UncertaintyLevel,
 } from './types';
 import type { ExecutionSurfaceSnapshot } from './surface';
+import { isOptimizationQuery } from '@/core/optimization/signals';
 
 type ExecutionPolicyContext = {
   taskIntent: TaskIntent;
@@ -110,7 +111,8 @@ function localKindFromManifestId(manifestId: string): ExecutionObjectKind {
     manifestId === 'math_decimal' ||
     manifestId === 'csv_parse' ||
     manifestId === 'csv_export' ||
-    manifestId === 'chart_generate'
+    manifestId === 'chart_generate' ||
+    manifestId === 'optimization_solve'
   ) {
     return 'local_bridge_tool';
   }
@@ -204,10 +206,17 @@ function shouldCrawl(query: string, urls: string[]) {
 }
 
 function shouldUseLocalBridge(query: string) {
-  return hasKeyword(query, [
+  return (
+    isOptimizationQuery(query) ||
+    hasKeyword(query, [
     /\b(calculate|math|sum|subtract|multiply|divide|percentage|ratio|decimal|precision)\b/i,
     /\b(csv|table|chart|plot|graph|spreadsheet)\b/i,
-  ]);
+    ])
+  );
+}
+
+function shouldOptimize(query: string) {
+  return isOptimizationQuery(query);
 }
 
 function shouldAuthorDocument(query: string) {
@@ -255,6 +264,10 @@ function buildExplicitLocalTarget(
 
   if (hasKeyword(query, [/\b(chart|plot|graph|visuali[sz]e)\b/i])) {
     return findLocalTargetById(surface, 'chart_generate', 'local_bridge_tool');
+  }
+
+  if (shouldOptimize(query)) {
+    return findLocalTargetById(surface, 'optimization_solve', 'local_bridge_tool');
   }
 
   if (hasKeyword(query, [/\bcsv\b/i])) {
@@ -418,6 +431,7 @@ export function buildExecutionPolicy(
   const useBrowserAutomation = shouldAutomateBrowser(query, urls);
   const useCrawl = shouldCrawl(query, urls);
   const useLocalBridge = shouldUseLocalBridge(query);
+  const useOptimization = shouldOptimize(query);
   const mcpDiscoveryAttempted = surface.mcp.discovery?.attempted === true;
 
   const candidates = dedupeCandidates(
@@ -431,6 +445,16 @@ export function buildExecutionPolicy(
             'Tool Bridge',
             'local',
             'Deterministic local tools can answer this request.'
+          )
+        : undefined,
+      useOptimization
+        ? findLocalTargetById(surface, 'optimization_solve', 'local_bridge_tool') ??
+          toTarget(
+            'local_bridge_tool',
+            'optimization_solve',
+            'Optimization Solve',
+            'local',
+            'Hybrid classical and quantum-inspired optimization can answer this request.'
           )
         : undefined,
       mcpTarget,
@@ -480,7 +504,7 @@ export function buildExecutionPolicy(
     preferredOrder: [
       ...new Set([
         ...(localTarget ? [localTarget.kind] : []),
-        ...(useLocalBridge ? ['local_bridge_tool'] : []),
+        ...(useLocalBridge || useOptimization ? ['local_bridge_tool'] : []),
         ...(mcpTarget
           ? [mcpTarget.kind]
           : shouldDiscoverMcp

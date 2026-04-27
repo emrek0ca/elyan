@@ -13,6 +13,18 @@ const CONTROL_PLANE_POOL_CONFIG: Omit<PoolConfig, 'connectionString'> = {
   allowExitOnIdle: true,
 };
 
+export type ControlPlaneDatabaseHealthSnapshot = {
+  storage: 'file' | 'postgres';
+  mode: 'file_backed' | 'postgres';
+  configured: boolean;
+  ready: boolean;
+  detail: string;
+  totalCount?: number;
+  idleCount?: number;
+  waitingCount?: number;
+  maxCount?: number;
+};
+
 export function getControlPlaneDatabaseUrl(explicitUrl?: string) {
   const databaseUrl = explicitUrl ?? env.DATABASE_URL;
   if (!databaseUrl) {
@@ -48,6 +60,40 @@ export function getControlPlanePoolStats(explicitUrl?: string) {
     idleCount: sharedPool.idleCount,
     waitingCount: sharedPool.waitingCount,
     maxCount: sharedPool.options.max ?? CONTROL_PLANE_POOL_CONFIG.max ?? 0,
+  };
+}
+
+export function buildControlPlaneDatabaseHealthSnapshot(
+  storage: 'file' | 'postgres',
+  stats = getControlPlanePoolStats()
+): ControlPlaneDatabaseHealthSnapshot {
+  if (storage === 'file') {
+    return {
+      storage,
+      mode: 'file_backed',
+      configured: false,
+      ready: true,
+      detail: 'File-backed state store is active. PostgreSQL is optional for hosted mode.',
+    };
+  }
+
+  if (stats) {
+    return {
+      storage,
+      mode: 'postgres',
+      configured: true,
+      ready: true,
+      detail: 'PostgreSQL pool is active and handling hosted control-plane state.',
+      ...stats,
+    };
+  }
+
+  return {
+    storage,
+    mode: 'postgres',
+    configured: true,
+    ready: false,
+    detail: 'PostgreSQL is configured, but the shared pool is not ready yet.',
   };
 }
 

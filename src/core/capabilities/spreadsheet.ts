@@ -78,7 +78,7 @@ function uniqueColumns(rows: Array<Record<string, unknown>>) {
 
 function assertXlsxFormat(format: 'xlsx' | 'xls' | 'ods') {
   if (format !== 'xlsx') {
-    throw new SpreadsheetCapabilityError(`${format.toUpperCase()} export is unavailable in the v1.2 runtime. Use XLSX or CSV.`);
+    throw new SpreadsheetCapabilityError(`${format.toUpperCase()} export is unavailable in the v1.3 runtime. Use XLSX or CSV.`);
   }
 }
 

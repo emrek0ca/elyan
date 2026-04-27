@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import {
   controlPlaneAccountUpsertSchema,
+  buildControlPlaneProfileResponse,
   getControlPlaneService,
 } from '@/core/control-plane';
 import { assertControlPlaneAccountAccess, requireControlPlaneSession } from '@/core/control-plane/session';
@@ -49,8 +50,10 @@ export async function GET(
     const { accountId } = params.data;
     const session = await requireControlPlaneSession(request);
     assertControlPlaneAccountAccess(session, accountId);
-    const account = await getControlPlaneService().getAccount(accountId);
-    return NextResponse.json({ ok: true, account });
+    const service = getControlPlaneService();
+    const profile = await service.getHostedProfile(accountId);
+
+    return NextResponse.json({ ok: true, ...buildControlPlaneProfileResponse(profile) });
   } catch (error: unknown) {
     const mapped = mapControlPlaneError(error);
     return NextResponse.json({ ok: false, error: mapped.message }, { status: mapped.status });
@@ -73,6 +76,7 @@ export async function PUT(
     const { accountId } = params.data;
     const session = await requireControlPlaneSession(request);
     assertControlPlaneAccountAccess(session, accountId);
+    const service = getControlPlaneService();
     const body = await request.json();
     const input = controlPlaneAccountUpsertSchema.safeParse(body);
 
@@ -83,12 +87,13 @@ export async function PUT(
       );
     }
 
-    const account = await getControlPlaneService().upsertAccount(accountId, {
+    await service.upsertAccount(accountId, {
       ...input.data,
       ownerUserId: session.sub,
       billingCustomerRef: undefined,
     });
-    return NextResponse.json({ ok: true, account });
+    const profile = await service.getHostedProfile(accountId);
+    return NextResponse.json({ ok: true, ...buildControlPlaneProfileResponse(profile) });
   } catch (error: unknown) {
     const mapped = mapControlPlaneError(error);
     return NextResponse.json({ ok: false, error: mapped.message }, { status: mapped.status });

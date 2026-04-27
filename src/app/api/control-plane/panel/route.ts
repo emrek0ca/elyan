@@ -1,24 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getControlPlaneService } from '@/core/control-plane';
+import { buildControlPlanePanelResponse, getControlPlaneService } from '@/core/control-plane';
 import { requireControlPlaneSession } from '@/core/control-plane/session';
-import type { ControlPlaneHostedDevice } from '@/core/control-plane/types';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
-
-function serializeHostedDevice(device: ControlPlaneHostedDevice) {
-  return {
-    deviceId: device.deviceId,
-    deviceLabel: device.deviceLabel,
-    status: device.status,
-    linkedAt: device.linkedAt,
-    lastSeenAt: device.lastSeenAt,
-    lastSeenReleaseTag: device.lastSeenReleaseTag,
-    revokedAt: device.revokedAt,
-    createdAt: device.createdAt,
-    updatedAt: device.updatedAt,
-  };
-}
 
 export async function GET(request: NextRequest) {
   try {
@@ -31,10 +16,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      session: profile.session,
-      profile,
-      account: profile.account,
-      devices: devices.map((device) => serializeHostedDevice(device)),
+      ...buildControlPlanePanelResponse(profile, devices),
     });
   } catch (error: unknown) {
     const status =

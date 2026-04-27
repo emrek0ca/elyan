@@ -22,7 +22,7 @@ type ChatInterfaceProps = {
 
 const starterPrompts = [
   'What changed in Next.js 15.5?',
-  'Compare OpenAI and Anthropic strengths',
+  'Compare cloud model strengths',
   'Summarize the latest AI search trends',
 ];
 

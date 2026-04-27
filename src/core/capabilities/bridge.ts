@@ -27,7 +27,14 @@ class ToolBridgeError extends Error {
   }
 }
 
-const bridgeToolIdSchema = z.enum(['math_exact', 'math_decimal', 'csv_parse', 'csv_export', 'chart_generate']);
+const bridgeToolIdSchema = z.enum([
+  'math_exact',
+  'math_decimal',
+  'csv_parse',
+  'csv_export',
+  'chart_generate',
+  'optimization_solve',
+]);
 
 const toolBridgeInputSchema = z.object({
   toolId: bridgeToolIdSchema,

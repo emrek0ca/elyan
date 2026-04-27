@@ -22,7 +22,9 @@ import {
 import {
   buildControlPlaneAnchorId,
 } from '@/core/control-plane/display';
+import type { OptimizationStatusSnapshot } from '@/core/optimization/status';
 import type { RuntimeSettings } from '@/core/runtime-settings';
+import type { OperatorApproval, OperatorRun } from '@/core/operator/runs';
 
 type DashboardStatus = {
   ok: boolean;
@@ -124,12 +126,6 @@ type DashboardStatus = {
     health?: {
       ok?: boolean;
       storage?: string;
-      database?: {
-        totalCount: number;
-        idleCount: number;
-        waitingCount: number;
-        maxCount: number;
-      };
       syncSummary?: {
         subscriptions: {
           total: number;
@@ -184,8 +180,20 @@ type DashboardStatus = {
         apiBaseUrl?: string;
         billingMode?: 'sandbox' | 'production';
       };
+      database?: {
+        storage: 'file' | 'postgres';
+        mode: 'file_backed' | 'postgres';
+        configured: boolean;
+        ready: boolean;
+        detail: string;
+        totalCount?: number;
+        idleCount?: number;
+        waitingCount?: number;
+        maxCount?: number;
+      };
     };
   };
+  optimization: OptimizationStatusSnapshot;
   workspace: {
     ready: boolean;
     summary: {
@@ -268,6 +276,78 @@ type HostedPanelPayload = {
     subscriptionSyncState?: string;
     hostedAccess?: boolean;
     hostedUsageAccounting?: boolean;
+  };
+  profile?: {
+    session: {
+      userId: string;
+      email: string;
+      name: string;
+      accountId: string;
+      ownerType: string;
+      role: string;
+      planId: string;
+      accountStatus: string;
+      subscriptionStatus: string;
+      subscriptionSyncState: string;
+      hostedAccess: boolean;
+      hostedUsageAccounting: boolean;
+      balanceCredits: string;
+      deviceCount: number;
+      activeDeviceCount: number;
+    };
+    user?: {
+      userId: string;
+      email: string;
+      displayName: string;
+      ownerType: string;
+      role: string;
+      status: string;
+    };
+    account: {
+      accountId: string;
+      displayName: string;
+      ownerType?: string;
+      balanceCredits?: string;
+      status: string;
+      subscription: {
+        planId: string;
+        status: string;
+        provider: string;
+        syncState: string;
+        providerStatus?: string;
+        retryCount: number;
+        nextRetryAt?: string;
+        currentPeriodEndsAt: string;
+        currentPeriodStartedAt: string;
+        creditsGrantedThisPeriod: string;
+        lastSyncError?: string;
+      };
+      plan?: {
+        title: string;
+        monthlyPriceTRY: string;
+        monthlyIncludedCredits: string;
+      };
+      deviceSummary?: {
+        total: number;
+        pending: number;
+        active: number;
+        revoked: number;
+        expired: number;
+      };
+      usageSnapshot: {
+        monthlyCreditsRemaining: string;
+        monthlyCreditsBurned: string;
+        dailyRequests: number;
+        dailyRequestsLimit: number;
+        remainingRequests: number;
+        dailyHostedToolActionCalls: number;
+        dailyHostedToolActionCallsLimit: number;
+        remainingHostedToolActionCalls: number;
+        state: string;
+        resetAt: string;
+      };
+      processedWebhookEventCount?: number;
+    };
   };
   account?: {
     displayName: string;
@@ -372,6 +452,16 @@ type IntegrationCatalogPayload = {
   }>;
 };
 
+type OperatorRunsPayload = {
+  ok: boolean;
+  runs: OperatorRun[];
+};
+
+type OperatorApprovalsPayload = {
+  ok: boolean;
+  approvals: OperatorApproval[];
+};
+
 const INTEGRATION_PROVIDER_FALLBACKS: Record<
   'google' | 'github' | 'notion',
   {
@@ -464,6 +554,24 @@ async function fetchIntegrations(): Promise<IntegrationCatalogPayload | null> {
   return response.json();
 }
 
+async function fetchOperatorRuns(): Promise<OperatorRunsPayload> {
+  const response = await fetch('/api/runs', { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to load operator runs (${response.status})`);
+  }
+
+  return response.json();
+}
+
+async function fetchOperatorApprovals(): Promise<OperatorApprovalsPayload> {
+  const response = await fetch('/api/approvals', { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Failed to load operator approvals (${response.status})`);
+  }
+
+  return response.json();
+}
+
 function hydrateChannelForm(status: DashboardStatus) {
   return {
     telegram: {
@@ -519,6 +627,8 @@ export function ManagementConsole() {
   const [releaseInfo, setReleaseInfo] = React.useState<ReleasePayload | null>(null);
   const [panelInfo, setPanelInfo] = React.useState<HostedPanelPayload | null>(null);
   const [integrationCatalog, setIntegrationCatalog] = React.useState<IntegrationCatalogPayload | null>(null);
+  const [operatorRuns, setOperatorRuns] = React.useState<OperatorRun[]>([]);
+  const [operatorApprovals, setOperatorApprovals] = React.useState<OperatorApproval[]>([]);
   const [runtimeForm, setRuntimeForm] = React.useState<RuntimeForm>({
     preferredModelId: '',
     routingMode: 'local_first',
@@ -544,10 +654,12 @@ export function ManagementConsole() {
     async function load() {
       try {
         setLoading(true);
-        const [next, nextRelease, nextPanel] = await Promise.all([
+        const [next, nextRelease, nextPanel, nextRuns, nextApprovals] = await Promise.all([
           fetchStatus(),
           fetchRelease().catch(() => null),
           fetchPanel().catch(() => null),
+          fetchOperatorRuns().catch(() => ({ ok: true, runs: [] })),
+          fetchOperatorApprovals().catch(() => ({ ok: true, approvals: [] })),
         ]);
         const nextIntegrations = await fetchIntegrations().catch(() => null);
 
@@ -559,6 +671,8 @@ export function ManagementConsole() {
         setReleaseInfo(nextRelease);
         setPanelInfo(nextPanel);
         setIntegrationCatalog(nextIntegrations);
+        setOperatorRuns(nextRuns.runs);
+        setOperatorApprovals(nextApprovals.approvals);
       } catch (loadError) {
         if (cancelled) {
           return;
@@ -580,10 +694,12 @@ export function ManagementConsole() {
   }, [syncFromStatus]);
 
   const refresh = React.useCallback(async () => {
-    const [next, nextRelease, nextPanel] = await Promise.all([
+    const [next, nextRelease, nextPanel, nextRuns, nextApprovals] = await Promise.all([
       fetchStatus(),
       fetchRelease().catch(() => null),
       fetchPanel().catch(() => null),
+      fetchOperatorRuns().catch(() => ({ ok: true, runs: [] })),
+      fetchOperatorApprovals().catch(() => ({ ok: true, approvals: [] })),
     ]);
     const nextIntegrations = await fetchIntegrations().catch(() => null);
 
@@ -591,6 +707,8 @@ export function ManagementConsole() {
     setReleaseInfo(nextRelease);
     setPanelInfo(nextPanel);
     setIntegrationCatalog(nextIntegrations);
+    setOperatorRuns(nextRuns.runs);
+    setOperatorApprovals(nextApprovals.approvals);
   }, [syncFromStatus]);
 
   const handleConnectIntegration = React.useCallback((provider: 'google' | 'github' | 'notion') => {
@@ -670,6 +788,8 @@ export function ManagementConsole() {
   });
 
   const connectedIntegrations = Object.values(panelInfo?.account?.integrations ?? {});
+  const hostedSession = panelInfo?.profile?.session;
+  const hostedProfileUser = panelInfo?.profile?.user;
 
   const handleRuntimeSave = async () => {
     setSaving(true);
@@ -752,6 +872,7 @@ export function ManagementConsole() {
 
   const activeCapabilities = status?.capabilities.capabilities.filter((entry) => entry.enabled) ?? [];
   const disabledCapabilities = status?.capabilities.capabilities.filter((entry) => !entry.enabled) ?? [];
+  const pendingOperatorApprovals = operatorApprovals.filter((approval) => approval.status === 'pending');
 
   if (loading) {
     return <div className="manage-page__loading">Loading local runtime status…</div>;
@@ -789,6 +910,7 @@ export function ManagementConsole() {
               <StatusChip label="Workspace" value={String(status.workspace.summary.connectedSourceCount)} tone="accent" />
               <StatusChip label="Team mode" value={status.team.settings.enabled ? status.team.settings.defaultMode : 'off'} tone={status.team.settings.enabled ? 'accent' : 'neutral'} />
               <StatusChip label="Local operator" value={status.localAgent.enabled ? 'on' : 'off'} tone={status.localAgent.enabled ? 'warning' : 'neutral'} />
+              <StatusChip label="Optimization" value={status.optimization.ready ? 'ready' : 'partial'} tone={status.optimization.ready ? 'success' : 'warning'} />
             </div>
           </div>
           <div className="manage-hero__actions">
@@ -916,6 +1038,78 @@ export function ManagementConsole() {
               )}
             </div>
           </article>
+
+          <article className="manage-card">
+            <div className="manage-card__title-row">
+              <div className="manage-card__title">Optimization lane</div>
+              <div className="manage-card__hint">Hybrid classical and quantum-inspired</div>
+            </div>
+            <div className="manage-metrics manage-metrics--dense">
+              <Metric label="Ready" value={status.optimization.ready ? 'yes' : 'partial'} />
+              <Metric label="Capability" value={status.optimization.capabilityReady ? 'enabled' : 'disabled'} />
+              <Metric label="Bridge" value={status.optimization.bridgeToolReady ? 'enabled' : 'disabled'} />
+              <Metric label="Skill" value={status.optimization.skillReady ? 'enabled' : 'disabled'} />
+            </div>
+            <div className="manage-list manage-list--dense" style={{ marginTop: '0.85rem' }}>
+              <SurfaceRow
+                label="Summary"
+                value={status.optimization.capabilityId}
+                hint={status.optimization.summary}
+              />
+              <SurfaceRow
+                label="Demo modes"
+                value={status.optimization.demoModes.join(' · ')}
+                hint={status.optimization.guidance[0]}
+              />
+              <SurfaceRow
+                label="Guardrails"
+                value="local-first"
+                hint={status.optimization.guidance[1]}
+              />
+            </div>
+          </article>
+
+          <article className="manage-card">
+            <div className="manage-card__title-row">
+              <div className="manage-card__title">Operator runs</div>
+              <div className="manage-card__hint">v1.3 plan, approval, and artifact trail</div>
+            </div>
+            <div className="manage-metrics manage-metrics--dense">
+              <Metric label="Runs" value={String(operatorRuns.length)} />
+              <Metric label="Pending approvals" value={String(pendingOperatorApprovals.length)} />
+              <Metric label="Blocked" value={String(operatorRuns.filter((run) => run.status === 'blocked').length)} />
+              <Metric label="Deep runs" value={String(operatorRuns.filter((run) => run.reasoning.depth === 'deep').length)} />
+              <Metric label="Failed gates" value={String(operatorRuns.reduce((total, run) => total + run.qualityGates.filter((gate) => gate.status === 'failed').length, 0))} />
+            </div>
+            <div className="manage-list manage-list--dense" style={{ marginTop: '0.85rem' }}>
+              {operatorRuns.length > 0 ? (
+                operatorRuns.slice(0, 5).map((run) => (
+                  <SurfaceRow
+                    key={run.id}
+                    label={run.title}
+                    value={`${run.mode} · ${run.status}`}
+                    hint={`${run.reasoning.depth}/${run.reasoning.maxPasses} passes · ${run.qualityGates.filter((gate) => gate.status === 'passed').length}/${run.qualityGates.length} gates · ${run.continuity.openItemCount} open · ${run.continuity.nextSteps[0]?.title ?? run.continuity.summary} · ${new Date(run.updatedAt).toLocaleString()}`}
+                  />
+                ))
+              ) : (
+                <div className="manage-page__help">
+                  Create one with <code>elyan run --mode research &quot;...&quot;</code> or start a chat task to capture an operator trail.
+                </div>
+              )}
+            </div>
+            {pendingOperatorApprovals.length > 0 && (
+              <div className="manage-list manage-list--dense" style={{ marginTop: '0.85rem' }}>
+                {pendingOperatorApprovals.slice(0, 3).map((approval) => (
+                  <SurfaceRow
+                    key={approval.id}
+                    label={approval.title}
+                    value={`${approval.approvalLevel}/${approval.riskLevel}`}
+                    hint={`Use CLI approval ${approval.id}; requested ${new Date(approval.requestedAt).toLocaleString()}`}
+                  />
+                ))}
+              </div>
+            )}
+          </article>
         </section>
 
         <section className="manage-grid manage-grid--main">
@@ -1016,6 +1210,7 @@ export function ManagementConsole() {
             <div className="manage-metrics manage-metrics--dense">
               <Metric label="Built-in" value={String(status.capabilities.summary.skillCount)} />
               <Metric label="Installed" value={String(status.capabilities.summary.installedSkillCount)} />
+              <Metric label="Techniques" value={String(status.capabilities.skills.summary.agenticTechniqueCount)} />
               <Metric label="Local-only" value={String(status.capabilities.skills.summary.localOnlySkillCount)} />
               <Metric label="Hostable" value={String(status.capabilities.skills.summary.hostedAllowedSkillCount)} />
               <Metric label="MCP configured" value={String(status.capabilities.skills.summary.mcpConfiguredServerCount)} />
@@ -1294,9 +1489,27 @@ export function ManagementConsole() {
             </div>
             <div className="manage-list manage-list--dense">
               <SurfaceRow
+                label="Identity"
+                value={hostedProfileUser?.displayName ?? panelInfo?.account?.displayName ?? 'unavailable'}
+                hint={
+                  hostedProfileUser?.userId
+                    ? `${hostedProfileUser.userId} · ${hostedProfileUser.role}`
+                    : panelInfo?.session?.email ?? 'No hosted identity loaded.'
+                }
+              />
+              <SurfaceRow
                 label="Account"
                 value={panelInfo?.account?.displayName ?? 'unavailable'}
                 hint={panelInfo?.account?.accountId ?? 'No hosted account loaded.'}
+              />
+              <SurfaceRow
+                label="Session"
+                value={hostedSession?.subscriptionStatus ?? panelInfo?.session?.subscriptionStatus ?? 'unavailable'}
+                hint={
+                  hostedSession?.subscriptionSyncState
+                    ? `${hostedSession.subscriptionSyncState} · ${hostedSession.hostedAccess ? 'hosted enabled' : 'hosted inactive'}`
+                    : 'No canonical hosted session loaded.'
+                }
               />
               <SurfaceRow
                 label="Subscription"
@@ -1327,7 +1540,7 @@ export function ManagementConsole() {
               />
               <SurfaceRow
                 label="Devices"
-                value={String(panelInfo?.account?.deviceSummary?.total ?? panelInfo?.devices?.length ?? 0)}
+                value={String(hostedSession?.deviceCount ?? panelInfo?.account?.deviceSummary?.total ?? panelInfo?.devices?.length ?? 0)}
                 hint={panelInfo?.devices?.[0]?.deviceLabel ?? 'No hosted devices linked yet.'}
               />
               <SurfaceRow
@@ -1501,13 +1714,15 @@ export function ManagementConsole() {
                 label="Database pool"
                 value={
                   status.controlPlane.health?.database
-                    ? `${status.controlPlane.health.database.idleCount}/${status.controlPlane.health.database.totalCount} idle`
-                    : 'file-backed'
+                    ? status.controlPlane.health.database.mode === 'file_backed'
+                      ? 'file-backed'
+                      : `${status.controlPlane.health.database.idleCount ?? 0}/${status.controlPlane.health.database.totalCount ?? 0} idle`
+                    : 'unavailable'
                 }
                 hint={
                   status.controlPlane.health?.database
-                    ? `${status.controlPlane.health.database.waitingCount} waiting, max ${status.controlPlane.health.database.maxCount}`
-                    : 'No PostgreSQL pool is active.'
+                    ? status.controlPlane.health.database.detail
+                    : 'No database health snapshot is available.'
                 }
               />
               <SurfaceRow

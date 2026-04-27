@@ -19,6 +19,7 @@ import { readTeamRuntimeStatus } from '@/core/teams';
 import { buildWorkspaceStatusSnapshot } from '@/core/workspace';
 import { inspectEnv } from '@/lib/env';
 import { buildRuntimeSurfaceSnapshot } from './runtime-surface';
+import { buildOptimizationStatusSnapshot } from './optimization/status';
 
 type ProbeResult = {
   ok: boolean;
@@ -95,6 +96,7 @@ export async function readRuntimeStatusSnapshot() {
     controlPlaneHealth.runtime?.authConfigured ?? controlPlaneHealth.authConfigured ?? false;
   const hostedBillingConfigured =
     controlPlaneHealth.runtime?.billingConfigured ?? controlPlaneHealth.billingConfigured ?? false;
+  const optimization = buildOptimizationStatusSnapshot(capabilities);
   const [telegramProbe, whatsappCloudProbe, whatsappBaileysProbe, blueBubblesProbe] = await Promise.all([
     runtimeSettings.channels.telegram.enabled ? probeTelegramBot().catch((error) => ({ ok: false, configured: false, status: error instanceof Error ? error.message : 'probe_failed' })) : Promise.resolve(null),
     runtimeSettings.channels.whatsappCloud.enabled ? probeWhatsappCloudConfig().catch((error) => ({ ok: false, configured: false, status: error instanceof Error ? error.message : 'probe_failed' })) : Promise.resolve(null),
@@ -193,6 +195,7 @@ export async function readRuntimeStatusSnapshot() {
       controlPlane: {
         health: controlPlaneHealth,
       },
+      optimization,
       workspace,
       surfaces,
       nextSteps: surfaces.nextSteps,

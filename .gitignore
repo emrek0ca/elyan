@@ -23,6 +23,16 @@
 # misc
 .DS_Store
 *.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+vps.md
+VPS.md
+server.md
+secrets.md
+credentials.md
 
 # debug
 npm-debug.log*
@@ -37,6 +47,7 @@ storage/control-plane/*.tmp
 storage/key_value_stores/
 storage/request_queues/
 storage/channels/
+storage/operator-runs/
 storage/runtime/settings.json
 
 # env files (can opt-in for committing if needed)

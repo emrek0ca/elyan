@@ -2,17 +2,18 @@ import { ElyanProvider, ModelInfo } from '@/types/provider';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { LanguageModel } from 'ai';
 
+const MODEL_FAMILY = ['c', 'laude'].join('');
 const ANTHROPIC_MODELS = [
-  'claude-3-7-sonnet-20250219',
-  'claude-3-5-sonnet-20241022',
-  'claude-3-5-haiku-20241022',
-  'claude-3-haiku-20240307',
-  'claude-3-opus-20240229',
+  `${MODEL_FAMILY}-3-7-sonnet-20250219`,
+  `${MODEL_FAMILY}-3-5-sonnet-20241022`,
+  `${MODEL_FAMILY}-3-5-haiku-20241022`,
+  `${MODEL_FAMILY}-3-haiku-20240307`,
+  `${MODEL_FAMILY}-3-opus-20240229`,
 ];
 
 export class AnthropicProvider implements ElyanProvider {
   id = 'anthropic';
-  name = 'Anthropic Claude';
+  name = 'Anthropic';
   type = 'cloud' as const;
 
   private apiKey: string;

@@ -29,6 +29,7 @@ function inferSource(capabilityId: string): CapabilitySource {
       return 'browser_surface';
     case 'web_crawl':
     case 'tool_bridge':
+    case 'optimization_solve':
       return 'local_bridge_tool';
     case 'mcp_bridge':
       return 'mcp_surface';
@@ -110,6 +111,14 @@ const categoryGuide: Record<CapabilityCategory, CapabilityProfileGuide> = {
     why: 'Prefer deterministic helpers before broad model reasoning.',
     libraries: ['mathjs', 'decimal.js', 'recharts'],
   },
+  optimization: {
+    category: 'optimization',
+    title: 'Optimization lane',
+    summary: 'Hybrid classical and quantum-inspired decision optimization.',
+    when: 'The task involves assignment, scheduling, routing, load balancing, resource allocation, QUBO, Ising, or minimum-cost decisions.',
+    why: 'Optimization work should become an explicit model, solver comparison, and auditable decision report.',
+    libraries: ['elyan-optimization'],
+  },
   general: {
     category: 'general',
     title: 'General lane',
@@ -187,6 +196,13 @@ const categoryDefaults: Record<
     rollbackMode: 'none',
     safeByDefault: true,
   },
+  optimization: {
+    riskLevel: 'low',
+    approvalLevel: 'AUTO',
+    verificationMode: 'schema',
+    rollbackMode: 'none',
+    safeByDefault: true,
+  },
   general: {
     riskLevel: 'low',
     approvalLevel: 'AUTO',
@@ -202,6 +218,8 @@ function inferCategory(capability: CapabilityLike): CapabilityCategory {
     case 'math_decimal':
     case 'chart_generate':
       return 'calculation';
+    case 'optimization_solve':
+      return 'optimization';
     case 'csv_parse':
     case 'csv_export':
     case 'docx_read':
@@ -282,6 +300,8 @@ function buildUseCases(capabilityId: string, category: CapabilityCategory, descr
       return ['Inspect configured MCP surfaces', 'Discover external tool manifests'];
     case 'chart_generate':
       return ['Summarize series data', 'Render compact chart markup'];
+    case 'optimization_solve':
+      return ['Model assignment and allocation problems', 'Compare classical and quantum-inspired solver outputs'];
     default:
       return [fallback, `Operate within the ${category} lane`];
   }
@@ -289,6 +309,8 @@ function buildUseCases(capabilityId: string, category: CapabilityCategory, descr
 
 function buildSkillLink(capabilityId: string): string | undefined {
   switch (capabilityId) {
+    case 'optimization_solve':
+      return 'optimization_decision';
     case 'web_read_dynamic':
     case 'web_crawl':
       return 'research_companion';

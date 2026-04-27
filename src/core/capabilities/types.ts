@@ -11,6 +11,7 @@ export type CapabilityCategory =
   | 'memory'
   | 'browser'
   | 'calculation'
+  | 'optimization'
   | 'general';
 export type CapabilityRiskLevel = 'low' | 'medium' | 'high' | 'critical';
 export type CapabilityApprovalLevel = 'AUTO' | 'CONFIRM' | 'SCREEN' | 'TWO_FA';

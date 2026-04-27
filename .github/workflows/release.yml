@@ -32,6 +32,9 @@ jobs:
       - name: Audit production dependencies
         run: npm run audit:prod
 
+      - name: Security check
+        run: npm run security:check
+
       - name: Build
         run: npm run build
 
@@ -48,6 +51,16 @@ jobs:
             --exclude='.github' \
             --exclude='node_modules' \
             --exclude='.next' \
+            --exclude='.env*' \
+            --exclude='vps.md' \
+            --exclude='VPS.md' \
+            --exclude='server.md' \
+            --exclude='secrets.md' \
+            --exclude='credentials.md' \
+            --exclude='*.pem' \
+            --exclude='*.key' \
+            --exclude='*.p12' \
+            --exclude='*.pfx' \
             --exclude='storage' \
             --exclude='release-staging' \
             --exclude='release-assets' \

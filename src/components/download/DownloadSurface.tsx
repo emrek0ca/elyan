@@ -88,7 +88,7 @@ export function DownloadSurface({ release }: DownloadSurfaceProps) {
         <div>
           <h2>First run</h2>
           <p className="panel-copy">
-            v1.2 keeps local execution first. The hosted control plane is used for account, plan, billing, release,
+            v1.3 keeps local execution first. The hosted control plane is used for account, plan, billing, release,
             and device-link state; private runtime work stays on the local machine.
           </p>
         </div>

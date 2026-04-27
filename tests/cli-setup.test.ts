@@ -1,5 +1,5 @@
 import { execFileSync } from 'child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -110,5 +110,89 @@ describe('elyan setup CLI', () => {
     });
     settings = JSON.parse(readFileSync(join(cwd, 'storage', 'runtime', 'settings.json'), 'utf8'));
     expect(settings.mcp.servers[0].enabled).toBe(true);
+  });
+
+  it('creates and resolves local v1.3 operator runs without a hosted server', () => {
+    const cwd = createTempDir();
+    const home = createTempDir();
+    const env = {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+    };
+
+    const runOutput = execFileSync(
+      process.execPath,
+      [cliPath, 'run', '--mode', 'code', 'implement', 'a', 'safe', 'patch'],
+      {
+        cwd,
+        env,
+        encoding: 'utf8',
+      }
+    );
+
+    expect(runOutput).toContain('Elyan operator run');
+    expect(runOutput).toContain('Mode: code');
+    expect(runOutput).toContain('Reasoning: deep, 5 passes');
+    expect(runOutput).toContain('Pending approvals: 1');
+
+    const runsOutput = execFileSync(process.execPath, [cliPath, 'runs', 'list'], {
+      cwd,
+      env,
+      encoding: 'utf8',
+    });
+    expect(runsOutput).toContain('code');
+    expect(runsOutput).toContain('blocked');
+    expect(runsOutput).toContain('0/3 gates');
+
+    const runFiles = readdirSync(join(cwd, 'storage', 'operator-runs')).filter((entry) => entry.endsWith('.json'));
+    const run = JSON.parse(readFileSync(join(cwd, 'storage', 'operator-runs', runFiles[0]), 'utf8'));
+    const approvalId = run.approvals[0].id;
+    expect(run.reasoning.depth).toBe('deep');
+    expect(run.qualityGates.find((gate: { title: string }) => gate.title === 'Approval boundary')?.status).toBe('blocked');
+
+    const approvalOutput = execFileSync(process.execPath, [cliPath, 'approvals', 'approve', approvalId], {
+      cwd,
+      env,
+      encoding: 'utf8',
+    });
+
+    expect(approvalOutput).toContain('approved');
+
+    const updatedRun = JSON.parse(readFileSync(join(cwd, 'storage', 'operator-runs', runFiles[0]), 'utf8'));
+    expect(updatedRun.status).toBe('planned');
+    expect(updatedRun.approvals[0].status).toBe('approved');
+  });
+
+  it('runs the local optimization demo as JSON and Markdown', () => {
+    const cwd = createTempDir();
+    const home = createTempDir();
+    const env = {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+    };
+
+    const jsonOutput = execFileSync(process.execPath, [cliPath, 'optimize', 'demo', 'assignment', '--json'], {
+      cwd,
+      env,
+      encoding: 'utf8',
+    });
+    const parsed = JSON.parse(jsonOutput);
+
+    expect(parsed.jsonSummary.problemType).toBe('assignment');
+    expect(parsed.jsonSummary.feasible).toBe(true);
+    expect(parsed.pipeline.map((step: { step: string }) => step.step)).toContain('compare');
+    expect(parsed.solverResults.map((entry: { solver: string }) => entry.solver)).toContain('simulated_annealing');
+
+    const markdownOutput = execFileSync(process.execPath, [cliPath, 'optimize', 'demo', 'resource-allocation'], {
+      cwd,
+      env,
+      encoding: 'utf8',
+    });
+
+    expect(markdownOutput).toContain('Recommended Solution');
+    expect(markdownOutput).toContain('simulated_annealing');
+    expect(markdownOutput).toContain('Constraint violations');
   });
 });

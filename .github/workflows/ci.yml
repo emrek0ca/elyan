@@ -29,6 +29,9 @@ jobs:
       - name: Audit production dependencies
         run: npm run audit:prod
 
+      - name: Security check
+        run: npm run security:check
+
       - name: Lint
         run: npm run lint
 

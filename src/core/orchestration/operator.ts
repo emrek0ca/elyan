@@ -1,5 +1,6 @@
 import { capabilityRegistry } from '@/core/capabilities';
 import { readMcpServerConfigs, McpToolRegistry } from '@/core/mcp';
+import { isOptimizationQuery, isResourceAllocationOptimizationQuery } from '@/core/optimization/signals';
 import { type ScrapedContent } from '@/types/search';
 import { type ExecutionPolicy, type ExecutionTarget } from './types';
 import type { ExecutionSurfaceSnapshot } from './surface';
@@ -91,6 +92,10 @@ function resolveBridgeToolId(query: string, target?: ExecutionTarget) {
 
   const normalized = query.toLowerCase();
 
+  if (isOptimizationQuery(normalized)) {
+    return 'optimization_solve';
+  }
+
   if (/\b(chart|plot|graph|visualize|visualise)\b/i.test(normalized)) {
     return 'chart_generate';
   }
@@ -108,6 +113,12 @@ function resolveBridgeToolId(query: string, target?: ExecutionTarget) {
   }
 
   return 'math_exact';
+}
+
+function resolveOptimizationDemo(query: string) {
+  return isResourceAllocationOptimizationQuery(query)
+    ? 'resource-allocation'
+    : 'assignment';
 }
 
 function resolveTargetUrl(query: string, target?: ExecutionTarget) {
@@ -273,8 +284,25 @@ export async function runOperatorPreflight(
       return outcome;
     }
 
+    if (bridgeToolId === 'optimization_solve') {
+      const result = await capabilityRegistry.execute('tool_bridge', {
+        toolId: bridgeToolId,
+        input: {
+          action: 'run_demo',
+          demo: resolveOptimizationDemo(query),
+        },
+      }) as { result?: { markdownReport?: string } };
+
+      const report = result.result?.markdownReport ?? stringifyValue(result);
+      outcome.sources.push(
+        toScrapedContent(`local://tool_bridge/${bridgeToolId}`, 'Optimization decision report', report)
+      );
+      outcome.contextBlocks.push(`Optimization result:\n${report}`);
+      return outcome;
+    }
+
     outcome.notes.push(
-      `Local bridge path resolved to ${bridgeToolId}, but the current preflight only auto-runs math bridge inputs.`
+      `Local bridge path resolved to ${bridgeToolId}, but the current preflight only auto-runs math and optimization bridge inputs.`
     );
     return outcome;
   }

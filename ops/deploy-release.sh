@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+umask 027
 
 VERSION="${1:-}"
 if [ -z "$VERSION" ]; then
@@ -30,6 +31,12 @@ fi
 
 if [ ! -f "$ENV_FILE" ]; then
     echo "[!] CRITICAL: Missing Elyan env file at $ENV_FILE"
+    exit 1
+fi
+
+ENV_MODE="$(stat -c '%a' "$ENV_FILE" 2>/dev/null || stat -f '%Lp' "$ENV_FILE")"
+if [ "$ENV_MODE" -gt 640 ]; then
+    echo "[!] CRITICAL: Elyan env file permissions are too open ($ENV_MODE). Use chmod 640 or stricter."
     exit 1
 fi
 

@@ -757,6 +757,9 @@ export const controlPlaneHostedDeviceSchema = z.object({
 
 export type ControlPlaneHostedDevice = z.infer<typeof controlPlaneHostedDeviceSchema>;
 
+export const controlPlaneHostedDevicePublicSchema = controlPlaneHostedDeviceSchema;
+export type ControlPlaneHostedDevicePublic = z.infer<typeof controlPlaneHostedDevicePublicSchema>;
+
 export const controlPlaneHostedAccountSchema = controlPlaneAccountPublicSchema.extend({
   plan: controlPlanePlanSchema,
   processedWebhookEventCount: z.number().int().nonnegative(),
@@ -784,7 +787,7 @@ export const controlPlaneHostedPanelSchema = z.object({
   session: controlPlaneHostedSessionSchema,
   profile: controlPlaneHostedProfileSchema,
   account: controlPlaneHostedAccountSchema,
-  devices: z.array(controlPlaneHostedDeviceSchema),
+  devices: z.array(controlPlaneHostedDevicePublicSchema),
 });
 
 export type ControlPlaneHostedPanel = z.infer<typeof controlPlaneHostedPanelSchema>;

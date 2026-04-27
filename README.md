@@ -1,4 +1,4 @@
-# Elyan v1.2
+# Elyan v1.3
 
 Elyan is a local-first personal agent runtime with a separate hosted control plane on elyan.dev.
 
@@ -127,6 +127,30 @@ elyan mcp disable <server>
 elyan mcp disable-tool <server> <tool>
 ```
 
+v1.3 operator runs:
+
+```bash
+elyan run --mode research "compare local-first agent runtimes with sources"
+elyan run --mode code "inspect this repo and plan a safe patch"
+elyan run --mode cowork "plan the next product milestone"
+elyan runs list
+elyan runs show <runId>
+elyan approvals list
+elyan approvals approve <approvalId>
+elyan approvals reject <approvalId>
+```
+
+Operator runs are local-first planning records. Each run records an adaptive reasoning profile (`shallow`, `standard`, or `deep`) so Elyan can stay fast for simple work and slow down for research, code, cowork, and verification-heavy tasks. Runs also track quality gates for the selected mode: research needs sources or an honest unavailable state, code needs repository inspection plus approval-safe verification, and cowork needs inspectable role artifacts. Risky file, terminal, browser, MCP, or automation actions must still pass typed action, policy, approval, audit, and verification before execution.
+
+Hybrid quantum-inspired optimization:
+
+```bash
+elyan optimize demo assignment
+elyan optimize demo resource-allocation --json
+```
+
+The v1.3 optimization capability is TEKNOFEST-oriented decision support, not a separate quantum chatbot. It models assignment and resource-allocation problems, builds a QUBO representation, compares greedy, simulated annealing, and small brute-force QUBO fallback solvers, then returns an auditable JSON plus Markdown decision report. No real quantum hardware is claimed or required.
+
 ## Optional Surfaces
 
 ### Search
@@ -219,14 +243,14 @@ npm run release:check
 
 ## Product Boundary
 
-Elyan v1.2 is not:
+Elyan v1.3 is not:
 
 - a Docker-first product
 - a fake hosted everything-app
 - an unrestricted computer-control bot
 - a replacement for explicit channel credentials and platform rules
 
-Elyan v1.2 is a directly runnable local-first runtime with guided setup and safer release/install surfaces. The hosted surface is separate and only adds shared account and billing features when configured.
+Elyan v1.3 is a directly runnable local-first runtime with guided setup, safer release/install surfaces, and a clearer operator workflow. The hosted surface is separate and only adds shared account and billing features when configured.
 
 ## License
 

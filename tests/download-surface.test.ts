@@ -36,7 +36,7 @@ const targets = [
 ];
 
 describe('download surface helpers', () => {
-  it('keeps exact install cards for supported v1.2 platforms', () => {
+  it('keeps exact install cards for supported v1.3 platforms', () => {
     expect(downloadPlatformCards.map((card) => card.key)).toEqual(['macos', 'linux', 'windows']);
     expect(downloadPlatformCards.every((card) => card.setupCommand === 'elyan setup --zero-cost')).toBe(true);
   });
@@ -52,7 +52,7 @@ describe('download surface helpers', () => {
   });
 
   it('formats release tags for display', () => {
-    expect(formatReleaseVersion('v1.2.0')).toBe('1.2.0');
+    expect(formatReleaseVersion('v1.3.0')).toBe('1.3.0');
     expect(formatReleaseVersion(undefined)).toBe('unknown');
   });
 });

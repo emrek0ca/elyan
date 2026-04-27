@@ -334,10 +334,10 @@ describe('ControlPlaneService', () => {
         platform: 'macOS',
         version: '1.0.1',
       },
-      lastSeenReleaseTag: 'v1.2.0',
+      lastSeenReleaseTag: 'v1.3.0',
     });
 
-    expect(pushed.device.lastSeenReleaseTag).toBe('v1.2.0');
+    expect(pushed.device.lastSeenReleaseTag).toBe('v1.3.0');
     expect(pushed.device.metadata).toMatchObject({
       platform: 'macOS',
       version: '1.0.1',
@@ -614,7 +614,13 @@ describe('ControlPlaneService', () => {
       deviceLinks: 0,
       ledgerEntries: 0,
     });
-    expect(health.database).toBeUndefined();
+    expect(health.database).toMatchObject({
+      storage: 'file',
+      mode: 'file_backed',
+      configured: false,
+      ready: true,
+    });
+    expect(health.database.detail).toContain('File-backed state store is active');
     expect(health.syncSummary).toMatchObject({
       subscriptions: {
         total: 0,

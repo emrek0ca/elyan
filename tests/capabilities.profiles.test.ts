@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildCapabilityProfileGuide, listCapabilityProfileGuides } from '@/core/capabilities/profiles';
+import {
+  buildCapabilityProfileGuide,
+  getCapabilityLibraryStrategy,
+  listCapabilityLibraryStrategies,
+  listCapabilityProfileGuides,
+} from '@/core/capabilities';
 
 describe('Capability profile guides', () => {
   it('exposes ready library hints for the main lanes', () => {
@@ -17,7 +22,34 @@ describe('Capability profile guides', () => {
   it('keeps the guide list aligned with the supported capability categories', () => {
     const guides = listCapabilityProfileGuides();
 
-    expect(guides).toHaveLength(10);
+    expect(guides).toHaveLength(11);
+    expect(guides.map((guide) => guide.category)).toContain('optimization');
     expect(guides.every((guide) => Array.isArray(guide.libraries))).toBe(true);
+  });
+
+  it('documents active and planned JS primitives without pretending planned libraries are installed', () => {
+    const strategies = listCapabilityLibraryStrategies();
+    const code = getCapabilityLibraryStrategy('code');
+    const process = getCapabilityLibraryStrategy('process');
+    const research = getCapabilityLibraryStrategy('research');
+
+    expect(strategies.length).toBeGreaterThanOrEqual(6);
+    expect(research?.libraries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'crawlee', status: 'active' }),
+        expect.objectContaining({ name: 'playwright', status: 'active' }),
+      ])
+    );
+    expect(code?.libraries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'ts-morph', status: 'planned' }),
+        expect.objectContaining({ name: 'simple-git', status: 'planned' }),
+      ])
+    );
+    expect(process?.libraries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'execa', status: 'planned' }),
+      ])
+    );
   });
 });

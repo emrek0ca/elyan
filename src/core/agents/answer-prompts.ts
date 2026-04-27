@@ -67,6 +67,14 @@ function buildLaneInstruction(plan?: AnswerPromptContext['plan']) {
     case 'document_inspector':
       instructions.push('When the task is document or design related, use clean Markdown, preserve hierarchy, and make the result ready to reuse.');
       break;
+    case 'design_producer':
+      instructions.push('Treat design work as a production artifact: audit existing context first, avoid generic AI patterns, specify layout density, motion, responsive states, and verification checks.');
+      break;
+    case 'optimization_decision':
+      instructions.push('Treat optimization work as a hybrid classical and quantum-inspired decision report, not a real quantum hardware claim.');
+      instructions.push('State the modeled problem, solver comparison, feasibility, and selected solution explicitly.');
+      instructions.push('Call out the QUBO or Ising framing only when it is actually supported by the run output.');
+      break;
     case 'browser_operator':
     case 'mcp_connector':
       instructions.push('Keep actions explicit, bounded, and auditable.');
@@ -83,6 +91,21 @@ function buildLaneInstruction(plan?: AnswerPromptContext['plan']) {
   }
 
   return instructions.length > 0 ? `\n${instructions.map((instruction) => `- ${instruction}`).join('\n')}` : '';
+}
+
+function buildTechniqueInstruction(plan?: AnswerPromptContext['plan']) {
+  const techniques = plan?.skillPolicy.selectedTechniques?.slice(0, 3) ?? [];
+
+  if (techniques.length === 0) {
+    return '';
+  }
+
+  return `\n${techniques
+    .flatMap((technique) => [
+      `- Apply ${technique.title}: ${technique.instruction}`,
+      `- Output hint for ${technique.title}: ${technique.outputHint}`,
+    ])
+    .join('\n')}`;
 }
 
 function buildFallbackInstruction(hasSources: boolean, plan?: AnswerPromptContext['plan']) {
@@ -110,9 +133,10 @@ function buildOperatorNotes(operatorNotes?: string[]) {
 export function resolveAnswerPrompt(mode: SearchMode, context: string, hasSources: boolean, options?: AnswerPromptContext) {
   const config = MODE_CONFIG[mode];
   const laneInstruction = buildLaneInstruction(options?.plan);
+  const techniqueInstruction = buildTechniqueInstruction(options?.plan);
   const fallbackInstruction = buildFallbackInstruction(hasSources, options?.plan);
   const operatorNotes = buildOperatorNotes(options?.operatorNotes);
   const basePrompt = hasSources ? config.systemPrompt.replace('{context}', context) : config.noSourcesPrompt;
 
-  return `${basePrompt}${laneInstruction}${fallbackInstruction}${operatorNotes}`;
+  return `${basePrompt}${laneInstruction}${techniqueInstruction}${fallbackInstruction}${operatorNotes}`;
 }

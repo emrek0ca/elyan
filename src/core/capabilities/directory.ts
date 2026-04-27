@@ -2,6 +2,7 @@ import { buildLocalCapabilityCatalog, buildLocalBridgeCatalog } from '@/core/mcp
 import { getBridgeToolManifest } from '@/core/capabilities/bridge-tools';
 import { buildSkillDirectorySnapshot, type SkillDirectorySnapshot } from '@/core/skills';
 import { capabilityRegistry } from './registry';
+import { listCapabilityLibraryStrategies, type CapabilityLibraryStrategy } from './library-strategy';
 import type { McpBridgeOutput } from './bridge';
 import {
   buildCapabilityDirectoryEntry,
@@ -197,6 +198,7 @@ export type CapabilityDirectorySnapshot = {
     why: string;
   }>;
   capabilityGuides: ReturnType<typeof listCapabilityProfileGuides>;
+  libraryStrategies: CapabilityLibraryStrategy[];
   filters: {
     domains: CapabilityCategory[];
     approvals: CapabilityApprovalLevel[];
@@ -252,6 +254,7 @@ export async function buildCapabilityDirectorySnapshot(includeLiveMcp = true): P
   const domains = buildDomainSnapshot(capabilities);
   const approvalMatrix = buildApprovalMatrix(capabilities);
   const filters = buildDirectoryFilters(capabilities);
+  const libraryStrategies = listCapabilityLibraryStrategies();
   const recentAudits = capabilityRegistry.getAuditTrail().slice(-12).reverse();
 
   let mcp: McpBridgeOutput;
@@ -353,6 +356,7 @@ export async function buildCapabilityDirectorySnapshot(includeLiveMcp = true): P
       },
     ],
     capabilityGuides: listCapabilityProfileGuides(),
+    libraryStrategies,
     filters,
     recentAudits,
     summary: {

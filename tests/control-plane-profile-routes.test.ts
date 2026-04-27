@@ -72,6 +72,11 @@ const profile = {
         hostedToolActionCallsPerDay: 600,
       },
     },
+    integrationSummary: {
+      total: 0,
+      connected: 0,
+      needsAttention: 0,
+    },
     processedWebhookEventCount: 1,
     usageTotals: {
       inference: '0.00',
@@ -105,6 +110,7 @@ const profile = {
 };
 
 const mockService = {
+  getAccount: vi.fn(),
   getHostedProfile: vi.fn(),
   listLedger: vi.fn(),
   listNotifications: vi.fn(),
@@ -125,6 +131,21 @@ vi.mock('@/core/control-plane', () => ({
       apiBaseUrl: 'https://api.iyzipay.com',
       billingMode: 'production',
     },
+  })),
+  buildControlPlaneProfileResponse: vi.fn((profile) => ({
+    session: profile.session,
+    profile,
+    account: profile.account,
+  })),
+  buildControlPlanePanelResponse: vi.fn((profile, devices) => ({
+    session: profile.session,
+    profile,
+    account: profile.account,
+    devices: devices.map((device) => {
+      const { deviceToken, ...publicDevice } = device;
+      void deviceToken;
+      return publicDevice;
+    }),
   })),
 }));
 
@@ -192,6 +213,26 @@ describe('control-plane canonical profile routes', () => {
     expect(payload.ledger).toBeUndefined();
     expect(payload.notifications).toBeUndefined();
     expect(payload.health).toBeUndefined();
+    expect(mockService.getHostedProfile).toHaveBeenCalledWith('acct_1');
+  });
+
+  it('returns the canonical profile from the account route too', async () => {
+    mockService.getHostedProfile.mockResolvedValue(profile);
+    mockService.getAccount.mockResolvedValue(profile.account);
+
+    const { GET } = await import('@/app/api/control-plane/accounts/[accountId]/route');
+    const request = new NextRequest('http://127.0.0.1:3000/api/control-plane/accounts/acct_1', { method: 'GET' });
+
+    const response = await GET(request, {
+      params: Promise.resolve({ accountId: 'acct_1' }),
+    });
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.ok).toBe(true);
+    expect(payload.profile.session.accountId).toBe('acct_1');
+    expect(payload.account.deviceSummary.total).toBe(1);
+    expect(payload.account.interactionState).toBeUndefined();
     expect(mockService.getHostedProfile).toHaveBeenCalledWith('acct_1');
   });
 });

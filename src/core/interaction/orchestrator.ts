@@ -1,16 +1,17 @@
 import { randomUUID } from 'crypto';
+import { execFileSync } from 'child_process';
 import type { LanguageModelUsage } from 'ai';
 import { answerEngine } from '@/core/agents/answer-engine';
 import { getControlPlaneService, isControlPlaneSessionConfigured } from '@/core/control-plane';
 import { ControlPlaneAuthenticationError, ControlPlaneInsufficientCreditsError, ControlPlaneUsageLimitError } from '@/core/control-plane/errors';
 import type { ControlPlaneSessionToken } from '@/core/control-plane/session';
-import { buildEvaluationSignalDraft } from '@/core/orchestration/evaluation';
 import { buildExecutionSurfaceSnapshot, buildOrchestrationPlan } from '@/core/orchestration';
 import { readRuntimeSettingsSync } from '@/core/runtime-settings';
 import { registry } from '@/core/providers';
 import { teamRunner } from '@/core/teams';
+import { getOperatorRunStore, recordOperatorRunArtifact, type OperatorRun } from '@/core/operator/runs';
 import type { SearchMode } from '@/types/search';
-import type { ExecutionSurfaceSnapshot, OrchestrationPlan, ExecutionTarget } from '@/core/orchestration';
+import type { ExecutionSurfaceSnapshot, OrchestrationPlan } from '@/core/orchestration';
 import { classifyInteractionIntent } from './intent';
 import { type OperatorSource } from '@/core/operator/types';
 import { estimateHostedUsageDraft } from '@/core/control-plane/pricing';
@@ -42,6 +43,7 @@ export type InteractionTextResponse = {
   surface: ExecutionSurfaceSnapshot;
   modelId: string;
   classification: ReturnType<typeof classifyInteractionIntent>;
+  runId?: string;
 };
 
 type PreparedInteraction = {
@@ -55,6 +57,7 @@ type PreparedInteraction = {
   controlPlaneSession?: ControlPlaneSessionToken | null;
   hostedAccountId?: string;
   hostedAccount?: HostedAccountView | null;
+  operatorRun?: OperatorRun;
   startedAt: number;
   queryLength: number;
 };
@@ -191,6 +194,12 @@ async function prepareInteraction(request: InteractionRequest): Promise<Prepared
   const mode = classification.resolvedMode;
   const surface = buildExecutionSurfaceSnapshot();
   const plan = buildOrchestrationPlan(request.text, mode, surface);
+  const operatorRun = await getOperatorRunStore().create({
+    source: request.source,
+    text: request.text,
+    mode: plan.taskIntent === 'research' || plan.taskIntent === 'comparison' || mode === 'research' ? 'research' : 'auto',
+    title: request.text.slice(0, 80),
+  });
   const selectedModelId =
     request.modelId?.trim() ||
     runtimeSettings.routing.preferredModelId?.trim() ||
@@ -222,6 +231,7 @@ async function prepareInteraction(request: InteractionRequest): Promise<Prepared
     controlPlaneSession: request.controlPlaneSession,
     hostedAccountId,
     hostedAccount,
+    operatorRun,
     startedAt: Date.now(),
     queryLength: request.text.length,
   };
@@ -237,42 +247,6 @@ async function maybeRecordHostedUsage(prepared: PreparedInteraction) {
     const usageDraft = estimateHostedUsageDraft(prepared.plan, prepared.requestId);
     await controlPlane.recordUsageBundle(prepared.hostedAccountId, usageDraft);
   }
-}
-
-async function recordHostedOutcome(
-  prepared: PreparedInteraction,
-  output: {
-    text: string;
-    sources: Array<{ url: string; title: string }>;
-    totalUsage: LanguageModelUsage;
-    modelProvider: string;
-  }
-) {
-  if (!prepared.hostedAccountId || !prepared.hostedAccount) {
-    return;
-  }
-
-  const controlPlane = getControlPlaneService();
-  const signal = buildEvaluationSignalDraft({
-    requestId: prepared.requestId,
-    mode: prepared.mode,
-    plan: prepared.plan,
-    surface: prepared.surface,
-    searchAvailable: prepared.plan.executionPolicy.shouldRetrieve,
-    operatorNotes: prepared.plan.executionPolicy.notes,
-    operatorTarget: prepared.plan.executionPolicy.primary as ExecutionTarget,
-    modelProvider: output.modelProvider,
-    modelId: prepared.selectedModelId,
-    text: output.text,
-    queryLength: prepared.queryLength,
-    latencyMs: Date.now() - prepared.startedAt,
-    totalUsage: output.totalUsage,
-    toolCallCount: 0,
-    toolResultCount: 0,
-    sourcesCount: output.sources.length,
-  });
-
-  await controlPlane.recordEvaluationSignal(prepared.hostedAccountId, signal);
 }
 
 async function recordInteractionOutput(
@@ -312,18 +286,132 @@ async function recordInteractionOutput(
       sources: output.sources,
       citationCount: (output.text.match(/\[(\d+)\]/g) ?? []).length,
     });
-
-    if (prepared.hostedAccount?.entitlements.hostedImprovementSignals) {
-      await recordHostedOutcome(prepared, {
-        text: output.text,
-        sources: output.sources,
-        totalUsage: output.totalUsage,
-        modelProvider: output.modelProvider,
-      });
-    }
   } catch (error) {
     console.warn('Elyan interaction memory capture failed', error);
   }
+}
+
+async function recordOperatorRunOutput(
+  prepared: PreparedInteraction,
+  output: {
+    text: string;
+    sources: Array<{ url: string; title: string }>;
+  }
+) {
+  if (!prepared.operatorRun) {
+    return;
+  }
+
+  const mode = prepared.operatorRun.mode;
+  const sourceLines = output.sources.length > 0
+    ? output.sources.map((source, index) => `[${index + 1}] ${source.title} - ${source.url}`).join('\n')
+    : 'No verified sources were available for this run.';
+  const modeMetadata =
+    mode === 'research'
+      ? {
+          sourceCount: output.sources.length,
+          taskIntent: prepared.plan.taskIntent,
+          mode: prepared.mode,
+          unavailable: output.sources.length === 0,
+        }
+      : mode === 'code'
+        ? {
+            taskIntent: prepared.plan.taskIntent,
+            mode: prepared.mode,
+            ...captureRepositorySnapshot(),
+          }
+        : {
+            taskIntent: prepared.plan.taskIntent,
+            mode: prepared.mode,
+            sharedToHosted: false,
+            memoryBoundary: 'local',
+          };
+  const kind = mode === 'research' ? 'research' : 'summary';
+  const title = mode === 'research' ? 'Research result' : mode === 'code' ? 'Code result' : 'Operator result';
+  const bodyParts =
+    mode === 'research'
+      ? [
+          'Answer:',
+          output.text,
+          '',
+          output.sources.length === 0 ? 'Live evidence is unavailable for this run.' : 'Sources:',
+          sourceLines,
+        ]
+      : mode === 'code'
+        ? [
+            'Answer:',
+            output.text,
+            '',
+            'Repository snapshot:',
+            describeRepositorySnapshot(modeMetadata),
+            '',
+            'Sources:',
+            sourceLines,
+          ]
+        : [
+            'Answer:',
+            output.text,
+            '',
+            'Project memory boundary:',
+            'Local only by default.',
+            '',
+            'Sources:',
+            sourceLines,
+          ];
+
+  await recordOperatorRunArtifact(prepared.operatorRun.id, {
+    kind,
+    title,
+    content: bodyParts.join('\n'),
+    metadata: modeMetadata,
+  });
+}
+
+function captureRepositorySnapshot() {
+  try {
+    const branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const status = execFileSync('git', ['status', '--short'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const changedFiles = status ? status.split(/\r?\n/).length : 0;
+
+    return {
+      repoInspected: true,
+      repoBranch: branch,
+      repoDirtyFileCount: changedFiles,
+      repoDirtySummary: status || 'clean',
+      checksPassed: false,
+    };
+  } catch (error) {
+    return {
+      repoInspected: false,
+      repoInspectionError: error instanceof Error ? error.message : 'Repository snapshot unavailable',
+      checksPassed: false,
+    };
+  }
+}
+
+function describeRepositorySnapshot(metadata: Record<string, unknown>) {
+  if (metadata.repoInspected !== true) {
+    return `Inspection unavailable: ${String(metadata.repoInspectionError ?? 'repo snapshot could not be collected.')}`;
+  }
+
+  const branch = String(metadata.repoBranch ?? 'unknown');
+  const dirtyCount = Number(metadata.repoDirtyFileCount ?? 0);
+  const summary = String(metadata.repoDirtySummary ?? 'clean');
+
+  return [
+    `Branch: ${branch}`,
+    `Changed files: ${dirtyCount}`,
+    `Status: ${summary}`,
+    'Verification evidence still required before the run can complete.',
+  ].join('\n');
 }
 
 export async function executeInteractionText(request: InteractionRequest): Promise<InteractionTextResponse> {
@@ -359,6 +447,10 @@ export async function executeInteractionText(request: InteractionRequest): Promi
       modelProvider: team.modelProvider,
       modelId: team.modelId,
     });
+    await recordOperatorRunOutput(prepared, {
+      text: team.text,
+      sources: team.sources.map((source) => ({ url: source.url, title: source.title })),
+    });
 
     return {
       text: team.text,
@@ -367,6 +459,7 @@ export async function executeInteractionText(request: InteractionRequest): Promi
       surface: prepared.surface,
       modelId: team.modelId,
       classification: prepared.classification,
+      runId: prepared.operatorRun?.id,
     };
   }
 
@@ -375,15 +468,19 @@ export async function executeInteractionText(request: InteractionRequest): Promi
     surface: prepared.surface,
     searchEnabled: runtimeSettings.routing.searchEnabled,
     contextAugments: prepared.memoryContext,
-    onFinish: async (event, context) => {
-      await recordInteractionOutput(prepared, request, {
+      onFinish: async (event, context) => {
+        await recordInteractionOutput(prepared, request, {
         text: event.text,
         sources: context.sources.map((source) => ({ url: source.url, title: source.title })),
         totalUsage: event.totalUsage,
         modelProvider: context.providerId,
-        modelId: prepared.selectedModelId,
-      });
-    },
+          modelId: prepared.selectedModelId,
+        });
+        await recordOperatorRunOutput(prepared, {
+          text: event.text,
+          sources: context.sources.map((source) => ({ url: source.url, title: source.title })),
+        });
+      },
   });
 
   return {
@@ -393,6 +490,7 @@ export async function executeInteractionText(request: InteractionRequest): Promi
     surface: prepared.surface,
     modelId: prepared.selectedModelId,
     classification: prepared.classification,
+    runId: prepared.operatorRun?.id,
   };
 }
 
@@ -442,6 +540,10 @@ export async function executeInteractionStream(request: InteractionRequest) {
           modelProvider: team.modelProvider,
           modelId: team.modelId,
         });
+        await recordOperatorRunOutput(prepared, {
+          text: team.text,
+          sources: team.sources.map((source) => ({ url: source.url, title: source.title })),
+        });
       },
     });
 
@@ -453,30 +555,20 @@ export async function executeInteractionStream(request: InteractionRequest) {
     surface: prepared.surface,
     searchEnabled: runtimeSettings.routing.searchEnabled,
     contextAugments: prepared.memoryContext,
-    onFinish: async (event, context) => {
-      await recordInteractionOutput(prepared, request, {
+      onFinish: async (event, context) => {
+        await recordInteractionOutput(prepared, request, {
         text: event.text,
         sources: context.sources.map((source) => ({ url: source.url, title: source.title })),
         totalUsage: event.totalUsage,
         modelProvider: context.providerId,
-        modelId: prepared.selectedModelId,
-      });
+          modelId: prepared.selectedModelId,
+        });
+        await recordOperatorRunOutput(prepared, {
+          text: event.text,
+          sources: context.sources.map((source) => ({ url: source.url, title: source.title })),
+        });
     },
     onError: async (error) => {
-      if (!prepared.hostedAccountId || !account || !account.entitlements.hostedImprovementSignals) {
-        return;
-      }
-
-      try {
-        await recordHostedOutcome(prepared, {
-          text: '',
-          sources: [],
-          totalUsage: createEmptyLanguageModelUsage(),
-          modelProvider: registry.resolveModel(prepared.selectedModelId).provider.id,
-        });
-      } catch (captureError) {
-        console.warn('Elyan evaluation error capture failed', captureError);
-      }
       console.warn('Elyan interaction stream error', error);
     },
   });

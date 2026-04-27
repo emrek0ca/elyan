@@ -26,6 +26,12 @@ const {
   setMcpServerEnabled,
   setMcpServers,
 } = require('./lib/mcp-settings');
+const {
+  createOperatorRunStore,
+} = require('./lib/operator-runs');
+const {
+  runOptimization,
+} = require(path.join(__dirname, '..', 'src', 'core', 'optimization', 'engine.js'));
 const packageJson = require(path.join(__dirname, '..', 'package.json'));
 
 program
@@ -234,6 +240,7 @@ function ensureRuntimeStorageDirs(storageDir = DEFAULT_STORAGE_DIR) {
     path.join(storageDir, 'runtime'),
     path.join(storageDir, 'channels'),
     path.join(storageDir, 'evidence'),
+    path.join(storageDir, 'operator-runs'),
     path.join(storageDir, 'team-runs'),
     path.join(storageDir, 'trash'),
   ]) {
@@ -415,11 +422,22 @@ function printLinkedDeviceSnapshot(session = readCliSession()) {
 
 function printAccountSnapshot(data) {
   console.log(chalk.bold.blue('\n👤 Hosted account\n'));
-  console.log(`Email: ${chalk.green(data.session.email || 'unknown')}`);
-  console.log(`Name: ${chalk.green(data.session.name || data.account.displayName)}`);
-  console.log(`Account: ${chalk.green(data.account.accountId)}`);
-  console.log(`Plan: ${chalk.green(`${data.account.plan.title} (${data.account.subscription.status})`)}`);
-  console.log(`Hosted access: ${data.account.entitlements.hostedAccess ? chalk.green('active') : chalk.yellow('inactive')}`);
+  const session = data.profile?.session || data.session || {};
+  const account = data.profile?.account || data.account;
+  const user = data.profile?.user;
+  console.log(`Email: ${chalk.green(session.email || 'unknown')}`);
+  console.log(`Name: ${chalk.green(session.name || account.displayName)}`);
+  if (user) {
+    console.log(`User ID: ${chalk.green(user.userId)}`);
+    console.log(`Role: ${chalk.green(user.role)}`);
+  }
+  console.log(`Account: ${chalk.green(account.accountId)}`);
+  console.log(`Account status: ${chalk.green(session.accountStatus || account.status)}`);
+  console.log(`Plan: ${chalk.green(`${account.plan.title} (${account.subscription.status})`)}`);
+  console.log(`Subscription sync: ${chalk.green(session.subscriptionSyncState || account.subscription.syncState)}`);
+  const hostedAccess = session.hostedAccess ?? account.entitlements.hostedAccess;
+  console.log(`Hosted access: ${hostedAccess ? chalk.green('active') : chalk.yellow('inactive')}`);
+  console.log(`Devices: ${chalk.green(String(session.deviceCount ?? account.deviceSummary.total))} total / ${chalk.green(String(session.activeDeviceCount ?? account.deviceSummary.active))} active`);
   console.log(`Monthly credits remaining: ${chalk.green(data.account.usageSnapshot.monthlyCreditsRemaining)}`);
   console.log(`Daily requests remaining: ${chalk.green(String(data.account.usageSnapshot.remainingRequests))}`);
   console.log(`Daily tool calls remaining: ${chalk.green(String(data.account.usageSnapshot.remainingHostedToolActionCalls))}`);
@@ -887,6 +905,38 @@ program
   });
 
 // ----------------------------------------------------------------------------
+// COMMAND: optimize
+// ----------------------------------------------------------------------------
+const optimizeCommand = program
+  .command('optimize')
+  .description('Runs local hybrid quantum-inspired decision optimization demos.');
+
+optimizeCommand
+  .command('demo <kind>')
+  .option('--json', 'Print machine-readable JSON')
+  .description('Runs an optimization demo: assignment or resource-allocation.')
+  .action((kind, options) => {
+    const normalizedKind = String(kind || '').toLowerCase();
+    if (!['assignment', 'resource-allocation', 'resource_allocation'].includes(normalizedKind)) {
+      console.log(chalk.red('Unknown optimization demo. Use `assignment` or `resource-allocation`.'));
+      process.exit(1);
+      return;
+    }
+
+    const result = runOptimization({
+      action: 'run_demo',
+      demo: normalizedKind === 'resource_allocation' ? 'resource-allocation' : normalizedKind,
+    });
+
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+
+    console.log(result.markdownReport);
+  });
+
+// ----------------------------------------------------------------------------
 // COMMAND: plans
 // ----------------------------------------------------------------------------
 program
@@ -1327,8 +1377,16 @@ program
     console.log(`Telegram: ${data.channels?.telegram?.enabled ? chalk.green('enabled') : chalk.gray('disabled')}`);
     console.log(`WhatsApp Cloud: ${data.channels?.whatsappCloud?.enabled ? chalk.green('enabled') : chalk.gray('disabled')}`);
     console.log(`iMessage: ${data.channels?.imessage?.enabled ? chalk.green('enabled') : chalk.gray('disabled')}`);
-    if (data.controlPlane?.health?.storage) {
-      console.log(`Hosted control plane DB: ${chalk.green(String(data.controlPlane.health.storage))}`);
+    if (data.controlPlane?.health?.database) {
+      const database = data.controlPlane.health.database;
+      const databaseState =
+        database.mode === 'file_backed'
+          ? 'file-backed'
+          : database.ready
+            ? `${database.idleCount ?? 0}/${database.totalCount ?? 0} idle`
+            : 'not ready';
+      console.log(`Hosted control plane DB: ${chalk.green(String(database.storage))} · ${chalk.green(databaseState)}`);
+      console.log(`DB detail: ${database.detail}`);
     }
     printLinkedDeviceSnapshot();
 
@@ -1779,6 +1837,146 @@ program
     }
 
     console.log(chalk.red('Usage: elyan mcp list | doctor | set <json> | enable <server> | disable <server> | disable-tool <server> <tool>'));
+  });
+
+// ----------------------------------------------------------------------------
+// COMMAND: run
+// ----------------------------------------------------------------------------
+program
+  .command('run <task...>')
+  .option('--mode <mode>', 'Operator mode: auto, research, code, or cowork', 'auto')
+  .description('Creates a local v1.3 operator run plan without bypassing approvals.')
+  .action((task, options) => {
+    const text = task.join(' ').trim();
+    const mode = String(options.mode || 'auto').trim();
+    if (!['auto', 'research', 'code', 'cowork'].includes(mode)) {
+      console.log(chalk.red('Mode must be one of: auto, research, code, cowork'));
+      process.exit(1);
+    }
+
+    ensureRuntimeStorageDirs();
+    const store = createOperatorRunStore(process.cwd());
+    const run = store.createRun({
+      source: 'cli',
+      text,
+      mode,
+    });
+
+    console.log(chalk.bold.blue('\n🧭 Elyan operator run\n'));
+    console.log(`Run: ${chalk.green(run.id)}`);
+    console.log(`Mode: ${chalk.green(run.mode)}`);
+    console.log(`Status: ${run.status === 'blocked' ? chalk.yellow(run.status) : chalk.green(run.status)}`);
+    console.log(`Reasoning: ${chalk.green(`${run.reasoning.depth}, ${run.reasoning.maxPasses} passes`)}`);
+    console.log(`Plan: ${chalk.gray(path.join('storage', 'operator-runs', `${run.id}.json`))}`);
+    if (run.approvals.length > 0) {
+      console.log(`Pending approvals: ${chalk.yellow(String(run.approvals.length))}`);
+      console.log(chalk.gray('Use: elyan approvals list'));
+    }
+  });
+
+// ----------------------------------------------------------------------------
+// COMMAND: runs
+// ----------------------------------------------------------------------------
+program
+  .command('runs [action] [runId]')
+  .description('Lists or inspects local v1.3 operator runs.')
+  .action((action = 'list', runId) => {
+    const store = createOperatorRunStore(process.cwd());
+
+    if (action === 'list') {
+      const runs = store.listRuns();
+      console.log(chalk.bold.blue('\n🧭 Operator runs\n'));
+      if (runs.length === 0) {
+        console.log(chalk.gray('No operator runs yet.'));
+        return;
+      }
+
+      for (const run of runs.slice(0, 20)) {
+        const openItems = run.continuity?.openItemCount ?? 0;
+        const reasoning = run.reasoning ? `${run.reasoning.depth}/${run.reasoning.maxPasses}` : 'standard/3';
+        const gates = Array.isArray(run.qualityGates) ? `${run.qualityGates.filter((gate) => gate.status === 'passed').length}/${run.qualityGates.length} gates` : '0/0 gates';
+        console.log(`${chalk.green(run.id)}  ${run.mode}  ${run.status}  ${reasoning}  ${gates}  ${openItems} open  ${run.title}`);
+      }
+      return;
+    }
+
+    if (action === 'show' && runId) {
+      const run = store.getRun(runId);
+      if (!run) {
+        console.log(chalk.red(`Run not found: ${runId}`));
+        process.exit(1);
+      }
+
+      console.log(chalk.bold.blue('\n🧭 Operator run\n'));
+      console.log(`Run: ${chalk.green(run.id)}`);
+      console.log(`Mode: ${chalk.green(run.mode)}`);
+      console.log(`Status: ${chalk.green(run.status)}`);
+      if (run.reasoning) {
+        console.log(`Reasoning: ${chalk.green(`${run.reasoning.depth}, ${run.reasoning.maxPasses} passes`)}`);
+        console.log(`Halting: ${run.reasoning.halting}`);
+      }
+      console.log(`Intent: ${run.intent}`);
+      if (run.continuity) {
+        console.log(`Continuity: ${run.continuity.summary}`);
+      }
+      console.log(chalk.bold('\nSteps'));
+      for (const step of run.steps) {
+        const approval = step.approvalId ? ` approval=${step.approvalId}` : '';
+        console.log(`- ${step.status} ${step.title}${approval}`);
+      }
+      if (run.continuity?.nextSteps?.length > 0) {
+        console.log(chalk.bold('\nNext steps'));
+        for (const item of run.continuity.nextSteps) {
+          console.log(`- ${item.status} ${item.title}`);
+        }
+      }
+      if (run.qualityGates?.length > 0) {
+        console.log(chalk.bold('\nQuality gates'));
+        for (const gate of run.qualityGates) {
+          console.log(`- ${gate.status} ${gate.title}`);
+        }
+      }
+      return;
+    }
+
+    console.log(chalk.red('Usage: elyan runs list | show <runId>'));
+  });
+
+// ----------------------------------------------------------------------------
+// COMMAND: approvals
+// ----------------------------------------------------------------------------
+program
+  .command('approvals [action] [approvalId]')
+  .description('Lists or resolves local v1.3 operator approval requests.')
+  .action((action = 'list', approvalId) => {
+    const store = createOperatorRunStore(process.cwd());
+
+    if (action === 'list') {
+      const approvals = store.listApprovals();
+      console.log(chalk.bold.blue('\n✅ Operator approvals\n'));
+      if (approvals.length === 0) {
+        console.log(chalk.gray('No approval requests.'));
+        return;
+      }
+
+      for (const approval of approvals) {
+        console.log(`${chalk.green(approval.id)}  ${approval.status}  ${approval.approvalLevel}/${approval.riskLevel}  ${approval.title}`);
+      }
+      return;
+    }
+
+    if ((action === 'approve' || action === 'reject') && approvalId) {
+      const approval = store.resolveApproval(approvalId, action === 'approve' ? 'approved' : 'rejected');
+      if (!approval) {
+        console.log(chalk.red(`Approval not found: ${approvalId}`));
+        process.exit(1);
+      }
+
+      console.log(chalk.green(`Approval ${approval.id} ${approval.status}.`));
+      return;
+    }
+
+    console.log(chalk.red('Usage: elyan approvals list | approve <approvalId> | reject <approvalId>'));
   });
 
 // ----------------------------------------------------------------------------

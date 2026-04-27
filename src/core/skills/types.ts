@@ -7,10 +7,12 @@ const skillTaskIntentValues = ['direct_answer', 'research', 'comparison', 'proce
 export const skillDomainSchema = z.enum([
   'research',
   'operator',
+  'design',
   'documents',
   'browser',
   'mcp',
   'calculation',
+  'optimization',
   'general',
 ]);
 
@@ -22,9 +24,25 @@ export const skillStageKindSchema = z.enum(['analysis', 'privacy', 'capability',
 export const skillRiskLevelSchema = z.enum(['read_only', 'write_safe', 'write_sensitive', 'destructive', 'system_critical']);
 export const skillApprovalLevelSchema = z.enum(['AUTO', 'CONFIRM', 'SCREEN', 'TWO_FA']);
 export const skillVerificationModeSchema = z.enum(['none', 'summary', 'trace', 'artifact']);
+export const skillTechniqueCategorySchema = z.enum([
+  'writing_content',
+  'visual_infographic',
+  'research_analysis',
+  'video_content',
+  'coding_automation',
+]);
 export const skillContractSchema = z.object({
   summary: z.string().min(1),
   schema: z.record(z.string(), z.unknown()).optional(),
+});
+export const skillTechniqueSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  category: skillTechniqueCategorySchema,
+  description: z.string().min(1),
+  keywords: z.array(z.string().min(1)).default([]),
+  instruction: z.string().min(1),
+  outputHint: z.string().min(1),
 });
 
 export const skillTriggerSchema = z.object({
@@ -75,6 +93,7 @@ export const skillManifestSchema = z.object({
   outputShape: skillOutputShapeSchema,
   selectionWeight: z.number().int().min(0).default(0),
   stageTemplates: z.array(skillStageTemplateSchema).default([]),
+  techniques: z.array(skillTechniqueSchema).default([]),
 });
 
 export const skillInstallationRecordSchema = z.object({
@@ -94,6 +113,8 @@ export type SkillStageKind = z.output<typeof skillStageKindSchema>;
 export type SkillRiskLevel = z.output<typeof skillRiskLevelSchema>;
 export type SkillApprovalLevel = z.output<typeof skillApprovalLevelSchema>;
 export type SkillVerificationMode = z.output<typeof skillVerificationModeSchema>;
+export type SkillTechniqueCategory = z.output<typeof skillTechniqueCategorySchema>;
+export type SkillTechnique = z.output<typeof skillTechniqueSchema>;
 export type SkillContract = z.output<typeof skillContractSchema>;
 export type SkillTrigger = z.output<typeof skillTriggerSchema>;
 export type SkillStageTemplate = z.output<typeof skillStageTemplateSchema>;
@@ -140,6 +161,8 @@ export type SkillDirectorySnapshot = {
     mcpConfigurationError?: string;
     approvalLevelCounts: Record<SkillApprovalLevel, number>;
     riskLevelCounts: Record<SkillRiskLevel, number>;
+    agenticTechniqueCount: number;
+    agenticTechniqueCategoryCounts: Record<SkillTechniqueCategory, number>;
   };
   selectionGuide: Array<{
     kind: SkillDomain;

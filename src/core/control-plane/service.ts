@@ -17,11 +17,8 @@ import {
 import { getIyzicoBillingClient, buildIyzicoPlanBinding, type IyzicoSubscriptionWebhook } from './iyzico';
 import { buildControlPlaneConnectionSnapshot, buildControlPlaneRuntimeSnapshot } from './runtime';
 import { buildControlPlaneEvaluationSummary } from './evaluation';
-import {
-  buildAccountPolicySnapshot,
-  buildHostedConnectionRegistry,
-} from './governance';
-import { getControlPlanePoolStats } from './database';
+import { buildAccountPolicySnapshot, buildHostedConnectionRegistry } from './governance';
+import { buildControlPlaneDatabaseHealthSnapshot, getControlPlanePoolStats } from './database';
 import { FileControlPlaneStateStore, type ControlPlaneStateStore } from './store';
 import { PostgresControlPlaneStateStore } from './postgres-store';
 import {
@@ -832,7 +829,7 @@ export class ControlPlaneService {
       ledgerEntries: state.ledger.length,
       evaluationSignals: state.evaluationSignals.length,
     };
-    const database = this.store.kind === 'postgres' ? getControlPlanePoolStats() : undefined;
+    const database = buildControlPlaneDatabaseHealthSnapshot(this.store.kind, getControlPlanePoolStats());
 
     return {
       ok: true,

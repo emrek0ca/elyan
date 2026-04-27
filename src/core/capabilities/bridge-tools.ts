@@ -22,13 +22,19 @@ import {
   summarizeChartSeries,
   renderChartMarkup,
 } from './chart';
+import {
+  optimizationSolveInputSchema,
+  optimizationSolveOutputSchema,
+} from './optimization';
+import { runOptimization } from '@/core/optimization';
 
 export type BridgeToolId =
   | 'math_exact'
   | 'math_decimal'
   | 'csv_parse'
   | 'csv_export'
-  | 'chart_generate';
+  | 'chart_generate'
+  | 'optimization_solve';
 
 export type BridgeToolManifest = {
   id: BridgeToolId;
@@ -117,6 +123,16 @@ const bridgeToolDefinitions: BridgeToolDefinition[] = [
         },
       };
     },
+  },
+  {
+    id: 'optimization_solve',
+    title: 'Optimization Solve',
+    description: 'Models assignment and resource allocation problems, builds QUBO, and compares solver outputs.',
+    library: 'elyan-optimization',
+    timeoutMs: 3_000,
+    inputSchema: optimizationSolveInputSchema,
+    outputSchema: optimizationSolveOutputSchema,
+    run: (input) => runOptimization(input as z.output<typeof optimizationSolveInputSchema>),
   },
 ];
 
