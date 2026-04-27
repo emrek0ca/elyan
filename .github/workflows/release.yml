@@ -3,134 +3,149 @@ name: Release
 on:
   push:
     tags:
-      - "v*.*.*"
-
-permissions:
-  contents: write
-  packages: write
+      - 'v*'
 
 jobs:
-  # ── GitHub Release ──────────────────────────────────────────────────────────
-  create-release:
-    name: Create GitHub Release
+  release:
     runs-on: ubuntu-latest
-    outputs:
-      upload_url: ${{ steps.release.outputs.upload_url }}
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          fetch-depth: 0
+          node-version: 20
+          registry-url: https://registry.npmjs.org
 
-      - name: Generate changelog
-        id: changelog
+      - name: Install
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium
+
+      - name: Test
+        run: npm run test
+
+      - name: Audit production dependencies
+        run: npm run audit:prod
+
+      - name: Security check
+        run: npm run security:check
+
+      - name: Build
+        run: npm run build
+
+      - name: Package release artifacts
         run: |
-          PREV_TAG=$(git describe --abbrev=0 --tags HEAD~1 2>/dev/null || echo "")
-          if [ -n "$PREV_TAG" ]; then
-            CHANGES=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
-          else
-            CHANGES=$(git log --pretty=format:"- %s (%h)" --no-merges -20)
-          fi
-          echo "CHANGES<<EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          STAGING_DIR="release-staging"
+          ASSET_DIR="release-assets"
 
-      - name: Create Release
-        id: release
+          rm -rf "${STAGING_DIR}" "${ASSET_DIR}"
+          mkdir -p "${STAGING_DIR}" "${ASSET_DIR}"
+
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='node_modules' \
+            --exclude='.next' \
+            --exclude='.env*' \
+            --exclude='vps.md' \
+            --exclude='VPS.md' \
+            --exclude='server.md' \
+            --exclude='secrets.md' \
+            --exclude='credentials.md' \
+            --exclude='*.pem' \
+            --exclude='*.key' \
+            --exclude='*.p12' \
+            --exclude='*.pfx' \
+            --exclude='storage' \
+            --exclude='release-staging' \
+            --exclude='release-assets' \
+            ./ "${STAGING_DIR}/"
+
+          tar -czf "${ASSET_DIR}/elyan-linux-x64.tar.gz" -C "${STAGING_DIR}" .
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+
+          staging_dir = Path("release-staging")
+          asset_dir = Path("release-assets")
+          zip_names = [
+              "elyan-macos-arm64.zip",
+              "elyan-macos-x64.zip",
+              "elyan-windows-x64.zip",
+          ]
+
+          for name in zip_names:
+              archive_path = asset_dir / name
+              with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                  for path in staging_dir.rglob("*"):
+                      if path.is_file():
+                          archive.write(path, path.relative_to(staging_dir))
+          PY
+
+      - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: Elyan ${{ github.ref_name }}
-          body: |
-            ## Elyan ${{ github.ref_name }}
+          files: |
+            release-assets/elyan-macos-arm64.zip
+            release-assets/elyan-macos-x64.zip
+            release-assets/elyan-linux-x64.tar.gz
+            release-assets/elyan-windows-x64.zip
 
-            ### Değişiklikler
-            ${{ steps.changelog.outputs.CHANGES }}
-
-            ### Kurulum
-            ```bash
-            bash <(curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/install.sh)
-            ```
-
-            ### Docker
-            ```bash
-            docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-            ```
-          draft: false
-          prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
-
-  # ── Docker Image ─────────────────────────────────────────────────────────────
-  docker-release:
-    name: Docker Release
-    runs-on: ubuntu-latest
-    needs: create-release
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up QEMU (çok platform)
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build & Push (linux/amd64 + arm64)
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-            ghcr.io/${{ github.repository }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            VERSION=${{ github.ref_name }}
-            VCS_REF=${{ github.sha }}
-
-  # ── PyPI (isteğe bağlı) ──────────────────────────────────────────────────────
-  # pypi-release:
-  #   name: PyPI Release
-  #   runs-on: ubuntu-latest
-  #   needs: create-release
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-python@v5
-  #       with:
-  #         python-version: "3.12"
-  #     - run: pip install build twine
-  #     - run: python -m build
-  #     - run: twine upload dist/*
-  #       env:
-  #         TWINE_USERNAME: __token__
-  #         TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-
-  # ── MkDocs Deploy ─────────────────────────────────────────────────────────────
-  docs-deploy:
-    name: Deploy Docs
-    runs-on: ubuntu-latest
-    needs: create-release
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install MkDocs
-        run: pip install mkdocs-material mkdocs-minify-plugin mike
-
-      - name: Deploy docs
+      - name: Publish
         run: |
-          git config user.name github-actions
-          git config user.email github-actions@github.com
-          mike deploy --push --update-aliases ${{ github.ref_name }} stable
-          mike set-default --push stable
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN is not configured; skipping npm publish."
+            exit 0
+          fi
+
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Resolve VPS deploy readiness
+        id: vps_deploy
+        run: |
+          if [ -n "${ELYAN_VPS_HOST:-}" ] && [ -n "${ELYAN_VPS_USER:-}" ] && [ -n "${ELYAN_VPS_SSH_KEY:-}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "VPS deploy secrets are not configured; skipping VPS deploy."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          ELYAN_VPS_HOST: ${{ secrets.ELYAN_VPS_HOST }}
+          ELYAN_VPS_USER: ${{ secrets.ELYAN_VPS_USER }}
+          ELYAN_VPS_SSH_KEY: ${{ secrets.ELYAN_VPS_SSH_KEY }}
+
+      - name: Copy artifact to VPS
+        if: steps.vps_deploy.outputs.enabled == 'true'
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.ELYAN_VPS_HOST }}
+          username: ${{ secrets.ELYAN_VPS_USER }}
+          key: ${{ secrets.ELYAN_VPS_SSH_KEY }}
+          source: release-assets/elyan-linux-x64.tar.gz
+          target: /tmp
+
+      - name: Deploy release on VPS
+        if: steps.vps_deploy.outputs.enabled == 'true'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.ELYAN_VPS_HOST }}
+          username: ${{ secrets.ELYAN_VPS_USER }}
+          key: ${{ secrets.ELYAN_VPS_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            VERSION="${{ github.ref_name }}"
+            DEPLOY_ROOT="${ELYAN_DEPLOY_ROOT:-/srv/elyan}"
+            RELEASE_DIR="${DEPLOY_ROOT}/releases/${VERSION}"
+            mkdir -p "${DEPLOY_ROOT}/releases"
+            rm -rf "${RELEASE_DIR}"
+            mkdir -p "${RELEASE_DIR}"
+            tar -xzf "/tmp/elyan-linux-x64.tar.gz" -C "${RELEASE_DIR}"
+            "${RELEASE_DIR}/ops/deploy-release.sh" "${VERSION}"

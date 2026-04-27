@@ -12,6 +12,7 @@ import re
 import json
 import os
 import shlex
+import uuid
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from utils.logger import get_logger
@@ -99,7 +100,7 @@ class AgentOrchestrator:
         """
         Industrial Loop: Reason -> Plan -> Surgical Execute -> Layered Verify
         """
-        job_id = f"job_{int(time.time())}"
+        job_id = f"job_{uuid.uuid4().hex[:12]}"
         start_time = time.time()
         self._bridge = get_orchestrator_bridge()
         await self._emit_event(

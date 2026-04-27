@@ -198,9 +198,13 @@ class TestElyanStartup:
     @pytest.mark.asyncio
     async def test_start_services_completes_without_crashing(self):
         """All services should start gracefully even if deps are missing."""
-        from core.elyan.elyan_startup import start_elyan_services
+        from core.elyan.elyan_startup import start_elyan_services, stop_elyan_services
+
         # Should not raise even if Ollama is offline, pyaudio is missing, etc.
+        # Clean shutdown matters here because the startup path intentionally
+        # spawns background tasks.
         await start_elyan_services(broadcast=None)
+        await stop_elyan_services()
 
     @pytest.mark.asyncio
     async def test_stop_services_completes_without_crashing(self):

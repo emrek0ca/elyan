@@ -47,6 +47,7 @@ logs/
 .pytest_cache/
 .coverage
 htmlcov/
+*.tsbuildinfo
 
 # Project specific
 .elyan/
@@ -61,9 +62,19 @@ elyan-video/node_modules/
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
 apps/desktop/target-workspace/
-apps/desktop/*.tsbuildinfo
 apps/desktop/vite.config.js
 apps/desktop/vite.config.d.ts
+apps/web/node_modules/
+apps/web/.next/
+apps/web/.turbo/
+apps/web/coverage/
+apps/web/dist/
+apps/web/out/
+apps/web/storage/
+apps/web/.env
+apps/web/.env.*.local
+apps/web/.vercel/
+apps/web/package-lock.json
 _graveyard/
 
 # Elyan workspace bootstrap artifacts
